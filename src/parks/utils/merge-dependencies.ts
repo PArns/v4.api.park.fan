@@ -845,6 +845,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "forecast_date"],
   },
   {
+    // The nightly driver-level shadow (PAR-1058), one row per ride and day.
+    table: "driver_level_forecasts",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["target_date"],
+  },
+  {
     // The calendar-grid TFT shadow (PAR-1041): same key as tft_forecasts.
     table: "tft_forecasts_shadow",
     column: "attraction_id",

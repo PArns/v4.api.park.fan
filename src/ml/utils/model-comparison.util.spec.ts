@@ -240,7 +240,7 @@ describe("offline-model-verdicts.json — the PAR-1038 schema", () => {
         .filter(([, v]) => v.metric === "hit_rate")
         .map(([mid]) => `${qid}/${mid}`),
     );
-    expect(hitRates).toEqual(["cal_rank/wkd"]);
+    expect(hitRates.sort()).toEqual(["cal_rank/driver", "cal_rank/wkd"]);
     expect(file.questions.today_h6_12.persist).toBeUndefined();
   });
   it("keeps the PCN questions from turning better on a win over persistence", () => {
@@ -869,6 +869,51 @@ describe("calendar questions (PAR-1037)", () => {
       referenceMae: 5,
       diff: 3,
     });
+  });
+
+  // PAR-1058: the driver level is a column on all four calendar questions,
+  // read under the reference of the model that serves each one.
+  it("gives the driver level a live cell on every calendar question", () => {
+    const rows = (lead: string, reference: string) =>
+      Array.from({ length: 24 }, (_, i) => ({
+        useCase: "PEAK",
+        lead,
+        model: "driver_level",
+        reference,
+        segment: "headliner",
+        parkId: `p${i % 12}`,
+        dates: [i < 12 ? "2026-10-08" : "2026-10-09"],
+        n: 5,
+        saeModel: 20,
+        saeRef: 25,
+      }));
+    const res = buildModelComparison({
+      aggregates: [
+        ...rows("d30", "served_tft"),
+        ...rows("d90", "served_catboost"),
+      ],
+      since: new Map(),
+      verdicts: verdictsJson as unknown as OfflineVerdictFile,
+      window: { days: 28, firstDate: "2026-10-08", lastDate: "2026-10-09" },
+      today: "2026-10-10",
+      generatedAt: "2026-10-10T08:00:00.000Z",
+    });
+    const cell = (id: string) =>
+      res.questions.find((x) => x.id === id)!.cells.driver;
+    // 4 vs 5 min per ride-day: the driver level one minute ahead.
+    for (const id of ["cal_far", "cal_far_90"]) {
+      expect(cell(id).live).toMatchObject({
+        modelMae: 4,
+        referenceMae: 5,
+        diff: -1,
+      });
+    }
+    // The D7 / near-lead questions have the column, with no rows yet.
+    expect(cell("cal_rank")).toBeDefined();
+    expect(cell("cal_busier")).toBeDefined();
+    expect(res.models.find((m) => m.id === "driver")?.label).toBe(
+      "Treiber-Niveau",
+    );
   });
 
   it("orders a park's days: D7 counts wrongly ordered day pairs, ties half", () => {

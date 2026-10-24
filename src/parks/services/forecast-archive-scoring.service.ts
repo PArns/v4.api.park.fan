@@ -504,6 +504,7 @@ export class ForecastArchiveScoringService {
       laterAt: c.laterAt ? new Date(c.laterAt).getTime() : null,
       levelSource: c.levelSource,
       catboostDayPeak: c.catboostDayPeak,
+      driverDayPeak: c.driverDayPeak,
     };
   }
 

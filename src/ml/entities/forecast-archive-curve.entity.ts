@@ -282,6 +282,15 @@ export class ForecastArchiveCurve {
   @Column({ name: "catboost_day_peak", type: "smallint", nullable: true })
   catboostDayPeak: number | null;
 
+  /**
+   * plan_day only (PAR-1058): the driver-level SHADOW for the same ride-day,
+   * read from `driver_level_forecasts` as it stood at the origin (rows written
+   * before it), rounded. On every level source, so it pairs against served
+   * TFT and served CatBoost alike. NULL where the shadow has no row.
+   */
+  @Column({ name: "driver_day_peak", type: "smallint", nullable: true })
+  driverDayPeak: number | null;
+
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 }
