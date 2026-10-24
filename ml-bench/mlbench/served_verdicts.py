@@ -31,6 +31,14 @@ import math
 import sys
 from pathlib import Path
 
+try:  # PAR-1067 (#569): the one list of benchmark-only models
+    from mlbench.licences import refuse_benchmark_only
+except ImportError:  # shortcut: until #569 is merged — then this branch is dead and can go
+    def refuse_benchmark_only(names) -> None:
+        bad = sorted({n for n in names if n.lower().startswith(("timesfm3", "tabpfn"))})
+        if bad:
+            raise ValueError(f"benchmark-only models cannot get a serving verdict: {bad}")
+
 DEFAULT_VERDICTS = Path(__file__).resolve().parents[2] / "src" / "ml" / "data" / "offline-model-verdicts.json"
 REFERENCE = "served"
 MIN_UNITS = 10                      # BenchConfig.min_bootstrap_units (parks)
@@ -140,6 +148,8 @@ def run_period(run: Path) -> str | None:
 
 
 def entries(run: Path, passes: dict[str, list[dict]], min_days: int) -> dict[tuple[str, str], dict]:
+    # a benchmark-only model (non-production licence) never gets an entry: refuse before any
+    refuse_benchmark_only({m for _, _, _, _, cols in QUESTIONS.values() for m in cols.values()})
     out = {}
     word = {"better": "besser als", "worse": "schlechter als", "unclear": "nicht sicher anders als"}
     for qid, (metric, vmetric, ucs, keys, columns) in QUESTIONS.items():

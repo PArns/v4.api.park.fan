@@ -496,7 +496,10 @@ entry per cell with `reference: "served"`, `metric`, `runId`, `diff`/`ciLow`/`ci
 and a German note. `better` needs every lead to win (park-cluster CI below 0, ≥ 10
 parks, ≥ `--min-origin-days`) in **every** pass; `worse` every CI above 0; anything else
 is `unclear`. The quoted figure is the least favourable cell (largest CI upper bound),
-never a pool across leads. `referenceIsServed` is not stored: the API derives it from
+never a pool across leads. Before any entry is built the generator refuses a
+benchmark-only model (non-production licence: `mlbench.licences.refuse_benchmark_only`,
+PAR-1067; a local `timesfm3` / `tabpfn` prefix check until that module is merged).
+`referenceIsServed` is not stored: the API derives it from
 `reference`. Dry run by default (prints the unified diff); `--write` writes
 `src/ml/data/offline-model-verdicts.json`, whose spec accepts a figure only as a whole
 triple against `served` from a named run.

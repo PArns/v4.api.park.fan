@@ -261,3 +261,14 @@ def test_accumulating_export_reads_only_new_origin_days(tmp_path, monkeypatch):
     E.run_export(p.parse_args(base + ["--queue-to", "2026-10-11"]))
     E.run_export(p.parse_args(base + ["--queue-to", "2026-10-13"]))
     assert asked == [f"archive_curves_2026-10-{d:02d}.csv.gz" for d in (9, 10, 11, 12, 13)]
+
+
+@pytest.mark.parametrize("model", ["timesfm3", "tabpfn_ts"])
+def test_generator_refuses_benchmark_only_models(tmp_path, monkeypatch, model):
+    """No entry is written once a benchmark-only model (non-production licence) is mapped."""
+    q = dict(SV.QUESTIONS)
+    metric, vm, ucs, keys, cols = q["plan_d0_1"]
+    monkeypatch.setitem(SV.QUESTIONS, "plan_d0_1", (metric, vm, ucs, keys, {**cols, "fm": model}))
+    cells = {"a": [_cell(0, -1.0, -1.5, -0.5, True, model=model)]}
+    with pytest.raises(ValueError, match="benchmark-only"):
+        SV.entries(tmp_path, cells, 14)
