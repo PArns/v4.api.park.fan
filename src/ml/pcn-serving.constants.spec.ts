@@ -2,7 +2,7 @@ import { roundServedWait } from "./pcn-serving.constants";
 
 /**
  * roundServedWait must stay in EXACT parity with ml-service predict.py
- * round_to_nearest_5 + the operating min-10 rule (predict.py ~:24-52, :1959-1969)
+ * round_to_nearest_5 + the operating min-5 rule (predict.py ~:37-65, ~:2037-2042)
  * AND with pcn-service score.serve_round — the same value has to appear in the UI,
  * the deviation compare, and the shadow board. The 5er-step convention is what the
  * champion-swap silently broke with a plain Math.round (users saw 23-minute waits).
@@ -15,9 +15,10 @@ describe("roundServedWait", () => {
     expect(roundServedWait(34.7)).toBe(35);
   });
 
-  it("applies the operating min-10 floor to positive waits", () => {
-    expect(roundServedWait(2.5)).toBe(10); // rounds to 5, floored to 10
-    expect(roundServedWait(7.2)).toBe(10);
+  it("floors positive waits at 5, not 10 (PAR-1027: a 5-min walk-on stays 5)", () => {
+    expect(roundServedWait(2.5)).toBe(5);
+    expect(roundServedWait(5)).toBe(5);
+    expect(roundServedWait(7.2)).toBe(5);
     expect(roundServedWait(7.5)).toBe(10);
   });
 

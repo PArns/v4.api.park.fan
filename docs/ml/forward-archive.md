@@ -211,10 +211,10 @@ what the app shows. Other boards that read `queue_data` themselves (the
 
 **Paired slot waits are compared as served (PAR-1024).** `PairedAccumulator`
 puts both arms of a UC1/UC2/UC3 slot through `roundServedWait` (5-minute steps,
-floor 10) — what any candidate would go through once served. Before, persistence
+floor 5 since PAR-1027, 10 before) — what any candidate would go through once served. Before, persistence
 and Chronos-2 were scored raw against a rounded served curve and won partly by
 rounding. That is a choice with a cost: persistence is judged as if it were the
-served forecast, so a live 5 counts as 10, although the app shows the live wait
+served forecast, so a live 3 counts as 5, although the app shows the live wait
 itself unrounded. `plan_day` is archived at 1-minute precision and is rounded
 here like its candidates. D3 regret and PEAK stay unrounded, and so does the
 unpaired board (`ScoreAccumulator`) — its per-source MAEs are not the matrix's.
@@ -734,7 +734,7 @@ anchor at 2 h); the offline bench shows no lead where that ordering is wrong.
 Per served slot, the same per-purpose quantile split CatBoost and PCN use
 (docs/ml/quantile-serving-and-calibration.md):
 
-- **wait** = q50, through `roundServedWait` (5-minute steps, ≥ 10 when positive);
+- **wait** = q50, through `roundServedWait` (5-minute steps, ≥ 5 when positive);
 - **`uncertaintyMinutes`** = q95 − q50, the one-sided upper half-width the
   CatBoost band is (Chronos's own quantile, not a measured residual);
 - **`crowdLevel`** = q80 (clamped ≥ the shown wait) ÷ the row's carried P50

@@ -2034,12 +2034,13 @@ def predict_wait_times(
         # the displayed median only for a MultiQuantile model; otherwise identical.
         crowd_wait = round_to_nearest_5(crowd_predictions[i])
 
-        # Enforce a minimum 10 min wait if the ride is considered operating by the model
-        # or zero if the model thinks it's closed anyway.
+        # Enforce a minimum 5 min wait if the ride is considered operating by the model
+        # or zero if the model thinks it's closed anyway. Mirrored exactly by NestJS
+        # roundServedWait and pcn-service serve_round (10 until PAR-1027).
         if row["status"] in ["UNKNOWN", "OPERATING"] and pred_wait > 0:
-            pred_wait = max(10, pred_wait)
+            pred_wait = max(5, pred_wait)
         if row["status"] in ["UNKNOWN", "OPERATING"] and crowd_wait > 0:
-            crowd_wait = max(10, crowd_wait)
+            crowd_wait = max(5, crowd_wait)
 
         # Calculate combined confidence (60% time-based + 40% model-based)
         hours_ahead = (row["timestamp"] - base_time).total_seconds() / 3600

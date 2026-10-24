@@ -939,7 +939,7 @@ export class PairedAccumulator {
   ): void {
     // Slot waits are compared as a visitor would see them: every candidate
     // goes through the same serve-side rounding as what is served (5-minute
-    // steps, floor 10), or an unrounded arm wins by rounding alone (PAR-1024).
+    // steps, floor 5), or an unrounded arm wins by rounding alone (PAR-1024).
     // A no-op on park_hourly (already served-rounded); plan_day is archived at
     // 1-minute precision and gets the same treatment as its candidates. The
     // unpaired board (ScoreAccumulator) stays raw on purpose.

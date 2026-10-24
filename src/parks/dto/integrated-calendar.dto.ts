@@ -245,7 +245,7 @@ export class HeadlinerWaitForecast {
       "certain day. See docs/ml/quantile-serving-and-calibration.md. " +
       "Deliberately not rounded to 5: a band is a difference, not a posted " +
       "wait time. Do not compute an interval off `waitTime` with it either — " +
-      "that number is rounded to 5 and floored at 10 while the band is " +
+      "that number is rounded to 5 and floored at 5 while the band is " +
       "measured against the raw median, so on a very quiet ride the " +
       "subtraction goes negative. " +
       "ABSENT means NOT KNOWN — which is NOT a band of width zero and must " +

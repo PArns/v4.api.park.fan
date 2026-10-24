@@ -75,14 +75,14 @@ def test_aggregate_drops_nan_actual_and_empty():
 
 
 def test_serve_round_mirrors_catboost_serving():
-    """Parity with ml-service round_to_nearest_5 + min-10 (predict.py:1959-1969):
-    half-up 5er steps, floor of 10 for positive values, 0 stays 0. The board scores
+    """Parity with ml-service round_to_nearest_5 + min-5 (predict.py ~:2037-2042):
+    half-up 5er steps, floor of 5 for positive values (10 until PAR-1027), 0 stays 0. The board scores
     PCN through the same boundary that serves it."""
     import numpy as np
 
     x = np.array([0.0, 2.4, 2.5, 7.2, 7.5, 12.4, 23.0, 34.7])
     out = score.serve_round(x)
-    np.testing.assert_array_equal(out, [0, 0, 10, 10, 10, 10, 25, 35])
+    np.testing.assert_array_equal(out, [0, 0, 5, 5, 10, 10, 25, 35])
 
 
 def test_full_day_window_covers_only_full_days():
