@@ -15,7 +15,13 @@ import gc
 
 from config import get_settings
 from db import fetch_training_data, fetch_attraction_accuracy
-from features import engineer_features, get_feature_columns
+from features import (
+    LAST_YEAR_LAG,
+    LAST_YEAR_MIN_LEAD,
+    LAST_YEAR_MIN_OBSERVED_DAYS,
+    engineer_features,
+    get_feature_columns,
+)
 from model import WaitTimeModel
 from data_validation import validate_training_data
 
@@ -471,12 +477,35 @@ def _neutral_far_weather_and_schedule(
     return merged
 
 
+def _last_year_same_slot(
+    merged: pd.DataFrame, source: pd.DataFrame, first_seen: pd.Series
+) -> pd.Series:
+    """Mean wait in the same local date-hour 52 weeks before each row, NaN where
+    unobserved or the ride was first seen < 330 d before the row's origin —
+    predict.fetch_last_year_slots' rule on the training frame."""
+    src_local = pd.to_datetime(source["local_timestamp"])
+    slots = source["waitTime"].groupby(
+        [source["attractionId"].values, src_local.dt.date.values, src_local.dt.hour.values]
+    ).mean()
+    year_ago = pd.to_datetime(merged["local_timestamp"]) - LAST_YEAR_LAG
+    keys = pd.MultiIndex.from_arrays(
+        [merged["attractionId"].values, year_ago.dt.date.values, year_ago.dt.hour.values]
+    )
+    vals = pd.Series(slots.reindex(keys).values, index=merged.index, dtype=float)
+    watched = merged["attractionId"].map(first_seen) <= (
+        merged["_origin_ts"] - pd.Timedelta(days=LAST_YEAR_MIN_OBSERVED_DAYS)
+    )
+    return vals.where(watched.fillna(False).astype(bool))
+
+
 def as_known_at_origin(
     df_target: pd.DataFrame,
     df_source: pd.DataFrame,
     lead: pd.Timedelta,
     occ_profile: pd.Series,
     weather_clim: pd.DataFrame | None = None,
+    last_year_source: pd.DataFrame | None = None,
+    first_seen: pd.Series | None = None,
 ) -> pd.DataFrame:
     """The hold-out rows with the features they would have had if forecast
     `lead` ahead, i.e. built at origin = target - lead the way
@@ -494,7 +523,10 @@ def as_known_at_origin(
       rolling_avg_7d, serving's fallback when the history lookup misses.
       shortcut: a lead between 7 d and 28 d knows SOME of the lags and serving
       averages those; no served lead falls there today — add a partial mean if
-      one ever does;
+      one ever does. Beyond 28 d it is the same weekday and hour 52 weeks
+      before the row instead, where `last_year_source` holds that reading and
+      the ride was first seen >= 330 d before the origin (serving's
+      fetch_last_year_slots, PAR-1045);
     * avg_wait_last_24h is the origin's for lead <= 24 h, else the
       same-dow value above (serving's > 24 h replacement);
     * avg_wait_last_1h is the target hour one week earlier when that is known
@@ -538,6 +570,9 @@ def as_known_at_origin(
     r7d = merged["_o_rolling_avg_7d"]
     same_dow = merged["avg_wait_same_dow_4w"] if lead <= pd.Timedelta(days=7) else r7d
     same_dow = same_dow.where(same_dow > 0, r7d)
+    if lead > LAST_YEAR_MIN_LEAD and last_year_source is not None and first_seen is not None:
+        year_ago = _last_year_same_slot(merged, last_year_source, first_seen)
+        same_dow = year_ago.where(year_ago.notna() & (year_ago > 0), same_dow)
 
     for c in cols:
         merged[c] = merged[f"_o_{c}"]
@@ -795,6 +830,15 @@ def train_model(
         df["timestamp"] >= origin_from,
         ["attractionId", "timestamp", *[c for c in _ORIGIN_VALUE_COLUMNS if c in df.columns]],
     ].copy()
+    # The hold-out's slots 52 weeks back (a ~31-day slice) and each ride's first
+    # row, for the far leads' same-weekday-last-year value (PAR-1045).
+    year_ago_from = holdout_cutoff - LAST_YEAR_LAG - pd.Timedelta(days=1)
+    df_last_year = df.loc[
+        (df["timestamp"] >= year_ago_from)
+        & (df["timestamp"] < year_ago_from + pd.Timedelta(days=33)),
+        ["attractionId", "timestamp", "local_timestamp", "waitTime"],
+    ].copy()
+    first_seen = df.groupby("attractionId")["timestamp"].min()
     occ_profile = origin_occupancy_profile(df[~holdout_mask])
     weather_clim = origin_weather_climatology(df[~holdout_mask])
     df_holdout = df[holdout_mask].copy().reset_index(drop=True)
@@ -1066,7 +1110,8 @@ def train_model(
         logger.info("📊 Hold-out as known at origin (served leads):")
         for name, lead in ORIGIN_LEADS.items():
             df_lead = as_known_at_origin(
-                df_holdout, df_origin_source, lead, occ_profile, weather_clim
+                df_holdout, df_origin_source, lead, occ_profile, weather_clim,
+                df_last_year, first_seen,
             )
             if df_lead.empty:
                 holdout_eval["origin_leads"][name] = None
@@ -1087,7 +1132,7 @@ def train_model(
             )
             del df_lead, X_lead
         logger.info("")
-    del df_origin_source, occ_profile
+    del df_origin_source, df_last_year, first_seen, occ_profile
     gc.collect()
 
     model.metadata["holdout_metrics"] = holdout_eval

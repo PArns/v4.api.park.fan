@@ -498,6 +498,117 @@ def fetch_recent_rolling_stats(
     return _cached_read(_recent_rolling_stats_cache, cache_key, read)
 
 
+# avg_wait_same_dow_4w for a row more than 28 days ahead: all four weekly lags
+# lie after base_time, so the 32-day lookup cannot hold any. Such a row reads
+# the same weekday-and-hour 52 weeks before it instead (PAR-1045) — but only for
+# a ride watched at least LAST_YEAR_MIN_OBSERVED_DAYS before base_time, and only
+# where that slot holds a reading. Otherwise rolling_avg_7d, as before: an
+# unobserved week is never made into a value.
+# shortcut: queue_data starts 2025-12-24, so rides watched since then pass the
+# gate from ~2026-11-19 and the whole 29-365 d daily horizon has a slot a year
+# back from ~2026-11-24; parks added later stay on rolling_avg_7d until their
+# own 330 days. Revisit the 28-day cut (rows 8-28 d use a partial mean) then.
+# The constants live in features.py so train.as_known_at_origin reads the same.
+from features import (
+    LAST_YEAR_LAG,
+    LAST_YEAR_MIN_LEAD,
+    LAST_YEAR_MIN_OBSERVED_DAYS,
+    LAST_YEAR_WATCH_LOOKBACK_DAYS,
+)
+
+
+def last_year_slot_keys(df: pd.DataFrame, base_time: datetime) -> list:
+    """(attractionId, local date, local hour) 52 weeks before each row further
+    than LAST_YEAR_MIN_LEAD ahead — the only slots fetch_last_year_slots reads."""
+    base = pd.Timestamp(base_time)
+    base = base.tz_localize("UTC") if base.tzinfo is None else base.tz_convert("UTC")
+    ts = pd.to_datetime(df["timestamp"], utc=True)
+    far = df[ts > base + LAST_YEAR_MIN_LEAD]
+    if far.empty:
+        return []
+    local = pd.to_datetime(far["local_timestamp"]) - LAST_YEAR_LAG
+    return sorted(
+        set(zip(far["attractionId"].astype(str), local.dt.date, local.dt.hour.astype(int)))
+    )
+
+
+def fetch_last_year_slots(keys: list, end_time: datetime) -> Dict[tuple, float]:
+    """Mean wait per (attractionId, local date, local hour) key, in the serving
+    population, for rides with a reading at least LAST_YEAR_MIN_OBSERVED_DAYS
+    before `end_time`. One query; it reads only the keys' date span (up to
+    ~336 days for a 365-day daily batch, hourly requests never get here)."""
+    valid = set(uuid_list(sorted({k[0] for k in keys}), "fetch_last_year_slots"))
+    keys = [k for k in keys if k[0] in valid]
+    if not keys:
+        return {}
+    aids, dates, hours = (list(x) for x in zip(*keys))
+    start = datetime.combine(min(dates), datetime.min.time(), tzinfo=timezone.utc)
+    stop = min(
+        datetime.combine(max(dates), datetime.min.time(), tzinfo=timezone.utc)
+        + timedelta(days=2),
+        end_time if end_time.tzinfo else end_time.replace(tzinfo=timezone.utc),
+    )
+    local_ts = "qd.timestamp AT TIME ZONE p.timezone"
+    query = text(
+        f"""
+        WITH keys AS (
+            SELECT * FROM unnest(
+                CAST(:key_ids AS uuid[]), CAST(:key_dates AS date[]), CAST(:key_hours AS int[])
+            ) AS k(aid, d, h)
+        ),
+        watched AS (
+            SELECT a.id FROM attractions a
+            WHERE a.id = ANY(CAST(:attraction_ids AS uuid[]))
+              AND EXISTS (
+                SELECT 1 FROM queue_data w
+                WHERE w."attractionId" = a.id
+                  AND w.timestamp >= CAST(:end_time AS timestamptz) - :lookback * INTERVAL '1 day'
+                  AND w.timestamp < CAST(:end_time AS timestamptz) - :min_days * INTERVAL '1 day'
+                  AND w."waitTime" >= 5
+                  AND w."queueType" = 'STANDBY'
+                  AND NOT COALESCE(w.is_heartbeat, false)
+              )
+        )
+        SELECT qd."attractionId"::text AS "attractionId",
+               DATE({local_ts}) AS date,
+               EXTRACT(HOUR FROM {local_ts})::int AS hour,
+               AVG(qd."waitTime") AS avg_wait
+        FROM queue_data qd
+        INNER JOIN attractions a ON a.id = qd."attractionId"
+        INNER JOIN parks p ON p.id = a."parkId"
+        LEFT JOIN schedule_entries se
+            ON se."parkId" = a."parkId"
+            AND se.date = DATE({local_ts})
+            AND se."attractionId" IS NULL
+        INNER JOIN keys k
+            ON k.aid = qd."attractionId"
+            AND k.d = DATE({local_ts})
+            AND k.h = EXTRACT(HOUR FROM {local_ts})
+        WHERE {_SERVING_QUEUE_FILTER}
+            AND qd."attractionId" IN (SELECT id FROM watched)
+            AND qd.timestamp >= :start AND qd.timestamp < :stop
+        GROUP BY 1, 2, 3
+        """
+    )
+    with get_db() as db:
+        result = db.execute(
+            query,
+            {
+                "key_ids": aids,
+                "key_dates": dates,
+                "key_hours": hours,
+                "attraction_ids": sorted(valid),
+                "end_time": end_time,
+                "lookback": LAST_YEAR_WATCH_LOOKBACK_DAYS,
+                "min_days": LAST_YEAR_MIN_OBSERVED_DAYS,
+                "start": start,
+                "stop": stop,
+            },
+        )
+        rows = result.fetchall()
+    return {(str(r[0]), pd.Timestamp(r[1]).date(), int(r[2])): float(r[3]) for r in rows}
+
+
 def _park_timezones(park_ids: List[str]) -> Dict[str, str]:
     """{parkId: IANA timezone} for the given parks, "UTC" where none is on record."""
     import logging
@@ -1485,6 +1596,7 @@ def create_prediction_features(
     # them (see fetch_recent_rolling_stats).
     recent_data = fetch_recent_wait_times(attraction_ids, end_time=base_time)
     rolling_stats = fetch_recent_rolling_stats(attraction_ids, end_time=base_time)
+    last_year_slots = fetch_last_year_slots(last_year_slot_keys(df, base_time), base_time)
     if recent_data.empty:
         recent_data = pd.DataFrame(
             columns=["attractionId", "attractionName", "date", "hour", "avg_wait"]
@@ -1741,7 +1853,13 @@ def create_prediction_features(
                         )
                         if key in _attr_lookup:
                             vals.append(_attr_lookup[key])
-                    return float(np.mean(vals)) if vals else rolling_7d
+                    if vals:
+                        return float(np.mean(vals))
+                    # Same weekday and hour a year back, where observed (PAR-1045).
+                    year_ago = ts_local.replace(tzinfo=None) - LAST_YEAR_LAG
+                    return last_year_slots.get(
+                        (attraction_id, year_ago.date(), int(ts_local.hour)), rolling_7d
+                    )
 
                 # For future prediction rows (> 24h ahead), avg_wait_last_24h and
                 # avg_wait_last_1h lose meaning — they just reflect current/recent

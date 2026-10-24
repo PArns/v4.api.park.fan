@@ -20,6 +20,14 @@ from attraction_features import (
     add_park_attraction_count_feature,
 )
 
+# avg_wait_same_dow_4w more than 28 days ahead (PAR-1045): the same weekday and
+# hour 52 weeks back, for rides watched >= MIN_OBSERVED_DAYS. Read by
+# predict.fetch_last_year_slots and train.as_known_at_origin.
+LAST_YEAR_LAG = timedelta(days=364)  # 52 weeks: same weekday
+LAST_YEAR_MIN_LEAD = timedelta(days=28)
+LAST_YEAR_MIN_OBSERVED_DAYS = 330  # MIN_OBSERVED_DAYS (docs/rules/absent-facts.md)
+LAST_YEAR_WATCH_LOOKBACK_DAYS = 730  # TRAIN_LOOKBACK_YEARS: training's first-seen reach
+
 
 def convert_to_local_time(
     df: pd.DataFrame, parks_metadata: pd.DataFrame
