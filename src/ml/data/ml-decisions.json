@@ -4,7 +4,7 @@
     {
       "id": "planner_h5_slots",
       "title": "Tagesplaner auf 15-Minuten-Slots umstellen (H5-Profil)",
-      "detail": "Offline besser als heute bei jedem Abstand. TFT-Niveau nur für volle Fahrgeschäfte bis 2 Tage. „Beste Besuchszeit“ (H5) und „heute oder morgen“ (H5 + TFT) sind offline nur gegen den Wochentag-Durchschnitt gemessen, nicht gegen das, was heute läuft: bis ein ml-bench-Lauf gegen den heutigen Tagesplaner vorliegt, bleiben diese Zellen offen.",
+      "detail": "Offline besser als heute bei jedem Abstand. TFT-Niveau nur für volle Fahrgeschäfte bis 2 Tage.",
       "cells": [
         { "questionId": "plan_d0_1", "modelId": "h5" },
         { "questionId": "plan_d0_1", "modelId": "tfth5" },
@@ -19,7 +19,7 @@
     {
       "id": "live_chronos",
       "title": "Live-Wartezeit 30 bis 120 Minuten: Chronos-2 statt PCN",
-      "detail": "Offline 0,4 bis 2,3 Minuten besser als die aktuelle Wartezeit. Gegen PCN entscheidet erst das Live-Archiv. PCN ist im Offline-Vergleich nicht enthalten: bis ein ml-bench-Lauf gegen das, was heute läuft, vorliegt, bleiben „nächste Stunde“ und „1 bis 2 Stunden“ offline offen.",
+      "detail": "Offline 0,4 bis 2,3 Minuten besser als die aktuelle Wartezeit. Gegen PCN entscheidet erst das Live-Archiv.",
       "cells": [
         { "questionId": "live_h0_1", "modelId": "chronos" },
         { "questionId": "live_h1_2", "modelId": "chronos" }
@@ -28,7 +28,7 @@
     {
       "id": "planner_chronos",
       "title": "Tagesplaner 1 bis 7 Tage: Chronos-2 zusätzlich prüfen",
-      "detail": "Offline besser als H5 bei 0, 1, 2 und 6 Tagen, nie schlechter. Nicht für „beste Besuchszeit“. „Heute oder morgen“ ist offline nur gegen das Stundenprofil gemessen, nicht gegen den heutigen Tagesplaner: bis ein ml-bench-Lauf dagegen vorliegt, bleibt diese Zelle offen.",
+      "detail": "Offline besser als H5 bei 0, 1, 2 und 6 Tagen, nie schlechter. Nicht für „beste Besuchszeit“.",
       "cells": [
         { "questionId": "plan_d0_1", "modelId": "chronos" },
         { "questionId": "plan_d2_5", "modelId": "chronos" }
