@@ -5,12 +5,16 @@ import { Holiday } from "./entities/holiday.entity";
 import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { formatInParkTimezone } from "../common/utils/date.util";
+import { addIsoDays, formatInParkTimezone } from "../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
 import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
+import {
+  SchoolCoverage,
+  buildSchoolCoverage,
+} from "../common/utils/holiday.utils";
 
 /** The holiday columns range readers use — everything but the bookkeeping. */
 const HOLIDAY_ROW_COLUMNS = [
@@ -86,6 +90,10 @@ export class HolidaysService {
     string,
     { rows: HolidayRow[]; expiresAt: number }
   >();
+  private schoolCoverageMemo: {
+    coverage: SchoolCoverage;
+    expiresAt: number;
+  } | null = null;
 
   constructor(
     @InjectRepository(Holiday)
@@ -420,6 +428,11 @@ export class HolidaysService {
    * year to marker-only (<25 d) in the target year. Idempotent via a
    * `synth-summer:` externalId, and a NO-OP for countries that already publish
    * ranges (so it is safe to run for every synced country).
+   *
+   * Scope, on purpose (PAR-1049): the summer break of the CURRENT year only. It
+   * is a projection, not data, and it counts toward the school-holiday coverage.
+   * No other break type and no later year is projected — an unpublished break
+   * reads as unknown instead (docs/architecture/school-holiday-coverage.md).
    */
   async synthesizeProjectedSummerHolidays(
     countryCode: string,
@@ -926,6 +939,72 @@ export class HolidaysService {
       24 * 60 * 60,
     );
     return isHeuristicBridge;
+  }
+
+  /**
+   * The last stored school-holiday date per (country, region) — the edge past
+   * which a day's school flag is unknown rather than "no break" (PAR-1049).
+   * One GROUP BY over the school rows, memoised like the holiday years.
+   */
+  async getSchoolHolidayCoverage(): Promise<SchoolCoverage> {
+    const memo = this.schoolCoverageMemo;
+    if (memo && memo.expiresAt > Date.now()) return memo.coverage;
+    const rows: { country: string; region: string | null; through: string }[] =
+      await this.holidayRepository.query(
+        `SELECT country, region, TO_CHAR(MAX(date), 'YYYY-MM-DD') AS through
+           FROM holidays
+          WHERE "holidayType" = 'school'
+          GROUP BY country, region`,
+      );
+    const coverage = buildSchoolCoverage(rows);
+    this.schoolCoverageMemo = {
+      coverage,
+      expiresAt: Date.now() + HOLIDAY_YEAR_MEMO_TTL_MS,
+    };
+    return coverage;
+  }
+
+  /**
+   * One log line naming the synced countries whose school-holiday data ends
+   * within `withinDays` of `today` (or holds none), so an unpublished school
+   * year is visible before the calendar and the models read it as unknown.
+   */
+  async logSchoolCoverageGaps(
+    countries: string[],
+    today: string,
+    withinDays = 90,
+  ): Promise<string[]> {
+    this.schoolCoverageMemo = null; // the sync just wrote
+    const coverage = await this.getSchoolHolidayCoverage();
+    const horizon = addIsoDays(today, withinDays);
+    const gaps: string[] = [];
+    for (const country of [...new Set(countries)].sort()) {
+      if (!coverage.countryAny.has(country)) {
+        gaps.push(`${country}: none`);
+        continue;
+      }
+      const ending: [string, string][] = [];
+      for (const [key, through] of coverage.regional) {
+        const [c, region] = key.split("|");
+        if (c === country && through <= horizon) ending.push([region, through]);
+      }
+      const national = coverage.national.get(country);
+      if (national && national <= horizon) ending.push(["national", national]);
+      if (ending.length === 0) continue;
+      ending.sort((a, b) => a[1].localeCompare(b[1]));
+      const shown = ending
+        .slice(0, 5)
+        .map(([region, through]) => `${region} ${through}`)
+        .join(", ");
+      const more = ending.length > 5 ? ` +${ending.length - 5} more` : "";
+      gaps.push(`${country}: ${shown}${more}`);
+    }
+    if (gaps.length > 0) {
+      this.logger.warn(
+        `School-holiday data ends within ${withinDays} days, later days read as unknown — ${gaps.join("; ")}`,
+      );
+    }
+    return gaps;
   }
 
   /**

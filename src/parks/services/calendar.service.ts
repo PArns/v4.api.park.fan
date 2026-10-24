@@ -33,6 +33,8 @@ import {
   calculateHolidayInfo,
   holidayDay,
   isLocalHoliday,
+  markUnknownSchoolVacation,
+  schoolCoverageThrough,
 } from "../../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
@@ -523,6 +525,28 @@ export class CalendarService {
         todayDay.todayCrowdLevel = todayCrowdLevel;
         todayDay.todayCrowdLevelSamples = todayCrowdLevelSamples;
       }
+    }
+
+    // Past the park's last stored school-holiday row, `isSchoolVacation: false`
+    // is our missing data, not a statement (PAR-1049): say so on the day. When
+    // the coverage cannot be read, nothing is marked.
+    const schoolCoverage = await this.holidaysService
+      .getSchoolHolidayCoverage()
+      .catch((err) => {
+        this.logger.warn(
+          `School-holiday coverage unavailable for ${park.slug}: ${err.message}`,
+        );
+        return null;
+      });
+    if (schoolCoverage) {
+      markUnknownSchoolVacation(
+        days,
+        schoolCoverageThrough(
+          schoolCoverage,
+          park.countryCode,
+          park.regionCode ?? null,
+        ),
+      );
     }
 
     // Build response
