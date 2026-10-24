@@ -294,7 +294,9 @@ def time_weighted_p90(
     r = readings.sort_values("ts").reset_index(drop=True)
     r["ds"] = r["ts"].dt.normalize()
     rd = r[["unique_id", "park_id", "ds"]].drop_duplicates()
-    span = (r[r["status"] == "OPERATING"].groupby(["park_id", "ds"])["ts"]
+    # observed=True: ids/status may be categoricals (fetch_time_weighted_panel);
+    # without it a groupby would build every id × day combination.
+    span = (r[r["status"] == "OPERATING"].groupby(["park_id", "ds"], observed=True)["ts"]
             .agg(fb_open="min", fb_close="max").reset_index())
     span["fb_close"] += q
     rd = rd.merge(span, on=["park_id", "ds"], how="left")
@@ -320,7 +322,7 @@ def time_weighted_p90(
         allow_exact_matches=False, tolerance=pd.Timedelta(hours=max_stale_hours),
     )
     m = m[(m["status"] == "OPERATING") & (m["wait"] >= min_wait)]
-    grp = m.groupby(["unique_id", "ds"])["wait"]
+    grp = m.groupby(["unique_id", "ds"], observed=True)["wait"]
     # Linear interpolation, as PERCENTILE_CONT in fetch_daily_peak_panel.
     agg = pd.DataFrame({"y": grp.quantile(pct), "n": grp.size()}).reset_index()
     return agg.loc[agg["n"] >= min_slots, out_cols].reset_index(drop=True)
@@ -353,9 +355,16 @@ def fetch_time_weighted_panel(park_ids: list[str], schedule: pd.DataFrame | None
     with _engine.connect() as c:
         r = pd.read_sql(sql, c, params=params)
     r["ts"] = pd.to_datetime(r["ts"])
+    # Raw change-log rows (~3M per 10-park chunk) and their 15-min grid: as
+    # categoricals the ids and status are int codes, not one Python str per row.
+    r = r.astype({"unique_id": "category", "park_id": "category", "status": "category"})
     out = time_weighted_p90(r, schedule, settings.NF_TARGET_PERCENTILE, settings.NF_MIN_WAIT)
+    out["unique_id"] = out["unique_id"].astype(str)
     out["ds"] = pd.to_datetime(out["ds"])
     out["y"] = out["y"].astype(float)
+    import psutil
+    logger.info("time-weighted panel: %d parks, %d readings -> %d ride-days, RSS %.2f GB",
+                len(park_ids), len(r), len(out), psutil.Process().memory_info().rss / 1e9)
     return out
 
 

@@ -564,6 +564,12 @@ grid-only one; it still runs when `NF_CALENDAR_GRID` serves the grid (it differs
 Cost: one more fit, the night's `train-nf` job ~40–50 min instead of ~25, inside the 90-min
 poll deadline. `forecast.calendar_grid(True, drivers=True)` is the only way in, `db.DRIVERS`
 is not an env setting, and `futr_exog()` returns `DRIVER_EXOG` only with the grid AND the flag.
+Memory: the target is read as raw change-log rows (`fetch_time_weighted_panel`, every status,
+~3M rows per 10-park chunk over the 730-day window) and expanded to a 15-min grid, so ids and
+status are categoricals (the groupbys pass `observed=True`), and each chunk logs
+`time-weighted panel: <parks> parks, <readings> readings -> <ride-days> ride-days, RSS <GB>`.
+Watch that line and `docker stats` on the first nights; expected ~1–3 GB peak per chunk in the
+14 GB container.
 
 | futr_exog | meaning | unknown |
 |---|---|---|
