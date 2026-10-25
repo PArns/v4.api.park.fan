@@ -872,27 +872,14 @@ export class QueuePercentileProcessor {
    * a park shutting for winter does close its rides on one *day*, and this
    * must not mistake that for a feed change.
    *
-   * Two thresholds, both needed. An absolute floor, because three rides
-   * sharing a minute is a coincidence a park can produce. And a share of the
-   * park, because five rides is a lot at a park with twelve and nothing at a
-   * park with two hundred.
+   * Two thresholds, both needed: an absolute floor and a share of the park.
+   * They are `FEED_EVENT_CLUSTER_THRESHOLDS`, which is where the numbers and
+   * the production clusters they were measured against are written down.
    */
   private async findFeedEventCluster(
     candidates: Array<{ attractionId: string; parkId: string }>,
     lastOperating: Map<string, { at: Date; day: string }>,
   ): Promise<Set<string>> {
-    const MIN_CLUSTER_SIZE = 5;
-    // 15 %, measured rather than chosen: the four clusters in production sit at
-    // 42 % (Europa-Park), 44 % (Rulantica), 49 % (Universal Studios Singapore)
-    // and 19 % (Six Flags Fiesta Texas), and Knott's Berry Farm at 17 %.
-    //
-    // The cost of the threshold is worth stating: a park that really does close
-    // a whole area on one evening produces the same shape, and this will
-    // decline to flag it. That is the direction to fail in — the flag then
-    // stays off and a curator can set `curated_is_seasonal`, which is a fact
-    // somebody checked, instead of the detector asserting a season it cannot
-    // tell from a feed change.
-    const MIN_PARK_SHARE = 0.15;
     if (candidates.length === 0) return new Set<string>();
 
     const trackedPerPark = await this.trackedAttractionsPerPark(
@@ -903,7 +890,7 @@ export class QueuePercentileProcessor {
       candidates,
       lastOperating,
       trackedPerPark,
-      { minSize: MIN_CLUSTER_SIZE, minParkShare: MIN_PARK_SHARE },
+      FEED_EVENT_CLUSTER_THRESHOLDS,
     );
 
     const ignored = new Set<string>();
@@ -1165,10 +1152,11 @@ export class QueuePercentileProcessor {
  * once.
  *
  * Pure, and exported, because the thresholds are the whole judgement and a
- * judgement worth arguing about is worth testing. Two of them: an absolute
- * floor, because a handful of rides can share a minute by coincidence, and a
- * share of the park, because five rides means something different at a park
- * with twelve than at one with two hundred.
+ * judgement worth arguing about is worth testing. Two of them, documented on
+ * `FEED_EVENT_CLUSTER_THRESHOLDS` below: an absolute floor, because a handful
+ * of rides can share a minute by coincidence, and a share of the park, because
+ * five rides means something different at a park with twelve than at one with
+ * two hundred.
  */
 export interface SharedMinuteCluster {
   parkId: string;
@@ -1176,6 +1164,53 @@ export interface SharedMinuteCluster {
   tracked: number;
   attractionIds: string[];
 }
+
+/**
+ * The two thresholds the guard judges by. Exported with the function, because
+ * they are the judgement and a judgement worth arguing about is worth testing
+ * against the value production runs on rather than a copy of it.
+ *
+ * `minSize` is an absolute floor: a handful of rides can share a minute by
+ * coincidence, and three is a coincidence a park can produce.
+ *
+ * `minParkShare` is 20 %, and it has been measured twice. The four clusters
+ * this guard was built on sit at 42 % (Europa-Park), 44 % (Rulantica), 49 %
+ * (Universal Studios Singapore) and 19 % (Six Flags Fiesta Texas, 2026-04-12),
+ * with Knott's Berry Farm at 17 % — so the first measurement put the line at
+ * 15 %, below all five.
+ *
+ * At 15 % the cost had grown larger than the protection (PAR-1070,
+ * 2026-10-25). A park closing one water area on a single evening produces the
+ * same shape as a feed event, so every such area stayed unflagged, and the
+ * rides then publish CLOSED as a fact with no seasonal marker to qualify it.
+ * Measured against production: the 15-20 % band holds eight clusters, 74 rides
+ * in seven parks. 38 of those 74, in four parks, clear the candidate gates
+ * above, and all 38 are one water area each, closing while the main park kept
+ * running. The evidence differs by park and is worth keeping apart. Cinecittà
+ * World (6 rides, 15.0 %) and Fårup Sommerland (5, 16.1 %) are observed
+ * closures: the source names them every poll and says CLOSED on a `lastUpdated`
+ * minutes old. Carowinds (14, 19.2 %) and Six Flags Fiesta Texas (13, 16.5 %)
+ * are the frozen-feed class of PAR-1023 — their `lastUpdated` stopped at the
+ * cluster minute — so there the closure rests on the ride names and on the
+ * date, the Labor Day weekend, rather than on a fresh reading.
+ *
+ * The other three parks in the band are not closures the source confirms
+ * (Energylandia's source dropped 18 entries in one minute, Le Pal's park feed
+ * went silent a day later, Fantawild Glorious Orient Jining's `lastUpdated`
+ * froze), and none of them reaches this guard: they fail `ever_operating`,
+ * `current_status` or the seven-open-day count first.
+ *
+ * Raising the line moves the failure direction rather than removing it, and
+ * that is worth stating plainly. Below 20 % a feed event now reads as a season
+ * and gets flagged; today no such cluster gets that far, but that is a
+ * property of this data and not of the rule. At or above 20 % the old cost
+ * stands: a real area closure reads as a feed event, stays unflagged, and a
+ * curator can set `curated_is_seasonal`, which is a fact somebody checked.
+ */
+export const FEED_EVENT_CLUSTER_THRESHOLDS = {
+  minSize: 5,
+  minParkShare: 0.2,
+} as const;
 
 export function findSharedMinuteClusters(
   candidates: Array<{ attractionId: string; parkId: string }>,
