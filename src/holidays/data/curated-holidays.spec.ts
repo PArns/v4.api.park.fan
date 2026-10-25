@@ -18,7 +18,7 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
   // The local authority itself (PAR-1072).
   GB: ["www.staffordshire.gov.uk"],
   // The municipal boards of education (PAR-1072).
-  JP: ["www.city.nagoya.jp", "www.city.urayasu.lg.jp"],
+  JP: ["www.city.nagoya.jp"],
   SG: ["www.moe.gov.sg"],
   AU: ["education.qld.gov.au"],
   // Xinhua's authorised release ("受权发布") of the State Council notice.
@@ -160,7 +160,7 @@ describe("curated holiday files (PAR-1065)", () => {
     for (const e of gb.entries) expect(e.region).toBe("GB-ENG");
   });
 
-  it("covers Chiba and Aichi as far as the cities published, nothing else in Japan (PAR-1072)", () => {
+  it("covers Aichi as far as Nagoya published, nothing else in Japan (PAR-1072)", () => {
     const jp = CURATED_HOLIDAY_SETS.find((x) => x.country === "JP")!;
     const coverage = buildSchoolCoverage(
       expandCuratedHolidays(jp).map((r) => ({
@@ -169,10 +169,9 @@ describe("curated holiday files (PAR-1065)", () => {
         through: r.date.toISOString().slice(0, 10),
       })),
     );
-    // Urayasu: summer 2026 only; Nagoya: through 令和8年度's end.
-    expect(schoolCoverageThrough(coverage, "JP", "12")).toBe("2026-08-31");
     expect(schoolCoverageThrough(coverage, "JP", "23")).toBe("2027-03-31");
-    // Osaka (USJ) and Yamanashi (Fuji-Q): nothing published for a year.
+    // Chiba (Disney), Osaka (USJ), Yamanashi (Fuji-Q): not curated.
+    expect(schoolCoverageThrough(coverage, "JP", "12")).toBeNull();
     expect(schoolCoverageThrough(coverage, "JP", "27")).toBeNull();
     expect(schoolCoverageThrough(coverage, "JP", "Yamanashi")).toBeNull();
   });

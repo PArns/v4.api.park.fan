@@ -20,7 +20,7 @@ Facts about real places come from the publisher's own page, never from recall.
 | AU (QLD) | school, `AU-QLD` | Department of Education, [2026](https://education.qld.gov.au/about-us/calendar/term-dates) and [2027–2029](https://education.qld.gov.au/about-us/calendar/future-dates) | curated file | `curated:AU:` | school through 2029-12-31 |
 | US (FL, TX, CA) | school, `US-FL` / `US-TX` / `US-CA`, one district per state | [Orange County Public Schools](https://www.ocps.net/110680_3), [Northside ISD](https://www.nisd.net/schools/calendars), [Los Angeles Unified](https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183) | curated file | `curated:US:` | FL through 2028-08-09, TX through 2028-07-31, CA through 2028-06-30; other states unknown |
 | GB (England) | school, `GB-ENG`, one local authority | [Staffordshire County Council](https://www.staffordshire.gov.uk/schools-and-learning/school-term-dates) | curated file | `curated:GB:` | school through 2029-08-31 (PAR-1072); Scotland, Wales, Northern Ireland unknown |
-| JP (Chiba, Aichi) | school, `JP-12` / `JP-23`, one city each | Urayasu City ([board minutes 2025-10](https://www.city.urayasu.lg.jp/_res/projects/default_project/_page_/001/045/711/202510teireikai.pdf)), [Nagoya City](https://www.city.nagoya.jp/kodomo/schools/1027693/1016802/1016803/1016804.html) | curated file | `curated:JP:` | Chiba through 2026-08-31, Aichi through 2027-03-31 (PAR-1072); Osaka, Yamanashi and every other prefecture unknown |
+| JP (Aichi) | school, `JP-23` | [Nagoya City](https://www.city.nagoya.jp/kodomo/schools/1027693/1016802/1016803/1016804.html) | curated file | `curated:JP:` | Aichi through 2027-03-31 (PAR-1072); Chiba, Osaka, Yamanashi and every other prefecture unknown |
 | CN | public blocks + `working_day` | State Council notice for 2026, [Xinhua's authorised release](https://www.news.cn/politics/20251104/88bcffd88ae249e58c699b8772548e3d/c.html) | curated file | `curated:CN:` | no school data, so unknown |
 
 Public holidays for all of them still come from Nager.Date as well. The rows
@@ -64,7 +64,7 @@ entry. Past the last entry the coverage ends, and the day reads as unknown:
 | `curated-holidays-sg.ts` | July, for the next year | MOE press release "School Terms and Holidays for YYYY" |
 | `curated-holidays-au.ts` | when QLD adds a year (currently through 2029) | education.qld.gov.au "future dates" |
 | `curated-holidays-gb.ts` | when Staffordshire adds 2029-30 (it publishes about three years ahead; the live page drops the year just ended) | staffordshire.gov.uk "School term dates" |
-| `curated-holidays-jp.ts` | spring, for the school year starting in April (Nagoya updates its 年間スケジュール page; Urayasu: check 第18条の2 and the board's minutes for a change) | the city's own page or regulation |
+| `curated-holidays-jp.ts` | spring, for the school year starting in April (Nagoya updates its 年間スケジュール page; Urayasu can join once its 第18条の2 dates are read) | the city's own page or regulation |
 | `curated-holidays-us.ts` | when a district publishes its next school year (Orange County publishes three ahead; Northside ISD two, approved each December) | the district's own calendar page, never an aggregator |
 
 ## United States (PAR-1071)
@@ -334,9 +334,11 @@ day was unknown (CatBoost NaN, TFT `school_holiday_known` 0, calendar
 `schoolVacationUnknown`). After the sync the seven parks read real 0/1 for
 `is_school_holiday_primary` and the calendar through 2029-08-31. The
 neighbour count stays NaN, because Scotland and Wales are unknown; the
-three-valued `is_school_holiday_any` is 1 on England's breaks. Nothing is
-retrained for it: the current CatBoost model sends NaN to the side of 0
-(`nan_mode = Min`), so serving changes only on the days that are now 1.
+three-valued `is_school_holiday_any` is 1 on England's breaks. Serving the
+current CatBoost model changes only on the days that are now 1 (`nan_mode =
+Min` sends NaN to the side of 0); the daily 06:00 UTC CatBoost training
+absorbs the new history the next morning, and the next TFT training learns
+from the new 0/1 — no manual retrain is needed.
 
 ## Japan (PAR-1072)
 
@@ -350,32 +352,33 @@ park is in, where the city states the dates.
 **Production region codes (read 2026-10-25).** Tokyo Disneyland and
 DisneySea `12` (Chiba), LEGOLAND Japan `23` (Aichi), Universal Studios Japan
 `27` (Osaka), Fuji-Q Highland `Yamanashi` (a name, not the ISO number 19).
-The rows are keyed `JP-12` / `JP-23`, which `normalizeRegionCode` turns into
-the parks' `12` / `23`.
+The rows are keyed `JP-23`, which `normalizeRegionCode` turns into
+LEGOLAND's `23`.
 
 | Key | City | Parks | Breaks listed | Basis |
 |---|---|---|---|---|
-| `JP-12` | Urayasu (浦安市教育委員会) | Tokyo Disneyland, Tokyo DisneySea | summer 2026 (2026-07-21..08-31) only | the [October 2025 minutes](https://www.city.urayasu.lg.jp/_res/projects/default_project/_page_/001/045/711/202510teireikai.pdf): "令和８年度から…夏季休業期間を７月21日から８月31日までとすることとした", ending a trial (令和3–7年度) in which summer ended on 8/24 |
 | `JP-23` | Nagoya (名古屋市教育委員会) | LEGOLAND Japan | winter 2025-26, spring 2026, summer 2026, winter 2026-27, spring 2027 to 03-31 | [年間スケジュール](https://www.city.nagoya.jp/kodomo/schools/1027693/1016802/1016803/1016804.html), dates per school year (冬休み, 夏休み; spring from the 修了式 and 始業式 dates) |
 
-**Rules versus dates.** Urayasu's other breaks are fixed in its school
-regulation (浦安市立小学校及び中学校管理規則 第18条の2; reported as 学年始め
-4/1–4/6, 冬季 12/24–1/5, 学年末 3/26–3/31 and 県民の日). The regulation names
-no year, and its text sits behind the Reiki-Base viewer
-(krg028.legal-square.com), which the independent cross-check could not
-open — so the dates were not confirmed by a second reader and are **not
-listed**. Add them once someone has read 第18条の2 in a browser; until then
-Disney's days after 2026-08-31 read as unknown. Summer 2025 is not listed:
-the trial ended it on 8/24 and its start is not published (elementary and
-junior high differed). 令和9年度 is not listed for either city: neither has
-published it. Nagoya's spring break is
-the days between 修了式 (03-24) and the junior high 始業式 (2026-04-06;
-elementary starts 04-07), without the weekend before it. Nagoya's single
-days (県民の日学校ホリデー, ラーケーションの日) are a school's or a family's
-choice and are not listed.
+Nagoya's spring break is the days between 修了式 (03-24) and the junior high
+始業式 (2026-04-06; elementary starts 04-07), without the weekend before it.
+Nagoya's single days (県民の日学校ホリデー, ラーケーションの日) are a school's
+or a family's choice and are not listed. 令和9年度 is not published, so the
+data stops on 2027-03-31.
 
 **Left out.**
 
+- **Urayasu (Tokyo Disney Resort, `12`).** The only date the city states for
+  a school year is summer 2026 (7/21–8/31, [October 2025 board minutes](https://www.city.urayasu.lg.jp/_res/projects/default_project/_page_/001/045/711/202510teireikai.pdf),
+  ending a 令和3–7年度 trial in which summer ended on 8/24). The other breaks
+  are fixed in 浦安市立小学校及び中学校管理規則 第18条の2 (reported as
+  学年始め 4/1–4/6, 冬季 12/24–1/5, 学年末 3/26–3/31 and 県民の日), whose text
+  sits behind the Reiki-Base viewer (krg028.legal-square.com) that the
+  independent cross-check could not open. Summer 2026 alone was not added: a
+  coverage ending 2026-08-31 has no forward value, and it would have turned
+  Disney's real, unlisted winter 2025-26 and spring 2026 from unknown into a
+  confident 0, and made those days `regular` instead of `school_unknown` as
+  `/plan/day` climatology references. Add Urayasu once the 第18条の2 dates are
+  read for full school years.
 - **Osaka (USJ, `27`).** 大阪市立学校管理規則 第2条の2 sets summer 7/21–8/24,
   winter 12/25–1/7 and spring 3/25–4/7 for elementary and junior high, as
   quoted in board agendas of [2021](https://www.city.osaka.lg.jp/kyoiku/cmsfiles/contents/0000531/531729/giann30.pdf)
@@ -387,19 +390,20 @@ choice and are not listed.
   of 富士吉田市立小・中学校管理規則 第29条 is a 2014 Wayback capture, and it
   gives windows (summer "7月20日から8月31日までの間", at most 75 days a
   year), not dates; the live reiki (g-reiki.net) answered 403. Not listed.
-- **Neighbour prefectures** (Tokyo, Kanagawa, Saitama for Disney; Mie, Gifu,
-  Shizuoka for LEGOLAND) have no rows.
+- **Neighbour prefectures** (Mie, Gifu, Shizuoka for LEGOLAND) have no rows.
 
-JP is in `REGION_ONLY_SCHOOL_COVERAGE`, so Osaka, Yamanashi and every
-neighbour prefecture read as unknown rather than borrowing Chiba's or
-Aichi's coverage.
+JP is in `REGION_ONLY_SCHOOL_COVERAGE`, so Chiba, Osaka, Yamanashi and every
+neighbour prefecture read as unknown rather than borrowing Aichi's coverage.
 
 **What the models see.** Before: no JP school row, every day unknown. After
-the sync, the three Chiba and Aichi parks read real 0/1 for
-`is_school_holiday_primary` and the calendar inside their coverage (Disney
-through 2026-08-31, i.e. history only; LEGOLAND through 2027-03-31); USJ and
-Fuji-Q stay unknown on every day. The neighbour count stays NaN for Disney
-and LEGOLAND, whose neighbour prefectures are unknown. Nothing is retrained.
+the sync, LEGOLAND Japan reads real 0/1 for `is_school_holiday_primary` and
+the calendar through 2027-03-31; Disney, USJ and Fuji-Q stay unknown on
+every day. LEGOLAND's neighbour count stays NaN, because its neighbour
+prefectures are unknown. Serving the
+current CatBoost model changes only on the days that are now 1 (`nan_mode =
+Min` sends NaN to the side of 0); the daily 06:00 UTC CatBoost training
+absorbs the new history the next morning, and the next TFT training learns
+from the new 0/1 — no manual retrain is needed.
 
 ## China's make-up working days (调休)
 

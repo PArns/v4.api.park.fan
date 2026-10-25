@@ -70,8 +70,8 @@ SCHOOL_HOLIDAY_TYPES = frozenset({"school"})
 EASTER_COUNTRIES = frozenset({"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"})
 # Countries whose school data is curated for some regions only (PAR-1071): a
 # region without rows is unknown, never covered by another region's rows —
-# Ohio is not on Orlando's calendar. GB (England only) and JP (Chiba and
-# Aichi only) since PAR-1072.
+# Ohio is not on Orlando's calendar. GB (England only) and JP (Aichi only)
+# since PAR-1072.
 REGION_ONLY_SCHOOL_COVERAGE = frozenset({"US", "AU", "GB", "JP"})
 
 SCHOOL_FEATURE_COLUMNS = (

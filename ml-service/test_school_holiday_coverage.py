@@ -118,13 +118,14 @@ def test_gb_scotland_and_wales_are_unknown_not_covered_by_england():
 
 
 def test_jp_prefectures_without_rows_are_unknown():
-    # PAR-1072: JP school data is Chiba (Urayasu) and Aichi (Nagoya) only.
+    # PAR-1072: JP school data is Aichi (Nagoya) only.
     jp = SchoolCoverage(
         pd.DataFrame(
-            [("JP", "2027-03-31", "JP-12", "school", False)],
+            [("JP", "2027-03-31", "JP-23", "school", False)],
             columns=["country", "date", "region", "holiday_type", "is_nationwide"],
         )
     )
-    assert jp.through("JP", normalize_region_code("12")) == dt.date(2027, 3, 31)
+    assert jp.through("JP", normalize_region_code("23")) == dt.date(2027, 3, 31)
+    assert jp.through("JP", normalize_region_code("12")) is None
     assert jp.through("JP", normalize_region_code("27")) is None
     assert jp.through_any("JP") is None

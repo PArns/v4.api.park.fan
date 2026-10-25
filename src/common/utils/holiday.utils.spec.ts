@@ -42,9 +42,10 @@ describe("holiday.utils › school-holiday coverage", () => {
 
   it("leaves a Japanese prefecture without rows unknown (PAR-1072)", () => {
     const jp = buildSchoolCoverage([
-      { country: "JP", region: "JP-12", through: "2027-03-31" },
+      { country: "JP", region: "JP-23", through: "2027-03-31" },
     ]);
-    expect(schoolCoverageThrough(jp, "JP", "12")).toBe("2027-03-31");
+    expect(schoolCoverageThrough(jp, "JP", "23")).toBe("2027-03-31");
+    expect(schoolCoverageThrough(jp, "JP", "12")).toBeNull();
     expect(schoolCoverageThrough(jp, "JP", "27")).toBeNull();
   });
 
