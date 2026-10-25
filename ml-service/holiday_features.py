@@ -50,9 +50,9 @@ its public holidays reach 2028; Sweden has none at all). Inside the coverage
 nothing changes. A location's coverage is its last regional OR national
 school row; a location whose region matches no row falls back to the latest
 school row of any region of its country, and a country with no school row
-has no coverage at all. In REGION_ONLY_SCHOOL_COVERAGE countries (US, AU:
-curated for some states only) there is no such fallback, and a whole-country
-influence has no coverage. Without a ``SchoolCoverage`` the features are what
+has no coverage at all. In REGION_ONLY_SCHOOL_COVERAGE countries (US, AU,
+GB, JP: curated for some regions only) there is no such fallback, and a
+whole-country influence has no coverage. Without a ``SchoolCoverage`` the features are what
 they always were.
 """
 
@@ -70,8 +70,9 @@ SCHOOL_HOLIDAY_TYPES = frozenset({"school"})
 EASTER_COUNTRIES = frozenset({"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"})
 # Countries whose school data is curated for some regions only (PAR-1071): a
 # region without rows is unknown, never covered by another region's rows —
-# Ohio is not on Orlando's calendar.
-REGION_ONLY_SCHOOL_COVERAGE = frozenset({"US", "AU"})
+# Ohio is not on Orlando's calendar. GB (England only) and JP (Aichi only)
+# since PAR-1072.
+REGION_ONLY_SCHOOL_COVERAGE = frozenset({"US", "AU", "GB", "JP"})
 
 SCHOOL_FEATURE_COLUMNS = (
     "is_school_holiday_primary",

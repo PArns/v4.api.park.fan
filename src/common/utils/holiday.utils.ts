@@ -573,12 +573,15 @@ export function buildSchoolCoverage(
 /**
  * Countries whose school data is curated for some regions only (PAR-1071): a
  * region without rows is unknown, never covered by another region's rows —
- * Ohio is not on Orlando's calendar. Same set as ml-service's
+ * Ohio is not on Orlando's calendar. GB (England only) and JP (Aichi only)
+ * since PAR-1072. Same set as ml-service's
  * `REGION_ONLY_SCHOOL_COVERAGE`.
  */
 export const REGION_ONLY_SCHOOL_COVERAGE: ReadonlySet<string> = new Set([
   "US",
   "AU",
+  "GB",
+  "JP",
 ]);
 
 /**

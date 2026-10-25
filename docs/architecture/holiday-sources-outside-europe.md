@@ -19,6 +19,8 @@ Facts about real places come from the publisher's own page, never from recall.
 | SG | school, national | MOE press releases for [2026](https://www.moe.gov.sg/news/press-releases/20250730-school-terms-and-holidays-for-2026) and [2027](https://www.moe.gov.sg/news/press-releases/20260714-school-terms-and-holidays-for-2027) | curated file | `curated:SG:` | school through 2027-12-31 |
 | AU (QLD) | school, `AU-QLD` | Department of Education, [2026](https://education.qld.gov.au/about-us/calendar/term-dates) and [2027–2029](https://education.qld.gov.au/about-us/calendar/future-dates) | curated file | `curated:AU:` | school through 2029-12-31 |
 | US (FL, TX, CA) | school, `US-FL` / `US-TX` / `US-CA`, one district per state | [Orange County Public Schools](https://www.ocps.net/110680_3), [Northside ISD](https://www.nisd.net/schools/calendars), [Los Angeles Unified](https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183) | curated file | `curated:US:` | FL through 2028-08-09, TX through 2028-07-31, CA through 2028-06-30; other states unknown |
+| GB (England) | school, `GB-ENG`, one local authority | [Staffordshire County Council](https://www.staffordshire.gov.uk/schools-and-learning/school-term-dates) | curated file | `curated:GB:` | school through 2029-08-31 (PAR-1072); Scotland, Wales, Northern Ireland unknown |
+| JP (Aichi) | school, `JP-23` | [Nagoya City](https://www.city.nagoya.jp/kodomo/schools/1027693/1016802/1016803/1016804.html) | curated file | `curated:JP:` | Aichi through 2027-03-31 (PAR-1072); Chiba, Osaka, Yamanashi and every other prefecture unknown |
 | CN | public blocks + `working_day` | State Council notice for 2026, [Xinhua's authorised release](https://www.news.cn/politics/20251104/88bcffd88ae249e58c699b8772548e3d/c.html) | curated file | `curated:CN:` | no school data, so unknown |
 
 Public holidays for all of them still come from Nager.Date as well. The rows
@@ -61,6 +63,8 @@ entry. Past the last entry the coverage ends, and the day reads as unknown:
 | `curated-holidays-cn.ts` | early November, for the next year | the 国务院办公厅 notice (Xinhua "受权发布" or gov.cn) |
 | `curated-holidays-sg.ts` | July, for the next year | MOE press release "School Terms and Holidays for YYYY" |
 | `curated-holidays-au.ts` | when QLD adds a year (currently through 2029) | education.qld.gov.au "future dates" |
+| `curated-holidays-gb.ts` | when Staffordshire adds 2029-30 (it publishes about three years ahead; the live page drops the year just ended) | staffordshire.gov.uk "School term dates" |
+| `curated-holidays-jp.ts` | spring, for the school year starting in April (Nagoya updates its 年間スケジュール page; Urayasu can join once its 第18条の2 dates are read) | the city's own page or regulation |
 | `curated-holidays-us.ts` | when a district publishes its next school year (Orange County publishes three ahead; Northside ISD two, approved each December) | the district's own calendar page, never an aggregator |
 
 ## United States (PAR-1071)
@@ -277,6 +281,129 @@ default inputs are finite; the next TFT training learns from the new 0/1. Until 
 the served TFT sees `is_holiday_neighbor` = 1 on US neighbour breaks it never
 had in training (PAR-1074), a train/serve gap that closes with the next TFT
 retrain.
+
+## Great Britain (PAR-1072)
+
+Nager.Date has GB bank holidays per nation (`GB-ENG`, `GB-SCT`, `GB-WLS`,
+`GB-NIR`) and no school data; OpenHolidays has no GB. In England term dates
+are set by each local authority for its community and voluntary-controlled
+schools, and academies may set their own. `curated-holidays-gb.ts` copies one
+council's dates.
+
+**Production region codes (read 2026-10-25).** All seven GB parks are in
+England: Alton Towers, Blackpool Pleasure Beach, Chessington, LEGOLAND
+Windsor, Paultons Park and Thorpe Park store `ENG`, Flamingo Land stores
+`England` (the geocoder's long name, aliased to `ENG` by
+`normalizeRegionCode` and `REGION_ALIASES` in both Python services). The rows
+are keyed `GB-ENG`, so every park gets them.
+
+| Council | Parks it stands for | School years |
+|---|---|---|
+| Staffordshire County Council ([school term dates](https://www.staffordshire.gov.uk/schools-and-learning/school-term-dates), updated 2026-10-08; 2024-25 / 2025-26 from its Wayback captures of [2025-09-10](http://web.archive.org/web/20250910231343/https://www.staffordshire.gov.uk/education/termdates.aspx) and [2026-01-27](http://web.archive.org/web/20260127195849/https://www.staffordshire.gov.uk/schools-and-learning/school-term-dates)) | all seven England parks; Alton Towers is in Staffordshire | May half term 2025, summer 2025, 2025-26, 2026-27, 2027-28, 2028-29 (summer 2029 to 08-31, the page's last day) |
+
+**What is listed.** Every holiday the page names, the May Day bank holiday
+(inside the term) and the one inset day per year the council fixes
+(2025-09-01, 2026-09-01, 2027-09-02, 2028-09-04), which joins the summer. The
+other four inset days are each school's choice and are not listed. A bank
+holiday that sits between term and holiday is part of the holiday: Good
+Friday 2027 (term ends Thursday 25 March) and 3 January 2028 (term starts
+Tuesday 4 January). 2026-07-20 is a school day: the council only
+"encourages" it as an inset day.
+
+**One council for England.** The key is the nation, so one calendar stands
+for all seven parks. Staffordshire was chosen because it publishes three
+years ahead and its 2026-27 dates are the common pattern: Windsor &
+Maidenhead (LEGOLAND, [2026/27](https://www.rbwm.gov.uk/schools-and-education/school-term-dates/school-term-dates-202627))
+publishes the same 2026-27 year day for day, from the 1 September inset day
+to the 21 July last day. Others are not: Surrey (Thorpe Park, next to
+Chessington and LEGOLAND) has a two-week October half term in 2026
+(19–30 October) and ends its 2026-27 year on 28 July; its 2028 Easter break
+runs 3–17 April where Staffordshire's is 10–21 April. Those weeks are wrong
+for Thorpe Park. Two councils under one key would be unioned and every break
+they hold in different weeks would read twice as long, so none was added.
+Hampshire's site (hants.gov.uk, Paultons Park) answered 403 to scripted
+requests on 2026-10-25 and was not compared. Per-park councils need a sub-nation
+key, the same follow-up as the US.
+
+**Scotland, Wales and Northern Ireland have no rows** and read as unknown:
+GB is in `REGION_ONLY_SCHOOL_COVERAGE`, so `GB-SCT` and `GB-WLS` — every GB
+park lists both as influencing regions — are not covered by England's rows.
+
+**What the models see.** Before this change GB had no school row, so every GB
+day was unknown (CatBoost NaN, TFT `school_holiday_known` 0, calendar
+`schoolVacationUnknown`). After the sync the seven parks read real 0/1 for
+`is_school_holiday_primary` and the calendar through 2029-08-31. The
+neighbour count stays NaN, because Scotland and Wales are unknown; the
+three-valued `is_school_holiday_any` is 1 on England's breaks. Serving the
+current CatBoost model changes only on the days that are now 1 (`nan_mode =
+Min` sends NaN to the side of 0); the daily 06:00 UTC CatBoost training
+absorbs the new history the next morning, and the next TFT training learns
+from the new 0/1 — no manual retrain is needed.
+
+## Japan (PAR-1072)
+
+Nager.Date has Japan's public holidays (national rows) and no school data.
+School breaks (長期休業日) of public elementary and junior high schools are
+set by each municipal board of education in its school regulation
+(学校管理規則), sometimes as fixed dates, sometimes as a window inside which
+each school sets its own. `curated-holidays-jp.ts` copies them for the city a
+park is in, where the city states the dates.
+
+**Production region codes (read 2026-10-25).** Tokyo Disneyland and
+DisneySea `12` (Chiba), LEGOLAND Japan `23` (Aichi), Universal Studios Japan
+`27` (Osaka), Fuji-Q Highland `Yamanashi` (a name, not the ISO number 19).
+The rows are keyed `JP-23`, which `normalizeRegionCode` turns into
+LEGOLAND's `23`.
+
+| Key | City | Parks | Breaks listed | Basis |
+|---|---|---|---|---|
+| `JP-23` | Nagoya (名古屋市教育委員会) | LEGOLAND Japan | winter 2025-26, spring 2026, summer 2026, winter 2026-27, spring 2027 to 03-31 | [年間スケジュール](https://www.city.nagoya.jp/kodomo/schools/1027693/1016802/1016803/1016804.html), dates per school year (冬休み, 夏休み; spring from the 修了式 and 始業式 dates) |
+
+Nagoya's spring break is the days between 修了式 (03-24) and the junior high
+始業式 (2026-04-06; elementary starts 04-07), without the weekend before it.
+Nagoya's single days (県民の日学校ホリデー, ラーケーションの日) are a school's
+or a family's choice and are not listed. 令和9年度 is not published, so the
+data stops on 2027-03-31.
+
+**Left out.**
+
+- **Urayasu (Tokyo Disney Resort, `12`).** The only date the city states for
+  a school year is summer 2026 (7/21–8/31, [October 2025 board minutes](https://www.city.urayasu.lg.jp/_res/projects/default_project/_page_/001/045/711/202510teireikai.pdf),
+  ending a 令和3–7年度 trial in which summer ended on 8/24). The other breaks
+  are fixed in 浦安市立小学校及び中学校管理規則 第18条の2 (reported as
+  学年始め 4/1–4/6, 冬季 12/24–1/5, 学年末 3/26–3/31 and 県民の日), whose text
+  sits behind the Reiki-Base viewer (krg028.legal-square.com) that the
+  independent cross-check could not open. Summer 2026 alone was not added: a
+  coverage ending 2026-08-31 has no forward value, and it would have turned
+  Disney's real, unlisted winter 2025-26 and spring 2026 from unknown into a
+  confident 0, and made those days `regular` instead of `school_unknown` as
+  `/plan/day` climatology references. Add Urayasu once the 第18条の2 dates are
+  read for full school years.
+- **Osaka (USJ, `27`).** 大阪市立学校管理規則 第2条の2 sets summer 7/21–8/24,
+  winter 12/25–1/7 and spring 3/25–4/7 for elementary and junior high, as
+  quoted in board agendas of [2021](https://www.city.osaka.lg.jp/kyoiku/cmsfiles/contents/0000531/531729/giann30.pdf)
+  and (unchanged paragraph) [2024](https://www.city.osaka.lg.jp/kyoiku/cmsfiles/contents/0000623/623570/gian38.pdf).
+  The current text could not be read (no public reiki found), no page states
+  dates for a school year, and since 2021 each school may move a boundary
+  by a day. Not listed.
+- **Yamanashi (Fuji-Q).** Fuji-Q is in Fujiyoshida. The only readable copy
+  of 富士吉田市立小・中学校管理規則 第29条 is a 2014 Wayback capture, and it
+  gives windows (summer "7月20日から8月31日までの間", at most 75 days a
+  year), not dates; the live reiki (g-reiki.net) answered 403. Not listed.
+- **Neighbour prefectures** (Mie, Gifu, Shizuoka for LEGOLAND) have no rows.
+
+JP is in `REGION_ONLY_SCHOOL_COVERAGE`, so Chiba, Osaka, Yamanashi and every
+neighbour prefecture read as unknown rather than borrowing Aichi's coverage.
+
+**What the models see.** Before: no JP school row, every day unknown. After
+the sync, LEGOLAND Japan reads real 0/1 for `is_school_holiday_primary` and
+the calendar through 2027-03-31; Disney, USJ and Fuji-Q stay unknown on
+every day. LEGOLAND's neighbour count stays NaN, because its neighbour
+prefectures are unknown. Serving the
+current CatBoost model changes only on the days that are now 1 (`nan_mode =
+Min` sends NaN to the side of 0); the daily 06:00 UTC CatBoost training
+absorbs the new history the next morning, and the next TFT training learns
+from the new 0/1 — no manual retrain is needed.
 
 ## China's make-up working days (调休)
 

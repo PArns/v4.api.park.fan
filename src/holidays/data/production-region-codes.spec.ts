@@ -25,6 +25,17 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   ["lotte-world-adventure", "KR", "11"],
   ["universal-studios-singapore", "SG", ""],
   ["dreamworld", "AU", "QLD"],
+  // GB (PAR-1072, read 2026-10-25): England, one stores the full name.
+  ["alton-towers", "GB", "ENG"],
+  ["blackpool-pleasure-beach", "GB", "ENG"],
+  ["chessington-world-of-adventures", "GB", "ENG"],
+  ["flamingo-land", "GB", "England"],
+  ["legoland-windsor", "GB", "ENG"],
+  ["paultons-park", "GB", "ENG"],
+  ["thorpe-park", "GB", "ENG"],
+  // JP (PAR-1072): ISO numbers; Disney (12), USJ (27) and Fuji-Q
+  // (Yamanashi) have no rows.
+  ["legoland-japan", "JP", "23"],
   ["cn-zhejiang", "CN", "Zhejiang"],
   ["cn-jiangsu", "CN", "Jiangsu"],
   ["cn-gansu-sheng", "CN", "Gan Su Sheng"],

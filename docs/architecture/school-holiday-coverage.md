@@ -21,13 +21,15 @@ OpenHolidays itself holds no ES/IT/HU school holidays for 2026-09 … 2027-08
 (DE has 110), and returns none for SE even for 2025. So nothing is projected or
 invented: past the edge, the answer is **unknown**.
 
-Sources outside Europe (KR from NEIS, curated SG / AU-QLD / CN / US files) and
+Sources outside Europe (KR from NEIS, curated SG / AU-QLD / CN / US / GB / JP files) and
 how far each reaches: [Holiday sources outside Europe](holiday-sources-outside-europe.md).
 
 | Country | School data (PAR-1071 / PAR-1074 update, 2026-10-25) |
 |---|---|
 | US | curated, one district per state: FL (Orange County) through 2028-08-09, TX (Northside ISD) through 2028-07-31, CA (Los Angeles Unified) through 2028-06-30; MO (North Kansas City), VA (Williamsburg-James City County) and NC (Charlotte-Mecklenburg) through 2028-06-30; PA (Derry Township), OH (Sandusky) and TN (Sevier County) through 2027-06-30; every other state unknown |
 | AU | QLD through 2029-12-31; every other state unknown |
+| GB | curated, England from one council (Staffordshire) through 2029-08-31; Scotland, Wales, Northern Ireland unknown (PAR-1072) |
+| JP | curated per city: Aichi (Nagoya) through 2027-03-31; Chiba, Osaka, Yamanashi and every other prefecture unknown (PAR-1072) |
 
 ## Coverage
 
@@ -36,7 +38,7 @@ last `school` date per `(country, region)` (`MAX(date) GROUP BY country, region`
 A location's coverage is the later of its own region's rows and the national
 rows. A region that no row names falls back to the latest row of any region of
 its country — a region-matching gap is a different bug and stays as it was.
-Not in the US and AU (`REGION_ONLY_SCHOOL_COVERAGE`, PAR-1071): there school
+Not in the US, AU, GB and JP (`REGION_ONLY_SCHOOL_COVERAGE`, PAR-1071 / PAR-1072): there school
 data is curated for some states only, so a state without rows is unknown
 rather than covered by another state's calendar. A
 country without a single school row has no coverage: every day is unknown.
@@ -50,7 +52,14 @@ The same rule exists twice, kept identical:
   `HolidaysService.getSchoolHolidayCoverage()`.
 
 Only the upper edge is handled. Rows before the first synced school year read
-as 0 as before.
+as 0 as before. For GB and JP (PAR-1072) that is a change: a day before a
+region's first curated row (England before 2025-05-05, Aichi before
+2025-12-24) now reads 0 where it read NaN while the country had no school
+row at all. It costs nothing in practice: park
+history starts on 2025-12-24 (`queue_data`'s first row; the training window
+in `ml-service/config.py` and [Model Overview](../ml/model-overview.md)
+starts there too), so no wait-time day of a GB or Aichi park lies before
+its first school row.
 
 ## What each consumer does past the edge
 
