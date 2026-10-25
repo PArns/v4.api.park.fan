@@ -1,4 +1,7 @@
-import { findSharedMinuteClusters } from "./queue-percentile.processor";
+import {
+  FEED_EVENT_CLUSTER_THRESHOLDS,
+  findSharedMinuteClusters,
+} from "./queue-percentile.processor";
 
 /**
  * Forty seasons do not start in the same minute.
@@ -13,9 +16,18 @@ import { findSharedMinuteClusters } from "./queue-percentile.processor";
  *
  * It is one upstream write. A real seasonal closure is ragged, because each
  * ride stops when it stops.
+ *
+ * Two of those five clusters are no longer suppressed. Fiesta Texas at 18.75 %
+ * and Knott's Berry Farm at 17 % fall below the 20 % line this guard has used
+ * since PAR-1070; the same minute at either park would now be read as a season.
+ * They stay named here because they are what the guard was built from, not
+ * because the guard still catches them.
  */
 describe("findSharedMinuteClusters", () => {
-  const thresholds = { minSize: 5, minParkShare: 0.15 };
+  // The value production runs on, not a copy of it: a spec that carried its
+  // own 0.15 stayed green through the whole move to 0.20 and proved nothing
+  // about the detector.
+  const thresholds = FEED_EVENT_CLUSTER_THRESHOLDS;
   const at = (iso: string) => ({ at: new Date(iso) });
 
   const cluster = (parkId: string, count: number) =>
@@ -91,17 +103,45 @@ describe("findSharedMinuteClusters", () => {
     ).toEqual([]);
   });
 
-  it("keeps the 19 % case, because that one really happened", () => {
-    // Six Flags Fiesta Texas: 15 of 80, all at 2026-04-12 22:53.
-    const rides = cluster("fiesta-texas", 15);
+  it("reads a whole water area closing on one evening as a season", () => {
+    // Carowinds: 14 of 73 tracked rides, all at 2026-09-07 20:15, and all of
+    // them Carolina Harbor — one water area over the Labor Day weekend, while
+    // the park ran another 23 open days. At 19.2 % the old 15 % line read that
+    // shape as a feed event and left all 14 without season_out_since
+    // (PAR-1070).
+    const rides = cluster("carowinds", 14);
     expect(
       findSharedMinuteClusters(
         rides,
-        lastOperatingFor(rides, "2026-04-12T22:53:00Z"),
-        new Map([["fiesta-texas", 80]]),
+        lastOperatingFor(rides, "2026-09-07T20:15:10Z"),
+        new Map([["carowinds", 73]]),
+        thresholds,
+      ),
+    ).toEqual([]);
+  });
+
+  it("still suppresses a cluster that is exactly a fifth of its park", () => {
+    // The line itself: 20 % is a feed event, 19 % is not, and the comparison
+    // is `< minParkShare` rather than `<=`.
+    const rides = cluster("boundary-park", 20);
+    expect(
+      findSharedMinuteClusters(
+        rides,
+        lastOperatingFor(rides, "2026-09-07T20:15:00Z"),
+        new Map([["boundary-park", 100]]),
         thresholds,
       ),
     ).toHaveLength(1);
+
+    const justUnder = cluster("boundary-park", 19);
+    expect(
+      findSharedMinuteClusters(
+        justUnder,
+        lastOperatingFor(justUnder, "2026-09-07T20:15:00Z"),
+        new Map([["boundary-park", 100]]),
+        thresholds,
+      ),
+    ).toEqual([]);
   });
 
   it("ignores rides that were never OPERATING — a different question", () => {
