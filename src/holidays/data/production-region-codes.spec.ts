@@ -25,6 +25,9 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   ["lotte-world-adventure", "KR", "11"],
   ["universal-studios-singapore", "SG", ""],
   ["dreamworld", "AU", "QLD"],
+  // GB (PAR-1072, read 2026-10-25): England, one stores the full name.
+  ["alton-towers", "GB", "ENG"],
+  ["flamingo-land", "GB", "England"],
   ["cn-zhejiang", "CN", "Zhejiang"],
   ["cn-jiangsu", "CN", "Jiangsu"],
   ["cn-gansu-sheng", "CN", "Gan Su Sheng"],

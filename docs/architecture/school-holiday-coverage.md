@@ -28,6 +28,7 @@ how far each reaches: [Holiday sources outside Europe](holiday-sources-outside-e
 |---|---|
 | US | curated, one district per state: FL (Orange County) through 2028-08-09, TX (Northside ISD) through 2028-07-31, CA (Los Angeles Unified) through 2028-06-30; MO (North Kansas City), VA (Williamsburg-James City County) and NC (Charlotte-Mecklenburg) through 2028-06-30; PA (Derry Township), OH (Sandusky) and TN (Sevier County) through 2027-06-30; every other state unknown |
 | AU | QLD through 2029-12-31; every other state unknown |
+| GB | curated, England from one council (Staffordshire) through 2029-08-31; Scotland, Wales, Northern Ireland unknown (PAR-1072) |
 
 ## Coverage
 
@@ -36,7 +37,7 @@ last `school` date per `(country, region)` (`MAX(date) GROUP BY country, region`
 A location's coverage is the later of its own region's rows and the national
 rows. A region that no row names falls back to the latest row of any region of
 its country — a region-matching gap is a different bug and stays as it was.
-Not in the US and AU (`REGION_ONLY_SCHOOL_COVERAGE`, PAR-1071): there school
+Not in the US, AU and GB (`REGION_ONLY_SCHOOL_COVERAGE`, PAR-1071 / PAR-1072): there school
 data is curated for some states only, so a state without rows is unknown
 rather than covered by another state's calendar. A
 country without a single school row has no coverage: every day is unknown.

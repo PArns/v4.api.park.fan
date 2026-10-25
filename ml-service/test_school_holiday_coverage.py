@@ -17,6 +17,7 @@ from holiday_features import (
     assign_holiday_features,
     park_day_holiday_features,
 )
+from holiday_utils import normalize_region_code
 
 HOLIDAYS = pd.DataFrame(
     [
@@ -99,3 +100,18 @@ def test_us_states_without_rows_are_unknown_not_covered_by_florida():
     assert us.through("US", "FL") == dt.date(2028, 8, 9)
     assert us.through("US", "OH") is None
     assert us.through_any("US") is None
+
+
+def test_gb_scotland_and_wales_are_unknown_not_covered_by_england():
+    # PAR-1072: GB school data is England (one council) only.
+    gb = SchoolCoverage(
+        pd.DataFrame(
+            [("GB", "2029-08-31", "GB-ENG", "school", False)],
+            columns=["country", "date", "region", "holiday_type", "is_nationwide"],
+        )
+    )
+    assert gb.through("GB", "ENG") == dt.date(2029, 8, 31)
+    # Flamingo Land stores "England"; callers pass the normalised code.
+    assert gb.through("GB", normalize_region_code("England")) == dt.date(2029, 8, 31)
+    assert gb.through("GB", "SCT") is None
+    assert gb.through_any("GB") is None

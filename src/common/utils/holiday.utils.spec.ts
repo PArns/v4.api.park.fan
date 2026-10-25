@@ -31,6 +31,15 @@ describe("holiday.utils › school-holiday coverage", () => {
     expect(schoolCoverageThrough(us, "US", null)).toBeNull();
   });
 
+  it("never lends England's calendar to Scotland or Wales (PAR-1072)", () => {
+    const gb = buildSchoolCoverage([
+      { country: "GB", region: "GB-ENG", through: "2029-08-31" },
+    ]);
+    expect(schoolCoverageThrough(gb, "GB", "England")).toBe("2029-08-31");
+    expect(schoolCoverageThrough(gb, "GB", "GB-SCT")).toBeNull();
+    expect(schoolCoverageThrough(gb, "GB", null)).toBeNull();
+  });
+
   it("marks only the false days past the coverage", () => {
     const days = [
       { date: "2026-09-11", isSchoolVacation: true },

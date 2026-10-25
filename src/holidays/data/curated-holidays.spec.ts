@@ -15,6 +15,8 @@ import {
  * an aggregator is exactly what this guards against.
  */
 const OFFICIAL_HOSTS: Record<string, string[]> = {
+  // The local authority itself (PAR-1072).
+  GB: ["www.staffordshire.gov.uk"],
   SG: ["www.moe.gov.sg"],
   AU: ["education.qld.gov.au"],
   // Xinhua's authorised release ("受权发布") of the State Council notice.
@@ -139,5 +141,20 @@ describe("curated holiday files (PAR-1065)", () => {
     expect(schoolCoverageThrough(coverage, "US", "TN")).toBe("2027-06-30");
     expect(schoolCoverageThrough(coverage, "US", "NC")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
+  });
+
+  it("covers England through the council's last published day (PAR-1072)", () => {
+    const gb = CURATED_HOLIDAY_SETS.find((x) => x.country === "GB")!;
+    const coverage = buildSchoolCoverage(
+      expandCuratedHolidays(gb).map((r) => ({
+        country: r.country,
+        region: r.region ?? null,
+        through: r.date.toISOString().slice(0, 10),
+      })),
+    );
+    // Staffordshire publishes through summer 2029.
+    expect(schoolCoverageThrough(coverage, "GB", "ENG")).toBe("2029-08-31");
+    expect(schoolCoverageThrough(coverage, "GB", "SCT")).toBeNull();
+    for (const e of gb.entries) expect(e.region).toBe("GB-ENG");
   });
 });
