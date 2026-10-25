@@ -1,8 +1,11 @@
 import { Process, Processor } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
+import axios from "axios";
+import { getMlServiceUrl } from "../../config/ml-services.config";
 import { ForecastArchiveService } from "../../parks/services/forecast-archive.service";
 import { ForecastArchiveScoringService } from "../../parks/services/forecast-archive-scoring.service";
+import { MlDecisionWatchService } from "../../parks/services/ml-decision-watch.service";
 
 /**
  * The forward archive of served intraday curves (PAR-831).
@@ -14,7 +17,11 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  *   one hourly job reading every park's clock covers all offsets.
  * - `score` ({@link ForecastArchiveScoreProcessor}, its own queue) runs daily
  *   at 12:00 UTC, when yesterday (UTC) is over in every park's timezone,
- *   scores it against queue_data truth and prunes the archive.
+ *   scores it against queue_data truth and prunes the archive, then freezes
+ *   due decision reports and computes the drift watch (PAR-1059).
+ * - `driver-level` (PAR-1058) runs daily at 01:30 UTC and starts ml-service's
+ *   driver-level shadow, which replaces `driver_level_forecasts` before the
+ *   first 06:00 origin (Europe, 04:00 UTC in summer) reads it at capture.
  */
 @Processor("forecast-archive")
 export class ForecastArchiveProcessor {
@@ -34,6 +41,26 @@ export class ForecastArchiveProcessor {
       );
     }
   }
+
+  /** Fire and forget: the job runs in its own ml-service process. */
+  @Process("driver-level")
+  async handleDriverLevel(_job: Job): Promise<void> {
+    try {
+      await axios.post(
+        `${getMlServiceUrl()}/driver-level/run`,
+        {},
+        { timeout: 30000 },
+      );
+    } catch (error) {
+      // 409: a run is still live (ml-service holds a single-flight lock).
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        this.logger.warn("🧮 Driver-level shadow already running, not started");
+        return;
+      }
+      throw error;
+    }
+    this.logger.log("🧮 Driver-level shadow started in ml-service");
+  }
 }
 
 /**
@@ -48,6 +75,7 @@ export class ForecastArchiveScoreProcessor {
   constructor(
     private readonly archiveService: ForecastArchiveService,
     private readonly scoringService: ForecastArchiveScoringService,
+    private readonly decisionWatch: MlDecisionWatchService,
   ) {}
 
   @Process("score")
@@ -76,6 +104,9 @@ export class ForecastArchiveScoreProcessor {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Forward archive retention deferred: ${message}`);
       }
+      // PAR-1059: frozen decision reports + drift watch, after the scoring so
+      // a report's window ends on the date just scored. Never throws.
+      await this.decisionWatch.runDaily(new Date());
     }
   }
 }

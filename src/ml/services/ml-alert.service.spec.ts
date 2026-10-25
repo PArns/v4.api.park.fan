@@ -51,6 +51,45 @@ describe("MLAlertService", () => {
     service = module.get(MLAlertService);
   });
 
+  // PAR-1050: no comparable feature must read "no data", never resolve as healthy.
+  it("raises a low feature_drift alert instead of resolving when drift has no data", async () => {
+    accuracyService.getSystemAccuracyStats.mockResolvedValue({
+      overall: {
+        mae: 4,
+        coveragePercent: 98,
+        totalPredictions: 1000,
+        matchedPredictions: 980,
+      },
+    });
+    featureDriftService.detectFeatureDrift.mockResolvedValue({
+      driftedFeatures: [],
+      summary: {
+        status: "no_data",
+        criticalCount: 0,
+        warningCount: 0,
+        healthyCount: 0,
+        totalFeatures: 75,
+      },
+    });
+    alertRepo.findOne.mockResolvedValue(null);
+    alertRepo.save.mockImplementation(async (a: unknown) => a);
+
+    const { alerts } = await service.checkAndCreateAlerts();
+
+    expect(alerts).toEqual([
+      expect.objectContaining({
+        alertType: "feature_drift",
+        severity: "low",
+        title: "Feature Drift: No Data",
+      }),
+    ]);
+    const resolvedDrift = alertRepo.update.mock.calls.find(
+      ([criteria]) =>
+        (criteria as Record<string, unknown>).alertType === "feature_drift",
+    );
+    expect(resolvedDrift).toBeUndefined();
+  });
+
   describe("resolveAlertIfActive — N+1 fix (PR #46)", () => {
     // The private method used to SELECT all matching alerts then call
     // save() N times. PR #46 replaced it with a single repository.update.

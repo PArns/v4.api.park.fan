@@ -845,6 +845,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "forecast_date"],
   },
   {
+    // The nightly driver-level shadow (PAR-1058), one row per ride and day.
+    table: "driver_level_forecasts",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["target_date"],
+  },
+  {
     // The calendar-grid TFT shadow (PAR-1041): same key as tft_forecasts.
     table: "tft_forecasts_shadow",
     column: "attraction_id",
@@ -1253,6 +1260,23 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   // `"attractionId"` and the hour, and `parkId` is in neither.
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },
+  // The as-of fact logs (PAR-1061). No FK, so a forgotten entry leaves silent
+  // orphans. Move, keyed on the target day: where both parks logged the same
+  // day the winner's history stays, which also keeps `schedule_day_versions`'
+  // one-open-version-per-day index intact (the loser's open row for that day
+  // goes with its history).
+  {
+    table: "weather_forecast_issues",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["target_date"],
+  },
+  {
+    table: "schedule_day_versions",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["day"],
+  },
 ];
 
 /**

@@ -57,6 +57,7 @@ export class WeatherProcessor {
         : "🌤️  Starting weather sync (full: current + 16-day forecast)...",
     );
 
+    const syncStartedAt = new Date().toISOString();
     try {
       const parks = await this.parksService.findAll();
 
@@ -166,6 +167,23 @@ export class WeatherProcessor {
                   "forecast",
                 );
                 totalForecast += savedForecast;
+              }
+
+              // As-of log of this issue (PAR-1061). Its own try: losing one
+              // park's archive row must not cost the park its forecast cache
+              // eviction below.
+              if (!currentOnly) {
+                try {
+                  await this.weatherService.saveForecastIssue(
+                    park,
+                    forecastData.days,
+                    new Date(forecastData.fetchedAt ?? syncStartedAt),
+                  );
+                } catch (error: unknown) {
+                  this.logger.warn(
+                    `Forecast issue not archived for ${park.name}: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
               }
 
               await this.redis.del(CacheKeys.weatherForecast(park.id));

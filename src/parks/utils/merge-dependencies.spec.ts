@@ -92,6 +92,7 @@ describe("merge dependency tables", () => {
     "attraction_rope_drop",
     "attraction_slug_aliases",
     "attraction_typical_waits",
+    "driver_level_forecasts",
     "forecast_archive_curves",
     "forecast_data",
     "headliner_attractions",
@@ -168,9 +169,11 @@ describe("merge dependency tables", () => {
     "park_slug_aliases",
     "queue_data_aggregates",
     "restaurants",
+    "schedule_day_versions",
     "schedule_entries",
     "shows",
     "weather_data",
+    "weather_forecast_issues",
     "weather_warnings",
   ];
 

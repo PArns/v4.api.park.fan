@@ -1,0 +1,9 @@
+{
+  "OpenAPI_ServiceResponse": {
+    "cmmMsgHeader": {
+      "errMsg": "SERVICE_KEY_IS_NULL",
+      "returnAuthMsg": "서비스 접근거부",
+      "returnReasonCode": "20"
+    }
+  }
+}

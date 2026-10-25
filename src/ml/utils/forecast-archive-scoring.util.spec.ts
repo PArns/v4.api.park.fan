@@ -1281,6 +1281,81 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
     ).toEqual([]);
   });
 
+  // PAR-1058: the driver-level shadow against whichever model levelled the day.
+  it("pairs the driver-level shadow with the served level of either model", () => {
+    const run = (extra: Partial<ArchivedCurve>) => {
+      const paired = new PairedAccumulator();
+      scorePairedModels(planner(extra), truth, paired, weekday);
+      return paired;
+    };
+    // driver 53, served 45, truth P90 50.
+    const tft = run({ levelSource: "tft", driverDayPeak: 53 });
+    for (const seg of ["all", "headliner"]) {
+      expect(
+        find(tft, "PEAK", "d0", "driver_level", "served_tft", seg),
+      ).toMatchObject({ n: 1, saeModel: 3, saeRef: 5, seModel: 3 });
+    }
+    expect(
+      find(tft, "D7", "d0", "driver_level", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 53, saeRef: 45, seModel: 50 });
+    // A CatBoost-levelled day (d90's case): PEAK under served_catboost, no D7.
+    const cb = run({ levelSource: "catboost", driverDayPeak: 53 });
+    expect(
+      find(cb, "PEAK", "d0", "driver_level", "served_catboost", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 3, saeRef: 5 });
+    expect(
+      cb
+        .entries()
+        .filter((e) => e.model === "driver_level" && e.useCase === "D7"),
+    ).toEqual([]);
+    // No shadow value: no row, and the weekday average's rows are unchanged.
+    const none = run({ levelSource: "tft" });
+    expect(none.entries().filter((e) => e.model === "driver_level")).toEqual(
+      [],
+    );
+    expect(
+      find(tft, "PEAK", "d0", "weekday_avg", "served_tft", "headliner"),
+    ).toEqual(
+      find(none, "PEAK", "d0", "weekday_avg", "served_tft", "headliner"),
+    );
+  });
+
+  // PAR-1042: CatBoost's shadow level against the served TFT dayPeak, on the
+  // weekday average's PEAK / D7 rows.
+  it("pairs the CatBoost shadow level with served TFT on the same ride-days", () => {
+    const run = (
+      extra: Partial<ArchivedCurve>,
+      wkd: typeof weekday | null = weekday,
+    ) => {
+      const paired = new PairedAccumulator();
+      scorePairedModels(planner(extra), truth, paired, wkd);
+      return paired;
+    };
+    const tft = run({ levelSource: "tft", catboostDayPeak: 62 });
+    // CatBoost 62, served 45, truth P90 50 — same ride-day as the wkd row.
+    for (const seg of ["all", "headliner"]) {
+      expect(
+        find(tft, "PEAK", "d0", "catboost_shadow", "served_tft", seg),
+      ).toMatchObject({ n: 1, saeModel: 12, saeRef: 5, seModel: 12 });
+    }
+    expect(
+      find(tft, "PEAK", "d0", "weekday_avg", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 15, saeRef: 5 });
+    expect(
+      find(tft, "D7", "d0", "catboost_shadow", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 62, saeRef: 45, seModel: 50 });
+    // No shadow, a CatBoost-served day, or no weekday average: no row.
+    for (const paired of [
+      run({ levelSource: "tft" }),
+      run({ levelSource: "catboost", catboostDayPeak: 62 }),
+      run({ levelSource: "tft", catboostDayPeak: 62 }, null),
+    ]) {
+      expect(
+        paired.entries().filter((e) => e.model === "catboost_shadow"),
+      ).toEqual([]);
+    }
+  });
+
   it("pairs the grid TFT shadow with the served TFT level on PEAK and D7 (PAR-1041)", () => {
     const run = (extra: Partial<ArchivedCurve>) => {
       const paired = new PairedAccumulator();

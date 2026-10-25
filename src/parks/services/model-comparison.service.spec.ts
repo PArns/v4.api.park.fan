@@ -20,6 +20,7 @@ function build(
     timezones?: string[];
     dates?: string[];
     optionRows?: Record<string, Partial<DayOptionRow>[]>;
+    d7Rows?: unknown[];
   } = {},
 ) {
   const sql: string[] = [];
@@ -57,6 +58,10 @@ function build(
         timezone,
       }));
     }
+    if (opts.d7Rows && q.includes("AS first")) {
+      return [{ first: "2026-10-01", last: "2026-10-14" }];
+    }
+    if (q.includes("use_case = 'D7'")) return opts.d7Rows ?? [];
     if (q.includes("generate_series")) {
       return (opts.dates ?? []).map((d) => ({ d }));
     }
@@ -379,5 +384,32 @@ describe("ModelComparisonService.getMatrix", () => {
     expect(sql.some((q) => q.includes("FROM forecast_archive_scores"))).toBe(
       true,
     );
+  });
+
+  // PAR-1042: the CatBoost shadow ranks a park's days on its own, never in
+  // one series with the weekday average.
+  it("ranks D7 days per model, so the CatBoost shadow gets its own cell", async () => {
+    const d7Rows = ["p1", "p2"].flatMap((parkId) =>
+      [30, 40, 50].flatMap((truth, i) => {
+        const base = {
+          parkId,
+          lead: "d3",
+          date: `2026-10-0${i + 1}`,
+          n: 1,
+          sumRef: truth,
+          sumTruth: truth,
+        };
+        return [
+          { ...base, model: "weekday_avg", sumModel: truth },
+          { ...base, model: "catboost_shadow", sumModel: 100 - truth },
+        ];
+      }),
+    );
+    const { service } = build({ d7Rows });
+    const res = await service.getMatrix(28, "ALL", T("2026-10-15T08:00:00Z"));
+    const rank = res.questions.find((x) => x.id === "cal_rank")!;
+    expect(rank.cells.wkd.live!.modelMae).toBe(0);
+    expect(rank.cells.catboost.live!.modelMae).toBe(100);
+    expect(rank.cells.catboost.live!.referenceMae).toBe(0);
   });
 });

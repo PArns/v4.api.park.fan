@@ -1,3 +1,5 @@
+import type { BandCalibrationTable } from "../utils/catboost-band-calibration.util";
+
 /**
  * Admin ML overview (PAR-861): the contract of `GET /v1/admin/ml-overview`.
  *
@@ -40,7 +42,7 @@ export interface MlDecisionDto {
   /** YYYY-MM-DD (Europe/Berlin) + German label, e.g. "frühestens 24.10.". Null when nothing is outstanding or nothing can be dated. */
   earliest: { date: string; label: string } | null;
   /** Matrix cells the decision rests on (for a link into the model comparison). */
-  cells: { questionId: string; modelId: string }[];
+  cells: { questionId: string; modelId: string; expect?: "not_better" }[];
   /**
    * PAR-1036: the fixed evaluation date (YYYY-MM-DD). Before it the decision
    * is never `ready`; from it on (`evaluated: true`) it is judged on the
@@ -48,6 +50,109 @@ export interface MlDecisionDto {
    */
   evaluateOn?: string;
   evaluated?: boolean;
+  /**
+   * PAR-1059: the frozen report written once on `evaluateOn` (after that
+   * day's 12:00 UTC scoring). Present = `state` is the report's verdict and
+   * never moves again. Absent before the job ran.
+   */
+  report?: MlDecisionReportDto;
+}
+
+/** One cell of a frozen decision report (PAR-1059), copied from the matrix. */
+export interface MlDecisionReportCellDto {
+  questionId: string;
+  modelId: string;
+  /** The matrix cell's state on the frozen window. */
+  state: string;
+  /** model − served, in the question's unit; negative = better. Null without live data. */
+  diff: number | null;
+  /** The gate's interval (park × date bootstrap). */
+  ciLow: number | null;
+  ciHigh: number | null;
+  /** The park-cluster interval, shown beside it. */
+  parkCiLow: number | null;
+  parkCiHigh: number | null;
+  parks: number;
+  days: number;
+  /** Paired slots / ride-days behind the cell. */
+  n: number;
+  /** The question's joint rows (every core candidate had a value); null without coverage. */
+  jointRows: number | null;
+  /** This cell's own rows (below `jointRows` for an optional shadow with gaps). */
+  cellRows: number | null;
+}
+
+export interface MlDecisionReportCheckDto {
+  id: "weekday_mix" | "holiday_share" | "autumn_only" | "window_end";
+  ok: boolean;
+  /** Plain German, what was measured. */
+  label: string;
+}
+
+/**
+ * A decision judged once on its `evaluateOn` (PAR-1059): the verdict and
+ * everything it rested on, stored in `ml_decision_reports` and never
+ * recomputed. Semantics: docs/ml/ml-overview.md §1a.
+ */
+export interface MlDecisionReportDto {
+  decisionId: string;
+  evaluateOn: string;
+  /** ISO instant the report was frozen. */
+  createdAt: string;
+  /** The paired window (YYYY-MM-DD, inclusive); the intended end is evaluateOn − 1. */
+  window: { firstDate: string | null; lastDate: string | null };
+  /** The derived state on the frozen window (never `ready` with a failed check unnoticed: see `warning`). */
+  verdict: MlDecisionState;
+  cells: MlDecisionReportCellDto[];
+  /** Distinct parks and dates among the paired park × date cells of the decision. */
+  parks: number;
+  days: number;
+  /** Paired park × date cells, Monday first (index 0 = Mo … 6 = So). */
+  weekdays: { weekday: string; count: number; share: number }[];
+  /** Share (0..1) of paired park × date cells on a public holiday, school break or bridge day at the park. */
+  holidayShare: number | null;
+  /** Plain German, e.g. "Herbst" or "Herbst und Winter". */
+  season: string;
+  checks: MlDecisionReportCheckDto[];
+  /** True when any check failed: the verdict must not be read as a silent green. */
+  warning: boolean;
+  /** Plain German, one line per failed check. */
+  warnings: string[];
+}
+
+export type MlDriftStatus = "ok" | "drift" | "no_data";
+
+export interface MlDriftWindowDto {
+  /** Scored slots (rows) in the window. */
+  n: number;
+  mae: number | null;
+  /** MAE of the weekday median (same ride, park-local weekday and hour, 4 weeks before) on the slots that have one. */
+  baselineMae: number | null;
+  /** mae / baselineMae on the same slots; below 1 = beats the weekday median. */
+  skill: number | null;
+  /** P(actual ≤ q0.8) / P(actual ≤ q0.95); null where no quantile is stored. */
+  coverageQ80: number | null;
+  coverageQ95: number | null;
+}
+
+/** One served model's drift watch (PAR-1059): last 7 days vs the 28 before. */
+export interface MlDriftModelDto {
+  /** `catboost` (raw, with quantiles), `pcn`, `chronos` (served). */
+  model: string;
+  label: string;
+  status: MlDriftStatus;
+  recent: MlDriftWindowDto;
+  previous: MlDriftWindowDto;
+  /** Plain German, one line per threshold crossed (empty when ok). */
+  reasons: string[];
+}
+
+export interface MlDriftWatchDto {
+  /** ISO instant of the daily computation. */
+  computedAt: string;
+  /** Worst of the models: drift > ok > no_data. */
+  status: MlDriftStatus;
+  models: MlDriftModelDto[];
 }
 
 export type MlComponentRole = "served" | "shadow" | "measurement";
@@ -81,4 +186,13 @@ export interface MlOverviewDto {
     worse: number;
   };
   components: MlComponentDto[];
+  /**
+   * PAR-1060: the current CatBoost hourly band factor per (lead bucket,
+   * segment) with its in-sample coverage before/after, as the daily
+   * `calibrate-bands` job wrote it. Null before the first run or once it has
+   * expired (the band is then served raw).
+   */
+  bandCalibration?: BandCalibrationTable | null;
+  /** PAR-1059: the daily drift watch; absent until it first ran (or when it is older than 3 days). */
+  drift?: MlDriftWatchDto;
 }

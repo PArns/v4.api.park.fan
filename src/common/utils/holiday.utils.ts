@@ -571,10 +571,25 @@ export function buildSchoolCoverage(
 }
 
 /**
+ * Countries whose school data is curated for some regions only (PAR-1071): a
+ * region without rows is unknown, never covered by another region's rows —
+ * Ohio is not on Orlando's calendar. GB (England only) and JP (Aichi only)
+ * since PAR-1072. Same set as ml-service's
+ * `REGION_ONLY_SCHOOL_COVERAGE`.
+ */
+export const REGION_ONLY_SCHOOL_COVERAGE: ReadonlySet<string> = new Set([
+  "US",
+  "AU",
+  "GB",
+  "JP",
+]);
+
+/**
  * The last day a location's school-holiday flag rests on data, or null when
  * its country has no school row at all. The same rule as ml-service's
  * `SchoolCoverage.through`: the later of the region's own and the national
- * rows; a region no row names falls back to the country's latest row.
+ * rows; a region no row names falls back to the country's latest row,
+ * except in {@link REGION_ONLY_SCHOOL_COVERAGE}.
  */
 export function schoolCoverageThrough(
   coverage: SchoolCoverage,
@@ -587,6 +602,7 @@ export function schoolCoverageThrough(
     coverage.national.get(countryCode),
   ].filter((d): d is string => d !== undefined);
   if (own.length > 0) return own.sort()[own.length - 1];
+  if (REGION_ONLY_SCHOOL_COVERAGE.has(countryCode)) return null;
   return coverage.countryAny.get(countryCode) ?? null;
 }
 

@@ -14,11 +14,16 @@ import { PredictionAccuracyService } from "./services/prediction-accuracy.servic
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { ParkHistoricalStatsService } from "../analytics/park-historical-stats.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
+import {
+  BAND_CALIBRATION_KEY,
+  fitBandCalibration,
+} from "./utils/catboost-band-calibration.util";
 import { PCN_MAX_FORECAST_AGE_H } from "./pcn-serving.constants";
 
 describe("MLService", () => {
@@ -126,6 +131,10 @@ describe("MLService", () => {
     getP50BaselineFromCache: jest.fn(),
   };
 
+  const mockParkHistoricalStats = {
+    getParkHourlyProfile: jest.fn(),
+  };
+
   const mockHolidaysService = {
     isBridgeDay: jest.fn(),
     isEffectiveSchoolHoliday: jest.fn(),
@@ -181,6 +190,10 @@ describe("MLService", () => {
         {
           provide: AnalyticsService,
           useValue: mockAnalyticsService,
+        },
+        {
+          provide: ParkHistoricalStatsService,
+          useValue: mockParkHistoricalStats,
         },
         {
           provide: HolidaysService,
@@ -287,6 +300,217 @@ describe("MLService", () => {
       expect(build).toHaveBeenCalledTimes(1);
       expect(results).toEqual([payload, payload]);
       build.mockRestore();
+    });
+  });
+
+  // PAR-1048: Knoebels (schedule UNKNOWN) served 192 round-the-clock slots and
+  // 05:45 as its "optimal" visit time.
+  describe("hourly slots on a day without an OPERATING window (PAR-1048)", () => {
+    const park = {
+      id: "knoebels",
+      slug: "knoebels",
+      timezone: "America/New_York",
+    };
+    // 2026-10-24 in New York is UTC-4.
+    const slot = (localHour: string, type: "hourly" | "daily" = "hourly") =>
+      ({
+        attractionId: "looper",
+        predictedTime: `2026-10-24T${localHour}:00-04:00`,
+        predictedWaitTime: 5,
+        predictionType: type,
+        confidence: 80,
+        crowdLevel: "low",
+        baseline: 10,
+        modelVersion: "v1",
+      }) as never;
+    const hoursOf = (preds: { predictedTime: string }[]) =>
+      preds.map((p) => p.predictedTime.slice(11, 16));
+    // One ride whose queue moves (P90 above P25) in every listed hour.
+    const profileOf = (hours: number[]) => ({
+      hours,
+      attractions: [{ p25: hours.map(() => 5), p90: hours.map(() => 30) }],
+    });
+
+    it("keeps only the measured hours when the schedule is UNKNOWN", async () => {
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([11, 12, 13, 14, 15, 16, 17]),
+      );
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("03:00"),
+        slot("05:45"),
+        slot("11:00"),
+        slot("17:45"),
+        slot("21:00"),
+        slot("00:00", "daily"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["11:00", "17:45", "00:00"]);
+    });
+
+    it("passes an OPERATING day untouched without reading the profile", async () => {
+      mockScheduleEntryRepository.find.mockResolvedValue([
+        { date: "2026-10-24" },
+      ]);
+      const preds = [slot("03:00"), slot("11:00")];
+
+      const out = await service.withinKnownOpeningHours(park, preds);
+
+      expect(out).toEqual(preds);
+      expect(
+        mockParkHistoricalStats.getParkHourlyProfile,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("leaves the slots ungated when the profile cannot be read", async () => {
+      // Trimming on a read error would be cached for 30 min and delete the
+      // stored rows of those days through the generator's replace mode.
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockRejectedValue(
+        new Error("db down"),
+      );
+      const preds = [slot("03:00"), slot("11:00"), slot("00:00", "daily")];
+
+      const out = await service.withinKnownOpeningHours(park, preds);
+
+      expect(out).toEqual(preds);
+    });
+
+    it("serves no hourly slot on an unscheduled day when no hour was measured", async () => {
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([]),
+      );
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("11:00"),
+        slot("00:00", "daily"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["00:00"]);
+    });
+
+    it("drops the hours a never-closing frozen feed carries flat", async () => {
+      // Beto Carrero shape: the profile spans 0-23, but at night every ride
+      // repeats its last snapshot, so P25 equals P90.
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      const hours = Array.from({ length: 24 }, (_, h) => h);
+      const moving = (h: number) => h >= 10 && h <= 18;
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
+        hours,
+        attractions: [
+          {
+            p25: hours.map((h) => (moving(h) ? 5 : 20)),
+            p90: hours.map((h) => (moving(h) ? 40 : 20)),
+          },
+          { p25: hours.map(() => null), p90: hours.map(() => null) },
+        ],
+      });
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("03:00"),
+        slot("05:45"),
+        slot("12:00"),
+        slot("21:00"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["12:00"]);
+    });
+
+    it("keeps a flat hour inside the moving span", async () => {
+      // Le Parc du Petit Prince shape: 10:00 sits still between moving hours.
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      const hours = [9, 10, 11, 12];
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
+        hours,
+        attractions: [
+          {
+            p25: hours.map(() => 10),
+            p90: hours.map((h) => (h === 10 ? 10 : 30)),
+          },
+        ],
+      });
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("08:00"),
+        slot("10:00"),
+        slot("12:00"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["10:00", "12:00"]);
+    });
+
+    it("is applied to the park read before it is cached", async () => {
+      mockParkRepository.findOne.mockResolvedValue(park);
+      mockRedis.get.mockImplementation(async (key: string) =>
+        key.startsWith("ml:active-attractions:")
+          ? JSON.stringify(["looper"])
+          : null,
+      );
+      mockAttractionRepository.find.mockResolvedValue([{ id: "looper" }]);
+      mockWeatherService.getHourlyForecast.mockResolvedValue([]);
+      jest
+        .spyOn(service as never, "enrichForecastWithHolidays")
+        .mockResolvedValue([] as never);
+      jest
+        .spyOn(service as never, "buildFeatureContext")
+        .mockResolvedValue({} as never);
+      (service as any).mlClient.post = jest.fn().mockResolvedValue({
+        data: {
+          predictions: [slot("03:00"), slot("12:00")],
+          count: 2,
+          modelVersion: "v1",
+        },
+      });
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([12]),
+      );
+
+      const out = await service.getRawParkPredictions(park.id, "hourly");
+
+      expect(hoursOf(out.predictions)).toEqual(["12:00"]);
+      expect(out.count).toBe(1);
+      const cached = JSON.parse(mockRedis.set.mock.calls[0][1]);
+      expect(hoursOf(cached.predictions)).toEqual(["12:00"]);
+      jest.restoreAllMocks();
+    });
+
+    it("is applied to the attraction detail's live fallback", async () => {
+      mockAttractionRepository.findOne.mockResolvedValue({
+        id: "looper",
+        parkId: park.id,
+      });
+      mockParkRepository.findOne.mockResolvedValue(park);
+      mockWeatherService.getHourlyForecast.mockResolvedValue([]);
+      mockAnalyticsService.getP50BaselineFromCache.mockResolvedValue(null);
+      (mockAnalyticsService as any).getTypicalDayPeakFromCache = jest
+        .fn()
+        .mockResolvedValue(null);
+      mockQueueDataRepository.findOne.mockResolvedValue(null);
+      const qb: Record<string, jest.Mock> = {};
+      for (const m of ["where", "andWhere", "orderBy", "setParameter"]) {
+        qb[m] = jest.fn().mockReturnValue(qb);
+      }
+      qb.getOne = jest.fn().mockResolvedValue(null);
+      mockQueueDataRepository.createQueryBuilder.mockReturnValueOnce(
+        qb as never,
+      );
+      jest.spyOn(service, "getPredictions").mockResolvedValue({
+        predictions: [slot("04:00"), slot("12:00")],
+        count: 2,
+        modelVersion: "v1",
+      });
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([12]),
+      );
+
+      const out = await service.getAttractionPredictions("looper", "hourly");
+
+      expect(hoursOf(out)).toEqual(["12:00"]);
+      jest.restoreAllMocks();
     });
   });
 
@@ -492,6 +716,11 @@ describe("MLService", () => {
         .spyOn(service as any, "enrichForecastWithHolidays")
         .mockResolvedValue([]);
       jest.spyOn(service as any, "buildFeatureContext").mockResolvedValue({});
+      // Every day has an OPERATING window, so PAR-1048's gate keeps every slot.
+      mockScheduleEntryRepository.find.mockImplementation(
+        async ({ where }: { where: { date: { value: Date[] } } }) =>
+          where.date.value.map((d) => ({ date: d.toISOString().slice(0, 10) })),
+      );
       mockAnalyticsService.getP50BaselineFromCache.mockResolvedValue(0);
       (mockAnalyticsService as any).getTypicalDayPeakFromCache = jest
         .fn()
@@ -832,6 +1061,42 @@ describe("MLService", () => {
       }
       expect(at(180).modelVersion).toBe("v1");
       expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("PAR-1060: the band factor scales CatBoost slots only, never Chronos or PCN", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      // PCN only for the 180-min slot, so 30 stays CatBoost.
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows("60").filter(
+          (r) => r.predicted_time.getTime() === NOW + 180 * MIN,
+        ),
+      );
+      const payload = await mockRedis.get();
+      const table = fitBandCalibration(
+        Array.from({ length: 20 }, () => ({
+          lead: "h0-2",
+          segment: "quiet",
+          bin: 40, // every score 2.0 → k = 2
+          n: 100,
+        })),
+      );
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(
+          key === BAND_CALIBRATION_KEY ? JSON.stringify(table) : payload,
+        ),
+      );
+
+      const at = byLead(
+        (await service.getParkPredictions(parkId, "hourly")).predictions,
+      );
+
+      expect(at(30).modelVersion).toBe("v1");
+      expect(at(30).uncertaintyMinutes).toBe(10); // 5 × 2
+      expect(at(60).modelVersion).toBe("v1+chronos");
+      expect(at(60).uncertaintyMinutes).toBe(18); // Chronos's own band
+      expect(at(180).modelVersion).toBe("v1+pcn");
+      expect(at(180).uncertaintyMinutes).toBeNull();
     });
 
     it("with PCN on: blend ≤ 30 min, Chronos 45–120, PCN beyond", async () => {

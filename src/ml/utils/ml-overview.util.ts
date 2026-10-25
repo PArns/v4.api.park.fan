@@ -15,6 +15,7 @@ import {
 import {
   MlComponentStatus,
   MlDecisionDto,
+  MlDecisionReportDto,
   MlDecisionState,
 } from "../dto/ml-overview.dto";
 import {
@@ -38,8 +39,23 @@ export interface DecisionDef {
    * owner moves it by editing ml-decisions.json.
    */
   evaluateOn?: string;
-  cells: { questionId: string; modelId: string }[];
+  cells: DecisionCellRef[];
 }
+
+/**
+ * One matrix cell a decision rests on. `expect` says what the cell must show
+ * for the decision to be taken: absent = the model beats what is served (the
+ * cell is `better`); `not_better` = the live gate is met and the model does
+ * NOT beat what is served (live check `no`) — for a decision to switch a model
+ * OFF that is measured against its replacement (catboost_daily_off).
+ */
+export interface DecisionCellRef {
+  questionId: string;
+  modelId: string;
+  expect?: "not_better";
+}
+
+type DecisionCell = ModelComparisonCellDto & { expect?: "not_better" };
 
 export interface DecisionFile {
   decisions: DecisionDef[];
@@ -94,42 +110,47 @@ export function componentStatus(
 }
 
 /** The matrix cells a decision rests on, without the served (`today`) ones. */
-function decisionCells(
+export function decisionCells(
   def: DecisionDef,
   matrix: ModelComparisonResponseDto | null,
-): ModelComparisonCellDto[] {
+): DecisionCell[] {
   if (!matrix) return [];
-  const out: ModelComparisonCellDto[] = [];
+  const out: DecisionCell[] = [];
   for (const ref of def.cells) {
     const q = matrix.questions.find((x) => x.id === ref.questionId);
     const cell = q?.cells[ref.modelId];
-    if (cell && cell.state !== "today") out.push(cell);
+    if (cell && cell.state !== "today") {
+      out.push(ref.expect ? { ...cell, expect: ref.expect } : cell);
+    }
   }
   return out;
 }
 
 /**
- * The derived state. `ready`: every cell better, offline and live green.
- * `waiting_live`: at least one cell is better offline (or its offline run is
- * still going) while its live gate is not met. Otherwise `open`.
+ * The derived state. `ready`: every cell meets its expectation — by default
+ * better, offline and live green; `expect: "not_better"` = live gate met
+ * without a win (live check `no`). `waiting_live`: at least one cell is better
+ * offline (or its offline run is still going), or is a `not_better` cell,
+ * while its live gate is not met. Otherwise `open`.
  */
-export function deriveDecisionState(
-  cells: ModelComparisonCellDto[],
-): MlDecisionState {
+export function deriveDecisionState(cells: DecisionCell[]): MlDecisionState {
   if (cells.length === 0) return "open";
   if (
-    cells.every(
-      (c) =>
-        c.state === "better" &&
-        c.checks.offline === "yes" &&
-        c.checks.live === "yes",
+    cells.every((c) =>
+      c.expect === "not_better"
+        ? c.checks.live === "no"
+        : c.state === "better" &&
+          c.checks.offline === "yes" &&
+          c.checks.live === "yes",
     )
   ) {
     return "ready";
   }
   const waiting = cells.some(
     (c) =>
-      (c.checks.offline === "yes" || c.checks.offline === "running") &&
+      (c.expect === "not_better" ||
+        c.checks.offline === "yes" ||
+        c.checks.offline === "running") &&
       (c.checks.live === "running" || c.checks.live === "open"),
   );
   return waiting ? "waiting_live" : "open";
@@ -203,6 +224,8 @@ export function buildDecisions(
   today: string,
   /** Per `evaluateOn` reached: the matrix of the window ending the day before. */
   frozen: Map<string, ModelComparisonResponseDto | null> = new Map(),
+  /** PAR-1059: stored reports, keyed `${decisionId}|${evaluateOn}`; one wins over `frozen`. */
+  reports: Map<string, MlDecisionReportDto> = new Map(),
 ): MlDecisionDto[] {
   const derived = new Map<string, MlDecisionDto>();
   for (const def of file.decisions) {
@@ -212,7 +235,12 @@ export function buildDecisions(
       def,
       evaluated ? (frozen.get(def.evaluateOn!) ?? null) : matrix,
     );
-    let state = deriveDecisionState(cells);
+    const report = evaluated
+      ? reports.get(`${def.id}|${def.evaluateOn}`)
+      : undefined;
+    // A stored report is the verdict: the paired rows behind it age out after
+    // 120 days, the report does not.
+    let state = report ? report.verdict : deriveDecisionState(cells);
     // Before the evaluation date a decision is never ready: the gate is
     // looked at once, not every day until it happens to pass.
     if (!evaluated && def.evaluateOn && state === "ready") {
@@ -238,6 +266,7 @@ export function buildDecisions(
       earliest,
       cells: def.cells,
       ...(def.evaluateOn ? { evaluateOn: def.evaluateOn, evaluated } : {}),
+      ...(report ? { report } : {}),
     });
   }
   return file.decisions.map((def) => {

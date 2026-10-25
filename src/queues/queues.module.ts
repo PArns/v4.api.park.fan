@@ -63,6 +63,7 @@ import { DataSourcesModule } from "../external-apis/data-sources/data-sources.mo
 import { WartezeitenModule } from "../external-apis/wartezeiten/wartezeiten.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { OpenHolidaysModule } from "../external-apis/open-holidays/open-holidays.module";
+import { KoreaHolidaysModule } from "../external-apis/korea/korea.module";
 import { DiscoveryModule } from "../discovery/discovery.module";
 import { SearchModule } from "../search/search.module";
 import { RedisModule } from "../common/redis/redis.module";
@@ -144,6 +145,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     GeocodingModule,
     NagerDateModule,
     OpenHolidaysModule,
+    KoreaHolidaysModule,
     WartezeitenModule,
     AnalyticsModule,
     DiscoveryModule,

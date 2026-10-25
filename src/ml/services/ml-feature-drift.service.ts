@@ -93,6 +93,12 @@ export class MLFeatureDriftService {
       wassersteinDistance?: number;
     }>;
     summary: {
+      /**
+       * `no_data` when not a single feature could be compared (no training
+       * stats, or no production feature values): the counts are then all 0
+       * and say nothing about the model, never "all healthy" (PAR-1050).
+       */
+      status: "ok" | "no_data";
       totalFeatures: number;
       healthyCount: number;
       warningCount: number;
@@ -123,6 +129,7 @@ export class MLFeatureDriftService {
       return {
         driftedFeatures: [],
         summary: {
+          status: "no_data",
           totalFeatures: 0,
           healthyCount: 0,
           warningCount: 0,
@@ -142,12 +149,16 @@ export class MLFeatureDriftService {
     });
 
     if (recentPredictions.length === 0) {
+      // prediction_accuracy.features is never written today (0 of ~773k
+      // rows), so this is the branch production takes. It used to report
+      // every feature healthy, which made "75/75 healthy" out of no data.
       this.logger.warn("No recent predictions with features found");
       return {
         driftedFeatures: [],
         summary: {
+          status: "no_data",
           totalFeatures: trainingStats.length,
-          healthyCount: trainingStats.length,
+          healthyCount: 0,
           warningCount: 0,
           criticalCount: 0,
         },
@@ -261,6 +272,8 @@ export class MLFeatureDriftService {
     }
 
     const summary = {
+      status:
+        driftedFeatures.length > 0 ? ("ok" as const) : ("no_data" as const),
       totalFeatures: trainingStats.length,
       healthyCount: driftedFeatures.filter((f) => f.status === "healthy")
         .length,

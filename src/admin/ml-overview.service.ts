@@ -4,11 +4,12 @@ import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
 import {
-  addIsoDays,
-  getCurrentDateInTimezone,
-} from "../common/utils/date.util";
+  getMlServiceUrl,
+  getNfServiceUrl,
+  getPcnServiceUrl,
+} from "../config/ml-services.config";
+import { addIsoDays, formatInParkTimezone } from "../common/utils/date.util";
 import {
   StatementLimits,
   queryWithLimits,
@@ -23,7 +24,13 @@ import { ARCHIVE_SURFACES } from "../ml/entities/forecast-archive-curve.entity";
 import { serveChronosIntraday } from "../ml/chronos-serving";
 import { servePcnIntraday } from "../ml/pcn-serving.constants";
 import { ModelComparisonResponseDto } from "../ml/dto/model-comparison.dto";
-import { MlComponentDto, MlOverviewDto } from "../ml/dto/ml-overview.dto";
+import {
+  MlComponentDto,
+  MlDecisionReportDto,
+  MlDriftWatchDto,
+  MlOverviewDto,
+} from "../ml/dto/ml-overview.dto";
+import { DRIFT_WATCH_KEY } from "../parks/services/ml-decision-watch.service";
 import {
   DecisionFile,
   LATE_AFTER_MS,
@@ -32,6 +39,10 @@ import {
   versionNote,
 } from "../ml/utils/ml-overview.util";
 import { dayMonthDe } from "../ml/utils/model-comparison.util";
+import {
+  BAND_CALIBRATION_KEY,
+  BandCalibrationTable,
+} from "../ml/utils/catboost-band-calibration.util";
 import decisionsJson from "../ml/data/ml-decisions.json";
 
 /**
@@ -110,13 +121,16 @@ export class MlOverviewService {
   }
 
   async build(now: Date): Promise<MlOverviewDto> {
-    const today = getCurrentDateInTimezone(ADMIN_TZ);
+    const today = formatInParkTimezone(now, ADMIN_TZ);
+    // PAR-1059: a frozen report is the verdict; its window is not re-read.
+    const reports = await this.reports();
     // A decision past its evaluation date reads the window ending the day
     // before it, so it does not drift (PAR-1036). Cached per `until` by the
     // comparison service.
     const due = [
       ...new Set(
         this.decisionFile.decisions
+          .filter((d) => !reports.has(`${d.id}|${d.evaluateOn}`))
           .map((d) => d.evaluateOn)
           .filter((d): d is string => !!d && d <= today),
       ),
@@ -133,7 +147,7 @@ export class MlOverviewService {
         ),
       ),
     );
-    const [matrix, components] = await Promise.all([
+    const [matrix, components, bandRaw, drift] = await Promise.all([
       // Cached 2 h per scoring run by the comparison service itself.
       this.modelComparison
         .getMatrix(MATRIX_DAYS, "ALL", now)
@@ -144,10 +158,26 @@ export class MlOverviewService {
           return null;
         }),
       this.components(now),
+      this.redis.get(BAND_CALIBRATION_KEY).catch(() => null),
+      this.drift(),
     ]);
+    let bandCalibration: BandCalibrationTable | null = null;
+    try {
+      bandCalibration = bandRaw
+        ? (JSON.parse(bandRaw) as BandCalibrationTable)
+        : null;
+    } catch {
+      bandCalibration = null;
+    }
     return {
       generatedAt: now.toISOString(),
-      decisions: buildDecisions(this.decisionFile, matrix, today, frozen),
+      decisions: buildDecisions(
+        this.decisionFile,
+        matrix,
+        today,
+        frozen,
+        reports,
+      ),
       matrixSummary: matrix?.summary ?? {
         better: 0,
         pending: 0,
@@ -155,7 +185,34 @@ export class MlOverviewService {
         worse: 0,
       },
       components,
+      bandCalibration,
+      ...(drift ? { drift } : {}),
     };
+  }
+
+  /** Stored decision reports (PAR-1059), keyed `${decisionId}|${evaluateOn}`; empty when unreadable. */
+  private async reports(): Promise<Map<string, MlDecisionReportDto>> {
+    const rows = await this.probe<Array<{ report: MlDecisionReportDto }>>(
+      "decision reports",
+      `SELECT report FROM ml_decision_reports`,
+    );
+    return new Map(
+      (rows ?? []).map((r) => [
+        `${r.report.decisionId}|${r.report.evaluateOn}`,
+        r.report,
+      ]),
+    );
+  }
+
+  /** The daily drift watch (PAR-1059) from Redis; null before its first run. */
+  private async drift(): Promise<MlDriftWatchDto | null> {
+    const raw = await this.redis.get(DRIFT_WATCH_KEY).catch(() => null);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as MlDriftWatchDto;
+    } catch {
+      return null;
+    }
   }
 
   private probe<T>(name: string, sql: string): Promise<T | null> {
@@ -185,6 +242,7 @@ export class MlOverviewService {
       nfTrain,
       mlTrain,
       chronosStatus,
+      pcnTrain,
     ] = await Promise.all([
       // Backward scan of idx_pcn_forecasts_created_at, recent window only.
       this.probe<LatestRow[]>(
@@ -234,6 +292,7 @@ export class MlOverviewService {
       this.service(`${getNfServiceUrl()}/train/status`),
       this.service(`${getMlServiceUrl()}/train/status`),
       this.service(`${getNfServiceUrl()}/chronos/status`),
+      this.service(`${getPcnServiceUrl()}/train/status`),
     ]);
 
     let chronosRun: ChronosRunSummary | null = null;
@@ -255,6 +314,11 @@ export class MlOverviewService {
     // --- PCN -----------------------------------------------------------
     const pcnAt = toDate(pcn?.[0]?.at);
     const pcnServed = servePcnIntraday();
+    // PAR-1053: forecasts keep flowing from the previous model when a training
+    // run fails, so their age alone never shows it. pcn-service's status file
+    // carries no finish time, so a `failed` there stands until the next run.
+    const pcnFailed = trainingFailedAfter(pcnTrain, null);
+    const pcnNote = trainingNote(pcnTrain, pcnFailed, pcn?.[0]?.version);
 
     // --- TFT -----------------------------------------------------------
     const tftAt = toDate(tft?.[0]?.at);
@@ -302,10 +366,10 @@ export class MlOverviewService {
         role: pcnServed ? "served" : "shadow",
         lastRunAt: iso(pcnAt),
         expected: "alle 15 Min. (rund um die Uhr)",
-        status: status(pcnAt, LATE_AFTER_MS.pcn),
+        status: status(pcnAt, LATE_AFTER_MS.pcn, pcnFailed ? "failed" : null),
         note: pcnServed
-          ? versionNote(pcn?.[0]?.version)
-          : `nicht ausgeliefert (SERVE_PCN_INTRADAY aus)${pcn?.[0]?.version ? ` · Version ${pcn[0].version}` : ""}`,
+          ? pcnNote
+          : `nicht ausgeliefert (SERVE_PCN_INTRADAY aus)${pcnNote ? ` · ${pcnNote}` : ""}`,
       },
       {
         id: "tft",

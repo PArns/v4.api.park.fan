@@ -1,5 +1,5 @@
 {
-  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired. evaluateOn (PAR-1036, owner decision): the fixed date on which a decision is judged, once, on the matrix window ending the day before; before it the decision is never 'ready', after it the verdict no longer moves. Each date is at least the earliest the gate can be met (ARCHIVE_START 2026-10-09 + the longest lead of the decision's cells + 14 days; a spec checks it) and, for the short-lead decisions, two weeks after the paired-definition-3 deploy so it does not rest on the replay alone. To re-judge a decision, move its evaluateOn to a later date here; to stop the fixed date, remove the field.",
+  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired. evaluateOn (PAR-1036, owner decision): the fixed date on which a decision is judged, once, on the matrix window ending the day before; before it the decision is never 'ready', after it the verdict no longer moves. Each date is at least the earliest the gate can be met (ARCHIVE_START 2026-10-09 + the longest lead of the decision's cells + 14 days; a spec checks it) and, for the short-lead decisions, two weeks after the paired-definition-3 deploy so it does not rest on the replay alone. expect (PAR-1042): absent = the cell's model must beat what is served; 'not_better' = the live gate is met and the model does not beat what is served (live check 'no') — for switching a model off, on cells that measure it against its replacement. To re-judge a decision, move its evaluateOn to a later date here; to stop the fixed date, remove the field.",
   "decisions": [
     {
       "id": "planner_h5_slots",
@@ -76,13 +76,28 @@
     {
       "id": "catboost_daily_off",
       "title": "CatBoost-Tagesniveau abschalten",
-      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live entscheidet „Kalendertage 3 Monate voraus“ (dort liefert CatBoost das Tagesniveau) gegen den Wochentag-Durchschnitt.",
+      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live wird CatBoost jetzt an denselben Tagen gegen TFT gemessen: Wir speichern an jedem Tag, an dem TFT das Tagesniveau liefert, zusätzlich den CatBoost-Wert, ohne ihn anzuzeigen („Welcher Tag ist voller?“, „Wie hoch wird die Tagesspitze?“, „1 bis 2 Monate voraus“). Bei 3 Monaten liefert nur CatBoost; dort zählt der Vergleich mit dem Wochentag-Durchschnitt. Gemessen wird erst seit dem Einbau dieser Speicherung.",
       "state": "later",
       "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
       "evaluateOn": "2027-01-21",
       "cells": [
+        { "questionId": "cal_rank", "modelId": "catboost", "expect": "not_better" },
+        { "questionId": "cal_busier", "modelId": "catboost", "expect": "not_better" },
+        { "questionId": "cal_far", "modelId": "catboost", "expect": "not_better" },
         { "questionId": "cal_far_90", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "wkd" }
+      ]
+    },
+    {
+      "id": "calendar_driver_level",
+      "title": "Kalender: Treiber-Niveau für die Reihenfolge der Tage",
+      "detail": "Der Wochentag-Wert, korrigiert um Ferien, Feiertage, Brückentage und die veröffentlichten Öffnungszeiten. Offline ordnet er die Tage ab einer Woche Vorlauf besser als jedes andere Tagesniveau, verliert aber im Frühjahr und im Sommer und bei der besten Besuchszeit; gemessen ist bisher nur ein Herbst. Läuft seit dem Deploy jede Nacht nebenher, nur im Archiv. Entschieden wird am 1. September 2027 über die vier Wochen davor, also im Hochsommer, wo er offline am deutlichsten verliert. Den Frühling bitte Ende Mai 2027 im Vergleich von Hand ablesen: ein Fenster von vier Wochen fasst nicht beide Jahreszeiten, und das Archiv hält die Paare nur 120 Tage.",
+      "evaluateOn": "2027-09-01",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "driver" },
+        { "questionId": "cal_busier", "modelId": "driver" },
+        { "questionId": "cal_far", "modelId": "driver" },
+        { "questionId": "cal_far_90", "modelId": "driver" }
       ]
     }
   ]

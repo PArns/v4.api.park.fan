@@ -542,6 +542,122 @@ ORDER BY relname;
 was skipped — the API log says why (`skipped_in_progress`, `skipped_window_closed`,
 or a `failed` with the error).
 
+### 5b. Weekly REINDEX of `pcn_forecasts_pkey` and the TFT retention (PAR-1054)
+
+**Why.** On 2026-10-24 `pcn_forecasts_pkey` was 10.1 GB against a 5.2 GB heap. The
+hourly 4-day prune (PAR-873) deletes the oldest rows and the writer inserts new ones
+at the other end of the key space; VACUUM marks the emptied index pages reusable but
+never gives them back, so the index stays at about twice its packed size.
+
+**The job.** `db-maintenance/reindex-pcn-forecasts-pkey`, cron `10 19 * * 0` (Sunday
+19:10 UTC), runs `REINDEX INDEX CONCURRENTLY pcn_forecasts_pkey` on the maintenance
+connection (`application_name = parkfan-db-maintenance`, `maintenance_work_mem =
+256MB`). Code: `src/database/maintenance/` (`vacuum-plan.ts`, `db-vacuum.service.ts`).
+
+- **Slot.** Outside the 04:50–05:58 VACUUM window and the 05:50–07:30 training
+  window, after the :05 forward-archive capture, on the evening of the week with no
+  nightly batch job. It starts only Sunday 19:10–19:30 UTC; a late Bull delivery
+  (deploy, retry) outside that is logged `skipped_window_closed`.
+- **Timeouts.** `statement_timeout` = 50 min, capped to end by 20:03 UTC, before the
+  20:05 capture. `lock_timeout` = 60 s, longer than the VACUUM's 5 s on purpose:
+  REINDEX CONCURRENTLY waits twice for every open transaction on the table (the
+  15-minute PCN upsert, the hourly prune batch), and at 5 s one slow upsert would throw
+  away a finished build. Its own lock is SHARE UPDATE EXCLUSIVE, which no SELECT,
+  INSERT, UPDATE or DELETE conflicts with, so a waiting request queues no reader or
+  writer behind it.
+- **Skipped (`skipped_busy`)** while any row is in `pg_stat_progress_create_index`,
+  while `pcn_forecasts` is in `pg_stat_progress_vacuum`, or while another
+  `parkfan-db-maintenance` session is active.
+- **Leftovers.** A REINDEX CONCURRENTLY that fails leaves an invalid
+  `pcn_forecasts_pkey_ccnew` (or `_ccold`) that every write still maintains. The job
+  drops invalid `pcn_forecasts_pkey_cc*` indexes with `DROP INDEX CONCURRENTLY` before
+  it starts and again after a failure.
+
+**Why CONCURRENTLY works here.** `pcn_forecasts` is a plain table, not in `HYPERTABLES`
+(`src/database/hypertables.ts`; the spec asserts it). TimescaleDB does not support
+`REINDEX … CONCURRENTLY` on a hypertable — that would need a per-chunk rebuild. If
+`pcn_forecasts` ever becomes one (the "hypertable + retention policy" option in
+`docs/ml/pcn-intraday-review.md`), this job and the pcn-service ctid prune both have to
+be rewritten.
+
+**Known risk: a pcn-service restart during the build.** pcn-service runs its
+`CREATE INDEX IF NOT EXISTS` once per process. That takes a SHARE lock, which conflicts
+with the REINDEX's SHARE UPDATE EXCLUSIVE, and the writers' ROW EXCLUSIVE then queue
+behind the pending SHARE — so PCN writes would stall until the REINDEX finishes (at
+most until 20:03). Do not deploy on Sunday between 19:10 and 20:05 UTC.
+
+**Check.**
+
+```sql
+SELECT pg_size_pretty(pg_relation_size('pcn_forecasts_pkey')) AS pkey,
+       pg_size_pretty(pg_relation_size('pcn_forecasts')) AS heap;
+-- Must be empty: an invalid copy left behind.
+SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+ WHERE i.indrelid = 'pcn_forecasts'::regclass AND NOT i.indisvalid;
+```
+
+The API log line is `🧽 REINDEX pcn_forecasts_pkey in N s — X GB → Y GB`.
+
+**TFT retention.** `db-maintenance/prune-tft-forecasts`, cron `35 4 * * *` UTC, deletes
+rows with `forecast_date` older than 120 days from `tft_forecasts`, then
+`tft_forecasts_shadow` (PAR-1041) and `tft_forecasts_shadow_drivers` (PAR-1057).
+The two shadows are `LIKE tft_forecasts` and created by nf-service on its first
+shadow write; until then `to_regclass` is null and the table is skipped (debug log,
+no error). None had a retention before (27 M rows, 3.8 GB, +180 k a
+day). 120 days is the oldest origin any reader asks for — the forward-archive shadow
+scoring at 14 + 90 + 3 = 107 days (the one reader of both shadows), the planner
+accuracy profile at 45 + 60 = 105 — plus 13 days; the full reader table is in `vacuum-plan.ts`. Batches of 200 k rows, each
+its own autocommitted `DELETE … WHERE ctid = ANY(ARRAY(SELECT ctid … LIMIT n))` (the
+PAR-873 pattern, plain tables only), at most 40 a night **for all three tables
+together** (one budget, served table first), 5 min
+`statement_timeout` per batch, `lock_timeout` 5 s. `forecast_date` has no index, so a
+batch is a sequential scan that stops once it has its rows; the last, short batch
+reads the table once (~4 GB). It runs before the 04:50 VACUUM, which then reclaims
+the deleted rows. The log line is `🗑️  TFT forecasts older than 120 days: …`.
+
+**Stop time.** No batch starts outside 04:35–04:48 UTC, and each batch's
+`statement_timeout` is capped to end by 04:50, when the VACUUM starts. Every batch
+rescans the heap from its start past the rows the earlier batches deleted (dead
+until the VACUUM), so the first catch-up (~29 batches) gets slower per batch; when
+the cut-off stops it, the log line says `not finished, N rows left` (one 30 s-bounded
+`count(*)`) and the next night continues. A run Bull delivers late starts nothing.
+
+**Before the first run: export what it deletes (owner decision, one-off).** The
+first run deletes every `tft_forecasts` row older than 120 days — on a run dated
+2026-10-25 that is `forecast_date < 2026-06-27`, ~5–6 M rows, the oldest month of
+TFT's only forward record. Copy them to the NAS first, on the docker host, from a
+checkout of this repo, **before the deploy that ships the job** and outside
+04:35–05:00 and 05:50–07:30 UTC. `CUTOFF` is today (UTC) − 118 days, so the file
+covers the prune of the next two nights; if the deploy slips further, run it again.
+The NAS is mounted on demand the way `scripts/backup/parkfan-backup.sh` does it
+(credentials from `/opt/parkfan/backup.env`, root-only, see
+docs/deployment/backup.md).
+
+```bash
+sudo -s                       # backup.env and the NAS mount are root-only; keeps the cwd
+set -a; . /opt/parkfan/backup.env; set +a
+MP=/mnt/parkfan-nas-backup; mkdir -p "$MP"
+mountpoint -q "$MP" && WAS_MOUNTED=1 || mount -t cifs "//$BACKUP_NAS_HOST/$BACKUP_NAS_SHARE" "$MP" \
+  -o "username=$BACKUP_NAS_USER,password=$BACKUP_NAS_PASSWORD,vers=3.0,iocharset=utf8,file_mode=0600,dir_mode=0700"
+CUTOFF=$(date -u -d 'now -118 days' +%F)
+OUT="$MP/parkfan/tft-forecasts-archive/tft_forecasts_before_${CUTOFF}.csv.gz"
+mkdir -p "$(dirname "$OUT")"
+PARKFAN_PSQL_STATEMENT_TIMEOUT=20min ./scripts/prod-psql.sh -v ON_ERROR_STOP=1 -c \
+  "COPY (SELECT * FROM tft_forecasts WHERE forecast_date < DATE '$CUTOFF') TO STDOUT WITH (FORMAT csv, HEADER)" \
+  | gzip > "$OUT"
+# Row-count check: both numbers must match (rows of a past forecast_date are never rewritten).
+EXPECTED=$(./scripts/prod-psql.sh -tA -c "SELECT count(*) FROM tft_forecasts WHERE forecast_date < DATE '$CUTOFF'")
+GOT=$(( $(gzip -cd "$OUT" | wc -l) - 1 ))
+echo "cutoff=$CUTOFF expected=$EXPECTED exported=$GOT"; [ "$EXPECTED" = "$GOT" ] && echo OK || echo MISMATCH
+ls -lh "$OUT"
+[ -n "${WAS_MOUNTED:-}" ] || umount "$MP"
+exit
+```
+
+Deploy only after it printed `OK`. Neither shadow needs an export: their first rows
+are from PAR-1041 / PAR-1057, nowhere near 120 days old.
+
+
 ---
 
 ## 6. Slow Query Logging

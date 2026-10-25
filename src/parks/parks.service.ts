@@ -18,6 +18,7 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -54,6 +55,10 @@ import {
   crossTypeConflictSql,
   sameTypeDuplicateSql,
 } from "./utils/schedule-dedup.sql";
+import {
+  recordScheduleDayVersions,
+  ScheduleVersionSource,
+} from "./utils/schedule-version-log";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
   DuplicatePair,
@@ -2473,6 +2478,30 @@ export class ParksService {
   }
 
   /**
+   * Append the park's changed days to `schedule_day_versions` (PAR-1061).
+   * Call after the last schedule writer of a sync is done with the park.
+   * Never throws: the log is write-only, and a failed write must not fail the
+   * sync that served the schedule.
+   */
+  async recordScheduleVersions(
+    parkId: string,
+    source: ScheduleVersionSource,
+  ): Promise<number> {
+    try {
+      return await recordScheduleDayVersions(
+        this.scheduleRepository.manager,
+        parkId,
+        source,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Schedule version log not written for park ${parkId}: ${error}`,
+      );
+      return 0;
+    }
+  }
+
+  /**
    * Refreshes holiday and bridge day metadata for ALL parks
    */
   async fillAllParksGaps(): Promise<number> {
@@ -2493,6 +2522,7 @@ export class ParksService {
       try {
         const count = await this.fillScheduleGaps(park.id);
         totalUpdated += count;
+        await this.recordScheduleVersions(park.id, "gap_fill");
       } catch (error) {
         this.logger.error(`Failed gap filling for ${park.name}: ${error}`);
       }
@@ -3568,6 +3598,34 @@ export class ParksService {
     }
 
     return [...codes];
+  }
+
+  /**
+   * The region codes, as stored, that a country's holiday rows must carry for
+   * the parks to find them: each park's own `regionCode` there, and each
+   * influencing region there (normalised, without the country prefix).
+   */
+  async getSyncRegionCodes(countryCode: string): Promise<string[]> {
+    const parks = await this.parkRepository.find({
+      select: {
+        countryCode: true,
+        regionCode: true,
+        influencingRegions: true,
+      },
+    });
+    const codes = new Set<string>();
+    for (const park of parks) {
+      if (park.countryCode === countryCode) {
+        const own = normalizeRegionCode(park.regionCode);
+        if (own) codes.add(own);
+      }
+      for (const reg of park.influencingRegions ?? []) {
+        if (reg.countryCode !== countryCode) continue;
+        const code = normalizeRegionCode(reg.regionCode);
+        if (code) codes.add(code);
+      }
+    }
+    return [...codes].sort();
   }
 
   /**

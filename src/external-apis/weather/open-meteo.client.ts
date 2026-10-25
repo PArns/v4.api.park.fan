@@ -691,7 +691,11 @@ export class OpenMeteoClient {
         }
       : null;
 
-    return { days, current: currentConditions };
+    return {
+      days,
+      current: currentConditions,
+      fetchedAt: new Date().toISOString(),
+    };
   }
 
   private transformNowcastResponse(
@@ -846,6 +850,13 @@ export interface CurrentConditions {
 export interface DailyWeatherResponse {
   days: DailyWeather[];
   current: CurrentConditions | null;
+  /**
+   * UTC ISO time the upstream response was fetched. Cached with the response,
+   * so every park on one coordinate (and a re-run within the cache TTL) sees the
+   * same value: it is the `issued_at` of `weather_forecast_issues`. Absent on a
+   * response cached before PAR-1061.
+   */
+  fetchedAt?: string;
 }
 
 export interface HourlyWeather {

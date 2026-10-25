@@ -8,7 +8,11 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { createHash } from "crypto";
 import { AbortableRuns } from "../../common/utils/abortable-runs";
-import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
+import {
+  DB_VACUUM_CRON,
+  PCN_REINDEX_CRON,
+  TFT_PRUNE_CRON,
+} from "../../database/maintenance/vacuum-plan";
 
 /**
  * How often the scheduler re-runs its registration after startup.
@@ -23,6 +27,8 @@ import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
  * deploy restarted the API (PAR-626).
  */
 const RE_REGISTER_INTERVAL_MS = 60 * 60 * 1000;
+/** PAR-1058 driver-level shadow, UTC (see the registration for why 01:30). */
+const DRIVER_LEVEL_CRON = "30 1 * * *";
 
 /**
  * Id of the job Bull materialises for one run of a repeatable entry. Mirrors
@@ -60,7 +66,8 @@ export function materialisedRepeatJobId(entry: {
  * - prediction-accuracy: Every hour (compare predictions with actuals)
  * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
  * - db-maintenance: 04:50 UTC VACUUM of the high-churn tables, done before the
- *   06:00 UTC training (PAR-868)
+ *   06:00 UTC training (PAR-868); 04:35 UTC TFT forecast retention, Sunday
+ *   19:10 UTC REINDEX of pcn_forecasts_pkey (PAR-1054)
  */
 @Injectable()
 export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -623,6 +630,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // CatBoost band calibration (PAR-1060): daily 04:20 UTC, after the 4am
+    // cleanup and before the 04:50 vacuum / 06:00 training window. The 15-min
+    // comparison has scored everything up to ~20 min ago by then.
+    const hasBandCalibrationCron = await this.hasRepeatableJob(
+      this.predictionAccuracyQueue,
+      "band-calibration-cron",
+      "20 4 * * *",
+    );
+    if (!hasBandCalibrationCron) {
+      await this.predictionAccuracyQueue.add(
+        "calibrate-bands",
+        {},
+        {
+          repeat: { cron: "20 4 * * *" },
+          jobId: "band-calibration-cron",
+          attempts: 2,
+        },
+      );
+    }
+
     // Predictions: Every 15 minutes (fresh predictions for bestVisitTimes and crowd levels)
     const hasHourlyPredictionsCron = await this.hasRepeatableJob(
       this.predictionsQueue,
@@ -1117,6 +1144,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         },
       );
     }
+    // The driver-level shadow (PAR-1058): nightly, before Europe's 06:00 origin.
+    // 01:30 UTC sits in the gap after generate-daily (01:00, ~2 min) and before
+    // the 02:00 queue_data readers (calculate-percentiles, detect-feature-drift,
+    // 02:30 detect-seasonal): its scan is one all-park PERCENTILE_CONT over
+    // 400 days. `tz` is explicit so a host TZ change cannot move it into them.
+    const hasDriverLevelCron = await this.hasRepeatableJob(
+      this.forecastArchiveQueue,
+      "driver-level-cron",
+      DRIVER_LEVEL_CRON,
+    );
+    if (!hasDriverLevelCron) {
+      await this.forecastArchiveQueue.add(
+        "driver-level",
+        {},
+        {
+          repeat: { cron: DRIVER_LEVEL_CRON, tz: "UTC" },
+          jobId: "driver-level-cron",
+        },
+      );
+    }
     const hasArchiveScoreCron = await this.hasRepeatableJob(
       this.forecastArchiveScoreQueue,
       "forecast-archive-score-cron",
@@ -1216,6 +1263,30 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           removeOnFail: 30,
         },
       );
+    }
+
+    // TFT forecast retention (PAR-1054): 04:35 UTC, before the 04:50 VACUUM.
+    // Weekly REINDEX of pcn_forecasts_pkey: Sunday 19:10 UTC. Both UTC, one
+    // attempt — the REINDEX refuses to start outside its window anyway.
+    for (const [jobName, jobId, cron] of [
+      ["prune-tft-forecasts", "db-tft-prune-cron", TFT_PRUNE_CRON],
+      ["reindex-pcn-forecasts-pkey", "db-pcn-reindex-cron", PCN_REINDEX_CRON],
+    ] as const) {
+      if (
+        !(await this.hasRepeatableJob(this.dbMaintenanceQueue, jobId, cron))
+      ) {
+        await this.dbMaintenanceQueue.add(
+          jobName,
+          {},
+          {
+            repeat: { cron, tz: "UTC" },
+            jobId,
+            attempts: 1,
+            removeOnComplete: 30,
+            removeOnFail: 30,
+          },
+        );
+      }
     }
 
     // GeoIP (GeoLite2-City): Every 48 hours (0:00 every 2 days)

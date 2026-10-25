@@ -113,6 +113,21 @@ Operating hours for parks.
 - `visitingHours`: Open/Close times
 - `type`: `OPERATING`, `CLOSED`, `Ticketed Event`
 
+### 6. As-of fact logs (`weather_forecast_issues`, `schedule_day_versions`)
+Append-only, write-only logs (PAR-1061, [covariate source](../architecture/covariate-source.md) PRs 1–2).
+Nothing reads them yet. Plain tables, no FK, no hypertable; a park merge moves them
+(`PARK_DEPENDENCIES`, keyed on the target day).
+- `weather_forecast_issues` — PK `(park_id, target_date, issued_at)`; every daily
+  forecast the 12-hourly full weather sync stores, with `lead_days` from the park-local
+  date of `issued_at`. Insert-or-ignore, so a re-run within the client's 2 h cache adds
+  nothing. ~4,800 rows/day, **≈ 230 MB/yr**, no retention (D6).
+- `schedule_day_versions` — PK `(park_id, day, known_from)`, partial unique
+  `(park_id, day) WHERE known_to IS NULL`; one row per change of a park-day's derived
+  state (state, open/close, events), diff-written by `ParksService.recordScheduleVersions`
+  after the last schedule writer. A park's first versions are its backfill
+  (`known_from = max(updatedAt)`, `asof_exact = false`, ≈ 83 k rows); churn is
+  assumed ≈ 1 M rows / **≈ 160 MB/yr** until measured.
+
 ## Relationships
 
 - **One-to-Many**: Park -> Attractions
@@ -134,6 +149,8 @@ Precomputed analytics are stored in dedicated tables and optionally mirrored in 
 | `attraction_hourly_history` | Per-day per-attraction 15-min-slot P90/avg/sampleCount rollup (JSONB `slots` array). Read by the attraction history endpoint for past days; today is computed live against `queue_data`. Both columns are built from observations only (`observedReadingsSql`): the `slots` array since PAR-729, `downCount` since PAR-897 — a carried `DOWN` used to count as an outage hour of its own. **Rows written before those deploys were deliberately not recomputed**, so for days before them up to 45 % of their slots per park come from carried heartbeat rows and 1.64 % of the rows overstate `downCount` by a median of 2 h — a `backfill-attraction-hourly-history` run over those days removes that slot coverage rather than repairing it, and no row it would touch loses its outage (PAR-897). |
 | `park_daily_stats` | Daily stats per park (P50/P90/max wait). Updated hourly for today, daily for yesterday. |
 | `queue_data_aggregates` | Precomputed hourly percentiles (P25/P50/P75/P90/P95/P99) per attraction. Used by ML feature engineering. |
+| `tft_forecasts`, `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` | nf-service's daily-peak forecast per (attraction, target_date, forecast_date) — every origin, not just the latest. Plain tables (not hypertables). **Retention 120 days by `forecast_date`** (PAR-1054): the `db-maintenance/prune-tft-forecasts` job at 04:35 UTC deletes in 200 k-row ctid batches, one autocommitted statement each, the shadows after the served table and skipped while nf-service has not created them yet. The window is the oldest origin any reader asks for (forward-archive shadow scoring, 107 days) plus 13 days; the reader table is in `src/database/maintenance/vacuum-plan.ts`. |
+| `pcn_forecasts` | pcn-service's 15-minute intraday forecast. Plain table, retention 4 days by `created_at` in pcn-service (PAR-873). Its primary key is rebuilt weekly with `REINDEX INDEX CONCURRENTLY` (Sunday 19:10 UTC, PAR-1054) because the rolling prune bloats it to twice its packed size — see [DB Health Runbook §5b](../troubleshooting/db-health-runbook.md). |
 
 The P50/P90 baseline pair is recalculated nightly by the same cron (3 AM parks, 4 AM attractions) — PostgreSQL produces both percentiles in a single PERCENTILE_CONT sort. The 548-day **live** sliding-window calculation that used to back this on every cache miss was removed; missing rows mean "wait for the next cron run" rather than "scan half a billion data points now".
 

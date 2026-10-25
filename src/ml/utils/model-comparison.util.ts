@@ -95,6 +95,8 @@ export function cellFloorDate(questionId: string, modelId: string): string {
 export const MODEL_ARCHIVE_START: Record<string, string> = {
   tft_grid: "2026-10-26",
   tft_grid_drivers: "2026-10-26",
+  // PAR-1058: the first capture after the first nightly driver-level run.
+  driver: "2026-10-27",
 };
 
 export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
@@ -155,6 +157,12 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
     label: "TFT mit Lücken-Raster + Treibern",
     oneLiner:
       "Wie „TFT mit Lücken-Raster“, kennt zusätzlich längere oder kürzere Öffnungszeiten als sonst, den ersten Tag nach einer Schließung und Ferienanfang/-ende, und lernt die zeitgewichtete Tagesspitze. Läuft jede Nacht nebenher, nicht in der App.",
+  },
+  {
+    id: "driver",
+    label: "Treiber-Niveau",
+    oneLiner:
+      "Der Wochentag-Wert, korrigiert um das, was man vorher weiß: Ferien, Feiertage, Brückentage und die veröffentlichten Öffnungszeiten. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "catboost",
@@ -469,7 +477,8 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
       tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
-      catboost: null,
+      driver: [PAIRED_MODELS.driverLevel],
+      catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
     },
   },
@@ -487,8 +496,9 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
       tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
-      catboost: null,
-      wkd: ["weekday_avg"],
+      driver: [PAIRED_MODELS.driverLevel],
+      catboost: [PAIRED_MODELS.catboostShadow],
+      wkd: [PAIRED_MODELS.weekdayAvg],
     },
     pairwise: CAL_PAIRWISE,
   },
@@ -508,8 +518,9 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
       tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
-      catboost: null,
-      wkd: ["weekday_avg"],
+      driver: [PAIRED_MODELS.driverLevel],
+      catboost: [PAIRED_MODELS.catboostShadow],
+      wkd: [PAIRED_MODELS.weekdayAvg],
     },
     pairwise: CAL_PAIRWISE,
   },
@@ -524,7 +535,10 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: ["d90"],
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.catboost,
-    models: { wkd: ["weekday_avg"] },
+    models: {
+      driver: [PAIRED_MODELS.driverLevel],
+      wkd: ["weekday_avg"],
+    },
   },
 ];
 

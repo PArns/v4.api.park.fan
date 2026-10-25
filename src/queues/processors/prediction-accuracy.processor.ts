@@ -20,6 +20,7 @@ import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
  * 1. compare-accuracy: Compare predictions with actual wait times (hourly)
  * 2. aggregate-stats: Pre-aggregate MAE per attraction (daily)
  * 3. cleanup-old: Delete old MISSED/PENDING records (daily)
+ * 4. calibrate-bands: CatBoost hourly band factor (daily, PAR-1060)
  */
 @Processor("prediction-accuracy")
 export class PredictionAccuracyProcessor {
@@ -169,6 +170,17 @@ export class PredictionAccuracyProcessor {
       this.logger.error(`❌ Stats aggregation failed: ${errorMessage}`);
       throw error;
     }
+  }
+
+  /** PAR-1060: refit the CatBoost hourly band factor from the scored slots. */
+  @Process("calibrate-bands")
+  async handleCalibrateBands(_job: Job): Promise<void> {
+    const table = await this.predictionAccuracyService.calibrateCatboostBands();
+    this.logger.log(
+      `📐 CatBoost band calibration: ${Object.entries(table.cells)
+        .map(([key, c]) => `${key} k=${c.k ?? "raw"} n=${c.n}`)
+        .join(", ")}`,
+    );
   }
 
   /**

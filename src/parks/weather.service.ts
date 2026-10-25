@@ -6,6 +6,7 @@ import { Repository, Between } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { WeatherData } from "./entities/weather-data.entity";
+import { WeatherForecastIssue } from "./entities/weather-forecast-issue.entity";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import {
@@ -730,6 +731,31 @@ export class WeatherService {
   }
 
   /**
+   * Append one issued daily forecast to `weather_forecast_issues` (PAR-1061).
+   *
+   * Called by the full weather sync with the same response it upserts into
+   * `weather_data`: no extra Open-Meteo call. Idempotent per
+   * (park, target_date, issued_at) — a re-run inside the client's 2 h cache
+   * carries the same `issuedAt` and inserts nothing.
+   */
+  async saveForecastIssue(
+    park: { id: string; timezone: string },
+    days: DailyWeather[],
+    issuedAt: Date,
+  ): Promise<number> {
+    if (days.length === 0 || !park.timezone) return 0;
+    const rows = buildForecastIssueRows(park, days, issuedAt);
+    await this.weatherDataRepository.manager
+      .createQueryBuilder()
+      .insert()
+      .into(WeatherForecastIssue)
+      .values(rows)
+      .orIgnore()
+      .execute();
+    return rows.length;
+  }
+
+  /**
    * Get weather data for a park within a date range.
    * @param timezone - Optional; when provided (e.g. from calendar with park already loaded), skips park lookup.
    */
@@ -1095,4 +1121,34 @@ export function synthesizeHourlyFromDaily(
     }
   }
   return out;
+}
+
+/**
+ * One `weather_forecast_issues` row per forecast day. `lead_days` counts from
+ * the park-local date of `issuedAt`, not the UTC one: a 00:00 UTC run is still
+ * the previous day for a park west of UTC.
+ */
+export function buildForecastIssueRows(
+  park: { id: string; timezone: string },
+  days: DailyWeather[],
+  issuedAt: Date,
+): WeatherForecastIssue[] {
+  const issuedDay = Date.parse(
+    `${formatInParkTimezone(issuedAt, park.timezone)}T00:00:00Z`,
+  );
+  return days.map((d) => ({
+    parkId: park.id,
+    targetDate: d.date,
+    issuedAt,
+    leadDays: Math.round(
+      (Date.parse(`${d.date}T00:00:00Z`) - issuedDay) / 86_400_000,
+    ),
+    tempMax: d.temperatureMax,
+    tempMin: d.temperatureMin,
+    precipSum: d.precipitationSum,
+    rainSum: d.rainSum,
+    snowSum: d.snowfallSum,
+    windMax: d.windSpeedMax,
+    weatherCode: d.weatherCode,
+  }));
 }

@@ -63,6 +63,16 @@ fewer chunks = the static encoder and cross-series attention see more series at 
 - *Caveat:* keep `num_workers`/shared-mem in mind; raise chunk size empirically while
   watching both CPU-RAM and VRAM.
 
+**Chunk membership (PAR-1054).** Each chunk trains its own TFT, so which parks
+share a chunk is part of the model. `db.fetch_park_ids` lists only parks with at
+least one row the panel could keep (OPERATING, STANDBY, wait ≥ `NF_MIN_WAIT`
+inside `NF_WINDOW_DAYS` — a superset of the panel's own filters, so no park with
+a series is dropped), ordered by (country, park id), unknown country last
+(`db.order_parks`). Before, it was every park with attractions in UUID order:
+the status-only parks filled chunk slots, and a new park shifted every later
+park into another chunk. Now a new park moves only the chunks of its own country
+and those after it. `NF_PARK_IDS` (an explicit list) is used as given.
+
 ### 4. (Later) learning-rate / loss sweep
 Once 1–3 land, sweep `learning_rate` (1e-4..3e-3) and re-test `studentt` vs the
 rejected quantile losses now that capacity is higher — the earlier rejection was at

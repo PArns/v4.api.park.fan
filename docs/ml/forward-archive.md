@@ -106,6 +106,21 @@ and `is_headliner`, plus:
   picks it: the `getServingDailyPredictions` row for that ride whose
   `predictedTime.slice(0, 10)` is the date, TFT rows carrying
   `modelVersion: "tft"`. Internal only, not in the API.
+- `catboost_day_peak` (plan_day, PAR-1042): on a ride-day whose level is
+  `tft`, CatBoost's day level for the same ride-day — a **shadow**, never
+  served. `getServingDailyPredictions` starts from the CatBoost daily read
+  (`getParkPredictions(…, "daily")`) and drops its row wherever TFT has one;
+  the archive reads that same answer and keeps the dropped value, matched on
+  `predictedTime.slice(0, 10)` like the planner. Since the planner's `dayPeak`
+  IS the level's `predictedWaitTime`, this is the `dayPeak` the planner would
+  have shown had CatBoost levelled the day. NULL on every other row (a
+  CatBoost-levelled day already has CatBoost in `day_peak`).
+- `driver_day_peak` (plan_day, PAR-1058): the driver-level **shadow** for the
+  ride-day, on every level source — the row of `driver_level_forecasts` for that
+  ride and date, read once per park capture and only where it was written at or
+  before the origin (`created_at <= origin_at`), rounded. NULL where the nightly
+  job has no row (ride without two same-weekday days in the last 56, park not
+  run, table unreadable — the capture itself never fails on it). See §9.1.
 
 **Operating day.** A served 15-min slot before 04:00 park-local belongs to the
 previous date, so a park open until 01:00 keeps its evening in one row and is
@@ -173,6 +188,22 @@ per open park. Per capture the extra reads are one `getServingDailyPredictions`
 (single-flight, the call `buildPlanDay` makes anyway), one `DISTINCT ON` over the
 last 3 h of `queue_data` for the live anchor, and once a day per park the
 forward-filled q90 over 56 days of the hourly rollup (cached).
+
+**CatBoost shadow level (PAR-1042), measured at unit level** (the capture spec
+counts the calls): **one** extra `getParkPredictions(park, "daily")` per
+06:00 and 07:00 park capture, none at the intraday origins. That read is the
+Redis entry `getServingDailyPredictions` itself starts from, under the same
+single-flight key, so on the warm path it is one `parks` primary-key lookup
+(the timezone for the cache key) plus one Redis GET — no ml-service call and
+no `wait_time_predictions` read: ~200 parks × 2 captures ≈ 400 PK lookups a
+day. The stored `wait_time_predictions` daily rows were the alternative and
+were not taken: they are written by the prediction generator's own run
+(diff-written, so a row's age says nothing about which run made it), whereas
+the cached answer is by construction the set of rows the planner's level was
+chosen from, and reading the table would be a range query per park instead of
+a cache hit. Size: one nullable `smallint` on `forecast_archive_curves`,
+filled on TFT-levelled plan_day rows only (headliners d0–d60, a few thousand a
+day) — a few kB a day, nothing at the steady state's scale.
 
 **Not a hypertable, no foreign key.** At ~0.85 GB a plain table is fine, and
 retention is an app-side `DELETE` in 20,000-row batches with `lock_timeout` 2 s
@@ -550,8 +581,8 @@ spec builds the matrix from the real scorer and asserts it.
 | UC3 d0–d5 | `shadow_h5`, routed, `shadow_peak_scaled`, `weekday_avg`, `chronos2_grid` | `plan_day` | 06:00 |
 | UC3 d6, d7, d10 … d60 | the same without Chronos | `plan_day` | 06:00 / 07:00 |
 | D3 d0–d7 / d10–d30 | as UC3 d0–d5 / without Chronos; regret of every candidate and of served on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | `plan_day` | 06:00 / 07:00 |
-| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional `tft_grid` / `tft_grid_drivers` on the TFT-levelled ones (PAR-1041) | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
-| D7 dN | `weekday_avg` (and optional `tft_grid`, `tft_grid_drivers`) vs served `dayPeak`, headliners whose level is TFT's | `served_tft` | 06:00 / 07:00 |
+| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional on the TFT-levelled ride-days that have a value: `catboost_shadow` (PAR-1042), `tft_grid` / `tft_grid_drivers` (PAR-1041, PAR-1057); optional on every ride-day that has a value, under the served level's reference: `driver_level` (PAR-1058) | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
+| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow`, `tft_grid`, `tft_grid_drivers`, `driver_level` likewise, each on its own rows | `served_tft` | 06:00 / 07:00 |
 
 The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
 old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
@@ -588,6 +619,33 @@ CatBoost's; CatBoost's live figure is its day peak against the weekday average
 on the days it levelled, shown under `comparisons` beside TFT's — two different
 sets of days, never subtracted.
 
+**CatBoost against TFT on the same days (PAR-1042).** To make "switch the
+CatBoost daily level off" decidable live, the capture keeps CatBoost's level on
+every TFT-levelled ride-day (`catboost_day_peak`, §1) and the scorer pairs it
+with the served TFT `dayPeak` as model **`catboost_shadow`**, reference
+`served_tft` — PEAK (`all`, `headliner`) and D7. It is optional like the
+nf-service shadows: written on the weekday average's PEAK / D7 rows where the
+ride-day has a shadow value, so the weekday-average rows are unchanged and the
+CatBoost cell's reference MAE differs from the weekday average's only by the
+ride-days without a shadow. The read path ranks D7 per model (`d7Aggregates`
+is called once per `model`): one series per park and lead mixing the two
+models' level sums would order one model's dates against the other's. The
+matrix columns `catboost` of `cal_rank`, `cal_busier` and `cal_far` read it
+(they were offline only before); `cal_far_90` stays CatBoost-served with the
+weekday average as its only live cell. `PAIRED_DEFINITION` stays 3: every key
+that existed keeps its meaning and its rows, and a bump would make the replay
+rescore 14 dates whose curves have no shadow (they were captured before the
+column existed) while restarting every other gate for nothing. The shadow's
+first rows are the first capture after deploy, so its cells' "frühestens"
+dates (`cellFloorDate`, counted from `ARCHIVE_START`) are optimistic by the
+time between 2026-10-09 and the deploy. Because the shadow rides on the
+weekday average's rows, it is scored only where that average exists — a
+quarter-hour needs `WEEKDAY_AVG_MIN_DAYS` = 2 earlier dates of the same
+weekday with a value — so for a park's (or a ride's) first two weeks in the archive the CatBoost cells collect
+nothing even while TFT's level is archived; their gate starts counting once
+the weekday average does. Kept that way on purpose: one row set per ride-day
+keeps the shadow and the weekday average on identical days.
+
 **The grid TFT shadow (`tft_grid`, PAR-1041).** nf-service trains the
 calendar-grid TFT every night beside the served one into `tft_forecasts_shadow`
 ([neuralforecast-tft-evaluation.md](neuralforecast-tft-evaluation.md#the-grid-as-a-nightly-shadow-par-1041)).
@@ -614,6 +672,43 @@ are read one after the other per park), as its own optional model and its own
 column on `cal_rank` / `cal_busier` / `cal_far` and its own decision
 (`calendar_tft_grid_drivers`) — so the grid-only result is never mixed with the
 drivers and the time-weighted target.
+
+**The driver-level shadow (`driver_level`, PAR-1058).** ml-bench's
+`driver_level` plug-in (PAR-830, [level-drivers.md](level-drivers.md) §6.8:
+"shadow, not serve", scoped to the day-ranking surfaces) runs in production as
+`ml-service/driver_level.py`: at 01:30 UTC the `forecast-archive` queue's
+`driver-level` job calls ml-service `POST /driver-level/run`, which starts the
+job in its own process (like `/train`); it fits on ~400 days of ride-day P90s
+and replaces `driver_level_forecasts` with one level per ride for origin+1 …
+origin+91 (origin = the park-local date at run time). **Why 01:30 UTC**: its
+scan is one all-park `PERCENTILE_CONT` over 400 days of `queue_data`, so it
+sits in the measured gap between `generate-daily` (01:00, ~2 min in Bull) and
+the 02:00 `queue_data` readers (`calculate-percentiles`, `detect-feature-drift`,
+02:30 `detect-seasonal`), well before the 03:00 TFT training (~12 min) and
+`sync-all-parks` (~30 min); the cron carries `tz: "UTC"`. A second
+`POST /driver-level/run` while a run is live answers **409** (an `flock` the
+child process holds until it exits, so an OOM kill frees it too); the job
+logs and returns instead of failing. The capture copies it
+into `driver_day_peak` (§1) — a capture column rather than a read at scoring
+time like `tft_grid`, because the table keeps only the latest night. The scorer
+pairs it with the served `dayPeak` as model **`driver_level`** on **every**
+level source: PEAK under `served_tft` or `served_catboost` by the model behind
+the level, D7 on the TFT-levelled headliners like the other shadows. That is
+what lets `cal_far_90` (CatBoost-served, d90) carry a live driver cell beside
+`cal_rank`, `cal_busier` and `cal_far` (matrix column `driver`, „Treiber-
+Niveau“). It is optional (`PAIRED_OPTIONAL_MODELS`): rows only where the
+ride-day has a shadow value, on the weekday average's rows, which stay
+unchanged; **no `PAIRED_DEFINITION` bump** for the same reasons as `tft_grid`.
+Its lead is the archive's: a park whose 06:00 origin comes before the night's
+run in its own date (Asia, the Americas — 01:30 UTC is still the previous
+evening there, or already late morning) reads the level that run made at lead
+L+1. `MODEL_ARCHIVE_START.driver` = 2026-10-27 is the assumed first capture
+after deploy (shortcut, like `tft_grid`'s). The switch decision
+(`calendar_driver_level`, ML overview) is judged on **2027-09-01**: the bench
+found it losing in spring and summer and has seen one autumn, so it must be
+judged on a summer window; spring is a manual read in late May 2027, because a
+28-day window cannot hold both seasons and `forecast_archive_paired` keeps 120
+days.
 
 **D7 rows are levels, not errors**: per park, date and lead `n` headliners,
 `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,
@@ -683,9 +778,11 @@ TFT levels the calendar up to 60 days and the d90 rows were CatBoost's while the
 question named TFT as served. The calendar questions
 read the planner's per-ride `dayPeak` — built on the same daily level the
 calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
-calendar's crowd level itself is not archived per model. **CatBoost** and
-**Toto 2.0 / TiRex** have no archived curve, so their cells are offline only
-(`checks.live = "open"`). The offline hit rate (+0.026 for TFT) answers
+calendar's crowd level itself is not archived per model. **Toto 2.0 /
+TiRex** have no archived curve, so their cells are offline only
+(`checks.live = "open"`); **CatBoost** has none either, but on the calendar
+questions its day level is archived as a shadow (PAR-1042, §9.1) and its
+`cal_rank` / `cal_busier` / `cal_far` cells are live against TFT. The offline hit rate (+0.026 for TFT) answers
 "which day is fuller", so since PAR-1038's review it is filed under the
 day-ranking question `cal_rank` (PAR-1037), with `metric = hit_rate`; it stays in
 the note, never in `offline.diff`, which would then be in another unit than the
@@ -725,8 +822,11 @@ and `tft_grid_drivers` from their first shadow night, assumed 2026-10-26 —
 **Fixed evaluation dates** (owner decision against daily re-testing): the
 decisions of the ML overview carry `evaluateOn` and are judged once, on the
 window ending the day before (`getMatrix(…, until)`); see
-[ml-overview.md](ml-overview.md). The matrix page itself keeps showing the
-latest window. No multiplicity correction across the ~45 cells is applied.
+[ml-overview.md](ml-overview.md). Since PAR-1059 that judgement is stored once
+in `ml_decision_reports` after the scoring on `evaluateOn`
+([ml-overview.md §1a](ml-overview.md#1a-frozen-decision-reports-par-1059)),
+so the 120-day retention of this table cannot move it. The matrix page itself
+keeps showing the latest window. No multiplicity correction across the ~45 cells is applied.
 
 State rule: the served model is `today`. A live comparison that meets the gate
 (≥ 10 parks with ≥ 14 scored dates **each** — `gateDays`, the 10th-best park's

@@ -50,7 +50,9 @@ its public holidays reach 2028; Sweden has none at all). Inside the coverage
 nothing changes. A location's coverage is its last regional OR national
 school row; a location whose region matches no row falls back to the latest
 school row of any region of its country, and a country with no school row
-has no coverage at all. Without a ``SchoolCoverage`` the features are what
+has no coverage at all. In REGION_ONLY_SCHOOL_COVERAGE countries (US, AU,
+GB, JP: curated for some regions only) there is no such fallback, and a
+whole-country influence has no coverage. Without a ``SchoolCoverage`` the features are what
 they always were.
 """
 
@@ -66,6 +68,11 @@ from holiday_utils import normalize_region_code
 PUBLIC_HOLIDAY_TYPES = frozenset({"public", "bank", "bridge"})
 SCHOOL_HOLIDAY_TYPES = frozenset({"school"})
 EASTER_COUNTRIES = frozenset({"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"})
+# Countries whose school data is curated for some regions only (PAR-1071): a
+# region without rows is unknown, never covered by another region's rows —
+# Ohio is not on Orlando's calendar. GB (England only) and JP (Aichi only)
+# since PAR-1072.
+REGION_ONLY_SCHOOL_COVERAGE = frozenset({"US", "AU", "GB", "JP"})
 
 SCHOOL_FEATURE_COLUMNS = (
     "is_school_holiday_primary",
@@ -195,11 +202,13 @@ class SchoolCoverage:
         """The last day the location's school flags rest on data, or None."""
         own = [d for d in (self.regional.get((country, region_norm)) if region_norm else None,
                            self.national.get(country)) if d is not None]
-        return max(own) if own else self.country_any.get(country)
+        if own:
+            return max(own)
+        return None if country in REGION_ONLY_SCHOOL_COVERAGE else self.country_any.get(country)
 
     def through_any(self, country) -> _dt.date | None:
         """Coverage of an influencing region given at country level."""
-        return self.country_any.get(country)
+        return None if country in REGION_ONLY_SCHOOL_COVERAGE else self.country_any.get(country)
 
 
 def parse_influencing_regions(raw) -> list[dict]:

@@ -22,6 +22,33 @@ describe("holiday.utils › school-holiday coverage", () => {
     expect(schoolCoverageThrough(coverage, "SE", null)).toBeNull();
   });
 
+  it("never lends one US state's calendar to another (PAR-1071)", () => {
+    const us = buildSchoolCoverage([
+      { country: "US", region: "US-FL", through: "2028-08-09" },
+    ]);
+    expect(schoolCoverageThrough(us, "US", "FL")).toBe("2028-08-09");
+    expect(schoolCoverageThrough(us, "US", "OH")).toBeNull();
+    expect(schoolCoverageThrough(us, "US", null)).toBeNull();
+  });
+
+  it("never lends England's calendar to Scotland or Wales (PAR-1072)", () => {
+    const gb = buildSchoolCoverage([
+      { country: "GB", region: "GB-ENG", through: "2029-08-31" },
+    ]);
+    expect(schoolCoverageThrough(gb, "GB", "England")).toBe("2029-08-31");
+    expect(schoolCoverageThrough(gb, "GB", "GB-SCT")).toBeNull();
+    expect(schoolCoverageThrough(gb, "GB", null)).toBeNull();
+  });
+
+  it("leaves a Japanese prefecture without rows unknown (PAR-1072)", () => {
+    const jp = buildSchoolCoverage([
+      { country: "JP", region: "JP-23", through: "2027-03-31" },
+    ]);
+    expect(schoolCoverageThrough(jp, "JP", "23")).toBe("2027-03-31");
+    expect(schoolCoverageThrough(jp, "JP", "12")).toBeNull();
+    expect(schoolCoverageThrough(jp, "JP", "27")).toBeNull();
+  });
+
   it("marks only the false days past the coverage", () => {
     const days = [
       { date: "2026-09-11", isSchoolVacation: true },

@@ -18,6 +18,8 @@ describe("NfForecastProcessor.handleTrainNf", () => {
   /** Status bodies returned by successive GET /train/status calls. */
   let statuses: Array<Record<string, unknown>>;
   let warn: jest.SpyInstance;
+  /** One SCAN page holding two TFT cache keys, then the end of the keyspace. */
+  let redis: { scan: jest.Mock; pipeline: jest.Mock; del: jest.Mock };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -28,7 +30,18 @@ describe("NfForecastProcessor.handleTrainNf", () => {
     warn = jest
       .spyOn(Logger.prototype, "warn")
       .mockImplementation(() => undefined);
-    processor = new NfForecastProcessor();
+    const del = jest.fn();
+    redis = {
+      scan: jest
+        .fn()
+        .mockResolvedValue([
+          "0",
+          ["ml:tft-daily:a:30:x", "ml:tft-daily:b:30:x"],
+        ]),
+      del,
+      pipeline: jest.fn(() => ({ del, exec: jest.fn().mockResolvedValue([]) })),
+    };
+    processor = new NfForecastProcessor(redis as never);
     mockedAxios.post.mockImplementation(async (url: string) => {
       if (url.endsWith("/train")) {
         return { data: { status: "training_started", version: VERSION } };
@@ -145,6 +158,26 @@ describe("NfForecastProcessor.handleTrainNf", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("1 of 10 park chunk(s) failed"),
     );
+    // PAR-1053: the 13 h read cache is evicted, by SCAN and never by KEYS.
+    expect(redis.scan).toHaveBeenCalledWith(
+      "0",
+      "MATCH",
+      "ml:tft-daily:*",
+      "COUNT",
+      expect.any(Number),
+    );
+    expect(redis.del).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the TFT cache when the run fails", async () => {
+    statuses = [
+      { is_training: false, status: "completed", version: "nf20261008" },
+      { is_training: false, status: "failed", version: VERSION, error: "OOM" },
+    ];
+
+    await run();
+
+    expect(redis.scan).not.toHaveBeenCalled();
   });
 
   it("warns when a completed run persisted nothing", async () => {

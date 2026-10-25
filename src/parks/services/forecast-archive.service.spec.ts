@@ -353,6 +353,8 @@ describe("ForecastArchiveService.capturePark", () => {
       planThrows?: boolean;
       shadow?: (date: string) => PlanDayShadowCurve[];
       chronos?: ChronosResponse | null;
+      catboostDaily?: PredictionDto[];
+      driverLevels?: Array<{ id: string; date: string; level: number }>;
     } = {},
   ) {
     const inserted: unknown[][] = [];
@@ -392,10 +394,19 @@ describe("ForecastArchiveService.capturePark", () => {
         // Curves and park-days are written in one transaction.
         transaction: async (fn: (m: unknown) => unknown) =>
           fn({ createQueryBuilder: () => qb }),
+        // The driver-level shadow read (PAR-1058).
+        query: jest.fn(async (q: string) => {
+          if (!opts.driverLevels) throw new Error("no driver_level_forecasts");
+          return q.includes("driver_level_forecasts") ? opts.driverLevels : [];
+        }),
       },
     };
     const ml = {
-      getParkPredictions: jest.fn().mockResolvedValue({ predictions: served }),
+      getParkPredictions: jest
+        .fn()
+        .mockImplementation(async (_id: string, type: string) => ({
+          predictions: type === "daily" ? (opts.catboostDaily ?? []) : served,
+        })),
       getRawParkPredictions: jest.fn(),
       getServingDailyPredictions: jest.fn().mockResolvedValue({
         predictions: [
@@ -552,6 +563,93 @@ describe("ForecastArchiveService.capturePark", () => {
     );
   });
 
+  // PAR-1042: CatBoost's level beside TFT's, only on the ride-days TFT levelled.
+  it("stores the CatBoost day level as a shadow on TFT-levelled planner rows only", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
+    const { service, ml, inserted } = build(
+      [pred("id-taron", "2026-10-08T08:00:00Z", 20, "v1+pcn")],
+      {
+        catboostDaily: [
+          pred("id-taron", "2026-10-08T00:00:00.000Z", 55.4),
+          pred("id-taron", "2026-10-18T00:00:00.000Z", 61),
+        ],
+      },
+    );
+    await service.capturePark(park, "daily", new Date());
+    // One extra read per park capture: the cached CatBoost daily answer.
+    expect(
+      ml.getParkPredictions.mock.calls.filter((c) => c[1] === "daily"),
+    ).toHaveLength(1);
+    expect(ml.getServingDailyPredictions).toHaveBeenCalledTimes(1);
+    const curves = inserted[0] as Array<Record<string, unknown>>;
+    const planned = curves.find((c) => c.surface === 2)!;
+    expect(planned).toMatchObject({
+      targetDate: "2026-10-08",
+      levelSource: "tft",
+      dayPeak: 40,
+      catboostDayPeak: 55,
+    });
+    expect(curves.find((c) => c.surface === 1)!.catboostDayPeak).toBeNull();
+  });
+
+  it("leaves the shadow empty where CatBoost served the level itself", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    const { service, inserted } = build([], {
+      catboostDaily: [pred("id-taron", "2026-10-18T00:00:00.000Z", 61)],
+    });
+    await service.capturePark(park, "long", new Date());
+    const planned = (inserted[0] as Array<Record<string, unknown>>).find(
+      (c) => c.surface === 2,
+    )!;
+    expect(planned).toMatchObject({
+      targetDate: "2026-10-18",
+      levelSource: "catboost",
+      catboostDayPeak: null,
+    });
+  });
+
+  // PAR-1058: the driver-level shadow, on every level source, as of the origin.
+  it("stores the driver-level shadow on planner rows of either level source", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    const levels = [
+      { id: "id-taron", date: "2026-10-08", level: 47.6 },
+      { id: "id-taron", date: "2026-10-18", level: 52.2 },
+    ];
+    const { service, inserted } = build([], { driverLevels: levels });
+    await service.capturePark(park, "long", new Date());
+    const planned = (inserted[0] as Array<Record<string, unknown>>).find(
+      (c) => c.surface === 2,
+    )!;
+    expect(planned).toMatchObject({
+      targetDate: "2026-10-18",
+      levelSource: "catboost",
+      driverDayPeak: 52,
+    });
+
+    const daily = build([pred("id-taron", "2026-10-08T08:00:00Z", 20, "v1")], {
+      driverLevels: levels,
+    });
+    jest.setSystemTime(new Date("2026-10-08T04:05:00Z"));
+    await daily.service.capturePark(park, "daily", new Date());
+    const curves = daily.inserted[0] as Array<Record<string, unknown>>;
+    expect(curves.find((c) => c.surface === 2)).toMatchObject({
+      levelSource: "tft",
+      driverDayPeak: 48,
+    });
+    // Only on the planner's own rows.
+    expect(curves.find((c) => c.surface === 1)!.driverDayPeak).toBeNull();
+  });
+
+  it("captures without the shadow when its table cannot be read", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    const { service, inserted } = build([]);
+    await service.capturePark(park, "long", new Date());
+    const planned = (inserted[0] as Array<Record<string, unknown>>).find(
+      (c) => c.surface === 2,
+    )!;
+    expect(planned.driverDayPeak).toBeNull();
+  });
+
   it("records a plan that threw as an empty plan (D9), not a crash", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
     const { service, inserted } = build([], { planThrows: true });
@@ -620,7 +718,8 @@ describe("ForecastArchiveService.capturePark", () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
     const { service, ml, planDay, inserted } = build([]);
     const res = await service.capturePark(park, "long", new Date());
-    expect(ml.getParkPredictions).not.toHaveBeenCalled();
+    // Only the cached CatBoost daily read (PAR-1042), never a served curve.
+    expect(ml.getParkPredictions.mock.calls).toEqual([["p1", "daily"]]);
     expect(planDay.buildPlanDay.mock.calls.map((c: unknown[]) => c[1])).toEqual(
       [
         "2026-10-18",

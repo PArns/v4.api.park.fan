@@ -7,6 +7,7 @@ import {
   trainingNote,
 } from "./ml-overview.service";
 import { CHRONOS_LAST_RUN_KEY } from "../parks/services/chronos-shadow.service";
+import { DRIFT_WATCH_KEY } from "../parks/services/ml-decision-watch.service";
 
 jest.mock("axios");
 const mockedGet = axios.get as jest.Mock;
@@ -87,8 +88,41 @@ describe("MlOverviewService", () => {
       unclear: 0,
       worse: 0,
     });
-    expect(out.decisions).toHaveLength(7);
+    expect(out.decisions).toHaveLength(8);
     expect(out.decisions.some((d) => d.state === "ready")).toBe(false);
+  });
+
+  it("carries the drift watch and stored reports without re-reading their window (PAR-1059)", async () => {
+    const drift = {
+      computedAt: NOW.toISOString(),
+      status: "drift",
+      models: [],
+    };
+    const report = {
+      decisionId: "live_chronos",
+      evaluateOn: "2026-11-09",
+      verdict: "open",
+      warning: true,
+    };
+    const { service } = make(
+      { ml_decision_reports: [{ report }] },
+      { [DRIFT_WATCH_KEY]: JSON.stringify(drift) },
+    );
+    const out = await service.build(new Date("2026-11-10T08:00:00Z"));
+    expect(out.drift).toEqual(drift);
+    const live = out.decisions.find((d) => d.id === "live_chronos")!;
+    expect(live).toMatchObject({ state: "open", evaluated: true, report });
+    const planner = out.decisions.find((d) => d.id === "planner_chronos")!;
+    expect(planner.report).toBeUndefined();
+  });
+
+  it("reads no frozen window for a date every decision of which has a report", async () => {
+    const reports = ["live_chronos", "planner_chronos"].map((id) => ({
+      report: { decisionId: id, evaluateOn: "2026-11-09", verdict: "open" },
+    }));
+    const { service, comparison } = make({ ml_decision_reports: reports });
+    await service.build(new Date("2026-11-10T08:00:00Z"));
+    expect(comparison.getMatrix).toHaveBeenCalledTimes(1);
   });
 
   it("derives ok / late from the newest run of each component", async () => {
@@ -158,6 +192,35 @@ describe("MlOverviewService", () => {
       role: "shadow",
     });
     expect(out.components[0].note).toContain("SERVE_PCN_INTRADAY");
+  });
+
+  // PAR-1053: fresh forecasts from the previous model hid a failed training.
+  it("marks PCN failed from pcn-service's training status", async () => {
+    process.env.SERVE_PCN_INTRADAY = "true";
+    mockedGet.mockImplementation(async (url: string) => {
+      if (url.endsWith("/train/status") && url.includes("pcn")) {
+        return {
+          data: {
+            is_training: false,
+            status: "failed",
+            version: "pcn20261011_200000",
+            error: "CUDA out of memory",
+          },
+        };
+      }
+      throw new Error("unreachable");
+    });
+    const { service } = make({
+      pcn_forecasts: [
+        { at: "2026-10-11T20:16:48Z", version: "pcn20261010_201501" },
+      ],
+    });
+    const out = await service.build(NOW);
+    expect(out.components[0]).toMatchObject({
+      id: "pcn",
+      status: "failed",
+      note: "Letztes Training fehlgeschlagen: CUDA out of memory · Version pcn20261010_201501",
+    });
   });
 
   it("reports Chronos warming from the archive's last run summary", async () => {

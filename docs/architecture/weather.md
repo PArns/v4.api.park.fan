@@ -121,6 +121,11 @@ The forecast stops after 16 days. For a later travel day the calendar serves the
 | humidity | int | % relative humidity, updated hourly (nullable) |
 | isDay | boolean | daytime at park location, updated hourly (nullable) |
 
+**Forecast issue log** (PAR-1061): the full sync also appends every daily forecast it stores
+to `weather_forecast_issues` (`issued_at` = the response's `fetchedAt`, `lead_days` from the
+park-local date), from the same response, with no extra Open-Meteo call. Write-only; see
+[covariate source](covariate-source.md) §3.2 and [schema](../database/schema.md).
+
 **Timezone note**: Dates are always interpreted in park local timezone. `saveWeatherData()` converts `"2026-03-31"` → `fromZonedTime("2026-03-31T00:00:00", park.timezone)` before storing.
 
 ### Hourly observed weather — design only, not built (PAR-1045)

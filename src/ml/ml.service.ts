@@ -66,9 +66,17 @@ import {
 import { predictionLocalDate } from "./utils/prediction-local-date.util";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { ParkHistoricalStatsService } from "../analytics/park-historical-stats.service";
+import { ParkHourlyProfileDto } from "../analytics/dto/park-hourly-profile.dto";
+import { formatInTimeZone } from "date-fns-tz";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { forwardRef } from "@nestjs/common";
+import {
+  BAND_CALIBRATION_KEY,
+  BandCalibrationTable,
+  applyBandCalibration,
+} from "./utils/catboost-band-calibration.util";
 import {
   FeatureContext,
   QueueDataInfo,
@@ -233,6 +241,7 @@ export class MLService {
     private forecastAccuracyService: ForecastAccuracyService,
     private weatherService: WeatherService,
     private analyticsService: AnalyticsService,
+    private parkHistoricalStatsService: ParkHistoricalStatsService,
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
     @Inject(forwardRef(() => ParksService))
@@ -405,7 +414,7 @@ export class MLService {
       maxDays,
       liveStatus,
     );
-    if (!this.serveIntradayOverride || predictionType !== "hourly") {
+    if (predictionType !== "hourly") {
       return withoutInternalQuantiles(raw);
     }
 
@@ -418,7 +427,7 @@ export class MLService {
     // curve as it would be served without Chronos, so the live A/B keeps a
     // reference once Chronos is part of what is served. No endpoint passes it.
     const predictions = withoutInternalQuantiles(raw).predictions ?? [];
-    await this.applyServedIntradayOverride(
+    await this.serveHourlyRows(
       predictions,
       new Date(currentSlotStartMs()),
       options.chronos ?? true,
@@ -447,6 +456,7 @@ export class MLService {
       where: { id: parkId },
       select: {
         id: true,
+        slug: true,
         timezone: true,
         countryCode: true,
         regionCode: true,
@@ -703,6 +713,14 @@ export class MLService {
         "/predict",
         payload,
       );
+
+      if (predictionType === "hourly" && response.data.predictions) {
+        response.data.predictions = await this.withinKnownOpeningHours(
+          park,
+          response.data.predictions,
+        );
+        response.data.count = response.data.predictions.length;
+      }
 
       // Cache the response with appropriate TTL
       const ttl =
@@ -1414,7 +1432,121 @@ export class MLService {
     const response = await this.getPredictions(request);
     // A served fallback path (getAttractionPredictionsWithFallback), so the
     // accuracy-only quantiles are dropped here as on the park read.
-    return withoutInternalQuantiles(response).predictions;
+    const predictions = withoutInternalQuantiles(response).predictions;
+    if (predictionType !== "hourly") return predictions;
+    const park = await this.parkRepository.findOne({
+      where: { id: attraction.parkId },
+      select: { id: true, slug: true, timezone: true },
+    });
+    return park ? this.withinKnownOpeningHours(park, predictions) : [];
+  }
+
+  /**
+   * The profile's hours from the first to the last one in which at least one
+   * ride's queue moved (P90 above P25). A feed that never closes (queue-times: Beto Carrero, Cinecittà World,
+   * Le Parc du Petit Prince) carries its last snapshot through the night, and
+   * its re-stamped readings give those parks a 0–23 profile; every ride is
+   * flat in such an hour, and a feed flat all day (Cinecittà World: 15 min in
+   * every cell) keeps no hour at all. This is the movement test `ride_open_parks` applies
+   * to the live feed (open-parks.sql.ts), read off the profile instead of a 4 h
+   * window. PAR-759 removes those night readings from the published hourly
+   * values at the source; until it does, this keeps them out of forecasts.
+   * shortcut: reads the rounded DTO values, so a park whose every ride sits at
+   * one value in a real hour loses that hour; move the test into the profile
+   * SQL (per-day stdDev) if that shows up.
+   */
+  static movingProfileHours(profile: ParkHourlyProfileDto): Set<number> {
+    const hours = profile.hours ?? [];
+    const moving = hours.filter((_, i) =>
+      (profile.attractions ?? []).some(
+        (a) => (a.p90?.[i] ?? 0) > (a.p25?.[i] ?? 0),
+      ),
+    );
+    if (moving.length === 0) return new Set();
+    // An opening window has no holes: a quiet mid-day hour in which every
+    // ride happened to sit still (Le Parc du Petit Prince at 10:00) stays.
+    const first = moving[0];
+    const last = moving[moving.length - 1];
+    return new Set(hours.filter((h) => h >= first && h <= last));
+  }
+
+  /**
+   * Drops hourly slots nobody can say the park is open in (PAR-1048).
+   *
+   * On a park-local day with an OPERATING schedule window the slots pass
+   * untouched — the ml-service already gates those days. On a day without one
+   * (UNKNOWN, missing, past the operator's horizon) only the hours this park's
+   * queues have actually been measured in survive: the `/stats/hourly` rule
+   * (an hour needs 10 measured days), read from the same cached profile
+   * `/plan/day` falls back to for `hoursSource: "observed"`. A profile with no
+   * measured hour leaves nothing: an absent schedule is not a round-the-clock
+   * opening, and Knoebels served 05:45 as its "optimal" visit time on exactly
+   * that reading. A profile that cannot be read gates nothing (see the catch).
+   */
+  async withinKnownOpeningHours(
+    park: Pick<Park, "id" | "slug" | "timezone">,
+    predictions: PredictionDto[],
+  ): Promise<PredictionDto[]> {
+    const timezone = park.timezone || "UTC";
+    const hourly = predictions.filter((p) => p.predictionType === "hourly");
+    if (hourly.length === 0) return predictions;
+    const dates = [
+      ...new Set(
+        hourly.map((p) => MLService.localDateOf(p.predictedTime, timezone)),
+      ),
+    ];
+    const operating = await this.scheduleEntryRepository.find({
+      where: {
+        parkId: park.id,
+        attractionId: IsNull(),
+        scheduleType: ScheduleType.OPERATING,
+        date: In(dates.map((d) => new Date(`${d}T12:00:00Z`))),
+      },
+      select: { date: true },
+    });
+    // The `date` column hydrates as a "YYYY-MM-DD" string; reading it through a
+    // timezone would shift it a day west of UTC.
+    const scheduled = new Set(
+      operating.map((s) =>
+        typeof s.date === "string"
+          ? (s.date as string).slice(0, 10)
+          : formatInParkTimezone(s.date, timezone),
+      ),
+    );
+    if (dates.every((d) => scheduled.has(d))) return predictions;
+
+    let observedHours: Set<number>;
+    try {
+      // Same arguments as /plan/day's profile read, so both share one cache entry.
+      const profile =
+        await this.parkHistoricalStatsService.getParkHourlyProfile(
+          park as Park,
+          1,
+          60,
+          20,
+        );
+      observedHours = MLService.movingProfileHours(profile);
+    } catch (err) {
+      // A failed read is not "no measured hour": trimming here would be cached
+      // for 30 min and the generator's replace mode would delete the stored
+      // rows of those days. Serve the answer as it was until the profile reads.
+      this.logger.warn(
+        `Hourly profile unavailable for ${park.slug ?? park.id}; unscheduled days stay ungated: ${(err as Error).message}`,
+      );
+      return predictions;
+    }
+
+    return predictions.filter((p) => {
+      if (p.predictionType !== "hourly") return true;
+      if (scheduled.has(MLService.localDateOf(p.predictedTime, timezone))) {
+        return true;
+      }
+      // A string without an offset is already park-local (predictionLocalDate's rule).
+      const hour = /(Z|[+-]\d{2}:?\d{2})$/.test(p.predictedTime)
+        ? Number(formatInTimeZone(new Date(p.predictedTime), timezone, "H"))
+        : Number(p.predictedTime.slice(11, 13));
+      return observedHours.has(hour);
+    });
   }
 
   /**
@@ -2092,11 +2224,8 @@ export class MLService {
       result.set(p.attractionId, list);
     }
 
-    if (this.serveIntradayOverride && predictionType === "hourly") {
-      await this.applyServedIntradayOverride(
-        [...result.values()].flat(),
-        startTime,
-      );
+    if (predictionType === "hourly") {
+      await this.serveHourlyRows([...result.values()].flat(), startTime);
     }
     return result;
   }
@@ -2109,9 +2238,52 @@ export class MLService {
    * Since PAR-911 the read paths ask whether EITHER served-model override is on:
    * the PCN champion swap or the Chronos-2 30–120 min window
    * (`SERVE_CHRONOS_INTRADAY`, also default OFF). With both off every read path
-   * returns CatBoost untouched, exactly as before. */
+   * returns CatBoost untouched apart from the PAR-1060 band factor. */
   private get serveIntradayOverride(): boolean {
     return servePcnIntradayFlag() || serveChronosIntraday();
+  }
+
+  private bandTableMemo: {
+    at: number;
+    table: BandCalibrationTable | null;
+  } | null = null;
+
+  /** The PAR-1060 factor table, memoised for five minutes per process (one GET
+   *  per serving read would otherwise ride every park page). */
+  private async bandCalibrationTable(): Promise<BandCalibrationTable | null> {
+    const now = Date.now();
+    if (this.bandTableMemo && now - this.bandTableMemo.at < 5 * 60_000) {
+      return this.bandTableMemo.table;
+    }
+    let table: BandCalibrationTable | null = null;
+    try {
+      const raw = await this.redis.get(BAND_CALIBRATION_KEY);
+      table = raw ? (JSON.parse(raw) as BandCalibrationTable) : null;
+    } catch {
+      table = null;
+    }
+    this.bandTableMemo = { at: now, table };
+    return table;
+  }
+
+  /**
+   * Every serving adjustment of hourly rows, in place: the served-model
+   * overrides (PCN, Chronos) where their flags are on, then the PAR-1060
+   * calibration of CatBoost's band on the rows that stayed CatBoost — never on
+   * a PCN slot (its band is null) or a Chronos slot (it sets its own).
+   */
+  private async serveHourlyRows(
+    preds: PredictionDto[],
+    startTime?: Date,
+    withChronos = true,
+  ): Promise<void> {
+    const overridden = this.serveIntradayOverride
+      ? await this.applyServedIntradayOverride(preds, startTime, withChronos)
+      : new Map<PredictionDto, "pcn" | "chronos">();
+    applyBandCalibration(
+      preds.filter((p) => !overridden.has(p)),
+      await this.bandCalibrationTable(),
+    );
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
@@ -2455,8 +2627,8 @@ export class MLService {
         modelVersion: p.modelVersion,
         status: p.status || undefined,
       }));
-      if (this.serveIntradayOverride && predictionType === "hourly") {
-        await this.applyServedIntradayOverride(dtos, startTime);
+      if (predictionType === "hourly") {
+        await this.serveHourlyRows(dtos, startTime);
       }
       return dtos;
     }
@@ -2467,8 +2639,8 @@ export class MLService {
       attractionId,
       predictionType,
     );
-    if (this.serveIntradayOverride && predictionType === "hourly") {
-      await this.applyServedIntradayOverride(live, startTime);
+    if (predictionType === "hourly") {
+      await this.serveHourlyRows(live, startTime);
     }
     return live;
   }

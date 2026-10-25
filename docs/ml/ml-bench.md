@@ -53,6 +53,12 @@ after another, resumable (finished files are skipped).
   reads it; `build` leaves `cbd` empty when an export has no such files, and
   `lvlh5_cbd` / `lvl_cbd` stay empty on new exports. Exports taken before the
   drop (and the `pg_dump` on celestrial) still carry it.
+  **Since PAR-1054** production keeps only the last **120 days** of
+  `forecast_date` in `tft_forecasts` (nightly prune, 04:35 UTC), so an export's
+  TFT origins start at most 120 days before it was taken, whatever
+  `--forecast-from` says. Exports taken before the first prune (e.g.
+  `20261009`) keep the longer history; a backtest that
+  needs TFT origins older than 120 days must use one of those.
 - `parks` (timezone, regionCode, influencingRegions, lat/lng), `attractions`
   (+ `headliner_attractions`, coordinates, land), park-level `schedule_entries`,
   `holidays`, `weather_data`.
@@ -66,6 +72,10 @@ after another, resumable (finished files are skipped).
   export; the range is across models because each has its own coverage; the
   median operator publishing horizon is 39 d), so the runner treats it as
   unknown — see "Protocol".
+- `forecast_archive_curves` (`--tables archive_curves`, PAR-1043): the served
+  `park_hourly` / `plan_day` / incumbent curves by UTC origin day from `--archive-from`
+  (default 15 days back), for the served arm. Rows expire 14 days past their target
+  date, so an export only covers a recent window — see "The served arm".
 - `headliner_attractions` is the current table (548-day window), not ex-ante.
   It only decides which rides count as headliners (UC4 / D2 / D4 / D6).
 
@@ -483,6 +493,243 @@ allows. Read `licences` in `run-*.json`: `tabpfn_ts` (and `timesfm3`, if added) 
 `benchmark-only`, `serving_candidate: false`. Any step that turns a run into an offline
 verdict must call `mlbench.licences.refuse_benchmark_only` on the model names it writes
 (see "Licence verdicts" in `docs/ml/foundation-models.md`).
+
+## The served arm — candidates against what production showed (PAR-1043)
+
+The owner's switch rule needs an offline win **over what is served**
+(`offlineBetterThanServed`, `src/ml/utils/model-comparison.util.ts`). The bench could
+not give one: `prod_served` is a reconstruction of the planner's composed tier and
+only exists from d3, and PCN + the persistence blend are not in the bench at all.
+So `live_chronos` could only beat persistence and `planner_h5_slots` only the weekday
+median. The served arm replays the product instead of re-implementing it:
+`forecast_archive_curves` ([forward archive](./forward-archive.md)) holds the curves as
+they were served, with their capture time.
+
+**Data path.** `export` table `archive_curves` (surfaces 1 `park_hourly`, 2 `plan_day`,
+8 `park_hourly_incumbent`; one UTC origin day per query, `origin_at` leads the primary
+key so it is an index range scan) → `build` → `parquet/served_curves.parquet` (one row
+per curve, `waits` as a list) → plug-in `served` (`mlbench/models/served.py`), which
+reads that file with its own DuckDB connection and never reads truth.
+
+**What `served` predicts at (bench origin, ride, slot).**
+
+| bench origin | surface | archived origins used |
+| --- | --- | --- |
+| daily, 06:00 (slot table: UC2 d0, UC3, D3) | `plan_day` — the planner, an hour served as a step over its four quarters | the 06:00 capture (d0–d7) and the 07:00 long-lead capture (d10–d90), which counts as the 06:00 origin it extends |
+| intraday 10–18 (intraday table: UC1, UC2-intraday) | `park_hourly` — CatBoost + PCN + blend (+ Chronos-2 where served) | that hour's own capture (4 h); 08 and 20 have none and stay unpaired |
+
+`served_incumbent` is the same arm preferring surface 8 at the same capture — what
+`park_hourly` would have shown without Chronos-2, archived only while
+`SERVE_CHRONOS_INTRADAY` is on; it is the reference once Chronos-2 is itself served.
+
+**Own capture only, and the information cut** (`tests/test_served.py`). A capture runs
+within the hour of its *nominal* origin (the job fires at :05 UTC and reads each park's
+clock), so the curve read at 10:07 is the 10:00 origin's. Per (ride, target day) the arm
+takes the archived row whose capture lies in **[bench origin − 15 min, bench origin +
+60 min)** — the bench origin's **own** capture, nothing older. The bench's intraday
+origins are 08, 10 … 20 and the archive captures 06:00 and 10–18, so **08:00 and 20:00
+are left unpaired**: answering them with the 06:00 / 18:00 curve (as the first version
+of this arm did, `MAX_AGE_MIN = 120`) scored a curve two hours staler than the truth the
+candidate sees, which favours the candidate and inflated `live_h0_1` / `live_h1_2`. The
+run records, per origin kind and hour, how many park-origins were asked and how many had
+their own capture (`served_origins` in `run-*.json`, e.g. `"intraday 08": [n, 0]`); the
+rest are unpaired, so every paired cell compares like with like. The nearest row answers
+or nothing does: a slot past what it archived is not filled from an older curve. **A slot
+that starts before the capture instant is never answered**, so no slot the served curve
+could have partly observed is scored — which means **`m015` (the slot starting at the
+origin) never pairs**, since every capture runs at :05 or later; the generator's
+`live_h0_1` therefore reads `m030`–`m060`. What is left is a head start of minutes — the
+served curve knew the live readings up to its capture — which favours served: a
+candidate's win is, if anything, understated.
+
+**Known biases, documented and not corrected.** `park_hourly` is archived **rounded**
+(`roundServedWait`, 5-minute steps, floor 5) while every bench candidate is scored raw;
+the rounding costs the served arm a little MAE, i.e. favours the candidate. The
+archive's own live board rounds both arms (forward-archive §3); the bench cannot round
+another model's output without changing every other table. Read a margin of a few
+tenths of a minute against `park_hourly` with that in mind. `plan_day` is archived at
+1-minute precision. The calendar questions (`cal_*`, served by TFT) are not covered:
+the arm has no daily level.
+
+**The window limitation, and the accumulation that lifts it.** A curve is deleted **14
+days past its target date**, so one export taken on day X holds d0–d7 rows only for
+targets in X−14 … X−1, and the bench can only score a target whose truth is complete.
+A single export on 2026-11-09 (`--queue-to 2026-11-08`, `--to 2026-11-07`) therefore
+holds d0/d1/intraday targets from ~2026-10-26 only — **13 paired origin days, below the
+generator's `--min-origin-days 14`**, so every `live_*`, `today_*` and `plan_d0_1` cell
+would be `unclear` by construction. The archive started 2026-10-09, so lead L has its
+first scored target on 2026-10-09 + L (d30: 2026-11-08, d60: 2026-12-08) — the same
+floor as the live matrix (`cellFloorDate`). The report's usual 30-origin-day LOW-N gate
+is not met for months; the generator's floor is `--min-origin-days 14`.
+
+Rows are never updated after their capture, so a complete UTC origin day exported once
+holds every row it will ever hold. **`ml-bench/scripts/accumulate-archive-curves.sh`**
+exports `--tables archive_curves` into one persistent directory (`MLBENCH_ARCHIVE_DIR`),
+from the archive's start through yesterday UTC; `export` skips the days that
+directory's manifest already holds, so each run reads only the origin days since the
+last one (`tests/test_served.py::test_accumulating_export_reads_only_new_origin_days`).
+Read-only, every query through `scripts/prod-psql.sh`, one COPY per origin day,
+system `python3`. **Run it at least weekly** — a gap longer than ~14 days loses
+short-lead rows for good. Not installed by this change; to install it on the database
+host as a systemd **user** timer (like the local Linear runner; needs linger):
+
+```ini
+# ~/.config/systemd/user/mlbench-archive-curves.service
+[Unit]
+Description=ml-bench: accumulate forecast_archive_curves (PAR-1043)
+[Service]
+Type=oneshot
+Environment=MLBENCH_ARCHIVE_DIR=/data/parkfan/ml-bench/archive-curves
+ExecStart=%h/<checkout>/ml-bench/scripts/accumulate-archive-curves.sh
+Nice=10
+
+# ~/.config/systemd/user/mlbench-archive-curves.timer
+[Unit]
+Description=weekly ml-bench archive-curves export
+[Timer]
+# Mondays 11:30 UTC: outside the 00:55–09:30 UTC quiet window and away from :05
+OnCalendar=Mon *-*-* 11:30:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now mlbench-archive-curves.timer
+systemctl --user start mlbench-archive-curves.service   # first run now, then weekly
+journalctl --user -u mlbench-archive-curves.service -n 50
+```
+
+**When a verdict run is achievable.** With accumulation first run on day S, the d0–d7
+targets held start at max(2026-10-09, S − 14); a verdict run on day R scores targets
+through R − 2. The short-lead questions (`live_*`, `today_*`, `plan_d0_1`, `plan_d2_5`)
+need ≥ 14 of them, i.e. S ≤ R − 1 at the very edge — install the timer **by 2026-11-01**
+and the 2026-11-09 run below has targets 2026-10-18 … 2026-11-07 (21 days) for them.
+`plan_besttime` reaches d30 and has its 14th d30 target on 2026-11-21 (run ≥ 2026-11-23);
+`plan_d6_60` reaches d60 and has its 14th d60 target on 2026-12-21, so **its first
+decidable run is ≥ 2026-12-23** (~75 days of accumulated curves). Before then those
+cells come out `unclear` by construction (a lead missing) — read the dry-run diff and
+keep those entries out of the `--write` until their run date.
+
+**Pairing.** `run --model served --pair-with served` writes paired sums of every model —
+baselines (`h5`, `lvlh5_tft`, `wt_med`, `persistence`) and plug-ins (`chronos2`,
+`chronos2_grid`, …) — against `served` into the slot and intraday tables, and since this
+change also into `rideday` (the runner pairs ride-days against its `--pair-with` refs),
+so `report --vs served` writes `cells_vs_served.csv`: slot MAE per use case × lead and
+D3 best-time regret per lead, park-cluster CI, segments `all`/`busy`, regions.
+
+**Verdicts are generated, never typed.** `python3 -m mlbench.served_verdicts --run <run>`
+(stdlib only) maps each matrix cell to its bench cells (`QUESTIONS` in the script; a
+question straddling an intraday bucket takes every bucket it touches) and writes one
+entry per cell with `reference: "served"`, `metric`, `runId`, `diff`/`ciLow`/`ciHigh`
+and a German note. `better` needs every lead to win (park-cluster CI below 0, ≥ 10
+parks, ≥ `--min-origin-days`) in **every** pass; `worse` every CI above 0; anything else
+is `unclear`. The quoted figure is the least favourable cell (largest CI upper bound),
+never a pool across leads. Before any entry is built the generator refuses a
+benchmark-only model (non-production licence: `mlbench.licences.refuse_benchmark_only`,
+PAR-1067; a local `timesfm3` / `tabpfn` prefix check until that module is merged).
+`referenceIsServed` is not stored: the API derives it from
+`reference`. Dry run by default (prints the unified diff); `--write` writes
+`src/ml/data/offline-model-verdicts.json`, whose spec accepts a figure only as a whole
+triple against `served` from a named run.
+
+**How this rule differs from the live matrix's** (`poolCell` in
+`src/ml/utils/model-comparison.util.ts`, PAR-1036). Both require every lead to clear
+the gate on its own. Beyond that the two differ in opposite directions, so an offline
+`better` and a live `better` are not the same test:
+
+| | offline (`served_verdicts`) | live matrix (`poolCell`) |
+| --- | --- | --- |
+| leads | every lead **and every pass** must win; the figure quoted is the least favourable lead | plain mean of the per-lead figures, each lead gated on its own |
+| CI | **park-cluster** bootstrap only (the report's `diff_lo_park` / `diff_hi_park`) | **two-way park × date** bootstrap is the gate; park-cluster shown beside it |
+| floor | ≥ 10 parks and ≥ `--min-origin-days` paired origin days per lead | ≥ 14 days and ≥ 10 parks per lead |
+
+Offline is therefore **stricter on leads** (no averaging a strong lead over a weak one,
+and two report passes must agree) but **looser on clustering**: resampling parks alone
+treats the days of one park as independent, so a CI can be narrower than the matrix's
+when a whole stretch of days is good or bad for every park at once (weather, a holiday
+week). A cell whose park-cluster CI only just clears 0 is not yet a live `better`; the
+date-clustered interval is the one the switch rule (`offlineBetterThanServed` plus the
+live gate) finally reads. Adding a park × date bootstrap to `report --vs` would close
+the gap; not done here.
+
+**Two biases to read a close cell with.** `park_hourly` is archived rounded to
+5 minutes (see above) while the candidate is scored raw, so a slot-MAE margin under
+~0.5 min against `served` on the intraday questions can be decided by the rounding
+alone — read such a cell as tied, whatever its state. And `plan_day` is an hourly step,
+so on D3 (best-time regret) the four quarters of an hour tie in the served prediction;
+the ride-day ranking breaks ties by slot start (`ORDER BY pred, ws` in `rideday_sql`),
+so served always "recommends" the first quarter of its best hour, while a 15-minute
+candidate can pick any quarter. A sensitivity pass that rounds the candidate to 5 and
+scores it again is the clean answer to the first; neither is built.
+
+### Running it (celestrial) — not run yet
+
+Outside the 00:55–09:30 UTC quiet window; the Chronos-2 plug-ins need the GPU lock.
+Dates below are for a run on 2026-11-09 (the `live_chronos` `evaluateOn`); move them
+with the day. **Gated:** do not run step 5 with `--write` before the accumulation timer
+above has been running since ≤ 2026-11-01 (≥ 14 paired origin days per short lead) and
+this PR's own-capture rule is in the image; `plan_d6_60` waits for ≥ 2026-12-23.
+
+```bash
+cd ~/claude-worktrees/<checkout-at-the-PR-commit>
+EXP=20261109-served
+
+# 1. export (read-only, system python, every query through scripts/prod-psql.sh).
+#    Full queue history: Chronos-2 reads ~343 days of context. The served curves come from
+#    the accumulated directory, never from this export: on 2026-11-09 the database alone
+#    holds d0 targets from ~2026-10-26 only (14-day retention).
+MLBENCH_ARCHIVE_DIR=/data/parkfan/ml-bench/archive-curves \
+  ml-bench/scripts/accumulate-archive-curves.sh            # brings it up to yesterday
+python3 ml-bench/mlbench/export.py --out /data/parkfan/ml-bench/exports/$EXP --repo $PWD \
+  --queue-to 2026-11-08 --tables parks,attractions,schedule,holidays,weather,tft_forecasts,queue
+cp /data/parkfan/ml-bench/archive-curves/raw/archive_curves_*.csv.gz \
+   /data/parkfan/ml-bench/exports/$EXP/raw/
+
+# 2. image + build (CPU)
+docker build -t ml-bench:par-1043 --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg EXTRA_REQUIREMENTS=requirements-foundation.txt \
+  --build-context mlsvc=ml-service ml-bench
+docker run --rm --user 1000:1000 -e HOME=/tmp --cpus 6 --memory 8g --cpu-shares 256 \
+  -v /data/parkfan/ml-bench:/data ml-bench:par-1043 build --export /data/exports/$EXP \
+  --memory 5GB --threads 4
+
+# 3. run, three shards over the archive's origins (3 is not a multiple of 7, so no
+#    weekday aliasing), one container at a time under the GPU lock
+RUN=20261109-par1043-served
+LOCK=/data/parkfan/ml-bench/gpu.lock
+for i in 0 1 2; do
+  while ! (set -o noclobber; echo "PAR-1043 $RUN $i $(date -u +%FT%TZ)" > $LOCK) 2>/dev/null; do
+    sleep 60; done
+  docker run --rm --name mlbench-par1043-$i --gpus all --user 1000:1000 -e HOME=/tmp \
+    -e HF_HOME=/hf -e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{.Id}}' ml-bench:par-1043) \
+    --cpus 6 --memory 8g --cpu-shares 256 --entrypoint nice \
+    -v /data/parkfan/ml-bench/par-828/hf:/hf -v /data/parkfan/ml-bench:/data \
+    -v $PWD/ml-bench/results:/app/results -v $PWD/ml-bench/subsets:/app/subsets \
+    ml-bench:par-1043 -n 10 python -m mlbench run --export /data/exports/$EXP \
+    --out /app/results/$RUN --from 2026-10-09 --to 2026-11-07 --shard $i/3 \
+    --model served --model chronos2 --model chronos2_grid --pair-with served \
+    --parks @/app/subsets/par828-30parks.txt --memory 5GB --threads 4 --reference
+  rm -f $LOCK
+done
+
+# 4. report, two passes: the target window and the origin window, both the archive's
+R="docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+   -v $PWD/ml-bench/results:/app/results ml-bench:par-1043 report --run /app/results/$RUN --vs served"
+$R --target-from 2026-10-10 --target-to 2026-11-07
+$R --origin-from 2026-10-09 --origin-to 2026-11-07
+
+# 5. verdicts: dry run prints the JSON diff, then write and open a PR with it
+cd ml-bench
+python3 -m mlbench.served_verdicts --run results/$RUN \
+  --pass tables_2026-10-10_2026-11-07 --pass tables_o2026-10-09_2026-11-07
+python3 -m mlbench.served_verdicts --run results/$RUN \
+  --pass tables_2026-10-10_2026-11-07 --pass tables_o2026-10-09_2026-11-07 --write
+```
+
+Without `--parks` the run covers every park the archive holds, at a multiple of the
+GPU time; the subset keeps it comparable with PR #450.
 
 ## Level drivers (PAR-830)
 
@@ -1406,6 +1653,16 @@ Three things follow, and they are the load-bearing reading of this whole page:
    not.
 
 ### Heartbeat contamination of the target — measured, owner decision open
+
+> **Default changed (PAR-1054, 2026-10-24).** `build` now drops heartbeat rows
+> by default (`drop_heartbeats=True`, recorded as `"drop_heartbeats": true` in
+> `build_stats.json`), the same rule as the forward archive's truth and the TFT
+> panel. `--no-drop-heartbeats` builds the old target. **Builds made before this
+> change kept the heartbeats**: a parquet tree or result directory from before
+> 2026-10-24 whose `build_stats.json` lacks the key or reads `false` is the old
+> target, and its figures — including every table on this page measured on the
+> `20261009` export — differ from a rebuild of the same raw export. Compare
+> within one target only. The measurements below are of the old default.
 
 `queue_data` carries `is_heartbeat` rows: when the feed drops a ride, production
 writes the previous status **and wait** forward with a fresh `ts`. The harness

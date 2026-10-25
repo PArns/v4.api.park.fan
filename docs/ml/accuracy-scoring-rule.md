@@ -92,6 +92,11 @@ hypertable) and are stripped from every served read (`withoutInternalQuantiles`
 in `getParkPredictions` and `getAttractionPredictions`), so they never reach a
 public payload.
 
+Since PAR-1060 the row also carries `uncertainty_minutes`, CatBoost's RAW band
+(`q0.95 − q0.5`, before the calibration factor), which the daily band
+calibration fits on — see
+[quantile-serving-and-calibration.md](./quantile-serving-and-calibration.md#catboost-hourly-band-split-conformal-factor-par-1060).
+
 `predicted_wait_time` is the served median: q0.5 rounded to 5 with a floor of
 10. Its coverage therefore sits above 0.5 on quiet slots by construction; q80
 and q95 are unrounded and measure the model.
