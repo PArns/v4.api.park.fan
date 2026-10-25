@@ -289,7 +289,8 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     oh("2026-06-06", "2026-08-25", "Summer break", SCS_2026),
     // Ohio 2026-27 (first day 2026-08-26, last day 2027-06-03)
     oh("2026-09-07", "2026-09-07", "Labor Day", SCS_2026),
-    oh("2026-10-05", "2026-10-05", "Professional learning day", SCS_2026),
+    // 10-05 and 03-19 carry the same text (half-day professional learning,
+    // half-day family conferences) but different colours, so neither is listed.
     oh("2026-10-09", "2026-10-09", "NEOEA Day", SCS_2026),
     oh("2026-11-25", "2026-11-27", "Fall break", SCS_2026),
     oh("2026-11-30", "2026-11-30", "Professional learning day", SCS_2026),

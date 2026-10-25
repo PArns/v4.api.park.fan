@@ -149,7 +149,15 @@ calendar is used as published; Charlotte-Mecklenburg waived its 2025-26
 make-up days (WFAE, 2026-03-17, a cross-check only). Make-up days scheduled
 after the last day (NKC, CMS) are inside the summer, as planned. In Sandusky's
 sheets a day is off when it is coloured "No School" or "Professional Learning
-Day - No School"; conference days (grey) are school days.
+Day - No School"; conference days (grey) are school days. Sandusky 2026-27
+contradicts itself like Derry: 2026-10-05 and 2027-03-19 both read
+"Professional Learning Day (1/2 Day), Family Conferences (1/2 Day)", yet
+10-05 is coloured "PL Day - No School" and 03-19 "Parent/Teacher
+Conferences", so neither is listed. Its 2027-05-20 "District-wide Mental
+Health Day" is coloured "District Event", which does not say whether students
+attend, so it is not listed either. Sevier County's 2027-03-26 (Good Friday)
+is a holiday in the PDF's holiday list but a half day ("HD") in the grid and
+in the key dates; a half day is a school day, so it is not listed.
 
 **Where it stops.** No district has published the year after its last
 calendar, so each summer stops on June 30 of that calendar's last month
@@ -162,9 +170,18 @@ day.
 
 **Neighbours.** `REGION_INFLUENCES` (`src/common/region-influences.ts`) lists US neighbour states (`US-FL` →
 GA, AL, SC, **NC**, **TN**; `US-OH` → **PA**, …; `US-PA` → **OH**, …), so the
-new rows also reach `neighbor_school_holiday_count` and the calendar's
-`neighborHolidays` for parks in neighbouring states, not only the six states'
-own parks.
+new rows also reach parks in neighbouring states, but not every neighbour
+feature:
+
+- **CatBoost `neighbor_school_holiday_count` stays NaN.** `holiday_features.py`
+  sets `neighbors_known = False` as soon as one influencing region has no
+  coverage, and every US influence list still contains an uncovered state.
+- **CatBoost `is_school_holiday_any`** goes from NaN to 1 on days a curated
+  neighbour is on break.
+- **TFT `is_holiday_neighbor`** (`nf-service/db.py`) counts neighbour public
+  or school dates with no coverage gate, so it goes from a confident 0 to 1 —
+  for the 13 Orlando parks on every NC and TN break.
+- **The calendar's `neighborHolidays`** lists them.
 
 ### One district per state
 
@@ -251,11 +268,15 @@ May 8 in Missouri. After the sync and the 2024 fix:
 | FL / TX / CA (39), and since PAR-1074 PA / OH / MO / VA / TN / NC (18) | known 0 → real 0/1 inside the coverage, NaN past it | 0 → real 0/1 (`school_holiday_known` 1 inside, grid only) | breaks shown; `schoolVacationUnknown` past the coverage | ~2028-05-08 → the state's last school day |
 | the other US states' parks (~38 before PAR-1074, 21 after) | known 0 → NaN | stays 0, `school_holiday_known` 1 → 0 | `schoolVacationUnknown: true` on every day | ~2028-05-08 → `none` |
 | AU parks outside QLD, AU neighbours of QLD parks | known 0 (QLD fallback) → NaN | stays 0, `school_holiday_known` → 0 | unknown | QLD's date → `none` |
+| FL / OH / PA / … parks whose `REGION_INFLUENCES` neighbours gained a district (PAR-1074) | `neighbor_school_holiday_count` stays NaN (an uncovered neighbour remains); `is_school_holiday_any` NaN → 1 on a neighbour's break | `is_holiday_neighbor` 0 → 1 on a neighbour's break | `neighborHolidays` lists the break | unchanged |
 
 Nothing is retrained for it: the current CatBoost model sends NaN to the side
 of 0 (`nan_mode = Min`), so serving it changes only on the days that are now
 1; the next daily training learns from both the breaks and the NaN. TFT's
-default inputs are finite; the next TFT training learns from the new 0/1.
+default inputs are finite; the next TFT training learns from the new 0/1. Until then
+the served TFT sees `is_holiday_neighbor` = 1 on US neighbour breaks it never
+had in training (PAR-1074), a train/serve gap that closes with the next TFT
+retrain.
 
 ## China's make-up working days (调休)
 
