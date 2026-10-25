@@ -3,6 +3,7 @@ import { addIsoDays } from "../../common/utils/date.util";
 import { AU_CURATED_HOLIDAYS } from "./curated-holidays-au";
 import { CN_CURATED_HOLIDAYS } from "./curated-holidays-cn";
 import { GB_CURATED_HOLIDAYS } from "./curated-holidays-gb";
+import { JP_CURATED_HOLIDAYS } from "./curated-holidays-jp";
 import { SG_CURATED_HOLIDAYS } from "./curated-holidays-sg";
 import { US_CURATED_HOLIDAYS } from "./curated-holidays-us";
 import { CuratedHolidaySet } from "./curated-holidays.types";
@@ -12,6 +13,7 @@ export const CURATED_HOLIDAY_SETS: CuratedHolidaySet[] = [
   AU_CURATED_HOLIDAYS,
   CN_CURATED_HOLIDAYS,
   GB_CURATED_HOLIDAYS,
+  JP_CURATED_HOLIDAYS,
   SG_CURATED_HOLIDAYS,
   US_CURATED_HOLIDAYS,
 ];

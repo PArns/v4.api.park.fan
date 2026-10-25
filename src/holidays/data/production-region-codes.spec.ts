@@ -28,6 +28,10 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   // GB (PAR-1072, read 2026-10-25): England, one stores the full name.
   ["alton-towers", "GB", "ENG"],
   ["flamingo-land", "GB", "England"],
+  // JP (PAR-1072): ISO numbers; USJ (27) and Fuji-Q (Yamanashi) have no rows.
+  ["tokyo-disneyland", "JP", "12"],
+  ["tokyo-disneysea", "JP", "12"],
+  ["legoland-japan", "JP", "23"],
   ["cn-zhejiang", "CN", "Zhejiang"],
   ["cn-jiangsu", "CN", "Jiangsu"],
   ["cn-gansu-sheng", "CN", "Gan Su Sheng"],

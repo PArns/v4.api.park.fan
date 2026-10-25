@@ -40,6 +40,14 @@ describe("holiday.utils › school-holiday coverage", () => {
     expect(schoolCoverageThrough(gb, "GB", null)).toBeNull();
   });
 
+  it("leaves a Japanese prefecture without rows unknown (PAR-1072)", () => {
+    const jp = buildSchoolCoverage([
+      { country: "JP", region: "JP-12", through: "2027-03-31" },
+    ]);
+    expect(schoolCoverageThrough(jp, "JP", "12")).toBe("2027-03-31");
+    expect(schoolCoverageThrough(jp, "JP", "27")).toBeNull();
+  });
+
   it("marks only the false days past the coverage", () => {
     const days = [
       { date: "2026-09-11", isSchoolVacation: true },
