@@ -836,8 +836,8 @@ PAR-1063 / PAR-1064". Every arm is meant to be scored in the same run as `chrono
   `pinv`, after per-series normalisation) of the target on the covariates over the
   context, TimesFM forecasts the residual. The adapter calls it once per park, so the
   regression is shared by the rides of a park. It needs jax + scikit-learn
-  (`timesfm[xreg]`); the image takes CPU jax 0.6.2 (`force_on_cpu=True`; jax 0.7+ needs
-  numpy 2). The covariates are `chronos2`'s, except `day_len_h` on the daily series —
+  (`timesfm[xreg]`); the image takes CPU jax (`force_on_cpu=True`; 0.10.2 since PAR-1066's
+  numpy 2 upgrade, 0.6.2 before). The covariates are `chronos2`'s, except `day_len_h` on the daily series —
   there NaN means "beyond the publishing horizon", and XReg cannot mask, so it would read
   as a 0-hour (closed) day. Other NaN covariates (the window-relative minutes off-window
   on the grid, which `in_win` flags) enter as 0.
@@ -1003,11 +1003,10 @@ Resolved on top of `requirements.txt` with torch 2.11.0 — the newest cu128 whe
 2026-10-24 — in a Python 3.11 venv, the Dockerfile's two-step install order, `pip check` clean.
 What changes against the base image (only in images built with this extra):
 
-- **pandas 2.2.3 → 2.3.3**: granite-tsfm 0.3.x requires `pandas>=2.3.3`. numpy stays 1.26.4
-  (pandas 2.3 supports numpy ≥ 1.23.2 on Python 3.11).
-- **A latent upgrade in PAR-1063's file, fixed:** jax 0.6.2 pulled the newest `ml_dtypes`,
-  whose 0.6 release needs numpy ≥ 2, so pip silently upgraded the image's numpy to 2.4.
-  `requirements-par1063.txt` now pins `numpy==1.26.4` and `ml_dtypes==0.5.4`.
-- granite-tsfm needs `torch<2.12,>=2.10`. The Dockerfile's `torch>=2.7.0` from the cu128 index
-  is 2.11.0 today; should cu128 publish 2.12, pip would replace it with a PyPI (cu13) build —
-  `python -m mlbench gpu-check` after the build is the check.
+- **Since the PAR-1066 dependency upgrade** the base image already has pandas 2.3.3 and
+  numpy 2.4.6, so the pandas override and PAR-1063's `numpy==1.26.4` / `ml_dtypes==0.5.4`
+  holds are gone (jax is 0.10.2). What this extra still changes: scikit-learn 1.9.1 → 1.7.2
+  (granite-tsfm needs < 1.8), pyarrow 26.0.0 → 25.0.1 (tabpfn-client caps it) and datasets
+  stays 4.8.5 (fev needs < 5). See `docs/development/python-dependencies.md`.
+- granite-tsfm needs `torch<2.12,>=2.10`. The Dockerfile pins torch 2.11.0 from the cu128 index
+  (PAR-1066), which satisfies it; `python -m mlbench gpu-check` after the build is the check.

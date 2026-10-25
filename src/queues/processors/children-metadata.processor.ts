@@ -786,11 +786,13 @@ export class ChildrenMetadataProcessor {
       `📊 ${wikiAttractions.length}/${attractions.length} attractions have wiki entity documents`,
     );
 
-    // Deliberately slow: ~4 requests/s stays under the wiki's per-IP rate
-    // limit (the first run at 10-parallel/250ms tripped a 429 after ~1k
-    // requests and the distributed block failed everything after it).
-    const BATCH_SIZE = 4;
-    const BATCH_DELAY_MS = 1000;
+    // Deliberately slow: one request every 2 s, ~1/8 of the client's 240/min
+    // cap. The 5-minute live poll shares that budget, and at the old 4/s this
+    // weekly job took all of it for ~4.5 h — the live sync ran 230–430 s
+    // instead of ~50 s (PAR-1077). ~3.9 h for 7k rides is fine for data that
+    // barely changes.
+    const BATCH_SIZE = 1;
+    const BATCH_DELAY_MS = 2000;
     const RATE_LIMIT_RE = /blocked for (\d+)s/;
     const MAX_ATTEMPTS = 5;
     let updated = 0;
