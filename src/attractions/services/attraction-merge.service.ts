@@ -17,6 +17,7 @@ import {
 import {
   resolveSurvivingSlug,
   resolveSurvivingName,
+  describeDuplicateReason,
   isSafeToAutoMerge,
   chooseDuplicateWinner,
   DuplicateCandidate,
@@ -646,12 +647,7 @@ export class AttractionMergeService {
           winner.name,
         ),
         safe,
-        reason: safe
-          ? "same ride (names agree once the map number is stripped)"
-          : base.externalId.startsWith("qt-ride-") ===
-              suffix.externalId.startsWith("qt-ride-")
-            ? `same name but two ids from one source — "${base.name}"; upstream calls these two things, review by hand`
-            : `names differ — "${base.name}" vs "${suffix.name}"; review by hand`,
+        reason: describeDuplicateReason(base, suffix),
       };
     });
   }
