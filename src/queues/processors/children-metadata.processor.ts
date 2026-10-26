@@ -945,6 +945,21 @@ export class ChildrenMetadataProcessor {
         existing.externalId !== mappedData.externalId &&
         !ctx.listedExternalIds.has(existing.externalId);
 
+      // The cross-source adoption the comment above describes, now named: the
+      // row answers to a Queue-Times id, so it carries no wiki identity at all
+      // and `reissued` can never be true for it. It needs the wiki id as a
+      // mapping instead of in `externalId` (PAR-1081, written below).
+      //
+      // Deliberately narrower than `existing.externalId !== mappedData.externalId`:
+      // a row whose own wiki id the park still lists is reached through a
+      // shared Queue-Times id and may belong to a different live wiki entity.
+      // Mapping this id onto it would route that entity's readings here, which
+      // is the same orphaning `reissued` refuses to do by rewriting the id.
+      const adoptedCrossSource =
+        !!existing.externalId &&
+        existing.externalId.startsWith("qt-ride-") &&
+        !mappedData.externalId!.startsWith("qt-ride-");
+
       // The row is in the feed, so it gets today's stamp whether or not any
       // of its values moved — that is what dates the absence once the id
       // stops being listed, and it is the one thing an unchanged row still
@@ -997,6 +1012,41 @@ export class ChildrenMetadataProcessor {
           `♻️ ${mappedData.name}: wiki re-issued ${existing.externalId} as ` +
             `${mappedData.externalId}; row ${existing.id} keeps its history`,
         );
+      } else if (adoptedCrossSource) {
+        // The name match claimed a row that answers to the OTHER source's id,
+        // and `externalId` has to stay that id: it is unique globally, and the
+        // Queue-Times path finds this row through it. So the wiki id has only
+        // one place left to live, and until PAR-1081 nothing put it there —
+        // the row was stamped as listed every night and stayed unreachable.
+        //
+        // `WaitTimesProcessor` keys its lookup on `themeparks-wiki:<id>`,
+        // filled from the mappings plus an `externalId` fallback that assumes
+        // the id IS a wiki id. For a `qt-ride-` row that fallback registers
+        // `themeparks-wiki:qt-ride-11272`, which no `/live` entry ever
+        // carries, so every wiki reading for the ride was dropped. Measured on
+        // 2026-10-26: 35 listed rows in 2 parks with no wiki mapping, 30 of
+        // them (all Energylandia) with no mapping at all and therefore nothing
+        // but `system-reconciliation` CLOSED for seven days.
+        //
+        // This is the mirror of the unconditional `createMapping` on the
+        // Queue-Times path below, which exists for the same reason and states
+        // it: the `externalId` fallback covers `themeparks-wiki` only.
+        const written = await this.createMapping(
+          existing.id,
+          "attraction",
+          "themeparks-wiki",
+          mappedData.externalId!,
+        );
+        // Only the run that actually writes it says so. `createMapping` is a
+        // no-op once the mapping is right, and a line per adopted row per
+        // night would be 35 lines saying nothing happened.
+        if (written) {
+          this.logger.log(
+            `🔗 ${mappedData.name}: row ${existing.id} answers to ` +
+              `${existing.externalId}; mapped wiki ${mappedData.externalId} ` +
+              `onto it so its wiki readings resolve`,
+          );
+        }
       }
 
       // The entity is an attraction again, so the retirement
@@ -1993,14 +2043,21 @@ export class ChildrenMetadataProcessor {
   }
 
   /**
-   * Create external entity mapping (with duplicate check)
+   * Create external entity mapping (with duplicate check).
+   *
+   * Returns whether this call changed the table: `true` when it inserted the
+   * mapping or reclaimed a stranded one, `false` when the mapping was already
+   * right or belongs to another live entity. A caller that wants to log an
+   * identity write needs that distinction — this method runs on every listed
+   * child of every run, so logging at the call site unconditionally would say
+   * "mapped" nightly about a mapping that has been in place for weeks.
    */
   private async createMapping(
     internalEntityId: string,
     internalEntityType: "attraction" | "show" | "restaurant",
     externalSource: string,
     externalEntityId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Check if mapping already exists
     const existing = await this.mappingRepository.findOne({
       where: {
@@ -2018,10 +2075,10 @@ export class ChildrenMetadataProcessor {
         matchConfidence: 1.0,
         matchStrategy: "exact",
       });
-      return;
+      return true;
     }
 
-    if (existing.internalEntityId === internalEntityId) return;
+    if (existing.internalEntityId === internalEntityId) return false;
 
     // The row holds our id but names somebody else. Two cases, and only one of
     // them is ours to touch: if that somebody still exists, two live entities
@@ -2047,7 +2104,7 @@ export class ChildrenMetadataProcessor {
       existing.internalEntityType,
       existing.internalEntityId,
     );
-    if (targetExists) return;
+    if (targetExists) return false;
 
     this.logger.warn(
       `🔗 Reclaiming stranded mapping ${externalSource}:${externalEntityId} — it named ${existing.internalEntityId}, which no longer exists`,
@@ -2058,6 +2115,7 @@ export class ChildrenMetadataProcessor {
       matchConfidence: 1.0,
       matchMethod: "exact",
     });
+    return true;
   }
 
   /**
