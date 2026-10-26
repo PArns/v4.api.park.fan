@@ -27,6 +27,10 @@ export const BAND_CALIBRATION_WINDOW_DAYS = 28;
 export const BAND_CALIBRATION_KEY = "ml:band-calibration:catboost-hourly:v1";
 /** Rebuilt daily; three days survive two failed runs before the band reverts to raw. */
 export const BAND_CALIBRATION_TTL_SECONDS = 3 * 24 * 3600;
+/** The served factor never shrinks the raw band ... */
+export const BAND_FACTOR_MIN = 1;
+/** ... and never more than doubles it. */
+export const BAND_FACTOR_MAX = 2;
 
 export type BandLeadBucket = "h0-2" | "h2-6" | "h6-24" | "h24+";
 
@@ -168,7 +172,10 @@ export function fitBandCalibration(
   };
 }
 
-/** The factor for one slot: its cell, else its lead bucket's pool, else null (serve raw). */
+/**
+ * The factor for one slot: its cell, else its lead bucket's pool, else null
+ * (serve raw). The table keeps the fitted k; only the served one is clamped.
+ */
 export function bandFactor(
   table: BandCalibrationTable | null,
   leadMinutes: number,
@@ -180,7 +187,9 @@ export function bandFactor(
   const cell =
     table.cells[`${lead}|${ForecastAccuracyService.bandFor(predictedWait)}`];
   const k = cell ? cell.k : table.pooledByLead?.[lead]?.k;
-  return typeof k === "number" && k > 0 ? k : null;
+  if (typeof k !== "number" || !(k > 0)) return null;
+  // PAR-1083: a fitted k of 0.25..4.2 was absorbing median bias and made the band jump; clamp it.
+  return Math.min(BAND_FACTOR_MAX, Math.max(BAND_FACTOR_MIN, k));
 }
 
 /**

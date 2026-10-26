@@ -47,7 +47,7 @@ describe("fitBandCalibration (PAR-1060)", () => {
     ]);
     expect(t.cells["h0-2|busy"].k).toBe(4.75);
     expect(t.cells["h24+|busy"].k).toBeNull();
-    expect(bandFactor(t, 60, 70)).toBe(4.75);
+    expect(bandFactor(t, 60, 70)).toBe(2); // fitted 4.75, served clamped (PAR-1083)
     expect(bandFactor(t, 30 * 60, 70)).toBeNull(); // h24+ busy: raw
     expect(bandFactor(t, 30 * 60, 10)).toBeNull(); // h24+ quiet, no cell: raw
     expect(bandFactor(t, 8 * 60, 70)).toBeNull(); // h6-24, no data at all: raw
@@ -68,6 +68,21 @@ describe("fitBandCalibration (PAR-1060)", () => {
     ]);
     expect(t.pooledByLead["h0-2"].k).toBeNull();
     expect(bandFactor(t, 60, 70)).toBeNull();
+  });
+});
+
+describe("bandFactor clamp (PAR-1083)", () => {
+  /** A table whose only cell carries the given k, as Redis would hand it back. */
+  const withK = (k: number) =>
+    ({
+      cells: { "h0-2|busy": { n: 1000, k, source: "cell" } },
+      pooledByLead: {},
+    }) as never;
+
+  it("serves a stored k of 4.2 as 2 and a stored k of 0.25 as 1", () => {
+    expect(bandFactor(withK(4.2), 60, 70)).toBe(2);
+    expect(bandFactor(withK(0.25), 60, 70)).toBe(1);
+    expect(bandFactor(withK(1.4), 60, 70)).toBe(1.4);
   });
 });
 
@@ -98,7 +113,7 @@ describe("applyBandCalibration", () => {
       },
     ];
     expect(applyBandCalibration(preds, table, now)).toBe(1);
-    expect(preds[0].uncertaintyMinutes).toBe(43); // 9 × 4.75 = 42.75
+    expect(preds[0].uncertaintyMinutes).toBe(18); // 9 × min(4.75, 2)
     expect(preds[1].uncertaintyMinutes).toBeNull();
     expect(preds[2].uncertaintyMinutes).toBe(9);
   });

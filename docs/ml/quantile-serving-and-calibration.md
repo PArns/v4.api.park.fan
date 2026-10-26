@@ -275,6 +275,26 @@ PAR-1060, because `prediction_accuracy` has scored hourly slots to fit on.
   out-of-sample check is the forward archive's D8 (`nBandCov / nBand` on
   `park_hourly`) before and after the deploy.
 
+### The served factor is clamped to [1, 2] (PAR-1083)
+
+`bandFactor` serves `min(2, max(1, k))` (`BAND_FACTOR_MIN` / `BAND_FACTOR_MAX`);
+the table in Redis and on `/v1/admin/ml-overview` keeps the fitted `k`.
+
+- **Why.** The fitted `k` ranged 0.25 … 4.2 inside one lead bucket, so a ride's
+  band jumped between neighbouring slots (Taron 6 → 101 min). The factor was
+  absorbing the **median's bias**: a cell whose median under-forecasts needs a
+  wide band to reach 95 %, one that over-forecasts reaches it with almost none.
+  A band is a spread, not a bias correction — so it never narrows the model's
+  own band and never more than doubles it.
+- **Measured (calibration window, variant F of PAR-1083).** Coverage 0.957
+  (unclamped 0.949); mean live band 62 → 34 min; slot-to-slot jumps ≥ 40 min
+  1437 → 58; largest jump 199 → 74 min.
+- **Open.** (1) The bias itself: at ≥ 12 h lead the median runs −37.5 min on
+  mid and −63.4 min on busy slots — a level fix, not a band one. (2) The `h2-6`
+  bucket never gets a factor: `prediction_accuracy` keeps only the last writer
+  per slot, so its rows land in `h0-2` (see above); a lead-preserving source
+  would fix both that and the long buckets.
+
 ## Daily serving merge + stampede guard
 
 `MLService.getServingDailyPredictions` (calendar + yearly source) merges **TFT for
