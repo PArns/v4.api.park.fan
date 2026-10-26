@@ -69,7 +69,13 @@ run. Before such a PR merges:
 - Before a merge, each pair is **proven**: old id no longer listed, upstream
   coordinates within a building (G-137), and the operator's page naming the
   attraction once. Distance alone is not proof — seasonal overlays sit 0–20 m
-  from a permanent ride.
+  from a permanent ride. `adoptLoserExternalId` cannot stand in for "old id no
+  longer listed": `attractions.externalId` is one column with one value, so
+  when the feed lists both ids one of them can only live in
+  `external_entity_mapping`. Since PAR-949 `syncAttraction` reads that table
+  before it inserts — a listed id mapped onto a row of the same park stamps
+  that row instead of growing a `-3` — so a merge of a pair whose two ids are
+  both listed now holds.
 - Re-issues under a **different** name (`HAUNTED HOUSE: SAW…` → `SAW…`, Dutch
   vs English) are not caught by the name match. They are **listed, never merged
   by a machine** (PAR-686, option B): `/admin/duplicates` shows every

@@ -1064,6 +1064,29 @@ export class ChildrenMetadataProcessor {
         await this.attractionRetirementService.unretire(existing.id);
       }
     } else {
+      // A listed id with no row of its own may still be one of ours: after a
+      // merge the loser's mappings are re-pointed onto the winner
+      // (`AttractionMergeService`), and `externalId` is one column, so the
+      // winner answers to the second listed id only through that mapping.
+      // Without this read the sync re-inserted the loser as a `-3` row on the
+      // next run — and a silent one, because `createMapping` then found the id
+      // already taken (PAR-949). Only a row of THIS park counts; its own
+      // `externalId` stays, the second id keeps living in the mapping.
+      const mapped = await this.mappingRepository.findOne({
+        where: {
+          externalSource: "themeparks-wiki",
+          externalEntityId: mappedData.externalId!,
+          internalEntityType: "attraction",
+        },
+      });
+      const mappedRow =
+        mapped &&
+        existingAttractions.find((a) => a.id === mapped.internalEntityId);
+      if (mappedRow) {
+        ctx?.listedRowIds?.add(mappedRow.id);
+        return;
+      }
+
       // Generate unique slug for this park
       const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
       const existingSlugs = existingAttractions.map((a) => a.slug);
