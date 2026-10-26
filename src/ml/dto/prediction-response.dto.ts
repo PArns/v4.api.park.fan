@@ -41,10 +41,14 @@ export class PredictionDto {
       "never 'narrow'; a zero-wide band would draw as a confident hairline. " +
       "WHERE IT COMES FROM DEPENDS ON WHICH MODEL ANSWERED, and the two are " +
       "not the same statistic: CatBoost reports its own top trained quantile " +
-      "(alpha=0.95) minus its served median, which measured against realised " +
-      "days covers only 53-57% of them; the daily TFT path (calendar days " +
-      "1-60) carries the measured 95th percentile of that cell's residuals, " +
-      "which covers 92-98%. So the figure steps DOWN at day 60 even though " +
+      "(alpha=0.95) minus its served median; on HOURLY predictions that " +
+      "distance is empirically recalibrated per lead bucket x predicted-wait " +
+      "segment (PAR-1060), with the factor clamped to [1, 2] so it never " +
+      "narrows the raw band nor more than doubles it (PAR-1083) — measured " +
+      "coverage ~95.7% in the calibration window. The DAILY CatBoost band is " +
+      "not recalibrated and covers only 53-57%; the daily TFT path (calendar " +
+      "days 1-60) carries the measured 95th percentile of that cell's " +
+      "residuals, which covers 92-98%. So the figure steps DOWN at day 60 even though " +
       "the near term is the better-forecast one. Read it as a floor on how " +
       "wrong the day can be, never as a comparison between two days on " +
       "opposite sides of that seam. See docs/ml/quantile-serving-and-calibration.md.",
