@@ -116,6 +116,24 @@ export function isSafeToAutoMerge(
   return !sameSource(a.externalId, b.externalId);
 }
 
+/**
+ * The text the duplicate list shows next to a pair. It follows the names, not
+ * the sources: two ids from one source say nothing about whether the names
+ * agree, and an operator judging a pair needs both names when they differ.
+ */
+export function describeDuplicateReason(
+  a: DuplicateCandidate,
+  b: DuplicateCandidate,
+): string {
+  if (isSafeToAutoMerge(a, b)) {
+    return "same ride (names agree once the map number is stripped)";
+  }
+  if (normalizeName(a.name) !== normalizeName(b.name)) {
+    return `names differ — "${a.name}" vs "${b.name}"; review by hand`;
+  }
+  return `same name but two ids from one source — "${a.name}"; upstream calls these two things, review by hand`;
+}
+
 /** Which upstream issued an id. Queue-Times rows carry a `qt-ride-` prefix. */
 function sourceOf(externalId: string): "queue-times" | "wiki" {
   return externalId.startsWith("qt-ride-") ? "queue-times" : "wiki";
