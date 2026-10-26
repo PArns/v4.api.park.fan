@@ -72,7 +72,7 @@ Measured against production on 2026-10-07 over `2025-12-24` … `2026-10-07`: 6,
 
 - **ThemeParks API:** The previous month plus 12 months ahead are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
 - **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
-- **Cleanup when saving from API:** Bidirectional: when we save **OPERATING** for a date, we delete any **CLOSED** row; when we save **CLOSED** for a date, we delete any **OPERATING** row. This ensures one source of truth per date.
+- **Cleanup when saving from API:** Bidirectional: when we save **OPERATING** for a date, we delete any **CLOSED** row; when we save **CLOSED** for a date, we delete any **OPERATING** row. This ensures one **day-status** row per date — not one row: the event types stay beside it, see [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 - **Gaps:** `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills **missing** days. Range: (today - lookBackDays) through (today + lookAheadDays). Defaults: 182 days each (~½ year). Park timezone. Holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
   - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
   - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".

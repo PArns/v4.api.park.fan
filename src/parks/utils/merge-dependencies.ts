@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { aggregateIdSql } from "../../queues/processors/hourly-aggregate.sql";
+import { HYPERTABLES } from "../../database/hypertables";
 
 export type MergeStrategy =
   "move" | "discard" | "winner-authoritative" | "custom";
@@ -1863,4 +1864,43 @@ export async function migrateScheduleEntries(
   // node-postgres answers an UPDATE through TypeORM's raw query as
   // [rows, affectedCount].
   return Array.isArray(result) ? Number(result[1]) || 0 : 0;
+}
+
+/**
+ * The denormalised park columns that have to follow ONE attraction when the
+ * children sync moves it to another park of its resort (PAR-743).
+ *
+ * Derived from the lists above rather than written out, so a park-scoped
+ * attraction table declared there cannot be forgotten here: every park
+ * dependency whose table also carries a plain attraction column. `custom`
+ * attraction entries are left out (`park_seasons` names its rides inside a
+ * jsonb array), and so are hypertables — `queue_data_aggregates` keeps the
+ * park a reading was taken under, because rewriting it would decompress every
+ * chunk the ride ever touched.
+ */
+export function parkColumnsFollowingAttraction(): {
+  table: string;
+  parkColumn: string;
+  attractionColumn: string;
+}[] {
+  const attractionColumn = new Map(
+    ATTRACTION_DEPENDENCIES.filter((d) => d.strategy !== "custom").map((d) => [
+      d.table,
+      d.column,
+    ]),
+  );
+  const hypertables = new Set(HYPERTABLES.map((h) => h.table));
+  const parkSide: { table: string; column: string }[] = [
+    ...PARK_DEPENDENCIES,
+    ...PARK_INLINE_DEPENDENCIES,
+    // Moved by the merge callers themselves, so in neither list above.
+    { table: "schedule_entries", column: "parkId" },
+  ];
+  return parkSide
+    .filter((d) => attractionColumn.has(d.table) && !hypertables.has(d.table))
+    .map((d) => ({
+      table: d.table,
+      parkColumn: d.column,
+      attractionColumn: attractionColumn.get(d.table)!,
+    }));
 }

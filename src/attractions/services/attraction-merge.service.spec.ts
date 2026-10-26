@@ -586,6 +586,38 @@ describe("AttractionMergeService — batch", () => {
     expect(pair.reason).toMatch(/name/i);
   });
 
+  it("names both names when two ids from one source carry different names", async () => {
+    dataSource.query.mockResolvedValue([
+      pairRow({
+        base_name: "Midnight",
+        suffix_name: "The Conjuring: Beyond Fear",
+        base_external: "11111111-1111-1111-1111-111111111111",
+        suffix_external: "22222222-2222-2222-2222-222222222222",
+      }),
+    ]);
+
+    const [pair] = await service.findDuplicatePairs();
+
+    expect(pair.safe).toBe(false);
+    expect(pair.reason).toContain('"Midnight"');
+    expect(pair.reason).toContain('"The Conjuring: Beyond Fear"');
+    expect(pair.reason).not.toMatch(/same name/);
+  });
+
+  it("keeps the same-name reason for equal names from one source", async () => {
+    dataSource.query.mockResolvedValue([
+      pairRow({
+        base_external: "11111111-1111-1111-1111-111111111111",
+        suffix_external: "22222222-2222-2222-2222-222222222222",
+      }),
+    ]);
+
+    const [pair] = await service.findDuplicatePairs();
+
+    expect(pair.safe).toBe(false);
+    expect(pair.reason).toMatch(/^same name but two ids from one source/);
+  });
+
   it("merges nothing on a dry run", async () => {
     dataSource.query.mockResolvedValue([pairRow()]);
     const merge = jest.spyOn(service, "mergeAttractions");
