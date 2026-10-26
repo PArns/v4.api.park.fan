@@ -79,6 +79,22 @@ run. Before such a PR merges:
   the survivor takes the id the feed lists — without it the sync grows the
   loser back) or dismisses with a `not_a_duplicate` mark. Distance alone is
   never enough: Walibi Belgium's three 4D films sit at 0 m.
+- **A ride both upstreams report has one row, one `externalId` — and needs the
+  other source's id as a mapping.** `externalId` is source-scoped, so the name
+  match claims a row that answers to the other upstream and leaves its id
+  alone: moving it would strand the source that finds the row through it. The
+  id that lost the column has only one place left, and until PAR-1081 the wiki
+  path did not put it there — `reissued` is false by construction for a
+  `qt-ride-` row, and it gated both the id write and the `createMapping` call.
+  `WaitTimesProcessor` resolves a wiki entity through `themeparks-wiki:<id>`,
+  filled from the mappings plus an `externalId` fallback that assumes the id is
+  a wiki id, so for such a row it registered `themeparks-wiki:qt-ride-11272`
+  and dropped every wiki reading. 35 listed rows in two parks on 2026-10-26,
+  30 of them (Energylandia, seeded 2025-12-24 before the park had a
+  `wikiEntityId`) with no mapping at all and therefore seven days of nothing
+  but `system-reconciliation` CLOSED. The Queue-Times path has written its own
+  mapping unconditionally since PAR-311 for the same reason; both halves now
+  do.
 - **`attractions.externalId` is unique globally, `slug` only per park.** The
   wiki hangs single children on **both** parks of a resort, so the second park
   asks for a row it can never insert: the lookup in `syncAttraction` is
