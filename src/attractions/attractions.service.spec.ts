@@ -251,4 +251,69 @@ describe("AttractionsService", () => {
       expect(repo).toBe(attractionRepository);
     });
   });
+  describe("resolveSlugAlias", () => {
+    // Each call builds one query; the stub answers them in order.
+    const aliasQueries = (...rows: unknown[]) => {
+      for (const row of rows) {
+        const qb: Record<string, jest.Mock> = {};
+        for (const m of [
+          "innerJoin",
+          "where",
+          "andWhere",
+          "orderBy",
+          "select",
+          "addSelect",
+        ]) {
+          qb[m] = jest.fn().mockReturnValue(qb);
+        }
+        qb.getRawOne = jest.fn().mockResolvedValue(row);
+        mockAttractionRepository.createQueryBuilder.mockReturnValueOnce(
+          qb as never,
+        );
+      }
+    };
+    const ask = () =>
+      service.resolveSlugAlias("europe", "germany", "rust", "rulantica", "old");
+
+    it("answers from the same park without asking the sister parks", async () => {
+      aliasQueries({ slug: "new" });
+      await expect(ask()).resolves.toEqual({
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "rust",
+        parkSlug: "rulantica",
+        attractionSlug: "new",
+      });
+      expect(mockAttractionRepository.createQueryBuilder).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+
+    it("follows a ride the sync moved to a sister park (PAR-743)", async () => {
+      aliasQueries(undefined, {
+        slug: "vibes",
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "rust",
+        parkSlug: "europa-park",
+      });
+      await expect(ask()).resolves.toEqual({
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "rust",
+        parkSlug: "europa-park",
+        attractionSlug: "vibes",
+      });
+    });
+
+    it("does not answer a same-park alias that points at itself", async () => {
+      aliasQueries({ slug: "old" }, undefined);
+      await expect(ask()).resolves.toBeNull();
+    });
+
+    it("returns null when neither park records the alias", async () => {
+      aliasQueries(undefined, undefined);
+      await expect(ask()).resolves.toBeNull();
+    });
+  });
 });
