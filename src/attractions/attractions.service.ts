@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { In, IsNull, MoreThan, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { AttractionSlugAlias } from "./entities/attraction-slug-alias.entity";
+import { Park } from "../parks/entities/park.entity";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
@@ -355,13 +356,60 @@ export class AttractionsService {
       .select("attraction.slug", "slug")
       .getRawOne<{ slug: string }>();
 
-    if (!row?.slug || row.slug === attractionSlug) return null;
+    if (row?.slug && row.slug !== attractionSlug) {
+      return {
+        continentSlug,
+        countrySlug,
+        citySlug,
+        parkSlug,
+        attractionSlug: row.slug,
+      };
+    }
+
+    // A ride the children sync moved to a sister park (PAR-743) keeps its
+    // alias, but the alias is read through the ride's CURRENT park, so the
+    // old path has to be matched against another park of the same resort.
+    // shortcut: no column records which park an alias belonged to, so an
+    // alias also answers under a sister park's path that 404s; add a parkId
+    // to the alias if that ever redirects a real URL wrongly.
+    const moved = await this.attractionRepository
+      .createQueryBuilder("attraction")
+      .innerJoin(
+        AttractionSlugAlias,
+        "alias",
+        "alias.attractionId = attraction.id AND alias.slug = :attractionSlug",
+        { attractionSlug },
+      )
+      .innerJoin("attraction.park", "park")
+      .innerJoin(
+        Park,
+        "asked",
+        'asked."destinationId" = park."destinationId" AND asked.id <> park.id',
+      )
+      .where("asked.continentSlug = :continentSlug", { continentSlug })
+      .andWhere("asked.countrySlug = :countrySlug", { countrySlug })
+      .andWhere("asked.citySlug = :citySlug", { citySlug })
+      .andWhere("asked.slug = :parkSlug", { parkSlug })
+      .orderBy("alias.createdAt", "DESC")
+      .select("attraction.slug", "slug")
+      .addSelect("park.continentSlug", "continentSlug")
+      .addSelect("park.countrySlug", "countrySlug")
+      .addSelect("park.citySlug", "citySlug")
+      .addSelect("park.slug", "parkSlug")
+      .getRawOne<{
+        slug: string;
+        continentSlug: string;
+        countrySlug: string;
+        citySlug: string;
+        parkSlug: string;
+      }>();
+    if (!moved?.slug) return null;
     return {
-      continentSlug,
-      countrySlug,
-      citySlug,
-      parkSlug,
-      attractionSlug: row.slug,
+      continentSlug: moved.continentSlug,
+      countrySlug: moved.countrySlug,
+      citySlug: moved.citySlug,
+      parkSlug: moved.parkSlug,
+      attractionSlug: moved.slug,
     };
   }
 

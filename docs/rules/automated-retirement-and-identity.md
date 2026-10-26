@@ -69,7 +69,13 @@ run. Before such a PR merges:
 - Before a merge, each pair is **proven**: old id no longer listed, upstream
   coordinates within a building (G-137), and the operator's page naming the
   attraction once. Distance alone is not proof — seasonal overlays sit 0–20 m
-  from a permanent ride.
+  from a permanent ride. `adoptLoserExternalId` cannot stand in for "old id no
+  longer listed": `attractions.externalId` is one column with one value, so
+  when the feed lists both ids one of them can only live in
+  `external_entity_mapping`. Since PAR-949 `syncAttraction` reads that table
+  before it inserts — a listed id mapped onto a row of the same park stamps
+  that row instead of growing a `-3` — so a merge of a pair whose two ids are
+  both listed now holds.
 - Re-issues under a **different** name (`HAUNTED HOUSE: SAW…` → `SAW…`, Dutch
   vs English) are not caught by the name match. They are **listed, never merged
   by a machine** (PAR-686, option B): `/admin/duplicates` shows every
@@ -96,14 +102,22 @@ run. Before such a PR merges:
   mapping unconditionally since PAR-311 for the same reason; both halves now
   do.
 - **`attractions.externalId` is unique globally, `slug` only per park.** The
-  wiki hangs single children on **both** parks of a resort, so the second park
-  asks for a row it can never insert: the lookup in `syncAttraction` is
-  park-scoped, finds nothing, and the insert hits
-  `UQ_a94e9dc2762dfca8a463d173657`. Four such children on 2026-10-07 —
-  `Gremmie Lagoon` and `Beach House Slides` (Knott's Berry Farm, also listed
-  under Knott's Soak City), `Muffleheads Beach Bar` and `Cedar Creek` (Cedar
-  Point, also under Cedar Point Shores). The child is skipped and logged; which
-  park should own the row is open (PAR-743).
+  wiki moves children between the parks of a resort and keeps their id, so
+  the new park asks for a row it can never insert: the lookup in
+  `syncAttraction` is park-scoped, finds nothing, and the insert hits
+  `UQ_a94e9dc2762dfca8a463d173657` (`syncShow`/`syncRestaurant` look up
+  globally and silently kept writing the old park's row). Measured 2026-10-25
+  against every park's `/children`: **0 of 11,864 entities listed under two
+  parks**, but **74 listed children whose row lay in another park of the same
+  resort** — 49 attractions, 17 shows, 8 restaurants, 7 resorts (the 2026-10-07
+  sightings of `Gremmie Lagoon` etc. under both parks no longer hold). Since
+  PAR-743 the sync **moves** such a row to the park that lists it
+  (`applyParkMoves`, after the whole run): only within one `destinationId`,
+  only when the row's own park's `/children` from the same run lacks the id
+  (a park whose fetch failed moves nothing), with a free slug in the new park
+  and, for attractions, an `attraction_slug_aliases` row for the old path
+  (§5). History stays on the row id. An id listed by two parks at once stays
+  put and is logged.
 
 ## 4. Names come from the operator, never from a translation
 

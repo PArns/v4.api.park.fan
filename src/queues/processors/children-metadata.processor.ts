@@ -34,6 +34,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
+import { parkColumnsFollowingAttraction } from "../../parks/utils/merge-dependencies";
 
 /**
  * Rows already matched during the current park's sync pass. A park can hold
@@ -66,6 +67,23 @@ interface SyncClaimContext {
    * for the next. Only the wiki path fills it.
    */
   listedRowIds?: Set<string>;
+  /**
+   * Rows this run found in ANOTHER park of the same resort for a listed id
+   * (PAR-743). Run-wide, because whether that other park still lists the id
+   * is only known once every park's `/children` is in: `applyParkMoves`
+   * decides after the loop. Only the wiki path fills it.
+   */
+  pendingMoves?: PendingParkMove[];
+}
+
+/** A listed child whose row lives in another park (PAR-743). */
+interface PendingParkMove {
+  table: "attractions" | "shows" | "restaurants";
+  rowId: string;
+  externalId: string;
+  name: string;
+  fromParkId: string;
+  toParkId: string;
 }
 
 /**
@@ -340,6 +358,10 @@ export class ChildrenMetadataProcessor {
       let syncedShows = 0;
       let syncedRestaurants = 0;
       let skippedChildren = 0;
+      // What each park's `/children` listed in this run, for the parks whose
+      // fetch succeeded, and the rows found in a sister park (PAR-743).
+      const listingByPark = new Map<string, Set<string>>();
+      const pendingMoves: PendingParkMove[] = [];
 
       this.logger.log(`📊 Total parks to process: ${totalParks}`);
 
@@ -477,12 +499,14 @@ export class ChildrenMetadataProcessor {
               const listedExternalIds = new Set(
                 childrenResponse.children.map((child) => child.id),
               );
+              listingByPark.set(park.id, listedExternalIds);
 
               // Sync Attractions
               const attractionCtx: SyncClaimContext = {
                 claimed: new Set(),
                 listedExternalIds,
                 listedRowIds: new Set(),
+                pendingMoves,
               };
               for (const attractionEntity of attractions) {
                 try {
@@ -505,7 +529,7 @@ export class ChildrenMetadataProcessor {
               // Sync Shows
               for (const showEntity of shows) {
                 try {
-                  await this.syncShow(showEntity, park.id);
+                  await this.syncShow(showEntity, park.id, pendingMoves);
                   parkShows++;
                 } catch (e) {
                   skipChild("show", showEntity.name, showEntity.id, e);
@@ -515,7 +539,11 @@ export class ChildrenMetadataProcessor {
               // Sync Restaurants
               for (const restaurantEntity of restaurants) {
                 try {
-                  await this.syncRestaurant(restaurantEntity, park.id);
+                  await this.syncRestaurant(
+                    restaurantEntity,
+                    park.id,
+                    pendingMoves,
+                  );
                   parkRestaurants++;
                 } catch (e) {
                   skipChild(
@@ -708,6 +736,13 @@ export class ChildrenMetadataProcessor {
           // );
           await this.sleep(BATCH_DELAY_MS);
         }
+      }
+
+      // After the loop, because a move needs the OTHER park's listing too.
+      try {
+        await this.applyParkMoves(pendingMoves, listingByPark, parks);
+      } catch (e) {
+        this.logger.error(`Failed to move children between parks: ${e}`);
       }
 
       this.logger.log("🎉 Combined children metadata sync complete!");
@@ -1064,6 +1099,57 @@ export class ChildrenMetadataProcessor {
         await this.attractionRetirementService.unretire(existing.id);
       }
     } else {
+      // A listed id with no row of its own may still be one of ours: after a
+      // merge the loser's mappings are re-pointed onto the winner
+      // (`AttractionMergeService`), and `externalId` is one column, so the
+      // winner answers to the second listed id only through that mapping.
+      // Without this read the sync re-inserted the loser as a `-3` row on the
+      // next run — and a silent one, because `createMapping` then found the id
+      // already taken (PAR-949). Only a row of THIS park counts; its own
+      // `externalId` stays, the second id keeps living in the mapping.
+      const mapped = await this.mappingRepository.findOne({
+        where: {
+          externalSource: "themeparks-wiki",
+          externalEntityId: mappedData.externalId!,
+          internalEntityType: "attraction",
+        },
+      });
+      const mappedRow =
+        mapped &&
+        existingAttractions.find((a) => a.id === mapped.internalEntityId);
+      if (mappedRow) {
+        ctx?.listedRowIds?.add(mappedRow.id);
+        return;
+      }
+
+      // The row may exist in another park of the same resort: the wiki moved
+      // the entity between sister parks (Oceans of Fun ↔ Worlds of Fun) and
+      // `externalId` is unique globally, so the insert below could never
+      // succeed. Hand it to the run-wide move instead (PAR-743). Across a
+      // resort boundary nothing is found here and the insert fails as before.
+      if (ctx?.pendingMoves) {
+        const [elsewhere] = await this.mappingRepository.manager.query(
+          `SELECT a.id, a."parkId" FROM attractions a
+             JOIN parks src ON src.id = a."parkId"
+             JOIN parks dst ON dst.id = $2
+            WHERE a."externalId" = $1 AND a."parkId" <> $2
+              AND src."destinationId" IS NOT NULL
+              AND src."destinationId" = dst."destinationId"`,
+          [mappedData.externalId, parkId],
+        );
+        if (elsewhere) {
+          ctx.pendingMoves.push({
+            table: "attractions",
+            rowId: elsewhere.id,
+            externalId: mappedData.externalId!,
+            name: mappedData.name!,
+            fromParkId: elsewhere.parkId,
+            toParkId: parkId,
+          });
+          return;
+        }
+      }
+
       // Generate unique slug for this park
       const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
       const existingSlugs = existingAttractions.map((a) => a.slug);
@@ -1096,6 +1182,7 @@ export class ChildrenMetadataProcessor {
   private async syncShow(
     showEntity: EntityResponse,
     parkId: string,
+    pendingMoves?: PendingParkMove[],
   ): Promise<void> {
     const mappedData = this.themeParksMapper.mapShow(showEntity, parkId);
 
@@ -1120,11 +1207,21 @@ export class ChildrenMetadataProcessor {
       // Unlike `syncAttraction`, the way back is NOT park-scoped: the lookup
       // above is by `externalId`, which is unique across the whole table, so
       // the row is found whichever park's `/children` carried the id. It
-      // comes back under its OLD park, though — the update above does not
-      // move `parkId` — so a row whose park changed upstream un-retires into
-      // the wrong park's payload and still needs moving by hand.
+      // comes back under its OLD park — the update above does not move
+      // `parkId`; `applyParkMoves` does that after the run, within a resort
+      // (PAR-743).
       if (isReclassifiedAsAttractionReason(existing.retiredReason)) {
         await this.unretireChildEntity("show", existing.id, existing.parkId);
+      }
+      if (pendingMoves && existing.parkId !== parkId) {
+        pendingMoves.push({
+          table: "shows",
+          rowId: existing.id,
+          externalId: mappedData.externalId!,
+          name: mappedData.name!,
+          fromParkId: existing.parkId,
+          toParkId: parkId,
+        });
       }
     } else {
       // Generate unique slug for this park
@@ -1154,6 +1251,7 @@ export class ChildrenMetadataProcessor {
   private async syncRestaurant(
     restaurantEntity: EntityResponse,
     parkId: string,
+    pendingMoves?: PendingParkMove[],
   ): Promise<void> {
     const mappedData = this.themeParksMapper.mapRestaurant(
       restaurantEntity,
@@ -1183,6 +1281,16 @@ export class ChildrenMetadataProcessor {
           existing.id,
           existing.parkId,
         );
+      }
+      if (pendingMoves && existing.parkId !== parkId) {
+        pendingMoves.push({
+          table: "restaurants",
+          rowId: existing.id,
+          externalId: mappedData.externalId!,
+          name: mappedData.name!,
+          fromParkId: existing.parkId,
+          toParkId: parkId,
+        });
       }
     } else {
       // Generate unique slug for this park
@@ -1484,6 +1592,130 @@ export class ChildrenMetadataProcessor {
     await repository.update(id, { retiredAt: null, retiredReason: null });
     await this.evictAndRevalidate(new Set([parkId]));
     this.logger.log(`↩️  Un-retired ${kind} ${id}`);
+  }
+
+  /**
+   * Moves a row to the park whose `/children` lists it, within one resort
+   * (PAR-743).
+   *
+   * The wiki moves entities between sister parks (a water park split out of
+   * its theme park) and keeps the id. `externalId` is unique globally, so the
+   * new park could never insert its own row and the old one kept serving it:
+   * 74 listed children on 2026-10-25, all inside one resort, none listed under
+   * two parks.
+   *
+   * **The "no longer listed" signal is the other park's `/children` from this
+   * same run**, which is why this runs after the loop: a park whose fetch
+   * failed has no entry in `listingByPark` and nothing leaves it. Neither
+   * `last_listed_at` (73 of the 74 were never stamped, and shows and
+   * restaurants have no such column) nor `updatedAt` (every listing park
+   * writes the row) could say it. A row the other park still lists stays put
+   * and is logged — two parks claiming one entity is the open case of B/C.
+   * Never across a resort boundary.
+   */
+  private async applyParkMoves(
+    moves: PendingParkMove[],
+    listingByPark: Map<string, Set<string>>,
+    parks: { id: string; name: string; destinationId: string | null }[],
+  ): Promise<void> {
+    if (moves.length === 0) return;
+    const parkById = new Map(parks.map((p) => [p.id, p]));
+    const touched = new Set<string>();
+
+    for (const move of moves) {
+      const from = parkById.get(move.fromParkId);
+      const to = parkById.get(move.toParkId);
+      if (!from || !to || !from.destinationId) continue;
+      if (from.destinationId !== to.destinationId) continue;
+
+      const fromListing = listingByPark.get(from.id);
+      if (!fromListing || fromListing.has(move.externalId)) {
+        this.logger.warn(
+          `⏸️  ${to.name}: ${move.table} ${move.name} (${move.externalId}) ` +
+            `stays in ${from.name} — ` +
+            (fromListing
+              ? "that park lists it too"
+              : "that park's listing is unknown this run"),
+        );
+        continue;
+      }
+
+      try {
+        const moved = await this.moveRowToPark(move);
+        if (!moved) continue;
+        touched.add(from.id);
+        touched.add(to.id);
+        this.logger.log(
+          `🚚 Moved ${move.table} ${move.rowId} "${move.name}" ` +
+            `(${move.externalId}) from ${from.name} (${from.id}) to ` +
+            `${to.name} (${to.id}), slug ${moved.oldSlug} → ${moved.newSlug}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `Failed to move ${move.table} ${move.rowId} to ${to.name}: ${e}`,
+        );
+      }
+    }
+
+    await this.evictAndRevalidate(touched);
+  }
+
+  /**
+   * One move, in one transaction. The row takes a slug that is free in its new
+   * park (`-2` on a collision, like an insert); an attraction also stamps
+   * itself as listed, carries its denormalised park columns along, and leaves
+   * its old path in `attraction_slug_aliases` (rules §5). History hangs on the
+   * row id and moves by itself. Shows and restaurants have no alias table, so
+   * their old path simply stops answering. Returns null when the row is no
+   * longer in the park the move was planned from.
+   */
+  private async moveRowToPark(
+    move: PendingParkMove,
+  ): Promise<{ oldSlug: string; newSlug: string } | null> {
+    const table = move.table;
+    return this.mappingRepository.manager.transaction(async (m) => {
+      const [row] = await m.query(
+        `SELECT slug FROM ${table} WHERE id = $1 AND "parkId" = $2 FOR UPDATE`,
+        [move.rowId, move.fromParkId],
+      );
+      if (!row) return null;
+      const taken: { slug: string }[] = await m.query(
+        `SELECT slug FROM ${table} WHERE "parkId" = $1`,
+        [move.toParkId],
+      );
+      const newSlug = generateUniqueSlug(
+        row.slug,
+        taken.map((t) => t.slug),
+      );
+
+      if (table !== "attractions") {
+        await m.query(
+          `UPDATE ${table} SET "parkId" = $2, slug = $3 WHERE id = $1`,
+          [move.rowId, move.toParkId, newSlug],
+        );
+        return { oldSlug: row.slug, newSlug };
+      }
+
+      await m.query(
+        `UPDATE attractions
+            SET "parkId" = $2, slug = $3,
+                last_listed_at = now(), absent_since = NULL
+          WHERE id = $1`,
+        [move.rowId, move.toParkId, newSlug],
+      );
+      for (const f of parkColumnsFollowingAttraction()) {
+        await m.query(
+          `UPDATE ${f.table} SET "${f.parkColumn}" = $2 WHERE "${f.attractionColumn}" = $1`,
+          [move.rowId, move.toParkId],
+        );
+      }
+      await m.query(
+        `INSERT INTO attraction_slug_aliases ("attractionId", slug)
+         VALUES ($1, $2) ON CONFLICT ("attractionId", slug) DO NOTHING`,
+        [move.rowId, row.slug],
+      );
+      return { oldSlug: row.slug, newSlug };
+    });
   }
 
   /**
