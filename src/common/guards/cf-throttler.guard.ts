@@ -2,9 +2,8 @@ import { ExecutionContext, Injectable } from "@nestjs/common";
 import { ThrottlerGuard } from "@nestjs/throttler";
 import { isIP } from "net";
 import {
+  carriesCfOriginSecret,
   carriesThrottleBypassKey,
-  getCfOriginSecret,
-  getCfOriginSecretHeader,
 } from "../throttler/throttler.config";
 
 /**
@@ -36,15 +35,7 @@ export class CfThrottlerGuard extends ThrottlerGuard {
     // headers when the request carries the matching secret header; otherwise
     // the request didn't provably come through Cloudflare → key on the real
     // connection IP. No-op until CF_ORIGIN_SECRET is set.
-    const secret = getCfOriginSecret();
-    if (secret) {
-      const provided = req.headers?.[getCfOriginSecretHeader()];
-      const values = Array.isArray(provided) ? provided : [provided];
-      const verified = values.some(
-        (v) => typeof v === "string" && v === secret,
-      );
-      if (!verified) return realIp;
-    }
+    if (!carriesCfOriginSecret(req.headers)) return realIp;
 
     const cfIp = req.headers?.["cf-connecting-ip"];
     if (typeof cfIp === "string" && isIP(cfIp)) {

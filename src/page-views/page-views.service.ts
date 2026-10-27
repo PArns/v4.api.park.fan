@@ -1,11 +1,11 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { Redis } from "ioredis";
 import { createHmac, randomBytes } from "crypto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { incrementWithWindow } from "../common/redis/rate-limit.util";
 import { addIsoDays } from "../common/utils/date.util";
+import { addressBucket } from "../common/utils/request.util";
 import { buildAttractionUrl, buildParkUrl } from "../common/utils/url.util";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -13,7 +13,9 @@ import { PageViewDay } from "./entities/page-view-day.entity";
 import { isBotUserAgent } from "./bot-user-agent.util";
 import {
   MAX_VIEWS_PER_ADDRESS_PER_DAY,
+  MAX_VIEWS_PER_READER_PER_DAY,
   PAGE_VIEW_KINDS,
+  isPageKeyFor,
   type PageViewKind,
   type PageViewLocale,
 } from "./page-view.constants";
@@ -23,10 +25,29 @@ import type {
   TopPageViewDto,
 } from "./dto/page-view.dto";
 
+/** One reader's views of one page today: address bucket, User-Agent, page. */
 const SEEN_PREFIX = "page-views:seen:";
+
+/** One address bucket's views today, across all pages. */
+const ADDRESS_PREFIX = "page-views:addr:";
 
 /** A minute past midnight UTC, so a key never expires before the day it caps. */
 const SEEN_GRACE_SECONDS = 60;
+
+/**
+ * Storage settings `synchronize` cannot express, as `pg_class.reloptions`
+ * spells them. Every counted view after a page's first that day updates the
+ * same row. At the default fill no page has room for the new version, so 92 %
+ * of those updates were not HOT and left an entry in both indexes for VACUUM;
+ * at 80 % 57 % are HOT and pruned on the page. And the default 20 % would let
+ * autovacuum wait months on a table that only grows, where 1 % runs it every
+ * few days over the few pages that changed. Measured in
+ * docs/frontend/page-views.md.
+ */
+export const PAGE_VIEW_STORAGE_OPTIONS = [
+  "fillfactor=80",
+  "autovacuum_vacuum_scale_factor=0.01",
+] as const;
 
 export interface PageView {
   kind: PageViewKind;
@@ -49,14 +70,13 @@ export function utcDay(now: Date): string {
  * ranking that loses a day of counts under memory pressure ranks wrong without
  * saying so.
  *
- * No address is stored. The cap against counting one reader twice is a Redis
- * counter whose key is an HMAC of day, address and page under
- * `PAGE_VIEWS_HASH_SECRET`, which lives in the environment and never in
- * Redis: a key cannot be turned back into an address without it, and it
- * expires when its UTC day ends.
+ * No address is stored. The two caps are Redis counters whose keys are HMACs
+ * under `PAGE_VIEWS_HASH_SECRET`, which lives in the environment and never in
+ * Redis, and which expire when their UTC day ends: without the secret a key
+ * cannot be traced to an address, and with it only by testing a given one.
  */
 @Injectable()
-export class PageViewsService {
+export class PageViewsService implements OnModuleInit {
   private readonly logger = new Logger(PageViewsService.name);
   private readonly hashSecret: string;
 
@@ -80,14 +100,42 @@ export class PageViewsService {
   }
 
   /**
-   * Count one view, unless it comes from a bot or from an address that has
-   * already counted this page {@link MAX_VIEWS_PER_ADDRESS_PER_DAY} times
+   * Writes {@link PAGE_VIEW_STORAGE_OPTIONS} when they differ. `ALTER TABLE …
+   * SET` takes a lock that blocks neither reads nor writes, and the fill only
+   * shapes pages written from then on. A failure is logged, not thrown: the
+   * counter works without it.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const rows: Array<{ reloptions: string[] | null }> =
+        await this.views.query(
+          `SELECT reloptions FROM pg_class WHERE oid = 'page_view_days'::regclass`,
+        );
+      const current = rows[0]?.reloptions ?? [];
+      if (PAGE_VIEW_STORAGE_OPTIONS.every((o) => current.includes(o))) return;
+      await this.views.query(
+        `ALTER TABLE page_view_days SET (${PAGE_VIEW_STORAGE_OPTIONS.join(", ")})`,
+      );
+      this.logger.log(
+        `page_view_days: ${PAGE_VIEW_STORAGE_OPTIONS.join(", ")}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not set page_view_days storage options: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Count one view, unless it comes from a bot, from a reader who has counted
+   * this page {@link MAX_VIEWS_PER_READER_PER_DAY} times today, or from an
+   * address that has counted {@link MAX_VIEWS_PER_ADDRESS_PER_DAY} views
    * today. Returns whether it was counted.
    */
   async record(view: PageView, now: Date = new Date()): Promise<boolean> {
     if (isBotUserAgent(view.userAgent)) return false;
     const day = utcDay(now);
-    if (!(await this.withinAddressCap(view, day, now))) return false;
+    if (!(await this.withinCaps(view, day, now))) return false;
 
     await this.views.query(
       `INSERT INTO page_view_days (kind, key, locale, day, views)
@@ -100,34 +148,56 @@ export class PageViewsService {
   }
 
   /**
-   * Without an address, or with Redis down, the view counts: the cap is a
-   * guard against one machine, and refusing every reader because a cache is
-   * away would empty the rankings.
+   * The reader is the address bucket (an IPv6 /64) and the User-Agent, not
+   * the address alone: behind a carrier gateway one address is many readers.
+   * The page is kind and key, not the language, so one reader reading a post
+   * in two languages is still one reader. Without an address, or with Redis
+   * down, the view counts: the caps are a guard against one machine, and
+   * refusing every reader because a cache is away would empty the rankings.
    */
-  private async withinAddressCap(
+  private async withinCaps(
     view: PageView,
     day: string,
     now: Date,
   ): Promise<boolean> {
-    if (!view.ip) return true;
-    const key =
+    const bucket = addressBucket(view.ip);
+    if (!bucket) return true;
+    const reader =
       SEEN_PREFIX +
-      createHmac("sha256", this.hashSecret)
-        .update(`${day}|${view.ip}|${view.kind}|${view.key}|${view.locale}`)
-        .digest("hex")
-        .slice(0, 32);
+      this.hash(day, bucket, view.userAgent ?? "", view.kind, view.key);
+    const address = ADDRESS_PREFIX + this.hash(day, bucket);
     const endOfDay = Date.parse(`${addIsoDays(day, 1)}T00:00:00Z`);
     const ttl =
       Math.ceil((endOfDay - now.getTime()) / 1000) + SEEN_GRACE_SECONDS;
     try {
-      const count = await incrementWithWindow(this.redis, key, ttl);
-      return count <= MAX_VIEWS_PER_ADDRESS_PER_DAY;
+      // One round trip; `EXPIRE … NX` on every call heals a key whose first
+      // EXPIRE was lost, as in `incrementWithWindow`.
+      const results = await this.redis
+        .pipeline()
+        .incr(reader)
+        .expire(reader, ttl, "NX")
+        .incr(address)
+        .expire(address, ttl, "NX")
+        .exec();
+      const readerCount = Number(results?.[0]?.[1] ?? 0);
+      const addressCount = Number(results?.[2]?.[1] ?? 0);
+      return (
+        readerCount <= MAX_VIEWS_PER_READER_PER_DAY &&
+        addressCount <= MAX_VIEWS_PER_ADDRESS_PER_DAY
+      );
     } catch (error) {
       this.logger.warn(
         `Page-view cap unavailable, counting: ${(error as Error).message}`,
       );
       return true;
     }
+  }
+
+  private hash(...parts: string[]): string {
+    return createHmac("sha256", this.hashSecret)
+      .update(parts.join("|"))
+      .digest("hex")
+      .slice(0, 32);
   }
 
   /** The first UTC day of a window of `days` days ending today. */
@@ -158,29 +228,65 @@ export class PageViewsService {
 
   /**
    * Everything the admin shows: per kind the total and the split by language,
-   * the most viewed pages with their own split, and the views per day.
+   * the most viewed pages with their own split, and the views per day. With a
+   * `locale` the pages are ranked by that language's views, so a page read in
+   * Dutch is found even though most views are German. The ranking runs in
+   * SQL; only the top pages' rows come back.
    */
   async adminOverview(
     days: number,
     limit: number,
+    locale?: PageViewLocale,
     now: Date = new Date(),
   ): Promise<AdminPageViewsResponseDto> {
     const from = this.windowStart(days, now);
-    const [byKey, byDay]: [
+    const [totals, topRows, byDay]: [
+      Array<{
+        kind: PageViewKind;
+        locale: PageViewLocale;
+        views: string | number;
+      }>,
       Array<{
         kind: PageViewKind;
         key: string;
         locale: PageViewLocale;
         views: string | number;
+        rank: string | number;
       }>,
       Array<{ day: string; kind: PageViewKind; views: string | number }>,
     ] = await Promise.all([
       this.views.query(
-        `SELECT kind, key, locale, SUM(views) AS views
+        `SELECT kind, locale, SUM(views) AS views
          FROM page_view_days
          WHERE day >= $1
-         GROUP BY kind, key, locale`,
+         GROUP BY kind, locale`,
         [from],
+      ),
+      this.views.query(
+        // One pass: the views per page and language, each page's score beside
+        // them (all languages, or the one asked for), ranked per kind. Joining
+        // a second scan back for the split took 2.6 times as long.
+        `WITH per_locale AS (
+           SELECT kind, key, locale, SUM(views) AS views
+           FROM page_view_days
+           WHERE day >= $1
+           GROUP BY kind, key, locale
+         ), scored AS (
+           SELECT kind, key, locale, views,
+                  SUM(views) FILTER (WHERE $2::text IS NULL OR locale = $2)
+                    OVER (PARTITION BY kind, key) AS score
+           FROM per_locale
+         ), ranked AS (
+           SELECT kind, key, locale, views,
+                  DENSE_RANK() OVER (PARTITION BY kind ORDER BY score DESC, key ASC) AS rank
+           FROM scored
+           WHERE score > 0
+         )
+         SELECT kind, key, locale, views, rank
+         FROM ranked
+         WHERE rank <= $3
+         ORDER BY kind, rank`,
+        [from, locale ?? null, limit],
       ),
       this.views.query(
         // As text: the driver turns a `date` into a Date at local midnight,
@@ -188,49 +294,55 @@ export class PageViewsService {
         `SELECT to_char(day, 'YYYY-MM-DD') AS day, kind, SUM(views) AS views
          FROM page_view_days
          WHERE day >= $1
-         GROUP BY day, kind
-         ORDER BY day ASC`,
+         GROUP BY day, kind`,
         [from],
       ),
     ]);
 
     const kinds = await Promise.all(
       PAGE_VIEW_KINDS.map(async (kind) => {
-        const entries = new Map<string, AdminPageViewEntryDto>();
         const byLocale: Partial<Record<PageViewLocale, number>> = {};
         let total = 0;
-        for (const row of byKey) {
+        for (const row of totals) {
           if (row.kind !== kind) continue;
-          const views = Number(row.views);
+          byLocale[row.locale] = Number(row.views);
+          total += Number(row.views);
+        }
+        const entries = new Map<string, AdminPageViewEntryDto>();
+        for (const row of topRows) {
+          if (row.kind !== kind) continue;
           const entry = entries.get(row.key) ?? {
             key: row.key,
             total: 0,
             byLocale: {},
           };
-          entry.total += views;
-          entry.byLocale[row.locale] =
-            (entry.byLocale[row.locale] ?? 0) + views;
+          entry.total += Number(row.views);
+          entry.byLocale[row.locale] = Number(row.views);
           entries.set(row.key, entry);
-          byLocale[row.locale] = (byLocale[row.locale] ?? 0) + views;
-          total += views;
         }
-        const top = [...entries.values()]
-          .sort((a, b) => b.total - a.total || a.key.localeCompare(b.key))
-          .slice(0, limit);
-        return { kind, total, byLocale, top: await this.named(kind, top) };
+        // `topRows` comes ordered by rank, and a Map keeps insertion order.
+        return {
+          kind,
+          total,
+          byLocale,
+          top: await this.named(kind, [...entries.values()]),
+        };
       }),
     );
 
     const daily = new Map<string, Partial<Record<PageViewKind, number>>>();
+    for (let day = from; day <= utcDay(now); day = addIsoDays(day, 1)) {
+      daily.set(day, {});
+    }
     for (const row of byDay) {
-      const entry = daily.get(row.day) ?? {};
-      entry[row.kind] = (entry[row.kind] ?? 0) + Number(row.views);
-      daily.set(row.day, entry);
+      const entry = daily.get(row.day);
+      if (entry) entry[row.kind] = Number(row.views);
     }
 
     return {
       days,
       from,
+      ...(locale && { locale }),
       kinds,
       daily: [...daily.entries()].map(([day, byKind]) => ({ day, byKind })),
     };
@@ -244,7 +356,11 @@ export class PageViewsService {
     kind: PageViewKind,
     entries: AdminPageViewEntryDto[],
   ): Promise<AdminPageViewEntryDto[]> {
-    const ids = entries.map((entry) => entry.key);
+    // Rows written before keys were checked per kind may hold anything, and a
+    // non-UUID inside `IN (…)` on a uuid column fails the whole overview.
+    const ids = entries
+      .map((entry) => entry.key)
+      .filter((key) => isPageKeyFor(kind, key));
     if (ids.length === 0) return entries;
 
     if (kind === "park") {

@@ -25,20 +25,55 @@ export const PAGE_VIEW_LOCALES = ["en", "de", "nl", "fr", "es", "it"] as const;
 export type PageViewLocale = (typeof PAGE_VIEW_LOCALES)[number];
 
 /**
- * A `translationKey` or a UUID: lowercase, digits and inner hyphens. Anything
- * else is refused before it reaches a key or a row.
+ * A `translationKey`: lowercase, digits and inner hyphens. Anything else is
+ * refused before it reaches a key or a row.
  */
 export const PAGE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,118}[a-z0-9])?$/;
 
-/** The longest window a ranking may ask for. */
-export const MAX_WINDOW_DAYS = 90;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The most entries one ranking request returns. */
-export const MAX_TOP_LIMIT = 500;
+/** The kinds keyed by an entity's UUID rather than by a `translationKey`. */
+const UUID_KINDS: readonly PageViewKind[] = ["park", "attraction"];
 
 /**
- * How often one address may count the same page on the same day. Above one,
- * because a household or an office shares an address; low, because the cap is
- * what keeps a script on one machine from moving a ranking.
+ * Whether `key` can name a page of `kind`. A park or a ride is a UUID and
+ * nothing else: a free-form key there would reach an `IN (…)` on a uuid
+ * column and fail the admin's whole overview.
  */
-export const MAX_VIEWS_PER_ADDRESS_PER_DAY = 3;
+export function isPageKeyFor(kind: PageViewKind, key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  return UUID_KINDS.includes(kind)
+    ? UUID_PATTERN.test(key)
+    : PAGE_KEY_PATTERN.test(key);
+}
+
+/**
+ * The windows a public ranking may ask for: the two the site shows and the
+ * admin's longest. A free `days` and `limit` would be a hundred thousand
+ * distinct URLs, each a miss at the edge and an aggregate here.
+ */
+export const TOP_WINDOW_DAYS = [7, 30, 90] as const;
+
+/** The most entries one public ranking returns. */
+export const MAX_TOP_LIMIT = 50;
+
+/** The longest window the admin may ask for. */
+export const MAX_ADMIN_WINDOW_DAYS = 90;
+
+/**
+ * How often one reader may count the same page on the same day. A reader is
+ * an address (an IPv6 /64) and a User-Agent, so a household or an office
+ * behind one address still counts per browser. Above one for a reader who
+ * comes back; low, because a script rotating its User-Agent meets the next
+ * cap.
+ */
+export const MAX_VIEWS_PER_READER_PER_DAY = 3;
+
+/**
+ * How many views one address (an IPv6 /64) may count per UTC day across all
+ * pages. A carrier gateway shares one address among many readers, so this is
+ * generous; it is what keeps one machine from writing a row for every key it
+ * can make up.
+ */
+export const MAX_VIEWS_PER_ADDRESS_PER_DAY = 500;

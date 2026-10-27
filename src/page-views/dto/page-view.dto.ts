@@ -4,20 +4,35 @@ import {
   IsIn,
   IsInt,
   IsOptional,
-  IsString,
-  Matches,
   Max,
   Min,
+  Validate,
+  ValidatorConstraint,
+  type ValidationArguments,
+  type ValidatorConstraintInterface,
 } from "class-validator";
 import {
+  MAX_ADMIN_WINDOW_DAYS,
   MAX_TOP_LIMIT,
-  MAX_WINDOW_DAYS,
-  PAGE_KEY_PATTERN,
   PAGE_VIEW_KINDS,
   PAGE_VIEW_LOCALES,
+  TOP_WINDOW_DAYS,
+  isPageKeyFor,
   type PageViewKind,
   type PageViewLocale,
 } from "../page-view.constants";
+
+/** The key has to fit the kind beside it, see `isPageKeyFor`. */
+@ValidatorConstraint({ name: "pageKeyForKind" })
+class PageKeyForKind implements ValidatorConstraintInterface {
+  validate(key: unknown, args: ValidationArguments): boolean {
+    return isPageKeyFor((args.object as RecordPageViewDto).kind, key);
+  }
+
+  defaultMessage(): string {
+    return "key must be a translationKey, or a UUID for a park or an attraction";
+  }
+}
 
 /** One view, as the frontend's beacon sends it. */
 export class RecordPageViewDto {
@@ -30,8 +45,7 @@ export class RecordPageViewDto {
     description:
       "The post's `translationKey`, or the park's or attraction's UUID.",
   })
-  @IsString()
-  @Matches(PAGE_KEY_PATTERN)
+  @Validate(PageKeyForKind)
   key: string;
 
   @ApiProperty({ enum: PAGE_VIEW_LOCALES, example: "de" })
@@ -50,16 +64,13 @@ export class TopPageViewsQueryDto {
   locale: PageViewLocale;
 
   @ApiPropertyOptional({
-    minimum: 1,
-    maximum: MAX_WINDOW_DAYS,
+    enum: TOP_WINDOW_DAYS,
     default: 30,
     description: "UTC days, today included.",
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_WINDOW_DAYS)
+  @IsIn(TOP_WINDOW_DAYS)
   days: number = 30;
 
   @ApiPropertyOptional({ minimum: 1, maximum: MAX_TOP_LIMIT, default: 10 })
@@ -98,13 +109,27 @@ export class TopPageViewsResponseDto {
 
 /** `GET /v1/admin/page-views`. */
 export class AdminPageViewsQueryDto {
-  @ApiPropertyOptional({ minimum: 1, maximum: MAX_WINDOW_DAYS, default: 30 })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: MAX_ADMIN_WINDOW_DAYS,
+    default: 30,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(MAX_WINDOW_DAYS)
+  @Max(MAX_ADMIN_WINDOW_DAYS)
   days: number = 30;
+
+  @ApiPropertyOptional({
+    enum: PAGE_VIEW_LOCALES,
+    description:
+      "Rank by the views in this language; without it, by all languages. " +
+      "Every entry still carries its split by language.",
+  })
+  @IsOptional()
+  @IsIn(PAGE_VIEW_LOCALES)
+  locale?: PageViewLocale;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 25 })
   @IsOptional()
@@ -160,7 +185,8 @@ export class AdminPageViewKindDto {
 
   @ApiProperty({
     type: [AdminPageViewEntryDto],
-    description: "Most viewed first, across all languages.",
+    description:
+      "Most viewed first, across all languages or in the language asked for.",
   })
   top: AdminPageViewEntryDto[];
 }
@@ -184,9 +210,20 @@ export class AdminPageViewsResponseDto {
   @ApiProperty({ description: "First UTC day counted." })
   from: string;
 
+  @ApiPropertyOptional({
+    enum: PAGE_VIEW_LOCALES,
+    description:
+      "The language the top lists are ranked by, when one was asked for.",
+  })
+  locale?: PageViewLocale;
+
   @ApiProperty({ type: [AdminPageViewKindDto] })
   kinds: AdminPageViewKindDto[];
 
-  @ApiProperty({ type: [AdminPageViewDayDto], description: "Oldest first." })
+  @ApiProperty({
+    type: [AdminPageViewDayDto],
+    description:
+      "Every day of the window, oldest first; a day without views is empty.",
+  })
   daily: AdminPageViewDayDto[];
 }

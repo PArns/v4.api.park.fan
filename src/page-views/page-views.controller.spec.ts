@@ -102,6 +102,38 @@ describe("PageViewsController", () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  it("refuses a park or a ride whose key is no UUID", async () => {
+    for (const body of [
+      { kind: "park", key: "europa-park", locale: "de" },
+      { kind: "attraction", key: "junk", locale: "de" },
+      {
+        kind: "park",
+        key: "3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D",
+        locale: "de",
+      },
+    ]) {
+      await request(app.getHttpServer())
+        .post("/v1/page-views")
+        .send(body)
+        .expect(400);
+    }
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("counts nothing for a browser that sends Do Not Track or Global Privacy Control", async () => {
+    for (const [header, value] of [
+      ["DNT", "1"],
+      ["Sec-GPC", "1"],
+    ]) {
+      await request(app.getHttpServer())
+        .post("/v1/page-views")
+        .set(header, value)
+        .send({ kind: "news", key: "a-news-post", locale: "de" })
+        .expect(204);
+    }
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("accepts a park's UUID as the key", async () => {
     await request(app.getHttpServer())
       .post("/v1/page-views")
@@ -128,16 +160,23 @@ describe("PageViewsController", () => {
     expect(top).toHaveBeenCalledWith("news", "de", 30, 10, expect.any(Date));
   });
 
-  it("refuses a ranking without a language or with a window past 90 days", async () => {
-    await request(app.getHttpServer())
-      .get("/v1/page-views/top?kind=news")
-      .expect(400);
-    await request(app.getHttpServer())
-      .get("/v1/page-views/top?kind=news&locale=de&days=91")
-      .expect(400);
-    await request(app.getHttpServer())
-      .get("/v1/page-views/top?kind=news&locale=de&limit=0")
-      .expect(400);
+  it("refuses a ranking without a language, outside the fixed windows or past 50 entries", async () => {
+    for (const url of [
+      "/v1/page-views/top?kind=news",
+      "/v1/page-views/top?kind=news&locale=de&days=91",
+      "/v1/page-views/top?kind=news&locale=de&days=14",
+      "/v1/page-views/top?kind=news&locale=de&limit=0",
+      "/v1/page-views/top?kind=news&locale=de&limit=51",
+    ]) {
+      await request(app.getHttpServer()).get(url).expect(400);
+    }
     expect(top).not.toHaveBeenCalled();
+  });
+
+  it("serves the 7-day window the news list asks for", async () => {
+    await request(app.getHttpServer())
+      .get("/v1/page-views/top?kind=news&locale=fr&days=7&limit=40")
+      .expect(200);
+    expect(top).toHaveBeenCalledWith("news", "fr", 7, 40, expect.any(Date));
   });
 });

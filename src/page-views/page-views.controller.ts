@@ -20,7 +20,6 @@ import { Request } from "express";
 import { getRateLimitIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
-import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
 import { PageViewsService } from "./page-views.service";
 import {
   AdminPageViewsQueryDto,
@@ -37,7 +36,9 @@ import {
  * relay, so its own address and User-Agent are the request's. The write
  * answers 204 whether or not the view was counted: a caller that could tell a
  * counted view from a refused one could probe the cap and the bot rule, and
- * nothing the beacon does depends on the answer.
+ * nothing the beacon does depends on the answer. A browser that sends Do Not
+ * Track or Global Privacy Control is not counted even if a page's beacon
+ * failed to ask first.
  */
 @ApiTags("page-views")
 @Controller("page-views")
@@ -51,18 +52,22 @@ export class PageViewsController {
     summary: "Count one page view",
     description:
       "Sent by the frontend once a reader has stayed on a post, park or ride " +
-      "page for a few seconds. Bots are not counted, and one address counts " +
-      "the same page at most three times a day. Always 204.",
+      "page for a few seconds. Bots, `DNT: 1` and `Sec-GPC: 1` are not " +
+      "counted; one reader counts a page at most three times a day, one " +
+      "address 500 views a day. Always 204.",
   })
   @ApiResponse({ status: 204 })
   @ApiResponse({
     status: 400,
-    description: "Unknown kind or locale, or a malformed key.",
+    description:
+      "Unknown kind or locale, or a key that is neither a `translationKey` " +
+      "(posts) nor a UUID (parks, attractions).",
   })
   async record(
     @Body() body: RecordPageViewDto,
     @Req() request: Request,
   ): Promise<void> {
+    if (request.get("dnt") === "1" || request.get("sec-gpc") === "1") return;
     await this.pageViews.record({
       kind: body.kind,
       key: body.key,
@@ -81,6 +86,11 @@ export class PageViewsController {
       "ones it does not know.",
   })
   @ApiResponse({ status: 200, type: TopPageViewsResponseDto })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Unknown kind or locale, `days` not 7, 30 or 90, `limit` over 50.",
+  })
   async top(
     @Query() query: TopPageViewsQueryDto,
   ): Promise<TopPageViewsResponseDto> {
@@ -106,7 +116,6 @@ export class PageViewsController {
 @ApiSecurity("admin-auth")
 @Controller("admin/page-views")
 @UseGuards(AdminAuthGuard)
-@UseInterceptors(AdminAuditInterceptor)
 export class AdminPageViewsController {
   constructor(private readonly pageViews: PageViewsService) {}
 
@@ -122,6 +131,6 @@ export class AdminPageViewsController {
   overview(
     @Query() query: AdminPageViewsQueryDto,
   ): Promise<AdminPageViewsResponseDto> {
-    return this.pageViews.adminOverview(query.days, query.limit);
+    return this.pageViews.adminOverview(query.days, query.limit, query.locale);
   }
 }
