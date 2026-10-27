@@ -1,64 +1,65 @@
-# Data Ingestion Architecture
+# Data ingestion: live wait times from several sources
 
-## Overview
-The API aggregates data from multiple external sources to ensure high availability and coverage. A single park (e.g., Europa-Park) might be tracked by multiple providers.
+Where live wait times and statuses come from, how several sources for one park are merged, and how
+waits are normalised before they reach `queue_data`. Open this before adding a source or changing how
+a reading is stored. Opening hours: [Schedule sync](schedule-sync-and-calendar.md); what the API
+serves when a source stops reporting: [Reverse reconciliation](reverse-reconciliation.md) and
+[status regimes](attraction-status/status-regimes.md).
 
-## The Orchestrator
-**Service**: `MultiSourceOrchestrator` (`src/external-apis/data-sources/multi-source-orchestrator.service.ts`)
+## Sources
 
-Instead of fetching from a single API, we define a **Strategy** for each park.
+| Source | Client | Role |
+| --- | --- | --- |
+| ThemeParks.wiki | `src/external-apis/themeparks` | Base source: live data, `/children` metadata, schedules. Rate limits: [schedule sync](schedule-sync-and-calendar.md#the-upstream-budget-and-why-the-bulk-run-is-the-only-job-that-spends-it) |
+| Queue-Times.com | `src/external-apis/queue-times` | Live waits and lands; the only source for some parks |
+| wartezeiten.app | `src/external-apis/wartezeiten` | Live waits for German/European parks; opening times (`wartezeiten-schedule`). Parks created from it alone are whitelisted in `data-sources/config/wartezeiten-only-parks.ts` |
 
-### Strategies
-1.  **Single Source**: Just use one reliability provider (e.g., `THEMEPARKS`).
-2.  **Fallback**: Try Primary -> if fail/empty -> Try Secondary (e.g., `THEMEPARKS` -> `QUEUE_TIMES`).
-3.  **Merge**: Fetch from all, combine unique attractions (e.g., Source A tracks rides, Source B tracks shows).
+Not live data: `six-flags` (ride heights), `wikidata` (ride stats), `nager-date`, `open-holidays`,
+`korea` (holidays, [holiday sources](holiday-sources-outside-europe.md)), `weather` (Open-Meteo,
+[weather](weather.md)), `geocoding`.
 
-## Conflict Resolution
-**Service**: `ConflictResolverService`
+## One park, several sources
 
-When two sources report different wait times for the *same* attraction:
-- We prioritize "Trusted" sources (configured in metadata).
-- **Sanity Check**: We discard data that looks "stuck" (unchanged for > 2 hours) if a fresher source is available.
-- **Normalization**: All statuses are mapped to our internal enum (`OPERATING`, `DOWN`, `CLOSED`).
+`WaitTimesProcessor` (queue `wait-times`, every 5 min) asks `MultiSourceOrchestrator.fetchParkLiveData`
+(`src/external-apis/data-sources/`) for every source the park has an external id for, in parallel;
+`ConflictResolverService.aggregateParkData` merges them:
+
+- **The wiki is the anchor.** Its entities are added first; Queue-Times and wartezeiten entities are
+  matched to them by `normalizeForMatching` name, exact first, then a string similarity above 0.9 for
+  names longer than five characters. Unmatched entities are added. Lands come from Queue-Times only;
+  operating hours from the wiki, falling back to wartezeiten.
+- **Wait time consensus:** with three values, two that agree win, else the median; with two, the
+  mean; then `roundToNearest5Minutes`.
+- **Status:** a wiki CLOSED or DOWN is overruled when another source reports OPERATING with a wait of
+  at least 5 min (the wiki can lag on "closed").
+
+Park-to-park matching across sources (discovery, `EntityMatcherService`) uses fuzzy names plus
+geography; forced aliases for renamed parks live in `data-sources/config/manual-park-matches.ts`.
+Attraction-level mappings are written by `EntityMappingsProcessor` into `external_entity_mapping`
+(and `attractions.queue_times_entity_id`); `WaitTimesProcessor` resolves live entities through them
+as `<source>:<externalId>`.
 
 ### Name matching keeps a trailing country code
 
-`normalizeForMatching` (`src/common/utils/slug.util.ts`) does not strip a suffix like ` (DK)`. In the data it marks the language of a show, not the source of a duplicate: on 2026-10-13 exactly 3 rows carried one, all in `shows` at LEGOLAND Billund (`V.I.M. Dance Party (DK)`, `V.I.M. Dance Party (UK)`, `Playdate with Peppa & George (UK)`), and no attraction or park name did. Merging two different performances costs more than a missed merge, and the fuzzy branch of `EntityMatcherService` (`dice > 0.9`) still catches a real cross-source duplicate. The rule applies to shows and attractions alike.
+`normalizeForMatching` (`src/common/utils/slug.util.ts`) does not strip a suffix like ` (DK)`. In the
+data it marks the language of a show, not a duplicate: on 2026-10-13 exactly 3 rows carried one, all
+LEGOLAND Billund shows (`V.I.M. Dance Party (DK)` / `(UK)`). Merging two performances costs more than
+a missed merge, and the fuzzy branch still catches a real cross-source duplicate. The same applies to
+attractions.
 
-### Wait times are stored in five-minute steps
-Every STANDBY, SINGLE_RIDER and PAID_STANDBY wait is rounded with `roundToNearest5Minutes`
-in `QueueDataService.buildQueueCandidates`, the one place every source's row passes through.
-The one exception is 13: Disney posts it for a walk-on, so `roundToNearest5Minutes` returns
-exactly 13 unchanged (`WALK_ON_WAIT_MINUTES`) and it is never stored or served as 15.
-The park, attraction and favorites payloads serve `queue_data.waitTime` as stored, so a value
-that reaches the table off the grid reaches the user off the grid.
+## Wait times are stored in five-minute steps
 
-The rounding in `ConflictResolverService` does not cover this. It writes the merged entity's
-`waitTime`, while `WaitTimesProcessor.adaptEntityLiveData` stores the source's `queue` object
-whenever one is present (ThemeParks.wiki always, Wartezeiten for a ride with a wait). Most feeds
-post multiples of five, but not all: Movie Park's rides read 61 on 2026-10-04, and the wiki sent
-Europa-Park 1, 3 and 6 on 2026-10-05 (PAR-715). A consequence of the same split: with several
-sources, the stored wait is the queue object's figure, not the resolver's consensus.
+Every STANDBY, SINGLE_RIDER and PAID_STANDBY wait is rounded with `roundToNearest5Minutes` in
+`QueueDataService.buildQueueCandidates`, the one place every source's row passes through. The
+exception is 13: Disney posts it for a walk-on, so it is kept exactly (`WALK_ON_WAIT_MINUTES`). The
+park, attraction and favorites payloads serve `queue_data.waitTime` as stored, so a value off the
+grid in the table is off the grid for the user.
 
-## Reverse Reconciliation (stale attraction auto-close)
-Upstream sources sometimes stop reporting an attraction entirely (e.g. seasonal Halloween mazes after the event ends). Without a counter-signal the last-known `OPERATING` status would remain indefinitely. See [`reverse-reconciliation.md`](./reverse-reconciliation.md) for the mechanism that writes a `CLOSED` entry once an attraction has not been seen in any source for >24h.
+The rounding in `ConflictResolverService` does not cover this: it writes the merged entity's
+`waitTime`, while `WaitTimesProcessor.adaptEntityLiveData` stores the source's `queue` object whenever
+one is present (always for the wiki, and for wartezeiten when a ride has a wait). Feeds do send
+off-grid values (Movie Park 61 on 2026-10-04, Europa-Park 1, 3 and 6 on 2026-10-05, PAR-715). With
+several sources, the stored wait is therefore the queue object's figure, not the consensus.
 
-## Supported Sources
-
-### 1. ThemeParks.wiki (Direct API)
-- **Location**: `src/external-apis/themeparks`
-- **Description**: Direct client for the [ThemeParks.wiki REST API](https://api.themeparks.wiki/docs/v1/). 
-- **Role**: **Primary** source for most major supported parks (Disney, Universal, etc.).
-- **Data**: Wait Times, Status, Opening Hours, Forecasts.
-
-### 2. Queue-Times.com
-- **Location**: `src/external-apis/queue-times`
-- **Description**: Scraper/API client for Queue-Times.com.
-- **Role**: **Fallback** or Primary for smaller parks not supported by the main library.
-
-### 3. Wartezeiten
-- **Location**: `src/external-apis/wartezeiten`
-- **Role**: Specific scrapers for German/European parks.
-
-### 4. Direct/Custom
-- Some parks have custom implementations (e.g., `Efteling` if direct integration is needed).
+A row is written only when the value changes, plus an hourly heartbeat (`isSignificantChange`,
+[reverse reconciliation](reverse-reconciliation.md#the-heartbeat-writehourlyheartbeats)).

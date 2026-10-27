@@ -27,7 +27,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 /**
  * Coverage for the typical-day-peak baseline (the calendar's crowd-level
  * reference: a day's peak ÷ a typical day's peak). See
- * docs/analytics/crowd-level-typical-day-peak.md.
+ * docs/analytics/crowd-levels.md.
  */
 describe("AnalyticsService — typical-day-peak baseline", () => {
   let service: AnalyticsService;

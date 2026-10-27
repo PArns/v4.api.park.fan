@@ -514,8 +514,9 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Removed retired "nf-score-comparison-cron" job');
     }
 
-    // PCN intraday shadow (design doc §12). Runs in the shadow — writes pcn_forecasts /
-    // pcn_intraday_comparisons only; CatBoost stays the served champion until a gate win.
+    // PCN intraday shadow (docs/ml/pcn.md#shadow-boards). Runs in the shadow — writes
+    // pcn_forecasts / pcn_intraday_comparisons only; CatBoost stays the served champion
+    // until a gate win.
     // train-pcn at 08:30 UTC: after TFT (starts 03:00, ~2.5h) and CatBoost (starts 06:00,
     // ~45min) have both finished, so the shared-GPU training spikes never overlap.
     const hasPcnTrainCron = await this.hasRepeatableJob(

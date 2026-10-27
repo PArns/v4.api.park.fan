@@ -1948,7 +1948,7 @@ def crowd_level_for(
     The TYPICAL-DAY-PEAK baseline comes first so the ML service's crowd levels
     match the calendar (100% = a typical day = moderate); P50 when it is absent.
     Without either there is no baseline to rate against, and the answer is
-    ("unknown", 0.0) (rule 3, docs/rules/crowd-levels.md) - never a placeholder
+    ("unknown", 0.0) (docs/rules/crowd-levels.md) - never a placeholder
     "moderate", and never the ride's own rolling_avg_7d, which rates on a
     different scale than the park path does (PAR-943). The 0.0 baseline keeps
     the API's served re-tiering (PCN / Chronos, gated on baseline > 0) off it.

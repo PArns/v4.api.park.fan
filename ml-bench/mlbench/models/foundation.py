@@ -121,7 +121,8 @@ DAY_COVS = ["is_weekend", "dow_sin", "dow_cos", "is_holiday_primary", "is_school
 WX_COVS = ["temp_max", "precip_sum"]
 #: backends that treat a NaN covariate as missing (TimesFM interpolates it instead)
 NAN_MASKING_BACKENDS = ("chronos2", "tirex2", "toto2", "tabpfn_ts")
-#: licence verdicts of the weights (docs/ml/foundation-models.md quotes the line each rests on)
+#: licence verdicts of the weights (docs/ml/foundation-models/README.md#licences quotes the line each
+#: rests on)
 LICENCES = ("servable", "benchmark-only", "unclear")
 EMPTY = pd.DataFrame(columns=["attraction_id", "slot_start_utc", "q50", "q80", "q95"])
 

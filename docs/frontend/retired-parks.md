@@ -1,5 +1,8 @@
 # Retired parks (`retiredAt` on a park)
 
+The contract for a park that closed for good: the `retiredAt`/`retiredReason` fields,
+how to render it, which lists drop it, and how it is written.
+
 A park that closed for good — Six Flags America, last day 2025-11-02 — is
 **retired**, not deleted. It keeps its URL and its history, and the park
 endpoint says it is closed:
@@ -11,7 +14,8 @@ endpoint says it is closed:
 }
 ```
 
-Both fields are `null` while the park operates. Render a retired park the way
+Both fields are absent (null, stripped by `ExcludeNullInterceptor`) while the park
+operates. Render a retired park the way
 a ride retired as closed is rendered: closed permanently since that date, the
 reason with its source, no live wait times, no crowd level, no forecast, no
 opening hours. Its rides are retired on the same day, so every ride page of the

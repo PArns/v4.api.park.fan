@@ -1,236 +1,90 @@
-# The merge path's E2E gate
+# The merge path's E2E schema
 
-> **2026-09-10** — why `repairDuplicates` had no end-to-end coverage until now,
-> and the rule that keeps the test schema from drifting away from production.
->
-> **2026-10-12, PAR-870** — `shape_forecasts` and `catboost_daily_forecasts`
-> were retired together with their writers (the shape-service and the
-> `score-comparison` job), so the entity-less tables are now **two**. The lists
-> have also grown since this page was written: they name **42 tables**, forty of
-> them entities. The history below keeps the September numbers.
+How the E2E suite builds a schema the park and attraction merge can run against: the tables with no
+entity, hypertables, the guards that fail loudly, and the precondition that silently switched a merge
+spec off once. Open it before adding a table to `src/parks/utils/merge-dependencies.ts`, a hypertable, or
+a merge E2E case. Why the schema comes from the entities at all: [the entities are the
+schema](../rules/the-entities-are-the-schema.md).
 
-## Why there was no test
+## Tables without an entity: read the DDL, never copy it
 
-`ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES`, `PARK_INLINE_DEPENDENCIES` and
-`PARK_TABLES_HANDLED_INLINE` (`src/parks/utils/merge-dependencies.ts`) name
-**34 tables** between them. Thirty are TypeORM entities, so `synchronize: true`
-in `test/global-setup.ts` creates them. Four are not:
+`ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES`, `PARK_INLINE_DEPENDENCIES` and `PARK_TABLES_HANDLED_INLINE`
+list every table a merge touches. `synchronize: true` in `test/global-setup.ts` creates the entity tables.
+Four are written by the Python services and have no entity:
 
-```
-pcn_forecasts · shape_forecasts · tft_forecasts · catboost_daily_forecasts
-```
+| Table                          | DDL read from                                   |
+| ------------------------------ | ----------------------------------------------- |
+| `pcn_forecasts`                | `pcn-service/db.py`                             |
+| `tft_forecasts`                | `nf-service/db.py`                              |
+| `tft_forecasts_shadow`         | `nf-service/db.py` (`LIKE tft_forecasts`, PAR-1041) |
+| `tft_forecasts_shadow_drivers` | `nf-service/db.py` (`LIKE tft_forecasts`, PAR-1057) |
 
-They exist in production, created at runtime by the service that writes them —
-three Python sub-services and one NestJS processor — not by TypeORM.
-`applyMergeDependencies` walks its list straight through, so on the test schema
-the first one it reached aborted the whole merge:
+`test/helpers/ml-forecast-tables.ts` (`ML_FORECAST_TABLE_SOURCES`) **extracts the `CREATE TABLE IF NOT
+EXISTS` statement from the writer's own file**: a plain text scan that matches parentheses by counting,
+after stripping line comments, so it works on a Python `text("""…""")` block and a TypeScript template
+alike. A copied DDL would drift the first time a service added a column, and the suite would keep passing
+against a table production no longer has. If the statement moves, setup throws naming the file, instead of
+a 42P01 inside the merge transaction that reads like a merge bug.
 
-```
-QueryFailedError: relation "pcn_forecasts" does not exist
-  at applyMergeDependencies (src/parks/utils/merge-dependencies.ts:392)
-```
+Without these tables the first merge E2E aborted with `relation "pcn_forecasts" does not exist` before any
+assertion ran, which is why `repairDuplicates` had no E2E coverage until 2026-09-10. A unit test with a
+recorded manager proves a statement is issued; only a real database proves the transaction commits.
+(PAR-100 and PAR-121 counted eight entity-less tables, including the four `*_p50/p90_baselines`, which
+have entities: their measurement used `CREATE TABLE IF NOT EXISTS`, a silent no-op on a table
+`synchronize` had already made.)
 
-That is a wall on the first run, not an oversight. Anyone writing a merge E2E
-hit it before a single assertion could execute, and the path stayed uncovered —
-which is precisely why the three faults PAR-90 fixed lived as long as they did.
-A unit test with a recorded manager proves a statement is **issued**; only a
-real database proves the transaction **commits**.
+**No foreign keys are added**, matching production: these writers do not share the entity graph, and a
+stricter test schema would turn a forgotten dependency into a loud 23503 instead of the quiet orphan the
+merge code exists to prevent.
 
-> Note for anyone reading the older tickets: PAR-100 and PAR-121 both say
-> **eight** tables lack an entity, listing the four `*_p50/p90_baselines`
-> alongside these. That is wrong — all four baseline tables have had entities
-> since before `e099daa`. The count is four. The earlier measurement used
-> `CREATE TABLE IF NOT EXISTS`, which is a silent no-op on a table `synchronize`
-> had already made.
+**In production these tables appear only on the service's first write.** `tft_forecasts_shadow` did not
+exist between the API deploy and the first shadow run (and never with `NF_GRID_SHADOW=false`), so the
+merge's move on it rolled back every attraction merge, `repairDuplicates` included, while the suite stayed
+green. Dependencies on these raw-SQL tables therefore carry `mayBeAbsent: true`, and
+`applyMergeDependencies` skips them when `to_regclass` is null. A new service-written table needs the
+flag; an entity table never gets it (a missing one is a bug, and skipping it would orphan rows).
 
-## The rule: read the DDL, never copy it
+## Hypertables come from one list
 
-`test/helpers/ml-forecast-tables.ts` creates the entity-less tables by
-**extracting the `CREATE TABLE` statement from the file that issues it**:
+Production has seven compressed hypertables, and the merge writes to all of them: `queue_data`,
+`forecast_data`, `weather_data`, `show_live_data`, `restaurant_live_data`, `queue_data_aggregates`,
+`wait_time_predictions`. `synchronize` makes none of them a hypertable. They are `HYPERTABLES` in
+`src/database/hypertables.ts` (table, partitioning column, `chunk_time_interval`, compression settings),
+which `TimescaleInitService.initializeHypertables` applies in production and `global-setup.ts` imports.
+Before that list existed the test setup converted one, then three, tables by hand, so cases about
+compressed rows were measuring plain tables. Adding a hypertable is one entry there.
 
-| Table                          | Source of truth                                                         |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `pcn_forecasts`                | `pcn-service/db.py`                                                     |
-| `tft_forecasts`                | `nf-service/db.py`                                                      |
-| `tft_forecasts_shadow`         | `nf-service/db.py` (`LIKE tft_forecasts`, so listed after it; PAR-1041) |
-| `tft_forecasts_shadow_drivers` | `nf-service/db.py` (`LIKE tft_forecasts`; PAR-1057)                     |
+Two consequences that are easy to miss:
 
-Until PAR-870 (2026-10-12) the table also listed `shape_forecasts`
-(`shape-service/db.py`) and `catboost_daily_forecasts`
-(`src/queues/processors/nf-forecast.processor.ts`); both writers are gone and
-the tables are dropped in production after a `pg_dump`.
+1. **`TimescaleInitService.enableCompression` is a silent no-op on a plain table**, and the first suite
+   to boot decides the compression state later ones inherit. A test that toggles compression reads the
+   current state and restores only what it changed (`park-merge.e2e-spec.ts` does); a hard
+   `SET (timescaledb.compress = false)` disables it for every later file and orphans the policy.
+2. **`create_hypertable` failures only warn**, so a table can quietly stay plain.
+   `park-merge.e2e-spec.ts` asserts every `HYPERTABLES` entry against
+   `timescaledb_information.dimensions` (name, column, interval compared in Postgres) and the list's own
+   length first.
 
-A copied DDL is a second definition of a schema this repo owns no migration
-for, and it drifts the first time a sub-service adds a column: the suite keeps
-passing against a table production no longer has. Reading the writer's own
-statement cannot drift. If the statement is renamed or moved, the extraction
-finds nothing and throws with the file it looked in — loudly, at setup, rather
-than as a 42P01 inside the merge transaction that reads like a merge bug.
+Compression settings are fields on the same constant: only `wait_time_predictions` has a `segmentBy`,
+as in production. Segmenting by a column the merge rewrites would make the test easier than production.
 
-The extraction is a plain text scan, so it works on a Python `text("""…""")`
-block and a TypeScript template literal alike. Parentheses are matched by
-counting (`varchar(16)`, `(now() AT TIME ZONE 'UTC')::date`), with line comments
-stripped first so an unbalanced one inside a comment cannot throw the count off.
+## Guards a new dependency must pass
 
-**No foreign keys are added**, matching production. These tables are written by
-services that do not share this schema's entity graph — which is exactly why
-`ATTRACTION_DEPENDENCIES` describes them as "no FK, so silent orphans if
-forgotten". A test schema stricter than production would turn a forgotten
-dependency into a loud 23503 instead of the quiet orphan the merge code exists
-to prevent.
+1. **Schema guard**: `test/e2e/park-merge.e2e-spec.ts` checks every table in the four lists with
+   `to_regclass`. A dependency on a table with neither an entity nor an entry in `ml-forecast-tables.ts`
+   fails there, by name.
+2. **Truncation**: `test/setup-e2e.ts` empties the entity tables plus `ML_FORECAST_TABLES`. A table in
+   neither is never emptied, and one spec's rows become the next spec's start.
 
-## The E2E schema has a table production may not have yet
+## A gate in front of the path can switch a spec off
 
-> **2026-10-24, PAR-1041** — the opposite direction of the rule above.
+`repairDuplicates` merges only pairs `ParkValidatorService.findDuplicates` returns as `safe`
+(`sharedEntityId && nameSimilarity >= 0.95`, `AUTO_MERGE_NAME_SIMILARITY`, since PAR-262). The fixture's
+`winner-park` / `ghost-park` scored 0.4211, so no merge ran, and every assertion failed against an
+untouched database in a way that read like a rollback. `expectPairIsMergeable()` now asserts the
+precondition before the call. **Where the path under test sits behind a gate, the fixture satisfying the
+gate is part of the contract and is asserted like one.**
 
-Reading the writer's DDL makes every sub-service table exist from the first
-test, but in production these tables only appear on the sub-service's **first
-write**. `tft_forecasts_shadow` did not exist between the API deploy and the
-first nightly shadow run (and never would with `NF_GRID_SHADOW=false`), so the
-merge's `move` on it was a 42P01 that rolled back every attraction merge —
-including `repairDuplicates`, which `syncParks` awaits — while the suite stayed
-green. Dependencies on these raw-SQL tables (`pcn_forecasts`, `tft_forecasts`,
-`tft_forecasts_shadow`, `tft_forecasts_shadow_drivers`) therefore carry `mayBeAbsent: true`, and
-`applyMergeDependencies` skips them when `to_regclass` is null (unit test in
-`merge-dependencies.spec.ts`). A new sub-service table needs the flag too.
-Entity tables never get it: `synchronize` creates them, so a missing one is a
-bug, and skipping it would orphan rows silently.
-
-## A table can exist and still be the wrong kind
-
-> **2026-09-15, PAR-172** — the second axis of the same drift.
-
-The rule above is about tables the test schema does not _have_. A table it does
-have can still be shaped differently from production, and that is quieter,
-because every `to_regclass` check above passes.
-
-Production runs **seven** hypertables, all compressed, and the merge writes to
-every one of them:
-
-| Table                   | Where the merge touches it                     | Partitioning column |
-| ----------------------- | ---------------------------------------------- | ------------------- |
-| `queue_data`            | `ATTRACTION_DEPENDENCIES`                      | `timestamp`         |
-| `show_live_data`        | `SHOW_DEPENDENCIES`                            | `timestamp`         |
-| `restaurant_live_data`  | `RESTAURANT_DEPENDENCIES`                      | `timestamp`         |
-| `weather_data`          | `mergeParks` step 4                            | `date`              |
-| `wait_time_predictions` | `ATTRACTION_DEPENDENCIES`                      | `createdAt`         |
-| `forecast_data`         | `ATTRACTION_DEPENDENCIES`                      | `createdAt`         |
-| `queue_data_aggregates` | `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES` | `hour`              |
-
-`synchronize: true` makes none of them a hypertable. `global-setup.ts` has to
-convert them itself, and it did so from a hand-written list: one entry until
-PAR-172, three until PAR-234. So the merge's `SET LOCAL
-timescaledb.max_tuples_decompressed_per_dml_transaction = 0` — step 0, lifted
-once for the whole transaction — applied to nothing the suite touched, and any
-case asserting what a merge does to compressed rows was measuring a plain
-table.
-
-**That list is gone.** The seven are `HYPERTABLES` in
-`src/database/hypertables.ts`, as data: table, partitioning column,
-`chunk_time_interval` and the compression settings.
-`TimescaleInitService.initializeHypertables` iterates it, so production's
-schema comes from the same constant the test schema does, and
-`global-setup.ts` imports it rather than repeating it. Adding a hypertable is
-one line in one file; it reaches the test schema and the assertion below
-without anyone remembering to copy it.
-
-It drifted twice for the reason a copy always does, and both times quietly:
-`to_regclass` passes on a plain table, and the only other thing that would have
-noticed is the premise assertion inside the compressed-chunk case.
-
-**Two things this costs that are easy to miss:**
-
-1. **`TimescaleInitService.enableCompression` is a silent no-op on a
-   non-hypertable.** Every suite that boots `AppModule` runs it, and it looked
-   like it was configuring compression all along. It takes hold the moment a
-   table becomes a hypertable, which means the first suite to boot decides the
-   compression state the later ones inherit. A test that toggles compression
-   therefore reads the current state and puts back only what it changed —
-   `park-merge.e2e-spec.ts` does; a hard `SET (timescaledb.compress = false)`
-   disables it for every later file and orphans the policy.
-2. **`create_hypertable` failures only warn.** That is deliberate — a suite
-   without TimescaleDB should still run — but it means a table can quietly stay
-   plain. `park-merge.e2e-spec.ts` asserts every entry of `HYPERTABLES` against
-   `timescaledb_information.dimensions` — name, partitioning column and chunk
-   interval, the interval compared in Postgres because `1 day` and `24:00:00`
-   are the same one — so a silent fallback fails as a named expectation rather
-   than as a case that passes for the wrong reason. The case asserts the
-   constant's own length first: it is the expectation, so a shortened list would
-   pass while leaving tables plain.
-
-**And compression settings are read from the writer too**, for the same reason
-the DDL is — they are fields on the same constant. `HYPERTABLES` gives
-`wait_time_predictions` a `segmentBy` and nothing else one, which is what
-production has (measured 2026-09-17: `compression_settings` holds three rows,
-all of them that table's). Segmenting by the column a merge rewrites lets TimescaleDB
-decompress one segment instead of every batch the rows sit in — an easier case
-than the one production runs, and green for the wrong reason.
-
-## Two things a new dependency must not slip past
-
-1. **The schema guard.** `test/e2e/park-merge.e2e-spec.ts` checks every table in
-   the four dependency lists against `to_regclass`. A new dependency on a table
-   with neither an entity nor an entry in `ml-forecast-tables.ts` fails there,
-   named, instead of surfacing as 42P01 mid-merge.
-2. **Truncation.** `test/setup-e2e.ts` empties `entityMetadatas` plus
-   `ML_FORECAST_TABLES`. A table in neither list is never emptied between
-   tests, and one spec's rows become the next spec's starting state.
-
-## The spec is not empty
-
-A green test proves nothing until it is shown it can go red. Rolling only
-`parks.service.ts` and `merge-dependencies.ts` back, with the test harness left
-as it is:
-
-| Commit                              | Result                                                                             | Where it dies                                                           |
-| ----------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `a045850~1` — before #245           | **42703** `column "attractionId" does not exist`                                   | `parks.service.ts:632`, `UPDATE prediction_accuracy SET "attractionId"` |
-| `a045850` — after #245, before #246 | **23503** `violates foreign key constraint "FK_f6d…014" on table "park_occupancy"` | the `DELETE FROM parks`                                                 |
-| `main`                              | **green**                                                                          | —                                                                       |
-
-Each stand dies on a _different_ statement, one level further in. That is the
-answer to why this survived so long: without a real database, none of the three
-is visible.
-
-The schema guard has to come out for that counter-check — it imports
-`PARK_INLINE_DEPENDENCIES`, which #245 introduced, so on the older commits the
-suite fails to compile instead of failing an assertion. A compile error is not
-the counter-check.
-
-## A gate in front of the path can switch the spec off without touching it
-
-The counter-check above answers "can this test go red". It does not answer the
-question that actually took this suite down: **does the call under test still
-reach the code being asserted about?**
-
-Since PAR-262 (#322), `repairDuplicates` does not merge every pair sharing a
-Queue-Times id. It merges the ones `ParkValidatorService.findDuplicates` also
-returns as `safe`, and `safe` is `sharedEntityId && nameSimilarity >= 0.95`
-(`AUTO_MERGE_NAME_SIMILARITY`). An unsafe pair is logged and skipped.
-
-The fixture named its two parks `winner-park` and `ghost-park`. Measured with
-`calculateNameSimilarity`, that pair scores **0.4211**, so `findDuplicates` did
-not list it at all, the verdict lookup returned `undefined`, and the loop hit
-its `continue`. No merge ran. Every assertion in the case — ghost park gone,
-time series on the winner, no orphans — then failed against a database nobody
-had touched, and the first of them, `parks WHERE id = GHOST_PARK` returning 1,
-read like the merge had rolled back. It had not: it had never started.
-
-The shape is worth naming because the schema guard does not catch it and the
-counter-check above does not either. A precondition added to the production path
-after a spec was written can make that spec assert about a call that no longer
-happens, and it fails **downstream of the reason**, which is where the reading
-time goes.
-
-What it costs to close: assert the precondition, in the test, before the call.
-`expectPairIsMergeable()` reads `findDuplicates()` and pins that the seeded pair
-is listed, shares its Queue-Times id, carries no `reviewReason` and is `safe`.
-Move the threshold and that assertion fails, naming the verdict, instead of a
-count two hundred lines below it. The general rule: **where the path under test
-is behind a gate, the fixture satisfying that gate is part of the contract and
-is asserted like one.**
-
-## Related
-
-- [Attraction Status & Seasonality](../architecture/attraction-status-and-seasonality.md) — duplicate detection and the review marks that keep a settled verdict settled.
-- `src/parks/utils/merge-dependencies.ts` — the lists themselves, with the reasoning per table.
+A spec is also only trusted once it has been seen red: with only `parks.service.ts` and
+`merge-dependencies.ts` rolled back, `a045850~1` fails with 42703 and `a045850` with 23503 (each one
+statement further in), and `main` passes.

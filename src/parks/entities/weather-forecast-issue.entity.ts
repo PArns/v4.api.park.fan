@@ -10,7 +10,7 @@ import { Column, Entity, PrimaryColumn } from "typeorm";
  *
  * Plain table, no FK and no hypertable: ~230 MB/yr
  * (docs/architecture/covariate-source.md §3.6), below the size where a
- * TimescaleDB job queueing for a lock pays off (db-health-runbook §0b). The PK
+ * TimescaleDB job queueing for a lock pays off (docs/troubleshooting/timescaledb-lock-queues.md). The PK
  * is the only index the design names.
  */
 @Entity("weather_forecast_issues")

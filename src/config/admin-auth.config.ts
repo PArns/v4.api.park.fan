@@ -18,9 +18,8 @@ import { getThrottleBypassKeys } from "../common/throttler/throttler.config";
  * attractions or flush every cache with no credential whatsoever, and nothing
  * that happened was attributable to anyone. Named sessions replace that, but
  * the shared secret cannot simply vanish: it is what the maintenance scripts
- * and the curation runbooks in todo.md still send. So it stays, demoted to a
- * deprecated path that logs every use, and can be switched off the day nothing
- * depends on it.
+ * still send. So it stays, demoted to a deprecated path that logs every use,
+ * and can be switched off the day nothing depends on it.
  */
 
 /** The deprecated shared secret. Empty ⇒ the legacy path is unavailable. */

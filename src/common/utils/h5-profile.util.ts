@@ -86,7 +86,8 @@ export const BUSY_Q90_MINUTES = 45;
  * −0.267 [−0.553, +0.002] is not, d4–d6 −0.248 … −0.108 straddle 0, d7 +0.033,
  * and d30 +0.420 [+0.116, +0.708] is significantly WORSE. Plain `h5` beats the
  * weekday median at every lead in both passes (−0.19 at d3), so past d2 the
- * plain profile is the evidenced answer (`docs/ml/ml-bench.md`, "The
+ * plain profile is the evidenced answer
+ * (`docs/ml/ml-bench/results-baselines.md#the-tft-level-on-busy-rides`, "The
  * load-bearing correction").
  */
 export const TFT_LEVEL_MAX_LEAD_DAYS = 2;
@@ -155,7 +156,8 @@ export interface H5HistoryDay {
  * wait ≥ 5, and stores no DOWN or CLOSED time at all (`downCount` is a count of
  * hours, not their times). So in production a breakdown is filled with the
  * last operating wait for up to three hours, where the benchmark's truth has a
- * gap — unknowable from this source, and documented in the endpoint doc §2a.
+ * gap — unknowable from this source, and documented in the endpoint doc
+ * (`docs/frontend/plan-day/slots-and-h5.md#where-production-differs-from-the-benchmark`).
  */
 export function truthSlotsOf(
   day: H5HistoryDay,

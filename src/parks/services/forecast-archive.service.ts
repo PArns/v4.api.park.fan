@@ -162,7 +162,8 @@ export class ForecastArchiveService {
    * Curves are kept this many days past their TARGET date — never counted from
    * the origin, or a d90 row would be gone before its day could be scored.
    * Two weeks leaves room for re-scoring and the bench runner's per-park-day
-   * CIs. Sized in forward-archive.md.
+   * CIs. Sized in
+   * docs/ml/forward-archive/capture.md#size-and-db-impact-measured-2026-10-09.
    */
   static readonly CURVE_RETENTION_AFTER_TARGET_DAYS = 14;
   /** Park-day rows, past their target date: ~3.2 k a day at ~240 B with
@@ -1010,7 +1011,8 @@ export class ForecastArchiveService {
    * the resolution the planner will read: 15-minute steps from its first to
    * its last served quarter-hour. Each step holds the slot where there is one
    * and otherwise the HOUR's value, but only for an hour with no slot at all —
-   * the frontend contract (docs/frontend/plan-day-endpoint.md §2a) — so an
+   * the frontend contract
+   * (docs/frontend/plan-day/slots-and-h5.md#the-15-minute-contract) — so an
    * hour the 15-minute series answers is never padded with a value from
    * before the opening. Steps are absolute 15 minutes from the first one,
    * which only a park open across a DST switch would notice.
@@ -1458,7 +1460,7 @@ export class ForecastArchiveService {
 
   /**
    * App-side retention by TARGET date, in short batches with a lock deadline —
-   * never a TimescaleDB policy (db-health-runbook §0b). The tables have no
+   * never a TimescaleDB policy (docs/troubleshooting/timescaledb-lock-queues.md). The tables have no
    * foreign key, so a DELETE locks nothing but its own rows.
    */
   async pruneExpired(

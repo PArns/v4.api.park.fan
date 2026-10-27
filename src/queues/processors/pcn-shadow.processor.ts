@@ -12,7 +12,7 @@ const pcnServiceUrl = getPcnServiceUrl;
  * Thin HTTP triggers for the Python pcn-service (which owns all the ML + DB work);
  * mirrors NfForecastProcessor. PCN runs in the shadow — it only writes pcn_forecasts /
  * pcn_intraday_comparisons; CatBoost stays the served champion until the shadow shows a
- * busy/headliner win (design doc §12).
+ * busy/headliner win (docs/ml/pcn.md#shadow-boards).
  *
  * - train-pcn: nightly per-park GP-STGNN training (GPU). Scheduled at 08:30 UTC, after
  *   TFT (starts 03:00, ~2.5h) and CatBoost (starts 06:00, ~45min) have both finished, so

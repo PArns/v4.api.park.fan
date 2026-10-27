@@ -1,113 +1,94 @@
-# Coolify Deployment
+# Production deployment (Coolify)
 
-This guide details how to deploy Park Fan API v4 on Coolify.
+How the API and its services run in production: the Coolify resource, the containers in
+`docker-compose.production.yml`, where their data lives, the environment and what to check after a
+deploy. Open it before changing the compose file, an environment variable or the host.
 
-## Quick Start
+## The Coolify resource
 
-1. **Project**: Create a new Docker Compose resource in Coolify.
-2. **Repo**: Select `PArns/v4.api.park.fan`.
-3. **Branch**: `main`.
-4. **Compose File**: `docker-compose.production.yml`.
+- A **Docker Compose** resource on repository `PArns/v4.api.park.fan`, branch `main`, compose file
+  `docker-compose.production.yml`.
+- **Coolify deploys on every push to `main`.** The build takes a few minutes; check a change only after
+  the new container is up.
+- The schema follows the entities at boot (`DB_SYNCHRONIZE=true`, no migrations), so an entity change
+  reaches production with the deploy: [the entities are the schema](../rules/the-entities-are-the-schema.md).
+- Container names carry a Coolify deploy id and change with every deploy. Ad-hoc SQL goes through
+  `scripts/prod-psql.sh`, which finds the container itself
+  ([DB health runbook §0](../troubleshooting/db-health-runbook.md#0-time-limits-on-ad-hoc-sql)).
 
-## Environment Variables
+## Containers
 
-Configure these in Coolify's environment variable section:
+| Service       | Image / build                       | Limits and settings                                                                                                                                       | Port                    |
+| ------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `postgres`    | `timescale/timescaledb:latest-pg18` | `shm_size: 512m` (parallel-query shared memory), `max_parallel_workers_per_gather=2`, `log_lock_waits=on`                                                  | `${DB_PORT:-5433}:5432` |
+| `redis`       | `redis:8.4-alpine`                  | `--maxmemory 2gb --maxmemory-policy volatile-lru`, AOF on, RDB snapshots off                                                                              | internal                |
+| `ml-service`  | `./ml-service` (CatBoost)           | `mem_limit: 20g`, `ML_WORKERS` default 2 (each extra worker eats the 06:00 training margin)                                                               | 8000 internal           |
+| `nf-service`  | `./nf-service` (TFT, Chronos)       | `mem_limit: 14g`, `shm_size: 2gb`; never trigger its `/train` during ml-service's 06:00 training                                                          | 8000 internal           |
+| `pcn-service` | [`./pcn-service`](../../pcn-service/README.md) (intraday nowcast) | `mem_limit: 8g`, `shm_size: 2gb`; trains 08:30 UTC so GPU peaks do not overlap                                                                             | 8000 internal           |
+| `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB (the Dockerfile's `--max-old-space-size=6144` overrides the compose `NODE_OPTIONS` 4096); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
+| `bull-board`  | `venatum/bull-board:latest`         | Reads Bull keys under `BULL_PREFIX` (default `parkfan`)                                                                                                    | `3001:3000`             |
 
-### Application
-- `NODE_ENV=production`
-- `PORT=3000`
-- `API_PREFIX=v1`
+Whether those memory limits fit the host is an open decision:
+[container memory limits](container-memory-limits.md).
 
-### Database
-- `DB_HOST=postgres`
-- `DB_PORT=5432`
-- `DB_USERNAME=parkfan`
-- `DB_PASSWORD=<SECURE_PASSWORD>`
-- `DB_DATABASE=parkfan`
-- `DB_SYNCHRONIZE=false` (Use migrations in prod if available, else be careful)
+Two settings that look removable and are not:
 
-### Redis
-- `REDIS_HOST=redis`
-- `REDIS_PORT=6379`
+- **`api` does not wait for `ml-service` to be healthy.** The ML services run on the NVIDIA runtime on
+  the GPU host; a driver fault ("Driver/library version mismatch" after an unattended update) stops
+  their containers from starting. When `api` depended on `ml-service: service_healthy`, that took every
+  endpoint down with a 502. The ML services are HTTP dependencies that degrade per request, so `api`
+  waits only for `postgres` and `redis`. Do not add them back, not even as `service_started`.
+- **`stop_grace_period: 30s` on `api`.** The 20 s shutdown deadline in
+  `src/common/utils/graceful-shutdown.ts` needs it: Coolify passes `--timeout=30` on a deploy, but a
+  `docker.service` restart uses the container's own `StopTimeout`, which defaulted to 10 s and SIGKILLed
+  the API with 31 Bull job locks held (2026-10-21, PAR-1004). After a deploy,
+  `docker inspect -f '{{.Config.StopTimeout}}' <api-container>` must print `30`.
 
-### ML Service
-- `ML_SERVICE_URL=http://ml-service:8000`
-- `MODEL_DIR=/app/models`
+## Data on the host
 
-## Volumes
+Every service writes to a bind mount under `/data/parkfan/` (not to Docker named volumes), so a
+redeploy keeps it:
 
-Coolify manages these persistent volumes automatically:
-- `pgdata`
-- `redisdata`
-- `ml-models`
+| Path                       | Service                        |
+| -------------------------- | ------------------------------ |
+| `/data/parkfan/postgres`   | `postgres` (`/var/lib/postgresql`) |
+| `/data/parkfan/redis`      | `redis`                        |
+| `/data/parkfan/ml-models`  | `ml-service` (`/app/models`)   |
+| `/data/parkfan/nf-models`  | `nf-service`                   |
+| `/data/parkfan/pcn-models` | `pcn-service`                  |
+| `/data/parkfan/geoip`      | `api` (GeoLite2-City database) |
+| `/data/parkfan/logs`       | `api` (slow-query log)         |
 
-## Verification
+`api` also mounts `/sys` read-only at `/host/sys` so `system-health` can read the CPU temperature.
+What is backed up: [backup](backup.md).
 
-After deployment, check health endpoints:
-- API: `https://api.yourdomain.com/health`
-- Queue Board: `https://queue.yourdomain.com`
+## Environment
 
-## Container memory limits — analysis and owner decision (PAR-1054)
+Coolify holds one `.env`; `.env.production.example` is the template and the list of every variable
+with its comment. For `api`, the compose file overrides the addresses: `DB_HOST=postgres`,
+`REDIS_HOST=redis`, `ML_SERVICE_URL`, `NF_SERVICE_URL`, `PCN_SERVICE_URL` (all `http://<service>:8000`),
+`NODE_ENV=production` and `GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb`.
 
-**Status: recommendation only. `docker-compose.production.yml` is unchanged.**
-A limit set too low turns a nightly training into an OOM-kill and a limit on
-Postgres turns one backend's kill into a crash-restart of the whole database, so
-the values below need the measurement step first and the owner's call.
+Switches set in the compose file, each with its default:
 
-**What the host has and what is promised.** celestrial has 29 GB RAM (+32 GB swap).
+| Variable                                    | Default  | Effect                                                                                     |
+| ------------------------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `SERVE_PCN_INTRADAY`                        | `false`  | Serve PCN's 15-minute intraday forecast instead of CatBoost's hourly one.                  |
+| `SERVE_CHRONOS_INTRADAY`                    | `false`  | Serve Chronos-2 on the 45–120 minute intraday slots.                                       |
+| `CHRONOS_SHADOW_ENABLED`                    | `true`   | Capture Chronos-2 into the forward archive (never served).                                 |
+| `CHRONOS_ENABLED` (nf-service)              | `true`   | Run Chronos-2 in nf-service at all.                                                        |
+| `DOCKER_RUNTIME`, `NVIDIA_VISIBLE_DEVICES`  | `runc`, empty | Set to `nvidia` / `all` on a GPU host (needs `nvidia-container-toolkit`).             |
+| `CATBOOST_TASK_TYPE`                        | `CPU`    | CatBoost training device.                                                                  |
 
-| container / process | limit today | known peak | source |
-|---|---|---|---|
-| `ml-service` | 20 g | ~13 GB training subprocess + 2–4 GB serving; 6.4 GB RSS when killed at 06:15 | compose comment, runbook §5a |
-| `nf-service` | 14 g | ">10 g at dataset build" for the *full* panel; the chunked fit (10 parks) is documented at ~1–2 GB | compose comment, `forecast.py` |
-| `pcn-service` | 8 g | not measured | — |
-| `postgres` | none | 0.51 GB private RSS at the 10-12 OOM, plus shared buffers; ~5.3 GB "committed" per the nf comment | runbook §5a |
-| `api` | none | V8 heap capped at 4 GB (`--max-old-space-size=4096`), so ~5 GB RSS | compose |
-| `redis` | none | `maxmemory 2gb` + overhead | compose |
-| Linear runner (host, systemd user unit) | `MemoryMax=18G` | 15.3 GB (28 jest workers) | runbook §5a |
+`API_PREFIX` appears in `.env.production.example` but nothing reads it: the global prefix is the
+constant `GLOBAL_PREFIX = "v1"` (`src/common/swagger/swagger-config.ts`).
 
-The three hard limits alone add up to 42 GB on a 29 GB host; with the unlimited
-ones and the runner, ~72 GB. That is safe only because the peaks are separated in
-time — nf 03:00, CatBoost 06:00, PCN 08:30, the runner at 09:45/13:45/17:45/21:45.
-Any two of the big peaks together (a manual `/train`, a retried job, a runner
-moved back) exceed the host, and the kernel then picks the largest process, which
-was the training on 2026-10-12. The limits today bound nothing that matters: they
-are all above what fits next to the rest.
+## After a deploy
 
-**Measure first** (on the host, after one full night and one runner run):
-
-```bash
-for c in $(docker ps --format '{{.Names}}' | grep -E 'ml-service|nf-service|pcn-service|postgres|api|redis'); do
-  id=$(docker inspect -f '{{.Id}}' "$c")
-  echo "$c $(cat /sys/fs/cgroup/system.slice/docker-$id.scope/memory.peak 2>/dev/null)"
-done
-```
-
-`memory.peak` is the high-water mark since the container started; read it the
-morning after a deploy-free night.
-
-**Recommended limits** — each = measured peak + ~25 %, so that one runaway
-container is killed inside its own cgroup instead of taking the host:
-
-| container | recommended | why |
-|---|---|---|
-| `ml-service` | `mem_limit: 18g` | 13 GB training + 4 GB serving; 20 g leaves no room for anything else at 06:00 |
-| `nf-service` | `mem_limit: 8g` after `memory.peak` confirms the chunked fit stays under ~6 GB; keep 14 g otherwise | the 14 g was sized for full-panel training, which no longer runs |
-| `pcn-service` | `mem_limit: 6g` if `memory.peak` < 4.5 GB, else keep 8 g | not measured yet |
-| `postgres` | **no hard limit**; `mem_reservation: 6g` (cgroup v2 `memory.low`) | a cgroup OOM kills a backend and the postmaster restarts every connection; protect it from reclaim instead, and bound it by its own settings (`shared_buffers`, `work_mem`, `autovacuum_work_mem` 256 MB × 4 workers) |
-| `api` | `mem_limit: 6g` | heap 4 GB + native; a leak should restart the API, not trigger a host OOM |
-| `redis` | `mem_limit: 3g` | `maxmemory 2gb` + fragmentation |
-
-Worst case at 06:00 with these: 18 + 8 + 6 + ~6 (postgres) + 6 + 3 ≈ 47 GB of
-ceilings, but the realistic concurrent use is ~13 + 2 + 1 + 6 + 5 + 2 ≈ 29 GB —
-still at the host's edge, so **the time separation stays the real protection**
-and the limits decide only *who* dies when it fails.
-
-**Options for the owner.**
-
-1. Keep today's limits (nothing changes; a coincident peak OOMs the largest
-   process, as on 10-12).
-2. Apply the table above after one night of `memory.peak` readings
-   (recommended).
-3. Option 2 plus moving nf-service's training off the CPU-RAM path entirely
-   (GPU-only data loading) before lowering it further.
+- `GET https://api.park.fan/v1/health/ready` answers 200 (this is what the compose healthcheck asks;
+  Coolify's own label checks `/v1/health`).
+- The ML services answer `GET /health` on port 8000 inside the network only.
+- Bull Board on port 3001 shows the queues; a failed job is retried from there.
+- Do not deploy on Sunday between 19:10 and 20:05 UTC: a pcn-service restart during the weekly
+  `REINDEX` of `pcn_forecasts_pkey` stalls PCN writes
+  ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#weekly-reindex-of-the-pcn-primary-key)).

@@ -1,128 +1,66 @@
-# Common Issues & Troubleshooting
+# Common issues
 
-Short guide for frequent problems and how to fix them.
+Symptoms seen before, their cause and the fix, each with a link to the page that owns the mechanism.
+Open it when an API answer looks wrong. Database slowness: [DB health runbook](db-health-runbook.md).
 
-## Stale cache (e.g. peakWaitToday wrong)
+## An implausible statistic (e.g. `peakWaitToday: 450`)
 
-**Symptom**: API returns `peakWaitToday: 450` (or another implausible value) while DB or live data shows ~45.
+**Cause:** an old value in Redis, here `park:statistics:{parkId}`, computed from bad data before the outlier
+cap. **Fix:** `redis-cli DEL "park:statistics:<parkId>"`, or `POST /v1/admin/flush-cache` for every park
+cache ([recalculating aggregates](../analytics/data-recalculation.md#caches)); it is rebuilt on the next
+request. **Prevention:** `StatsService` caps a day's maximum at `max(120, 3 × P90)` with 20 or more samples,
+`max(120, 5 × P50)` below that, so outliers no longer reach `park_daily_stats`.
 
-**Cause**: Redis cache key `park:statistics:{parkId}` still holds an old value (e.g. from bad data before outlier cap).
+## A park's occupancy or crowd level looks wrong
 
-**Fix**:
+Check `occupancy.breakdown`: `currentAvgWait / typicalAvgWait` must divide out to `current`. A park with no
+P50 baseline answers `current: 50`, `crowdLevel: "unknown"`, `confidence: "low"`: the 50 is a placeholder,
+so a client that shows `current` instead of `crowdLevel` shows a made-up number. Then check the headliners
+and baselines ([when a crowd level looks wrong](../analytics/headliner-logic.md#when-a-crowd-level-looks-wrong))
+and that the 03:00 UTC `calculate-park-baselines` job ran. Formulas: [crowd levels](../analytics/crowd-levels.md).
 
-1. Invalidate the key (Redis CLI or script):
-   ```bash
-   redis-cli DEL "park:statistics:<parkId>"
-   ```
-2. Or use a script that clears park caches (see [Scripts](development/scripts.md)).
-3. Stats are recomputed on next request; CacheWarmupProcessor also refreshes periodically.
+## Wrong "today" for a park, or a date one day off
 
-**Prevention**: `StatsService` caps `maxWaitTime` at `min(rawMax, max(120, p90*3))` so bad values no longer enter `park_daily_stats` / cache.
+**Cause:** the server's date instead of the park's (`new Date()`, `toISOString().slice(0, 10)`), or a
+date-only value turned into an instant (`new Date("2025-12-25")` is 24 December in New York). **Fix:** the
+helpers in `src/common/utils/date.util.ts` and date-only values kept as `YYYY-MM-DD` strings
+([park-timezone rule](../rules/park-timezone.md); [date-only values and the two US-park anti-patterns](../development/datetime-handling.md#6-date-only-values-holidays-schedules-events)).
 
----
+## A peak hour after closing time
 
-## Occupancy always 100%
+The typical peak hour comes from 60 days of history, often longer summer days. `getParkStatistics` returns
+`peakHour: null` when the hour, in the park's timezone, is at or after today's closing hour.
 
-**Symptom**: `occupancy.current` is 100% even when the park is quiet.
+## ML predictions missing or on the wrong scale
 
-**Cause**: Occupancy reads **(current recent peak / P50 baseline)** (ratio-vs-P50). If the baseline is wrong (e.g. an “all attractions” P50 instead of the headliner P50), the denominator is too low and occupancy is inflated. A second cause: the park has no row in `park_p50_baselines` yet (e.g. brand-new park) — the method returns 100 by design until the next cron run.
+1. Is the service up? `GET http://ml-service:8000/health` inside the network (`/v1/health` on the API
+   reports it too).
+2. The crowd level from ML divides by the `typicalDayPeakBaseline` the API sends
+   ([crowd levels: ML integration](../analytics/crowd-levels.md#ml-integration)); a park without one gets
+   `unknown`, by design.
 
-**Fix**: Ensure the API uses `getP50BaselineFromCache(parkId)` for park occupancy (headliner P50). No manual fix needed if code is correct; if you see 100% on a quiet day, check that the P50 baseline cron has run (`p50-park-baseline-cron` at 03:00) and `park_p50_baselines` has a sane row for that park.
+## ML service: `ECONNRESET` or "socket hang up"
 
-**See**: [Crowd Levels](../analytics/crowd-levels.md), [Caching Strategy](../architecture/caching-strategy.md).
+The API's ML client (`MLService`, `src/ml/ml.service.ts`) has a 120 s timeout and retries `ECONNRESET`,
+`ETIMEDOUT`, `ECONNABORTED` and "socket hang up" twice, after 1 s and 2 s (log: `retry N/2`). ml-service runs
+gunicorn with `keepalive = 120`, `timeout = 120`, `graceful_timeout = 30` (`ml-service/gunicorn.conf.py`), so
+an idle keep-alive connection is not closed under a long prediction. Errors that survive the retries point at
+the service itself: memory, worker recycling (`max_requests`), or a restart.
 
----
+## Conflicting schedule rows for one day
 
-## Wrong “today” / schedule for a park
+**Cause:** parallel syncs or a sync racing `fillScheduleGaps`. **Automatic fix:** `fillScheduleGaps(parkId)`
+first runs `cleanupDuplicateScheduleEntriesForPark`, and the daily global gap fill runs
+`cleanupDuplicateScheduleEntries()`. Only the day-status types are arbitrated (OPERATING > CLOSED from the
+API > gap-filled CLOSED > UNKNOWN); event types such as `TICKETED_EVENT` stay beside them, so a reader picks
+the day's status by type, never the first row. **By hand:** `POST /v1/admin/fill-schedule-gaps` (queues `fill-all-gaps` for every park). Mechanism:
+[schedule sync and calendar](../architecture/schedule-sync-and-calendar.md).
 
-**Symptom**: Schedule or “today” data is for the wrong calendar day (e.g. US park when server is in Europe).
+## A cron's outcome cannot be found
 
-**Cause**: Using server date (`new Date()`) instead of the park’s timezone for “today”.
-
-**Fix**: Use `getCurrentDateInTimezone(park.timezone)` for “today” and `getTomorrowDateInTimezone(park.timezone)` for “tomorrow”. Schedule queries should use date-string equality (`schedule.date = :todayStr`) where possible.
-
-**See**: [Date & Time Handling](development/datetime-handling.md).
-
----
-
-## Holidays / schedules: date shift
-
-**Symptom**: A holiday or schedule for “2025-12-25” appears as 24th or 26th.
-
-**Cause**: Treating date-only values as timestamps; timezone conversion shifts the calendar day.
-
-**Fix**: Store and compare holidays/schedules as **date-only strings** (`YYYY-MM-DD`). Use `getCurrentDateInTimezone(park.timezone)` when comparing with “today”. Never use `new Date("2025-12-25")` without explicit noon-UTC or timezone handling.
-
-**See**: [Date & Time Handling](development/datetime-handling.md) (§ Strict Date-Only Handling).
-
----
-
-## ML predictions missing or wrong scale
-
-**Symptom**: Predictions fail or crowd level from ML doesn’t match API.
-
-**Checks**:
-
-1. **ML service up**: `GET http://localhost:8000/health` (or your ML base URL).
-2. **Occupancy feature**: At inference, `park_occupancy_pct` comes from the API (P50-based). If it was trained with P90, retrain with P50 (see [Model Overview](../ml/model-overview.md)).
-3. **P50 baseline**: API passes `p50Baseline` for crowd level; Python uses it so labels match TypeScript.
-
-**See**: [Model Overview](../ml/model-overview.md) (§ Alignment with API).
-
----
-
-## Peak hour / park peak outside operating hours
-
-**Symptom:** Dashboard shows e.g. peak hour 22:00 or park peak 500 min, even though the park is only open until 19:00 today.
-
-**Cause:** The “typical” peak hour comes from 60 days of history (often longer summer hours). Park peak could come from daily stats that were not limited to today’s operating hours.
-
-**Fix (implemented):**
-
-1. **Peak hour (peakHour):** If the displayed peak hour in the park’s timezone is **after** today’s closing time, it is not shown (`peakHour: null`).
-2. **Park peak (peakWaitToday) and park average (avgWaitToday):** Both computed **only from headliner attractions** (same rides as P50/crowd level), from **one** query: per headliner, its AVG and its MAX for today, each then averaged across headliners (`averageTodayAcrossRides`). Averaging peaks rather than taking a global max is intentional — it describes typical peak load across headliners and is not dominated by a single outlier ride. Deriving both from the same rides is also what keeps them ordered: per ride AVG ≤ MAX, so `avgWaitToday ≤ peakWaitToday` holds by construction. Without headliners, both fall back to the `park_daily_stats` figures.
-
-   > Previously `avgWaitToday` was `ParkDailyStats.p90WaitTime` — a P90 pooled over *all* attractions — while `peakWaitToday` was headliner-scoped. Two statistics over two populations, so nothing ordered them, and the park page could render "Ø 45 min" next to "Peak 40 min".
-3. **Trend (occupancy.trend):** Computed **only from headliner attractions**. Per headliner: average wait time in the last 1h and 1h–2h; then **average** = sum of these per-headliner averages / number of headliners (not sum over all data points). Current wait time for occupancy (`getCurrentSpotWaitTime`) is also headliner-only when headliners exist.
-
-**Relevant code:** `AnalyticsService.getParkStatistics` (peak hour, park peak), `AnalyticsService.calculateParkOccupancy` (trend, current), `getCurrentSpotWaitTime(…, headlinerIds)`.
-
----
-
-## Duplicate or conflicting schedule entries
-
-**Symptom**: Calendar shows conflicting opening hours (e.g. both OPERATING and CLOSED for the same date), or schedule queries return unexpected multiple entries for a single day.
-
-**Cause**: Parallel schedule syncs or interrupted processes may create duplicate entries with different schedule types for the same `(parkId, date)`. This can happen when:
-- Multiple schedule sync jobs run simultaneously for the same park (rare, but possible with manual triggers)
-- Race condition between `saveScheduleData` and `fillScheduleGaps` when running concurrently
-- API provides conflicting data that gets saved before cleanup runs
-
-**Automatic fixes**:
-
-1. **Per-park cleanup (immediate)**: `fillScheduleGaps(parkId)` automatically calls `cleanupDuplicateScheduleEntriesForPark(parkId)` **before** gap-filling. This removes duplicates for that specific park using SQL window functions:
-   - **Same-type duplicates**: Multiple entries with identical `(parkId, date, attractionId, scheduleType)` → keeps most recent by `updatedAt`
-   - **Cross-type conflicts**: Multiple entries for same `(parkId, date, attractionId)` with different scheduleTypes → applies priority (OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN)
-
-   **Only those three types are arbitrated.** OPERATING, CLOSED and UNKNOWN each state what the day is, so two of them on one subject contradict each other. `TICKETED_EVENT`, `PRIVATE_EVENT`, `EXTRA_HOURS`, `MAINTENANCE` and `INFO` state what else happens that day (Halloween Horror Nights is a `TICKETED_EVENT` on an OPERATING day) and are never deleted by this phase — they stay next to the opening hours. Until PAR-276 they fell to `ELSE 4`, below UNKNOWN, and were deleted on every pass, then rewritten by the next sync. A reader that wants the day's status must therefore filter by type or order by `scheduleType` (the Postgres enum sorts `OPERATING` first, `CLOSED` and `UNKNOWN` last) instead of taking any row of the day.
-
-   **`attractionId` is part of both keys**, because `schedule_entries` holds the park's opening hours (`attractionId IS NULL`) and per-ride rows in the same table. Leave it out and each pass keeps **one row per park and day** — the opening hours or a single ride, whichever `updatedAt` favours. Both statements are built by `src/parks/utils/schedule-dedup.sql.ts`, one derivation for the global and the per-park scope; the merge path states the same rule in `migrateScheduleEntries`.
-
-2. **Global cleanup (daily)**: `cleanupDuplicateScheduleEntries()` runs as part of `fillAllParksGaps()` job, processing all parks. Uses optimized SQL (2 queries total instead of N+1 pattern).
-
-**Manual fix** (if needed before automatic cleanup):
-
-```bash
-# Run gap-fill for a specific park (triggers per-park cleanup)
-npm run script:fill-gaps -- --parkId=<park-uuid>
-
-# Or run global cleanup for all parks
-npm run script:fill-all-gaps
-```
-
-**Prevention**:
-- Ensure only one schedule sync job runs per park at a time (BullMQ queue handles this automatically for cron jobs)
-- Avoid concurrent manual API calls to `saveScheduleData` for the same park
-- The batch DELETE operations in `saveScheduleData` now clean up cross-type conflicts automatically (OPERATING deletes CLOSED, CLOSED deletes OPERATING, etc.)
-
-**Technical details**: See [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md) (§ Performance optimization, § Persistence).
+Bull keeps the last 100 completed and 500 failed jobs per queue (`defaultJobOptions` in
+`src/queues/queues.module.ts`), but some crons are added with `removeOnComplete: true` and
+`removeOnFail: true` (`audit-ride-profile-terms`, `monitor-data-quality`): a finished run and a failed one
+then leave the same trace, none. The repeat entry proves the cron fires, not that its handler succeeded, and
+the container log starts at the last deploy. Read the job's own log line after a run, or call the handler
+through its admin endpoint where one exists.

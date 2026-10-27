@@ -1810,7 +1810,7 @@ export class ParksController {
       "in 4 groups the `slug` differs too.\n\n" +
       "A differing `slug` does **not** make them two rides. A slug is a frozen name, so a row " +
       "keeps the slug of whatever it was called when it was created — see " +
-      "`docs/architecture/attraction-status-and-seasonality.md` §4a, where identity is the " +
+      "`docs/architecture/attraction-status/identity.md`, where identity is the " +
       "`externalId` and never the slug. Three of those four groups carry the exact damage " +
       "shape that page describes, one row holding the name another row's slug claims. " +
       "Resolved against the upstream entities on 2026-09-20, in each of the three the ride " +
@@ -1821,7 +1821,7 @@ export class ParksController {
       "`castaway-bay-sky-fortress`; New Jersey's `discovery-bay-mini-waves` is grouped under " +
       '"Discovery Bay", and "Discovery Bay - Mini Waves" is `discovery-bay-treehouse`. ' +
       "New Jersey differs underneath — its two rows bind to two different upstream entities " +
-      "the feed names alike, so the `externalId` would split them too; see §4a. **So the " +
+      "the feed names alike, so the `externalId` would split them too; see `identity.md`. **So the " +
       "park payload's number is the one that describes the park**, and this route's surplus " +
       "is duplicate rows rather than hidden attractions (PAR-259).",
   })

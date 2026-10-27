@@ -726,7 +726,7 @@ export class ShowsService {
   /**
    * The operating day a showtime belongs to, as a SQL scalar expression.
    *
-   * §5 of `docs/frontend/plan-day-endpoint.md` unfolds a day that crosses
+   * `docs/frontend/plan-day/midnight.md` unfolds a day that crosses
    * midnight: La Ronde's `10 → 0` is one ascending run of hours, and the hour
    * after 23 is 24 rather than 0 of the next date. Showtimes were never
    * unfolded that way — both readers below grouped them by the showtime's own
@@ -774,7 +774,7 @@ export class ShowsService {
    * column, and that is load-bearing in both directions. A closing time stamped
    * with the day's OWN date — ThemeParks.wiki does that for `open 12:00 /
    * close 00:00`, Parque Warner Madrid every day — is not a wrap day to a raw
-   * comparison, so the rule would miss exactly the rows §5 was written for. And
+   * comparison, so the rule would miss exactly the rows `midnight.md` was written for. And
    * an overshot window (`operating-window.util.ts` names a 34-hour one at
    * SeaWorld San Diego and a three-year one at Busch Gardens Williamsburg)
    * would swallow the whole following day, dragging ordinary afternoon
@@ -847,7 +847,7 @@ export class ShowsService {
                   AND se."openingTime" IS NOT NULL
                   AND se."closingTime" IS NOT NULL
                   AND se.date = (${startTs} AT TIME ZONE ${tz})::date - 1
-                  -- A wrap day, in the same terms as §5: the window ends on a
+                  -- A wrap day, in the same terms as plan-day/midnight.md: the window ends on a
                   -- later park-local date than it starts on.
                   --
                   -- This test and the coverage test below overlap on an
@@ -943,7 +943,7 @@ export class ShowsService {
          SELECT show_id, day,
                 EXTRACT(DOW FROM day)::int AS weekday,
                 hhmm,
-                -- Ordering is unfolded the way §5 unfolds hours: a time that
+                -- Ordering is unfolded the way plan-day/midnight.md unfolds hours: a time that
                 -- falls on the date AFTER its operating day belongs at the end
                 -- of that day, not at its start. Without this a 00:00 show
                 -- sorts in front of the 22:00 one it follows, and both

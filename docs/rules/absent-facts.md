@@ -1,58 +1,48 @@
-# An Absent Fact Never Becomes a Confident One
+# An absent fact never becomes a confident one
 
-Moved out of the repo's `claude.md` so that a session reads an index first and opens only the pages its task needs. The wording is unchanged.
+Our own bookkeeping is never somebody else's statement. Where no source says something, the API
+says "unknown" — it does not fill the gap with the most likely answer. Open this page before
+writing any default, fallback or derived value that a reader will take as a fact. Every case
+below shipped once the other way.
 
-- **Detailed Guide**: [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md)
-- The `unknown` crowd-level rule (§3) is the same rule as these, and they have
-  all been broken the same way — **our own bookkeeping served as somebody
-  else's statement**:
-  - A ride **no source reports** reads `UNKNOWN`, never `CLOSED`. Reverse-
-    reconciliation's row records that our data stopped arriving, not that the
-    operator shut the ride. ~140 attractions across ten parks read "closed" for
-    weeks this way.
-  - **`season_months` may not be derived from less than a year of watching**
-    (`MIN_OBSERVED_DAYS` = 330). Below that the months are the observation
-    window, not a season — every list in the database was one.
-  - A **free-flow** attraction (`open_with_park`) is not seasonal just because
-    its feed never says OPERATING; that is a playground's normal state.
-  - A park whose **whole feed has been silent** for `PARK_FEED_SILENT_DAYS` does
-    not get to announce future operating days: `saveScheduleData` stores them as
-    `UNKNOWN`, without hours. The schedule and the live data come from the same
-    upstream, and it keeps publishing after it stops measuring — La Ronde was
-    silent for 89 days while its schedule claimed all 344 remaining calendar
-    days as OPERATING, January in Montréal included. Past days and `CLOSED` days
-    the source delivered are left alone. Gap-filled `CLOSED` days are not:
-    they rest on the park's last OPERATING day, the guard moves that day into
-    the past, and `fillScheduleGaps` then demotes every future gap-filled
-    `CLOSED` day to `UNKNOWN`. Full rule and the production numbers:
-    [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
-  - A day the schedule source **withdraws** is not an operating day either. The
-    stored row is our copy of an older answer, and `saveScheduleData` only ever
-    looked at the days a payload contains — Rulantica's maintenance closure stood
-    as 14 OPERATING days for seven months. It is retracted now, but only inside
-    the months the fetch reports as answered, because an empty or throttled month
-    says nothing about its days: [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
-  - A school break **nobody has published yet** is not "no school holiday".
-    Past a region's last stored school row the flag is unknown (Spain's
-    school rows end 2026-09-11 while its public holidays reach 2028; Sweden
-    has none). Nothing is projected to fill it:
-    [School-holiday coverage](../architecture/school-holiday-coverage.md).
-- **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
-  and `curated_stats` sit _beside_ the synced column, never in it, because the
-  sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.
-- **`AttractionStatus` includes `UNKNOWN`** and every Swagger `enum:` for it
-  comes from `ATTRACTION_STATUS_VALUES` — hand-written lists are how `unknown`
-  stayed out of the published contract for months.
-- **Research, never recall.** Facts about real rides and parks (heights, wet
-  flags, whether something is free-flow, seasons) come from the operator's own
-  pages. A name pattern is not evidence.
-- **Identity is the `externalId`, never the slug.** A slug is a frozen name that
-  renames deliberately do not move, so 281 rows carry a slug that no longer
-  matches — that is the system working. Resolve a disputed name against the
-  upstream entity, not against what its slug implies.
-- **A behavioural detector cannot remember.** Duplicate and retirement detection
-  describe the feed, so a cleared candidate returns tomorrow unless the verdict
-  is written to `attraction_review_marks`. Give it a `recheck_after` whenever the
-  answer can change.
+## The rule, case by case
 
----
+- **A ride no source reports reads `UNKNOWN`, never `CLOSED`.** Reverse reconciliation's CLOSED row
+  records that our data stopped arriving, not that the operator shut the ride (~140 attractions in
+  ten parks read "closed" for weeks).
+  [Status regimes](../architecture/attraction-status/status-regimes.md).
+- **`season_months` is not derived from less than a year of watching** (`MIN_OBSERVED_DAYS` = 330).
+  Below that the months are our recording window, not a season — every stored list was one.
+  [Seasonality](../architecture/attraction-status/seasonality.md).
+- **A free-flow attraction (`open_with_park`) is not seasonal** because its feed never says OPERATING;
+  that is a playground's normal state.
+- **A park whose whole feed has been silent for `PARK_FEED_SILENT_DAYS` (30) announces no future
+  operating days.** `saveScheduleData` stores them as `UNKNOWN` without hours, and its rides read
+  `UNKNOWN` (La Ronde: silent 89 days, schedule claiming 344 OPERATING days including a Montréal
+  January). [Schedule sync](../architecture/schedule-sync-and-calendar.md#a-silent-park-does-not-announce-future-operating-days).
+- **A day the schedule source withdraws stops being an operating day**, but only inside the months
+  the fetch reports as answered — an empty or throttled month says nothing about its days.
+  [Schedule sync](../architecture/schedule-sync-and-calendar.md#a-day-the-source-withdraws-stops-being-an-operating-day).
+- **A school break nobody has published yet is not "no school holiday".** Past a region's last
+  stored school row the flag is unknown; nothing is projected to fill it.
+  [School-holiday coverage](../architecture/school-holiday-coverage.md).
+- **Two writers, never one cell.** A correction sits in a `curated_*` column beside the synced one,
+  never in it, because the sync overwrites its own cell on every run. Read through
+  `resolveCuratedFacts` / `resolveCuratedPark`. [Curation](../admin/curation.md).
+- **A stored `false` that means "nobody said" may not clear a `true`.** `has_fast_pass = false` is
+  served like `null`; a merge never lets a loser's default `open_with_park = false` unset a winner's
+  `true`. [Curation](../admin/curation.md#merges).
+- **Every Swagger `enum:` for `AttractionStatus` comes from `ATTRACTION_STATUS_VALUES`**
+  (`src/common/types/status.type.ts`); a hand-written list is how `UNKNOWN` stayed out of the
+  published contract for months. Crowd levels follow the same rule:
+  [Unified crowd levels](crowd-levels.md).
+- **Research, never recall.** Facts about real rides and parks (heights, wet flags, free-flow,
+  seasons, school calendars) come from the operator's or publisher's own pages. A name pattern is not
+  evidence.
+- **Identity is the `externalId`, never the slug.** A slug is a frozen name that renames deliberately
+  leave alone. [Identity](../architecture/attraction-status/identity.md),
+  [Automated retirement and upstream identity](automated-retirement-and-identity.md).
+- **A behavioural detector cannot remember.** Duplicate and retirement detection describe the feed,
+  so a cleared candidate returns tomorrow unless the verdict is written to
+  `attraction_review_marks`, with a `recheck_after` whenever the answer can change.
+  [Review marks](../architecture/attraction-status/review-marks.md).

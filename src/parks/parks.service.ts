@@ -2282,7 +2282,7 @@ export class ParksService {
     // A day with only per-ride rows is not a gap the park can speak about — it
     // is a day whose park-level row somebody lost, and `isGapClosed` would turn
     // it into a "Gap-filled" CLOSED between the park's first and last operating
-    // day. That is a confident claim built from an absence (claude.md §4), it
+    // day. That is a confident claim built from an absence (docs/rules/absent-facts.md), it
     // cannot be demoted again inside the season, and the analytics joins read
     // CLOSED as "drop this day's queue data from P50/P90" while they read a
     // missing row as "keep it". Reconstructing those rows is out of scope

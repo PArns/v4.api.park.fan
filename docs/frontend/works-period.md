@@ -1,10 +1,10 @@
 # The works period on a ride (`worksPeriod`)
 
-**What it answers:** is this ride closed for a rebuild or a refit somebody
-scheduled, and until when.
-
-Present on the attraction detail payload and on every ride in the park payload,
-so a ride list can badge without a second request.
+The contract for a ride's hand-curated rebuild or refit window: its shape, why it is
+never an outage, how to word it, and why "is it running today" is the client's
+comparison. Present on the attraction detail payload and on every ride in the park
+payload, so a ride list can badge without a second request. `/plan/day` leaves a ride
+out of a day inside the window ([plan-day availability](./plan-day/availability.md)).
 
 ```jsonc
 "worksPeriod": {

@@ -1,241 +1,121 @@
-# Weather Architecture
+# Weather
 
-## Overview
+How park weather is fetched from Open-Meteo, stored in `weather_data`, served on the park payload, and
+extended past the 16-day forecast with climate normals that the wait-time models never see. Open this
+when a park's weather is empty or wrong, or before adding a weather call. Severe-weather warnings:
+[weather warnings](../frontend/weather-warnings.md).
 
-Weather data is fetched from **Open-Meteo** (free, no API key, global coverage including US/worldwide).
+Open-Meteo is free, keyless and global; no US-specific source is needed. **A park with empty weather
+(`current: null, forecast: []`) has no `latitude`/`longitude`.** The park metadata sync
+(`sync-all-parks`) geocodes parks without coordinates (Google Maps); the next full weather sync then
+fills them in.
 
-**Key fact**: Open-Meteo works for all parks globally — no US-specific API is needed. Empty weather on a park means the park has no `latitude`/`longitude` in the DB.
+## Sync (queue `weather`, `WeatherProcessor`)
 
----
+| Job | Cron (UTC) | What |
+| --- | --- | --- |
+| `weather-full-cron` | 00:00, 12:00 | `forecast_days=16`: today plus 15 forecast days, and the forecast issue log |
+| `weather-current-cron` | 07:00, 19:00 | `forecast_days=1`: today and the live fields (`temperatureCurrent`, `apparentTemperature`, `humidity`, `isDay`) |
+| `weather-historical` / `mark-historical` | 05:00 | Relabels past rows `dataType = 'historical'` |
 
-## Data Flow
+Parks are deduplicated to unique coordinates; those are fetched in batches of 5 with 1 s (current) or
+2 s (full) between batches, then every park is saved from the client's cache in batches of 10. After
+each park `weather:forecast:{parkId}` is deleted. A done-marker (5 h current, 11 h full) lets a restart
+skip a redundant re-sync.
 
-```
-Open-Meteo API (/forecast, /archive)
-        ↓
-WeatherProcessor (BullMQ queue: "weather")
-  — two jobs: "weather-full-cron" (00:00 + 12:00) and "weather-current-cron" (07:00 + 19:00)
-  — filters parks where latitude IS NOT NULL AND longitude IS NOT NULL
+**Forecast issue log** (PAR-1061): the full sync also appends every daily forecast to
+`weather_forecast_issues` (`issued_at` = the response's `fetchedAt`, `lead_days` from the park-local
+date), from the same response, no extra call. Write-only ([covariate source](covariate-source.md),
+[schema](../database/schema.md)).
 
-  Hourly (currentOnly=true):
-    — forecast_days=1, fetches current{} variables from Open-Meteo
-    — saves today's record + live fields (temperatureCurrent, apparentTemperature, humidity, isDay)
-    — 300ms delay between parks (~45s for 150 parks)
+## Storage: `weather_data`
 
-  Every 12h (currentOnly=false):
-    — forecast_days=16, saves today + 15 forecast days
-    — 1000ms delay between parks
+Entity `src/parks/entities/weather-data.entity.ts`, primary key `(parkId, date)`. `dataType` is
+`current` (today), `forecast` (future) or `historical` (past). Daily columns: `temperatureMax`/`Min`
+(°C), `precipitationSum`, `rainSum` (mm), `snowfallSum` (cm), `weatherCode` (WMO), `windSpeedMax`
+(km/h); live columns, nullable: `temperatureCurrent`, `apparentTemperature`, `humidity`, `isDay`.
 
-        ↓
-weather_data table  (composite PK: parkId + date)
-  — dataType: "current" (today) | "forecast" (future) | "historical" (past)
-  — live columns (nullable): temperatureCurrent, apparentTemperature, humidity, isDay
-        ↓
-WeatherService.getCurrentAndForecast(parkId)
-  — returns: { current: today, forecast: next 15 days }
-        ↓
-ParkIntegrationService.buildIntegratedResponse()
-  — dto.weather = { current, now, forecast: next 6 days }  ← API response
-```
+**Dates are stored as noon UTC** (`new Date(`${day.date}T12:00:00Z`)`) and queried by plain
+date-string comparison (`weather.date >= :start`). Two bugs taught this
+([park timezone](../rules/park-timezone.md)):
 
----
+- `DATE(weather.date AT TIME ZONE :tz)` on a `DATE` column casts it to midnight UTC first, so west of
+  UTC the stored date moves back a day and today's row is never found (`current` was always `null` for
+  US parks).
+- Saving `fromZonedTime("…T00:00:00", tz)` stores the previous date east of UTC
+  (`Europe/Berlin` → `2026-03-30T22:00Z`); European parks showed tomorrow's data as today.
 
-## API Response Shape
+## On the park payload
 
-The integrated park endpoint (`GET /v1/parks/:continent/:country/:city/:slug`) returns:
+`ParkIntegrationService.buildIntegratedResponse` serves
+`weather = { current, now, forecast, warnings }`: `current` is today's daily summary, `now` the live
+snapshot (`null` until the first current sync), `forecast` up to 15 following days from
+`WeatherService.getCurrentAndForecast`. DTO and WMO descriptions: `src/parks/dto/weather-item.dto.ts`,
+`src/common/constants/wmo-weather-codes.constant.ts`.
 
-```json
-{
-  "weather": {
-    "current": {
-      "date": "2026-03-31",
-      "dataType": "current",
-      "temperatureMax": 12.2,
-      "temperatureMin": 0.3,
-      "precipitationSum": 0.0,
-      "rainSum": 0.0,
-      "snowfallSum": 0.0,
-      "weatherCode": 45,
-      "weatherDescription": "Fog",
-      "windSpeedMax": 8.3
-    },
-    "now": {
-      "temperature": 9.4,
-      "apparentTemperature": 7.1,
-      "humidity": 82,
-      "weatherCode": 45,
-      "weatherDescription": "Fog",
-      "isDay": true
-    },
-    "forecast": [
-      { "date": "2026-04-01", "dataType": "forecast", ... },
-      { "date": "2026-04-02", ... },
-      ...  // up to 6 days
-    ]
-  }
-}
-```
+## Climate normals beyond the forecast
 
-`weather.now` is `null` until the first hourly sync has run for a park.
-`weather.current` remains the daily summary (max/min temp, precipitation totals).
-`weather.now` is the live snapshot updated every hour.
-
----
-
-## Climate Normals (beyond the forecast)
-
-The forecast stops after 16 days. For a later travel day the calendar serves the park's **climate normal**: the long-run mean for that calendar day, marked so nobody takes it for a forecast.
+For a calendar day past the forecast the calendar serves the park's **climate normal**, marked so nobody
+takes it for a forecast.
 
 | | |
-|---|---|
-| Source | Open-Meteo **archive** API (`archive-api.open-meteo.com/v1/archive`, ERA5 reanalysis). Same provider, licence and attribution as the forecast calls. |
-| Reference period | 2015-01-01 to 2024-12-31 (10 full years), constants in `src/external-apis/weather/climate-normals.ts` |
-| Resolution | Daily values at the park's coordinates (rounded to 0.01°). Each calendar day averages `±3` days across all years (70 samples), 366 keys `MM-DD` |
-| Fields | temperature max/min, precipitation, rain, snowfall, max wind, most frequent WMO code |
-| Request volume | One request per park location, about 180 calls of Open-Meteo's daily allowance each (variables / 10 × days / 14). Fetched in the background after a calendar window reaches past the forecast, at most 20 parks a day, one failed park is not retried for an hour, and the archive has its own block key (`ratelimit:openmeteo-archive:blocked`, 15 min). Cached 30 days. The calendar reads the cache only, so the first request after a miss has no normals |
+| --- | --- |
+| Source | Open-Meteo archive (`archive-api.open-meteo.com/v1/archive`, ERA5), same provider and attribution |
+| Period | 2015–2024 (`CLIMATE_NORMAL_FIRST_YEAR` / `_LAST_YEAR`, `src/external-apis/weather/climate-normals.ts`) |
+| Shape | per park coordinate (0.01°), each `MM-DD` averages ±3 days over all years (`CLIMATE_NORMAL_WINDOW_DAYS`), 366 keys; max/min temperature, precipitation, rain, snowfall, wind, most frequent WMO code |
+| Fetching | background, after a calendar window reaches past the forecast; at most `CLIMATE_WARM_BUDGET_PER_DAY` parks a day, a failed park not retried for an hour, own block key `ratelimit:openmeteo-archive:blocked`; ~180 units of the daily allowance per park. Cached 30 days; the calendar reads the cache only, so the first request after a miss has no normals |
 
-**In the response.** `weather` on a calendar day carries `basis: "forecast" | "climate_normal"`. A normal also has `normalPeriod: "2015-2024"`. `basis` is present on every weather block, so a client that ignores it is ignoring a field that is always there. A normal never fills a day that has a forecast row, and it is not used for the day's `recommendation`. `/plan/day` does not pass a normal into its context.
+Every calendar weather block carries `basis: "forecast" | "climate_normal"`, a normal also
+`normalPeriod: "2015-2024"`. A normal never fills a day that has a forecast row, never feeds the day's
+`recommendation`, and `/plan/day` does not use it.
 
-**Why it is walled off from the wait-time model.** The model takes weather as a feature and cannot see the difference between "the mean of this date" and "what the model expects on this day". So a normal is never written to `weather_data` (the table `ml-service/db.py` trains on), never returned by `getCurrentAndForecast` or `getHourlyForecast` (what `MLService` sends), and cached under its own key (`weather:climate-normals:<parkId>`). `weather.service.climate-normals.spec.ts` pins each of these, including that neither `ml-service/*.py` nor `ml.service.ts` mentions normals.
+**Walled off from the wait-time model**, which cannot tell "the mean of this date" from "what to expect
+on this day": a normal is never written to `weather_data` (what `ml-service/db.py` trains on), never
+returned by `getCurrentAndForecast` or `getHourlyForecast` (what `MLService` sends), and is cached under
+its own key (`weather:climate-normals:<parkId>`). `weather.service.climate-normals.spec.ts` pins all of
+it, including that neither `ml-service/*.py` nor `ml.service.ts` mentions normals.
 
----
+## Open-Meteo limits
 
-## Storage
+Free, keyless, at most 16 forecast days. The daily allowance is weighted per call (variables / 10 ×
+days / 14). A 429 blocks every forecast call for 60 s (`ratelimit:openmeteo:blocked`); 5xx or network
+failures that exhaust their retries open a 30 s circuit (`ratelimit:openmeteo:circuit`); the archive has
+its own 15-min block (`ratelimit:openmeteo-archive:blocked`). Do not add calls to fill a gap — archive
+what the crons already fetch.
 
-**Entity**: `src/parks/entities/weather-data.entity.ts`
-**Composite PK**: `(parkId, date)`
-
-| Column | Type | Notes |
-|--------|------|-------|
-| parkId | UUID | FK → parks |
-| date | DATE (timestamptz) | Stored as noon UTC (see timezone note) |
-| dataType | enum | `historical` \| `current` \| `forecast` |
-| temperatureMax / Min | decimal(5,2) | °C — daily high/low |
-| precipitationSum | decimal(6,2) | mm |
-| rainSum | decimal(6,2) | mm |
-| snowfallSum | decimal(6,2) | cm |
-| weatherCode | int | WMO code (daily) |
-| windSpeedMax | decimal(5,2) | km/h |
-| temperatureCurrent | decimal(5,2) | °C — live, updated hourly (nullable) |
-| apparentTemperature | decimal(5,2) | °C — feels-like, updated hourly (nullable) |
-| humidity | int | % relative humidity, updated hourly (nullable) |
-| isDay | boolean | daytime at park location, updated hourly (nullable) |
-
-**Forecast issue log** (PAR-1061): the full sync also appends every daily forecast it stores
-to `weather_forecast_issues` (`issued_at` = the response's `fetchedAt`, `lead_days` from the
-park-local date), from the same response, with no extra Open-Meteo call. Write-only; see
-[covariate source](covariate-source.md) §3.2 and [schema](../database/schema.md).
-
-**Timezone note**: Dates are always interpreted in park local timezone. `saveWeatherData()` converts `"2026-03-31"` → `fromZonedTime("2026-03-31T00:00:00", park.timezone)` before storing.
-
-### Hourly observed weather — design only, not built (PAR-1045)
-
-The CatBoost model trains on the **daily** rows above, while serving has an
-**hourly** forecast; PAR-1031/1032 bridge the gap by collapsing the forecast to
-training's daily units. A rain shower at 15:00 and a dry morning therefore read
-the same in training. Storing what the weather actually was, hour by hour, would
-let training learn hour-level weather and serving feed the hourly forecast
-directly. Not built: it is a new table, a backfill and a new sync job, and the
-feature change needs its own measured retrain.
-
-| | |
-|---|---|
-| Table | `weather_hourly_observed` — `parkId` uuid, `ts` timestamptz (the UTC hour), `temperature` / `apparentTemperature` real (°C), `precipitation` / `rain` real (mm), `snowfall` real (cm), `weatherCode` smallint (WMO), `windSpeed` / `windGusts` real (km/h), `cloudCover` smallint (%). PK `(parkId, ts)`. A TimescaleDB hypertable with compression after 7 days, registered in `HYPERTABLES` (`src/database/hypertables.ts`). Observed values only: forecasts never land here, and an hour the archive does not return stays absent rather than interpolated. |
-| Source | Open-Meteo **archive** (`archive-api.open-meteo.com/v1/archive`, ERA5 / ERA5-Land, `hourly=` the variables above, `timezone=GMT`). The archive runs ~5 days behind, so training's last days keep the daily row until the archive catches up. One provider for both, so the units match the forecast's. |
-| Size | ~211 parks × 8 760 h ≈ 1.85 M rows a year; ~125 B per row with the PK index ≈ 230 MB/year uncompressed, roughly 25 MB/year compressed. Two years (`TRAIN_LOOKBACK_YEARS`) ≈ 50 MB compressed. |
-| Calls | Open-Meteo weights a call by variables/10 × days/14. Backfill of 730 days for ~185 unique locations at 9 variables ≈ 47 per location ≈ 8 700 — most of one day's free allowance, so it has to be spread over 3–4 days beside the existing jobs. Ongoing: one daily request per location for the last 7 days ≈ 0.45 each ≈ 85 a day. |
-| Consumers | `ml-service/db.fetch_training_data` joins it per (park, UTC hour) in place of the daily row's fields; serving keeps the hourly forecast (it already is per hour). The climate normals stay walled off as above. |
-
----
-
-## Sync Jobs (BullMQ)
-
-| Queue | Job ID | Schedule | Action |
-|-------|--------|----------|--------|
-| `weather` | `weather-current-cron` | 07:00 + 19:00 UTC | `forecast_days=1` — saves today + live fields. Was `0 */6 * * *` until PAR-822, which also fired at 00:00/12:00 beside the full run that already saves today. |
-| `weather` | `weather-full-cron` | Every 12h (00:00 + 12:00 UTC) | `forecast_days=16` — saves today + 15 forecast days; 1s delay between parks |
-| `weather-historical` | `weather-historical-cron` | Daily 05:00 UTC | Mark past records as `dataType = historical` |
-
-**Rate limiting**: 300ms (hourly/current) or 1s (full) delay between parks.
-**Cache invalidation**: `weather:forecast:{parkId}` Redis key is deleted after each park update so the next request sees fresh data.
-
----
-
-## Why a Park Has Empty Weather
-
-A park shows `weather: { current: null, forecast: [] }` when **it has no coordinates** (`latitude IS NULL OR longitude IS NULL`).
-
-Coordinates come from the ThemeParks.wiki API sync (park-metadata processor, Step 1). For newer parks or parks where the wiki hasn't provided coordinates, the geocoding step (Step 8 of metadata sync, using Google Maps) attempts to fill them in.
-
-**Diagnosis**: Check `parks` table — if `latitude` and `longitude` are NULL, weather sync skips the park.
-
-**Fix**: Trigger a park-metadata sync (`sync-parks` job) to re-attempt geocoding. Once coordinates are populated, the next weather sync (runs every 12h) will populate weather data.
-
----
-
-## Known Bug Patterns (Fixed)
-
-### DATE + AT TIME ZONE = off-by-one for non-UTC parks
-
-**Bug**: Queries using `DATE(weather.date AT TIME ZONE :tz) BETWEEN ...` on a PostgreSQL `DATE` column shift dates by ±1 day for non-UTC parks.
-
-**Why it happens**: PostgreSQL implicitly casts a `DATE` to `timestamp with time zone` (midnight UTC) before applying `AT TIME ZONE`. For parks west of UTC (e.g. `America/New_York` = UTC-4), midnight UTC becomes 8 PM the previous day in local time → the stored date shifts back by 1 day → today's record is excluded from the query → `current` is always `null`.
-
-For parks east of UTC (e.g. `Europe/Berlin` = UTC+2), the save bug and the query bug happen to cancel out — they appear to work but actually show the wrong day's data (April 1 data shown as "today" on March 31).
-
-**Fix**:
-- **Save**: Use noon-UTC instead of `fromZonedTime(midnight, tz)`. Noon UTC is never ambiguous for any timezone: `new Date(\`${day.date}T12:00:00Z\`)` → PostgreSQL DATE always truncates to the correct calendar date.
-- **Query**: Use direct date-string comparison (`weather.date >= :start`) instead of `DATE(weather.date AT TIME ZONE :tz)`. PostgreSQL auto-casts `'YYYY-MM-DD'` strings to DATE.
-
-**Affected**: All non-UTC parks. US parks showed `current: null`; European parks showed tomorrow's data as today.
-
-### save via `fromZonedTime(midnight, timezone)` stores wrong date for east-of-UTC parks
-
-**Bug**: `fromZonedTime("2026-03-31T00:00:00", "Europe/Berlin")` = `2026-03-30T22:00:00Z`. PostgreSQL DATE = `2026-03-30` (off by -1 day).
-
-**Fix**: Use `new Date(\`${day.date}T12:00:00Z\`)` — noon UTC is unambiguous for all timezones (±12h = always same calendar day).
-
----
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/external-apis/weather/open-meteo.client.ts` | Open-Meteo API client (daily + hourly forecast, historical) |
-| `src/parks/weather.service.ts` | Save/query weather data, `getCurrentAndForecast()`, hourly forecast |
-| `src/parks/entities/weather-data.entity.ts` | TypeORM entity |
-| `src/parks/dto/weather-item.dto.ts` | Response DTO with `fromEntity()` and WMO description |
-| `src/queues/processors/weather.processor.ts` | BullMQ processor for daily sync |
-| `src/queues/processors/weather-historical.processor.ts` | Marks past data as historical |
-| `src/common/constants/wmo-weather-codes.constant.ts` | WMO code → human-readable description |
-
----
-
-## Open-Meteo Limits
-
-- Free tier: no API key, no hard rate limit
-- Max forecast days: **16** (current implementation uses all 16)
-- Historical: 1940–present via `/archive` endpoint
-- Redis rate-limit guard: `ratelimit:openmeteo:blocked` key (60s block on 429)
-
-### Call cadence per surface
+## Call cadence per surface
 
 | Surface | Cache | Refresh |
-|---------|-------|---------|
-| Daily (`weather:daily:{lat}:{lon}:{days}`) | 2 h, per ~1 km coordinate | Crons only (table above), ~185 unique locations |
-| Hourly for ML (`weather:hourly:v2:park:{id}`, client `weather:hourly:utc:…`) | 6 h + ≤1 h jitter | On demand |
-| Nowcast (`weather:nowcast:raw:{parkId}`) | **Park-hours aware** (`nowcastCacheTtlSeconds`) | On demand (park page, `rain-soon` push) |
+| --- | --- | --- |
+| Daily, `weather:daily:{lat}:{lon}:{days}` | 2 h per ~1 km coordinate | the crons only |
+| Hourly for ML, `weather:hourly:v2:park:{id}` (client: `weather:hourly:utc:…`) | 6 h + ≤ 1 h jitter | on demand |
+| Nowcast, `weather:nowcast:raw:{parkId}` | park-hours aware (`nowcastCacheTtlSeconds`) | on demand (park page, `rain-soon` push) |
 
-The nowcast is the only surface that refreshes every 30 min, and it is demand-driven,
-so crawlers and evening visitors kept closed parks on that cadence: on 2026-10-20 at
-19:34 UTC, 20 of the 29 warm nowcast keys belonged to parks that were closed
-(Universal Studios Japan at 04:34 local). The TTL is now chosen on each upstream
-fetch from the earliest OPERATING / EXTRA_HOURS / TICKETED_EVENT window that has not
-closed yet:
+The nowcast is the only surface refreshed every 30 min, and on demand, so crawlers kept closed parks on
+that cadence (2026-10-20 19:34 UTC: 20 of 29 warm nowcast keys belonged to closed parks). Its TTL is now
+chosen on each fetch from the earliest OPERATING / EXTRA_HOURS / TICKETED_EVENT window not yet closed:
+open or opening within the hour → 30 min; closed → 3 h, but never past one hour before the next opening;
+no window known → 30 min (a missing schedule is not a closed park). Only the per-park key follows the
+park; the client's per-coordinate key (`weather:nowcast:{lat}:{lon}:{steps}`) stays at 30 min so an
+open park sharing coordinates with a closed one is never served stale.
 
-- open, or opening within the hour → 30 min (unchanged)
-- closed → 3 h, but never past one hour before the next opening
-- no upcoming window known → 30 min — a missing schedule is not a closed park
+## Hourly observed weather — designed, not built (PAR-1045)
 
-Only the per-park key follows the park; the client's per-coordinate key stays at
-30 min so an open park sharing coordinates with a closed one is never served stale.
+CatBoost trains on the **daily** rows while serving has an **hourly** forecast; PAR-1031/1032 collapse the
+forecast to daily units, so a 15:00 shower and a dry morning read the same in training. The design:
+
+| | |
+| --- | --- |
+| Table | `weather_hourly_observed`: `parkId`, `ts` (UTC hour), `temperature`, `apparentTemperature`, `precipitation`, `rain`, `snowfall`, `weatherCode`, `windSpeed`, `windGusts`, `cloudCover`; PK `(parkId, ts)`; a hypertable compressed after 7 days, registered in `HYPERTABLES`. Observed values only; a missing hour stays absent |
+| Source | Open-Meteo archive, `hourly=` those variables, `timezone=GMT`; the archive runs ~5 days behind, so the last training days keep the daily row |
+| Size | ~211 parks × 8,760 h ≈ 1.85 M rows/yr, ≈ 230 MB uncompressed, ~25 MB compressed; two years (`TRAIN_LOOKBACK_YEARS`) ≈ 50 MB |
+| Calls | backfill of 730 days for ~185 locations ≈ 8,700 units (spread over 3–4 days); then ~85 a day |
+| Consumers | `ml-service/db.fetch_training_data` joins it per (park, UTC hour); serving keeps the hourly forecast; normals stay walled off |
+
+Not built: it needs a table, a backfill, a sync job and a measured retrain.
+
+## Key files
+
+`src/external-apis/weather/open-meteo.client.ts` (client: daily, hourly, nowcast, archive),
+`src/parks/weather.service.ts` (save, query, nowcast, normals), `src/queues/processors/weather.processor.ts`,
+`src/queues/processors/weather-historical.processor.ts`.

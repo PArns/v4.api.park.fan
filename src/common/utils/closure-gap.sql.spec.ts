@@ -97,7 +97,7 @@ describe("closure-gap statements", () => {
     // Three hand-rolled copies of "when does this park's day end" lived here:
     // park_open scanned schedule_entries and normalized the close itself,
     // park_day_close did it a second time, and the readings they were compared
-    // against carried calendar dates from a third. todo.md named all three.
+    // against carried calendar dates from a third.
     //
     // Each of the four assertions below is a separate way back to a second
     // definition, and none of them changes a row in an ordinary park — which is

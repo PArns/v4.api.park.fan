@@ -38,7 +38,7 @@
  * `observedReadingsSql()`. That is deliberate; the reasoning is on
  * `isSourceAbsent` (PAR-162).
  *
- * See §5.2a of `docs/architecture/attraction-status-and-seasonality.md` for the
+ * See `docs/architecture/attraction-status/feed-drops.md` for the
  * three groups and the two checks that tell them apart.
  *
  * This says the honest thing instead, and it is the rule the codebase already

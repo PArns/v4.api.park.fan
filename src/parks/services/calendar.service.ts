@@ -426,7 +426,8 @@ export class CalendarService {
           );
           return null;
         });
-      // "unknown" means no usable baseline — an absent fact, not a rating (§3/§4).
+      // "unknown" means no usable baseline — an absent fact, not a rating
+      // (docs/rules/crowd-levels.md, docs/rules/absent-facts.md).
       if (
         todayRating?.hasData &&
         todayRating.crowdLevel !== "unknown" &&

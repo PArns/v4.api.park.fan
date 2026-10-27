@@ -14,7 +14,7 @@ import { Entity, PrimaryColumn, Column, Index } from "typeorm";
  * 1,396 days, which is why the rebuild below filters the showtime and not just
  * the snapshot. A visitor planning October gets nothing from the feed, and the
  * planner's `shows` field was therefore always `[]`. The full measurement is in
- * `docs/frontend/plan-day-endpoint.md` §8.
+ * `docs/frontend/plan-day/shows.md#no-feed-publishes-showtimes-ahead-of-the-current-day`.
  *
  * So a projection is the only honest answer, and this table is what makes it
  * cheap. Computing it per request is not an option: one park's eight-week window

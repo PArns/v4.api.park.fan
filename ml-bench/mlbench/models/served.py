@@ -1,5 +1,5 @@
 """The SERVED arm (PAR-1043): what production actually showed, replayed from the forward
-archive (``forecast_archive_curves``, docs/ml/forward-archive.md) instead of re-implemented.
+archive (``forecast_archive_curves``, docs/ml/forward-archive/README.md) instead of re-implemented.
 
 ``prod_served`` (baselines.py) reconstructs the planner's composed tier and only exists from
 d3; PCN + the persistence blend are not in the bench at all. This arm reads the archived

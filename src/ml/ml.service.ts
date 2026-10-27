@@ -2377,7 +2377,7 @@ export class MLService {
    * `chronos` where the Chronos-2 serving override (PAR-911) produced the
    * slot. Chronos serves only 45–120 min ahead, so under the two-hour scored
    * lead below it is recorded only where the two windows meet — see
-   * docs/ml/forward-archive.md §10.4 before reading the badge as a Chronos
+   * docs/ml/forward-archive/chronos-serving.md#where-it-applies before reading the badge as a Chronos
    * figure.
    *
    * `catboost` wherever CatBoost is what was served: the flag off, no PCN
@@ -2744,7 +2744,7 @@ export class MLService {
    * query that touches `attractions` — nearly every API read — queues behind
    * it. The policy waited for its full five-minute `max_runtime`, 25 times in a
    * row on 2026-10-07/08, and each time ~30–70 API queries finished in the same
-   * second the attempt gave up (docs/troubleshooting/db-health-runbook.md §0b).
+   * second the attempt gave up (docs/troubleshooting/timescaledb-lock-queues.md).
    *
    * Three things make this version safe:
    *

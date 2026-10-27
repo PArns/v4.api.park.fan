@@ -6,7 +6,7 @@
  * - `GET /v1/admin/model-comparison/day?parkId&date&attractionId&origin=morning`
  *
  * The admin frontend (PAR-856) is built against these types; change them only
- * additively. Semantics are in docs/ml/forward-archive.md §9.
+ * additively. Semantics are in docs/ml/forward-archive/model-comparison.md.
  */
 
 export type ModelComparisonGroupId = "live" | "today" | "planner" | "calendar";

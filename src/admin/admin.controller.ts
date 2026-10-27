@@ -367,7 +367,8 @@ export class AdminController {
    * endpoint counts distinct clock hours carrying a DOWN reading, across the
    * whole park-local calendar day and with no opening-hours bound, so it reads
    * 16 on a ten-hour park day. Every threshold in
-   * `docs/analytics/ride-downtime.md` is provisional until this has run.
+   * `docs/analytics/ride-downtime/publishing.md#ride-gates` is provisional until
+   * this has run.
    */
   @Get("downtime-measurement")
   @ApiOperation({
@@ -619,7 +620,7 @@ export class AdminController {
       "D9 (coverage). Counters are pooled before dividing. `chronos`: the " +
       "Chronos-2 shadow (PAR-852, never served) per use case × lead — own " +
       "MAE plus the paired difference vs served / persistence / H5 with a " +
-      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive.md.",
+      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive/scoring.md#admin-board.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
   @ApiQuery({
@@ -654,7 +655,7 @@ export class AdminController {
       "Cells: today | better | worse | unclear | pending, with the live " +
       "paired difference (model − served, minutes, negative = better) and its " +
       "95 % park-cluster CI, the offline verdict, the three switch checks and " +
-      "when the outstanding one reports. See docs/ml/forward-archive.md §9.",
+      "when the outstanding one reports. See docs/ml/forward-archive/model-comparison.md.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 28" })
   @ApiQuery({

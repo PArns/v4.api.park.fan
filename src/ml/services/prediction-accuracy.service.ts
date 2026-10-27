@@ -53,7 +53,8 @@ export type AccuracyBadgeResult = {
  * The champion-swap serves the PCN model (q0.5) for intraday, but
  * `prediction_accuracy` only ever stores CatBoost predictions — so
  * `getSystemAccuracyStats().byPredictionType.HOURLY` measures the CatBoost
- * *fallback*, not the served product (docs/ml/pcn-intraday-review.md §6a). The
+ * *fallback*, not the served product
+ * (docs/ml/intraday-serving.md#serving-and-storing-are-separate-reads). The
  * PCN shadow board (`pcn_intraday_comparisons`) already scores the served value
  * vs actuals on a matched (attraction, 15-min slot) population, with CatBoost
  * scored on the same population for a fair head-to-head. `null` when the board

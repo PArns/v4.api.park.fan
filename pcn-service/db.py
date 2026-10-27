@@ -58,7 +58,7 @@ def get_engine():
         connect_args={
             # Name the session (all services share the `parkfan` role) and end a
             # transaction left idle for 10 min, which would otherwise hold its
-            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            # locks indefinitely. See docs/troubleshooting/timescaledb-lock-queues.md.
             "application_name": "parkfan-pcn-service",
             "options": "-c idle_in_transaction_session_timeout=600000",
         },
@@ -191,7 +191,7 @@ def fetch_cross_ride_panel(
 
 
 # --------------------------------------------------------------------------
-# Shadow producer + scorer (design doc §12). Mirrors nf-service's durable
+# Shadow producer + scorer (docs/ml/pcn.md#shadow-boards). Mirrors nf-service's durable
 # tft_forecasts snapshot + the (since retired, PAR-870) score-comparison job, at
 # 15-min intraday grain.
 # --------------------------------------------------------------------------
@@ -380,7 +380,7 @@ PRUNE_MAX_BATCHES = 50
 # THIS IS ONLY CORRECT WHILE pcn_forecasts IS A PLAIN TABLE. A ctid is unique
 # per table, not per partition: as a hypertable the same ctid exists in every
 # chunk, and the outer DELETE would match rows in chunks the SELECT never looked
-# at. `docs/ml/pcn-intraday-review.md` floats "hypertable + add_retention_policy"
+# at. `docs/ml/pcn.md#retention-4-days` floats "hypertable + add_retention_policy"
 # as a future option for this table — taking it means rewriting this statement
 # (and then the policy replaces it anyway).
 _PRUNE_PCN_FORECASTS = text(

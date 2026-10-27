@@ -1,23 +1,23 @@
-# Precomputed Best-Days Endpoint (`/best-days`)
+# Precomputed best days (`/best-days`)
 
-**Added 2026-07-14.** A lean, precomputed projection of the calendar for the
-frontend's best-days / crowd-FAQ / header-forecast blocks — so those surfaces
-stop pulling the ~2.25 MB `/calendar` response (≈98 % of which is per-day
-`influencingHolidays` they never read) through the `/api` proxy, and stop
-paying its 10–20 s cold ML compute.
+The contract for the lean today → +90 days projection of a park's calendar
+(status, crowd level, holiday flags, optional weekday ranking) that park.fan's
+best-days, crowd-FAQ and header-forecast blocks read instead of the full
+`/calendar`. Open it when reading that endpoint or changing how it is refreshed.
 
 ```
-GET /v1/parks/{continent}/{country}/{city}/{parkSlug}/best-days
+GET /v1/parks/{continent}/{country}/{city}/{parkSlug}/best-days[?from=YYYY-MM-DD&to=YYYY-MM-DD]
 ```
+
+Code: `BestDaysService` (`src/parks/services/best-days.service.ts`).
 
 ## Window
 
-Rolling **today → +90 days** in the **park's timezone**, no params required.
-Optional `from` / `to` (YYYY-MM-DD, park timezone) slice the materialized
-snapshot; the range is capped at **90 days** (`400` otherwise). Days outside the
-stored today → +90 d window are simply not returned.
+Rolling **today → +90 days** in the park's timezone, no parameters needed. Optional
+`from`/`to` (park-local) slice the stored snapshot; a range over **90 days** or a bad
+date is a 400. Days outside the stored window are simply not returned.
 
-## Response (target ≤ 15 KB uncompressed)
+## Response
 
 ```jsonc
 {
@@ -25,84 +25,66 @@ stored today → +90 d window are simply not returned.
     "slug": "phantasialand",
     "timezone": "Europe/Berlin",
     "hasOperatingSchedule": true,
-    "computedAt": "2026-07-14T03:10:00.000Z", // when the batch produced this
+    "computedAt": "2026-07-14T03:10:00.000Z",
     "windowFrom": "2026-07-14",
     "windowTo": "2026-10-12"
   },
   "days": [
     {
-      "date": "2026-07-14",          // YYYY-MM-DD, park tz
-      "status": "OPERATING",          // ParkStatus: OPERATING | CLOSED | UNKNOWN
-      "crowdLevel": "low",            // very_low|low|moderate|high|very_high|extreme|unknown|closed
-      "predictedCrowdLevel": "low",   // optional: ML forward level; absent when unratable
+      "date": "2026-07-14",          // park tz
+      "status": "OPERATING",          // OPERATING | CLOSED | UNKNOWN
+      "crowdLevel": "low",            // very_low … extreme | unknown | closed
+      "predictedCrowdLevel": "low",   // ML forward level; absent when unratable
       "isHoliday": false,
       "isSchoolVacation": true,
       "isBridgeDay": false
     }
   ],
-  // OPTIONAL: stats-quality weekday ranking (same source as /stats) so the FE
-  // can render it without the (also slow) /stats aggregate. Omitted when cold.
-  "byDayOfWeek": [{ "dayOfWeek": 1, "avgCrowdScore": 2.1, "sampleDays": 98 }]
+  "byDayOfWeek": [{ "dayOfWeek": 1, "avgCrowdScore": 2.1, "sampleDays": 98 }] // optional
 }
 ```
 
-**Deliberately excluded** (vs `/calendar`): `influencingHolidays`, weather,
-hourly arrays, events, schedule/hours detail, `recommendation`, `peakLoad`.
-`isToday` is **not** baked in — derive it from `date` + `meta.timezone` so it
-never goes stale in a cache. The calendar **grid tab** keeps using the full
-`/calendar` endpoint (it needs hours/weather per day).
+- **Excluded on purpose** (vs `/calendar`): `influencingHolidays`, weather, hourly
+  arrays, events, hours, `recommendation`, `peakLoad`. There is no `isToday` —
+  derive it from `date` + `meta.timezone`, so a cached copy never goes stale.
+- **`crowdLevel` vs `predictedCrowdLevel`**: equal on future days. On today
+  `crowdLevel` is the level as of `computedAt`, `predictedCrowdLevel` the pure
+  forecast; a live "now" level belongs to the park page, not this planning surface.
+- **`byDayOfWeek`** is read best-effort from the 24 h `/stats` cache
+  (`getCachedByDayOfWeek`, read-only — it never triggers the stats scan) and is
+  omitted while that cache is cold; fall back to [`/stats`](./park-stats-and-peak-time.md).
+- Unknown park: **404**. A snapshot that cannot be built: **200** with `"days": []`.
 
-`crowdLevel` vs `predictedCrowdLevel`: on future days they're equal (the ML
-forecast). On **today** `crowdLevel` carries the level as of `computedAt` while
-`predictedCrowdLevel` is the pure ML forward — a live "now" number is patched
-separately on the park page, not here (this is a planning surface).
+## How it stays fast
 
-## Errors
+Served from a materialized Redis snapshot (`best-days:<parkId>`), never computed per
+request from ML:
 
-- `404` — unknown park.
-- `200` with `"days": []` — no snapshot materialized yet (brand-new park, or
-  cold Redis before the first warmup). The frontend degrades gracefully.
-
-## How it stays fast (the SLO)
-
-Served from a **materialized Redis snapshot** (`best-days:<parkId>`, 26 h TTL),
-never a lazy compute:
-
-- The 12 h **calendar warmup** (`warmup-calendar-daily`, 08:00 + 20:00 UTC —
-  after the nightly forecast) force-refreshes each park's calendar and then
-  projects the today → +90 d snapshot from the **already-warm month caches**
-  (`BestDaysService.precomputeForPark`). No extra ML cost.
-- The request path is a single Redis GET + in-memory slice ⇒ **p99 < 300 ms,
-  cold and warm**. This is what lets the frontend drop its `BEST_DAYS_SEED_TIMEOUT_MS`
-  guard — the seed can't be slow, so the timeout becomes a formality.
-
-`byDayOfWeek` is read **best-effort** from the 24 h `/stats` cache
-(`getCachedByDayOfWeek`, read-only — it never triggers the slow 2-year
-percentile scan). It's omitted until that cache is warm; the frontend can fall
-back to `/stats` when absent.
-
-## HTTP caching
-
-```
-Cache-Control: public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400
-```
-
-No auth variance → the CDN absorbs repeat traffic. Express emits a weak `ETag`
-and answers `If-None-Match` with `304` natively.
+- The calendar warmup (`warmup-calendar-daily`, 08:00 and 20:00 UTC) refreshes each
+  park's calendar months and projects the snapshot from those warm month caches
+  (`BestDaysService.precomputeForPark`) — no extra ML cost.
+- **The snapshot lives 13 h** (`CALENDAR_WARMUP_MONTH_TTL`), the same as the month
+  caches it is built from: a projection may not outlive its source. It was 26 h, and
+  a 24.8-hour-old snapshot then said "low" for three October Saturdays the calendar
+  and `/plan/day` rated `very_high` (2026-09-04). The current month's caches live 2 h,
+  so for up to 11 h a current-month day can lag the calendar.
+- **A miss rebuilds on demand**, single-flighted, rather than answering empty (an
+  empty 200 would sit at the edge for an hour and blank "Prognose heute"). Only a
+  failed rebuild answers `days: []`.
+- `Cache-Control: public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400`;
+  Express answers `If-None-Match` with 304.
 
 ## On-change revalidation
 
-After each calendar-warmup batch, the backend fires **one batched**
-`POST {REVALIDATE_URL}` with `{ "tags": ["best-days:<slug>", …] }` for every
-park it recomputed, so the frontend drops its (day-long) best-days cache
-immediately instead of waiting out the TTL.
+After each warmup batch the API fires one batched `POST {REVALIDATE_URL}` with
+`{ "tags": ["best-days:<slug>", …] }` for every recomputed park, so park.fan drops
+its day-long best-days cache at once (`RevalidationService`).
 
-Config (see `.env.example`):
+| Env                 | Default                           | Notes                                                                 |
+| ------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| `REVALIDATE_URL`    | `https://park.fan/api/revalidate` | park.fan's endpoint                                                   |
+| `REVALIDATE_SECRET` | unset                             | sent as `Authorization: Bearer …`; **empty disables the webhook**     |
 
-| Env | Default | Notes |
-|-----|---------|-------|
-| `REVALIDATE_URL` | `https://park.fan/api/revalidate` | Frontend endpoint. |
-| `REVALIDATE_SECRET` | _(unset)_ | Sent as `Authorization: Bearer <secret>`. **Empty ⇒ webhook disabled** (dev/test/CI never ping production). |
-
-The webhook is best-effort — a failed POST is logged and never fails the warmup
-batch.
+The webhook is best-effort: a failed POST is logged and never fails the warmup. The
+order in which the API evicts and announces is in
+[caching strategy](../architecture/caching-strategy.md).

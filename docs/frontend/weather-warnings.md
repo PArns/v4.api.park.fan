@@ -1,96 +1,61 @@
-# Severe-weather warnings — `weather.warnings` (frontend guide)
+# Severe-weather warnings (`weather.warnings`)
 
-> How to render official severe-weather warnings on a park page. Shipped
-> 2026-06-19. Source: MeteoGate (EUMETNET → DWD/MeteoAlarm).
+The contract for official severe-weather warnings (MeteoGate: EUMETNET → DWD /
+MeteoAlarm) on a park: where they appear, the `WeatherWarningDto` shape, German and
+English text, severity colours and coverage. Open it when rendering a weather
+warning banner.
 
-## Where it lives — two places
+## Where it lives
 
-The same `WeatherWarningDto[]` is exposed in two spots:
+The same `WeatherWarningDto[]` in two places:
 
-1. **Embedded in the park response** — `weather.warnings`:
-   ```
-   GET /v1/parks/:continent/:country/:city/:parkSlug   (the park detail)
-   → weather.warnings: WeatherWarningDto[]
-   ```
-   Cached ~15 min with the rest of the park payload — fine for first paint.
+1. **The park detail** — `weather.warnings`, cached with the park payload. Fine for
+   the first paint and the prerendered HTML.
+2. **The nowcast** — `GET …/:parkSlug/weather/nowcast` → `warnings`, cached to the
+   next 15-minute slot. Use this one for the live banner.
 
-2. **On the live nowcast** — `/weather/nowcast`:
-   ```
-   GET …/:parkSlug/weather/nowcast → warnings: WeatherWarningDto[]
-   ```
-   This endpoint is **polled live client-side** (re-derived every ~15 min), so
-   it carries the **most up-to-date** warnings. Use the nowcast warnings for the
-   live banner; the embedded copy just seeds the prerendered HTML.
+`[]` means no active warning: render nothing. Only currently valid warnings are
+returned (`expires > now`, `src/parks/weather-warnings.service.ts`), so no client
+filtering is needed.
 
-An **empty array** (`[]`) means no active warnings → render nothing. The backend
-only returns warnings that are currently valid (`expires > now`), so you don't
-need to filter expired ones — but `onset`/`expires` are there if you want to.
-
-## Shape (`WeatherWarningDto`)
+## Shape (`src/parks/dto/weather-warning.dto.ts`)
 
 ```ts
 interface WeatherWarning {
-  alertId: string;        // stable id — use as React key / dedup
-  event: string;          // event type, German, e.g. "GEWITTER"
-  eventEn?: string | null;// English, e.g. "thunderstorms"
-  severity?: string | null; // Minor | Moderate | Severe | Extreme (CAP)
-  urgency?: string | null;  // CAP urgency (Immediate | Expected | Future …)
-  category?: string | null; // CAP category / awareness type
-  onset?: string | null;    // valid from (ISO 8601)
-  expires?: string | null;  // valid until (ISO 8601)
+  alertId: string;              // stable — React key, dedupe
+  event: string;                // German, e.g. "GEWITTER"
+  eventEn?: string | null;      // e.g. "thunderstorms"
+  severity?: string | null;     // CAP: Minor | Moderate | Severe | Extreme
+  urgency?: string | null;      // CAP urgency
+  category?: string | null;     // CAP category / awareness type
+  onset?: string | null;        // ISO 8601, may be in the future
+  expires?: string | null;      // ISO 8601
   headline?: string | null;     headlineEn?: string | null;
   description?: string | null;  descriptionEn?: string | null;
   instruction?: string | null;  instructionEn?: string | null; // safety advice
-  area?: string | null;     // affected area, e.g. "Kreis Freyung-Grafenau"
-  source: string;           // "meteogate" (attribution)
+  area?: string | null;         // e.g. "Kreis Freyung-Grafenau"
+  source: string;               // "meteogate"
 }
 ```
 
-## Localization
+Null fields are stripped from the JSON (`ExcludeNullInterceptor`), so read every
+optional field as possibly absent.
 
-Every text field ships in **German and English** — pick per the active locale:
+## Rendering
 
-```ts
-const t = locale.startsWith("de") ? "de" : "en";
-const event = t === "en" && w.eventEn ? w.eventEn : w.event;
-const headline = t === "en" ? (w.headlineEn ?? w.headline) : w.headline;
-// same for description / instruction
-```
+- **Language**: German fields are always present, English best-effort. For a German
+  locale read the German field; otherwise the `*En` field with the German one as
+  fallback.
+- **Severity → MeteoAlarm colour**: `Minor` yellow (be aware), `Moderate` orange (be
+  prepared), `Severe` red (be very alert), `Extreme` dark red (take action). When
+  several collapse into one badge, show the most severe first, then by `onset`.
+- Headline plus severity colour is the minimum; `description` and `instruction` go in
+  the expanded view. Show "until {expires}", or "{onset}–{expires}" when the warning
+  has not started. `area` says which region is affected.
+- Credit the national weather service via MeteoGate/MeteoAlarm where a source line is
+  shown.
 
-(The German fields are always present; English is best-effort — fall back to
-the German value when an `*En` field is null.)
+## Coverage
 
-## Severity → colour
-
-Map `severity` to the MeteoAlarm awareness colours:
-
-| severity   | meaning        | suggested colour |
-|------------|----------------|------------------|
-| `Minor`    | be aware       | yellow           |
-| `Moderate` | be prepared    | orange           |
-| `Severe`   | be very alert  | red              |
-| `Extreme`  | take action    | dark red / purple|
-
-Show the most severe warning first if you collapse multiple into one badge
-(sort by this order, then by `onset`).
-
-## Rendering rules
-
-- Render a **banner/badge** per warning (or one badge + a "N warnings" expander).
-  Headline + severity colour is the minimum; `description` and `instruction`
-  (the safety advice) go in the expanded view.
-- Show the validity as "until {expires}" (and "{onset}–{expires}" if the
-  warning hasn't started yet — `onset` can be in the future).
-- `area` tells the user *which* region is affected — useful when a park sits
-  near a warning boundary.
-- Use `alertId` as the stable key.
-
-## Coverage & freshness
-
-- **European parks only** (DWD/MeteoAlarm covers ~40 countries). Parks elsewhere
-  (US, …) simply return `warnings: []` until another source is added.
-- Synced every **15 minutes** server-side; the nowcast poll surfaces changes
-  within that window.
-- Attribution: warnings are sourced via MeteoGate/MeteoAlarm from the national
-  weather service (DWD for Germany) — credit per their terms if you display a
-  source line.
+**European parks only** (MeteoAlarm covers ~40 countries); elsewhere `warnings: []`.
+Synced every 15 minutes (`weather-warnings-cron`).

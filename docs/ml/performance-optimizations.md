@@ -1,203 +1,14 @@
-# ML Service Performance Optimizations
+# ml-service query performance
 
-> **Last Updated**: 2026-02-15
-> **Status**: ✅ Implemented
-> **Impact**: 60-80% faster predictions
+How the CatBoost serving path keeps its database reads cheap — the uuid-cast rule that applies to
+every service, the in-process caches, the recent-history reads — and the measurements behind
+them. Open it before adding a query to `ml-service`, `nf-service` or `pcn-service`, or any uuid
+filter in the API.
 
----
+## Never cast an indexed uuid column; cast the parameter (PAR-871)
 
-## 📊 Overview
-
-The ML Service underwent significant performance optimizations to reduce prediction latency and improve throughput. These optimizations focus on three key areas:
-
-1. **Database Query Caching** - Reduce repeated queries
-2. **Query Optimization with Window Functions** - Move computation to database
-3. **Vectorization** - Replace Python loops with pandas operations
-
-**Results:**
-- First request: ~40-50% faster
-- Cached requests: ~70-85% faster
-- Daily predictions (1000+ timestamps): up to **90% faster**
-
----
-
-## 🚀 Optimizations Implemented
-
-### 1. Database Query Caching
-
-**Problem**: Every prediction request re-fetched the same data (holidays, schedules, weather) even when unchanged.
-
-**Solution**: In-memory caching with appropriate TTLs.
-
-#### Holiday Caching (1 hour TTL)
-- **File**: `ml-service/db.py:276-340`
-- **Cache Key**: `{countries}:{start_date}:{end_date}`
-- **TTL**: 3600 seconds (1 hour)
-- **Rationale**: Holidays never change for past dates; safe to cache
-
-```python
-# Cache structure
-_holidays_cache = {
-  "DE,NL:2024-01-01:2024-12-31": (DataFrame, timestamp)
-}
-```
-
-#### Schedule Caching (5 minutes TTL)
-- **File**: `ml-service/db.py:383-464`
-- **Cache Key**: `{start_date}:{end_date}`
-- **TTL**: 300 seconds (5 minutes)
-- **Rationale**: Schedules rarely change; short TTL ensures freshness
-
-#### Recent Wait Times Caching (2 minutes TTL)
-- **File**: `ml-service/predict.py:50-119`
-- **Cache Key**: `{attraction_ids}:{lookback_days}`
-- **TTL**: 120 seconds (2 minutes)
-- **Rationale**: Protects against burst traffic; very short TTL for near-real-time data
-
-#### Weather Historical Caching (1 hour TTL)
-- **File**: `ml-service/predict.py:344-410`
-- **Cache Key**: `{park_ids}:{month}`
-- **TTL**: 3600 seconds (1 hour)
-- **Rationale**: Historical averages don't change; safe to cache
-
-**Impact**: 40-60% speedup for repeated requests within TTL window.
-
----
-
-### 2. Query Optimization with Window Functions
-
-**Problem**: `fetch_recent_wait_times` fetched 730 days of raw data and calculated rolling averages in Python.
-
-**Solution**: Pre-compute rolling averages and standard deviation in PostgreSQL using window functions.
-
-#### Before (Python):
-```python
-# Fetch raw data
-SELECT attractionId, date, hour, AVG(waitTime)
-FROM queue_data
-WHERE ...
-GROUP BY attractionId, date, hour
-
-# Python calculates rolling_avg_7d
-for attraction_id in attraction_ids:
-    last_7_days = data[data['date'] >= cutoff]
-    rolling_7d = last_7_days['avg_wait'].mean()
-```
-
-#### After (PostgreSQL):
-```sql
-WITH hourly_agg AS (...)
-SELECT
-    attractionId,
-    date,
-    hour,
-    avg_wait,
-    -- Pre-compute 7-day rolling average (168 hours)
-    AVG(avg_wait) OVER (
-        PARTITION BY attractionId
-        ORDER BY date, hour
-        ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-    ) as rolling_avg_7d,
-    -- Pre-compute standard deviation
-    STDDEV(avg_wait) OVER (...) as rolling_std_7d
-FROM hourly_agg
-```
-
-**Benefits**:
-- ✅ Less data transferred over network
-- ✅ PostgreSQL window functions are highly optimized (C code)
-- ✅ No Python loops over 730 days × 24 hours × N attractions
-- ✅ Easier to cache (includes computed values)
-
-**Impact**: +30-40% speedup for historical feature calculation.
-
-**File**: `ml-service/predict.py:50-119`
-
----
-
-### 3. Vectorization - Holiday Lookups
-
-**Problem**: Holiday feature engineering used a **loop over every prediction row** (potentially 1000+ for daily predictions).
-
-#### Before (Loop):
-```python
-for idx, row in df.iterrows():  # 1000+ iterations for daily predictions
-    date = row["local_timestamp"].date()
-    park_info = parks_metadata[parks_metadata["park_id"] == row["parkId"]]
-
-    # Parse JSON influencing regions
-    influencing_regions = json.loads(park_info.iloc[0].get("influencingRegions"))
-
-    # Lookup holidays
-    primary_type = holiday_lookup.get((country, region, date))
-    df.at[idx, "is_holiday_primary"] = int(primary_type == "public")
-    # ... repeat for neighbors
-```
-
-**Performance**:
-- 1000 rows × (park lookup + JSON parse + 4 dict lookups) = **very slow**
-
-#### After (Vectorized):
-```python
-# Pre-process once (not per row!)
-park_country_map = parks_metadata.set_index("park_id")[["country", "region_code"]].to_dict("index")
-park_influences_map = {pid: parse_influences(row) for pid, row in parks_metadata.iterrows()}
-
-# Build lookup keys vectorized
-df["primary_key"] = df.apply(
-    lambda row: f"{park_country_map[row['parkId']]['country']}|{row['date']}",
-    axis=1
-)
-
-# Map to holiday types (vectorized operation)
-df["primary_type"] = df["primary_key"].map(holiday_type_lookup)
-df["is_holiday_primary"] = (df["primary_type"] == "public").astype(int)
-```
-
-**Benefits**:
-- ✅ Parks metadata parsed **once** instead of **1000 times**
-- ✅ Pandas `.map()` is vectorized (C-accelerated)
-- ✅ No `.at[]` assignments (very slow for large DataFrames)
-
-**Impact**: +25-40% speedup for daily predictions with many timestamps.
-
-**File**: `ml-service/predict.py:458-690`
-
----
-
-### 4. Vectorization - Historical Features
-
-**Problem**: Rolling averages and volatility were calculated in Python for every attraction.
-
-**Solution**: Use pre-computed values from database (from optimization #2).
-
-#### Before:
-```python
-for attraction_id in attraction_ids:
-    last_7_days = data[data['attractionId'] == attraction_id]
-    rolling_7d = last_7_days['avg_wait'].mean()  # Python aggregation
-    volatility = np.log1p(last_7_days['avg_wait'].std())
-```
-
-#### After:
-```python
-# Use DB-computed values directly
-if "rolling_avg_7d" in attraction_data.columns:
-    rolling_7d = attraction_data["rolling_avg_7d"].iloc[-1]
-    raw_std = attraction_data["rolling_std_7d"].iloc[-1]
-    volatility = min(np.log1p(raw_std), np.log1p(cap_std))
-```
-
-**Impact**: Eliminates Python aggregation loops; values come pre-computed from DB.
-
-**File**: `ml-service/predict.py:936-1085`
-
----
-
-### 5. Never cast an indexed uuid column; cast the parameter (PAR-871, 2026-10-12)
-
-**Rule.** A filter on a uuid column compares uuid to uuid. The cast goes on the
-bound value, never on the column:
+**Rule.** A filter on a uuid column compares uuid to uuid. The cast goes on the bound value, never
+on the column:
 
 ```sql
 -- WRONG: the column is hidden from its index
@@ -210,253 +21,73 @@ WHERE "parkId" = CAST(:park_id AS uuid)
 WHERE a."parkId" = $1::uuid      /  = ANY($1::uuid[])             -- TypeORM / pg
 ```
 
-A cast on the column turns the predicate into an expression no index covers. On
-`queue_data` it is worse than a missed index: the compressed chunks are filtered
-on their segment-by column, and with a text expression TimescaleDB decompresses
-every chunk in the time window instead. The two serving reads in `predict.py`
-(`fetch_recent_rolling_stats`, `fetch_recent_wait_times`, ~90 000 calls a day
-each) carried this cast and were ~80 % of all database time on 2026-10-12. An
-expression index does not help (segment-by filtering on compressed chunks does
-not use it); fixing the predicate does.
+A cast on the column turns the predicate into an expression no index covers. On `queue_data` it
+is worse than a missed index: compressed chunks are filtered on their segment-by column, and with
+a text expression TimescaleDB decompresses every chunk in the time window instead. The two serving
+reads in `predict.py` (`fetch_recent_rolling_stats`, `fetch_recent_wait_times`, ~90,000 calls a day
+each) carried this cast and were ~80 % of all database time on 2026-10-12. An expression index
+does not help (segment-by filtering on compressed chunks does not use it); fixing the predicate
+does.
 
-**The one trap.** Casting the parameter raises `22P02` on a value that is not a
-uuid, which fails the whole query, where the text comparison just matched
-nothing. So ids are filtered before they are bound: `uuid_params.uuid_list` /
-`uuid_or_none` (Python, one identical copy in each of `ml-service`,
-`pcn-service`, `nf-service`) and `isCanonicalUuid` in
-`src/common/utils/uuid-param.util.ts`. Both keep only the lowercase hyphenated
-form, which is exactly what `uuid::text` prints, so they drop only values the
-old comparison could never have matched: same rows, before and after. A dropped
-value is logged once per process. Where an empty id list means "all parks"
-(`fetch_attraction_meta` in pcn/nf), the `WHERE` follows the input list, not the
-filtered one, so a list of bad ids still matches nothing.
+**The one trap.** Casting the parameter raises `22P02` on a value that is not a uuid, which fails
+the whole query, where the text comparison just matched nothing. So ids are filtered before they
+are bound: `uuid_params.uuid_list` / `uuid_or_none` (one identical copy in each of `ml-service`,
+`pcn-service`, `nf-service`) and `isCanonicalUuid` in `src/common/utils/uuid-param.util.ts`. Both
+keep only the lowercase hyphenated form, which is exactly what `uuid::text` prints, so they drop
+only values the old comparison could never have matched. A dropped value is logged once per
+process. Where an empty id list means "all parks" (`fetch_attraction_meta` in pcn/nf), the
+`WHERE` follows the input list, not the filtered one, so a list of bad ids still matches nothing.
 
-Output casts (`SELECT qd."attractionId"::text AS "attractionId"`) are fine:
-they run after the filter. Columns that really are text
-(`queue_data_aggregates."attractionId"`) are compared as text.
+Output casts (`SELECT qd."attractionId"::text AS "attractionId"`) are fine: they run after the
+filter. Columns that really are text (`queue_data_aggregates."attractionId"`) are compared as text.
 
 **Measured on production, Phantasialand (40 rides), warm cache, same rows:**
 
 | Query | Before (`::text`) | After (`uuid[]`) |
 |---|---|---|
-| rolling stats, 90 d | 264 781 buffers, 289 ms exec + 85 ms plan, 61 seq scans on chunks | 28 195 buffers, 93 ms + 18 ms, 0 seq scans |
-| recent waits, 32 d | 198 643 buffers, 165 ms + 35 ms | 50 520 buffers, 45 ms + 5 ms |
-| historical occupancy (`db.py`) | 42 318 buffers, 62 ms + 459 ms plan | 30 315 buffers, 33 ms + 116 ms plan |
-| `weather_data` averages | 1 611 buffers, 5 ms + 32 ms plan | 121 buffers, 1.5 ms + 2 ms |
+| rolling stats, 90 d | 264,781 buffers, 289 ms exec + 85 ms plan, 61 seq scans on chunks | 28,195 buffers, 93 ms + 18 ms, 0 seq scans |
+| recent waits, 32 d | 198,643 buffers, 165 ms + 35 ms | 50,520 buffers, 45 ms + 5 ms |
+| historical occupancy (`db.py`) | 42,318 buffers, 62 ms + 459 ms plan | 30,315 buffers, 33 ms + 116 ms plan |
+| `weather_data` averages | 1,611 buffers, 5 ms + 32 ms plan | 121 buffers, 1.5 ms + 2 ms |
 | `schedule_entries` | 698 buffers | 4 buffers |
 
-Old and new SQL return identical rows (`EXCEPT ALL` both ways = 0) for
-Phantasialand, Europa-Park and Magic Kingdom on all five queries.
-
-`ml-service/tests/test_uuid_params.py` (and the copies in `pcn-service` and
-`nf-service/tests`) fail on any `::text =`, `::text IN` or `::text <>` in the
+Old and new SQL return identical rows (`EXCEPT ALL` both ways = 0) for Phantasialand, Europa-Park
+and Magic Kingdom on all five queries. `ml-service/tests/test_uuid_params.py` (and the copies in
+`pcn-service` and `nf-service/tests`) fail on any `::text =`, `::text IN` or `::text <>` in the
 service's query files.
 
----
+## Recent history: two reads, both shaped like training
 
-## 🔧 Technical Details
+- **`fetch_recent_wait_times`** — one row per (ride, park-local date, hour) over
+  `RECENT_LOOKUP_DAYS` (32), for the date/hour lag lookups.
+- **`fetch_recent_rolling_stats`** — one row per ride: `rolling_avg_7d/_weekday/_weekend/_28d/_90d`
+  and the matching stds, computed in SQL over the same time-based, left-closed windows training
+  uses (one median per hour, park-local weekday split, sample std).
 
-### Cache Safety
+Their predecessor read 730 days with nine ROWS-based window functions and took `.iloc[-1]` under
+`ORDER BY date DESC` — the **oldest** row — so every served rolling feature was the value from
+the start of the two-year window (Taron, 2026-10-01: `rolling_avg_7d` 54.75 served against 28.8
+real), and that query alone was ~2/3 of all Postgres execution time.
 
-**All caches use `.copy()`** to prevent mutation:
+## In-process caches
 
-```python
-if cache_key in _holidays_cache:
-    cached_data, cache_time = _holidays_cache[cache_key]
-    if time.time() - cache_time < _holidays_cache_ttl:
-        return cached_data.copy()  # ✅ Returns copy, not reference
-```
+| Cache | Where | TTL |
+|---|---|---|
+| holidays | `db.py` | 1 h |
+| parks metadata | `db.py` | 5 min |
+| schedules | `db.py` | 5 min |
+| historical park occupancy (weekday × hour) | `db.py` | 1 h, expired entries evicted |
+| weather climatology | `predict.py` | 1 h |
+| recent wait times, recent rolling stats | `predict.py` | 15 min; the end time is floored to the 15-min window, so one key and one SQL bound per window; expired entries evicted on write |
 
-This ensures cached DataFrames cannot be accidentally modified by prediction code.
+Every cache hands out `.copy()`, so prediction code cannot mutate a cached frame. TTLs are
+time-based, not event-based: a holiday or a weather average changes rarely, a schedule a little
+more often. The holidays, schedules and weather caches check the TTL on read but never evict, and
+their keys carry date ranges and park sets; when no cache evicted, the 2 gunicorn workers grew to
+~15 GiB over ~25 h. `gunicorn.conf.py` recycles a
+worker after `ML_MAX_REQUESTS` (1000, jitter 200) requests, which caps that growth; bounding the
+remaining caches is the real fix.
 
-### Cache Invalidation
+## Connection pool
 
-Caches use **time-based TTL** (not event-based invalidation):
-- Simple to implement and reason about
-- No complex invalidation logic needed
-- TTLs chosen based on data mutability
-
-| Data Type | TTL | Rationale |
-|-----------|-----|-----------|
-| Holidays | 1 hour | Never changes for past dates |
-| Weather Historical | 1 hour | Monthly averages are stable |
-| Schedules | 5 minutes | Can change, but infrequently |
-| Recent Wait Times | 2 minutes | Near-real-time data; burst protection only |
-
-### Database Connection Pooling
-
-The ML service uses a **connection pool** to avoid connection overhead:
-
-```python
-# ml-service/db.py
-engine = create_engine(
-    get_db_url(),
-    pool_pre_ping=True,
-    pool_size=20,        # 20 connections in pool
-    max_overflow=10,     # +10 overflow connections
-    pool_timeout=30,     # 30s wait for connection
-)
-```
-
-**Configuration**:
-- Base pool: 20 connections
-- Max total: 30 connections (20 + 10 overflow)
-- Pre-ping enabled: Validates connections before use
-
----
-
-## 📈 Performance Benchmarks
-
-### Prediction Request Times
-
-**Test Setup**: Park with 40 attractions, daily predictions (365 days)
-
-| Scenario | Before | After | Improvement |
-|----------|--------|-------|-------------|
-| First request (cold cache) | ~8.5s | ~4.2s | **50% faster** |
-| Cached request (warm cache) | ~8.5s | ~1.2s | **86% faster** |
-| Hourly predictions (24 hours) | ~2.1s | ~0.9s | **57% faster** |
-
-### Database Query Reduction
-
-**Test**: 10 prediction requests in 1 minute (same park)
-
-| Query Type | Before | After | Reduction |
-|------------|--------|-------|-----------|
-| Holiday queries | 10 | 1 | **90%** |
-| Schedule queries | 10 | 2 | **80%** |
-| Weather queries | 10 | 1 | **90%** |
-| Recent wait times | 10 | 5 | **50%** (2min cache) |
-
----
-
-## 🎯 Remaining Optimizations (Future Work)
-
-### 1. Schedule Processing Loop Vectorization
-- **File**: `predict.py:770-874`
-- **Current**: Loop over every prediction row
-- **Potential**: Merge-based approach
-- **Estimated Impact**: +10-15%
-- **Complexity**: High (complex edge cases: OPERATING/CLOSED/UNKNOWN logic)
-
-### 2. Historical Features Full Vectorization
-- **Current**: Still uses loop for lag features (last_1h, last_24h, same_hour_last_week)
-- **Potential**: Groupby + merge approach
-- **Estimated Impact**: +5-10%
-- **Complexity**: Medium
-
-### 3. Parallel Feature Engineering
-- **Current**: Sequential feature computation
-- **Potential**: Compute independent feature groups in parallel
-- **Estimated Impact**: +15-20% (for large requests)
-- **Complexity**: Medium (requires careful dependency management)
-
----
-
-## 🔍 Monitoring & Debugging
-
-### Cache Hit Rates
-
-Currently **not logged**. Future enhancement:
-
-```python
-# Add to each cache check
-logger.debug(f"Cache hit rate: {hits}/{total} ({hits/total*100:.1f}%)")
-```
-
-### Performance Logging
-
-The ML service logs prediction duration:
-
-```python
-# ml-service/main.py
-start_time = time.time()
-predictions = predict_wait_times(...)
-duration = time.time() - start_time
-logger.info(f"Prediction duration: {duration:.2f}s for {len(predictions)} predictions")
-```
-
-### Cache Size Management
-
-Caches are **unbounded** (no size limit). For production with many parks, consider:
-- LRU eviction policy
-- Max cache size limits
-- Periodic cleanup of expired entries
-
----
-
-## 📝 Notes
-
-### Data Consistency
-
-**Question**: Do caches affect data freshness?
-
-**Answer**: Minimal impact:
-- Holidays: Never change for past dates → safe
-- Weather: Historical monthly averages → stable
-- Schedules: 5min TTL → acceptable for prediction accuracy
-- Recent wait times: 2min TTL → protects burst traffic only
-
-### Cache Warming
-
-Caches are **lazy** (populated on first request). For production:
-- Consider warming critical caches on startup
-- Pre-fetch holidays for current year
-- Pre-fetch schedules for active parks
-
----
-
-## 🚀 Deployment
-
-### Backward Compatibility
-
-All optimizations are **backward compatible**:
-- Caches have fallback to DB queries
-- Window functions add new columns; old columns still work
-- Vectorization produces identical results to loop version
-
-### Rolling Out
-
-1. ✅ Deploy updated `ml-service` with new code
-2. ✅ Monitor prediction latency (should decrease)
-3. ✅ Monitor database load (should decrease)
-4. ✅ No database schema changes required
-5. ✅ No model retraining required
-
-### Rollback Plan
-
-If issues occur:
-1. Redeploy previous ML service version
-2. No data migration needed (backward compatible)
-3. No database changes to revert
-
----
-
-## 📚 Related Documentation
-
-- [Model Overview](./model-overview.md) - ML model architecture and features
-- [System Overview](../architecture/system-overview.md) - Overall system design
-- [Caching Strategy](../architecture/caching-strategy.md) - Redis caching on NestJS side
-
----
-
-## ✅ Summary
-
-**Total Performance Improvement: 60-80%**
-
-| Optimization | Impact | Complexity | Status |
-|--------------|--------|------------|--------|
-| Database Caching | 40-60% | Low | ✅ Done |
-| Query Window Functions | 30-40% | Medium | ✅ Done |
-| Holiday Vectorization | 25-40% | Medium | ✅ Done |
-| Historical Features Optimization | 15-20% | Low | ✅ Done |
-| Schedule Loop Vectorization | 10-15% | High | ⏸️ Future |
-| Parallel Feature Engineering | 15-20% | Medium | ⏸️ Future |
-
-**Key Achievements**:
-- ✅ No data loss or accuracy impact
-- ✅ Backward compatible
-- ✅ All caches use `.copy()` for safety
-- ✅ Appropriate TTLs for data mutability
-- ✅ Window functions offload work to database
-- ✅ Vectorization eliminates expensive Python loops
+`ml-service/db.py`: `pool_size` 20, `max_overflow` 10, `pool_timeout` 30 s, `pool_pre_ping`.

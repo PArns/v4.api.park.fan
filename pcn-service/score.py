@@ -1,5 +1,5 @@
 """Shadow scorer — score matured PCN forecasts vs realised actuals AND vs CatBoost,
-on the matched (attraction, 15-min slot) population (design doc §12).
+on the matched (attraction, 15-min slot) population (docs/ml/pcn.md#shadow-boards).
 
 Mirrors the (since retired, PAR-870) daily score-comparison job, at intraday grain: INNER-join PCN's durable
 forward forecast (q0.5 = the displayed wait) to the realised 15-min median and to
@@ -272,8 +272,9 @@ def _matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.DataFrame:
         return pd.DataFrame()
     # INNER-join BOTH actuals and CatBoost: PCN and CatBoost are scored on exactly the SAME
     # matched (attraction, 15-min slot) population, so their MAE/bias are comparable and n
-    # is identical (design doc §12 — a fair head-to-head). The previous LEFT-join on CatBoost
-    # kept PCN-only slots, producing misleading unequal-n cells across the two models.
+    # is identical (docs/ml/pcn.md#shadow-boards — a fair head-to-head). The previous
+    # LEFT-join on CatBoost kept PCN-only slots, producing misleading unequal-n cells across
+    # the two models.
     m = (pcn.merge(actuals, on=["unique_id", "target_slot"], how="inner")
             .merge(cat, on=["unique_id", "target_slot"], how="inner"))
     return m.rename(columns={"cat_pred": "catboost"})

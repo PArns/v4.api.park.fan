@@ -1,53 +1,47 @@
 # What an attraction is for (`attractionKind`)
 
-A hand-decided category on every attraction, on the ride endpoint and on every
-ride in a park payload:
+The contract for the curated category on every attraction — `RIDE`, `TRANSPORT`,
+`SHOW`, `WALKTHROUGH`, `MAZE` — why `null` is not `RIDE`, why it is independent of
+the feed's `attractionType`, and what it does not change. On the ride endpoint and on
+every ride in a park payload:
 
 ```json
 { "attractionKind": "TRANSPORT" }
 ```
 
-Five values, and they are the whole list: `RIDE`, `TRANSPORT`, `SHOW`,
-`WALKTHROUGH`, `MAZE`. They come from `ATTRACTION_KIND_VALUES`, which is also what the
-Swagger enum and the admin editor's dropdown read, so the three cannot drift
-apart.
+The five values are `ATTRACTION_KIND_VALUES` (`src/common/types/attraction-kind.type.ts`),
+which the Swagger enum and the admin editor's dropdown also read. Editors decide every
+value except one: a job may write `MAZE` into an empty cell under a calibrated rule —
+see [the `MAZE` rule](../architecture/attraction-status/maze-rule.md).
 
 ## Null is not `RIDE`
 
-`null` means nobody has judged this attraction. That is the state of nearly the
-whole catalogue — the column started empty on 2026-09-22 and fills one editor
-decision at a time. Render nothing for it. A client that treats the absence as
-"it is a ride" publishes our own silence as a statement about the park, which
-is the rule in [absent facts](../rules/absent-facts.md).
+`null` means nobody has judged the attraction — the state of most of the catalogue
+(the column started empty on 2026-09-22). Render nothing for it; treating absence as
+"it is a ride" publishes our silence as a statement about the park
+([absent facts](../rules/absent-facts.md)).
 
 ## It is not `attractionType`
 
-`attractionType` is the upstream's free-text label (ThemeParks.wiki,
-Queue-Times) and does not reach the public payload at all. This field is a
-verdict we make, and the two are independent by design: upstream files water
-rides as ATTRACTION and walkthroughs as RIDE, so a label may never seed a kind.
-Both columns stay on the row, and the editor shows them side by side.
+`attractionType` is the upstream's free-text label (ThemeParks.wiki, Queue-Times). It
+is not on the ride or park payload (only `/stats` `topAttractions` carries it, as
+text). The kind is our verdict and the two are independent by design: upstream files
+water rides as ATTRACTION and walkthroughs as RIDE, so a label may never seed a kind.
+The editor shows both side by side.
 
-## Why `TRANSPORT` is the value it was built for
+## Why `TRANSPORT` exists
 
-A park railway, a cable car or a monorail builds its queue from the timetable
-rather than from demand — a train every 20 minutes collects a line whether or
-not anybody is keen. So a 25-minute wait there is not the signal it is on a
-coaster, and a ride card that frames it as one misleads.
-
-**Neither the name nor the upstream label can tell you this.** Of 151
-attractions whose name contains a transport word, 17 are headliners and exactly
-3 of those are transport systems: `Disneyland Railroad Main Street Station`
-(Paris) and Ocean Park's two cable cars. The other 14 are coasters and dark
-rides that merely sound the part — `Big Thunder Mountain Railroad`,
-`Seven Dwarfs Mine Train`, `Ghost Train`, `Mickey & Minnie's Runaway Railway`.
-Measured against production on 2026-09-22.
+A park railway, cable car or monorail builds its queue from the timetable, not from
+demand, so a 25-minute wait there is not the signal it is on a coaster.
+**Neither the name nor the upstream label can tell you this**: of 151 attractions
+whose name contains a transport word, 17 are headliners and only 3 of those are
+transport systems (Disneyland Railroad Main Street Station in Paris and Ocean Park's
+two cable cars); the rest are coasters and dark rides that sound the part — Big
+Thunder Mountain Railroad, Seven Dwarfs Mine Train (measured 2026-09-22).
 
 ## What it does not change
 
-The headliner tiering. A transport system still counts toward a park's
-baseline exactly as it did before, and this field does not re-rank anything —
-see the changelog entry for PAR-344 for the two parks where an exclusion would
-have had an effect, and why it is the wrong trade. Anything that wants to treat
-transport differently is a separate, measurable change with a before-figure per
-park.
+Headliner tiering: a transport system still counts toward a park's baseline, and this
+field re-ranks nothing (PAR-344 measured the two parks where an exclusion would have
+mattered and rejected it). Treating transport differently is a separate, measured
+change.

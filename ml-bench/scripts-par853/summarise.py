@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Derive the PAR-853 hand-over tables from a run's report CSVs.
 
-Every number quoted in the PR body, docs/ml/foundation-models.md and the review notes
+Every number quoted in the PR body, docs/ml/foundation-models/tirex-toto.md and the review notes
 comes out of this script, so each one is re-derivable from the committed CSVs instead of
 being transcribed by hand.
 

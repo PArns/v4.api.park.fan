@@ -1,9 +1,10 @@
-# Ride day curve
+# One ride's day curve (`/stats/day`)
+
+The contract for the ~1 KB series behind a day-curve chart: what one ride normally
+does per hour, what it has done so far today, and what the model expects for the
+rest — plus how to draw the forecast band.
 
 `GET /v1/parks/:continent/:country/:city/:parkSlug/stats/day`
-
-One ride's day, as the three series a day-curve chart needs: what it normally
-does, what it has done so far today, and what the model expects for the rest.
 
 Optional `?attraction=<slug>` pins a ride. Without it the endpoint picks the
 park's busiest ride **that actually reported today** — see below, it is the
@@ -23,8 +24,8 @@ interface RideDayCurve {
   p90: Array<number | null>;    // historical spread, upper edge
   today: Array<number | null>;  // measured today
   forecast: Array<number | null>; // expected, for hours not yet measured
-  predicted: Array<number | null>; // NEW in 2 — what the model said BEFORE
-                                   // each hour happened, over the whole day
+  predicted: Array<number | null>; // what the model said BEFORE each hour
+                                   // happened, over the whole day
   forecastError: number | null; // the ride's own MAE, minutes
   measuredToday: boolean;
   sampleDays: number;
@@ -36,7 +37,8 @@ interface RideDayCurve {
 
 ## Three sources, and why that matters
 
-- `p25`/`p50`/`p90` come from `queue_data_aggregates`, the nightly hourly rollup.
+- `p25`/`p50`/`p90` come from `queue_data_aggregates`, the nightly hourly rollup, via
+  the same profile read as [`/stats/hourly`](./park-hourly-profile.md).
 - **`today` cannot come from that table.** The rollup is computed for *yesterday*
   and back (`calculate-percentiles` explicitly aggregates the completed day), so
   it holds no row for today at all. `today` is bucketed live out of raw
@@ -59,7 +61,8 @@ interface RideDayCurve {
   horizon.** Drawing the forecast as `± forecastError` is honest because that is
   what the number means. Fanning the band out with distance would be an
   uncertainty model nothing here has measured. Null means the ride has not been
-  scored (fewer than 10 compared slots); draw the forecast as a line and no band.
+  scored (fewer than 10 compared slots, `MIN_BADGE_COMPARISONS`); draw the forecast
+  as a line and no band.
 - **`forecastError` is CatBoost's error, because the curve is CatBoost's.**
   `forecast` and `predicted` come from `wait_time_predictions`, which holds the
   raw CatBoost answer; the PCN override the ride page serves is never written

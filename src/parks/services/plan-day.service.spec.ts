@@ -350,7 +350,7 @@ describe("PlanDayService", () => {
    * of every Berlin evening, so a suite built on it called a date seven days
    * back eight days back, and today tomorrow — two tests that failed between
    * 22:00 and midnight UTC and passed all day. The service reads the park's
-   * clock (CLAUDE.md §1); its fixtures have to as well.
+   * clock (docs/rules/park-timezone.md); its fixtures have to as well.
    */
   function dayFromToday(days: number): string {
     return dayShift(
@@ -2768,7 +2768,9 @@ describe("PlanDayService", () => {
 
     it("does not reach back into last night's session on a park that runs past midnight", async () => {
       // The case park-local midnight got wrong, and the reason the cutoff is
-      // the opening (docs §6). La Ronde's operating day ends at 02:00, so a
+      // the opening
+      // (docs/frontend/plan-day/availability.md#a-ride-out-of-season-is-absent-not-closed).
+      // La Ronde's operating day ends at 02:00, so a
       // reading from 01:30 lies AFTER the planned day's park-local midnight and
       // BEFORE its opening — midnight lets it through and rescues the ride into
       // a day that row says nothing about.

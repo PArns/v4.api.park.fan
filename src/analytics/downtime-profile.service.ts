@@ -20,7 +20,8 @@ import {
  * Every number here is a placeholder until `GET /v1/admin/downtime-measurement`
  * has been run against production and the event distribution is known. They are
  * written down in one object so re-deriving them is an edit to a constant rather
- * than a hunt through a service, and `docs/analytics/ride-downtime.md` records
+ * than a hunt through a service, and
+ * `docs/analytics/ride-downtime/publishing.md#ride-gates` records
  * which of them the measurement is supposed to replace.
  *
  * They are deliberately strict. Publishing nothing is the correct default here,

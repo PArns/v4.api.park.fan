@@ -1,4 +1,4 @@
-"""GP-STGNN — the intraday candidate ("Ansatz 3", design doc §11.6).
+"""GP-STGNN — the intraday candidate ("Ansatz 3", docs/ml/pcn.md#model).
 
 An AGCRN-style adaptive-graph net. Why this shape:
   * **Adaptive graph (AGCRN DAGG):** A = softmax(ReLU(E·Eᵀ)) is LEARNED from node

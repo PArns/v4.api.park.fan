@@ -38,7 +38,7 @@ def get_engine():
         connect_args={
             # Name the session (all services share the `parkfan` role) and end a
             # transaction left idle for 10 min, which would otherwise hold its
-            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            # locks indefinitely. See docs/troubleshooting/timescaledb-lock-queues.md.
             "application_name": "parkfan-nf-service",
             "options": "-c idle_in_transaction_session_timeout=600000",
         },

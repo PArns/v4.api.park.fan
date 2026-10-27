@@ -97,7 +97,7 @@ export class DowntimeReconstructionProcessor {
    * The FIRST fill is a different job and is not this one: it needs the whole
    * history and belongs in 30-day stages, run by hand. It was run that way on
    * 2026-09-11 and reached `queue_data`'s own floor of 2025-12-24; see
-   * `docs/analytics/ride-downtime.md`, "The first production fill, staged".
+   * `docs/analytics/ride-downtime/reconstruction.md#the-first-production-fill-2026-09-11`.
    */
   private readonly DEFAULT_WINDOW_DAYS = 30;
 

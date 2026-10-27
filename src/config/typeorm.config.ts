@@ -29,7 +29,7 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       // Every service connects as the same `parkfan` role, so without a name
       // pg_stat_activity cannot say whose session is holding a lock. The
       // 2026-10-07..09 incidents could not be attributed for exactly that
-      // reason (runbook §0b).
+      // reason (docs/troubleshooting/timescaledb-lock-queues.md).
       applicationName: "parkfan-api",
       extra: {
         // A session parked between BEGIN and COMMIT keeps its locks and its

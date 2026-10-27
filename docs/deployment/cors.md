@@ -1,5 +1,9 @@
 # CORS: which browser origins may call the API
 
+Which origins get CORS headers, why a foreign origin still gets a normal answer, and why only uncached
+endpoints are safe to call from a browser. Open it before changing `CORS_ORIGINS` or letting the
+frontend call a new endpoint directly.
+
 Cloudflare adds no CORS headers to `api.park.fan` (checked 2026-10-23: no
 `Access-Control-Allow-Origin` on any answer, `OPTIONS` preflight 404). The
 allowed origins are decided in the app, by `buildCorsOptions()` in

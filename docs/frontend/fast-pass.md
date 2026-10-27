@@ -1,9 +1,8 @@
 # The queue-jump product on a ride (`fastPass`)
 
-**What it answers:** can this ride be skipped for money, what does the park call
-the thing, and what does it cost.
-
-Present on the attraction detail payload and on every ride in the park payload,
+The contract for a ride's curated fast-pass product — can it be skipped for money,
+what the park calls the product, what it costs — and how to render its price and
+its absence. Present on the attraction detail payload and on every ride in the park payload,
 so a ride list can badge without a second request.
 
 ```jsonc

@@ -2,8 +2,8 @@
  * When a ride opens, and how much watching that answer rests on.
  *
  * Produced by `AnalyticsService.getRideOpeningTimes` and served on `/plan/day`
- * as `opensAt` + `opensAtConfidence`. See `docs/frontend/plan-day-endpoint.md`
- * §9 for the shape the frontend reads.
+ * as `opensAt` + `opensAtConfidence`. See `docs/frontend/plan-day/opens-at.md`
+ * for the shape the frontend reads.
  */
 export interface RideOpening {
   /** Park-local `HH:mm`, floored to the quarter hour. */

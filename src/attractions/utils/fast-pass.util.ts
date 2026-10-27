@@ -154,7 +154,7 @@ function resolvePrice(
  * "no source has told us" and "we checked and there is none" are different
  * facts to an editor and the same absence to a visitor. Publishing the second
  * as "kein QuickPass" would be our own bookkeeping presented as the park's
- * statement — see the rule in CLAUDE.md §4. The admin keeps all three states.
+ * statement — see the rule in docs/rules/absent-facts.md. The admin keeps all three states.
  */
 export function resolveFastPass(
   attraction: FastPassAttractionSource,

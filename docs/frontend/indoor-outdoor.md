@@ -1,7 +1,8 @@
 # Where you stay dry (`indoorOutdoor`)
 
-A hand-decided value on every attraction, on the ride endpoint and on every
-ride in a park payload:
+The contract for the hand-decided `indoor` / `covered_queue` / `outdoor` value a rain
+plan reads, why `null` is neither, and where values come from. On the ride endpoint
+and on every ride in a park payload:
 
 ```json
 { "indoorOutdoor": "covered_queue" }
@@ -21,8 +22,7 @@ from both neighbours: you wait dry, and the ride may still stop for weather.
 
 ## Null is neither
 
-`null` means nobody has checked. On the day the column landed (PAR-424) that
-was every attraction. A reader must behave exactly as it did before the field
+`null` means nobody has checked (the column started empty, PAR-424). A reader must behave exactly as it did before the field
 existed: a rain plan that reads null as outdoor sends people away from dry
 rides, and one that reads it as indoor sends them into the rain. The rule is
 [absent facts](../rules/absent-facts.md).
@@ -35,6 +35,3 @@ it, and RCDB and park websites are off-limits by their terms (frontend repo,
 the curated-field editor, and the source goes into the `reason` and
 `sourceUrl` of the curation's audit row. That row is the record of where a
 value came from.
-
-The column appears through `synchronize` on deploy, so a fill cannot run
-before the change is deployed.
