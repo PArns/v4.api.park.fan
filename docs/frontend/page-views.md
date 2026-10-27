@@ -55,9 +55,10 @@ warning): addresses stay out of Redis all the same, only a restart or a second i
 reader again. With Redis down, the view counts.
 
 The browser sends the write straight to api.park.fan, never through the frontend's relay, so the
-address (`getRateLimitIp`) and the User-Agent are the reader's own. The frontend's beacon also
-counts each page once per browser and day, only after a few seconds on the page, and not at all
-under Do Not Track or after the analytics opt-out on the privacy page.
+address (`getRateLimitIp`) and the User-Agent are the reader's own. The frontend's beacon sends
+each page once per tab, only after a few seconds on the page, and not at all under Do Not Track or
+after the analytics opt-out on the privacy page. It keeps nothing in the browser's storage, so a
+reader who reloads the page is held to three a day by this cap alone.
 
 `POST` always answers **204**, counted or not: a caller that could tell the two apart could probe
 the cap and the bot rule.
