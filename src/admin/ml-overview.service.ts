@@ -374,7 +374,7 @@ export class MlOverviewService {
       {
         id: "tft",
         name: "TFT",
-        delivers: "Kalender und Tagesniveau, 1 bis 60 Tage",
+        delivers: "Kalender und Tagesniveau, 1 bis 59 Tage",
         role: "served",
         lastRunAt: iso(tftAt),
         expected: "täglich 03:00 UTC",

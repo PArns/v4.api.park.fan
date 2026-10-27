@@ -765,7 +765,7 @@ happens in the scoring job.
 | `plan_besttime` | planner | Beste Besuchszeit (bis 6 Wochen) | `served` | D3 d0–d7, d10, d14, d21, d30 | best-time regret |
 | `cal_rank` | calendar | Welcher Tag ist voller? | `tft` (columns `tft_grid`, `tft_grid_drivers`: shadows) | D7 d0–d7, d10, d14, d21 (headliners, TFT level) | wrongly ordered day pairs, % |
 | `cal_busier` | calendar | Wie hoch wird die Tagesspitze? | `tft` (columns `tft_grid`, `tft_grid_drivers`: shadows) | PEAK d0–d7, d10, d14, d21 (headliners, TFT level) | day-peak error |
-| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` (columns `tft_grid`, `tft_grid_drivers`: shadows) | PEAK d30, d45, d60 (headliners, TFT level) | day-peak error |
+| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` (columns `tft_grid`, `tft_grid_drivers`: shadows) | PEAK d30, d45 (headliners, TFT level) | day-peak error |
 | `cal_far_90` | calendar | Kalendertage 3 Monate voraus vergleichen | `catboost` | PEAK d90 (headliners, CatBoost level) | day-peak error |
 
 Every question also carries `leadLabel`, the forecast distance in plain German
@@ -816,8 +816,19 @@ lead has no rows. Because a lead without rows counts as 0 days, the
 22.12.2026 for a d60 cell, 21.01.2027 for d90. A model whose rows begin later
 than the archive starts from its own date (`MODEL_ARCHIVE_START`): `tft_grid`
 and `tft_grid_drivers` from their first shadow night, assumed 2026-10-26 —
-08.01.2027 for `cal_far`; correct the constants to the first `forecast_date` of
+24.12.2026 for `cal_far`; correct the constants to the first `forecast_date` of
 `tft_forecasts_shadow` / `tft_forecasts_shadow_drivers` after the deploy.
+
+**A lead no row can ever reach is not a lead of the cell.** Two did, and held
+every decision built on them at "0 von 14" for good: TFT's horizon ends on
+forecast day + 59 (`NF_HORIZON` = 60 counts from the last observed day), so the
+archive's d60 ride-day is always CatBoost-levelled and `cal_far` against TFT
+had no d60 row — it now covers d30 and d45. And CatBoost's daily forecast
+starts tomorrow (`range(1, …)` in `ml-service/predict.py`), so
+`catboost_shadow` has no d0 row: `MODEL_MISSING_LEADS` takes d0 out of its
+cells' leads in `cellLeads`. Before adding a lead or a model, check that the
+archive holds rows for that pair (`forecast_archive_paired` by use case ×
+model × lead).
 
 **Fixed evaluation dates** (owner decision against daily re-testing): the
 decisions of the ML overview carry `evaluateOn` and are judged once, on the
