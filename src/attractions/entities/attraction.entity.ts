@@ -567,7 +567,8 @@ export class Attraction {
   /**
    * The newest reading about this attraction that was an OBSERVATION rather
    * than a repeat — `timestamp - "lastUpdated"` within
-   * `SOURCE_FRESH_MAX_FEED_AGE_MINUTES`. Written by `detect-silent-sources`,
+   * `MEASURED_OPERATION_MAX_FEED_AGE_MINUTES`, and not one of our own writes
+   * (`observedReadingsSql`). Written by `detect-silent-sources`,
    * read by `readsUnknownFromSilentSource` on the three live payloads.
    *
    * It exists because `absent_since` and the reverse-reconciliation rule next

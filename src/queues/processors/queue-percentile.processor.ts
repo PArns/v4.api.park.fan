@@ -13,6 +13,7 @@ import {
 } from "../../attractions/utils/maze-rule";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
 import { MEASURED_OPERATION_MAX_FEED_AGE_MINUTES } from "../../parks/utils/measured-operation.gate";
+import { SOURCE_SILENT_DAYS } from "../../common/utils/source-absent-status.util";
 import {
   HOURLY_AGGREGATE_SELECT,
   HOURLY_AGGREGATE_UPSERT,
@@ -988,13 +989,17 @@ export class QueuePercentileProcessor {
   /**
    * How far back `detect-silent-sources` looks for an observation.
    *
-   * Wider than `SOURCE_SILENT_DAYS` on purpose: the column stores a real
-   * timestamp so the read path can do the comparison itself, and a window the
-   * width of the threshold would put every value straight onto the boundary.
-   * 30 days is also where `queue_data` starts compressing, so the scan stays
-   * inside the uncompressed chunks.
+   * Wider than `SOURCE_SILENT_DAYS`, and derived from it rather than written
+   * down: the window is the oldest age the column can ever report, so a
+   * threshold raised to meet or exceed it would stop the rule firing at all
+   * without anything going red. 30 days is the floor because that is where
+   * `queue_data` starts compressing, and the scan stays in the uncompressed
+   * chunks while the threshold leaves room for it.
    */
-  private static readonly SILENT_SOURCE_SCAN_DAYS = 30;
+  private static readonly SILENT_SOURCE_SCAN_DAYS = Math.max(
+    30,
+    2 * SOURCE_SILENT_DAYS,
+  );
 
   /**
    * Stamp every attraction with the newest reading that was an OBSERVATION —
@@ -1039,6 +1044,14 @@ export class QueuePercentileProcessor {
            SELECT qd."attractionId" AS id, MAX(qd."timestamp") AS last_fresh
            FROM queue_data qd
            WHERE qd."timestamp" >= $1::timestamptz
+             -- Our own writes are not observations, and both of them look like
+             -- the freshest possible reading: the hourly heartbeat stamps
+             -- lastUpdated = now on a row it copied forward, and
+             -- reverse-reconciliation does the same on the CLOSED row it
+             -- invents. Feed age 0 on both. Without this the column would
+             -- report a ride the feed dropped as measured for as long as the
+             -- heartbeat carries it, and a source-absent ride for ever.
+             AND ${observedReadingsSql("qd")}
              -- A null lastUpdated leaves the question undecidable, and an
              -- undecidable row is not an observation. Same reasoning as
              -- MEASURED_OPERATION_MAX_FEED_AGE_MINUTES, expressed as a
@@ -1048,7 +1061,15 @@ export class QueuePercentileProcessor {
            GROUP BY qd."attractionId"
          ),
          target AS (
-           SELECT a.id, COALESCE(o.last_fresh, $1::timestamptz) AS value
+           -- An observation if there is one; else whatever is already stored,
+           -- which is why the fallback is third rather than second. The window
+           -- bound moves with the clock, so writing it unconditionally would
+           -- restamp every never-observed row on every run and the count below
+           -- would stop being a count of changes. Keeping the first stamp
+           -- costs nothing: it is only ever older, and the read path asks
+           -- whether it is past a threshold.
+           SELECT a.id,
+                  COALESCE(o.last_fresh, a.source_last_fresh_at, $1::timestamptz) AS value
            FROM attractions a
            LEFT JOIN observed o ON o.id = a.id
          )

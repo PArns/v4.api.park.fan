@@ -109,18 +109,25 @@ export const LIVE_STATS_SQL = `
           -- Only count attractions with status OPERATING (includes those with waitTime=0)
           -- This matches the actual operational state from recent data
           COUNT(CASE WHEN lad.status = 'OPERATING' THEN 1 END) as operating_count,
-          COUNT(CASE WHEN lad.status != 'OPERATING' THEN 1 END) as explicitly_closed_count
+          -- A ride whose source stopped MEASURING it is served as UNKNOWN by
+          -- the park, ride and favourites payloads, so it belongs in neither
+          -- half of "12 von 45 geöffnet" here either. It stays in
+          -- total_attractions: it IS one of the park's rides today, unlike a
+          -- retired or out-of-season one, and dropping it from the total would
+          -- report a park whose whole feed has frozen as having no rides at
+          -- all — a worse answer than the closure being retracted. The reader
+          -- therefore subtracts BOTH counts from the total.
+          -- See readsUnknownFromSilentSource.
+          COUNT(CASE WHEN lad.status != 'OPERATING'
+                      AND NOT lad.source_is_silent THEN 1 END) as explicitly_closed_count,
+          COUNT(CASE WHEN lad.status != 'OPERATING'
+                      AND lad.source_is_silent THEN 1 END) as silent_count
         FROM latest_attraction_data lad
         -- A ride the season has closed is not one of the park's rides today: it
         -- belongs in neither half of "12 von 45 geöffnet". Unless it is actually
         -- running, in which case the season on file is behind the park and a
         -- visitor can queue for it — the rule the park payload applies too.
-        WHERE (NOT lad.out_of_season OR lad.status = 'OPERATING')
-          -- And a ride whose source stopped MEASURING it: the park, ride and
-          -- favourites payloads serve it as UNKNOWN, so counting it closed in
-          -- the listing beside them is the same contradiction one surface up.
-          -- See readsUnknownFromSilentSource.
-          AND (NOT lad.source_is_silent OR lad.status = 'OPERATING')
+        WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'
         GROUP BY lad."parkId"
       )
       SELECT
@@ -136,6 +143,7 @@ export const LIVE_STATS_SQL = `
         COALESCE(stats.avg_wait, 0) as avg_wait,
         COALESCE(stats.operating_count, 0) as operating_conf_count,
         COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
+        COALESCE(stats.silent_count, 0) as silent_count,
         (SELECT COUNT(*)::int FROM attractions a
           WHERE a."parkId" = p.id
             -- See latest_attraction_data: a retired ride left this park's
@@ -146,17 +154,6 @@ export const LIVE_STATS_SQL = `
             AND a.retired_at IS NULL
             AND (
               NOT ${attractionIsOutOfSeason("a")}
-              OR a.id IN (
-                SELECT lad."attractionId" FROM latest_attraction_data lad
-                 WHERE lad.status = 'OPERATING'
-              )
-            )
-            -- And out of the total as well, not just out of park_stats:
-            -- operatingAttractions is derived as total minus explicitly_closed,
-            -- so a ride dropped from only one of the two would be counted as
-            -- running. Same shape as the season clause above, same override.
-            AND (
-              NOT ${attractionSourceIsSilent("a")}
               OR a.id IN (
                 SELECT lad."attractionId" FROM latest_attraction_data lad
                  WHERE lad.status = 'OPERATING'
@@ -175,6 +172,12 @@ interface ParkLiveStats {
   avgWait: number;
   operatingAttractions: number;
   explicitlyClosedCount: number;
+  /**
+   * Rides whose source stopped measuring them, counted apart from the closed
+   * ones and subtracted from the total alongside them. They stay IN the total,
+   * so a park whose whole feed has frozen still reports its rides.
+   */
+  silentCount: number;
   totalAttractions: number;
   // Gated crowd-level label hydrated from the shared park:occupancy cache;
   // "unknown" for thin parks (not ratable). null = no live occupancy yet.
@@ -496,15 +499,26 @@ export class DiscoveryService {
                 statistics: {
                   avgWaitTime: stats.avgWait,
                   // Optimistic Calculation: Total - Explicitly Closed (if status is OPERATING)
+                  // Both counts come off the total. A silent ride is in
+                  // neither half — left only out of the closed count it would
+                  // have been served here as RUNNING, which is worse than the
+                  // closure this retracts.
                   operatingAttractions:
                     stats.isOpen && stats.explicitlyClosedCount !== undefined
                       ? Math.max(
                           0,
-                          stats.totalAttractions - stats.explicitlyClosedCount,
+                          stats.totalAttractions -
+                            stats.explicitlyClosedCount -
+                            (stats.silentCount ?? 0),
                         )
                       : 0,
+                  // The silent rides come back into the closed half when the
+                  // park is shut: the UNKNOWN rule does not fire there, every
+                  // ride is closed for a reason we can state, and this count
+                  // stays exactly what it was before the split.
                   closedAttractions:
-                    stats.explicitlyClosedCount ?? stats.totalAttractions,
+                    (stats.explicitlyClosedCount ?? stats.totalAttractions) +
+                    (stats.isOpen ? 0 : (stats.silentCount ?? 0)),
                   totalAttractions: stats.totalAttractions,
                   crowdLevel: stats.crowdLevel ?? undefined,
                 },
@@ -666,6 +680,7 @@ export class DiscoveryService {
         avgWait: roundToNearest5Minutes(parseFloat(row.avg_wait || 0)),
         operatingAttractions: parseInt(row.operating_conf_count || "0", 10),
         explicitlyClosedCount: parseInt(row.explicitly_closed_count || "0", 10),
+        silentCount: parseInt(row.silent_count || "0", 10),
         totalAttractions: parseInt(row.total_attractions || "0", 10),
         crowdLevel: null,
       });

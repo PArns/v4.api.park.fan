@@ -178,6 +178,16 @@ describe("silent-source status", () => {
       ).toBe(false);
     });
 
+    it("does not treat an empty list as a frozen closure", () => {
+      // Nothing is published for a ride with no current row, so there is no
+      // closure to retract. The park payload answers that case with its own
+      // optimism one branch further down, which is a different decision —
+      // the same line `isSourceAbsent([])` draws.
+      expect(readsUnknownFromSilentSource([], facts(), "OPERATING", NOW)).toBe(
+        false,
+      );
+    });
+
     it("never fires for a ride the source is still measuring", () => {
       // The 50 evening-event readings of that same sort land here: a Halloween
       // maze measured at three in the afternoon carries a twelve-hour-old

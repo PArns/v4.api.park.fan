@@ -408,6 +408,33 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
     expect(rideIn(dto, SILENT)?.status).toBe("CLOSED");
   });
 
+  it("leaves a ride with no current row on the optimistic path", async () => {
+    queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(
+      new Map([
+        [
+          MEASURED,
+          [
+            {
+              queueType: "STANDBY",
+              status: "CLOSED",
+              waitTime: null,
+              dataSource: "themeparks-wiki",
+              timestamp: now,
+              lastUpdated: now,
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const dto = await buildResponse(buildPark(threeRides()));
+
+    // The silent ride publishes nothing at this instant, so there is no
+    // closure to retract — that case belongs to the optimism one branch
+    // further down and is not this rule's decision to take.
+    expect(rideIn(dto, SILENT)?.status).not.toBe("UNKNOWN");
+  });
+
   it("leaves every ride alone before the job has ever run", async () => {
     const dto = await buildResponse(
       buildPark([

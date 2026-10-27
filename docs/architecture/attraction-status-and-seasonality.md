@@ -972,6 +972,13 @@ over the 1,107 CLOSED readings in open parks:
 | no observation in 14 d | 228 | 20.6 % | 23 |
 | no observation in 14 d, no hard marker | **64** | 5.8 % | 13 |
 
+The last row is the figure the decision was costed against. Re-measured on
+2026-10-27 10:00 UTC with `observedReadingsSql` in place — which the original
+measurement did not have — the rule fires on **281** rides in parks open by
+their own schedule, of which **198 already read UNKNOWN** through the
+absent-source rule beside it and **97** are held back by the live-OPERATING
+guard. The published change is the remaining **83**.
+
 A gate on the current row encodes the time of day: an evening Halloween event is
 twelve hours stale at three in the afternoon, and a water park in October is
 forty-five days stale because that is when it shut. Of the 97 frozen readings
@@ -982,13 +989,23 @@ stamped once and never touched again, 186 days at Islands of Adventure.
 
 **What is built.** `attractions.source_last_fresh_at` holds the newest reading
 whose `timestamp - "lastUpdated"` is inside
-`MEASURED_OPERATION_MAX_FEED_AGE_MINUTES`, stamped nightly at 02:45 by
+`MEASURED_OPERATION_MAX_FEED_AGE_MINUTES` **and which we did not write
+ourselves** (`observedReadingsSql`), stamped nightly at 02:45 by
 `detect-silent-sources` (`queue-percentile.processor.ts`) over a 30-day window;
 `readsUnknownFromSilentSource` reads it on the park, ride and favourites
 payloads, with `SOURCE_SILENT_DAYS` = 14 and the hard markers `retired_at` and
 the resolved `seasonOutSince`.
 
-Three things about it are easy to get wrong:
+**`observedReadingsSql` is load-bearing, not decoration.** Both of our own
+writers stamp the freshest possible reading: `writeHourlyHeartbeats` writes
+`lastUpdated = now` on a row it copied forward, and reverse-reconciliation does
+the same on the CLOSED row it invents. Feed age 0 on both. Without the predicate
+the column reports a ride the feed dropped as measured for as long as the
+heartbeat carries it, and a source-absent ride for ever. Measured 2026-10-27:
+Europa-Park wrote 3,992 reconciliation rows in three days, and leaving them in
+put 0 of its 97 rides in the silent set where 58 belong.
+
+Five things about it are easy to get wrong:
 
 - **A row with no observation in the window gets the window's lower bound, not
   null.** Null is reserved for "never scanned", which is the state a deploy
@@ -998,10 +1015,23 @@ Three things about it are easy to get wrong:
 - **A frozen OPERATING is out of scope.** That is the wait-time side of the same
   column (PAR-759), and 391 readings carried it at the measured instant. Any
   current row still claiming the ride runs takes the ride out of this rule.
+- **An empty row set is not this rule's business**, the same line
+  `isSourceAbsent([])` draws. The rule retracts a PUBLISHED closure; with no
+  current row there is nothing published, and the park payload answers that
+  with its own optimism one branch further down.
 - **The counters have to follow.** `closedAttractions` is derived as the
-  remainder of total and operating, and the analytics population counts
-  anything non-OPERATING as closed, so an unknown ride was served as unknown on
-  the list and counted as closed in the headline beside it.
+  remainder of total and operating, and the analytics and geo-listing
+  populations count anything non-OPERATING as closed, so an unknown ride was
+  served as unknown on the list and counted as closed in the headline beside
+  it.
+- **An unknown ride stays IN the total**, unlike a retired or out-of-season
+  one. It is one of the park's rides today; we just cannot say whether it runs.
+  Dropping it from the total instead of from the closed half reports a park
+  whose whole feed has frozen — Billund, all 37 — as a park with no
+  attractions, which is a worse answer than the closure being retracted. So
+  every one of the three counters subtracts BOTH the closed and the unknown
+  count from the total, and a reader that subtracts only one would publish the
+  ride as *running*.
 
 The read path is a column rather than a query because the query is a hot-path
 cost: per park over 14 days it is 50 ms of execution behind **128 ms of

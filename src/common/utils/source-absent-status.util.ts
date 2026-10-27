@@ -200,6 +200,12 @@ export function readsUnknownFromSilentSource(
   if (parkStatus !== "OPERATING") return false;
   if (facts.retiredAt) return false;
   if (facts.seasonOutSince) return false;
+  // An empty list is not this rule's business, exactly as it is not
+  // `isSourceAbsent`'s. This rule retracts a PUBLISHED closure; with no current
+  // row there is nothing published, and the callers answer "no data inside the
+  // window" on their own terms — in the park payload with the optimism of
+  // `statusWithoutLiveData`, which is a different decision from this one.
+  if (rows.length === 0) return false;
   // A frozen OPERATING is a different published statement with a different
   // owner (PAR-759), and this rule must not reach it: it would turn a stale
   // wait time into a shrug on the way past. Any current row that still claims

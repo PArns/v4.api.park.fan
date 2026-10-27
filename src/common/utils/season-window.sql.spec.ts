@@ -62,11 +62,8 @@ describe("the live-stats query leaves out-of-season rides out of the counter", (
   const sql = flat(LIVE_STATS_SQL);
 
   it("drops them from the operating and closed counts", () => {
-    // Parenthesised since PAR-1023 put a second exclusion beside it: without
-    // the brackets the new AND would have bound tighter than this OR and the
-    // season half would have stopped excluding anything.
     expect(sql).toContain(
-      "WHERE (NOT lad.out_of_season OR lad.status = 'OPERATING')",
+      "WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'",
     );
   });
 
@@ -87,8 +84,13 @@ describe("the live-stats query leaves out-of-season rides out of the counter", (
  * The same counter, the same sentence, and the second reason a ride belongs in
  * neither half of it (PAR-1023): the source stopped measuring it and the three
  * live payloads serve it as UNKNOWN.
+ *
+ * Unlike the season, this one does NOT leave the total. A ride the season has
+ * closed is not one of the park's rides today; a ride nobody can speak for is
+ * — and dropping it from the total would report LEGOLAND Billund, whose whole
+ * feed froze in April, as a park with no attractions at all.
  */
-describe("the live-stats query leaves a silent-source ride out of the counter", () => {
+describe("the live-stats query leaves a silent-source ride out of both halves", () => {
   const sql = flat(LIVE_STATS_SQL);
 
   it("computes the predicate per ride in the same CTE as the season one", () => {
@@ -96,22 +98,23 @@ describe("the live-stats query leaves a silent-source ride out of the counter", 
     expect(sql).toContain(`INTERVAL '${SOURCE_SILENT_DAYS} days'`);
   });
 
-  it("drops them from the operating and closed counts", () => {
+  it("counts it apart from the closed rides instead of among them", () => {
     expect(sql).toContain(
-      "AND (NOT lad.source_is_silent OR lad.status = 'OPERATING')",
+      "COUNT(CASE WHEN lad.status != 'OPERATING' AND NOT lad.source_is_silent THEN 1 END) as explicitly_closed_count",
+    );
+    expect(sql).toContain(
+      "COUNT(CASE WHEN lad.status != 'OPERATING' AND lad.source_is_silent THEN 1 END) as silent_count",
     );
   });
 
-  it("drops them from the total as well", () => {
-    // `operatingAttractions` is read as total − explicitly_closed. A ride
-    // dropped from only one of the two would be counted as RUNNING, which is
-    // worse than the closure it was meant to retract.
+  it("keeps it in the total", () => {
+    // The reader subtracts both counts from the total. Dropping it here as
+    // well would leave a frozen park reporting zero rides.
     const total = sql.slice(
       sql.indexOf("(SELECT COUNT(*)::int FROM attractions a"),
       sql.indexOf("as total_attractions"),
     );
 
-    expect(total).toContain("a.source_last_fresh_at");
-    expect(total).toContain("lad.status = 'OPERATING'");
+    expect(total).not.toContain("source_last_fresh_at");
   });
 });
