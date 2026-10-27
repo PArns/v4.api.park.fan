@@ -1,573 +1,151 @@
 <div align="center">
 
-# 🎢 park.fan API v4
+# 🎢 park.fan API
 
-**Real-time theme park intelligence powered by machine learning**
+**Live wait times, crowd levels, opening hours and forecasts for theme parks worldwide.**
+The data service behind [park.fan](https://park.fan).
 
-[![NestJS](https://img.shields.io/badge/NestJS-11.0-E0234E?logo=nestjs&logoColor=white)](https://nestjs.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![NestJS 12](https://img.shields.io/badge/NestJS-12-E0234E?logo=nestjs&logoColor=white)](https://nestjs.com/)
+[![TypeScript 6](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL 18 + TimescaleDB](https://img.shields.io/badge/PostgreSQL_18-TimescaleDB-4169E1?logo=postgresql&logoColor=white)](https://www.timescale.com/)
+[![Redis 8](https://img.shields.io/badge/Redis-8-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Python ML](https://img.shields.io/badge/ML-CatBoost_·_TFT_·_PCN-3776AB?logo=python&logoColor=white)](https://github.com/PArns/v4.api.park.fan/blob/main/docs/ml/model-overview.md)
 
-*Aggregating wait times, weather forecasts, park schedules, and ML-powered predictions for optimal theme park experiences worldwide.*
+**[OpenAPI / Swagger](https://api.park.fan/api)** · **[park.fan](https://park.fan)** · **[Developer docs](https://github.com/PArns/v4.api.park.fan/blob/main/docs/README.md)**
 
 </div>
 
 ---
 
-## 📖 Quick Navigation
+## What it serves
 
-- [✨ Features](#-features)
-- [🚀 Quick Start](#-quick-start)
-- [📚 API Documentation](#-api-documentation)
-- [🛠️ Tech Stack](#️-tech-stack)
-- [📁 Project Structure](#-project-structure)
-- [🐳 Docker Commands](#-docker-commands)
-- [🧪 Testing](#-testing)
-- [🔧 Environment Variables](#-environment-variables)
+All routes live under **`/v1`**. Parks are addressed by their geographic path,
+`/v1/parks/{continent}/{country}/{city}/{park}`, e.g.
+`/v1/parks/europe/germany/rust/europa-park`. Every parameter and response shape is in the
+[Swagger UI](https://api.park.fan/api).
 
----
+| Area | Routes | What you get |
+| --- | --- | --- |
+| 🎡 **Parks** | `GET /parks` · `/parks/{continent}[/{country}[/{city}]]` · `/parks/popular` | Park lists by region, most-requested parks |
+| 🏰 **One park** | `GET /parks/…/{park}` | Status, opening hours, live crowd level, weather, every attraction, show and restaurant |
+| ⏱️ **Live** | `…/{park}/wait-times` | Current queues per attraction |
+| 📅 **Calendar** | `…/{park}/calendar` · `/best-days` · `/schedule` · `/seasons` · `/predictions/yearly` | Opening hours, day status, crowd forecast per day, holidays, named seasons |
+| 🗓️ **Trip planning** | `…/{park}/plan/day` | One day, ride by ride: hourly waits with source and expected error |
+| 📊 **Statistics** | `…/{park}/stats` · `/stats/hourly` · `/stats/day` | Historical park stats, the park's hourly profile, one ride's day curve |
+| 🎢 **Attractions** | `…/{park}/attractions[/{attraction}]` | Catalog list; detail with live state, forecast, typical/busy waits, ride profile |
+| 🌤️ **Weather** | `…/{park}/weather` · `/weather/forecast` · `/weather/nowcast` | Observed weather, 16-day forecast, short-term nowcast, severe-weather warnings |
+| 🌍 **Discovery** | `GET /discovery/geo` · `/discovery/continents[…]` · `/discovery/nearby` | Geo hierarchy for navigation, parks or rides near a position |
+| 🔍 **Search** | `GET /search?q=…` | Parks and attractions by name or place |
+| 📈 **Analytics** | `GET /analytics/realtime` · `/geo-live` · `/ticker` · `/best-times` | Platform-wide live figures and best times to visit |
+| 📖 **Glossary** | `GET /glossary/terms/counts` · `/glossary/terms/{termId}/attractions` | Rides that feature a glossary term |
+| ⭐ **Personal** | `/favorites` · `/trips` · `/push` · `/push/ride-alerts` · `/push/show-follows` · `/page-views` | Favorites, stored day plans, web push, page-view counts |
+| 🩺 **Health** | `GET /health` · `/health/ready` · `/health/ping` · `/ml/health` | Liveness, readiness, ML service state |
 
-## ✨ Features
+### Conventions worth knowing
 
-- **🚀 Real-time Wait Times** — Live queue data for attractions, shows, and restaurants
-- **🤖 ML Predictions** — Machine learning forecasts for wait times and crowd levels
-- **🌤️ Weather Integration** — Current conditions and 16-day forecasts for all parks
-- **📅 Park Schedules** — Opening hours, special events, and operating calendars
-- **🕵️ Smart Gaps** — Reconstruction of historical opening hours from ride activity when official data is missing
-- **🌍 Multi-Source Data** — Aggregated from multiple providers for maximum coverage
-- **📊 Analytics Ready** — TimescaleDB-powered time-series data for insights
-- **⚡ High Performance** — Redis caching and Bull queue processing
-- **🎯 RESTful API** — Clean endpoints with full Swagger/OpenAPI documentation
-
----
-
-## 🛠️ Tech Stack
-
-| Category | Technology |
-|----------|-----------|
-| **Backend** | [NestJS 12](https://nestjs.com/) · [TypeORM 1](https://typeorm.io/) · TypeScript (strict mode) · Node.js 26 |
-| **Database** | [PostgreSQL 18](https://www.postgresql.org/) · [TimescaleDB](https://www.timescale.com/) |
-| **Cache & Queue** | [Redis 8](https://redis.io/) · [Bull Queue](https://github.com/OptimalBits/bull) |
-| **ML Services** | Python 3.11–3.13 · CatBoost · NeuralForecast (TFT) · PyTorch · FastAPI |
-| **DevOps** | Docker Compose · GitHub Actions |
-| **Testing** | Jest · Supertest · Testcontainers |
+- **Park-local time.** Dates and "today" are in the park's own timezone (`timezone` on every park), never the caller's.
+- **Unknown is not closed.** A ride no source reports reads `UNKNOWN`; a crowd level without a baseline reads `unknown`. Neither means "closed" or "quiet".
+- **Nulls are omitted.** Fields without a value are left out of the response; add `?debug=true` to see them.
+- **Cached at the edge.** Responses carry `Cache-Control` headers for Cloudflare; live endpoints refresh within minutes.
 
 ---
 
-## 📅 Special Logic: Schedules & Seasons
+## 🚀 Quick start
 
-The API implements advanced logic to handle parks without official API schedules (e.g., Efteling, Hellendoorn) and seasonal closures.
-
-### 1. `hasOperatingSchedule` Flag
-All park objects include a `hasOperatingSchedule` boolean:
-- `true`: The park provides official operating hours via an API.
-- `false`: The park does not provide official hours. Opening times are either null (future) or reconstructed from activity (past).
-
-### 2. Historical Hour Reconstruction
-For past days without official data, the system reconstructs opening hours from ride activity.
-- **Opening Time**: First 15min window with >= 10% ride activity, rounded down.
-- **Closing Time**: Last 15min window with activity, rounded up.
-- **Rounding**: Both times are rounded to the **nearest full hour** for maximum plausibility.
-
-### 3. Seasonal Detection
-The system automatically identifies "Seasonal Parks" (parks with winter gaps > 21 days). 
-- **Seasonal Parks**: Future dates outside the known operating range are marked as `CLOSED` (suppressing crowd predictions).
-- **Year-Round Parks**: Future dates without schedules remain `UNKNOWN`, allowing ML-powered crowd and wait-time predictions for trip planning.
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Node.js 26+ (the test scripts rely on Jest loading NestJS's ESM packages natively)
-- pnpm 11+ (`corepack enable` picks up the pinned `packageManager` version)
-- Docker & Docker Compose
-- Git
-
-### Installation
+Requires **Node.js 26+**, **pnpm 11** (`corepack enable`) and **Docker**.
 
 ```bash
-# Clone the repository
 git clone https://github.com/PArns/v4.api.park.fan.git
 cd v4.api.park.fan
-
-# Install dependencies
 pnpm install
-
-# Copy environment configuration
 cp .env.example .env
 
-# Start infrastructure (PostgreSQL + Redis)
-pnpm docker:up
-
-# Start development server
-pnpm dev
+docker compose up -d postgres redis   # add ml-service nf-service pcn-service for forecasts
+pnpm dev                              # http://localhost:3000
 ```
 
-### Access Points
+| URL | |
+| --- | --- |
+| http://localhost:3000/ | This page |
+| http://localhost:3000/v1 | The API |
+| http://localhost:3000/api | Swagger UI |
+| http://localhost:3001/ | Bull Board (job queues) |
 
-Once running, you can access:
-
-- **API Root**: http://localhost:3000/ (this README)
-- **API Base**: http://localhost:3000/v1
-- **API Docs**: http://localhost:3000/api (Swagger)
+`pnpm docker:up` starts the **whole** stack including the API container on port 3000 — use it
+instead of `pnpm dev`, not alongside it.
 
 ---
 
-## 📚 API Documentation
+## 🧱 Architecture
 
-### 🏥 Health & Monitoring
-
-System health checks and monitoring endpoints.
-
-```http
-GET /v1/health              # System health status
-GET /v1/health/db           # Database connectivity
+```
+            ┌──────────────── NestJS API (src/) ────────────────┐
+ park.fan ─▶│ REST /v1 · Redis cache · Bull queues · TypeORM    │
+            └───┬───────────────┬──────────────────┬────────────┘
+                │               │                  │
+        PostgreSQL 18     Redis 8          Python services
+        + TimescaleDB     cache + queues   ml-service  (CatBoost)
+                                           nf-service  (TFT, Chronos)
+                                           pcn-service (intraday PCN)
 ```
 
-**Response includes:**
-- System uptime
-- Database connection status
-- Last sync timestamps (wait times, park metadata)
-- Active jobs and queue status
+| Path | Contents |
+| --- | --- |
+| `src/` | NestJS modules: `parks`, `attractions`, `queue-data`, `analytics`, `ml`, `holidays`, `discovery`, `search`, `trips`, `push`, `admin`, … |
+| `ml-service/` | CatBoost training and serving (FastAPI) |
+| `nf-service/` | NeuralForecast TFT and Chronos daily forecasts |
+| `pcn-service/` | Intraday forecast model |
+| `ml-bench/` | Offline forecasting benchmark (not deployed) |
+| `scripts/` | Operational and one-off scripts |
+| `test/` | E2E suite (Testcontainers) and fixtures |
+| `docs/` | Developer documentation — start at [`docs/README.md`](https://github.com/PArns/v4.api.park.fan/blob/main/docs/README.md) |
 
 ---
 
-### 🎡 Parks
-
-Core endpoints for park information, weather, schedules, and wait times. All routes use the full geographic path structure for consistency and SEO-friendly URLs.
-
-**Geographic Routes:**
-```http
-GET /v1/parks                                                      # List all parks (paginated)
-GET /v1/parks/:continent                                          # Parks by continent
-GET /v1/parks/:continent/:country                                 # Parks by country
-GET /v1/parks/:continent/:country/:city                           # Parks by city
-GET /v1/parks/:continent/:country/:city/:parkSlug                 # Get park by location
-GET /v1/parks/:continent/:country/:city/:parkSlug/calendar        # Integrated calendar
-GET /v1/parks/:continent/:country/:city/:parkSlug/weather         # Current weather & history
-GET /v1/parks/:continent/:country/:city/:parkSlug/weather/forecast # 16-day forecast
-GET /v1/parks/:continent/:country/:city/:parkSlug/schedule        # Operating hours
-GET /v1/parks/:continent/:country/:city/:parkSlug/wait-times       # Live wait times
-GET /v1/parks/:continent/:country/:city/:parkSlug/predictions/yearly # Yearly crowd predictions
-GET /v1/parks/:continent/:country/:city/:parkSlug/attractions     # List park attractions
-GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction
-```
-
-**Query Parameters:**
-- `continent`, `country`, `city` — Filter by location (in list endpoint)
-- `sort` — Sort order (name, popularity, etc.)
-- `page`, `limit` — Pagination (default: page=1, limit=10)
-- `from`, `to` — Date range for weather/schedule (YYYY-MM-DD format)
-
-**Example Geographic Route:**
-```http
-GET /v1/parks/north-america/united-states/orlando/magic-kingdom
-```
-
-**Example Response:**
-```json
-{
-  "id": "123e4567-e89b-12d3-a456-426614174000",
-  "name": "Magic Kingdom",
-  "slug": "magic-kingdom",
-  "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom",
-  "continent": "North America",
-  "country": "United States",
-  "city": "Orlando",
-  "timezone": "America/New_York",
-  "currentStatus": "OPERATING",
-  "currentLoad": {
-    "crowdLevel": "moderate",
-    "occupancy": 0.65
-  },
-  "coordinates": { "lat": 28.3772, "lng": -81.5707 },
-  "attractions": [
-    {
-      "id": "...",
-      "name": "Space Mountain",
-      "slug": "space-mountain",
-      "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom/attractions/space-mountain"
-    }
-  ]
-}
-```
-
----
-
-### 🎢 Attractions
-
-Detailed attraction data with ML predictions and historical analytics. Access attractions through their park's geographic route.
-
-**Routes:**
-```http
-GET /v1/parks/:continent/:country/:city/:parkSlug/attractions              # List park attractions
-GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # Get attraction details
-```
-
-**Query Parameters:**
-- `page`, `limit` — Pagination for attraction list (default: page=1, limit=10)
-
-**The detail route includes:**
-- Live wait times and status (OPERATING, CLOSED, DOWN, REFURBISHMENT)
-- 24-hour ML-powered wait time forecasts
-- Daily predictions with confidence scores
-- Historical statistics (average, percentiles)
-- Downtime tracking and reliability metrics
-- Full geographic URL for easy navigation
-
-**The list route includes none of that.** It joins no live data: no status, no
-queues, no forecasts, no statistics — the stored catalog of the park and
-nothing else. Read the park payload or the detail route for live state.
-
-**Example Response (detail route):**
-```json
-{
-  "id": "123e4567-e89b-12d3-a456-426614174000",
-  "name": "Space Mountain",
-  "slug": "space-mountain",
-  "url": "/v1/parks/north-america/united-states/orlando/magic-kingdom/attractions/space-mountain",
-  "park": {
-    "id": "...",
-    "name": "Magic Kingdom",
-    "slug": "magic-kingdom"
-  },
-  "category": "RIDE",
-  "currentWaitTime": 45,
-  "status": "OPERATING",
-  "lastUpdate": "2025-12-23T19:30:00Z",
-  "forecast": [
-    { "hour": "20:00", "predictedWaitTime": 50, "confidence": 0.87 },
-    { "hour": "21:00", "predictedWaitTime": 35, "confidence": 0.82 }
-  ],
-  "stats": {
-    "averageWaitTime": 42,
-    "p50": 40,
-    "p75": 55,
-    "p90": 70
-  }
-}
-```
-
----
-
-### 🌍 Geographic Discovery
-
-Navigate parks by geographic hierarchy for route generation and exploration.
-
-```http
-GET /v1/discovery/geo                        # Full geo hierarchy
-GET /v1/discovery/continents                 # List continents
-GET /v1/discovery/continents/:continent      # Countries in continent
-```
-
-**Response Structure:**
-```json
-{
-  "continents": [
-    {
-      "continent": "North America",
-      "countries": [
-        {
-          "country": "United States",
-          "cities": [
-            {
-              "city": "Orlando",
-              "parks": [
-                {
-                  "name": "Magic Kingdom",
-                  "url": "/north-america/united-states/orlando/magic-kingdom",
-                  "status": "OPERATING",
-                  "analytics": {
-                    "statistics": {
-                      "avgWaitTime": 35,
-                      "operatingAttractions": 42,
-                      "closedAttractions": 3,
-                      "totalAttractions": 45,
-                      "crowdLevel": "moderate"
-                    }
-                  },
-                  "attractions": [...]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
-
-> **Note:** `analytics.statistics.crowdLevel` is co-present with `avgWaitTime` whenever the park has a valid P90 baseline (with P50 as fallback). See [Crowd Levels](docs/analytics/crowd-levels.md) for the rating system.
-
----
-
-### 🏰 Destinations
-
-Resort-level aggregation grouping multiple parks. Destinations are used internally for data organization but are not exposed as top-level API endpoints. Parks are accessed directly via their geographic routes.
-
-**Examples:**
-- Walt Disney World (Magic Kingdom, EPCOT, Hollywood Studios, Animal Kingdom)
-- Disneyland Paris (Disneyland Park, Walt Disney Studios Park)
-
----
-
-### 🎭 Shows & Dining
-
-Entertainment and dining options are available through the park endpoints. Shows and restaurants are not exposed as top-level API endpoints but are included in park responses and can be accessed via the search endpoint.
-
----
-
-### 🔍 Intelligent Search
-
-Global search with enriched results across parks and attractions.
-
-```http
-GET /v1/search?q=disney                    # Search all types
-GET /v1/search?q=thunder&type=attraction  # Filter by type
-GET /v1/search?q=paris                   # Search by city
-```
-
-**Search Features:**
-- **Multi-entity search**: Parks and attractions
-- **Geographic search**: By city, country, or continent
-- **Per-type counts**: Shows returned vs total results
-- **Enriched results**: Coordinates, wait times, park hours, full geographic URLs
-- **Smart filtering**: Type-based filtering with max 5 results per type
-- **Fast response**: Redis-cached for 5min, <3ms cached response
-
-**Response Structure:**
-```json
-{
-  "query": "disney",
-  "counts": {
-    "park": {"returned": 5, "total": 13},
-    "attraction": {"returned": 5, "total": 156}
-  },
-  "results": [
-    {
-      "type": "park",
-      "name": "Disneyland Park",
-      "status": "OPERATING",
-      "load": "normal",
-      "parkHours": {...},
-      "coordinates": {...}
-    },
-    {
-      "type": "attraction",
-      "name": "Space Mountain",
-      "waitTime": 45,
-      "load": "higher",
-      "parentPark": {...}
-    }
-  ]
-}
-```
-
----
-
-### 🎉 Holidays
-
-Public holiday data affecting park crowds and operating hours. Holidays are used internally for ML predictions and analytics but are not exposed as top-level API endpoints.
-
----
-
-## 📁 Project Structure
-
-```
-v4.api.park.fan/
-├── src/
-│   ├── config/                    # App configuration & environment
-│   ├── common/                    # Shared utilities, filters, interceptors
-│   ├── database/                  # Database utilities & migrations
-│   ├── queues/                    # Bull queue setup & processors
-│   ├── health/                    # Health check endpoints
-│   ├── destinations/              # Resort/destination grouping
-│   ├── parks/                     # Parks, weather, schedules
-│   ├── attractions/               # Attractions & data sources
-│   ├── shows/                     # Entertainment shows
-│   ├── restaurants/               # Dining locations
-│   ├── queue-data/                # Wait time data & history
-│   ├── ml/                        # ML prediction integration
-│   ├── analytics/                 # Statistics & analytics
-│   ├── holidays/                  # Public holiday data
-│   ├── date-features/             # Date-based features for ML
-│   ├── discovery/                 # Geographic discovery endpoints
-│   └── search/                    # Global search functionality
-├── ml-service/                    # Python ML service (CatBoost)
-│   ├── train.py                   # Model training script
-│   ├── main.py                    # FastAPI prediction service
-│   ├── features.py                # Feature engineering
-│   └── db.py                      # Database connection
-├── docker/                        # Docker configurations
-├── scripts/                       # Utility & debug scripts
-├── migrations/                    # Database migrations
-└── test/                          # E2E tests
-```
-
----
-
-## 🐳 Docker Commands
+## 🧪 Development
 
 ```bash
-# Start all services (PostgreSQL + Redis)
-pnpm docker:up
-
-# Stop all services
-pnpm docker:down
-
-# View logs
-pnpm docker:logs
-
-# Restart services
-pnpm docker:restart
-
-# Reset database (WARNING: deletes all data)
-pnpm db:reset
+pnpm test           # unit tests
+pnpm test:e2e       # end-to-end tests against a TimescaleDB container
+pnpm lint           # ESLint (fixes in place)
+pnpm format         # Prettier
+pnpm build          # type check + build
 ```
 
-**Production Deployment:**
-```bash
-docker-compose -f docker-compose.production.yml up -d
-```
+Configuration lives in [`.env.example`](https://github.com/PArns/v4.api.park.fan/blob/main/.env.example)
+(development) and `.env.production.example`; every variable is commented there. Deployment runs on
+Coolify with `docker-compose.production.yml` — see
+[docs/deployment](https://github.com/PArns/v4.api.park.fan/tree/main/docs/deployment).
 
 ---
 
-## 🧪 Testing
+## 🙏 Data sources
 
-```bash
-# Run unit tests
-pnpm test
+park.fan combines these sources. Thank you for making theme park data accessible.
 
-# Run e2e tests
-pnpm test:e2e
-
-# Run all tests with coverage
-pnpm test:all:cov
-
-# Watch mode for development
-pnpm test:watch
-
-# Specific test file
-pnpm test wait-times.processor.spec.ts
-```
-
-**Code Quality:**
-```bash
-# Lint code
-pnpm lint
-
-# Format code
-pnpm format
-
-# Type check
-pnpm build
-```
-
----
-
-## 🔧 Environment Variables
-
-### Application Settings
-
-```env
-NODE_ENV=development              # development | production | test
-PORT=3000                         # API server port
-API_PREFIX=v1                     # API version prefix
-```
-
-### Database Configuration
-
-```env
-# PostgreSQL with TimescaleDB
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=parkfan
-DB_PASSWORD=your_secure_password
-DB_DATABASE=parkfan
-DB_SYNCHRONIZE=true               # ⚠️ Set to false in production!
-DB_LOGGING=false                  # Enable for debugging
-DB_SSL_ENABLED=false              # Enable for production
-```
-
-### Caching & Queue
-
-```env
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=                   # Optional, recommended for production
-
-# Bull Queue
-BULL_PREFIX=parkfan
-```
-
-### External APIs
-
-```env
-# Google APIs (Geocoding, Places)
-GOOGLE_API_KEY=your_google_api_key
-
-# Weather Data: Open-Meteo (no API key required)
-
-# Data Sources (optional, for enhanced coverage)
-QUEUE_TIMES_API_KEY=              # Queue-Times.com
-THEMEPARKS_API_KEY=               # ThemeParks.wiki
-```
-
-### ML Service
-
-```env
-# ML Service Configuration
-ML_SERVICE_URL=http://localhost:8000        # Development
-# ML_SERVICE_URL=http://ml-service:8000     # Production (Docker)
-MODEL_DIR=/app/models                       # Model storage directory
-MODEL_VERSION=v1.1.0                        # Current model version (ml-service setting)
-```
-
-### Sync & Processing
-
-```env
-# Data Sync Intervals (cron expressions)
-SYNC_WAIT_TIMES_CRON=*/5 * * * *           # Every 5 minutes
-SYNC_PARK_METADATA_CRON=0 6 * * *          # Daily at 6 AM
-SYNC_WEATHER_CRON=0 * * * *                # Hourly
-```
-
----
-
-## 🤝 Contributing
-
-This is a private project. For questions or collaboration inquiries, please contact the maintainer.
+| Source | Used for |
+| --- | --- |
+| **[Queue-Times.com](https://queue-times.com/)** | Live wait times — *Powered by Queue-Times.com* |
+| **[ThemeParks.wiki](https://themeparks.wiki/)** | Parks, attractions, live data, opening hours |
+| **[Wartezeiten.app](https://www.wartezeiten.app/)** | Wait times, crowd levels and opening hours |
+| **[Open-Meteo.com](https://open-meteo.com/)** | Weather forecasts, current conditions and history ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); built on data from DWD, ECMWF, NOAA, Météo-France and other national weather services) |
+| **[Bright Sky](https://brightsky.dev/)** | Severe-weather warnings for Germany from the Deutscher Wetterdienst (DWD) |
+| **[MeteoGate](https://meteogate.eu/)** | Severe-weather warnings for Europe (EUMETNET / MeteoAlarm) |
+| **[Nager.Date](https://date.nager.at/)** · **[OpenHolidays API](https://www.openholidaysapi.org/)** | Public and school holidays |
+| **[NEIS](https://open.neis.go.kr/)** · **[KASI](https://www.data.go.kr/)** | School and public holidays in South Korea |
+| **[Wikidata](https://www.wikidata.org/)** | Park and ride facts |
+| **[Google Geocoding](https://developers.google.com/maps/documentation/geocoding)** | Park locations |
+| **[MaxMind GeoLite2](https://www.maxmind.com/)** | Approximate visitor location for "nearby" — includes GeoLite2 data created by MaxMind |
 
 ---
 
 ## 📄 License
 
-**UNLICENSED** — Private project by [Patrick Arns](https://arns.dev/)
-
----
-
-## 🙏 Powered By
-
-This project aggregates data from multiple sources:
-
-- **[Queue-Times.com](https://queue-times.com/)** — Real-time wait time data
-- **[ThemeParks.wiki](https://themeparks.wiki/)** — Comprehensive park information and live data
-- **[Wartezeiten.app](https://www.wartezeiten.app/)** — Wait times, crowd levels, and opening hours enrichment
-- **[Open-Meteo.com](https://open-meteo.com/)** — Weather forecasts, current conditions, and historical weather data (Weather data by [Open-Meteo.com](https://open-meteo.com/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); built on open data from DWD, ECMWF, NOAA, Météo-France and other national weather services)
-
-Special thanks to these services for making real-time theme park data accessible.
-
----
+**UNLICENSED** — private project by [Patrick Arns](https://arns.dev/). For questions or
+collaboration, contact the maintainer.
 
 <div align="center">
 
-Made with ❤️ for theme park enthusiasts worldwide
-
-**[API Documentation](https://api.park.fan/api)** · **[Frontend](https://park.fan)**
+Made with ❤️ for theme park fans · **[api.park.fan/api](https://api.park.fan/api)** · **[park.fan](https://park.fan)**
 
 </div>
