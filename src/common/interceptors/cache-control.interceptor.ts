@@ -170,6 +170,12 @@ export class CacheControlInterceptor implements NestInterceptor {
       return "public, max-age=86400, s-maxage=86400, stale-while-revalidate=172800";
     }
 
+    // Page-view rankings - 1 hour. A 7- or 30-day sum does not move in five
+    // minutes, and the frontend shows them as "most read", not as a ticker.
+    if (path.includes("/page-views/top")) {
+      return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400";
+    }
+
     // Stats/analytics - 5 min (live stats refresh on the 5-min sync cadence)
     if (path.includes("/stats") || path.includes("/analytics")) {
       return "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
