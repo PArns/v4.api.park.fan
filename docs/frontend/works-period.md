@@ -93,6 +93,5 @@ all. No feed announces a rebuild, so "no works period here" means nobody has
 curated one — never that the ride is running. Do not render a "läuft normal"
 line from it.
 
-`from` and `to` are stripped from the JSON when they are null, like every other
-null key outside `/v1/admin/*` (`ExcludeNullInterceptor`), so read them as
-optional even though the published schema documents both.
+`from` and `to` are optional although the published schema documents both: a null
+one is stripped ([conventions](./README.md#conventions-every-page-assumes)).

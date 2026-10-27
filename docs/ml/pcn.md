@@ -290,5 +290,3 @@ regressed); a residual hybrid on top of CatBoost (two systems, the skew only hal
 - Skipped parks and their reason are visible only in the log.
 - TouringPlans' public Walt Disney World dataset (posted and actual waits since 2012) as a
   pretraining seed against the short history — untested.
-- `pcn-service/README.md` still describes "Phase 0" and lists the NestJS wiring as next; the code
-  is past both.

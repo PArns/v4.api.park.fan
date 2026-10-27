@@ -58,13 +58,15 @@ pages. Everything here is hand-curated, and it is spread over two rows:
 
 | Part                       | Lives on   | Why                                        |
 | -------------------------- | ---------- | ------------------------------------------ |
-| name, currency, glossary id | the park   | It is a brand, and it is the same 40 times |
+| name, currency, glossary id, price floor | the park | It is a brand, and it is the same 40 times |
 | flag, price, name override | the ride   | These differ ride by ride                  |
 
 `name` falls back through the ride's override, then the park's brand, then the
 neutral **"Fast Pass"** — so a flagged ride always has something to label. The
-park's own name and currency are also on the park payload's `info` block
-(`info.fastPassName`, `info.currency`, `info.fastPassTermId`), for a park page
-that wants to name the product without walking the ride list.
+park's own values are also on the park payload's `info` block
+(`info.fastPassName`, `info.currency`, `info.fastPassTermId`, and
+`info.fastPassPriceFrom`, the cheapest version of a park-wide pass in `currency`,
+never `0`), for a park page that wants to name the product without walking the
+ride list.
 
 The backend rules are in [admin/curation.md](../admin/curation.md#fast-passes-across-two-rows).

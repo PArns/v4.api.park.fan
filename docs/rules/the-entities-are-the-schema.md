@@ -28,12 +28,12 @@ column, an index or an enum value.
 - **Hypertables and compression** come from the list in `src/database/hypertables.ts`, applied at
   boot by `TimescaleInitService`. A new hypertable is one line there; the E2E schema reads the same
   list.
-- **Tables written by the Python services have no entity** (`pcn_forecasts`, `tft_forecasts`,
-  `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers`). Their DDL lives in the writer
-  (`pcn-service/db.py`, `nf-service/db.py`), and `test/helpers/ml-forecast-tables.ts` reads it from
-  there rather than copying it ([E2E merge coverage](../development/e2e-merge-coverage.md)).
+- **Tables written by the Python services have no entity**
+  ([which](../database/schema.md#where-the-schema-is-defined)). Their DDL lives in the writer, and
+  `test/helpers/ml-forecast-tables.ts` reads the four that a merge touches from there rather than
+  copying it ([E2E merge coverage](../development/e2e-merge-coverage.md)).
 
 ## Scripts
 
-A script that opens its own DataSource against production sets `synchronize: false`
-([production one-offs](automated-retirement-and-identity.md#7-production-one-offs-run-the-deployed-code-from-a-clean-checkout)).
+A script that opens its own DataSource against production sets `synchronize: false`: with `true` it
+would alter the production schema to the entities of whatever checkout runs it.

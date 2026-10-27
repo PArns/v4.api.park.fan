@@ -490,7 +490,7 @@ export class SystemHealthService {
     );
   }
 
-  /** PCN lead-curve board (§7.7): PCN@{1h,3h,6h} vs a persistence baseline on matched
+  /** PCN lead-curve board (docs/ml/pcn.md#shadow-boards): PCN@{1h,3h,6h} vs a persistence baseline on matched
    * slots. The main intraday board only scores the freshest ~15-min origin, so the
    * quality of the LONGER leads the UI serves for rest-of-day was unmeasured. Verdict =
    * PCN−persistence MAE delta per (horizon, segment). Owned by pcn-service. */

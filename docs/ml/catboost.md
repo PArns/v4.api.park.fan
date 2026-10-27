@@ -246,7 +246,7 @@ current behaviour in short:
   half their wait. The scheduler now removes and re-registers an overdue repeatable job
   (`QueueSchedulerService.hasRepeatableJob`).
 - **A uuid filter compares uuid to uuid** — the cast goes on the parameter
-  ([ml-service query performance](performance-optimizations.md#never-cast-an-indexed-uuid-column-cast-the-parameter-par-871)).
+  ([uuid casts](../rules/uuid-casts.md)).
 
 ## Open
 

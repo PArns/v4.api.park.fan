@@ -2263,7 +2263,7 @@ export class PlanDayService {
    * closes — and the window is not one night wide, because `detect-seasonal` is
    * a daily job that has already been out for **73 days** without anyone
    * noticing
-   * (`docs/architecture/attraction-status/seasonality.md#detect-seasonal-was-dead-for-73-days`).
+   * (`docs/architecture/attraction-status/seasonality.md#running-and-changing-the-detector`).
    *
    * **It reaches as far as the note it contradicts**, which is today and
    * tomorrow ({@link SEASON_NOW_HORIZON_DAYS}). The caller decides what may be

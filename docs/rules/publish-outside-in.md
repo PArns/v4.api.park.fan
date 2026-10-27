@@ -22,5 +22,5 @@ Reference implementations: `CuratedDataProcessor.publish()` and `AdminCurationSe
 outside these paths (a raw `UPDATE`, a script) skips all of it: say so, and either evict or state the
 TTL until it shows ([production one-offs](automated-retirement-and-identity.md#7-production-one-offs-run-the-deployed-code-from-a-clean-checkout)).
 
-Why the order is what it is, and the park open/close webhook that applies it every five minutes:
-[Caching strategy](../architecture/caching-strategy.md#publishing-order).
+The park open/close webhook that applies it every five minutes:
+[Caching strategy](../architecture/caching-strategy.md#park-opening-and-closing-parkstatusrevalidationservice).

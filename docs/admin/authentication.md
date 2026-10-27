@@ -4,9 +4,8 @@ How `/v1/admin/*` is protected: named accounts, opaque Redis sessions, scrypt pa
 audit log, the login rate limits and Turnstile, and the deprecated shared pass. Open this before adding an
 admin endpoint or touching the login. The UI on the other side: the frontend's `docs/features/admin.md`.
 
-Until accounts existed, every admin endpoint claimed protection by a `?pass=` that the application never
-checked; anything reaching the origin directly could merge parks or flush caches, unattributed.
-Cloudflare's rule stays as the outer lock; this is the inner one.
+Cloudflare's rule is the outer lock and this is the inner one: without it, anything
+reaching the origin directly could merge parks or flush caches, unattributed.
 
 ## The guard
 

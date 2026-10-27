@@ -1,8 +1,7 @@
 # TimescaleDB jobs and lock queues
 
 Why a TimescaleDB background job asking for an `ACCESS EXCLUSIVE` lock can take the whole API down, what
-happened on 2026-10-07 to 10-09, what was changed so no job queues for that lock any more, and how to
-diagnose a stall that looks like it. Open it before adding a retention or compression policy, a foreign
+was changed so no job queues for that lock any more, and how to diagnose a stall that looks like it. Open it before adding a retention or compression policy, a foreign
 key to a hypertable, or when every query suddenly waits. Ad-hoc sessions are the other way in:
 [runbook §0](db-health-runbook.md#0-time-limits-on-ad-hoc-sql).
 
@@ -23,24 +22,12 @@ with `timeout exceeded when trying to connect`.
 Both were reproduced on `timescale/timescaledb:2.24.0-pg18` with one session holding a plain `SELECT`
 transaction.
 
-## What happened
-
-| When (UTC)                                   | Job                                        | Waited for                                    | Effect                                                                                |
-| -------------------------------------------- | ------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 10-07 15:59–20:28, 10-08 21:20–10-09 01:49   | 1007, retention on `wait_time_predictions` | `ACCESS EXCLUSIVE` on `attractions`           | 20 five-minute stalls (`max_runtime` 5 min, retried); every query on `attractions` waited |
-| 10-09 02:12–07:31                            | 1000, compression on `queue_data`          | `ACCESS EXCLUSIVE` on a 30-day-old chunk      | API down 5 h 16 min, until the 07:24 deploy restarted Postgres                        |
-
-The evidence: after each failed retention attempt, 8–73 queries (655 in all, every one naming
-`attractions`) finished **in the same second** the attempt ended, the signature of a lock queue draining;
-from 02:15:03 on 10-09 the slow-query log holds nothing until 07:31:47.
-
-Who held the lock is unknown: an idle-in-transaction or never-finished session, ended both times by a
-Postgres restart. `log_lock_waits` was off, the container log went with the container, and every client
-connected as `parkfan` with no `application_name`.
-
 ## What changed
 
-The fix does not depend on finding the holder.
+Both paths stalled production in October 2026: the retention on `wait_time_predictions` queued for
+`attractions` twenty times, and a compression on `queue_data` queued on a chunk and took the API down
+for 5 h 16 min until Postgres restarted. The holder was never identified, so the fix does not depend on
+finding one.
 
 | Change                                                                                     | Where                                                                                          | Effect                                                                                                         |
 | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |

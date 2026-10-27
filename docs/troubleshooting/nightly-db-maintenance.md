@@ -16,18 +16,14 @@ nightly job, adding a large table, or deploying near these windows. Code: `src/d
 | 05:50–07:30     | Nothing large: CatBoost training (`ml-training/train-model`, 06:00, 35–70 min) |
 | Sunday 19:10–20:03 | `db-maintenance/reindex-pcn-forecasts-pkey`; no deploy until 20:05 |
 
-## The 06:15 OOM of 2026-10-12
+## The Linear runner shares the host's memory
 
-At 06:15:55 the kernel killed the CatBoost training subprocess (6.4 GB RSS then, ~13 GB at peak) on the
-29 GB host; `v20261011_0600` stayed the active model. The kernel's dump (`journalctl -k`) showed what held
-the memory: 28 Node processes of the host's local Linear runner (`pnpm test`, one jest worker per core)
-with 15.29 GB, the training with 6.12 GB, and all of Postgres, autovacuum included, with 0.51 GB. The
-runner had started its 06:00 run 94 s before.
-
-Changed on the host the same evening (not in this repository): the runner timer
-(`park-worker-local.timer`, a user unit) moved to 09:45, 13:45, 17:45 and 21:45 UTC under
-`MemoryMax=18G` (check with `systemctl --user list-timers park-worker-local.timer`). The VACUUM window
-below stays as hygiene; it would not have prevented this kill. Container limits against the host:
+The 29 GB host also runs the local Linear runner (`park-worker-local.timer`, a systemd user unit, not in
+this repository): `pnpm test` with one jest worker per core, 15.3 GB at peak. Started at 06:00 it got the
+CatBoost training subprocess (~13 GB at peak) OOM-killed on 2026-10-12, while all of Postgres held
+0.5 GB. It now runs at 09:45, 13:45, 17:45 and 21:45 UTC under `MemoryMax=18G`
+(`systemctl --user list-timers park-worker-local.timer`); keep it out of the training window. The VACUUM
+window below is hygiene and would not have prevented that kill. Container limits against the host:
 [container memory limits](../deployment/container-memory-limits.md).
 
 ## The VACUUM window (`vacuum-churn-tables`, 04:50)

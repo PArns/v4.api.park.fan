@@ -23,8 +23,17 @@ page for the field or endpoint you are reading or changing.
 | Page | Covers |
 | --- | --- |
 | [plan-day/](./plan-day/README.md) | `/plan/day`: the trip planner's per-ride series for one date |
+| [schedule](./schedule.md) | `/schedule`: a park's opening-hours range |
+| [yearly-predictions](./yearly-predictions.md) | `/predictions/yearly`: crowd outlook per day of the year |
+| [park-seasons](./park-seasons.md) | `/seasons`: a park's named seasons and events |
+| [shows](./shows.md) | shows on the park payload: status, today's showtimes, season |
+| [weather](./weather.md) | `/weather`, `/weather/forecast`, `/weather/nowcast` |
 | [trips](./trips.md) | `/v1/trips`: stored plans, the id as credential, write limits |
 | [push](./push.md) | `/v1/push*`: subscriptions, topics, ride alerts, followed shows, quiet hours |
+| [favorites](./favorites.md) | `/v1/favorites`: favourites with full entities and distances |
+| [discovery](./discovery.md) | `/v1/discovery/*`: geo tree, continents, countries, `nearby` |
+| [search](./search.md) | `/v1/search`: the response a client renders |
+| [analytics](./analytics.md) | `/v1/analytics/*`: realtime, geo-live, ticker, best times |
 | [best-days-endpoint](./best-days-endpoint.md) | `/best-days`: the precomputed today → +90 d projection |
 | [calendar-schedule-status](./calendar-schedule-status.md) | calendar `UNKNOWN` vs `CLOSED`, `hasOperatingSchedule`, `scheduleCoverage` |
 | [park-stats-and-peak-time](./park-stats-and-peak-time.md) | `/stats` history and the peak-hour fields |

@@ -31,7 +31,7 @@ find what runs when, or before adding a queue or a cron.
 | `live-cache-warmup` | after each wait-times run | Park, top-1000 attraction and occupancy caches ([caching](caching-strategy.md#cache-warmup)) |
 | `park-metadata` / `sync-all-parks` | 03:00 | Park metadata, geocoding, schedules for every wiki park; chains `children-metadata` (no cron of its own since PAR-875) |
 | `park-metadata` / `sync-schedules-only` | 15:00 | Schedules only ([schedule sync](schedule-sync-and-calendar.md)); `sync-park-schedule` and `fill-all-gaps` run on demand |
-| `park-metadata` / `warmup-calendar-daily` | 08:00, 20:00 | Calendar months −1…+3 for all parks and the `/best-days` snapshot |
+| `park-metadata` / `warmup-calendar-daily` | 08:00, 20:00 | Calendar months and the `/best-days` snapshot ([caching](caching-strategy.md#cache-warmup)) |
 | `park-metadata` / `decay-popularity` | 00:00 | Decays the popularity sorted sets |
 | `children-metadata` / `sync-attraction-details` | Sun 05:30 | Attraction detail sync |
 | `six-flags-heights` / `sync-heights` | Mon 03:00 | Ride heights the wiki lacks |
@@ -58,7 +58,7 @@ find what runs when, or before adding a queue or a cron.
 | `prediction-accuracy` / `cleanup-old`, `calibrate-bands` | 04:00; 04:20 | Retention; band calibration |
 | `ml-training` / `train-model`, `cleanup-models` | 06:00; 07:00 | CatBoost training (35–70 min, ~13 GB peak) |
 | `nf-training` / `train-nf` | 03:00 | TFT training, writes `tft_forecasts`; evicts `ml:tft-daily:*` when done |
-| `pcn-shadow` / `train-pcn`, `forecast-pcn`, `score-pcn` | 08:30; every 15 min; hourly | PCN intraday shadow |
+| `pcn-shadow` / `train-pcn`, `forecast-pcn`, `score-pcn` | 08:30; every 15 min; hourly | PCN training, the intraday forecast (served when `SERVE_PCN_INTRADAY` is set) and its scoring; "shadow" is the queue's historical name |
 | `forecast-archive` / `capture`, `driver-level` | hourly :05; 01:30 | [Forward archive](../ml/forward-archive/README.md) |
 | `forecast-archive-score` / `score` | 12:00 | Scores the archive (own queue, so it never delays a capture) |
 | `ml-monitoring` / `detect-feature-drift`, `check-alerts`, `detect-anomalies`, `cleanup` | 02:00; hourly; 03:00; 04:00 | Model monitoring |

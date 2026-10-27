@@ -6,7 +6,7 @@ champion gate and the file sweep. The model and its features are on [CatBoost](c
 
 ## The nightly run
 
-`ml-training/train-model` at 06:00 UTC (`MlTrainingProcessor`) calls the ml-service's
+`ml-training/train-model` at 06:00 UTC (`MLTrainingProcessor`) calls the ml-service's
 `POST /train` with its time budget (`timeBudgetSeconds` = `ML_TRAINING_TIMEOUT_MINUTES`, default
 90), polls `/train/status`, then registers, gates and activates the result. The ml-service runs
 the training in a subprocess (`train_standalone.py`), so an OOM kill takes down that process and

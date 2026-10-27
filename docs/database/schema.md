@@ -21,8 +21,9 @@ How the schema reaches production: [the entities are the schema](../rules/the-en
   | `queue_data_aggregates` | `hour` | 7 days | 30 days |
   | `wait_time_predictions` | `createdAt` | 7 days | 14 days, `segmentby attractionId` |
 
-- **Tables of the Python services** (`pcn_forecasts`, `tft_forecasts`, `tft_forecasts_shadow`,
-  `tft_forecasts_shadow_drivers`) have no entity; their DDL is in `pcn-service/db.py` / `nf-service/db.py`.
+- **Tables of the Python services** have no entity; their DDL is in the writer: `pcn_forecasts`,
+  `pcn_intraday_comparisons`, `pcn_lead_curve_comparisons` (`pcn-service/db.py`), `tft_forecasts`,
+  `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` (`nf-service/db.py`).
 - No PostGIS: coordinates are `latitude` / `longitude` decimals (Postgres returns them as strings).
 
 ## Core tables

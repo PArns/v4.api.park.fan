@@ -60,7 +60,8 @@ export function getRateLimitIp(req: RequestLike | undefined): string | null {
     if (ip && isIP(ip)) return ip;
   }
   // Only a request that provably came through Cloudflare may name its own
-  // address in CF-Connecting-IP; the rule `CfThrottlerGuard` applies too.
+  // address in CF-Connecting-IP; the rule `CfThrottlerGuard` applies too. Until
+  // CF_ORIGIN_SECRET is set every request passes that test.
   if (carriesCfOriginSecret(req.headers)) {
     const cfIp = getFirstHeader(req, "cf-connecting-ip");
     if (cfIp && isIP(cfIp)) return cfIp;

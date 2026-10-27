@@ -27,8 +27,9 @@ export type ParkStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
  * whose wait times we cannot read at all (Hansa-Park) have carried it for
  * months while this union claimed four values. That drift is the same one that
  * kept `unknown` out of the published crowd-level contract, so: anything that
- * emits a status reads it from this type, and the Swagger enum comes from
- * ATTRACTION_STATUS_VALUES rather than a hand-written list.
+ * emits a status reads it from this type, and a Swagger enum must come from
+ * ATTRACTION_STATUS_VALUES rather than a hand-written list (docs/rules/absent-facts.md
+ * names the DTOs that do not yet).
  */
 export const ATTRACTION_STATUS_VALUES = [
   "OPERATING",

@@ -60,7 +60,7 @@ cd v4.api.park.fan
 pnpm install
 cp .env.example .env
 
-docker compose up -d postgres redis   # add ml-service nf-service pcn-service for forecasts
+docker compose up -d postgres redis bull-board   # add ml-service nf-service pcn-service for forecasts
 pnpm dev                              # http://localhost:3000
 ```
 
@@ -113,7 +113,7 @@ pnpm build          # type check + build
 ```
 
 Configuration lives in [`.env.example`](https://github.com/PArns/v4.api.park.fan/blob/main/.env.example)
-(development) and `.env.production.example`; every variable is commented there. Deployment runs on
+(development) and `.env.production.example`. Deployment runs on
 Coolify with `docker-compose.production.yml` — see
 [docs/deployment](https://github.com/PArns/v4.api.park.fan/tree/main/docs/deployment).
 

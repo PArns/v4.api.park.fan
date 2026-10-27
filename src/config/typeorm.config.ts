@@ -18,7 +18,7 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       password: dbConfig.password,
       database: dbConfig.database,
       entities: [__dirname + "/../**/*.entity{.ts,.js}"],
-      synchronize: dbConfig.synchronize, // Auto-sync schema (dev only!)
+      synchronize: dbConfig.synchronize, // On in production too: docs/rules/the-entities-are-the-schema.md
       logging: dbConfig.logging,
       logger: new SlowQueryFileLogger(),
       maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log

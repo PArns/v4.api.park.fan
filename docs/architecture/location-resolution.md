@@ -6,17 +6,22 @@ by a CDN. Open this when distances are missing or nearby answers 400.
 
 ## Resolution order
 
-1. Query `lat` and `lng`, if both are valid (lat ∈ [-90, 90], lng ∈ [-180, 180]).
+1. Query `lat` and `lng` (lat ∈ [-90, 90], lng ∈ [-180, 180]).
 2. Query `ip` — for debugging, forces a GeoIP lookup of that address.
 3. The client IP from the request (`getClientIp`, `src/common/utils/request.util.ts`): the first entry
    of `X-Forwarded-For`, then `CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`, `X-Forwarding-IP`,
    `req.ip`, `socket.remoteAddress`; `normalizeIp` strips a port and the `::ffff:` prefix.
 4. `GeoipService.lookupCoordinates(ip)` → `{ latitude, longitude }` or `null` (city level).
 
-| Endpoint | Controller | Without coordinates |
+The two endpoints differ in what a bad or missing coordinate does:
+
+| | `GET /v1/discovery/nearby` (`src/location/location.controller.ts`) | `GET /v1/favorites` (`src/favorites/favorites.controller.ts`) |
 | --- | --- | --- |
-| `GET /v1/discovery/nearby` | `src/location/location.controller.ts` | `400` |
-| `GET /v1/favorites` | `src/favorites/favorites.controller.ts` | `200`, no `userLocation`, no distances |
+| only one of `lat`/`lng`, or one unparsable or out of range | `400`; a sent coordinate never falls back to the IP | out of range: `400` (the query DTO); only one sent: GeoIP |
+| no coordinates, and no client IP or no GeoIP database loaded | `400` | `200` without `userLocation` or distances |
+| GeoIP finds nothing for the address | `400` | `200` without `userLocation` or distances |
+
+The contracts: [discovery](../frontend/discovery.md), [favorites](../frontend/favorites.md).
 
 A client should send `lat`/`lng` when it has them; otherwise the proxy in front must pass the real
 client IP (`X-Forwarded-For` or `CF-Connecting-IP`).

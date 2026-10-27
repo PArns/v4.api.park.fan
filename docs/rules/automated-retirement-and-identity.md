@@ -82,9 +82,8 @@ change to that step — a skipped id must not reach steps that assume its replac
   2026-10-04 a merge run imported a half-built dependency list naming a table production did not have;
   all 36 merges aborted, and only their transactions saved the data.
 - `synchronize: false` on every DataSource a script opens against production
-  ([the entities are the schema](the-entities-are-the-schema.md)).
+  ([why](the-entities-are-the-schema.md#scripts)).
 - Ad-hoc SQL goes through `scripts/prod-psql.sh` (session timeouts,
   [DB health runbook §0](../troubleshooting/db-health-runbook.md)), every write in one transaction that
   **counts before it writes**, and the count goes into the issue's worker log.
-- A write outside the admin path skips cache eviction and frontend revalidation: say so, and either
-  evict or state the TTL until it shows ([publish outside-in](publish-outside-in.md)).
+- A write outside the admin path is not published by itself: [publish outside-in](publish-outside-in.md).

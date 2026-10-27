@@ -60,14 +60,15 @@ date is a 400. Days outside the stored window are simply not returned.
 Served from a materialized Redis snapshot (`best-days:<parkId>`), never computed per
 request from ML:
 
-- The calendar warmup (`warmup-calendar-daily`, 08:00 and 20:00 UTC) refreshes each
-  park's calendar months and projects the snapshot from those warm month caches
-  (`BestDaysService.precomputeForPark`) — no extra ML cost.
-- **The snapshot lives 13 h** (`CALENDAR_WARMUP_MONTH_TTL`), the same as the month
-  caches it is built from: a projection may not outlive its source. It was 26 h, and
-  a 24.8-hour-old snapshot then said "low" for three October Saturdays the calendar
-  and `/plan/day` rated `very_high` (2026-09-04). The current month's caches live 2 h,
-  so for up to 11 h a current-month day can lag the calendar.
+- The calendar warmup (`warmup-calendar-daily`, [twice a day](../architecture/job-queues.md#schedule-utc))
+  refreshes each park's calendar months and projects the snapshot from those warm
+  month caches (`BestDaysService.precomputeForPark`) — no extra ML cost.
+- **The snapshot expires with the month caches it is built from**
+  (`CALENDAR_WARMUP_MONTH_TTL`; [TTLs](../architecture/caching-strategy.md#keys-and-ttls)):
+  a projection may not outlive its source. At 26 h, a 24.8-hour-old snapshot said
+  "low" for three October Saturdays the calendar and `/plan/day` rated `very_high`.
+  The current month's caches expire sooner, so for up to 11 h a current-month day can
+  lag the calendar.
 - **A miss rebuilds on demand**, single-flighted, rather than answering empty (an
   empty 200 would sit at the edge for an hour and blank "Prognose heute"). Only a
   failed rebuild answers `days: []`.

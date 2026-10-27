@@ -71,27 +71,11 @@ comparison matrix names a benchmark-only model.
 
 ## GPU and runtime
 
-Runs go through `ml-bench/scripts-par828/run.sh` (GPU lock, quiet window 00:55–09:30 UTC, HF cache
-`/data/parkfan/ml-bench/par-828/hf` mounted as `/hf`) — [running.md](../ml-bench/running.md#sharing-the-gpu-with-production).
+Runs go through `ml-bench/scripts-par828/run.sh` (GPU lock, quiet window, HF cache):
+[running.md](../ml-bench/running.md#sharing-the-gpu-with-production).
 VRAM is capped with `torch.cuda.set_per_process_memory_fraction` (`MLBENCH_FM_VRAM_FRACTION`,
 default 0.6 of 16 GB); every `[fm]` log line carries the running peak. Inference never came close:
 the peak of all seven PAR-853 arms in one origin was 3.29 GB.
 
-## Harness lessons from these runs
-
-- **The history cap raises, and must.** Chronos-2 asks for ~343 days of compressed context and 400
-  for the daily head; on a 56-day cap every origin raised. Truncating instead would have published
-  numbers from a shortened context with nothing in the output to show it. A model declares its need
-  (`truth_history_days`, read off the class).
-- **The intraday history cache was keyed on the origin table's name**, which the intraday path
-  reuses, so every intraday origin after 08:00 forecast from a context frozen at the first hour.
-  The key now includes the cut, and `test_information_cut_plugins` runs one pass per cut. The old
-  assertion had passed *because of* the bug — the third guard in this review that could not fail
-  (with the two-park fixture and an `--origin-from` path never executed). Give every guard a case
-  in which it can fail.
-- **Information budgets are read off the class** (`type(m)`), never the instance, because
-  `scored_name()` is a classmethod: an instance attribute would widen the budget and keep the honest
-  name. The guard is mutation-tested through `plugin_predict` / `plugin_predict_daily`.
-- **Provenance.** Record the measured `code_sha256`, not a transcribed git SHA: branches rebased
-  several times a day rewrite SHAs while the tree stays identical, and two published tables have
-  carried a wrong SHA.
+The harness rules these runs produced (history cap, information budgets, cache keys, provenance) are
+in [harness](../ml-bench/harness.md#protocol-and-information-cut).

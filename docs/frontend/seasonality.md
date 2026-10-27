@@ -49,9 +49,10 @@ at most a few hours a year at a month boundary, and kept so the two agree.
   | park cards, geo pages (`/v1/discovery/…`) | `DiscoveryService` `LIVE_STATS_SQL` (SQL)           |
   | global realtime stats                     | `AnalyticsService.getGlobalRealtimeStats` (SQL)     |
 
-  The SQL twin is `attractionIsOutOfSeason()` (`src/common/utils/season-window.sql.ts`),
-  checked against a real Postgres over all 300 combinations of the five seasonality
-  columns. **A change to either half is a change to both.**
+  The SQL twin is `attractionIsOutOfSeason()` (`src/common/utils/season-window.sql.ts`).
+  It was checked once, when it was written, against a real Postgres over all 300
+  combinations of the five seasonality columns; its spec (`season-window.sql.spec.ts`)
+  pins only four decisions. **A change to either half is a change to both.**
 - **Nearby** drops `isCurrentlyInSeason === false` rides from the `in_park` ride list.
 - **`/plan/day`** leaves a ride out of a day its season excludes, judged against the
   planned month — see [plan-day availability](./plan-day/availability.md).

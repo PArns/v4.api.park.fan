@@ -1,11 +1,12 @@
 # Attraction status: the regimes
 
 Which status an attraction is served with, and who is allowed to say so. Open this when a ride reads
-OPERATING, CLOSED or UNKNOWN and you need to know why, or before you add a status path.
+OPERATING, CLOSED or UNKNOWN and you need to know why, or before you add a status path. What each
+endpoint serves a client is the [effective-status contract](../../frontend/effective-status.md).
 
 `AttractionStatus` = `OPERATING | CLOSED | DOWN | REFURBISHMENT | UNKNOWN`, from
-`ATTRACTION_STATUS_VALUES` in `src/common/types/status.type.ts`; every Swagger `enum:` reads that
-list ([absent-facts rule](../../rules/absent-facts.md)).
+`ATTRACTION_STATUS_VALUES` in `src/common/types/status.type.ts` (Swagger enums:
+[absent-facts rule](../../rules/absent-facts.md)).
 
 ## 1. A real feed reported it
 

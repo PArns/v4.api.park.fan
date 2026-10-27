@@ -14,10 +14,12 @@ the API *serves* for such a ride (`UNKNOWN`, not CLOSED) is in
 `LAST_SEEN_TTL_SECONDS` = 14 days) whenever an attraction appears in a real feed. The heartbeat never
 touches it, or it would hide the staleness it exists to expose.
 
-**Per park, per 5-minute cycle,** after the entity loop, `reconcileMissingAttractions` diffs the
-cycle's `seenAttractionIds` against the park's attractions and, for each missing one:
+**Per park, per 5-minute cycle** (`wait-times-cron`), after the entity loop,
+`reconcileMissingAttractions` diffs the cycle's `seenAttractionIds` against the park's attractions and,
+for each missing one:
 
-- skips it if `createdAt` is under 24 h old (grace before its first successful sync);
+- skips it if `createdAt` is under 24 h old (grace before its first successful sync; the same
+  `STALE_THRESHOLD_MS`);
 - skips it if its last-seen key is under `STALE_THRESHOLD_MS` (24 h) old (a transient gap);
 - otherwise writes a CLOSED row through `QueueDataService.saveLiveDataBatch` with
   `source: "system-reconciliation"`. The delta check (`isSignificantChange`) deduplicates, so a stable
@@ -50,12 +52,4 @@ It reads the same last-seen key and:
 - **The outage reconstruction** (`outage-rows.sql.ts`) uses the row to **end** a run.
 - **Not `detect-seasonal`.** Its evidence queries read observed rows only (`observedReadingsSql()`,
   PAR-32), so a ride in this state has no current status there and is neither flagged nor given months
-  ([seasonality](attraction-status/seasonality.md#what-the-detector-skips)). The code comment on
-  `reconcileMissingAttractions` still names the detector as the reason for the write; it is stale.
-
-| Setting | Value | Where |
-| --- | --- | --- |
-| Stale threshold / grace period | 24 h | `STALE_THRESHOLD_MS` |
-| last-seen TTL | 14 days | `LAST_SEEN_TTL_SECONDS` |
-| Heartbeat skip after a fresh reading | 10 min | `FEED_WILL_WRITE_MS` |
-| Sync cadence | every 5 min | `wait-times-cron` |
+  ([seasonality](attraction-status/seasonality.md#what-the-detector-skips)).

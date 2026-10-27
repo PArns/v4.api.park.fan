@@ -14,7 +14,7 @@ import { roundServedWait } from "./pcn-serving.constants";
  * reads one MGET; a stale or missing curve leaves the slot as it was.
  *
  * Lead split when the flag is on (lead = slot start − the current slot start,
- * the same base the §7.7 persistence blend uses):
+ * the same base the persistence blend uses, docs/ml/intraday-serving.md):
  *
  * | lead | served |
  * | --- | --- |

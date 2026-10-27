@@ -22,8 +22,7 @@ does nothing. Wartezeiten parks get opening times from `wartezeiten-schedule` (0
 **On-demand refresh.** `CalendarService.requestScheduleRefreshIfNeeded` queues `sync-park-schedule` when
 the requested range ends more than `SCHEDULE_REFRESH_GAP_DAYS` (5) after the last OPERATING or CLOSED
 entry (UNKNOWN placeholders and event rows do not count, so a range covered only by gap-fill still
-triggers), at most once per 12 h per park (`calendar:refresh-check:{parkId}`). Its docblock still says
-UNKNOWN entries count; the code does not.
+triggers), at most once per 12 h per park (`calendar:refresh-check:{parkId}`).
 
 ## Source: ThemeParks.wiki
 
@@ -148,15 +147,13 @@ by one.
 `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`,
 `CalendarService.buildCalendarResponse()`.
 
-- **Cache:** per month only, `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}`, 15 min for the current
-  month and 30 min for others; any range is sliced from months, and only full months are stored. The
-  warmup keeps its months for 13 h (current month 2 h) ([caching](caching-strategy.md)).
+- **Cache:** per month only, `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}`; TTLs and slicing in
+  [caching](caching-strategy.md#keys-and-ttls).
 - **One cold build** fetches schedule, weather (`getWeatherData(parkId, from, to, timezone)`), daily ML,
   holidays, refurbishments, historical queue data and daily stats in one `Promise.all`; hourly ML once
   for today and tomorrow; past crowd levels with one `MGET` of `analytics:crowdlevel:park:{id}:{date}`,
   computing only misses. A cold build can take ~15 s, which is why the warmup exists.
-- **Warmup:** `warmup-calendar-daily` at 08:00 and 20:00 UTC builds months −1…+3 for every park (the
-  `none` variant the frontend reads) and the `/best-days` snapshot.
+- **Warmup:** what `warmup-calendar-daily` builds: [cache warmup](caching-strategy.md#cache-warmup).
 - **Indexes it relies on:** `schedule_entries (parkId, date, scheduleType)` and the partial
   `idx_schedule_park_date_no_attraction`, `weather_data (parkId, date)` (its primary key),
   `holidays (country, date)`, `park_daily_stats (parkId, date)`, `queue_data (attractionId, timestamp)`.

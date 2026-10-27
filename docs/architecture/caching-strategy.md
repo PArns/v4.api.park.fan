@@ -14,13 +14,13 @@ its `docs/architecture/caching-strategy.md`.
 | `attraction:integrated:{attractionId}:{days}` | to the next 5-min boundary (+5 s) | `days` = history length asked for (1–365, default 30); evict all variants with `attractionIntegratedPattern` |
 | `attraction:history:{attractionId}:…` | 5 min with today in range, else 24 h | Attraction wait-time history |
 | `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}` | 15 min current month, 30 min other months; warmed months 13 h, warmed current month 2 h | Only full months are stored; any range is sliced from months, and on a partial hit only the missing months are built. Warmup re-`expire`s them (`CALENDAR_WARMUP_MONTH_TTL`, `CALENDAR_WARMUP_CURRENT_MONTH_TTL`) |
-| `best-days:{parkId}` | tied to the warmed calendar | `/best-days` snapshot ([frontend contract](../frontend/best-days-endpoint.md)) |
+| `best-days:{parkId}` | 13 h (`CALENDAR_WARMUP_MONTH_TTL`, the warmed months it is built from) | `/best-days` snapshot ([frontend contract](../frontend/best-days-endpoint.md)) |
 | `ml:park:{parkId}:{type}:{date}` | hourly 30 min, daily 13 h | Same single-flight guard as the park payload |
 | `ml:tft-daily:{parkId}:{days}:{today}` | 13 h | Evicted (`ml:tft-daily:*`) when `train-nf` completes (PAR-1053); caches built on it still run out on their own TTLs |
 | `ml:hourly-fresh:{attractionId}` | 30 min | Freshness marker of the diff-written hourly predictions ([schema](../database/schema.md#write-path-par-874)) |
 | `park:statistics:{parkId}`, `park:occupancy:{parkId}` | 5 min | Occupancy is ratio-vs-P50 ([crowd levels](../rules/crowd-levels.md)) |
 | `analytics:crowdlevel:park:{parkId}:{date}` | 30 min today, 6 h past | Daily crowd level; the calendar reads all past days with one `MGET` |
-| `park:p50:{id}`, `park:p90:{id}`, `attraction:p50:{id}`, `attraction:p90:{id}`, `park:typicalpeak:{id}`, `attraction:typicalpeak:{id}` | 24 h | Mirrors of the baseline tables ([schema](../database/schema.md#precomputed-tables)), written by `p50-baseline` |
+| `park:p50:{id}`, `park:p90:{id}`, `attraction:p50:{id}`, `attraction:p90:{id}`, `park:typicalpeak:{id}`, `attraction:typicalpeak:{id}` | per key: [crowd levels](../analytics/crowd-levels.md#baselines-and-where-they-live) | Mirrors of the baseline tables ([schema](../database/schema.md#precomputed-tables)) |
 | `count:queue_data` | 6 h (other `count:*` 1 h) | Exact global row total; `approximate_row_count` overstated it 28× on compressed chunks |
 | `health:count:queue_data_24h`, `health:count:wait_time_predictions_24h` | 10 min | `/health` counts, shared across instances (PAR-872); a failed count is never cached. Liveness is `/health/ready` |
 | `analytics:headliners:{parkId}` | 6 h | `getHeadlinerAttractions`, read-through |
@@ -37,13 +37,9 @@ the geo structure) needs a version bump in `CacheKeys`.
 
 ## Publishing order
 
-The standing rule is [publish a write outside-in](../rules/publish-outside-in.md). Three caches sit in
-front of a write: `park:integrated` here (up to 6 h for a closed park), the Cloudflare copy
-(`max-age=300`, `stale-while-revalidate=600`, set by `cache-control.interceptor.ts`; this service has no
-Cloudflare integration and cannot purge it), and the frontend's data cache, which pins a park snapshot
-for **24 h** and refetches the instant `RevalidationService.revalidateTags` tells it to. So: evict here,
-revalidate, revalidate again after `CDN_SETTLE_MS` (16 min). `CuratedDataProcessor.publish()` is the
-reference implementation.
+The order in which a write lets go of the three caches in front of it (here, Cloudflare, the
+frontend's data cache) is the rule [publish a write outside-in](../rules/publish-outside-in.md). The
+park open/close webhook below applies it every five minutes.
 
 ### Park opening and closing (`ParkStatusRevalidationService`)
 
@@ -53,7 +49,9 @@ whatever was true when it was written, overnight in practice: on 2026-09-01 ever
 yesterday's showtimes under "no performances today". A frontend clock cannot fix that across every
 timezone, so `warmupOperatingParks()`, which recomputes every park's status every five minutes, posts
 **one** webhook with only the parks that flipped, tagged `park:<continent>/<country>/<city>/<slug>` (the
-geo path, because slugs repeat: `disneyland-park` is Anaheim and Paris).
+geo path, because slugs repeat: `disneyland-park` is Anaheim and Paris). The tag comes from
+`parkCacheTag` (`src/common/revalidation/park-status-transitions.ts`), a hand-written twin of park.fan's
+`parkCacheTag` in `lib/api/park-live-projection.ts`: change both or neither.
 
 - It fires **after** the warmup loop, which is what refreshed `park:integrated`.
 - Every transition is sent **twice**, the second after `CDN_SETTLE_MS`, scheduled in Redis
@@ -71,7 +69,7 @@ to refresh), popular CLOSED parks (top 50 by `PopularityService`), then the rest
 | --- | --- |
 | `live-cache-warmup`, after every wait-times run | parks, top 1000 attractions (`warmupTopAttractions`: user traffic plus the rides with the most `queue_data` rows in 7 days), occupancy, geo discovery, global and park statistics ([job queues](job-queues.md#the-wait-times-run-and-its-warmup)) |
 | `generate-hourly` predictions | parks opening in the next 12 h (`warmupUpcomingParks`) |
-| `warmup-calendar-daily`, 08:00 and 20:00 UTC | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; it runs after the 06:00 CatBoost training so the calendar serves fresh predictions without the ~15 s cold path |
+| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path |
 
 ## Database cache tables
 

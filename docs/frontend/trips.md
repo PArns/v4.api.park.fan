@@ -66,12 +66,11 @@ everybody except the planner. A `DELETE` spends the **update** bucket (a third
 bucket would hand a script a fresh allowance for guessing ids). The count happens
 before the lookup on every verb, so a miss costs an attempt like a hit.
 
-**The address is `getRateLimitIp`** (`src/common/utils/request.util.ts`):
-`X-Forwarded-For` only on a request carrying a valid throttle bypass key (our own
-frontend proxy), then `CF-Connecting-IP` only on a request carrying
-`CF_ORIGIN_SECRET` (it provably came through Cloudflare), else the socket address.
-Trusting a caller-written `X-Forwarded-For` let a script buy a fresh bucket per
-request. The push, ride-alert and show-follow limiters use the same key.
+**The address is `getRateLimitIp`**, the key the push limiters use too. A call
+through park.fan's relay is counted against the visitor address the relay forwards
+in `X-Forwarded-For`; a relay that drops it puts every visitor in one bucket. Which
+address a direct call is counted against:
+[edge and throttling](../deployment/edge-and-throttling.md#which-address-a-request-is).
 
 **A 429 says how long to wait**, in two places that agree: the body's
 `retryAfterSeconds` (exact) and a `Retry-After` header in whole seconds, rounded up.

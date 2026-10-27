@@ -22,7 +22,7 @@ The three hard limits alone add up to 42 GB, and with everything else ~72 GB. Th
 the peaks are separated in time: nf-service 03:00, CatBoost 06:00, PCN 08:30, the runner at
 09:45/13:45/17:45/21:45 UTC. Any two big peaks together (a manual `/train`, a retried job, a moved
 runner) exceed the host, and the kernel kills the largest process, which on 2026-10-12 was the training
-([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#the-0615-oom-of-2026-10-12)).
+([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#the-linear-runner-shares-the-hosts-memory)).
 Today's limits bound nothing that matters: each is above what fits next to the rest.
 
 ## Measure first

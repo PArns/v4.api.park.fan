@@ -4560,8 +4560,8 @@ export class AnalyticsService {
    * Cache the park typical-day-peak baseline (Redis only — no schema change;
    * recomputed by the daily cron). 2-day TTL so a single missed cron run
    * still leaves a usable value. When it's absent (brand-new park with no
-   * baseline) callers fall through to the neutral 'moderate' default —
-   * there is deliberately NO fallback to the P90 baseline.
+   * baseline) callers rate `unknown` — there is deliberately NO fallback to
+   * the P90 baseline (docs/rules/crowd-levels.md).
    *
    * NOTE: `park:typicalpeak:` (no hyphen) holds the typical-day peak WAIT
    * (number) — distinct from `park:typical-peak:` (with hyphen) in

@@ -15,7 +15,7 @@ exist in the repo), so these are snapshots; re-measure before quoting them as cu
 
 | Model | Horizon | Rides | Note |
 | --- | --- | --- | --- |
-| CatBoost daily | ~183 days | all active | `predict.py` walks the park's schedule, so the horizon is the operator's published calendar (181–362 days across parks) |
+| CatBoost daily | ~183 days | all active | `predict.py` walks the park's schedule, so the horizon is the operator's published calendar (181–362 days across parks, mean 193) |
 | TFT (`tft_forecasts`) | 60 days | 3,581 | covers 1,233 of 1,237 headliners and ~2,350 more rides |
 | PCN (`pcn_forecasts`) | 0–1 day (mean lead 6.1 h) | 2,782 | a nowcaster, not a long-range candidate |
 | shape (`shape_forecasts`) | 1–14 days | 4,893 | **retired in PAR-870 (2026-10-12)** with its service and tables |

@@ -33,9 +33,10 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   [absent-facts rule](absent-facts.md) applied to crowd levels.
 - **Consumers read the gated value** (`occupancy.crowdLevel`), never re-derive a tier from
   `occupancy.current`: that bypasses the ratability gate and turns `current = 0` into `very_low`.
-- **Every Swagger `enum:` for a crowd level comes from `CROWD_LEVEL_VALUES` /
+- **A Swagger `enum:` for a crowd level must come from `CROWD_LEVEL_VALUES` /
   `CROWD_LEVEL_WITH_CLOSED_VALUES`** (`src/common/types/crowd-level.type.ts`). A hand-written list
-  kept `unknown` out of the published contract for months.
+  kept `unknown` out of the published contract for months. One remains: `crowdLevel` in
+  `src/analytics/dto/ticker.dto.ts`, without `unknown`.
 - **Past and future days carry the same statistic where they share a field.**
   `headlinerForecast.avgWait` is a day-peak on both sides: forecasts take the per-day MAX in
   `predict.py`, history `getHeadlinerDailyPeaks` (per-ride day-P90). A mean on one side and a peak

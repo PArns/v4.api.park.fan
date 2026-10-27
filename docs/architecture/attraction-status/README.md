@@ -20,10 +20,16 @@ The standing rules for retirement, upstream identity and production one-offs are
 [Automated retirement and upstream identity](../../rules/automated-retirement-and-identity.md).
 The curated columns themselves are in [Curation](../../admin/curation.md).
 
+**Client contracts.** What a client reads and must do lives in `docs/frontend/`:
+[`status` and `effectiveStatus`](../../frontend/effective-status.md),
+[seasonality](../../frontend/seasonality.md) (the three values of `isCurrentlyInSeason` and its SQL
+twin `attractionIsOutOfSeason`, which change together),
+[parks whose wait times we cannot read](../../frontend/live-wait-times-availability.md).
+
 ## Old section numbers
 
-Code comments and older notes cite this subject as `attraction-status-and-seasonality.md` with a
-section number. Where each section now lives:
+The released changelog (`docs/changelog.md`) cites this subject as
+`attraction-status-and-seasonality.md` with a section number. Where each section now lives:
 
 | § | Now |
 | --- | --- |
@@ -33,7 +39,7 @@ section number. Where each section now lives:
 | 4 (two writers) | [curation.md](../../admin/curation.md); the free-flow months boundary in [seasonality.md](seasonality.md#free-flow-rows-and-their-months) |
 | 4a | [identity.md](identity.md) |
 | 4b | [review-marks.md](review-marks.md) |
-| 5.1 | [seasonality.md](seasonality.md#detect-seasonal-was-dead-for-73-days) |
+| 5.1 | [seasonality.md](seasonality.md#running-and-changing-the-detector) |
 | 5.2, 5.2a | [feed-drops.md](feed-drops.md) |
 | 5.3–5.5b | [duplicates.md](duplicates.md) |
 | 5.6, 5.7, 5.9, 5.9a | [reclassification-and-absence.md](reclassification-and-absence.md) |

@@ -123,24 +123,13 @@ pairs (they grow with the square of the dates), and a long lead with few pairs w
 
 ## Questions
 
-| id | Group | Label | Served | Use case × leads | Metric |
-| --- | --- | --- | --- | --- | --- |
-| `live_h0_1` | live | Wartezeit in der nächsten Stunde | `pcn` | UC1 h0-1 | slot MAE |
-| `live_h1_2` | live | Wartezeit in 1 bis 2 Stunden | `pcn` | UC1 h1-2 | slot MAE |
-| `today_h2_6` | today | Heute, 2 bis 6 Stunden später | `pcn` | UC2 h2-6 (2–4 h on the joint rows) | slot MAE |
-| `today_h6_12` | today | Heute, 6 bis 12 Stunden später | `pcn` | UC2 h6-12 | slot MAE |
-| `plan_d0_1` | planner | Geplanter Tag ist heute oder morgen | `served` | UC3 d0, d1 | slot MAE |
-| `plan_d2_5` | planner | Geplanter Tag ist in 2 bis 5 Tagen | `served` | UC3 d2–d5 | slot MAE |
-| `plan_d6_60` | planner | Geplanter Tag ist in 6 Tagen bis 2 Monaten | `served` | UC3 d6, d7, d10, d14, d21, d30, d45, d60 | slot MAE |
-| `plan_besttime` | planner | Beste Besuchszeit (bis 6 Wochen) | `served` | D3 d0–d7, d10, d14, d21, d30 | best-time regret |
-| `cal_rank` | calendar | Welcher Tag ist voller? | `tft` | D7 d0–d7, d10, d14, d21 (headliners, TFT level) | wrongly ordered day pairs, % |
-| `cal_busier` | calendar | Wie hoch wird die Tagesspitze? | `tft` | PEAK d0–d7, d10, d14, d21 (headliners, TFT level) | day-peak error |
-| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` | PEAK d30, d45, d60 (headliners, TFT level) | day-peak error |
-| `cal_far_90` | calendar | Kalendertage 3 Monate voraus vergleichen | `catboost` | PEAK d90 (headliners, CatBoost level) | day-peak error |
-
-Every question also carries `leadLabel` (e.g. "Prognose 2–5 Tage vorher, morgens um 06:05
-gespeichert"). Every metric is minutes, lower is better, except `cal_rank` (`rate`, percentage
-points). The calendar questions read the planner's per-ride `dayPeak` (built on the same daily
+The questions, with their German labels, served model, use case and leads, are
+`COMPARISON_QUESTIONS` in `src/ml/utils/model-comparison.util.ts`; read them there, not from a copy.
+By group: `live_h0_1`, `live_h1_2` and `today_h2_6`, `today_h6_12` compare against PCN (UC1, UC2);
+`plan_d0_1`, `plan_d2_5`, `plan_d6_60` (UC3) and `plan_besttime` (D3, best-time regret) against the
+served curve; `cal_rank` (D7), `cal_busier` and `cal_far` (PEAK) against the TFT level of the
+headliners, `cal_far_90` (PEAK d90) against CatBoost's. Every metric is minutes, lower is better,
+except `cal_rank` (`rate`, percentage points). The calendar questions read the planner's per-ride `dayPeak` (built on the same daily
 level the calendar reads); the calendar's crowd level itself is not archived per model. Toto 2.0 /
 TiRex-2 (`fm`) have no archived curve, so their cells are offline only (`checks.live = "open"`).
 

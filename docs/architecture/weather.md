@@ -2,8 +2,8 @@
 
 How park weather is fetched from Open-Meteo, stored in `weather_data`, served on the park payload, and
 extended past the 16-day forecast with climate normals that the wait-time models never see. Open this
-when a park's weather is empty or wrong, or before adding a weather call. Severe-weather warnings:
-[weather warnings](../frontend/weather-warnings.md).
+when a park's weather is empty or wrong, or before adding a weather call. Severe-weather warnings
+come from two other sources ([below](#severe-weather-warnings)).
 
 Open-Meteo is free, keyless and global; no US-specific source is needed. **A park with empty weather
 (`current: null, forecast: []`) has no `latitude`/`longitude`.** The park metadata sync
@@ -52,6 +52,22 @@ date-string comparison (`weather.date >= :start`). Two bugs taught this
 snapshot (`null` until the first current sync), `forecast` up to 15 following days from
 `WeatherService.getCurrentAndForecast`. DTO and WMO descriptions: `src/parks/dto/weather-item.dto.ts`,
 `src/common/constants/wmo-weather-codes.constant.ts`.
+
+## Severe-weather warnings
+
+`WeatherWarningsService.syncWarnings` (`src/parks/weather-warnings.service.ts`, `weather-warnings-cron`
+every 15 min) picks the source per country:
+
+| Parks | Source | Matching |
+| --- | --- | --- |
+| Germany | Bright Sky (`api.brightsky.dev/alerts`, DWD's CAP warnings, no key), `BrightSkyWarningsClient` | point-based: one query per park returns its DWD warncell's warnings |
+| the other MeteoAlarm countries | MeteoGate (EUMETNET's MeteoAlarm feed), `MeteoGateWarningsClient` | one country index, matched to parks by bbox and point-in-polygon |
+
+Germany goes to DWD directly because MeteoGate's German feed lags and drops the lower awareness
+levels (it once served only expired alerts while DWD had an active extreme-heat warning for Brühl).
+The country gate is MeteoGate's list, so without `METEOALARM_API_TOKEN` no country syncs, Germany
+included. Each sync replaces a country's rows in one transaction, hourly segments of one warning
+merged into a single row. What a client reads: [weather warnings](../frontend/weather-warnings.md).
 
 ## Climate normals beyond the forecast
 

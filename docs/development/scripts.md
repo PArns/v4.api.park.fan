@@ -43,6 +43,5 @@ npx ts-node -r tsconfig-paths/register scripts/<name>.ts
 npx dotenv -e .env.live_debug -- ts-node -r tsconfig-paths/register scripts/<name>.ts
 ```
 
-A script that opens its own DataSource against production sets `synchronize: false`, and a one-off that
-writes to production runs the deployed code from a clean checkout
-([production one-offs](../rules/automated-retirement-and-identity.md#7-production-one-offs-run-the-deployed-code-from-a-clean-checkout)).
+Before a script touches production:
+[production one-offs](../rules/automated-retirement-and-identity.md#7-production-one-offs-run-the-deployed-code-from-a-clean-checkout).

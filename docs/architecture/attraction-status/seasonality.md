@@ -3,7 +3,8 @@
 What `is_seasonal`, `season_months` and `season_out_since` mean, how the nightly `detect-seasonal`
 job writes them, and how a human curates a season. Open this before touching the detector or
 writing a season by hand. The seasonal rides' effect on what a park serves today is in
-[status regimes](status-regimes.md).
+[status regimes](status-regimes.md); what a client reads, and the SQL twin that must change with
+the TypeScript rule, in the [season contract](../../frontend/seasonality.md).
 
 ## The columns
 
@@ -15,10 +16,8 @@ writing a season by hand. The seasonal rides' effect on what a park serves today
 | `curated_is_seasonal`, `curated_season_months` | a human's season, read first | admin ([curation](../../admin/curation.md)) |
 
 Both pairs resolve through `resolveCuratedFacts`; a curated `false` takes the months down with it.
-`isCurrentlyInSeason` (`curated-attraction-facts.util.ts`) has three answers: with months, whether
-this month is one of them; without months but with `season_out_since`, `false` ("not now", which
-is what keeps an ice rink out of an August ride list); seasonal and nothing else known, `null` —
-which must not collapse into "not running". Readers test `!== false`.
+`isCurrentlyInSeason` (`curated-attraction-facts.util.ts`) turns them into three values; what each
+means and who reads it is the [season contract](../../frontend/seasonality.md#iscurrentlyinseason-has-three-values).
 
 ## The observation-window artefact
 
@@ -64,17 +63,15 @@ free-flow, which would have wiped a curated season). That guard reads the **sync
 curation writes `curated_season_months`, so on its own it protects nothing; what keeps a curated
 free-flow season stable is `curated_is_seasonal` (below).
 
-## `detect-seasonal` was dead for 73 days
+## Running and changing the detector
 
-Commit `9046535` (2026-06-03) refactored the zero-history query into a CTE chain and dropped the
-leading `WITH`. Postgres threw `42601` after the candidates were computed and before the UPDATE;
-every run found 262 candidates and wrote none. A SQL string in a template literal compiles and
-lints as well broken as whole: hand modified job SQL to Postgres as `EXPLAIN` before shipping. The
-failure surfaced nowhere until the job was triggered by hand; failed jobs are now swept nightly
-([job queues](../job-queues.md#failed-jobs-retention-and-monitoring)).
+Run it without waiting for 02:30: `POST /v1/admin/detect-seasonal` (queues `detect-seasonal` on
+`analytics`).
 
-Run the detector without waiting for 02:30: `POST /v1/admin/detect-seasonal` (queues
-`detect-seasonal` on `analytics`).
+Hand modified job SQL to Postgres as `EXPLAIN` before shipping: a SQL string in a template literal
+compiles and lints as well broken as whole. A dropped `WITH` once made every run throw `42601`
+after computing its candidates, and the detector wrote nothing for 73 days before anyone noticed.
+Failed jobs are now swept nightly ([job queues](../job-queues.md#failed-jobs-retention-and-monitoring)).
 
 ## Curating a free-flow attraction
 

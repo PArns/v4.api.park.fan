@@ -12,7 +12,7 @@ then open the reference page of the model you are changing.
 | same, slots 45–120 min ahead | 45–120 min | **Chronos-2** `live` q50 when switched on | whatever the row above serves | `SERVE_CHRONOS_INTRADAY` (default off) |
 | same, beyond PCN's horizon | 12–48 h | **CatBoost** hourly (q0.5), band × calibration factor | — | — |
 | Daily level: calendar crowd levels, `/plan/day` day levels, yearly view | days 1–60 | **TFT** `predicted_peak`, every ride in `tft_forecasts` (the calendar averages the headliners) | CatBoost daily for a ride/day TFT has no row for, or when the newest TFT run is more than 3 days old | — |
-| Daily level beyond TFT | days 61–365, up to the operator's published calendar (~183 days measured) | **CatBoost** daily (max of the park-local 12/14/16 h predictions) | — | — |
+| Daily level beyond TFT | days 61–365, up to the operator's published calendar ([measured](long-range-forecasting.md#1-the-models-and-how-far-they-reach)) | **CatBoost** daily (max of the park-local 12/14/16 h predictions) | — | — |
 | `/plan/day` hours past CatBoost's 48 h (`tier: "composed"`) | to the end of the daily horizon | the served daily level × the ride's historical hour shape; the **H5 composer** (`slots[]`) when switched on | — | `PLAN_DAY_H5_COMPOSER` (default off) |
 
 `SERVE_PCN_INTRADAY` and `SERVE_CHRONOS_INTRADAY` default to off in the code and in
@@ -80,40 +80,19 @@ reverted:
 
 ## Reference pages
 
-| Page | Covers |
-|---|---|
-| [CatBoost](catboost.md) | the ml-service model, its 75 features, the `/predict` contract, holiday and schedule handling |
-| [CatBoost training](catboost-training.md) | training data and filters, dropouts and weights, validation, tree count, champion gate, activation |
-| [Quantile serving & calibration](quantile-serving-and-calibration.md) | which quantile becomes the shown wait, the crowd level and the band; band calibration |
-| [Intraday serving path](intraday-serving.md) | the API's PCN / Chronos overrides, the persistence blend, raw vs served reads |
-| [PCN](pcn.md) | the intraday nowcaster: model, targets, training, forecast tick, `pcn_forecasts`, boards |
-| [TFT](tft.md) | the daily level: panel, covariates, nightly run, serving, why it serves days 1–60 |
-| [TFT grid shadows](tft-grid-shadows.md) | the calendar-day grid and the level-driver shadows |
-| [ml-service query performance](performance-optimizations.md) | caches, rolling statistics in SQL, the uuid-cast rule |
-| [What we can forecast, and how far](long-range-forecasting.md) | measured horizons and lead-time error per model |
-
-Evaluation and scoring are on [the forward archive](forward-archive/README.md),
-[ml-bench](ml-bench/README.md), [foundation models](foundation-models/README.md),
-[accuracy-scoring-rule.md](accuracy-scoring-rule.md) and
-[reader-facing-accuracy.md](reader-facing-accuracy.md).
+Every model, serving and evaluation page is listed under
+[Machine learning in the doc map](../README.md#machine-learning).
 
 ## Retired
 
-- **Shape model** (Level × Shape, `shape-service`, shadow 2026-06-29 → 2026-10-12). It rendered a
-  daily level into a 15-min curve from per-ride normalised profiles:
-  `smooth(base + 0.5·(crowd − base) + 0.6·(daytype − base))`, crowd = the ride's own tertile of
-  daily peaks, daytype = weekend / holiday / school break / bridge / season, ±2-slot smoothing.
-  Offline, at the true level, it beat the crowd-only profile on busy slots (16.0 vs 17.3 MAE,
-  7 parks); a learned residual over 18 parks took another 2.8 %, weather added nothing. Its live
-  board showed it losing everywhere (busy −3.9, bias −20), because it compared a 14-day forecast
-  with CatBoost's ≤ 24-hour one. Removed in PAR-870 (service, `shape-shadow` queue, admin
-  trigger, `shape_forecasts` and `shape_comparisons` dropped in production). Its idea — a
-  historical profile scaled by a daily level — is what `/plan/day`'s H5 composer does.
-- **TFT-vs-CatBoost daily scoreboard** (`nf-training/score-comparison` 07:00 UTC, the
-  `catboost_daily_forecasts` snapshot and `model_comparisons`, 2026-05-23 → 2026-10-12). Nobody
-  read it after the admin page moved to the forward archive's model comparison (PAR-862);
-  removed in PAR-870, both tables dropped. Its measurements are on
-  [TFT](tft.md#why-tft-serves-days-160).
+- **Shape model** (`shape-service`, removed in PAR-870 with `shape_forecasts` and
+  `shape_comparisons`): a daily level rendered into a 15-min curve from per-ride profiles modulated
+  by crowd tertile and day type. Offline it beat the crowd-only profile on busy slots (16.0 vs
+  17.3 MAE, 7 parks; weather added nothing); its live board's losses were a lead mismatch
+  ([long-range §5](long-range-forecasting.md#5-the-intraday-shape-neither-proposed-change-survived)).
+  The idea lives on in `/plan/day`'s H5 composer.
+- **TFT-vs-CatBoost daily scoreboard** (`model_comparisons`, `catboost_daily_forecasts`; removed in
+  PAR-870, unread since PAR-862). Its measurements: [TFT](tft.md#why-tft-serves-days-160).
 - **CatBoost `RMSEWithUncertainty` + VirtEnsembles** (until 2026-05-23) and the single
   `Quantile:alpha=0.8` loss (until 2026-06-13): replaced by `MultiQuantile`, see
   [Quantile serving](quantile-serving-and-calibration.md#why-these-quantiles-measured).

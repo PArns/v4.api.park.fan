@@ -21,5 +21,3 @@ a time into a date; the full guide with the traps is
 - **Python:** one pandas column carries one timezone, so park-local time is stored naive in
   `local_timestamp` and never compared against a `TIMESTAMPTZ`
   ([§8 of the guide](../development/datetime-handling.md)).
-
-Where the code was audited against this rule: [the guide's §1](../development/datetime-handling.md#1-park-time).

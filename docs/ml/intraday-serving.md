@@ -84,8 +84,7 @@ A slot or ride PCN has nothing for keeps CatBoost.
 ## The persistence blend (PAR-1026, PAR-1029)
 
 At short lead "the wait now" predicts the wait an hour from now better than the model.
-`persistenceBlendServe` (`src/ml/utils/persistence-blend.util.ts`; called the "§7.7 blend" in code
-comments):
+`persistenceBlendServe` (`src/ml/utils/persistence-blend.util.ts`):
 
 | lead (from now) | anchor | served q0.5 |
 |---|---|---|

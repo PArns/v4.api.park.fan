@@ -38,19 +38,11 @@ lives in one function on each side: `unfoldedCloseHour`
 Shows on such a day: a past-midnight performance belongs to the day whose
 published window still covers it — see [shows](./shows.md#past-midnight-performances).
 
-## What it used to answer
+## Four places have to agree
 
-Nothing. A guard (`closeHour < openHour` → context plus an empty ride list)
-returned `rides: []` for every wrap day: swept across all 212 parks on 2026-09-05,
-2026-10-31 and 2026-12-31, 22 of 22 wrap days were `OPERATING` with no rides,
-while the same parks answered normally on an ordinary day (Cedar Point 13 Sep
-`11 → 20`, 14 rides; 31 Oct `11 → 0`, 0 rides). The three every-day wrap parks had
-never carried a curve.
-
-## Four places had to agree
-
-Removing the guard was not enough; every loop under it would have run zero times,
-and two stores key the night by the wrong date:
+A wrap day once answered `rides: []` (a `closeHour < openHour` guard). Every loop
+that walks the day's hours has to unfold it, and two stores key the night by the
+next date:
 
 - **Hourly predictions** are timestamps, so 00:30 of a `16 → 1` day carries
   *tomorrow's* park-local date. Matching on the day's own date dropped exactly the

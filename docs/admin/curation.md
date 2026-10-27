@@ -158,9 +158,8 @@ Adding a curated column there makes it appear in the admin with no frontend chan
 ## Writing
 
 Through `AdminCurationService` (`PATCH /v1/admin/content/attractions/:id`, `…/parks/:id`), which publishes
-in the [outside-in order](../rules/publish-outside-in.md): write the curated column, evict Redis,
-revalidate the frontend, revalidate again after `CDN_SETTLE_MS` (16 min). A raw `UPDATE` lands in the
-database and not on the page, and leaves no audit row.
+in the [outside-in order](../rules/publish-outside-in.md). A raw `UPDATE` lands in the database and not
+on the page, and leaves no audit row.
 
 - **A patch that changes nothing writes nothing** — no save, no eviction, no audit row — so a form that
   PATCHes on every blur does not bury the real edits.
@@ -179,20 +178,75 @@ database and not on the page, and leaves no audit row.
 
 ### Ride profiles
 
-`attraction_ride_profiles` used to be edited by hand-written SQL, matched on park slug **and** attraction
-slug, with `seeded_at = now()` remembered by hand — forgetting it left the correction invisible, because
-`findCuratedSince` uses it to pick the caches to evict. The admin path stamps it and checks the glossary
-term ids on write (the nightly `audit-ride-profile-terms` re-checks them). `elements` is the layout **in
-ride order**: never sort or dedupe it. The API contract: [ride ↔ glossary](../frontend/ride-glossary-link.md).
+There is no upstream feed and no seed file: **the `attraction_ride_profiles` rows are the source of
+truth.** Write them in the admin (`/admin/attractions/<id>`, ride profile editor → `PUT` /
+`DELETE /v1/admin/content/attractions/:id/ride-profile`, editor role, audited). The write checks every
+term id against park.fan's `/api/glossary-term-ids` and refuses unknown ones, stamps `seeded_at` (the
+marker `findCuratedSince` picks the caches to evict by) and publishes like every curated write. Never
+touch `stats` / `stats_updated_at`; those belong to the Wikidata importer. What each field means,
+`elements` in ride order included: [ride ↔ glossary](../frontend/ride-glossary-link.md).
+
+A row written by hand in SQL must set `seeded_at = now()` (NOT NULL, no default) and then be published
+with `POST /v1/admin/publish-ride-profiles { "sinceHours": 24 }`, which evicts and revalidates every
+profile stamped in the window; without it a fix surfaces only as TTLs expire (up to 6 h Redis, 900 s
+edge, a day in the frontend's data cache). Match such SQL on `parks.slug` **and** `attractions.slug`:
+park slugs repeat (`disneyland-park` is Anaheim and Paris) and so do ride names ("Goliath" is six
+coasters).
+
+**Term-id audit.** `GET /v1/admin/ride-profile-term-audit` diffs every stored id against park.fan's
+`/api/glossary-term-ids` and names the broken ids and the rides they shorten; it aborts rather than
+reporting when the glossary answers empty. It also runs daily at 06:30 (`CuratedDataProcessor`,
+`ride-profile-term-audit-cron`) and logs a warning without failing the job — the ids only break when
+park.fan renames a term. **Still unguarded:** a ride deleted and re-created upstream loses its profile
+silently (the FK cascades).
+
+#### Sourcing a ride profile
+
+Ride layouts are facts about a physical object. Assemble them from the park's attraction page, the
+manufacturer's project page (Mack, Intamin, Vekoma, B&M and Gerstlauer publish element lists),
+Wikipedia ride articles and on-ride footage. RCDB is a link target and a check of
+manufacturer/model/year, **never a text source** — its terms permit linking, not reuse. Where sources
+disagree on a figure's name, use the manufacturer's name for that installation. Add only an element
+you can point at in footage or a published layout: an incomplete list is fine, a wrong one is worse
+than none.
+
+Measurements, stricter, because a number looks equally authoritative checked or not:
+
+- Join sources on the **RCDB id**, never the name; confirm the source describes *our* installation
+  (our own id pointed at a predecessor ride for four coasters).
+- Found by name, the article must name the ride **and one park** — a search for
+  "Winja's Force Phantasialand" returns Taron.
+- Require two sources within 5 %; where they disagree, write nothing.
+- Sanity: no coaster beats `sqrt(2gh)` without a launch or is taller than half its track. The admin
+  rejects values outside 0–400 km/h, 0–250 m, 0–10,000 m, 0–3,600 s.
+
+Invariants to check by hand, each a mistake that happened: no unknown term ids; a coaster's list
+starts with a lift, launch or drop (Hydra's pre-lift jojo roll is the exception); no ride claims
+inversions with no inverting figure in its list; **two rides with a byte-identical element list are a
+lead, not a fact** — every time it was chased down, members turned out to be another model (a
+"Boomerang" family coaster, an "SLC" that is an MK-900, a B&M floorless filed under a sister ride).
+Verify each against its own RCDB id.
+
+```sql
+-- identical element lists shared by several rides
+SELECT rp.elements, count(*), array_agg(a.slug)
+  FROM attraction_ride_profiles rp JOIN attractions a ON a.id = rp."attractionId"
+ WHERE jsonb_array_length(rp.elements) > 4
+ GROUP BY rp.elements HAVING count(*) > 1 ORDER BY count(*) DESC;
+
+-- rides with an RCDB id and no profile
+SELECT p.slug, a.slug, a.rcdb_id
+  FROM attractions a JOIN parks p ON p.id = a."parkId"
+  LEFT JOIN attraction_ride_profiles rp ON rp."attractionId" = a.id
+ WHERE rp."attractionId" IS NULL AND a.rcdb_id IS NOT NULL;
+```
 
 ### Seasons
 
-`park_seasons` is a table because nothing derives them: a Halloween night and a late
-Saturday produce the same schedule row. `dates` beside `startDate` / `endDate` because a season is often not
-a range (Walibi Holland's Fright Nights: weekends plus three single dates); `dates: null` means every day
-between the bounds, and an empty array is rejected. Read publicly at
-`GET /v1/parks/:continent/:country/:city/:park/seasons`, its own request because the park payload is
-re-polled every five minutes and seasons change a few times a year.
+`park_seasons` is curated only, because nothing derives a season: a Halloween night and a late Saturday
+produce the same schedule row. Editors write it through `POST /v1/admin/content/parks/:id/seasons` and
+`PATCH` / `DELETE …/content/seasons/:id`; an empty `dates` list is stored as `null` (every day between
+the bounds). The fields and what a client reads: [park seasons](../frontend/park-seasons.md).
 
 ## Names are display names
 

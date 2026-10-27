@@ -30,8 +30,8 @@ rides, and one that reads it as indoor sends them into the rain. The rule is
 ## Where the values come from
 
 No feed. ThemeParks.wiki, Queue-Times and Wartezeiten.app carry nothing like
-it, and RCDB and park websites are off-limits by their terms (frontend repo,
-`docs/product/attraction-metadata-sources.md`). Every value is written through
-the curated-field editor, and the source goes into the `reason` and
-`sourceUrl` of the curation's audit row. That row is the record of where a
-value came from.
+it, and the terms of RCDB and the park websites forbid ingesting or scraping
+them (frontend repo, `docs/product/attraction-metadata-sources.md`). An editor
+researches the park's own page and writes the value through the curated-field
+editor; the source goes into the `reason` and `sourceUrl` of the curation's
+audit row, which is the record of where a value came from.

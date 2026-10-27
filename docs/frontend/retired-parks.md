@@ -14,8 +14,7 @@ endpoint says it is closed:
 }
 ```
 
-Both fields are absent (null, stripped by `ExcludeNullInterceptor`) while the park
-operates. Render a retired park the way
+Both fields are absent while the park operates. Render a retired park the way
 a ride retired as closed is rendered: closed permanently since that date, the
 reason with its source, no live wait times, no crowd level, no forecast, no
 opening hours. Its rides are retired on the same day, so every ride page of the

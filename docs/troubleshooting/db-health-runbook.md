@@ -146,7 +146,7 @@ ORDER BY n_dead_tup DESC;
 
 A manual `VACUUM ANALYZE <table>` uses `maintenance_work_mem` (2 GB here), not `autovacuum_work_mem`: run
 `SET maintenance_work_mem = '256MB';` first, and never between 05:50 and 07:30 UTC
-([why](nightly-db-maintenance.md#the-0615-oom-of-2026-10-12)). Leave hypertables to autovacuum.
+([why](nightly-db-maintenance.md#the-windows-utc)). Leave hypertables to autovacuum.
 
 ## 6. Slow-query logs
 
@@ -208,10 +208,8 @@ docker inspect <api-container> --format '{{.RestartCount}} restarts'
 docker logs <api-container> 2>&1 | grep -B 20 'FATAL ERROR\|heap out of memory' | grep -E '(LOG|WARN|Processor|warmup)'
 ```
 
-The API's heap limit is set twice: the Dockerfile `CMD` passes `--max-old-space-size=6144`, and the
-production compose sets `NODE_OPTIONS=--max-old-space-size=4096`. Node applies command-line flags after
-`NODE_OPTIONS`, so the running API should have 6 GB. For a host-level kill, `journalctl -k` holds the
-kernel's OOM report with every process group's RSS.
+The running API's heap limit is 6 GB ([why not the compose's 4096](../deployment/coolify.md#containers)).
+For a host-level kill, `journalctl -k` holds the kernel's OOM report with every process group's RSS.
 
 ## 9. Containers
 

@@ -1,45 +1,16 @@
 # ml-service query performance
 
-How the CatBoost serving path keeps its database reads cheap — the uuid-cast rule that applies to
-every service, the in-process caches, the recent-history reads — and the measurements behind
-them. Open it before adding a query to `ml-service`, `nf-service` or `pcn-service`, or any uuid
-filter in the API.
+How the CatBoost serving path keeps its database reads cheap — the uuid-cast fix, the in-process
+caches, the recent-history reads — and the measurements behind them. Open it before adding a query
+to `ml-service`, `nf-service` or `pcn-service`.
 
-## Never cast an indexed uuid column; cast the parameter (PAR-871)
+## The uuid-cast fix, measured (PAR-871)
 
-**Rule.** A filter on a uuid column compares uuid to uuid. The cast goes on the bound value, never
-on the column:
-
-```sql
--- WRONG: the column is hidden from its index
-WHERE qd."attractionId"::text = ANY(:attraction_ids)
-WHERE "parkId"::text = :park_id
-
--- RIGHT
-WHERE qd."attractionId" = ANY(CAST(:attraction_ids AS uuid[]))   -- SQLAlchemy
-WHERE "parkId" = CAST(:park_id AS uuid)
-WHERE a."parkId" = $1::uuid      /  = ANY($1::uuid[])             -- TypeORM / pg
-```
-
-A cast on the column turns the predicate into an expression no index covers. On `queue_data` it
-is worse than a missed index: compressed chunks are filtered on their segment-by column, and with
-a text expression TimescaleDB decompresses every chunk in the time window instead. The two serving
-reads in `predict.py` (`fetch_recent_rolling_stats`, `fetch_recent_wait_times`, ~90,000 calls a day
-each) carried this cast and were ~80 % of all database time on 2026-10-12. An expression index
-does not help (segment-by filtering on compressed chunks does not use it); fixing the predicate
-does.
-
-**The one trap.** Casting the parameter raises `22P02` on a value that is not a uuid, which fails
-the whole query, where the text comparison just matched nothing. So ids are filtered before they
-are bound: `uuid_params.uuid_list` / `uuid_or_none` (one identical copy in each of `ml-service`,
-`pcn-service`, `nf-service`) and `isCanonicalUuid` in `src/common/utils/uuid-param.util.ts`. Both
-keep only the lowercase hyphenated form, which is exactly what `uuid::text` prints, so they drop
-only values the old comparison could never have matched. A dropped value is logged once per
-process. Where an empty id list means "all parks" (`fetch_attraction_meta` in pcn/nf), the
-`WHERE` follows the input list, not the filtered one, so a list of bad ids still matches nothing.
-
-Output casts (`SELECT qd."attractionId"::text AS "attractionId"`) are fine: they run after the
-filter. Columns that really are text (`queue_data_aggregates."attractionId"`) are compared as text.
+The rule is [cast the parameter, never the uuid column](../rules/uuid-casts.md). Here it was the two
+serving reads in `predict.py` (`fetch_recent_rolling_stats`, `fetch_recent_wait_times`, ~90,000
+calls a day each). A value the uuid filter drops is logged once per process. Where an empty id list
+means "all parks" (`fetch_attraction_meta` in pcn/nf), the `WHERE` follows the input list, not the
+filtered one, so a list of bad ids still matches nothing.
 
 **Measured on production, Phantasialand (40 rides), warm cache, same rows:**
 
@@ -52,9 +23,7 @@ filter. Columns that really are text (`queue_data_aggregates."attractionId"`) ar
 | `schedule_entries` | 698 buffers | 4 buffers |
 
 Old and new SQL return identical rows (`EXCEPT ALL` both ways = 0) for Phantasialand, Europa-Park
-and Magic Kingdom on all five queries. `ml-service/tests/test_uuid_params.py` (and the copies in
-`pcn-service` and `nf-service/tests`) fail on any `::text =`, `::text IN` or `::text <>` in the
-service's query files.
+and Magic Kingdom on all five queries.
 
 ## Recent history: two reads, both shaped like training
 

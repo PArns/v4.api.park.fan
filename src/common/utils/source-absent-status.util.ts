@@ -2,8 +2,8 @@
  * "No source mentions this ride any more" is not "this ride is closed".
  *
  * Reverse-reconciliation (wait-times.processor) writes a CLOSED queue_data row
- * for any attraction no upstream source has reported in 24h, so that the
- * seasonal detector has something to read. That write is deliberate, but the
+ * for any attraction no upstream source has reported in 24h, so that its last
+ * OPERATING row stops being its current status. That write is deliberate, but the
  * status it produces is an assertion we cannot support: it says the operator
  * closed the ride, when all that happened is that our data stopped arriving.
  *

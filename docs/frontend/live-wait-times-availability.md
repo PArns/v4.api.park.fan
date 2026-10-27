@@ -36,7 +36,7 @@ tier — [crowd levels](../rules/crowd-levels.md)):
 
 |                                      | readable park                     | `available: false` |
 | ------------------------------------ | --------------------------------- | ------------------ |
-| ride with no queue row, park open    | `OPERATING` (optimistic fallback) | **`UNKNOWN`**      |
+| ride `effectiveStatus`, park open    | the feed's, or `OPERATING` with no row (park payload; [effective status](./effective-status.md)) | **`UNKNOWN`** |
 | ride `crowdLevel`                    | rated against its P50             | **`unknown`**      |
 | park `statistics.crowdLevel`         | rated                             | **`unknown`**      |
 | `statistics.peakHour*`               | today's peak or a forecast        | **`null` / 0**     |
@@ -56,12 +56,11 @@ tier — [crowd levels](../rules/crowd-levels.md)):
 - **A closed park still closes its rides**: `CLOSED` comes from the schedule, which
   we can read. Only the open-park case becomes `UNKNOWN`.
 
-**The same withholding covers a park whose feed has gone quiet**:
-`ParkIntegrationService` gates on `waitTimesKnowable = waitTimesReadable &&
-parkObservedRecently`, the second half being an observed reading within
-`PARK_FEED_SILENT_DAYS` = 30 days (PAR-192). `liveWaitTimes.available` stays `true`
-there, so a client cannot derive this case — it reads the withheld fields
-themselves.
+**The park payload withholds the same for a park whose feed has gone quiet** for
+`PARK_FEED_SILENT_DAYS` (30). `liveWaitTimes.available` stays `true` there, so a
+client cannot derive this case — it reads the withheld fields themselves. The gate,
+and the surfaces it does not cover:
+[status regimes §5](../architecture/attraction-status/status-regimes.md#5-a-whole-park-gone-silent).
 
 ## What the client still has to do
 
@@ -83,18 +82,15 @@ Rule out a broken ingestion mapping first; the signature is `/stats` at
 
 ## A single ride can read `UNKNOWN`
 
-In an otherwise readable park, a ride reads `UNKNOWN` when **every** current queue
-row was written by reverse-reconciliation — the job that stamps CLOSED on anything no
-source has mentioned for 24 hours — while its park is operating. That row means "our
-data stopped arriving", not "the operator closed it" (ThemeParks.wiki dropped 44
-Europa-Park and 18 Rulantica attractions on 2026-06-07, and the park page still
-showed them closed ten weeks later). Measured 2026-09-11 (PAR-38): 125 rides across
-eleven parks are genuinely silent, mostly attractions of seasonal events.
+In an otherwise readable, open park, a ride reads `UNKNOWN` when **every** current
+queue row was written by reverse reconciliation: no source has mentioned it for
+24 hours, which says our data stopped arriving, not that the operator closed it.
 
 - Render `UNKNOWN` as "no information", never as closed; `queues` is empty.
 - A free-flow attraction (`open_with_park`) stays `OPERATING`: its flag, not the
   feed, makes it open.
-- An `UNKNOWN` ride is not counted as operating, as before.
+- An `UNKNOWN` ride is not counted as operating.
 
-How the status regimes fit together:
-[attraction status regimes](../architecture/attraction-status/status-regimes.md).
+Why, and which rides it catches:
+[status regimes §3](../architecture/attraction-status/status-regimes.md#3-no-source-reports-it--unknown),
+[feed drops](../architecture/attraction-status/feed-drops.md).

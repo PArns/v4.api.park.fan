@@ -323,7 +323,7 @@ def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.D
     # origin slot (merge_asof backward). This — not the exact actual@origin — is what serving
     # blends with (its live wait_ffill is present once a ride has ANY prior obs), so pcn_blend
     # now measures the ~100%-coverage SERVED blend, not the 60%-coverage scorer artifact that
-    # capped the earlier §7.7 read. NaN only before a ride's first-ever observation.
+    # capped the earlier blend read. NaN only before a ride's first-ever observation.
     anchor_src = actuals.rename(
         columns={"target_slot": "obs_slot", "actual": "ffill_anchor"}
     ).sort_values("obs_slot")
@@ -331,7 +331,7 @@ def _leadcurve_matched_frame(park_id: str, tz: str, lookback_hours: int) -> pd.D
         m.sort_values("origin_slot"), anchor_src,
         left_on="origin_slot", right_on="obs_slot", by="unique_id",
         direction="backward")
-    # Shadow persistence-blend (§7.7): blend the served PCN toward the ffill anchor, piecewise
+    # Shadow persistence-blend (docs/ml/intraday-serving.md): blend the served PCN toward the ffill anchor, piecewise
     # (full weight ≤ full_h, decaying to pure PCN by horizon). Fall back to pure PCN only when
     # even the ffill anchor is missing (pre-first-obs) → same population as pcn (clean A/B).
     blend = persistence_blend(
@@ -353,7 +353,7 @@ def score_leadcurve_all(
     """Pool every park's lead-curve matched slots and aggregate PCN@{1h,3h,6h} vs actual
     + persistence into pcn_lead_curve_comparisons (one pooled upsert, like score_all).
     Measures the longer leads the UI serves for rest-of-day — the main board's
-    freshest-origin join only ever sees ~15-min leads (§7.7)."""
+    freshest-origin join only ever sees ~15-min leads (docs/ml/pcn.md#shadow-boards)."""
     lookback_hours = lookback_hours or settings.PCN_SCORE_LOOKBACK_HOURS
     parks = pipeline.scope_park_ids(park_ids)
     t0 = time.time()
@@ -418,7 +418,7 @@ def score_all(lookback_hours: int | None = None, park_ids: list[str] | None = No
                     n, len(combined), len(parks), time.time() - t0, pruned)
         result = {"rows": n, "matched_slots": int(len(combined)), "parks": len(parks),
                   "pruned": pruned}
-    # Lead-curve board (§7.7) — best-effort, independent of the main board's success so a
+    # Lead-curve board (docs/ml/pcn.md#shadow-boards) — best-effort, independent of the main board's success so a
     # lead-curve failure never blocks the served-freshest swap-gate evidence.
     try:
         result["lead_curve"] = score_leadcurve_all(lookback_hours, park_ids)

@@ -84,6 +84,16 @@ filter.
   schedule row of the day, so they are cut at their own publication time; a day whose holiday flag
   came from a later non-OPERATING row is delivered as NULL.
 - **Ex-ante busy** = the ride's q90 over the 56 days before the origin ≥ 45 min (`busy_q90_min`).
+- **The history cap raises, and must.** A model declares how much history it needs
+  (`truth_history_days`, read off the class); a cap below that raises rather than truncating, which
+  would publish numbers from a shortened context with nothing in the output to show it (Chronos-2
+  asks for ~343 days of compressed context and 400 for the daily head).
+- **Information budgets are read off the class** (`type(m)`), never the instance, because
+  `scored_name()` is a classmethod: an instance attribute would widen the budget and keep the honest
+  name. The guard is mutation-tested through `plugin_predict` / `plugin_predict_daily`.
+- **A cache is keyed on the cut.** The intraday history cache was once keyed on the origin table's
+  name, which the intraday path reuses, so every intraday origin after 08:00 forecast from the first
+  hour's context; the old assertion passed *because of* the bug.
 - `tests/test_runner.py::test_information_cut_baselines` and `::test_information_cut_plugins`
   (run for every registered model, on the daily, daily-level and intraday paths, one pass per
   cut) poison truth, ride-day levels, hourly stats, forecast rows written after the origin, both
@@ -198,8 +208,10 @@ window. Both are needed to read a horizon curve honestly (see "Confounds" below)
   read `max_significant_lead` too.
 - **Provenance** (change #7). `run-*.json` records the scoring code, `report-<tables>.json` the
   code that produced the verdicts; they can differ. `code_sha256` (sha256 over every
-  `mlbench/**/*.py`, measured inside the process) is the field to trust; `git_sha` and `image_id`
-  are asserted by whoever launched the container and have been recorded wrong before.
+  `mlbench/**/*.py`, measured inside the process) is the field to trust and the one to quote;
+  `git_sha` and `image_id` are asserted by whoever launched the container, and branches rebased
+  several times a day rewrite SHAs while the tree stays identical — two published tables have
+  carried a wrong SHA.
 
 ## Confounds every reader needs
 

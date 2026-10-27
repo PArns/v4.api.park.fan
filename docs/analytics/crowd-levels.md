@@ -18,15 +18,15 @@ chosen is [Headliner identification](headliner-logic.md).
 | Ride calendar (attraction history)                                 | P90 of the day's in-hours 15-minute slot P90s (`attraction_hourly_history`)                                | ride typical-day-peak                                          | `AttractionIntegrationService`, `getAttractionTypicalDayPeak` |
 | Hourly within-a-day predictions                                    | predicted wait                                                                                             | P50                                                            | calendar hourly predictions                                |
 
-Cross-ride aggregation is always a mean of minutes, never a percentile of per-ride ratios. The live
-`breakdown.typicalAvgWait` is the mean P50 of exactly the rides in `breakdown.currentAvgWait`.
+Cross-ride aggregation follows the [rule](../rules/crowd-levels.md) (sum the minutes, then divide). The
+live `breakdown.typicalAvgWait` is the mean P50 of exactly the rides in `breakdown.currentAvgWait`.
 `avgWaitToday` and `peakWaitToday` come from one per-headliner query (`averageTodayAcrossRides`), so
 `avg ≤ peak` holds by construction; the calendar's past-day headliner figures are per-ride day-P90s
 (`getHeadlinerDailyPeaks`) to match the peak-shaped forecasts in the same field.
 
 With no live sample at all `calculateParkOccupancy` returns `crowdLevel: "unknown"`. With no P50
-baseline it returns `current: 50`, `crowdLevel: "unknown"`, `confidence: "low"`: the 50 is a placeholder,
-which is why consumers read `crowdLevel` and never re-derive a tier from `current`.
+baseline it returns `current: 50`, `crowdLevel: "unknown"`, `confidence: "low"`: the 50 is a placeholder
+(hence the rule's "consumers read the gated value").
 
 The legacy field `baseline90thPercentile` carries whichever baseline the surface used (typical-day-peak
 on the calendar, P50 live).

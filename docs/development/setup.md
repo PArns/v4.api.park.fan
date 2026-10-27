@@ -17,15 +17,16 @@ commands. Open it when setting up a checkout. Production runs differently:
 ```bash
 pnpm install
 cp .env.example .env              # defaults match docker-compose.yml
-docker compose up -d postgres redis ml-service
+docker compose up -d postgres redis bull-board   # add ml-service nf-service pcn-service for forecasts
 pnpm dev                          # nest start --watch on http://localhost:3000
 ```
 
+The API starts without the Python services; each forecast read degrades on its own until they run.
+Bull Board shows the job queues on http://localhost:3001. `pnpm docker:up` starts the whole stack,
+the `api` container on port 3000 included — use it instead of `pnpm dev`, not alongside it.
 `.env.example` sets `DB_SYNCHRONIZE=true`, so the schema is created from the entities on first boot
-([the entities are the schema](../rules/the-entities-are-the-schema.md)). `docker-compose.yml` also
-defines `nf-service`, `pcn-service`, `api` and `bull-board`; start them by name when you need them.
-`pnpm db:reset` takes the local stack down **with its volumes** (`docker-compose down -v`) and starts
-Postgres and Redis again.
+([the entities are the schema](../rules/the-entities-are-the-schema.md)). `pnpm db:reset` takes the
+local stack down **with its volumes** (`docker-compose down -v`) and starts Postgres and Redis again.
 
 To debug ml-service outside its container:
 

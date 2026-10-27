@@ -28,7 +28,7 @@ with an empty `hours` when every modelled hour lies before its own opening
 
 There is no fixed daily-horizon constant. The daily forecast (`ml-service/predict.py`)
 walks the park's schedule, so it ends where the operator's published calendar
-does — 181 to 362 days across the live parks when measured (average 193).
+does ([measured horizons](../../ml/long-range-forecasting.md#1-the-models-and-how-far-they-reach)).
 
 ### `climatology`: how it was last year
 
