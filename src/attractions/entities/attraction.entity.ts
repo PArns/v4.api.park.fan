@@ -565,6 +565,40 @@ export class Attraction {
   absentSince: Date | null;
 
   /**
+   * The newest reading about this attraction that was an OBSERVATION rather
+   * than a repeat — `timestamp - "lastUpdated"` within
+   * `SOURCE_FRESH_MAX_FEED_AGE_MINUTES`. Written by `detect-silent-sources`,
+   * read by `readsUnknownFromSilentSource` on the three live payloads.
+   *
+   * It exists because `absent_since` and the reverse-reconciliation rule next
+   * to it both answer "does the source still list this ride", and that is a
+   * different question from "does the source still MEASURE it". A feed can do
+   * the first without the second, indefinitely: on 2026-10-27 LEGOLAND
+   * Billund's feed delivered a row for all 37 of its attractions at 09:15 UTC
+   * while carrying `lastUpdated = 2026-04-06 13:54:00+00` on every one of them,
+   * identical to the second and 203 days old. The park was open. Every ride on
+   * it read CLOSED, as a statement of fact, on the strength of a stamp from
+   * April. `absent_since` is null for all 37 — the row is listed — and
+   * `isSourceAbsent` is false, because the rows carry a real `dataSource`.
+   *
+   * **Null means "never scanned", and nothing else.** When the job finds no
+   * fresh reading in its window it stores the window's lower bound rather than
+   * null: that is a true statement about the ride (the last observation was at
+   * or before this instant) and it is already past the threshold, so the rule
+   * fires. Keeping null for the unscanned case is what lets the read path tell
+   * a measured silence from an unmeasured one — the alternative reading, null
+   * as "silent", would put every ride in the database on UNKNOWN for the gap
+   * between the deploy that adds this column and the job's first run.
+   *
+   * Not a hypertable column and deliberately not a per-reading write: the
+   * threshold is 14 days, so a daily scan is as precise as the question needs,
+   * and one UPDATE per fresh reading would be ~190,000 writes a day for a
+   * signal that moves once a fortnight.
+   */
+  @Column({ name: "source_last_fresh_at", type: "timestamptz", nullable: true })
+  sourceLastFreshAt: Date | null;
+
+  /**
    * When this park's `/children` last carried this row — the one signal that
    * says "the feed still has it", written by the children sync and by nothing
    * else.

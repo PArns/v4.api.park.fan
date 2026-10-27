@@ -3,6 +3,7 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { safeJsonParse } from "../common/utils/json.util";
 import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
+import { attractionSourceIsSilent } from "../common/utils/source-absent-status.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -1557,6 +1558,12 @@ export class AnalyticsService {
         -- OPERATING row still overrides it: the season on file is then behind
         -- the park, and a ride you can queue for belongs in both numbers.
           AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
+        -- A ride whose source stopped MEASURING it is in neither half either:
+        -- the three live payloads serve it as UNKNOWN, and counting it as
+        -- closed here is the page contradicting itself. Same live-OPERATING
+        -- override, and for the same reason — a ride you can queue for belongs
+        -- in both numbers. See readsUnknownFromSilentSource.
+          AND (NOT ${attractionSourceIsSilent("a")} OR lq.status = 'OPERATING')
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $5 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1571,6 +1578,7 @@ export class AnalyticsService {
       WHERE a."parkId" = $1::uuid
         AND a.retired_at IS NULL
         AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
+        AND (NOT ${attractionSourceIsSilent("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
         parkId, // $1
@@ -1659,6 +1667,12 @@ export class AnalyticsService {
         -- OPERATING row still overrides it: the season on file is then behind
         -- the park, and a ride you can queue for belongs in both numbers.
           AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
+        -- A ride whose source stopped MEASURING it is in neither half either:
+        -- the three live payloads serve it as UNKNOWN, and counting it as
+        -- closed here is the page contradicting itself. Same live-OPERATING
+        -- override, and for the same reason — a ride you can queue for belongs
+        -- in both numbers. See readsUnknownFromSilentSource.
+          AND (NOT ${attractionSourceIsSilent("a")} OR lq.status = 'OPERATING')
       )
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
@@ -1673,6 +1687,7 @@ export class AnalyticsService {
       WHERE a."parkId" = $1::uuid
         AND a.retired_at IS NULL
         AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
+        AND (NOT ${attractionSourceIsSilent("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
         parkId,

@@ -110,3 +110,120 @@ export function readsUnknownFromAbsentSource(
 ): boolean {
   return parkStatus === "OPERATING" && isSourceAbsent(rows);
 }
+
+/**
+ * How many days a source may stop measuring an attraction before its last
+ * CLOSED reading stops being a statement about the ride (PO, 2026-10-26,
+ * PAR-1023 option C).
+ *
+ * The threshold is on the SILENCE, not on the age of the current reading, and
+ * that distinction is the whole decision. A gate on the current row's feed age
+ * reads the time of day: an evening Halloween event is twelve hours stale at
+ * three in the afternoon and a water park in October is forty-five days stale,
+ * so at six hours it would have taken 892 of the 1,107 CLOSED readings in
+ * open parks — 80.6 % — and replaced them with a shrug. At seven days it still
+ * took 243. Measured 2026-10-23 22:00 UTC; the numbers are on PAR-1023.
+ *
+ * "No observation in fourteen days" took 228, and the hard markers below bring
+ * it to 64. The number is a wide trough rather than a ridge: seven days gives
+ * 239 and the eleven rows between the two are the whole difference.
+ */
+export const SOURCE_SILENT_DAYS = 14;
+
+/**
+ * Whether the source has stopped measuring this attraction.
+ *
+ * `null` is NOT silence — it is "never scanned", and the column's docstring
+ * says why that has to stay distinguishable. A scan that found nothing stores
+ * its window's lower bound instead.
+ */
+export function isSourceSilent(
+  sourceLastFreshAt: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!sourceLastFreshAt) return false;
+  const last = new Date(sourceLastFreshAt).getTime();
+  if (!Number.isFinite(last)) return false;
+  return now.getTime() - last > SOURCE_SILENT_DAYS * 24 * 3600 * 1000;
+}
+
+/**
+ * The facts that decide whether a silence may be shown as UNKNOWN. Resolved
+ * values, not raw columns: a curated season has to be able to govern this the
+ * same way it governs the free-flow gate.
+ */
+export interface SilentSourceFacts {
+  /** `attractions.source_last_fresh_at`. */
+  sourceLastFreshAt: Date | string | null | undefined;
+  /** `attractions.retired_at`. */
+  retiredAt: Date | string | null | undefined;
+  /** Resolved `seasonOutSince` — `resolveCuratedFacts(attraction)`. */
+  seasonOutSince: string | null | undefined;
+}
+
+/**
+ * Whether a silent source should be shown to a visitor as UNKNOWN rather than
+ * as the CLOSED its last frozen reading claims.
+ *
+ * The sibling of {@link readsUnknownFromAbsentSource}, and it answers the half
+ * that one cannot: there the source went away, here it is still delivering
+ * rows and has simply stopped looking. The rows carry a real `dataSource`, so
+ * `isSourceAbsent` is false on every one of them.
+ *
+ * Three conditions, and each of them removes a class the measurement found:
+ *
+ * 1. **The park is OPERATING.** Same reason as the absent-source rule: in a
+ *    closed park every ride is closed for a reason we can state.
+ * 2. **No `retired_at`.** A demolished ride is not unknown.
+ * 3. **No `seasonOutSince`.** This is the one that does the work. Of the 97
+ *    frozen readings sorted by cause on 2026-10-24, 41 were seasonally or
+ *    permanently out of service and CLOSED was right for them; a water park in
+ *    October reports a forty-five-day-old stamp because that is when it shut.
+ *    Dropping this condition is how option B got to 80 % of all CLOSED.
+ *
+ * Not a fourth condition: `curated_out_of_service_from`/`_to`. A hand-entered
+ * out-of-service window is as hard a marker as the two above, but on
+ * 2026-10-27 it overlapped the candidate set in **0** rows, so it is left out
+ * rather than guessed at. If it ever overlaps, it belongs here.
+ *
+ * The 50 remaining readings of that sort are evening events — Halloween mazes
+ * measured at three in the afternoon — and they are NOT silent: they take
+ * fresh readings every night, so condition 0 above never fires for them. That
+ * is the difference between a threshold on the silence and one on the row.
+ */
+export function readsUnknownFromSilentSource(
+  rows: Array<{ status?: string | null }>,
+  facts: SilentSourceFacts,
+  parkStatus: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (parkStatus !== "OPERATING") return false;
+  if (facts.retiredAt) return false;
+  if (facts.seasonOutSince) return false;
+  // A frozen OPERATING is a different published statement with a different
+  // owner (PAR-759), and this rule must not reach it: it would turn a stale
+  // wait time into a shrug on the way past. Any current row that still claims
+  // the ride is running takes the ride out of scope here, which is also how
+  // the season predicate beside it treats a live OPERATING.
+  if (rows.some((row) => row.status === "OPERATING")) return false;
+  return isSourceSilent(facts.sourceLastFreshAt, now);
+}
+
+/**
+ * The same rule as a SQL boolean, for the counters that are computed in the
+ * database rather than in the ride loop.
+ *
+ * Here rather than in a `.sql.ts` of its own so that the threshold has one
+ * home: a second copy of the 14 is a drift waiting to happen, and the two
+ * halves of this rule have to agree to the day or the page contradicts itself.
+ *
+ * Only the silence. The hard markers and the live-OPERATING override are
+ * already spelled out in the WHERE clauses this drops into, beside
+ * `retired_at IS NULL` and `attractionIsOutOfSeason`.
+ *
+ * @param alias - Table alias the `attractions` row carries in the caller's SQL.
+ */
+export function attractionSourceIsSilent(alias: string): string {
+  return `(${alias}.source_last_fresh_at IS NOT NULL
+           AND ${alias}.source_last_fresh_at < NOW() - INTERVAL '${SOURCE_SILENT_DAYS} days')`;
+}

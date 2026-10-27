@@ -10,6 +10,17 @@ Moved out of the repo's `claude.md` so that a session reads an index first and o
     reconciliation's row records that our data stopped arriving, not that the
     operator shut the ride. ~140 attractions across ten parks read "closed" for
     weeks this way.
+  - A ride whose source **stopped measuring it** reads `UNKNOWN` too, and that
+    is a different signal from the one above: the feed keeps answering, with a
+    real `dataSource`, and its `lastUpdated` stops moving. LEGOLAND Billund
+    delivered a row for all 37 of its attractions on 2026-10-27 at 09:15 UTC
+    carrying an April stamp on every one, identical to the second, with the park
+    open. The threshold is on the SILENCE (`SOURCE_SILENT_DAYS` = 14, via
+    `attractions.source_last_fresh_at`), never on the current row's feed age —
+    that one encodes the time of day and would take 80.6 % of every `CLOSED` in
+    an open park. Hard markers (`retired_at`, resolved `seasonOutSince`) and a
+    live `OPERATING` row step in front of it:
+    [Attraction Status & Seasonality §5.2b](../architecture/attraction-status-and-seasonality.md).
   - **`season_months` may not be derived from less than a year of watching**
     (`MIN_OBSERVED_DAYS` = 330). Below that the months are the observation
     window, not a season — every list in the database was one.

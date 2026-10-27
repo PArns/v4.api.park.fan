@@ -1,5 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
-import { readsUnknownFromAbsentSource } from "../common/utils/source-absent-status.util";
+import {
+  readsUnknownFromAbsentSource,
+  readsUnknownFromSilentSource,
+} from "../common/utils/source-absent-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -757,12 +760,26 @@ export class FavoritesService {
         // dto.queues — without it a flagged playground whose feed went silent
         // would be flipped from OPERATING to UNKNOWN, inverting the precedence
         // the other two surfaces give free-flow.
+        //
+        // The second half is the same sentence about a source that still
+        // delivers rows and has stopped measuring them — see
+        // `readsUnknownFromSilentSource`. It reads the entity rather than the
+        // rows, so it needs the same `freeFlowOpen` guard for the same reason.
         if (
           !freeFlowOpen &&
-          readsUnknownFromAbsentSource(
+          (readsUnknownFromAbsentSource(
             queuesMap.get(attraction.id) || [],
             parkStatus,
-          )
+          ) ||
+            readsUnknownFromSilentSource(
+              queuesMap.get(attraction.id) || [],
+              {
+                sourceLastFreshAt: attraction.sourceLastFreshAt,
+                retiredAt: attraction.retiredAt,
+                seasonOutSince: resolveCuratedFacts(attraction).seasonOutSince,
+              },
+              parkStatus,
+            ))
         ) {
           dto.status = "UNKNOWN";
           dto.queues = [];
