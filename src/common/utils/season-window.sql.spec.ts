@@ -1,4 +1,5 @@
 import { attractionIsOutOfSeason } from "./season-window.sql";
+import { SOURCE_SILENT_DAYS } from "./source-absent-status.util";
 import { LIVE_STATS_SQL } from "../../discovery/discovery.service";
 
 /** Collapses the SQL's formatting so assertions can match on wording alone. */
@@ -76,5 +77,44 @@ describe("the live-stats query leaves out-of-season rides out of the counter", (
 
     expect(total).toContain("curated_season_months");
     expect(total).toContain("lad.status = 'OPERATING'");
+  });
+});
+
+/**
+ * The same counter, the same sentence, and the second reason a ride belongs in
+ * neither half of it (PAR-1023): the source stopped measuring it and the three
+ * live payloads serve it as UNKNOWN.
+ *
+ * Unlike the season, this one does NOT leave the total. A ride the season has
+ * closed is not one of the park's rides today; a ride nobody can speak for is
+ * — and dropping it from the total would report LEGOLAND Billund, whose whole
+ * feed froze in April, as a park with no attractions at all.
+ */
+describe("the live-stats query leaves a silent-source ride out of both halves", () => {
+  const sql = flat(LIVE_STATS_SQL);
+
+  it("computes the predicate per ride in the same CTE as the season one", () => {
+    expect(sql).toContain("as source_is_silent");
+    expect(sql).toContain(`INTERVAL '${SOURCE_SILENT_DAYS} days'`);
+  });
+
+  it("counts it apart from the closed rides instead of among them", () => {
+    expect(sql).toContain(
+      "COUNT(CASE WHEN lad.status != 'OPERATING' AND NOT lad.source_is_silent THEN 1 END) as explicitly_closed_count",
+    );
+    expect(sql).toContain(
+      "COUNT(CASE WHEN lad.status != 'OPERATING' AND lad.source_is_silent THEN 1 END) as silent_count",
+    );
+  });
+
+  it("keeps it in the total", () => {
+    // The reader subtracts both counts from the total. Dropping it here as
+    // well would leave a frozen park reporting zero rides.
+    const total = sql.slice(
+      sql.indexOf("(SELECT COUNT(*)::int FROM attractions a"),
+      sql.indexOf("as total_attractions"),
+    );
+
+    expect(total).not.toContain("source_last_fresh_at");
   });
 });

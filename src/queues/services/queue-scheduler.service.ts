@@ -795,6 +795,27 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // Silent-source detection: daily at 2:45am.
+    //
+    // Independent of the 02:30 seasonal detector despite following it: the two
+    // write different columns and this one reads neither of the seasonal ones.
+    // It is a minute-scale scan over one `queue_data` window, so it sits in the
+    // same quiet hour rather than competing with the live feed.
+    const hasSilentSourceCron = await this.hasRepeatableJob(
+      this.analyticsQueue,
+      "silent-source-detection-cron",
+    );
+    if (!hasSilentSourceCron) {
+      await this.analyticsQueue.add(
+        "detect-silent-sources",
+        {},
+        {
+          repeat: { cron: "45 2 * * *" },
+          jobId: "silent-source-detection-cron",
+        },
+      );
+    }
+
     // Wartezeiten Opening Times: Daily at 6am
     const hasWartezeitenScheduleCron = await this.hasRepeatableJob(
       this.wartezeitenScheduleQueue,

@@ -3,6 +3,7 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { safeJsonParse } from "../common/utils/json.util";
 import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
+import { attractionSourceIsSilent } from "../common/utils/source-absent-status.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -1561,7 +1562,16 @@ export class AnalyticsService {
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $5 THEN lq."waitTime" END)::numeric) as current_avg_wait,
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
-        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
+        --
+        -- A ride whose source stopped MEASURING it is NOT one of them: the
+        -- three live payloads serve it as UNKNOWN, so it belongs in neither
+        -- half. It stays in total_count — it IS one of the park's rides
+        -- today, unlike a retired or out-of-season one — and the reader
+        -- subtracts both counts. See readsUnknownFromSilentSource.
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING'
+                    AND NOT ${attractionSourceIsSilent("a")} THEN 1 END) as explicitly_closed_count,
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING'
+                    AND ${attractionSourceIsSilent("a")} THEN 1 END) as silent_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
         $6::numeric as avg_wait_today,
         $7::numeric as max_wait_today,
@@ -1663,7 +1673,16 @@ export class AnalyticsService {
       SELECT 
         ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN lq."waitTime" >= $6 THEN lq."waitTime" END)::numeric) as current_avg_wait,
         -- Count explicitly closed attractions (has recent data AND not OPERATING)
-        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING' THEN 1 END) as explicitly_closed_count,
+        --
+        -- A ride whose source stopped MEASURING it is NOT one of them: the
+        -- three live payloads serve it as UNKNOWN, so it belongs in neither
+        -- half. It stays in total_count — it IS one of the park's rides
+        -- today, unlike a retired or out-of-season one — and the reader
+        -- subtracts both counts. See readsUnknownFromSilentSource.
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING'
+                    AND NOT ${attractionSourceIsSilent("a")} THEN 1 END) as explicitly_closed_count,
+        COUNT(CASE WHEN lq.status IS NOT NULL AND lq.status != 'OPERATING'
+                    AND ${attractionSourceIsSilent("a")} THEN 1 END) as silent_count,
         (SELECT total_attractions FROM attraction_counts) as total_count,
         (SELECT avg_wait_today FROM today_avg) as avg_wait_today,
         (SELECT max_wait_today FROM today_max) as max_wait_today,
@@ -1740,13 +1759,17 @@ export class AnalyticsService {
     // This matches Discovery Service logic and prevents showing "0 operating" during data gaps
     const totalAttractions = parseInt(stats?.total_count) || 0;
     const explicitlyClosedCount = parseInt(stats?.explicitly_closed_count) || 0;
+    // Rides the source stopped measuring. They stay in `total_count` and are
+    // in neither half, so they come off the total here beside the closed ones
+    // — left only out of the closed count they would be served as RUNNING.
+    const silentCount = parseInt(stats?.silent_count) || 0;
 
     // Use occupancy data to determine if park is likely open
     const isParkLikelyOpen =
       occupancy.current > 0 || (occupancy.breakdown?.currentAvgWait ?? 0) > 0;
 
     const operatingAttractions = isParkLikelyOpen
-      ? Math.max(0, totalAttractions - explicitlyClosedCount)
+      ? Math.max(0, totalAttractions - explicitlyClosedCount - silentCount)
       : 0;
 
     // Caching Strategy for Typical Peak Hour (Heavy Query, changes slowly).
@@ -1882,7 +1905,18 @@ export class AnalyticsService {
         occupancy.crowdLevel ?? this.getParkCrowdLevel(occupancy.current),
       totalAttractions,
       operatingAttractions,
-      closedAttractions: totalAttractions - operatingAttractions,
+      // The remainder of the total and BOTH other counts. Derived as
+      // `total - operating` alone it would hand the silent rides straight back
+      // to the closed half, since `operatingAttractions` has just subtracted
+      // them — the park page makes the same subtraction in its own loop.
+      //
+      // Only while the park looks open, which is the same gate
+      // `operatingAttractions` sits behind. In a closed park every ride IS
+      // closed for a reason we can state, the UNKNOWN rule does not fire
+      // there, and this stays the `totalAttractions` it has always been.
+      closedAttractions: isParkLikelyOpen
+        ? Math.max(0, totalAttractions - operatingAttractions - silentCount)
+        : totalAttractions,
       timestamp: now,
       history,
     };

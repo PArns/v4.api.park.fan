@@ -12,6 +12,8 @@ import {
   selectMazeRows,
 } from "../../attractions/utils/maze-rule";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+import { MEASURED_OPERATION_MAX_FEED_AGE_MINUTES } from "../../parks/utils/measured-operation.gate";
+import { SOURCE_SILENT_DAYS } from "../../common/utils/source-absent-status.util";
 import {
   HOURLY_AGGREGATE_SELECT,
   HOURLY_AGGREGATE_UPSERT,
@@ -982,6 +984,119 @@ export class QueuePercentileProcessor {
     this.logger.log(
       `   🗓️  attraction_day_operating refreshed (${maxDay ? `incremental from ${maxDay}` : `backfill ${lookbackDays + 5}d`})`,
     );
+  }
+
+  /**
+   * How far back `detect-silent-sources` looks for an observation.
+   *
+   * Wider than `SOURCE_SILENT_DAYS`, and derived from it rather than written
+   * down: the window is the oldest age the column can ever report, so a
+   * threshold raised to meet or exceed it would stop the rule firing at all
+   * without anything going red. 30 days is the floor because that is where
+   * `queue_data` starts compressing, and the scan stays in the uncompressed
+   * chunks while the threshold leaves room for it.
+   */
+  private static readonly SILENT_SOURCE_SCAN_DAYS = Math.max(
+    30,
+    2 * SOURCE_SILENT_DAYS,
+  );
+
+  /**
+   * Stamp every attraction with the newest reading that was an OBSERVATION —
+   * `timestamp - "lastUpdated"` inside the feed-age gate — so the live
+   * payloads can tell a source that has stopped measuring a ride from one that
+   * is reporting it closed.
+   *
+   * Here rather than in a processor of its own because this is the third
+   * derived status fact written onto `attractions` on a nightly scan of
+   * `queue_data`, beside `is_seasonal`, `season_months` and
+   * `season_out_since`. It does NOT depend on those columns, which is why it is
+   * a separate job and not a step inside `detect-seasonal`: the hard-marker
+   * exclusion that pairs with it lives on the read path, so nothing here has to
+   * run after the seasonal detector, and a season that fails to compute must
+   * not take this measurement down with it.
+   *
+   * **A row with no observation in the window gets the window's lower bound,
+   * not null.** See `Attraction.sourceLastFreshAt`: null is reserved for
+   * "never scanned", because that is the state the deploy leaves behind and
+   * reading it as silence would put the whole database on UNKNOWN until this
+   * job first runs.
+   *
+   * Retired rides are scanned too. They are excluded on the read path, and
+   * leaving them out here would reintroduce the null ambiguity on exactly the
+   * rows that can never clear it.
+   */
+  @Process("detect-silent-sources")
+  async handleDetectSilentSources(_job: Job): Promise<void> {
+    const scanDays = QueuePercentileProcessor.SILENT_SOURCE_SCAN_DAYS;
+    this.logger.log(
+      `🔇 Starting silent-source detection (${scanDays}d window, ` +
+        `${MEASURED_OPERATION_MAX_FEED_AGE_MINUTES}min feed age)...`,
+    );
+
+    try {
+      // `IS DISTINCT FROM` rather than an unconditional write: on a quiet night
+      // this touches the handful of rows whose newest observation moved, not
+      // all 7,631. The row count is therefore the change count, which is the
+      // number worth logging.
+      const result: Array<{ changed: string }> = await this.dataSource.query(
+        `WITH observed AS (
+           SELECT qd."attractionId" AS id, MAX(qd."timestamp") AS last_fresh
+           FROM queue_data qd
+           WHERE qd."timestamp" >= $1::timestamptz
+             -- Our own writes are not observations, and both of them look like
+             -- the freshest possible reading: the hourly heartbeat stamps
+             -- lastUpdated = now on a row it copied forward, and
+             -- reverse-reconciliation does the same on the CLOSED row it
+             -- invents. Feed age 0 on both. Without this the column would
+             -- report a ride the feed dropped as measured for as long as the
+             -- heartbeat carries it, and a source-absent ride for ever.
+             AND ${observedReadingsSql("qd")}
+             -- A null lastUpdated leaves the question undecidable, and an
+             -- undecidable row is not an observation. Same reasoning as
+             -- MEASURED_OPERATION_MAX_FEED_AGE_MINUTES, expressed as a
+             -- NULL-rejecting comparison for the same reason.
+             AND qd."lastUpdated" IS NOT NULL
+             AND qd."timestamp" - qd."lastUpdated" <= ($2::int * INTERVAL '1 minute')
+           GROUP BY qd."attractionId"
+         ),
+         target AS (
+           -- An observation if there is one; else whatever is already stored,
+           -- which is why the fallback is third rather than second. The window
+           -- bound moves with the clock, so writing it unconditionally would
+           -- restamp every never-observed row on every run and the count below
+           -- would stop being a count of changes. Keeping the first stamp
+           -- costs nothing: it is only ever older, and the read path asks
+           -- whether it is past a threshold.
+           SELECT a.id,
+                  COALESCE(o.last_fresh, a.source_last_fresh_at, $1::timestamptz) AS value
+           FROM attractions a
+           LEFT JOIN observed o ON o.id = a.id
+         )
+         UPDATE attractions a
+         SET source_last_fresh_at = t.value
+         FROM target t
+         WHERE a.id = t.id
+           AND a.source_last_fresh_at IS DISTINCT FROM t.value
+         RETURNING a.id AS changed`,
+        [
+          new Date(Date.now() - scanDays * 24 * 3600 * 1000).toISOString(),
+          MEASURED_OPERATION_MAX_FEED_AGE_MINUTES,
+        ],
+      );
+
+      this.logger.log(
+        `✅ Silent-source detection complete: ${result.length} attraction(s) restamped`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to detect silent sources: ${errorMessage}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   }
 
   /**

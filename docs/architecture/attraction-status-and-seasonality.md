@@ -943,6 +943,105 @@ before a "silenced cluster" is a finding rather than a symptom.
 
 ---
 
+#### 5.2b A source that still answers and has stopped measuring — measured 2026-10-27
+
+Everything in 5.2 and 5.2a is about a source that went away: the ride leaves
+`/children`, or no feed mentions it, and reverse-reconciliation writes the
+CLOSED row that the whole of §5.2 is about. There is a second way for a source
+to stop speaking, and none of those checks can see it. The feed keeps answering
+about the ride, with a real `dataSource`, and stops looking at it.
+
+The symptom is a frozen `lastUpdated`. **LEGOLAND Billund, 2026-10-27:** the
+feed delivered a row for all 37 attractions at 09:15 UTC carrying `lastUpdated =
+2026-04-06 13:54:00+00` on every one of them, identical to the second and 203
+days old. The park was open, `season_out_since` was null on all 37, and rides
+that run all year — `Frog Hopper`, `LEGONDOL®` — read CLOSED as a statement of
+fact on the strength of a stamp from April. `isSourceAbsent` is false for every
+one of those rows and `absent_since` is null: the row is listed, so the two
+existing signals both say the source is fine.
+
+**The discriminator is the silence, not the age of the current row** — and that
+is the measurement that decided the rule. Taken at a fixed 2026-10-23 22:00 UTC
+over the 1,107 CLOSED readings in open parks:
+
+| rule | CLOSED → UNKNOWN | share | parks |
+|---|---|---|---|
+| current row's feed age > 6 h | 892 | 80.6 % | 30 |
+| current row's feed age > 24 h | 655 | 59.2 % | 29 |
+| current row's feed age > 7 d | 243 | 22.0 % | 24 |
+| no observation in 14 d | 228 | 20.6 % | 23 |
+| no observation in 14 d, no hard marker | **64** | 5.8 % | 13 |
+
+The last row is the figure the decision was costed against. Re-measured on
+2026-10-27 10:00 UTC with `observedReadingsSql` in place — which the original
+measurement did not have — the rule fires on **281** rides in parks open by
+their own schedule, of which **198 already read UNKNOWN** through the
+absent-source rule beside it and **97** are held back by the live-OPERATING
+guard. The published change is the remaining **83**.
+
+A gate on the current row encodes the time of day: an evening Halloween event is
+twelve hours stale at three in the afternoon, and a water park in October is
+forty-five days stale because that is when it shut. Of the 97 frozen readings
+sorted by cause on 2026-10-24, 41 were out of season or out of service (CLOSED
+is right), 50 were evening events taking fresh readings every night (not silent
+at all), and 6 were the real thing — playgrounds and walkthroughs in open parks
+stamped once and never touched again, 186 days at Islands of Adventure.
+
+**What is built.** `attractions.source_last_fresh_at` holds the newest reading
+whose `timestamp - "lastUpdated"` is inside
+`MEASURED_OPERATION_MAX_FEED_AGE_MINUTES` **and which we did not write
+ourselves** (`observedReadingsSql`), stamped nightly at 02:45 by
+`detect-silent-sources` (`queue-percentile.processor.ts`) over a 30-day window;
+`readsUnknownFromSilentSource` reads it on the park, ride and favourites
+payloads, with `SOURCE_SILENT_DAYS` = 14 and the hard markers `retired_at` and
+the resolved `seasonOutSince`.
+
+**`observedReadingsSql` is load-bearing, not decoration.** Both of our own
+writers stamp the freshest possible reading: `writeHourlyHeartbeats` writes
+`lastUpdated = now` on a row it copied forward, and reverse-reconciliation does
+the same on the CLOSED row it invents. Feed age 0 on both. Without the predicate
+the column reports a ride the feed dropped as measured for as long as the
+heartbeat carries it, and a source-absent ride for ever. Measured 2026-10-27:
+Europa-Park wrote 3,992 reconciliation rows in three days, and leaving them in
+put 0 of its 97 rides in the silent set where 58 belong.
+
+Five things about it are easy to get wrong:
+
+- **A row with no observation in the window gets the window's lower bound, not
+  null.** Null is reserved for "never scanned", which is the state a deploy
+  leaves behind — the other reading would put every ride in the database on
+  UNKNOWN until the job first runs, and the rows this rule exists for are
+  exactly the ones that never earn a timestamp.
+- **A frozen OPERATING is out of scope.** That is the wait-time side of the same
+  column (PAR-759), and 391 readings carried it at the measured instant. Any
+  current row still claiming the ride runs takes the ride out of this rule.
+- **An empty row set is not this rule's business**, the same line
+  `isSourceAbsent([])` draws. The rule retracts a PUBLISHED closure; with no
+  current row there is nothing published, and the park payload answers that
+  with its own optimism one branch further down.
+- **The counters have to follow.** `closedAttractions` is derived as the
+  remainder of total and operating, and the analytics and geo-listing
+  populations count anything non-OPERATING as closed, so an unknown ride was
+  served as unknown on the list and counted as closed in the headline beside
+  it.
+- **An unknown ride stays IN the total**, unlike a retired or out-of-season
+  one. It is one of the park's rides today; we just cannot say whether it runs.
+  Dropping it from the total instead of from the closed half reports a park
+  whose whole feed has frozen — Billund, all 37 — as a park with no
+  attractions, which is a worse answer than the closure being retracted. So
+  every one of the three counters subtracts BOTH the closed and the unknown
+  count from the total, and a reader that subtracts only one would publish the
+  ride as *running*.
+
+The read path is a column rather than a query because the query is a hot-path
+cost: per park over 14 days it is 50 ms of execution behind **128 ms of
+planning** (14 TimescaleDB chunks, 61,944 planning buffers), while the same
+question asked once for all 7,631 attractions takes 0.78 s. A Redis key was the
+other candidate and cannot work: "never seen fresh" and "key absent" are the
+same state, and after an `attraction:*` flush every key is absent.
+
+---
+
 ### 5.3 A map number in a ride name hid eight duplicates
 
 Queue-Times publishes some parks' own map numbers inside the ride name —

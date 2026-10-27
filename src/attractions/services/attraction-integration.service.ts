@@ -1,5 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
-import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
+import {
+  readsUnknownFromAbsentSource,
+  readsUnknownFromSilentSource,
+} from "../../common/utils/source-absent-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -283,7 +286,22 @@ export class AttractionIntegrationService {
     // be served as a closure — see the util for the Europa-Park case that made
     // this visible. Placed before the free-flow override, which outranks it: a
     // flagged playground is open on the strength of the flag, not the feed.
-    if (readsUnknownFromAbsentSource(queueData, parkStatus)) {
+    //
+    // The silent half beside it: a source that still delivers rows for this
+    // ride and stopped measuring them weeks ago. Same precedence — a flagged
+    // playground is open on the strength of the flag, not the feed.
+    if (
+      readsUnknownFromAbsentSource(queueData, parkStatus) ||
+      readsUnknownFromSilentSource(
+        queueData,
+        {
+          sourceLastFreshAt: attraction.sourceLastFreshAt,
+          retiredAt: attraction.retiredAt,
+          seasonOutSince: resolveCuratedFacts(attraction).seasonOutSince,
+        },
+        parkStatus,
+      )
+    ) {
       dto.status = "UNKNOWN";
       dto.queues = [];
     }
