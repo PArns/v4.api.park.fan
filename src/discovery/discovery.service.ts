@@ -27,6 +27,7 @@ import { ParksService } from "../parks/parks.service";
 import { safeJsonParse } from "../common/utils/json.util";
 import { scheduleRowSpeaksForToday } from "../common/utils/schedule-window.sql";
 import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
+import { attractionSourceIsSilent } from "../common/utils/source-absent-status.util";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 
@@ -66,7 +67,8 @@ export const LIVE_STATS_SQL = `
           a."parkId",
           qd."waitTime",
           qd."status",
-          ${attractionIsOutOfSeason("a")} as out_of_season
+          ${attractionIsOutOfSeason("a")} as out_of_season,
+          ${attractionSourceIsSilent("a")} as source_is_silent
         FROM attractions a
         JOIN LATERAL (
           SELECT "waitTime", "status"
@@ -113,7 +115,12 @@ export const LIVE_STATS_SQL = `
         -- belongs in neither half of "12 von 45 geöffnet". Unless it is actually
         -- running, in which case the season on file is behind the park and a
         -- visitor can queue for it — the rule the park payload applies too.
-        WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'
+        WHERE (NOT lad.out_of_season OR lad.status = 'OPERATING')
+          -- And a ride whose source stopped MEASURING it: the park, ride and
+          -- favourites payloads serve it as UNKNOWN, so counting it closed in
+          -- the listing beside them is the same contradiction one surface up.
+          -- See readsUnknownFromSilentSource.
+          AND (NOT lad.source_is_silent OR lad.status = 'OPERATING')
         GROUP BY lad."parkId"
       )
       SELECT
@@ -139,6 +146,17 @@ export const LIVE_STATS_SQL = `
             AND a.retired_at IS NULL
             AND (
               NOT ${attractionIsOutOfSeason("a")}
+              OR a.id IN (
+                SELECT lad."attractionId" FROM latest_attraction_data lad
+                 WHERE lad.status = 'OPERATING'
+              )
+            )
+            -- And out of the total as well, not just out of park_stats:
+            -- operatingAttractions is derived as total minus explicitly_closed,
+            -- so a ride dropped from only one of the two would be counted as
+            -- running. Same shape as the season clause above, same override.
+            AND (
+              NOT ${attractionSourceIsSilent("a")}
               OR a.id IN (
                 SELECT lad."attractionId" FROM latest_attraction_data lad
                  WHERE lad.status = 'OPERATING'

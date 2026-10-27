@@ -1,4 +1,5 @@
 import { attractionIsOutOfSeason } from "./season-window.sql";
+import { SOURCE_SILENT_DAYS } from "./source-absent-status.util";
 import { LIVE_STATS_SQL } from "../../discovery/discovery.service";
 
 /** Collapses the SQL's formatting so assertions can match on wording alone. */
@@ -61,8 +62,11 @@ describe("the live-stats query leaves out-of-season rides out of the counter", (
   const sql = flat(LIVE_STATS_SQL);
 
   it("drops them from the operating and closed counts", () => {
+    // Parenthesised since PAR-1023 put a second exclusion beside it: without
+    // the brackets the new AND would have bound tighter than this OR and the
+    // season half would have stopped excluding anything.
     expect(sql).toContain(
-      "WHERE NOT lad.out_of_season OR lad.status = 'OPERATING'",
+      "WHERE (NOT lad.out_of_season OR lad.status = 'OPERATING')",
     );
   });
 
@@ -75,6 +79,39 @@ describe("the live-stats query leaves out-of-season rides out of the counter", (
     );
 
     expect(total).toContain("curated_season_months");
+    expect(total).toContain("lad.status = 'OPERATING'");
+  });
+});
+
+/**
+ * The same counter, the same sentence, and the second reason a ride belongs in
+ * neither half of it (PAR-1023): the source stopped measuring it and the three
+ * live payloads serve it as UNKNOWN.
+ */
+describe("the live-stats query leaves a silent-source ride out of the counter", () => {
+  const sql = flat(LIVE_STATS_SQL);
+
+  it("computes the predicate per ride in the same CTE as the season one", () => {
+    expect(sql).toContain("as source_is_silent");
+    expect(sql).toContain(`INTERVAL '${SOURCE_SILENT_DAYS} days'`);
+  });
+
+  it("drops them from the operating and closed counts", () => {
+    expect(sql).toContain(
+      "AND (NOT lad.source_is_silent OR lad.status = 'OPERATING')",
+    );
+  });
+
+  it("drops them from the total as well", () => {
+    // `operatingAttractions` is read as total − explicitly_closed. A ride
+    // dropped from only one of the two would be counted as RUNNING, which is
+    // worse than the closure it was meant to retract.
+    const total = sql.slice(
+      sql.indexOf("(SELECT COUNT(*)::int FROM attractions a"),
+      sql.indexOf("as total_attractions"),
+    );
+
+    expect(total).toContain("a.source_last_fresh_at");
     expect(total).toContain("lad.status = 'OPERATING'");
   });
 });
