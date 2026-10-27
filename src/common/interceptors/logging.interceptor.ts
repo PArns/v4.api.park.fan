@@ -56,8 +56,11 @@ export class LoggingInterceptor implements NestInterceptor {
 
         if (isError || isSlow || isAdminOrML) {
           const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
+          // The page-view counter promises readers that it keeps no address,
+          // and a log line is a place it would be kept.
+          const who = url.startsWith("/v1/page-views") ? "" : ` - ${ip}`;
           this.logger.log(
-            `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms - ${ip}`,
+            `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms${who}`,
           );
         }
       }),

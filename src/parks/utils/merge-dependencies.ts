@@ -472,6 +472,34 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Moves a merged-away park's or ride's page views onto the survivor
+ * (`page_view_days`, PAR-1089). The table files every kind of page under one
+ * `key` column beside a `kind`, so the id is not a column of its own and the
+ * entry is `custom`; a day the survivor already has in that language is added
+ * up, because both rows are real readers of one page.
+ */
+function mergePageViewDays(kind: "park" | "attraction") {
+  return async (
+    manager: MergeQueryRunner,
+    winnerId: string,
+    loserId: string,
+  ): Promise<void> => {
+    await manager.query(
+      `INSERT INTO page_view_days (kind, key, locale, day, views)
+       SELECT kind, $2, locale, day, views FROM page_view_days
+        WHERE kind = $3 AND key = $1
+       ON CONFLICT (kind, key, locale, day)
+       DO UPDATE SET views = page_view_days.views + EXCLUDED.views`,
+      [loserId, winnerId, kind],
+    );
+    await manager.query(
+      `DELETE FROM page_view_days WHERE kind = $2 AND key = $1`,
+      [loserId, kind],
+    );
+  };
+}
+
+/**
  * Rewrites the ride ids inside `park_seasons.attraction_ids` (a jsonb array
  * with no FK) when a ride is merged away.
  *
@@ -1014,6 +1042,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "custom",
     apply: remapSeasonAttractionIds,
   },
+  {
+    // The ride's id sits in `key` beside a `kind`, see `mergePageViewDays`.
+    table: "page_view_days",
+    column: "key",
+    strategy: "custom",
+    apply: mergePageViewDays("attraction"),
+  },
 ];
 
 /**
@@ -1177,6 +1212,13 @@ export function restaurantTablesMissingFrom(known: string[]): string[] {
  * moved correctly.
  */
 export const PARK_DEPENDENCIES: MergeDependency[] = [
+  {
+    // The park's id sits in `key` beside a `kind`, see `mergePageViewDays`.
+    table: "page_view_days",
+    column: "key",
+    strategy: "custom",
+    apply: mergePageViewDays("park"),
+  },
   {
     table: "park_slug_aliases",
     column: "parkId",

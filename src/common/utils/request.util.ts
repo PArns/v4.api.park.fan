@@ -1,5 +1,8 @@
 import { isIP } from "net";
-import { carriesThrottleBypassKey } from "../throttler/throttler.config";
+import {
+  carriesCfOriginSecret,
+  carriesThrottleBypassKey,
+} from "../throttler/throttler.config";
 
 /**
  * Minimal request shape for IP/header extraction (Express Request compatible).
@@ -56,10 +59,44 @@ export function getRateLimitIp(req: RequestLike | undefined): string | null {
     const ip = forwarded ? normalizeIp(forwarded) : null;
     if (ip && isIP(ip)) return ip;
   }
-  const cfIp = getFirstHeader(req, "cf-connecting-ip");
-  if (cfIp && isIP(cfIp)) return cfIp;
+  // Only a request that provably came through Cloudflare may name its own
+  // address in CF-Connecting-IP; the rule `CfThrottlerGuard` applies too.
+  if (carriesCfOriginSecret(req.headers)) {
+    const cfIp = getFirstHeader(req, "cf-connecting-ip");
+    if (cfIp && isIP(cfIp)) return cfIp;
+  }
   const socketIp = req.socket?.remoteAddress;
   return socketIp ? normalizeIp(socketIp) : null;
+}
+
+/**
+ * The part of an address one subscriber controls: an IPv4 address whole, an
+ * IPv6 address as its /64. A host with a /64 can take a new address for every
+ * request, so a limit keyed on the full IPv6 address limits nothing.
+ */
+export function addressBucket(ip: string | null): string | null {
+  if (!ip) return null;
+  if (isIP(ip) === 6) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
+  return ip;
+}
+
+/**
+ * The eight hextets of an IPv6 address, with `::` written out.
+ *
+ * Needed because almost every real address is compressed, and slicing the
+ * first three groups off the compressed text does not give the first three
+ * hextets: `2001:db8::1` splits into `["2001","db8","","1"]`, so the naive
+ * version produced `2001:db8:::/48` — not a prefix, not comparable to the
+ * next login's, and stored as though it were.
+ */
+export function expandIpv6(address: string): string[] {
+  const [head, tail] = address.split("::");
+  const headGroups = head ? head.split(":").filter(Boolean) : [];
+  if (tail === undefined) return headGroups;
+
+  const tailGroups = tail ? tail.split(":").filter(Boolean) : [];
+  const missing = Math.max(0, 8 - headGroups.length - tailGroups.length);
+  return [...headGroups, ...Array<string>(missing).fill("0"), ...tailGroups];
 }
 
 /**
