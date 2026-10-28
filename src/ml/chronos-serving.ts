@@ -14,7 +14,7 @@ import { roundServedWait } from "./pcn-serving.constants";
  * reads one MGET; a stale or missing curve leaves the slot as it was.
  *
  * Lead split when the flag is on (lead = slot start − the current slot start,
- * the same base the §7.7 persistence blend uses):
+ * the same base the persistence blend uses, docs/ml/intraday-serving.md):
  *
  * | lead | served |
  * | --- | --- |
@@ -22,7 +22,7 @@ import { roundServedWait } from "./pcn-serving.constants";
  * | 45 … 120 min | Chronos-2 q50 (band q95 − q50, crowd from q80) |
  * | > 120 min | unchanged — PCN + blend (or CatBoost) |
  *
- * See docs/ml/forward-archive.md §10.
+ * See docs/ml/forward-archive/chronos-serving.md.
  */
 
 /** `SERVE_CHRONOS_INTRADAY=true` — read per call, like `SERVE_PCN_INTRADAY`. */

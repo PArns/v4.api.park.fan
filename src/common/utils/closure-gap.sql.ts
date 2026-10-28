@@ -8,7 +8,8 @@ import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
  *
  * ## Why this exists at all
  *
- * `docs/analytics/ride-downtime.md` §1 excludes `CLOSED` while the park is open,
+ * `docs/analytics/ride-downtime/reconstruction.md#what-does-not-count` excludes
+ * `CLOSED` while the park is open,
  * and that exclusion is right for the reason it gives: it is the class that
  * killed ML's `unexpected_closure`, where 534 of 602 anomalies were genuine
  * closures. But it was applied to a raw status, and a raw status is not what a
@@ -77,7 +78,7 @@ import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
  * closure, already found, already keyed on its operating day. The share is a
  * count over rows the statement holds, divided by the denominator the duty-cycle
  * test already reads. It is applied to the whole ride, gaps included, which is
- * what `todo.md` §2f asked for before anything published `closed_gap` history:
+ * what PAR-157 asked for before anything published `closed_gap` history:
  * the stored rows no longer carry the cinema noise the live line refuses to
  * show.
  *
@@ -986,7 +987,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   --
   -- Read out of win rather than scanning schedule_entries a second time. That
   -- scan was the second of three hand-rolled copies of "when does this park's
-  -- day end" in this file (todo.md named all three); through win it inherits
+  -- day end" in this file; through win it inherits
   -- the closing-time repair it already did by hand, plus the disjoint-union
   -- flattening and the operating-day anchor it did not.
   --
@@ -1436,8 +1437,8 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- and **none** of them has a null close or a close that stays at or before
   -- the opening after repair (2026-09-15). The two readings agree on every row
   -- the statement can see, and the day the first one appears it will be a
-  -- measurement rather than a silent change -- nothing here pins it, which
-  -- todo.md now carries.
+  -- measurement rather than a silent change -- nothing here pins it yet
+  -- (PAR-1094).
   park_day_close AS (
     SELECT w.op_day AS d, max(w.closes_at) AS closes_at
       FROM win w
@@ -1545,7 +1546,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
    -- park_downtime_coverage.regime is rebuilt nightly and already applies both
    -- halves of the test (never-DOWN, and MIN_BLIND_EVIDENCE_HOURS of
    -- observation). Re-deriving it here meant two sources of truth for one
-   -- question, kept in step only by a comment — the shape CLAUDE.md §4 names.
+   -- question, kept in step only by a comment — the shape docs/rules/absent-facts.md names.
    --
    -- It used to be a CTE brought in with CROSS JOIN, and the service said
    -- beside the call site that this "costs one indexed lookup" in a park that

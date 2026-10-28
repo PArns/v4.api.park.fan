@@ -1408,7 +1408,9 @@ export class ChildrenMetadataProcessor {
    * The lookup here is deliberately not scoped to the park:
    * `attractions.externalId` is globally unique, so there is at most one row
    * either way, and scoping it would miss a row whose park changed upstream.
-   * The diagnostic query in §5.6 of the doc answers a narrower question: it
+   * The diagnostic query in
+   * `docs/architecture/attraction-status/reclassification-and-absence.md#an-entity-changed-entitytype`
+   * answers a narrower question: it
    * joins only `shows`, so it misses an entity that became a `RESTAURANT`, and
    * it applies none of the second-source filters above.
    * **The way back is park-scoped**, because `syncAttraction` only ever looks
@@ -1864,8 +1866,9 @@ export class ChildrenMetadataProcessor {
     // A seasonal row is out of season, not gone — unless a row this run
     // claimed already carries its name. That twin was grown before the sync
     // learned to hand a re-issued id to the old row, and the dead row beside
-    // it would take the name group back from it (§5.9 of the status doc), so
-    // it is retired as before.
+    // it would take the name group back from it
+    // (`docs/architecture/attraction-status/reclassification-and-absence.md#an-entity-left-children-par-621`),
+    // so it is retired as before.
     const claimedNames = await this.claimedAttractionNames(claimedRowIds);
     const retirable = due.filter(
       (row) => !isSeasonalRow(row) || claimedNames.has(normalizeName(row.name)),

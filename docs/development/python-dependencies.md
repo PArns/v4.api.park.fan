@@ -1,7 +1,8 @@
 # Python dependencies: how versions are chosen
 
-Applies to `ml-service`, `nf-service`, `pcn-service` and `ml-bench`. Last full upgrade:
-PAR-1066 (2026-10-24).
+How `ml-service`, `nf-service`, `pcn-service` and `ml-bench` pin their packages, which pins are held back
+and why, and how to prove stored models survive an upgrade and a rollback. Open it before changing a
+`requirements*.txt` or a torch pin. Last full upgrade: PAR-1066 (2026-10-24).
 
 ## The rules
 

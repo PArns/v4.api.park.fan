@@ -1,302 +1,159 @@
-# Schedule Sync & Calendar
+# Schedule sync and the calendar
 
-## Overview
+How park opening hours get into `schedule_entries` — the ThemeParks.wiki fetch and its rate limit, the
+save, the gap fill, the guards against a silent or withdrawn schedule — and how the calendar endpoint
+is cached and warmed. Open this before touching `ParksService.saveScheduleData` / `fillScheduleGaps` or
+the schedule jobs. What the calendar then shows per day (status, crowd level, ML alignment) is
+[Calendar, schedule and ML rules](calendar-schedule-and-ml-rules.md).
 
-Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally Wartezeiten for fallback). They are stored in `schedule_entries` and used by the **Calendar** and Park Integration endpoints.
+## When schedules are synced
 
-## When Schedules Are Synced
+| Job (`park-metadata` queue) | When (UTC) | What |
+| --- | --- | --- |
+| `sync-all-parks` | 03:00 | Park metadata plus schedules for every wiki park |
+| `sync-schedules-only` | 15:00 | Schedules only, so a newly published month appears the same day |
+| `sync-park-schedule` | on demand | One park, queued by the calendar (below) |
+| `fill-all-gaps` | on demand, after each holiday sync | `fillAllParksGaps()`, no API fetch |
 
-| Trigger   | Job                   | When                       | What                                                                                                                                                                                                                                                                                                                                                                   |
-| --------- | --------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cron      | `sync-all-parks`      | Daily 03:00                | Full park metadata + **schedules for all Wiki parks** (12 months ahead).                                                                                                                                                                                                                                                                                               |
-| Cron      | `sync-schedules-only` | Daily 15:00                | **Schedules only** for all Wiki parks (no discovery). Ensures new months (e.g. Efteling March) appear same day when the source publishes.                                                                                                                                                                                                                              |
-| On-demand | `sync-park-schedule`  | When calendar is requested | If the requested date range has **no or little schedule data** (e.g. user asks for March, we have nothing), a background job is queued for that park only. Rate-limited to **once per 12 hours per park** (Redis key `schedule:refresh:requested:{parkId}`). Triggers only when the requested range ends **14+ days** beyond our last schedule date (less aggressive). |
+The processor handles `sync-all-parks`, not `fetch-all-parks`; a cron registered under the wrong name
+does nothing. Wartezeiten parks get opening times from `wartezeiten-schedule` (06:00), and
+`WaitTimesProcessor` can write a single live-data day.
 
-**Important**: The **daily cron** for park metadata must use the job name **`sync-all-parks`** (not `fetch-all-parks`). The processor only handles `sync-all-parks` and `sync-schedules-only`.
+**On-demand refresh.** `CalendarService.requestScheduleRefreshIfNeeded` queues `sync-park-schedule` when
+the requested range ends more than `SCHEDULE_REFRESH_GAP_DAYS` (5) after the last OPERATING or CLOSED
+entry (UNKNOWN placeholders and event rows do not count, so a range covered only by gap-fill still
+triggers), at most once per 12 h per park (`calendar:refresh-check:{parkId}`).
 
-## Source: ThemeParks Wiki
+## Source: ThemeParks.wiki
 
-- **Client**: `ThemeParksClient` (`src/external-apis/themeparks/themeparks.client.ts`).
-- **Extended fetch**: `getScheduleExtended(entityId, 12)` requests the **previous month** plus each of the next **12 months** via the month endpoint (`/entity/{id}/schedule/{year}/{month}`). Month is **zero-padded** (e.g. `05` for May) per Wiki API. Optionally merges with generic `/schedule` (~30 days) for the near term.
-- Some parks (e.g. Efteling) may return empty/404 for far-future months until the park publishes them; we still **request** every month (01–12 ahead) so data appears as soon as the source adds it. **On-demand** `sync-park-schedule` helps when a user requests a range we don’t have yet.
+`ThemeParksClient.getScheduleExtended(entityId, 12)` (`src/external-apis/themeparks/themeparks.client.ts`)
+asks the month endpoint (`/entity/{id}/schedule/{year}/{month}`, month zero-padded) for the previous
+month and each of the next 12, and may merge the generic `/schedule` (~30 days). Far months often answer
+empty until the park publishes them; every month is still asked, so data appears as soon as it exists.
 
-## The upstream budget, and why the bulk run is the only job that spends it
+### The upstream budget, and why the bulk run is the only job that spends it
 
-Measured from celestrial on 2026-09-26 (PAR-480). Every ThemeParks.wiki answer
-that reaches the origin carries its own budget, and until that ticket nothing in
-this codebase read it:
+Measured 2026-09-26 (PAR-480): **300 requests per fixed 60-second window per sender**, one budget
+across all endpoints (`ratelimit-limit: 300`, `ratelimit-policy: 300;w=60`, `ratelimit-remaining`,
+`ratelimit-reset`). The API container and the host share one egress IP. What a job costs depends on the
+CDN, not its request count:
 
-```
-ratelimit-limit: 300
-ratelimit-policy: 300;w=60
-ratelimit-remaining: 260
-ratelimit-reset: 29
-```
+| endpoint | `s-maxage` | our cadence | origin hits |
+| --- | --- | --- | --- |
+| `/entity/{id}/live` | 60 s | every 5 min, 195 parks | ~26 per cycle (~87 % Cloudflare hits, kept warm by other users) |
+| `/entity/{id}/schedule…` | 3600 s | once a day, 195 × 14 | all 2,730 |
 
-**300 requests per fixed 60-second window**, per sender — one budget across every
-endpoint, not one per path (reading the counter, firing 20 `/live` requests and
-reading it again drops it by 21). `ratelimit-reset` counts down to 0 and jumps
-back to 60, so the window is fixed rather than sliding, and its boundary is not
-ours. The API container and the host share one egress IP, so a shell on
-celestrial spends the same budget the container does.
+A cache hit carries no `RateLimit-*` header and never reaches the limiter. Rules for any new caller:
 
-**What each job actually costs is decided by the CDN, not by its request count.**
+- `ThemeParksClient` paces **every** request 250 ms apart through an atomic Redis slot (≤ 241 per 60 s
+  under any window alignment). Do not bypass it, and do not assume an endpoint is CDN-warm.
+- A cooldown is **waited out**, never thrown past (throwing cost 87 of 200 parks their schedule in one
+  run). The client pauses once `ratelimit-remaining` drops to 25 (`remainingFloor`) and ignores those
+  headers on a cache hit (a HIT reports numbers from a window long gone).
+- A throttled fetch raises `ThemeParksRateLimitError`; an empty list means the source published nothing.
+- A caller inside a request path passes `ThemeParksClient.requestPathMaxWaitMs`, so a rate limit is a
+  fast failure, not a two-minute sleep on a reader's page.
 
-| endpoint                 | `s-maxage` | our cadence            | origin hits       |
-| ------------------------ | ---------- | ---------------------- | ----------------- |
-| `/entity/{id}/live`      | 60 s       | every 5 min, 195 parks | **~26 per cycle** |
-| `/entity/{id}/schedule…` | 3600 s     | once a day, 195 × 14   | **all 2730**      |
+## Persistence: `saveScheduleData`
 
-The 5-minute live poll is ~87 % Cloudflare hits, because other users of the
-public API keep popular parks warm — a hit carries no `RateLimit-*` header at
-all and never reaches the limiter. The schedule endpoints are cached for an hour
-and asked once a day, so their entry is always cold. That is the whole reason the
-`Global Rate Limit` hits used to appear in the 15:00 hour and in no other.
+- Upsert by `(parkId, date, scheduleType)` over park-level rows (`attractionId IS NULL`). API types are
+  normalised (`"Closed"` → `ScheduleType.CLOSED`), so an off-season the source reports is stored as
+  CLOSED.
+- **One day-status row per day, any number of event rows.** OPERATING, CLOSED and UNKNOWN say what the
+  day *is* and are arbitrated against each other: saving OPERATING deletes that date's CLOSED and
+  UNKNOWN rows, saving CLOSED deletes its OPERATING row (batched `date IN (...)` deletes). The other
+  types (`EXTRA_HOURS`, `TICKETED_EVENT`, `PRIVATE_EVENT`, …) say what *else* happens and stay beside it:
+  Rulantica's hotel-guest `EXTRA_HOURS` from 09:00 next to `OPERATING` from 09:30, a Halloween Horror
+  Nights evening as `TICKETED_EVENT`. On 2026-10-26, 3,107 park-days at 73 parks held more than one row
+  and none held two day-status rows (PAR-1005). Readers pick the day's status by type
+  (`pickDayStatusEntry` / `dayStatusRank`, `src/common/utils/schedule.util.ts`), never the first row.
+- **Park-level only.** Both `saveScheduleData` and `fillScheduleGaps` read and delete only
+  `attractionId IS NULL` rows: a per-ride row is a different statement by a different writer. Without the
+  filter the sync handed ride rows the park's hours, and the gap fill rewrote ride schedules by the park's
+  operating range. The gap fill also never inserts a day that holds only per-ride rows (that would be a
+  confident "Gap-filled" CLOSED built from a lost park row).
+- **Version log** (PAR-1061): after the last writer of a sync is done with a park (Wiki save + gap fill,
+  the global gap fill, Wartezeiten, the live fallback) `ParksService.recordScheduleVersions(parkId,
+  source)` appends changed park-days to `schedule_day_versions`; a withdrawn day becomes a `NONE`
+  version. Write-only ([covariate source](covariate-source.md)).
 
-**Consequences for anything that adds a caller here:**
+### A silent park does not announce future operating days
 
-- `ThemeParksClient` paces **every** request 250 ms apart through an atomic Redis
-  slot, which holds the cap at 241 per 60 seconds under any window alignment. Do
-  not bypass it, and do not assume a new endpoint is CDN-warm: the warmth is
-  foreign traffic, not a promise.
-- A cooldown is **waited out**, never thrown past. Throwing costs no time, so a
-  loop over parks spends the whole penalty at full speed — which is how 87 of 200
-  parks came away with `Fetched total 0 schedule entries` in one run.
-- The client pauses itself once `ratelimit-remaining` drops to 25, and **ignores
-  those headers on a cache hit**: a HIT with `age: 212` still reported
-  `remaining: 260, reset: 29`, numbers from a window four minutes gone.
-- A throttled fetch raises `ThemeParksRateLimitError`; it is never an empty list.
-  An empty list means the source published nothing.
-- A caller inside a request/response path passes
-  `ThemeParksClient.requestPathMaxWaitMs`, so a rate limit stays a fast failure
-  instead of a two-minute sleep on a reader's page.
+While a park's whole feed has been silent for `PARK_FEED_SILENT_DAYS` (30), `saveScheduleData` stores its
+**future** OPERATING days as **UNKNOWN** with `openingTime`, `closingTime`, `description` and `purchases`
+NULL. The schedule and the live data come from the same upstream, which keeps publishing after it stops
+measuring: La Ronde, silent from 2026-06-24, had its schedule name every day to 2027-08-31 OPERATING (31
+of 31 January days answered OPERATING with hours and `recommendation: "recommended"`). The
+[absent-facts rule](../rules/absent-facts.md) in its own shape.
 
-## UNKNOWN vs CLOSED
+| row | effect |
+| --- | --- |
+| future OPERATING, park silent ≥ 30 days | stored UNKNOWN without hours; the date joins the OPERATING delete |
+| future OPERATING, feed answering | untouched |
+| past OPERATING | untouched — the past-day reconstruction in `CalendarService` reads it |
+| CLOSED from the API | untouched |
+| future gap-filled CLOSED | demoted to UNKNOWN by the next gap fill (the last OPERATING day moved back) |
+| per-ride rows | out of scope |
 
-- **`ScheduleType.CLOSED`**: Park is **confirmed** closed: from API (e.g. Wiki) or from **gap-fill** when the day has no schedule but lies **strictly between** two OPERATING days (see Gap-fill rules below).
-- **`ScheduleType.UNKNOWN`**: **No schedule data yet** — either before we have any OPERATING data, after the last known OPERATING day, or the park has no OPERATING entries. Calendar shows "Opening hours not yet available".
-- **Gap-fill** (`fillScheduleGaps`): For each missing date we create an entry with holiday/bridge metadata. We set **CLOSED** only when there is at least one OPERATING day **before** and one **after** that date; otherwise **UNKNOWN**. This keeps "Closed" vs "no data yet" distinguishable.
-- **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)`. When the API provides **OPERATING** for a date we also delete any **CLOSED** row for that date (so gap-fill CLOSED is removed and OPERATING wins). When the API provides **CLOSED** for a date we delete any **OPERATING** row for that date (bidirectional cleanup ensures a single **day-status** row per date).
-- **A day carries one day-status row and any number of event rows.** The arbitration above, and the cross-type phase of the cleanup, only ever range OPERATING, CLOSED and UNKNOWN against each other — each says what the day *is*. The other five types say what *else* happens that day and are kept beside the day-status row (PAR-276): Rulantica carries `EXTRA_HOURS` "Open To Hotel Guests" from 09:00 next to `OPERATING` from 09:30 on 375 days, because the source publishes both rows itself; a Halloween Horror Nights evening is a `TICKETED_EVENT` on an operating day. Measured on production 2026-10-26: **3107 park-level days at 73 parks hold more than one row**, and **not one** holds two day-status rows — the invariant is one day-status row per `(parkId, date, attractionId)`, over all 125 663 rows (PAR-1005). A reader therefore picks the day's status by type (`pickDayStatusEntry` / `dayStatusRank` in `src/common/utils/schedule.util.ts`, PAR-640) rather than taking the day's first row.
-- **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend shows "Closed" for `CLOSED` and "Opening hours not yet available" for `UNKNOWN`.
-- **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).
+UNKNOWN, not CLOSED: "no current information" is true, "the park is shut" would be a second unfounded
+claim. Holiday flags are kept. The threshold is the same constant `ParkIntegrationService` uses for ride
+status ([status regimes](attraction-status/status-regimes.md#5-a-whole-park-gone-silent)). It heals itself:
+the first real reading clears the probe (`QueueDataService.hasObservedReadingWithin`, one indexed
+`EXISTS`, paid only when the payload has a future operating day) and the next sync writes the days back.
+Measured 2026-09-21: 10 parks, 1,254 future OPERATING rows. Recovery needs no dump: revert, deploy, and
+the next sync rewrites the rows.
 
-## A silent park does not announce future operating days
+### A day the source withdraws stops being an operating day
 
-**`saveScheduleData` stores a park's future OPERATING days as UNKNOWN while its
-whole feed has been silent for `PARK_FEED_SILENT_DAYS` (30).** The schedule and
-the live data come from the same upstream, and when that upstream stops
-measuring it does not stop publishing — so a silent park keeps claiming
-operating days that nothing has confirmed.
+`saveScheduleData` deletes future park-level OPERATING rows the payload no longer names — **only inside
+the months the fetch reports as answered**. Before, a day the upstream stopped naming was never looked
+at: Rulantica's November maintenance closure and 24/25 December stood as 14 OPERATING days for seven
+months (2026-09-28: 18 wrong days in 2 of 10 parks, PAR-538).
 
-The reported case: La Ronde in Montréal went silent on 2026-06-24 and its
-ThemeParks.wiki schedule still named **every calendar day** to 2027-08-31 as
-OPERATING — 344 days, 59 of them in the Montréal January, with not one CLOSED
-day among them. `GET /calendar?from=2027-01-01` answered 31 of 31 days
-OPERATING with real opening hours, `isEstimated: false` and
-`recommendation: "recommended"`. That is the rule in
-[absent-facts](../rules/absent-facts.md) in its own shape: our copy of a silent
-source served as that source's statement.
+`getScheduleExtended` reports which months were answered (a flat array loses that, G-103). A month
+counts when its own month endpoint answered `200` **with at least one entry**; `[]` (an unpublished far
+month), 404/5xx, `ThemeParksRateLimitError` and the generic `/schedule` endpoint never count. A naive
+"delete what the payload does not name" would have removed 31 real days in the same measurement.
 
-What the guard does and does not touch:
+The DELETE has four filters: `attractionId IS NULL`; `scheduleType = 'OPERATING'` (hand-written CLOSED
+corrections such as Phantasialand's `Closed per park announcement (PAR-532)` sit on dates the upstream
+no longer names, and there is no provenance column to protect them otherwise); date after the park's
+own today; the day not named as operating by the payload (a day the silent-park guard downgraded counts
+as named). The end state belongs to `fillScheduleGaps`, run right after: a retracted day between two
+operating days becomes CLOSED, one past the last becomes UNKNOWN. Writers that report a single day
+(Wartezeiten, the live fallback) pass no coverage and retract nothing.
 
-|                                             |                                                                                                                    |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Future OPERATING day, park silent ≥ 30 days | → stored as **UNKNOWN**, with `openingTime`, `closingTime`, `description` and `purchases` set to NULL              |
-| Future OPERATING day, feed answering        | untouched                                                                                                          |
-| **Past** OPERATING day                      | untouched, silent park or not — the past-day reconstruction in `CalendarService` (`isHistorical`) reads those rows |
-| CLOSED day from the API, any direction      | untouched — a source that names a day closed has said something about that day                                     |
-| Future **gap-filled** CLOSED day            | not touched by the guard, but demoted to UNKNOWN by the next `fillScheduleGaps` — see below                        |
-| Per-ride rows (`attractionId IS NOT NULL`)  | out of scope, as everywhere else in this method                                                                    |
+## Gap fill: `fillScheduleGaps(parkId, lookAheadDays = 182, lookBackDays = 182)`
 
-- **UNKNOWN, not CLOSED.** "We have no current information" is what is true;
-  "the park is shut" is a second claim about a park nobody is measuring.
-- **The hours go too.** An UNKNOWN day that still answers `10:30–00:00` has only
-  moved the unfounded claim one field to the left — the frontend renders the
-  hours it is given. This matches how `fillScheduleGaps` writes its own UNKNOWN
-  placeholders. Holiday flags are kept: they describe the date, not the feed.
-- **The downgraded date joins the OPERATING delete.** Without that the write is
-  additive — the new UNKNOWN row lands beside the old OPERATING one and every
-  reader still finds an operating day.
-- **The threshold is `PARK_FEED_SILENT_DAYS`, not a second number.** It is the
-  same question `ParkIntegrationService` already asks before it stops serving a
-  silent park's rides as OPERATING, and that constant's own comment carries the
-  measurement that puts 30 in the empty band between a working feed's longest
-  gap (2 days) and the silent parks (31+).
-- **Self-healing.** The first real reading clears the probe, and the next sync
-  writes the OPERATING days back with their hours. Nothing has to be
-  un-done by hand, and `findScheduledButSilentParks` — which filters on
-  OPERATING — goes quiet on its own.
-- **Gap-filled CLOSED days go with the OPERATING ones.** `fillScheduleGaps`
-  marks a gap CLOSED only when it lies strictly between the park's first and
-  last park-level OPERATING day (`isGapClosed`), and demotes a gap-filled
-  CLOSED day (`description = 'Gap-filled'`, no hours) to UNKNOWN once it lies
-  after the last one. The guard removes exactly the future OPERATING days that
-  last one was taken from, so it falls back to the last past operating day and
-  the next gap fill demotes every future gap-filled CLOSED day at the park. The
-  guard itself writes no CLOSED row and deletes none, and a CLOSED day the API
-  delivered is never demoted. This is consistent with
-  [absent-facts](../rules/absent-facts.md): a closure inferred from a schedule
-  we no longer trust is no better than that schedule. The cost is on the
-  calendar, which for the off-season of these parks shows "opening hours not
-  yet available" instead of "closed".
-- **Cost.** One indexed `EXISTS` against `queue_data`
-  (`QueueDataService.hasObservedReadingWithin`), and only when the payload
-  actually carries a future operating day. A sync of past days or of a closed
-  season pays nothing.
+Runs after every schedule save (both crons and `sync-park-schedule`), over park-local today − 182 to
+today + 182 ([park timezone](../rules/park-timezone.md)). Only missing dates get a row, with
+holiday/bridge metadata:
 
-Measured on production 2026-09-21: **10 parks, 1254 future park-level OPERATING
-rows**. Untouched beside them: 9347 future operating days at the 148 parks whose
-feed still answers, 1550 past operating days at the silent ten, and 751 future
-CLOSED days. The 751 did not stay: on 2026-09-23, with the same population, the
-silent parks held 317 future CLOSED days, all of them at the two parks whose
-future OPERATING days the guard had not reached yet (Adventure Island Tampa,
-Aquatica San Antonio). The other 434 were gap-filled and had been demoted as
-described above (PAR-481).
+- **CLOSED** when the date lies strictly between the park's first and last park-level OPERATING date
+  (`isGapClosed`) — a mid-week closure;
+- **UNKNOWN** otherwise: no OPERATING at all, before the first, or on/after the last ("opening hours not
+  yet available").
+- An existing UNKNOWN that is now between two operating days is promoted to CLOSED; a gap-filled CLOSED
+  (`description = 'Gap-filled'`, no hours) now after the last operating day is demoted to UNKNOWN. An
+  OPERATING row or an API CLOSED row is never overwritten.
 
-**Recovery**: these rows are a copy of an upstream answer, not an original.
-Revert the guard, deploy, and the next `sync-schedules-only` (03:00 / 15:00 UTC,
-or `sync-park-schedule` on demand) writes the OPERATING days back with their
-times. No dump is kept, because a dump would be the same upstream answer, older.
+It first runs `cleanupDuplicateScheduleEntriesForPark` (same-type and cross-type duplicates, keyed with
+`attractionId`; statements in `src/parks/utils/schedule-dedup.sql.ts`), and writes in batches: one
+INSERT for all missing dates, one UPDATE each for promotions and demotions, holiday-metadata updates one
+by one.
 
-## A day the source withdraws stops being an operating day
+## The calendar endpoint
 
-**`saveScheduleData` retracts future park-level OPERATING rows the payload no
-longer names — but only inside the months the fetch reports as answered.**
+`GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`,
+`CalendarService.buildCalendarResponse()`.
 
-Everything else in that method works from the days the payload _contains_, so a
-day the upstream stops naming was never looked at: no `UPDATE`, no `DELETE`. The
-row kept saying OPERATING until the date passed. `fillScheduleGaps` does not catch
-it: it fills **missing** dates and demotes only its own gap-filled CLOSED rows,
-and never touches an OPERATING row from the API.
-
-Measured on production 2026-09-28 over the ten parks with the most future
-OPERATING rows, for 2026-11 / 2026-12 / 2027-01: **18 wrong days in 2 of 10
-parks** (PAR-538). Rulantica held 14 — the annual maintenance closure of the water
-park, 2026-11-16 to 27, plus 24/25 December — written on 2026-02-11 and never
-touched again, with the upstream naming none of those days in any form, not even
-as `EXTRA_HOURS`. SeaWorld San Antonio held 4.
-
-**The coverage information is reported, never derived.** `getScheduleExtended`
-asks for the previous month plus 12 ahead one request at a time and returns one
-flat array with the month boundaries thrown away, so a month that dropped a day
-and a month that never arrived are the same thing in it (📚 G-103). A month counts
-as answered when its **own month endpoint** answered `200` **with at least one
-entry**:
-
-| the month endpoint …                   | covered | why                                                                              |
-| -------------------------------------- | ------- | -------------------------------------------------------------------------------- |
-| answered with entries                  | **yes** | what it names is what the source says now                                        |
-| answered with `[]`                     | no      | the normal state of a far-future month before the park publishes it              |
-| 404 / 5xx                              | no      | no statement about the month                                                     |
-| throttled (`ThemeParksRateLimitError`) | no      | the run 87 of 200 parks had in PAR-480                                           |
-| the generic `/schedule` endpoint       | never   | it spans ~30 days across two months and says nothing about either being complete |
-
-In the same measurement Blackpool Pleasure Beach answered empty for two months and
-SeaWorld Orlando's December failed outright — 31 real operating days that a naive
-"delete what the payload does not name" would have removed.
-
-Four filters on the DELETE, each load-bearing:
-
-|                                           |                                                                                       |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| `attractionId IS NULL`                    | a ride's row is a different statement by a different writer, as everywhere else here  |
-| `scheduleType = 'OPERATING'`              | the type that offers a closed park as open, and the type this feed writes             |
-| date **after** the park's own today       | past OPERATING rows are what the historical reconstruction in `CalendarService` reads |
-| day not named as operating by the payload | a day the silent-feed guard downgraded counts as named — that guard owns those rows   |
-
-- **The end state belongs to `fillScheduleGaps`**, which both callers run
-  immediately after the save: a retracted day between two operating days becomes
-  CLOSED, one past the last operating day becomes UNKNOWN. Rulantica's closure
-  therefore reads "closed", because 15 and 28 November stay operating days.
-- **Hand-written CLOSED rows are out of reach by construction.**
-  `schedule_entries` has no provenance column, and curated corrections live in
-  CLOSED rows: Phantasialand's 2027-01-12 and 13 carry
-  `description = 'Closed per park announcement (PAR-532)'` on dates the upstream
-  no longer names inside a month it answers for — exactly the shape this DELETE
-  looks for, minus the type. Restricting it to OPERATING is what keeps them.
-- **The writers that report a single day retract nothing.** The Wartezeiten sync
-  and the live-data fallback in `WaitTimesProcessor` pass no coverage, and without
-  it the DELETE is not issued at all.
-- **Recovery needs no dump**, for the same reason as the silent-feed guard's: the
-  rows are a copy of an upstream answer, and the next sync writes the day back
-  with its hours as soon as the source names it again.
-- **What it costs.** One DELETE per park per sync, on the `(parkId, date)` partial
-  index, and only for parks whose fetch answered for at least one month.
-
-## Gap-fill rules (fillScheduleGaps)
-
-### When gap-fill runs (DB updates are automatic)
-
-- **After every schedule sync:** Both `sync-all-parks` (daily 03:00) and `sync-schedules-only` (daily 15:00) call `saveScheduleData` then `fillScheduleGaps(park.id)` for each Wiki park. On-demand `sync-park-schedule` does the same for a single park.
-- **Optional job:** `fill-all-gaps` runs `fillAllParksGaps()` (all parks, no API fetch). Used e.g. after holiday data updates. No one-off DB correction is needed when switching to park-timezone range — the next sync fills using the new range.
-
-### Range and classification
-
-**Timezone:** All range and date logic uses **park timezone** (see [Date & Time Handling](../development/datetime-handling.md)). The filled range is (today - lookBackDays) through (today + lookAheadDays) in the park’s calendar, not server date.
-
-- **Range**: From (today - lookBackDays) in park timezone through (today + lookAheadDays). Also extends lookBackDays into the past. Defaults: lookBackDays = 182, lookAheadDays = 182. Using `getStartOfDayInTimezone(park.timezone)` so the filled range is always in the park’s calendar. Only **missing** dates get an entry.
-- **Classification** (no existing entry for that date):
-  - **CLOSED**: The park has at least one OPERATING date **before** and one **after** this date (min/max OPERATING over all stored entries). The gap is "in the middle" of known opening — we treat it as a closed day (e.g. mid-week closure).
-  - **UNKNOWN**: Otherwise: no OPERATING at all for the park, or this date is **before** the first OPERATING date (e.g. before season or before we stored data), or **on or after** the last OPERATING date (schedule not yet published). We cannot infer closed vs not yet published.
-- **Existing UNKNOWN entries**: When re-running gap-fill, if an existing entry is UNKNOWN and is now "in the middle" (OPERATING before and after), we update it to CLOSED. We never overwrite OPERATING or API-provided CLOSED.
-- **Demotion (gap-fill CLOSED → UNKNOWN)**: If an existing entry is CLOSED with `description = "Gap-filled"` and its date is **after** the last OPERATING date, we demote it to UNKNOWN. This corrects entries that were gap-filled as CLOSED when we had future OPERATING; when those are removed (API no longer returns them), we treat the date as "schedule not yet published". We only demote gap-fill entries (never API-provided CLOSED) to avoid overwriting explicit winter-closure data from ThemeParks.
-
-### Performance optimization (batch operations)
-
-Gap-fill uses **batch INSERT/UPDATE operations** to minimize database round-trips:
-
-- **Batch INSERT**: All missing dates are collected during the range iteration, then inserted in bulk using `createQueryBuilder().insert().into(ScheduleEntry).values(entriesToInsert)`. Reduces ~182 individual inserts to **1 batch operation**.
-- **Batch UPDATE (status promotions)**: UNKNOWN → CLOSED promotions are batched using `whereInIds(statusPromotions)`. Reduces ~N individual updates to **1 batch operation**.
-- **Batch UPDATE (status demotions)**: Gap-filled CLOSED → UNKNOWN demotions are batched using `whereInIds(statusDemotions)`. Reduces ~N individual updates to **1 batch operation**.
-- **Individual UPDATE (holiday changes)**: Holiday metadata updates (non-status changes) are applied individually as fields may differ per entry.
-
-**Impact**: Reduced from ~364 individual save/update queries to **~5 batch operations** for a typical 365-day range (98.6% reduction).
-
-**Deduplication**: Before gap-fill runs, `cleanupDuplicateScheduleEntriesForPark(parkId)` removes any same-type or cross-type duplicates for that specific park. This prevents conflicts from parallel schedule syncs and ensures duplicate entries don't accumulate between the daily global cleanup (`cleanupDuplicateScheduleEntries`). Both keys include `attractionId` — see [Common Issues](../troubleshooting/common-issues.md) for why, and `src/parks/utils/schedule-dedup.sql.ts` for the statements.
-
-**Both `saveScheduleData` and `fillScheduleGaps` read and delete park-level rows only** (`attractionId IS NULL`). Every row either writes is built from `parkId` alone, so both speak about the park's own day; a per-ride row for the same day is a different statement by a different writer. Without the filter the sync hands a ride's row the park's opening times, and the gap-fill lets a ride's row occupy the day — the park never gets its own row for it, and the UNKNOWN→CLOSED promotion and the CLOSED→UNKNOWN demotion, both decided by the **park's** operating range, rewrite the ride's schedule instead.
-
-## Persistence
-
-- **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
-- **Behaviour**: Upsert by `(parkId, date, scheduleType)` over park-level rows — insert new, update if times/description/holiday changed. **Bidirectional cleanup** (batch operations): when saving OPERATING entries, delete CLOSED for those dates; when saving CLOSED entries, delete OPERATING for those dates. Also delete UNKNOWN placeholders when real data exists. All DELETE operations are **batched** using `date IN (:...dates)` to reduce database round-trips (reduces ~300 individual deletes to **3 batch deletes**, 99% reduction).
-- **Gaps**: After saving, `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills missing dates. Defaults: `lookAheadDays = 182`, `lookBackDays = 182` (~½ year each). Range: (today − lookBackDays) through (today + lookAheadDays). See **Gap-fill rules** above.
-
-- **Version log** (PAR-1061): after the last writer of a sync is done with a park (save + gap fill in the Wiki sync, the global gap fill, Wartezeiten, the live fallback), `ParksService.recordScheduleVersions(parkId, source)` diffs the park-level day state against `schedule_day_versions` and appends only the days that changed; a withdrawn day becomes a `NONE` version. Write-only; see [covariate source](covariate-source.md) §3.2.
-
-## Calendar Endpoint & First-Request Slowness
-
-- **Endpoint**: `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`
-- **Service**: `CalendarService.buildCalendarResponse()`.
-
-The **first request** for a given park/range can be **slow** if the cache is cold (cache miss; schedule, weather, ML, holidays, etc. fetched in parallel). **After the first request**: responses are cached (5 min if range includes today, 1 h for future-only).
-
-### Optimizations (queries, indexes, cache)
-
-- **Cache**: Only **per-month** keys: `calendar:month:{parkId}:YYYY-MM:{includeHourly}`. Any range (e.g. Feb 1–28, Feb 10–20, Feb 1–Mar 15) is served by loading the relevant months and slicing to the requested range — no full-range key, so overlapping requests (e.g. Feb 1–15 and Feb 10–28) reuse the same February data. When we build a response we cache only **full months** (all days 1st–last of that month) for reuse. TTL: 5 min if month includes today, 1 h for future.
-- **Queries**: All range data is fetched in one `Promise.all` (schedule, weather, ML daily, holidays, refurbishments, historical queue data, daily stats). Hourly ML predictions are fetched **once** per calendar build and reused for today+tomorrow (avoids N+1 ML calls). **Weather**: `getWeatherData(parkId, from, to, park.timezone)` is called with timezone so the weather service skips the park lookup. **Queue data**: `findHistoricalDataForDateRange` uses `innerJoin` (no `AndSelect`) so only queue_data rows are loaded, not full attraction entities. **Crowd level**: Redis **MGET** is used once for all historical dates in range (`analytics:crowdlevel:park:{parkId}:{date}`); only cache misses call `calculateCrowdLevelForDate`.
-- **Indexes** used by the calendar flow:
-  - **schedule_entries**: `(parkId, date, scheduleType)` — range queries `getSchedule(parkId, from, to)` use the leftmost prefix `(parkId, date)`.
-  - **weather_data**: `(parkId, date)` for `getWeatherData(parkId, from, to)`.
-  - **holidays**: `(country, date)` / `(country, region, date)` for `getHolidays(country, from, to)`.
-  - **park_daily_stats**: `(parkId, date)` for `getDailyStats(parkId, from, to)`.
-  - **queue_data**: `(attractionId, timestamp)`; calendar uses `findHistoricalDataForDateRange` (join with attractions on `parkId`).
-- **Crowd level**: For historical days, `calculateCrowdLevelForDate` is called per day but uses its own Redis cache (`analytics:crowdlevel:...`), so repeated requests hit cache.
-
-### Calendar Warmup
-
-Calendar is warmed **once per day**, not every 5 min with park warmup:
-
-- **Job**: `warmup-calendar-daily` on the `park-metadata` queue.
-- **Schedule**: Daily at **5:00** (cron).
-- **Effect**: Warms **per-month** keys `calendar:month:{parkId}:YYYY-MM:today+tomorrow` for **-1 to +3 months** (last month through 3 months ahead, park timezone) for **all parks**, covering the typical user range (recap + planning).
-
-So the calendar endpoint is fast after the first request of the day without warming on every wait-times sync. See [Caching Strategy – Cache Warmup](caching-strategy.md#cache-warmup).
-
-## Related
-
-- [Calendar, Schedule & ML Rules](calendar-schedule-and-ml-rules.md) — Status/crowd rules (past vs future, UNKNOWN vs CLOSED), schedule sync, ML alignment.
-- [Job Queues & Processors](job-queues.md) — cron and job names.
-- [Data Ingestion](data-ingestion.md) — multi-source overview.
-- [Caching Strategy](caching-strategy.md) — Redis keys and TTLs.
+- **Cache:** per month only, `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}`; TTLs and slicing in
+  [caching](caching-strategy.md#keys-and-ttls).
+- **One cold build** fetches schedule, weather (`getWeatherData(parkId, from, to, timezone)`), daily ML,
+  holidays, refurbishments, historical queue data and daily stats in one `Promise.all`; hourly ML once
+  for today and tomorrow; past crowd levels with one `MGET` of `analytics:crowdlevel:park:{id}:{date}`,
+  computing only misses. A cold build can take ~15 s, which is why the warmup exists.
+- **Warmup:** what `warmup-calendar-daily` builds: [cache warmup](caching-strategy.md#cache-warmup).
+- **Indexes it relies on:** `schedule_entries (parkId, date, scheduleType)` and the partial
+  `idx_schedule_park_date_no_attraction`, `weather_data (parkId, date)` (its primary key),
+  `holidays (country, date)`, `park_daily_stats (parkId, date)`, `queue_data (attractionId, timestamp)`.

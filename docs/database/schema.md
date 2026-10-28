@@ -1,160 +1,118 @@
-# Database Schema
+# Database schema
 
-## Overview
+What lives in PostgreSQL + TimescaleDB, where each table's definition comes from, and the tables whose
+write path or read rules are not obvious from the entity. Open this before querying or adding a table.
+How the schema reaches production: [the entities are the schema](../rules/the-entities-are-the-schema.md).
 
-The database uses PostgreSQL with TimescaleDB extension for efficient time-series data storage. TypeORM is used as the ORM.
+## Where the schema is defined
 
-## Key Entities
+- **Entities** (`src/**/entities/*.entity.ts`, 64 of them) — TypeORM `synchronize` creates and alters
+  their tables at boot. Column names are camelCase unless the entity gives a `name:` (`"parkId"`,
+  `"attractionId"`, `"queueType"` must be quoted in SQL; newer columns are snake_case, e.g.
+  `open_with_park`, `retired_at`).
+- **Hypertables** — `HYPERTABLES` in `src/database/hypertables.ts`, applied by `TimescaleInitService`:
 
-### 1. Parks (`parks`)
-Represents a theme park.
-- `id`: UUID
-- `name`: String
-- `timezone`: Timezone string (e.g., 'Europe/Berlin')
-- `externalId`: ID from upstream source (e.g., ThemeParks.wiki)
-- `location`: Geometry point
-- `slug`: URL-friendly identifier
+  | Table | Time column | Chunk | Compressed after |
+  | --- | --- | --- | --- |
+  | `queue_data` | `timestamp` | 1 day | 30 days (no `segmentby`) |
+  | `forecast_data` | `createdAt` | 1 day | 7 days |
+  | `weather_data` | `date` | 7 days | 60 days |
+  | `show_live_data`, `restaurant_live_data` | `timestamp` | 1 day | 30 days |
+  | `queue_data_aggregates` | `hour` | 7 days | 30 days |
+  | `wait_time_predictions` | `createdAt` | 7 days | 14 days, `segmentby attractionId` |
 
-### 2. Attractions (`attractions`)
-Represents a ride or show within a park.
-- `id`: UUID
-- `parkId`: FK to Park
-- `name`: String
-- `externalId`: Upstream ID
-- `status`: `OPERATING`, `CLOSED`, `DOWN`, `REFURBISHMENT`
-- `type`: `RIDE`, `SHOW`, `RESTAURANT`
+- **Tables of the Python services** have no entity; their DDL is in the writer: `pcn_forecasts`,
+  `pcn_intraday_comparisons`, `pcn_lead_curve_comparisons` (`pcn-service/db.py`), `tft_forecasts`,
+  `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` (`nf-service/db.py`).
+- No PostGIS: coordinates are `latitude` / `longitude` decimals (Postgres returns them as strings).
 
-### 3. Queue Data (`queue_data`)
-Stores raw wait time observations. This is a hypertable (TimescaleDB).
-- `attractionId`: FK to Attraction
-- `timestamp`: Time of observation
-- `waitTime`: Minutes (integer)
-- `status`: `OPERATING`, `CLOSED`, etc.
-- `source`: Source of data (e.g., 'themeparks-wiki')
+## Core tables
 
-### 4. Wait Time Predictions (`wait_time_predictions`)
-Stores CatBoost's raw predictions. Hypertable on `createdAt` (7-day chunks,
-compressed after 14 days, segment by `attractionId`).
-- Primary key `(attractionId, predictionType, createdAt, predictedTime)` — the
-  natural key plus the partition column, which TimescaleDB requires in every
-  unique index. That is the live column order on production (verified against
-  `pg_index` on 2026-10-12); `timescale-init.service.ts` derives the key from the
-  running schema rather than declaring it, so this is the order queries can rely
-  on for an index prefix.
-- `predictedTime`: the slot being predicted (15-minute slots for `hourly`,
-  despite the name; days for `daily`)
-- `predictedWaitTime`, `confidence`, `uncertaintyMinutes`, `crowdLevel`,
-  `status`, `baseline`, `modelVersion`: the answer a reader is served
+| Table | What it holds | Notes |
+| --- | --- | --- |
+| `parks` | one row per park | `slug` is unique per destination, not globally (`disneyland-park` is Anaheim and Paris) — group by `id`. `timezone` is read everywhere ([park timezone](../rules/park-timezone.md)). Source ids `wikiEntityId`, `queueTimesEntityId`, `wartezeitenEntityId`; `primaryDataSource`; `influencingRegions`; curated columns ([curation](../admin/curation.md)) |
+| `attractions` | one row per ride | `externalId` unique globally, `slug` unique per park ([identity](../architecture/attraction-status/identity.md)). Synced and curated columns side by side; `is_seasonal`, `season_months`, `season_out_since` ([seasonality](../architecture/attraction-status/seasonality.md)); `retired_at` / `retired_reason` / `retired_kind`, `absent_since`, `last_listed_at` ([reclassification](../architecture/attraction-status/reclassification-and-absence.md)) |
+| `shows`, `restaurants` | the other children of a park | `externalId` unique per table; `retired_at` / `retired_reason` |
+| `queue_data` | every wait-time reading | Written on change plus an hourly heartbeat ([ingestion](../architecture/data-ingestion.md)); `data_source` (`system-reconciliation` / `system-heartbeat` are ours), `is_heartbeat`, `lastUpdated`, `queueType`, `status`. Read observations through `observedReadingsSql()` |
+| `schedule_entries` | opening hours per park-day (and per ride) | `scheduleType`, `openingTime`, `closingTime`, holiday flags; one day-status row per day plus event rows ([schedule sync](../architecture/schedule-sync-and-calendar.md)) |
+| `holidays` | public, school and `working_day` rows | keyed by `externalId` (contains the date) ([holiday sources](../architecture/holiday-sources-outside-europe.md)) |
+| `weather_data` | daily weather per park | PK `(parkId, date)`, stored at noon UTC ([weather](../architecture/weather.md)) |
+| `external_entity_mapping` | `<source>:<externalId>` → internal row | how live data finds a row a second source also reports |
+| `attraction_review_marks`, `attraction_slug_aliases`, `park_slug_aliases` | human verdicts; old slugs that redirect | [review marks](../architecture/attraction-status/review-marks.md) |
+| `admin_users`, `admin_audit_log` | admin accounts and every admin write | [authentication](../admin/authentication.md) |
 
-#### Write path (PAR-874)
+## Precomputed tables
 
-`generate-hourly` runs every 15 minutes over a 48-hour horizon. It used to
-delete every future hourly row of a park (`deduplicatePredictions`) and insert
-the whole horizon again: ~25 M inserts and as many deletes a day, 94 % of the
-rows written were deleted again, and because a B-tree page is only reused once
-it is completely empty, the chunk primary keys grew to 15–25× their natural
-size (8.5 GB instead of ~0.3 GB for one 7-day chunk; DB audit 2026-10-12).
+Written by the nightly jobs ([job queues](../architecture/job-queues.md)), read instead of scanning
+`queue_data`, several mirrored in Redis ([caching](../architecture/caching-strategy.md)):
 
-It now **diff-writes** (`MLService.storePredictions(…, { replaceHourlyForPark })`,
+| Table | Written by | Used for |
+| --- | --- | --- |
+| `park_p50_baselines` | `p50-baseline`, 03:00 | park P50 (live occupancy) and `typicalDayPeak` (calendar baseline) ([crowd levels](../rules/crowd-levels.md)) |
+| `park_p90_baselines` | same run | computed alongside; not a crowd-level reference |
+| `attraction_p50_baselines`, `attraction_p90_baselines` | `p50-baseline`, 04:00 | per-ride live ratio (P50); the per-ride daily P90 the calendar averages |
+| `headliner_attractions` | `p50-baseline` | headliners per park, with per-ride 548-day `p50Wait548d` / `p90Wait548d`, so park baselines need no re-scan |
+| `attraction_hourly_history` | 04:30 | per-day, per-ride 15-min slots (P90 / avg / samples, JSONB) and `downCount`; past days of the history endpoint |
+| `attraction_day_operating` | `detect-seasonal` (`refreshOperatingDayRollup`) | which days a ride reported OPERATING |
+| `park_day_operations` | 04:45 | measured-operation verdicts ([calendar rules §1.5](../architecture/calendar-schedule-and-ml-rules.md#15-a-past-closed-day-the-measurement-overrules-par-697)) |
+| `park_daily_stats` | `stats`, hourly / 01:00 | park P50 / P90 / max per day |
+| `queue_data_aggregates` | `analytics`, 02:00 | hourly P25…P99 per ride, for ML features and `getTypicalStatsForHour` |
+
+Both columns of `attraction_hourly_history` are built from observations only (`observedReadingsSql`):
+`slots` since PAR-729, `downCount` since PAR-897. Rows written before those deploys were not recomputed,
+so for older days up to 45 % of a park's slots come from carried heartbeats and 1.64 % of rows overstate
+`downCount` by a median of 2 h. A `backfill-attraction-hourly-history` run over those days removes that
+slot coverage rather than repairing it.
+
+The 548-day **live** P90 sliding window that used to back the baselines on every cache miss is gone; a
+missing baseline row means "wait for the next run".
+
+## Forecast tables
+
+| Table | Notes |
+| --- | --- |
+| `wait_time_predictions` | CatBoost's hourly (15-min slots) and daily predictions; write path below |
+| `tft_forecasts`, `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` | nf-service's daily peak per (attraction, target_date, forecast_date), every origin. Plain tables; retention 120 days by `forecast_date` (`db-maintenance/prune-tft-forecasts`, 04:35 UTC, 200 k-row batches; the oldest origin a reader asks for is 107 days, readers listed in `src/database/maintenance/vacuum-plan.ts`) |
+| `pcn_forecasts` | pcn-service's 15-min intraday forecast; retention 4 days by `created_at` in pcn-service (PAR-873); primary key rebuilt weekly ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md)) |
+| `weather_forecast_issues`, `schedule_day_versions` | append-only as-of logs, write-only for now ([covariate source](../architecture/covariate-source.md) §3). No FK, no hypertable; a park merge moves them (`PARK_DEPENDENCIES`) |
+
+### `wait_time_predictions`
+
+Primary key `(attractionId, predictionType, createdAt, predictedTime)`: the natural key plus the
+partition column, which TimescaleDB requires in every unique index (the live order on production,
+verified 2026-10-12; `timescale-init.service.ts` derives it from the running schema). `predictedTime` is
+the slot (15 min for `hourly`, a day for `daily`); `predictedWaitTime`, `confidence`,
+`uncertaintyMinutes`, `crowdLevel`, `status`, `baseline` and `modelVersion` are the served answer.
+
+### Write path (PAR-874)
+
+`generate-hourly` runs every 15 minutes over a 48-hour horizon. It used to delete every future hourly row
+of a park and insert the whole horizon again — ~25 M inserts and as many deletes a day, 94 % of the rows
+deleted again, and chunk primary keys at 15–25× their natural size (8.5 GB instead of ~0.3 GB per 7-day
+chunk). It now **diff-writes** (`MLService.storePredictions(…, { replaceHourlyForPark })`,
 `src/ml/utils/prediction-diff-write.util.ts`):
 
-1. read the park's stored hourly rows with `predictedTime >= now` and
-   `createdAt >= now - 50 h` (no future slot can be held by an older row);
-2. compare each slot's newest stored row with the new answer on every served
-   column — a slot that did not change is **not written at all**;
-3. insert the changed and new slots, then delete the superseded rows of changed
-   slots and every stored future slot the run no longer predicts. Insert-first
-   means a reader never sees a hole; for a moment a changed slot holds two rows
-   and every reader takes the newest.
+1. read the park's stored hourly rows with `predictedTime >= now` and `createdAt >= now - 50 h`;
+2. compare each slot's newest row with the new answer on every served column — an unchanged slot is
+   **not written**;
+3. insert changed and new slots, then delete superseded rows and every stored future slot the run no
+   longer predicts. Insert first, so a reader never sees a hole (it takes the newest row per slot).
 
-A slot already under way (`predictedTime < now`) is outside the comparison, as
-it was outside the old delete: the run's row for it is appended, so the
-stats/day curve keeps the row written before the slot began.
+A slot already under way is outside the comparison; the run's row for it is appended, so the day curve
+keeps the row written before the slot began. `ON CONFLICT … DO UPDATE` is impossible: the slot cannot be
+a unique key, since every unique index must contain `createdAt`.
 
-Why not `ON CONFLICT … DO UPDATE`: the slot `(attractionId, predictionType,
-predictedTime)` cannot be a unique key on this hypertable, since every unique
-index must contain `createdAt` and no two runs share one.
+**For readers:** a row's `createdAt` is when its *value* was written, not when it was last confirmed.
+Freshness moved to Redis: every run sets `ml:hourly-fresh:{attractionId}` (30 min), and
+`getStoredPredictions` / `getBatchStoredPredictions` serve a ride's hourly rows when the marker exists or
+a row is younger than 30 minutes (so hourly serving depends on Redis). They read the 50-hour window and
+return the newest row per slot. Readers of the newest row per slot (`prediction-deviation`, the PCN
+scorer, the nf-service backtests, the daily CatBoost snapshot) are unaffected. `stats/day`'s
+`first_predicted` takes the *oldest* row and now reaches further back: an unchanged slot keeps the row of
+the run that last changed it. Measured 2026-10-12: 59–80 % of slots unchanged per run (88–96 % on
+`predictedWaitTime` alone, most other changes `confidence` moving ~0.7 points); the run after the 06:00
+retrain rewrites everything (`modelVersion`).
 
-**Consequences for readers.** A row's `createdAt` is now the time its *value*
-was written, not the time it was last confirmed. Freshness therefore moved off
-the row: every run sets a Redis marker `ml:hourly-fresh:{attractionId}` with a
-30-minute TTL, and `getStoredPredictions` / `getBatchStoredPredictions` serve a
-ride's hourly rows when the marker exists or one of its rows is younger than 30
-minutes (the old rule, which carries the deploy window itself, and after that
-any ride with a changed slot in the last 30 minutes — a ride whose curve sits
-unchanged writes no row, so hourly serving does depend on Redis now). Their
-`createdAt` bound is the 50-hour horizon window, and they return one row per
-slot, the newest. The history readers that take the *newest* row per slot
-(`prediction-deviation`, the PCN scorer, the nf-service backtests, and the
-`daily`-only CatBoost snapshot) are unaffected: the surviving value per slot is
-the same as before. One reader takes the *oldest* row per slot — `stats/day`'s
-`first_predicted`, "what we said first about this slot". It still answers that,
-and now reaches further back: before, a past slot's oldest surviving row came
-from the last run before the slot began, because every earlier run's row had
-been deleted while the slot was still in the future; now a slot whose value sat
-unchanged keeps the row of the run that last changed it, which can be hours
-earlier. `last_predicted` is unchanged.
-
-Measured on production (2026-10-12, two consecutive evening runs, ~90–105 k
-future slots each): 59 % and 80 % of the slots were unchanged.
-`predictedWaitTime` alone was unchanged in 88–96 %; most of the remaining
-changes are `confidence` moving by ~0.7 points. One run a day (after the 06:00
-retrain changes `modelVersion`) rewrites everything.
-
-`deduplicatePredictions` remains for `daily` (nightly) and is no longer called
-for hourly at all. Its `createdAt` window is derived per type — 72 h for hourly,
-8 days for daily (`DEDUPE_CREATED_AFTER_HOURS`, PAR-874) — down from a flat 13
-days, so the delete stays on the newest chunk or two.
-
-### 5. Park Schedules (`schedule_entries`)
-Operating hours for parks.
-- `parkId`: FK to Park
-- `date`: Date of schedule
-- `visitingHours`: Open/Close times
-- `type`: `OPERATING`, `CLOSED`, `Ticketed Event`
-
-### 6. As-of fact logs (`weather_forecast_issues`, `schedule_day_versions`)
-Append-only, write-only logs (PAR-1061, [covariate source](../architecture/covariate-source.md) PRs 1–2).
-Nothing reads them yet. Plain tables, no FK, no hypertable; a park merge moves them
-(`PARK_DEPENDENCIES`, keyed on the target day).
-- `weather_forecast_issues` — PK `(park_id, target_date, issued_at)`; every daily
-  forecast the 12-hourly full weather sync stores, with `lead_days` from the park-local
-  date of `issued_at`. Insert-or-ignore, so a re-run within the client's 2 h cache adds
-  nothing. ~4,800 rows/day, **≈ 230 MB/yr**, no retention (D6).
-- `schedule_day_versions` — PK `(park_id, day, known_from)`, partial unique
-  `(park_id, day) WHERE known_to IS NULL`; one row per change of a park-day's derived
-  state (state, open/close, events), diff-written by `ParksService.recordScheduleVersions`
-  after the last schedule writer. A park's first versions are its backfill
-  (`known_from = max(updatedAt)`, `asof_exact = false`, ≈ 83 k rows); churn is
-  assumed ≈ 1 M rows / **≈ 160 MB/yr** until measured.
-
-## Relationships
-
-- **One-to-Many**: Park -> Attractions
-- **One-to-Many**: Park -> Schedules
-- **One-to-Many**: Attraction -> QueueData
-- **One-to-Many**: Attraction -> Predictions
-
-## Cache & Precomputed Tables
-
-Precomputed analytics are stored in dedicated tables and optionally mirrored in Redis. See [Caching Strategy](../architecture/caching-strategy.md) for Redis keys and TTLs.
-
-| Table | Purpose |
-|-------|---------|
-| `park_p50_baselines` | Park P50 baseline (headliner attractions only). **Primary** input for live occupancy / ratio-vs-P50; also stores `typicalDayPeak` (the **primary** calendar baseline). |
-| `park_p90_baselines` | Park P90 (peak) baseline. Computed for free alongside P50; **not** the crowd-level reference any more. |
-| `attraction_p50_baselines` | Per-attraction P50 baseline. **Primary** for the live park load (`Σ latest ÷ Σ P50` across headliners). |
-| `attraction_p90_baselines` | Per-attraction P90 (peak) baseline. Computed for free; **not** the crowd-level reference (feeds the per-ride daily P90 the calendar averages). |
-| `headliner_attractions` | Which attractions were selected as headliners per park (for baseline calculation). Also stores per-headliner `p50Wait548d` / `p90Wait548d` so park baselines are avg-of-per-headliner without a re-scan. |
-| `attraction_hourly_history` | Per-day per-attraction 15-min-slot P90/avg/sampleCount rollup (JSONB `slots` array). Read by the attraction history endpoint for past days; today is computed live against `queue_data`. Both columns are built from observations only (`observedReadingsSql`): the `slots` array since PAR-729, `downCount` since PAR-897 — a carried `DOWN` used to count as an outage hour of its own. **Rows written before those deploys were deliberately not recomputed**, so for days before them up to 45 % of their slots per park come from carried heartbeat rows and 1.64 % of the rows overstate `downCount` by a median of 2 h — a `backfill-attraction-hourly-history` run over those days removes that slot coverage rather than repairing it, and no row it would touch loses its outage (PAR-897). |
-| `park_daily_stats` | Daily stats per park (P50/P90/max wait). Updated hourly for today, daily for yesterday. |
-| `queue_data_aggregates` | Precomputed hourly percentiles (P25/P50/P75/P90/P95/P99) per attraction. Used by ML feature engineering. |
-| `tft_forecasts`, `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` | nf-service's daily-peak forecast per (attraction, target_date, forecast_date) — every origin, not just the latest. Plain tables (not hypertables). **Retention 120 days by `forecast_date`** (PAR-1054): the `db-maintenance/prune-tft-forecasts` job at 04:35 UTC deletes in 200 k-row ctid batches, one autocommitted statement each, the shadows after the served table and skipped while nf-service has not created them yet. The window is the oldest origin any reader asks for (forward-archive shadow scoring, 107 days) plus 13 days; the reader table is in `src/database/maintenance/vacuum-plan.ts`. |
-| `pcn_forecasts` | pcn-service's 15-minute intraday forecast. Plain table, retention 4 days by `created_at` in pcn-service (PAR-873). Its primary key is rebuilt weekly with `REINDEX INDEX CONCURRENTLY` (Sunday 19:10 UTC, PAR-1054) because the rolling prune bloats it to twice its packed size — see [DB Health Runbook §5b](../troubleshooting/db-health-runbook.md). |
-
-The P50/P90 baseline pair is recalculated nightly by the same cron (3 AM parks, 4 AM attractions) — PostgreSQL produces both percentiles in a single PERCENTILE_CONT sort. The 548-day **live** sliding-window calculation that used to back this on every cache miss was removed; missing rows mean "wait for the next cron run" rather than "scan half a billion data points now".
-
-## Extensions
-
-- **TimescaleDB**: Used for `queue_data` and potentially `wait_time_predictions` to handle high-volume time-series data efficiently.
-- **PostGIS**: Used for location-based queries (nearby parks).
+`deduplicatePredictions` remains for `daily` only; its `createdAt` window is per type
+(`DEDUPE_CREATED_AFTER_HOURS`: 72 h hourly, 8 days daily) so its delete stays on the newest chunks.
+Retention: [nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#predictionscleanup-old-and-compressed-chunks-par-900).

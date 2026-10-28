@@ -1369,7 +1369,7 @@ describe("ParksService", () => {
    * `prediction_accuracy."attractionId"` (the column is `attraction_id`) and
    * neither block moves more than 3 of the 19 tables in
    * `ATTRACTION_DEPENDENCIES`, so the `DELETE FROM attractions` runs into the
-   * NO ACTION foreign keys. That is its own ticket; see todo.md.
+   * NO ACTION foreign keys.
    */
   describe("raw attraction merges stamp last_merged_at", () => {
     type Recorded = { sql: string; params?: unknown[] };

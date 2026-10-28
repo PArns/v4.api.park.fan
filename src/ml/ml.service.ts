@@ -2368,7 +2368,7 @@ export class MLService {
    *
    * Computed exactly as {@link getParkPredictions} computes it for the park
    * page, `/plan/day` and the ride page — copies of the CatBoost rows, the PCN
-   * override and the §7.7 persistence blend applied from the current slot — so
+   * override and the persistence blend applied from the current slot — so
    * the number scored later is the number shown at the time, with the blend at
    * the lead it had then. It is never re-derived after the fact: the blend's
    * anchor is "the wait now", and recomputing it once the slot has happened
@@ -2377,7 +2377,7 @@ export class MLService {
    * `chronos` where the Chronos-2 serving override (PAR-911) produced the
    * slot. Chronos serves only 45–120 min ahead, so under the two-hour scored
    * lead below it is recorded only where the two windows meet — see
-   * docs/ml/forward-archive.md §10.4 before reading the badge as a Chronos
+   * docs/ml/forward-archive/chronos-serving.md#where-it-applies before reading the badge as a Chronos
    * figure.
    *
    * `catboost` wherever CatBoost is what was served: the flag off, no PCN
@@ -2439,7 +2439,7 @@ export class MLService {
    * Every served-model override, in order, on these rows (in place), and which
    * model each changed row ended on.
    *
-   * 1. PCN + §7.7 persistence blend (`SERVE_PCN_INTRADAY`) on every slot it has.
+   * 1. PCN + the persistence blend (`SERVE_PCN_INTRADAY`) on every slot it has.
    * 2. Chronos-2 (`SERVE_CHRONOS_INTRADAY`, PAR-911) on the 45–120 min slots
    *    its cached curve covers — so ≤ 30 min stays the blend (persistence wins
    *    at 15 min) and > 120 min stays PCN, and a stale or missing curve leaves
@@ -2506,7 +2506,7 @@ export class MLService {
     const ids = [...new Set(hourly.map((p) => p.attractionId))];
     const [pcn, anchors] = await Promise.all([
       this.getPcnIntradayWaits(ids, startTime),
-      this.fetchCurrentWaits(ids), // §7.7 blend anchor: latest realised wait per attraction
+      this.fetchCurrentWaits(ids), // blend anchor: latest realised wait per attraction
     ]);
     // Lead from `nowMs` (the actual time), not from `startTime` (the current slot start
     // or a caller's read start): on the 1–3 h ramp α follows the clock inside a slot.
@@ -2516,7 +2516,8 @@ export class MLService {
       const slotMs = Date.parse(p.predictedTime);
       const q = pcn.get(p.attractionId)?.get(slotMs);
       if (q === undefined) continue;
-      // §7.7 persistence blend: at short lead the wait "L hours from now" is better predicted
+      // Persistence blend (docs/ml/intraday-serving.md#the-persistence-blend-par-1026-par-1029):
+      // at short lead the wait "L hours from now" is better predicted
       // by "the wait now" than by the model — the current wait in the first hour (any anchor
       // ≥ 5 min, PAR-1026), a ramp to pure PCN by 3h for rides with a real wait (≥ 40 min).
       const leadHours = (slotMs - nowMs) / 3_600_000;
@@ -2558,7 +2559,7 @@ export class MLService {
 
   /**
    * Latest realised STANDBY wait per attraction (within the last 3h) — the anchor for the
-   * §7.7 persistence blend. The reading in force must be OPERATING with a wait (the rule of
+   * persistence blend. The reading in force must be OPERATING with a wait (the rule of
    * `ForecastArchiveService.liveWaits`): a ride that just went DOWN still carries its last
    * wait, and blending toward it would serve a queue that is not there (PAR-1029).
    * Non-fatal: a missing anchor just leaves that ride's forecast raw.
@@ -2744,7 +2745,7 @@ export class MLService {
    * query that touches `attractions` — nearly every API read — queues behind
    * it. The policy waited for its full five-minute `max_runtime`, 25 times in a
    * row on 2026-10-07/08, and each time ~30–70 API queries finished in the same
-   * second the attempt gave up (docs/troubleshooting/db-health-runbook.md §0b).
+   * second the attempt gave up (docs/troubleshooting/timescaledb-lock-queues.md).
    *
    * Three things make this version safe:
    *

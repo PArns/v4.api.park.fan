@@ -1,7 +1,8 @@
 # A ride that has not run yet today (`notRunToday`)
 
-Added 2026-10-05 (PAR-157's pull request). On the park payload's attractions and
-on the attraction detail response:
+The contract for the neutral "not in operation yet today · last ran …" line: when the
+API sets `notRunToday`, what `lastRunAt` is, and why it is never an outage (PAR-157).
+On the park payload's attractions and on the attraction detail response:
 
 ```json
 "notRunToday": { "lastRunAt": "2026-10-04T16:00:00.000Z" }

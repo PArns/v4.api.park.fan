@@ -1,7 +1,8 @@
 # Changelog fragments
 
 One file per pull request. Write your entry here, **not** into
-`docs/changelog.md`.
+`docs/changelog.md`: entries written straight under `## [Unreleased]` made any
+two open pull requests conflict on the same line (PAR-257).
 
 ```
 docs/changelog.d/PAR-257.md
@@ -28,6 +29,11 @@ What changed, why it was wrong before, and the number that says so.
   a Markdown parser, so the check refuses both. No entry in `docs/changelog.md`
   uses one; if you want to separate something, use a blank line.
 - Inside a fenced code block both are fine. The fence has to be closed.
+- **Links are written relative to `docs/`**, where the merge puts the entry:
+  `[caching](architecture/caching-strategy.md)`, not `../architecture/…`. The
+  merge does not rewrite them, so a link relative to this directory breaks in
+  `docs/changelog.md`. Point at the page that holds the subject now, not at a §
+  number.
 
 `pnpm changelog:check` reports what it can read and what it rejects.
 `changelog-fragments.util.spec.ts` runs the same rules over this directory in
@@ -44,10 +50,3 @@ newest issue number first, and deletes the files it folded in. The entries
 already in `docs/changelog.md` are carried over as they stand; the only thing
 that changes is the run of blank lines directly under the heading, which becomes
 one.
-
-## Why
-
-Every entry used to be written directly under `## [Unreleased]`, so two pull
-requests open at the same time always touched the same line. On 2026-09-15 and
-2026-09-16 seven merges were sent back for a rebase and not one of them had a
-conflict outside `docs/changelog.md` (PAR-257).

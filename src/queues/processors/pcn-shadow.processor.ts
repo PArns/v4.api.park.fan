@@ -7,12 +7,13 @@ import { getPcnServiceUrl } from "../../config/ml-services.config";
 const pcnServiceUrl = getPcnServiceUrl;
 
 /**
- * PCN (Park-Crowd Nowcaster) intraday SHADOW orchestration.
+ * PCN (Park-Crowd Nowcaster) intraday orchestration. "Shadow" in the queue name is
+ * historical: the API serves pcn_forecasts whenever SERVE_PCN_INTRADAY is set
+ * (docs/ml/model-overview.md).
  *
  * Thin HTTP triggers for the Python pcn-service (which owns all the ML + DB work);
- * mirrors NfForecastProcessor. PCN runs in the shadow — it only writes pcn_forecasts /
- * pcn_intraday_comparisons; CatBoost stays the served champion until the shadow shows a
- * busy/headliner win (design doc §12).
+ * mirrors NfForecastProcessor. The service writes pcn_forecasts and the
+ * pcn_intraday_comparisons board (docs/ml/pcn.md#shadow-boards).
  *
  * - train-pcn: nightly per-park GP-STGNN training (GPU). Scheduled at 08:30 UTC, after
  *   TFT (starts 03:00, ~2.5h) and CatBoost (starts 06:00, ~45min) have both finished, so

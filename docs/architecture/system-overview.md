@@ -1,59 +1,44 @@
-# System Architecture
+# System overview
 
-## Overview
-
-The Park Fan API v4 is a microservices-based architecture designed for theme park wait time tracking, predictions, and analytics. It consists of a primary NestJS backend and a specialized Python machine learning service.
-
-![Architecture Diagram](https://mermaid.ink/img/pako:eNptkU9rwjAQxb9KyGkL9aDQU8FDbz30VmSPSQxjN5GkSyrWgfjdTezP4sE3LMz7zZt5M0KnNIKQ_D0pWqGtyY5K6z8lF5y_FpyjE4K_w5gLyeE1Xy6W8_liOcdLzM_Y4g0Wj9jiHh6u4R2Wd1jgEZb3eHyAF7g_wRusHuD1E7zD27eE0bZBa8oOjeaM0XpDObdG7dEazg2lDdpQzqyppNG7RiuD3pP2Bq0ZoxWlFdpQ9midQW9J24M2S_aonUHvSHtDqRmlDdoQdqjd_x1oDeuU0TqD3rP2Bm04e7TOoHekvaHUgtIGbYh7tM6gd6S9odSM0oboR-sMekfa27-xL62VHCW7J8flsN_vD4fTYTfoD_rddjMaRj38M4y67VbUa_fbTfxz1OniH91OqxkN43b02_8B9oyw7w)
+The parts of the park.fan API and how a wait time travels through them. Open this first when you are
+new to the repo; each section links the page that owns the detail.
 
 ## Components
 
-### 1. API Service (NestJS)
-The core backend service responsible for:
-- REST API endpoints (`/v1/...`)
-- Business logic and orchestration
-- Data ingestion and normalization
-- Background job processing (BullMQ)
-- Serving static data (parks, attractions)
+| Component | What it is | Owner page |
+| --- | --- | --- |
+| **API** (`src/`) | NestJS: the `/v1/...` REST API, ingestion, analytics, background jobs on Bull (`@nestjs/bull`, `bull` 4) | this page |
+| **ml-service** | Python FastAPI + CatBoost: intraday 15-min slots and the daily forecast beyond TFT's horizon; trains daily 06:00 UTC | [CatBoost](../ml/catboost.md); what serves what: [model overview](../ml/model-overview.md) |
+| **nf-service** | Python: TFT near-term daily forecast (`tft_forecasts`) and the Chronos-2 shadow | [TFT](../ml/tft.md) |
+| **pcn-service** | Python: PCN intraday shadow forecast (`pcn_forecasts`) | [PCN](../ml/pcn.md) |
+| **ml-bench** | offline benchmark, not deployed | [ml-bench](../ml/ml-bench/README.md) |
+| **PostgreSQL + TimescaleDB** | all data; `queue_data` and the other time series are hypertables | [Schema](../database/schema.md) |
+| **Redis** | response and analytics caches, Bull queues (prefix `BULL_PREFIX`, default `parkfan`) | [Caching](caching-strategy.md), [Job queues](job-queues.md) |
+| **bull-board** | queue dashboard, its own container (port 3001) | [Job queues](job-queues.md) |
 
-**Key Modules:**
-- `Analytics`: P50 + P90 baseline calculations, typical-day-peak (calendar) / ratio-vs-P50 (live) crowd levels (see [Crowd Levels](../analytics/crowd-levels.md))
-- `Queue Data`: Raw wait time ingestion
-- `ML`: Client for Python ML service
-- `Enrichment`: Aggregating data for responses
+The Compose files (`docker-compose.yml`, `docker-compose.production.yml`) run all of them on the
+internal `parkfan-network`; the API reaches the Python services over HTTP (`ML_SERVICE_URL` …).
+Deployment: [Coolify](../deployment/coolify.md).
 
-### 2. ML Service (Python)
-A lightweight FastAPI microservice dedicated to machine learning tasks.
-- **Framework**: FastAPI, CatBoost
-- **Responsibility**: Predict wait times based on historical data, weather, and schedules.
-- **Communication**: Internal HTTP calls from NestJS service.
+Main API modules: `parks` (park payload, calendar, `/plan/day`, schedules, weather), `attractions`,
+`queue-data` (ingestion and live status), `analytics` (P50/P90 baselines, crowd levels, statistics),
+`ml` (client for the Python services, prediction storage), `holidays`, `search`, `discovery` /
+`location` / `favorites`, `push` / `trips` / `ride-alerts` / `show-follows`, `admin`, `queues`
+(processors and the scheduler).
 
-### 3. Database (PostgreSQL + TimescaleDB)
-Primary data store.
-- **Extensions**: TimescaleDB (implied for time-series optimization).
-- **Entities**: Parks, Attractions, QueueData, Weather, Schedules.
-- **Cache tables**: Precomputed analytics — `park_p50_baselines`, `park_p90_baselines`, `attraction_p50_baselines`, `attraction_p90_baselines`, `attraction_hourly_history`, `park_daily_stats`, `queue_data_aggregates`. See [Caching Strategy](caching-strategy.md) and [Schema](../database/schema.md).
-- **ORM**: TypeORM (with `synchronize: true` in dev).
+## How a wait time flows
 
-### 4. Redis
-High-performance data structure store used for:
-- **Caching**: API responses, calculated stats.
-- **Queues**: BullMQ backing for background jobs.
-- **Pub/Sub**: Real-time event propagation.
+1. **Ingest** — `WaitTimesProcessor` (every 5 min) fetches every source a park has
+   ([data ingestion](data-ingestion.md)) and writes changed readings to `queue_data`; parks whose feeds
+   stopped are handled by [reverse reconciliation](reverse-reconciliation.md).
+2. **Derive** — nightly jobs build baselines, rollups and seasonality
+   ([job queues](job-queues.md)); crowd levels follow [one rule](../rules/crowd-levels.md).
+3. **Predict** — the API asks the Python services and stores the answers
+   ([ML overview](../ml/ml-overview.md)).
+4. **Serve** — `ParkIntegrationService` / `AttractionIntegrationService` build the payloads, cached
+   in Redis and warmed after every sync; a write is published
+   [outside-in](../rules/publish-outside-in.md) to the frontend.
 
-## Data Flow
-
-1. **Ingestion**: Scrapers/Clients send raw wait times to `QueueDataService`.
-2. **Processing**: 
-   - Data is stored in Postgres.
-   - `AnalyticsService` calculates current stats.
-   - `MLService` is queried for future predictions.
-3. **Serving**: 
-   - API builds rich responses using `ParkIntegrationService`.
-   - Responses are cached in Redis.
-
-## Infrastructure
-
-- **Docker Compose**: Orchestrates all services for dev and prod.
-- **Networks**: Internal `parkfan-network` isolates database and ML service.
-- **Volumes**: Persistent storage for DB, Redis, and ML models.
+Status rules for what a ride or day reads: [attraction status](attraction-status/README.md),
+[calendar rules](calendar-schedule-and-ml-rules.md). Time is always park time
+([rule](../rules/park-timezone.md)).

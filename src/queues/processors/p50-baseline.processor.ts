@@ -29,7 +29,7 @@ import { mapWithDbBudget } from "../../common/utils/db-job-budget";
  * Crowd-level regimes the API surfaces:
  * - Calendar/daily: a day's AVG-of-per-headliner-P90 ÷ the **typical-day-
  *   peak** baseline (100% = a typical day = moderate). See
- *   docs/analytics/crowd-level-typical-day-peak.md.
+ *   docs/analytics/crowd-levels.md.
  * - Live overview / getCurrentOccupancy and hourly predictions: ratio-vs-P50
  *   (current peak ÷ P50 baseline). P50 also feeds the ML occupancy feature.
  * P90 is computed for free (carries confidence/metadata) but is no longer

@@ -115,7 +115,7 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
  * It used to be a TimescaleDB retention policy and is not one any more —
  * `drop_chunks` locks every table the hypertable references (`attractions`)
  * ACCESS EXCLUSIVE, and the policy had no way to give up on that lock quickly.
- * See docs/troubleshooting/db-health-runbook.md §0b.
+ * See docs/troubleshooting/timescaledb-lock-queues.md.
  */
 export const PREDICTION_CHUNK_RETENTION_DAYS = 90;
 

@@ -1,10 +1,10 @@
 # The works period on a ride (`worksPeriod`)
 
-**What it answers:** is this ride closed for a rebuild or a refit somebody
-scheduled, and until when.
-
-Present on the attraction detail payload and on every ride in the park payload,
-so a ride list can badge without a second request.
+The contract for a ride's hand-curated rebuild or refit window: its shape, why it is
+never an outage, how to word it, and why "is it running today" is the client's
+comparison. Present on the attraction detail payload and on every ride in the park
+payload, so a ride list can badge without a second request. `/plan/day` leaves a ride
+out of a day inside the window ([plan-day availability](./plan-day/availability.md)).
 
 ```jsonc
 "worksPeriod": {
@@ -93,6 +93,5 @@ all. No feed announces a rebuild, so "no works period here" means nobody has
 curated one — never that the ride is running. Do not render a "läuft normal"
 line from it.
 
-`from` and `to` are stripped from the JSON when they are null, like every other
-null key outside `/v1/admin/*` (`ExcludeNullInterceptor`), so read them as
-optional even though the published schema documents both.
+`from` and `to` are optional although the published schema documents both: a null
+one is stripped ([conventions](./README.md#conventions-every-page-assumes)).

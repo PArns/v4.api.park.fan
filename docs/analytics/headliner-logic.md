@@ -1,79 +1,48 @@
-# Headliner Identification & Validation
+# Headliner identification
 
-> **Context**: To calculate accurate Crowd Levels, we compare wait times against a per-park baseline. The P50 (median) and P90 (peak) baselines are derived from "Headliner" attractions only — those best represent crowd flow. The system runs two regimes: **live** occupancy is ratio-vs-P50 (the reporting headliners' current minutes ÷ their P50 minutes), and the **calendar** is typical-day-peak (a day's averaged headliner P90 ÷ the typical-day-peak baseline). P50 + typical-day-peak are the references; P90 is computed for free but is no longer the crowd-level baseline. See [Crowd Levels](crowd-levels.md) for the full semantic.
+Which rides count as a park's headliners, the filters on the history they are chosen from, and what to
+check when a park's crowd level looks wrong. Headliners are the only rides in the park baselines and in
+the live park reading ([Crowd levels](crowd-levels.md)). Code: `AnalyticsService.identifyHeadliners`,
+run by the 03:00 UTC `calculate-park-baselines` job; result in `headliner_attractions`.
 
-## The 3-Tier Adaptive System
+## The history the selection reads
 
-Parks vary wildly in size and ride composition. A "one-size-fits-all" rule for selecting headliners fails for small parks. We use an adaptive 3-tier system.
+548 days of `queue_data` per ride, filtered to:
 
-### Tier 1: True E-Tickets (Major Parks)
-*Designed for Disney, Universal, Phantasialand.*
+- `queueType = 'STANDBY'`, `status = 'OPERATING'`;
+- `waitTime >= 10` and `< 380`. Queue-Times reports `waitTime = 1` for water slides and other "open, no
+  queue" attractions; counting it deflated P50s (Rulantica read 4.4 min instead of ~20) and made normal
+  days read `extreme`;
+- days whose park-level schedule row (`attractionId IS NULL`) is missing, `OPERATING` or `UNKNOWN`.
+  Any other type (`CLOSED`, `TICKETED_EVENT`, `PRIVATE_EVENT`, …) is excluded, which keeps off-season
+  data (Kennywood January–March) out of the baselines.
 
-- **Avg Wait**: > 20 minutes
-- **P90 Wait**: > 30 minutes
-- **Goal**: Select only the big mountains/coasters.
+## The tiers
 
-### Tier 2: Popular Rides (Regional Parks)
-*Designed for Heide Park, Six Flags.*
+Per ride: average wait, P50, P90 and operating days. Then, per park:
 
-- **Avg Wait**: Top 40% of all rides in the park
-- **Volatility**: P90 > 1.5x P50 (Indicates it gets busy)
-- **Goal**: Used if < 3 Tier 1 rides are found.
+| Tier                     | Criteria                                                                                          | Used when                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 1 (major parks)          | average > 20 min, P90 > 30 min, operating days > 60 % of the park's busiest ride's                | always                            |
+| 2 (regional parks)       | average in the park's top 40 %, P90 > 1.5 × P50, operating days > 60 % of the busiest ride's      | fewer than 3 tier-1 rides         |
+| 3 (small parks)          | average ≥ the park's median ride average                                                          | fewer than 3 in tier 1 and tier 2 |
+| Fallback                 | top 5 rides by P90 (same filters)                                                                 | the tiers found no ride at all    |
 
-### Tier 3: Any Operating Ride (Small Parks)
-*Designed for Local Parks.*
+A ride in several tiers keeps its best one. When tier 1 yields more than 10 rides, only the 10 with the
+highest average wait are kept (`MAX_TIER1_HEADLINERS`): borderline rides at 20–22 minutes diluted the P50
+baseline and the ML occupancy feature.
 
-- **Avg Wait**: Top 50% of all rides in the park (avg wait ≥ the park's median avg wait)
-- **Goal**: Used if < 3 rides found in Tier 1 & 2.
+New rides become headliners once they have the history; closed ones age out of the 548-day window. The
+set is recomputed every night.
 
-### Fallback Strategy (The "Nuclear Option")
-If even Tier 3 fails to find 3 attractions (e.g., extremely sparse data or tiny park):
-- **Force Select**: Top 5 attractions by historical P90 wait time.
-- **Constraint**: Must have avg wait ≥ 5 (same data-quality filter as all other tiers).
+## When a crowd level looks wrong
 
-## Data Quality Filters
-
-All tiers and the fallback apply these filters to historical wait-time data:
-
-### `waitTime >= 10` filter
-Queue-Times API reports `waitTime=1` for water-park slides and other "open but no queue" attractions (walk-on placeholder, not a real measurement). Including these values:
-- Inflates sample counts with non-representative data.
-- Deflates P50 baselines (e.g., Rulantica P50 was 4.4 min with placeholders vs ~20 min without).
-- Causes a systematic mismatch: real-time crowd level uses `minWaitTime=5` but baselines did not → "Extreme" level when rides are actually normal.
-
-**Rule**: All historical aggregations use `waitTime >= 10`. The real-time path already uses the same threshold.
-
-### Schedule JOIN (closed-day exclusion)
-Seasonal parks accumulate queue data during off-season months (e.g., Kennywood Jan–Mar, Canada's Wonderland winter). Without filtering, this off-season data depresses P50 baselines. Each wait-time sample is joined against the park-level schedule for that day:
-
-- **No schedule entry** → include (unknown = open).
-- **`OPERATING`** → include.
-- **Any other type** (`CLOSED`, `TICKETED_EVENT`, `PRIVATE_EVENT`, etc.) → exclude.
-
-```sql
-LEFT JOIN schedule_entries se
-  ON se."parkId" = a."parkId"
-  AND se.date = DATE(qd.timestamp AT TIME ZONE <park_timezone>)
-  AND se."attractionId" IS NULL
-WHERE qd."waitTime" >= 10
-  AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
-```
-
-The `attractionId IS NULL` condition selects park-level schedule rows only (not per-attraction entries).
-
-## Validation Checklist
-
-When investigating "weird" crowd levels (e.g., "Very Low" when it looks busy):
-
-1. **Check Headliners**: Are the right rides selected?
-   - Database: `SELECT * FROM headliner_attractions WHERE "parkId" = '...'`
-2. **Check Baseline**: Is the P50 value reasonable?
-   - Database: `SELECT * FROM park_p50_baselines WHERE "parkId" = '...'`
-   - *Example*: If P50 is 5 mins, the park will always look "Extreme". If P50 is 90 mins, it will always look "Very Low".
-3. **Check Real-Time Data**: Are the headliners actually operating?
-   - If all headliners are `DOWN`, the system falls back to available rides, which might skew comparisons.
-4. **Check Schedule**: Does today have a valid `OPERATING` schedule entry?
-   - `SELECT * FROM schedule_entries WHERE "parkId" = '...' AND date = CURRENT_DATE AND "scheduleType" = 'OPERATING'`
-   - If missing, `calculateCrowdLevelForDate` and the wait-time history chart fall back to midnight–23:59, which includes pre-opening and post-closing data and can depress crowd levels.
-
-**Attraction-level baselines:** Per-ride P50 + P90 baselines are stored in `attraction_p50_baselines` / `attraction_p90_baselines`. The live park reading sums the reporting headliners' current waits and divides by the sum of their **P50** baselines (a baseline-weighted mean, not a percentile across per-ride ratios — see [Crowd Levels § Migration Notes](crowd-levels.md#6-migration-notes)); the calendar averages each headliner's daily **P90** and divides by the typical-day-peak baseline. P90 is computed for free but is not itself the crowd-level reference. See [Crowd Levels](crowd-levels.md) for the full architecture.
+1. **Headliners**: `SELECT * FROM headliner_attractions WHERE "parkId" = '<park-uuid>';` Are these the
+   park's big rides?
+2. **Baselines**: `SELECT * FROM park_p50_baselines WHERE "parkId" = '<park-uuid>';` A P50 of 5 minutes
+   makes the park look `extreme` all the time, one of 90 makes it look `very_low`. A `NULL`
+   `typicalDayPeak` means the park is not ratable yet and reads `unknown`.
+3. **Live data**: are the headliners reporting? Only rides with a sample in the last 60 minutes enter the
+   live sums.
+4. **Schedule**: without an `OPERATING` row for the day, `calculateCrowdLevelForDate` reads the whole
+   park-local day (00:00–23:59), pre-opening and post-closing data included, which can depress the level.

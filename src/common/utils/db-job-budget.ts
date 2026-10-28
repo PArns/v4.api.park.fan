@@ -65,7 +65,7 @@ export class DbJobBudget {
 }
 
 /**
- * The shared budget. Sized well below `DB_POOL_SIZE` (default 30) so the
+ * The shared budget. Sized well below `DB_POOL_SIZE` (default 80) so the
  * request path keeps connections no matter how many jobs happen to overlap.
  */
 export const dbJobBudget = new DbJobBudget(

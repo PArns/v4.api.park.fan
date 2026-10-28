@@ -65,9 +65,8 @@ because both rows are real readers of the one page.
 
 The **address bucket** is an IPv4 address whole and an IPv6 address as its /64 (`addressBucket`,
 `src/common/utils/request.util.ts`): a host with a /64 can take a new address per request, so a cap
-on the full IPv6 address caps nothing. The address is `getRateLimitIp`: Cloudflare's
-`CF-Connecting-IP` only on a request that carries `CF_ORIGIN_SECRET` (`carriesCfOriginSecret`, the
-same test the throttler makes), otherwise the socket's.
+on the full IPv6 address caps nothing. The address is `getRateLimitIp`
+([which address that is](../deployment/edge-and-throttling.md#which-address-a-request-is)).
 
 **No address is stored**, in Postgres, in Redis or in the log. Each cap is a Redis counter
 (`page-views:seen:<hmac>`, `page-views:addr:<hmac>`) whose key is an HMAC-SHA256 under
@@ -111,54 +110,23 @@ come with name, context and URL.
 
 ## Performance and maintenance
 
-Measured on 2026-10-27 against PostgreSQL 18 (production runs `timescaledb:latest-pg18`), with the
-table exactly as TypeORM creates it, filled with a power-law spread over the real catalogue sizes
-(7,152 rides, 212 parks, ~100 guides, a news post every day and a half, read in the three weeks
-after it appears; German twice English, the rest smaller):
-
-| Data set                     | Rows  | Rows / day | Views / day | Heap   | Indexes |
-| ---------------------------- | ----- | ---------- | ----------- | ------ | ------- |
-| Today's traffic, one year    | 474 k | 1.3 k      | 1.9 k       | 40 MB  | 55 MB   |
-| Twenty times that, two years | 7.5 M | 10.3 k     | 39 k        | 656 MB | 955 MB  |
-
-| Query                                    | One year | Stress     | Plan                                       |
-| ---------------------------------------- | -------- | ---------- | ------------------------------------------ |
-| top, news, 7 days                        | 0.2 ms   | 0.15 ms    | index `(kind, locale, day)`                |
-| top, articles, 30 days                   | 1.7 ms   | 2 ms       | same                                       |
-| top, attractions, 90 days (worst public) | 17 ms    | 114 ms     | same, bitmap                               |
-| upsert of an existing row                | 0.3 ms   | 0.4 ms     | primary key                                |
-| admin: totals / per day, 90 days         | 37/23 ms | 260/240 ms | skip scan of `(kind, locale, day)` (PG 18) |
-| admin: ranking, 90 days                  | 165 ms   | 1.1 s      | one scan, two window functions             |
-| merge of the most read ride (+ delete)   | 53 ms    | 160 ms     | primary key, `(kind, key)` prefix          |
-
-The public rankings sit behind an hour of cache at Cloudflare and the frontend, so they run a few
-times an hour per kind and language. The admin ranking first joined a second scan back for the
-split by language; one pass with `SUM … OVER (PARTITION BY kind, key)` and `DENSE_RANK` gives the
-same rows (checked row for row) in 40 % of the time.
-
-**Key order.** The primary key is larger than the heap under stress, because `key` comes second and
-a day's rows land all over the index. `(kind, locale, day, key)` was tried, which appends and could
-drop the second index: 13 % smaller, but every query slower (articles 2 → 11 ms, the merge
-155 → 447 ms, the admin up to twice). The current order stays.
-
-**Updates and VACUUM.** Every counted view after a page's first that day updates the same row. One
-day of stress traffic (40,000 views, 25,000 rows) replayed view by view:
-
-| `fillfactor`  | HOT updates | Heap, one year |
-| ------------- | ----------- | -------------- |
-| 100 (default) | 7.6 %       | 40 MB          |
-| 90            | 31.7 %      | 45 MB          |
-| 80            | 57.2 %      | 51 MB          |
-| 70            | 77.3 %      | 58 MB          |
-
-A HOT update writes no index entry and is pruned on the page by the next read; the rest leave an
-entry in both indexes for VACUUM. A VACUUM after a day of stress traffic took 92 ms and read 1.6 %
-of the table, because the visibility map skips every older day. What was wrong was the trigger: at
-the default `autovacuum_vacuum_scale_factor` of 0.2 a table this size waits for 1.5 M dead rows,
-about a hundred days. So `PageViewsService.onModuleInit` sets `fillfactor=80` and
+**Storage options.** `PageViewsService.onModuleInit` sets `fillfactor=80` and
 `autovacuum_vacuum_scale_factor=0.01` (`PAGE_VIEW_STORAGE_OPTIONS`) once, when `pg_class.reloptions`
-lacks them; `synchronize` cannot express either. The table is not on the nightly VACUUM list
-(`VACUUM_TARGETS`): autovacuum handles it in milliseconds.
+lacks them; `synchronize` cannot express either. Every counted view after a page's first that day
+updates the same row: at fill 80, 57 % of those updates are HOT (no index entry, pruned on the page)
+against 8 % at the default, for a heap of 51 instead of 40 MB after a year. At the default scale
+factor of 0.2 autovacuum would wait for 1.5 M dead rows, about a hundred days; a VACUUM after a day
+of stress traffic takes 92 ms, because the visibility map skips every older day. The table is not
+on the nightly VACUUM list (`VACUUM_TARGETS`).
 
-Reproduce: the generator, the churn replay and the `EXPLAIN` set are plain SQL against a scratch
-database; the numbers above are from that run, not from production.
+**Key order.** `key` stays second in the primary key. `(kind, locale, day, key)` appends and could
+drop the second index (13 % smaller), but made every query slower (articles 2 → 11 ms, the merge
+155 → 447 ms, the admin up to twice). The admin ranking is one pass with
+`SUM … OVER (PARTITION BY kind, key)` and `DENSE_RANK` rather than a second scan for the language
+split (40 % of the time).
+
+**Size.** Measured 2026-10-27 on PostgreSQL 18 in a scratch database, filled with a power-law
+spread over the real catalogue sizes: today's traffic for a year is 474 k rows, 40 MB heap and
+55 MB indexes; the worst public ranking (attractions, 90 days) takes 17 ms and the admin ranking
+165 ms. Twenty times that traffic for two years (7.5 M rows) takes 114 ms and 1.1 s. The public
+rankings sit behind an hour of cache at Cloudflare and the frontend.

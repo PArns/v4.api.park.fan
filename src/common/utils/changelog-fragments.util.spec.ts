@@ -512,7 +512,7 @@ describe("readFragmentDirectory", () => {
  * merge the directory holds no fragments and it asserts over an empty set. The
  * fixtures above are the population that is never empty (📚 G-72). The other
  * three guard the three things a revert or a rename would take away without a
- * red test — the directory itself, the rule in `claude.md` with the two command
+ * red test — the directory itself, the rule in `CLAUDE.md` with the two command
  * names it promises, and the heading the merge folds under.
  */
 describe("the repository's own changelog directory", () => {
@@ -529,8 +529,8 @@ describe("the repository's own changelog directory", () => {
     expect(readFragmentDirectory(dir).problems).toEqual([]);
   });
 
-  it("is where claude.md sends a new entry, by the names package.json has", () => {
-    const rule = readFileSync(join(ROOT, "claude.md"), "utf8");
+  it("is where CLAUDE.md sends a new entry, by the names package.json has", () => {
+    const rule = readFileSync(join(ROOT, "CLAUDE.md"), "utf8");
     const readme = readFileSync(join(dir, "README.md"), "utf8");
     const { scripts } = JSON.parse(
       readFileSync(join(ROOT, "package.json"), "utf8"),

@@ -4,15 +4,16 @@ import type { OutageSignal } from "./attraction-outage.entity";
 /**
  * How long a running outage still has to go, as measured, never as predicted.
  *
- * ## What this answers, and why it is not the question §6 refuses
+ * ## What this answers, and why it is not the question `refused.md` refuses
  *
- * `docs/analytics/ride-downtime.md` §6 refuses "when will this ride break next,
+ * `docs/analytics/ride-downtime/refused.md#no-forecast-of-the-next-outage` refuses
+ * "when will this ride break next,
  * and for how long" on four independent grounds. This table answers a different
  * question — *it is broken right now; how long do outages like this one usually
  * last from here* — and the four grounds are why it is a separate table rather
  * than an extension of the profile:
  *
- * 1. **The arithmetic.** §6's is about a rate of p ≈ 0.006, which needs ~1300
+ * 1. **The arithmetic.** The refused forecast's is about a rate of p ≈ 0.006, which needs ~1300
  *    events per bin to pin down. Here the quantity is a conditional recovery
  *    share of p ≈ 0.15-0.5, measured on 5900-128000 intervals per bucket. At
  *    p = 0.15 and n = 5900 the standard error is 0.46 percentage points.

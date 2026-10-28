@@ -1,360 +1,87 @@
 # Curation
 
+The hand-written columns on parks and attractions: which exist, how reads merge them with the synced
+ones, how the admin editor is generated, how a write is published and undone, and how merges keep them.
+Open this before adding a curated column, writing curated data outside the admin, or touching a merge.
+Who may write: [authentication](authentication.md). The frontend editor: its `docs/features/admin.md`.
+
 ## The rule
 
-**Two writers, no shared cell.** A sync owns its column and overwrites it on
-every run. A human owns a parallel column. Reads merge them, curated first.
-
-Put a correction in a synced column and the next job run silently reverts it —
-which is not a hypothetical: it is why `curated_may_get_wet` and
-`curated_minimum_height` were the first two to exist.
+**Two writers, no shared cell.** A sync owns its column and overwrites it on every run; a human owns a
+parallel `curated_*` column; reads merge them, curated first. A correction in a synced column is silently
+reverted by the next run — which is why `curated_may_get_wet` (the wiki fills `may_get_wet` for a few
+dozen of ~7,000 rides, sometimes wrongly) and `curated_minimum_height` (the wiki conflates "must be this
+tall" with "needs an adult below this") were the first two. The general form:
+[absent facts](../rules/absent-facts.md).
 
 ## What is curated
 
 ### Attractions
 
-| Curated column            | Corrects          | Written by                            |
-| ------------------------- | ----------------- | ------------------------------------- |
-| `curated_name`            | `name`            | ThemeParks.wiki sync                  |
-| `curated_land_name`       | `land_name`       | Queue-Times sync                      |
-| `curated_attraction_type` | `attraction_type` | sync                                  |
-| `curated_minimum_height`  | `minimum_height`  | children-metadata / six-flags-heights |
-| `curated_maximum_height`  | `maximum_height`  | children-metadata                     |
-| `curated_may_get_wet`     | `may_get_wet`     | children-metadata                     |
-| `curated_is_seasonal`     | `is_seasonal`     | the nightly `detect-seasonal` job     |
-| `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
+| Curated column | Corrects | Synced by |
+| --- | --- | --- |
+| `curated_name` | `name` | ThemeParks.wiki sync |
+| `curated_land_name` | `land_name` | Queue-Times sync |
+| `curated_attraction_type` | `attraction_type` | sync |
+| `curated_minimum_height`, `curated_maximum_height` | `minimum_height`, `maximum_height` | children metadata / `six-flags-heights` |
+| `curated_may_get_wet` | `may_get_wet` | children metadata |
+| `curated_is_seasonal`, `curated_season_months` | `is_seasonal`, `season_months` | `detect-seasonal` ([seasonality](../architecture/attraction-status/seasonality.md)) |
+| `attraction_ride_profiles.curated_stats` | `attraction_ride_profiles.stats` | `ride-stats` (Wikidata importer) |
 
-Human-only, with no sync behind them: `attraction_kind`, `indoor_outdoor`, `has_single_rider`,
-`has_virtual_line`, `open_with_park`, `rcdb_id`, `retired_at` / `retired_reason` / `retired_kind`, the three
-fast-pass columns below, and the whole `attraction_ride_profiles` table except
-its `stats` column.
+Human-only, nothing syncs them: `attraction_kind` ([attraction kind](../frontend/attraction-kind.md)),
+`indoor_outdoor` ([indoor/outdoor](../frontend/indoor-outdoor.md)), `has_single_rider`,
+`has_virtual_line`, `open_with_park`, `rcdb_id`, the works period `curated_out_of_service_from` / `_to` /
+`_to_uncertain` ([works period](../frontend/works-period.md)), `retired_at` / `retired_reason` /
+`retired_kind`, the fast-pass columns below, and the rest of `attraction_ride_profiles`
+([ride ↔ glossary](../frontend/ride-glossary-link.md)).
 
-`attraction_kind` is the odd one in that list, because it sits next to a synced
-column it does **not** correct. `attraction_type` is the feed's free text —
-empty in practice, one value across ~7,400 rows — and `attraction_kind` is a
-closed set we decide: `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE` (a scare-actor walk-through that
-runs only during a Halloween event). Both stay, so
-an editor can record that Queue-Times calls something a "Family Ride" and that
-it is in fact a railway. It is also the first enum on the attraction half; every
-other one describes a park.
+`attraction_kind` sits beside `attraction_type` without correcting it: the feed's free text (one value
+across ~7,400 rows) against a closed set we decide (`RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE`).
+The one job allowed to write it, into a blank only, is the [maze rule](../architecture/attraction-status/maze-rule.md).
 
-#### `has_virtual_line` and its seed
-
-The column answers "does this ride work by return time or boarding group at
-all", which is not the same question the `queues` array answers and cannot be
-read off it: a virtual line handing out nothing at this moment publishes no
-queue, so the ride reads as plain CLOSED. Efteling's Danse Macabre is the
-reported case. The live badge built from `RETURN_TIME` / `BOARDING_GROUP` stays
-where it is — one is the ride's layout, the other is today's reading of it.
-
-Seeded like `has_single_rider`, from the rides that have ever reported one. This
-has not been run yet; it is written down here so that the run is reviewable
-rather than reconstructed afterwards. The run itself is PAR-440, which carries
-the counts below as its before-numbers.
-
-**It cannot run before the change that adds the column is deployed.** The repo
-has no migrations, so `has_virtual_line` appears when TypeORM's `synchronize`
-next connects — production runs with `DB_SYNCHRONIZE=true`, confirmed on the
-running container on 2026-09-22, despite `docs/deployment/coolify.md` telling
-you to set it to `false` (PAR-399). Adding the column by hand instead is not an
-option worth taking: a schema change outside the deploy path buys nothing that
-the next container start does not.
-
-**Counted against production on 2026-09-22, the three types move 140
-attractions** — 139 of them not retired, out of 7,301 that have any `queue_data`
-row at all. The whole pass takes **14.5 s**. Two of those numbers are worth
-keeping:
-
-- `VIRTUAL_QUEUE` matches **zero** rows in the entire history. Nothing has ever
-  been written with it, which is the other half of the dead-branch finding: the
-  switch ignored the value and no payload ever carried it. `RETURN_TIME` alone
-  carries the seed; `BOARDING_GROUP` matches 2 rides, both of which report
-  `RETURN_TIME` as well, so the union stays 140.
-- `SINGLE_RIDER` matches **48**, the same count `has_single_rider` was seeded
-  from months ago (`docs/changelog.md:3164`). The method reproduces its own
-  earlier result.
-
-Efteling's Danse Macabre — the reported case, and the reason to check before
-running rather than after — reports `RETURN_TIME` across 36,076 rows and is in
-the 140.
-
-**Two steps, run separately.** Step 1 writes nothing; you read its number and
-decide whether step 2 goes ahead. Pasting both at once defeats the point.
-
-```sql
--- Step 1 — build the set and count what the write would touch.
--- One pass over queue_data, not a correlated lookup per attraction. See below.
-\set ON_ERROR_STOP on
-
-DROP TABLE IF EXISTS pg_temp.virtual_line_rides;
-CREATE TEMP TABLE virtual_line_rides AS
-SELECT DISTINCT qd."attractionId" AS id
-FROM queue_data qd
-WHERE qd."queueType"::text IN ('RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE');
-
-SELECT count(*) FROM attractions a
-WHERE a.has_virtual_line IS NULL
-  AND a.id IN (SELECT id FROM virtual_line_rides);
--- 140 on 2026-09-22. Stop and read if it differs.
-```
-
-```sql
--- Step 2 — same session, only once the count above is what you expected.
-BEGIN;
-
-UPDATE attractions a
-SET has_virtual_line = true
-WHERE a.has_virtual_line IS NULL
-  AND a.id IN (SELECT id FROM virtual_line_rides);
-
-COMMIT;
-```
-
-Five things in it are load-bearing, and the first three were got wrong before
-they were got right.
-
-**`a.id`, not `a.id::text`.** This is the one that decides whether the statement
-runs at all, and it read the wrong way round until it was tried: with the cast,
-the whole `UPDATE` aborts on `operator does not exist: text = uuid` and writes
-nothing. `queue_data."attractionId"` is `uuid` in the database. The entity used to say
-`@Column({ type: "text" })`, but the column is created by the relation's
-`@JoinColumn`, and the decorator beside it did not change that (PAR-721 made the
-entity say `uuid`) — the repo documents this trap in three places of
-its own (`plan-day.service.ts:1458`,
-`park-historical-stats.service.ts:649-651`,
-`prediction-lead-snapshot.entity.ts:64-71`), one of which records it shipping
-exactly that way. `CREATE TABLE AS` inherits the column type, so the temp
-table's `id` is `uuid` too and both sides already match. Reproduced against
-production on 2026-09-22 with `count(*)` in place of the `UPDATE`: the cast
-errors out, and without it the count is 140.
-
-**`::text` on the enum column, not a bare literal.** `queue_data."queueType"` is
-a Postgres enum type. `'VIRTUAL_QUEUE'` is a member of the TypeScript enum, but
-it only exists in the database type if `synchronize` has run the `ALTER TYPE`
-since it was added — and until this change nothing ever wrote that value. On a
-database whose type predates it, comparing a bare literal does not merely fail
-to match: it aborts the whole statement with
-`invalid input value for enum queue_data_queuetype_enum: "VIRTUAL_QUEUE"`.
-Casting to text removes the dependency and still matches every real row.
-Production is not such a database — checked on 2026-09-22, its enum type already
-carries the label, because `synchronize` ran the `ALTER TYPE` when the value was
-added to the TypeScript enum, long before anything tried to write it. The cast
-stays anyway, because it is what makes the statement safe to paste into an
-instance whose type predates the value — but it is not free: casting the column
-makes the predicate non-sargable and rules out
-`@Index(["queueType", "status", "timestamp"])` (`queue-data.entity.ts:49`). For
-this statement that changes nothing, since it reads every chunk regardless. In a
-query that could have used the index, drop the cast and name the enum values
-directly.
-
-**`has_virtual_line IS NULL`** is what makes the `UPDATE` safe to run twice.
-Without it, a re-run overwrites an editor's hand-written `false` — the ride whose
-feed once published a return time and whose park has since stopped running one —
-with `true`.
-
-**Step 1 has to be re-runnable too**, which is what `DROP TABLE IF EXISTS
-pg_temp.virtual_line_rides` is for: the temp table deliberately outlives step 1
-so that step 2 writes against the set you just counted, and a second attempt in
-the same session would otherwise fail on `relation … already exists`. The
-schema qualifier matters — bare `virtual_line_rides` resolves through the rest
-of the `search_path` if no temp table is there. `\set ON_ERROR_STOP on` stops
-`psql` from reading on past a failed statement; inside step 2 the server aborts
-the transaction by itself, so it earns its place in step 1, not step 2.
-
-**Counting first is the point of splitting the two**, not decoration. A count
-that sits between `BEGIN` and an unconditional `UPDATE` is not a gate — it
-scrolls past after the write has already happened. Here it is a separate step
-whose number you read before deciding.
-
-**One pass, not `EXISTS` per row.** `queue_data` is a hypertable that compresses
-after 30 days with no `compress_segmentby` (`src/database/hypertables.ts`), and
-nothing prunes it, so "has ever reported" reaches back through every compressed
-chunk. A correlated `EXISTS` asks that question once per attraction, against an
-index that does not exist on a compressed chunk. The `DISTINCT` pass asks it
-once in total. Run it in a quiet window either way.
-
-**The quoted identifiers are the physical names.** Neither `attractionId` nor
-`queueType` declares a `name:` on the entity, so TypeORM stores them camelCase
-while `has_virtual_line` is snake_case; an unquoted identifier folds to lower
-case and does not exist.
-
-It seeds `true` only. A ride with no such row is left null — "nobody looked",
-which is what the API serves and what the ride page must not render as "no
-virtual line".
-
-**`PAID_RETURN_TIME` is deliberately not in the list. Confirmed on 2026-09-22:
-three types, not four.** PAR-385 named it alongside the other three. It is a
-return window, so on the wording it belongs; but it is the _paid_ one — Genie+,
-Lightning Lane, Express — and that product already has three columns of its own
-(`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would make
-the column mean "has a return window of some kind" rather than "you join this
-instead of standing in the queue", which is what its own docstring and the ride
-page's badge claim. The three above are unambiguous. The statement that would
-add the fourth is kept here as the record of what was weighed, not as a step to
-run:
-
-```sql
--- Not part of the seed. Kept because it is how the 55 and the 36 below were got.
-SELECT count(DISTINCT qd."attractionId")
-FROM queue_data qd
-WHERE qd."queueType"::text = 'PAID_RETURN_TIME';
-```
-
-**Measured on 2026-09-22, that is 55 rides, of which 36 report none of the other
-three** — so the fourth type would take the seed from 140 to 176. Every one of
-the 36 is in a Disney park, and they sit in **ten** of them: Disneyland Park
-(Paris) 11, Disney Adventure World 8, Tokyo DisneySea 7, Tokyo Disneyland 3,
-Magic Kingdom 2, and one each in Disneyland Park (Anaheim), Disney California
-Adventure, Animal Kingdom, Hollywood Studios and EPCOT. None is at Universal.
-
-This paragraph read "Disneyland Paris 12" and named nine parks until 2026-09-25,
-because **two parks are called `Disneyland Park`** — Paris and Anaheim, sharing
-the slug `disneyland-park` — and grouping by the name folded Anaheim's one ride
-into Paris's eleven. Group by `parks.id`; the name is not a key and neither is
-the slug.
-
-The list of names is the argument, not the count. It holds
-`"it's a small world"`, `Pirates of the Caribbean`, `Big Thunder Mountain`,
-`Peter Pan's Flight`, `Phantom Manor`, `Orbitron®` and `Autopia` — rides with an
-ordinary standby queue that additionally sell a return window, not rides you
-board by return time. That is the distinction the column is for.
-
-**Two things cut the other way, and the second is the harder one.**
-
-All 36 have `has_fast_pass` **NULL**. The fast-pass columns this argument defers
-to are not populated for these rides, so leaving `PAID_RETURN_TIME` out moves
-the fact into an empty field rather than the right one. That gap is PAR-386's to
-audit, not this seed's to paper over.
-
-And the premise itself — "the fast-pass columns are where the paid product
-lives" — is not what this repo models. `fast-pass.util.ts` says the opposite in
-as many words: "**Zero is free** … Europa-Park's Virtual Line is a queue-jump
-product included with admission", and `docs/frontend/fast-pass.md` repeats it
-for the renderer. A price of `0` is a positive claim, not a missing one. So
-`has_fast_pass` already holds free queue-jump products, and the new column is
-named after one of them.
-
-That is measurable, and it lands squarely on the seed. Counted on 2026-09-22,
-production has **83** rides with `has_fast_pass = true`, of which **7** carry
-`fast_pass_price = 0` — Euro-Mir, Pirates in Batavia, Voletarium, Voltron
-Nevera, WODAN, Poseidon and blue fire, all at Europa-Park. **All 7 are in the 140.** After the seed they assert the same fact in two columns: a free
-queue-jump product in the fast-pass group, and a virtual line in Ausstattung.
-
-So the open question is wider than "does `PAID_RETURN_TIME` count". It is where
-the line between `has_virtual_line` and `has_fast_pass` runs, and the answer
-decides whether those 7 rides are a duplication to resolve or two true
-statements about the same ride.
-
-**Answered on 2026-09-22: two true statements.** A ride can have a virtual line
-and that line can be free, and the seed writing both is not a contradiction to
-undo. Nothing here changes; the seed runs with its three types.
-
-**And answered on 2026-09-25 (PAR-386): the 36 are filled in, in
-`has_fast_pass`.** That is where the line between the two columns runs — a
-`PAID_RETURN_TIME` window is the park's paid queue-jump product, so it is
-recorded as one; `has_virtual_line` keeps its three types and none of the 36 got
-one. `fast_pass_price` stays empty on all 36, because Disney prices this per day
-and a frozen number would be wrong most days, which is the same rule
-`resolvePrice` states for the whole product family.
-
-The audit that found them, and the one to re-run. It is written as the whole
-picture rather than one gap, because every number in this section is a `FILTER`
-over the same join and reading them apart is how the 140 and the 36 got
-conflated in the first place:
-
-```sql
-WITH sig AS (
-  SELECT qd."attractionId" AS aid,
-         count(*) FILTER (WHERE qd."queueType"::text
-           IN ('RETURN_TIME','BOARDING_GROUP','VIRTUAL_QUEUE')) AS n_vl,
-         count(*) FILTER (WHERE qd."queueType"::text
-           = 'PAID_RETURN_TIME')                                AS n_paid
-  FROM queue_data qd
-  WHERE qd."queueType"::text
-    IN ('RETURN_TIME','BOARDING_GROUP','VIRTUAL_QUEUE','PAID_RETURN_TIME')
-  GROUP BY 1
-)
-SELECT count(*) FILTER (WHERE n_vl > 0)                     AS vl_types_any,
-       count(*) FILTER (WHERE n_paid > 0)                   AS paid_any,
-       count(*) FILTER (WHERE n_paid > 0 AND n_vl = 0)      AS paid_only,
-       -- the two gaps: a seeded column that missed a ride, and a paid-only
-       -- window recorded in neither column
-       count(*) FILTER (WHERE n_vl > 0
-         AND a.has_virtual_line IS NOT TRUE)                AS vl_gap,
-       count(*) FILTER (WHERE n_paid > 0 AND n_vl = 0
-         AND a.has_fast_pass IS NULL)                       AS fp_gap,
-       -- every paid window without a fast pass, virtual line or not
-       count(*) FILTER (WHERE n_paid > 0
-         AND a.has_fast_pass IS NULL)                       AS fp_gap_all
-FROM sig JOIN attractions a ON a.id = sig.aid;
-```
-
-Run against production on 2026-09-25, before and after the write:
-
-```
-        | vl_types_any | paid_any | paid_only | vl_gap | fp_gap | fp_gap_all
-before  |          140 |       55 |        36 |      0 |     36 |         55
-after   |          140 |       55 |        36 |      0 |      0 |         19
-```
-
-**`fp_gap` is the narrow one, and `fp_gap_all` is why it needs the adjective.**
-`fp_gap` asks only about the rides that report a paid window and nothing else,
-which is the set PAR-386 was given and the set that is now closed.
-**`fp_gap_all` still reads 19**: those are rides that report a paid window
-_and_ one of the three free types, so the seed already gave them
-`has_virtual_line = true` and the paid product they also sell is recorded
-nowhere. Measured on 2026-09-25, all 19 are exactly that — `has_virtual_line`
-true, `has_fast_pass` NULL, no exceptions. Deliberately left alone here: the
-decision of 2026-09-25 named the 36. PAR-539 carries the 19.
-
-`paid_only` stays 36 — it counts the rides, not the work left on them — so a
-later run that sees 36 there has found nothing. `vl_gap` is the seed's own
-check and was already zero. It asks `IS NOT TRUE` rather than `IS NULL`, which
-is the wording of the acceptance criterion it came from; a hand-set
-`has_virtual_line = false` would show up in it as a gap that is not one.
-
-The brand had to be written first. `has_fast_pass = true` on a park with no
-`curated_fast_pass_name` publishes the neutral **"Fast Pass"**, so the eight
-Disney parks outside Paris got theirs in the same run: Tokyo Disneyland and
-Tokyo DisneySea **Disney Premier Access** (`premier-access`), the six US parks
-**Lightning Lane** (`lightning-lane`). The two Paris parks already carried
-Disney Premier Access. No currency was written, because no price was.
+**`has_virtual_line`** means "this ride works by return time or boarding group at all", which the `queues`
+array cannot say (a virtual line handing out nothing right now publishes no queue, so Efteling's Danse
+Macabre read as plain CLOSED). It was seeded `true` from the rides that ever reported `RETURN_TIME`,
+`BOARDING_GROUP` or `VIRTUAL_QUEUE` (140 rides, 2026-09-22; `VIRTUAL_QUEUE` has never been written); a ride
+without one stays null — "nobody looked". **`PAID_RETURN_TIME` is not a virtual line:** it is the park's
+paid queue-jump product (Genie+, Lightning Lane, Express), recorded in `has_fast_pass` (PAR-386, 36 rides
+filled 2026-09-25, no price because Disney prices per day). A ride can rightly carry both (Europa-Park's
+free Virtual Line: `has_virtual_line` and `has_fast_pass` with price 0). Open: 19 rides that report both a
+paid window and a free type have the paid product recorded nowhere (PAR-539).
 
 ### Parks
 
-Corrections to a synced column: `curated_name`, `curated_park_type`. Plus
-`curated_no_wait_times_reason`, `curated_uses_twelve_hour_clock` and the
-internal `curation_note`. Before this there were none at all — the only
-park-level curation was a hardcoded list in `live-wait-time-sources.ts`.
+| Group | Columns |
+| --- | --- |
+| Corrections of a synced column | `curated_name`, `curated_park_type` |
+| Behaviour | `curated_no_wait_times_reason` ([parks we cannot read](../frontend/live-wait-times-availability.md)), `curated_uses_twelve_hour_clock` (below) |
+| Early entry | `curated_has_early_entry`, `curated_early_entry_minutes_peak`, `curated_early_entry_minutes_off_peak` |
+| Fast pass | `curated_fast_pass_name`, `curated_fast_pass_price_from`, `curated_currency`, `curated_fast_pass_term_id` |
+| Links | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url` |
+| Contact, facts | `curated_street_address`, `curated_postal_code`, `curated_phone`, `curated_opened_year`, `curated_area_hectares` |
+| Grammar | `curated_article_de` (German nominative article; another language gets its own column) |
+| Internal | `curation_note` |
 
-**Early entry** is three human-only columns, `curated_has_early_entry` (boolean),
-`curated_early_entry_minutes_peak` and `curated_early_entry_minutes_off_peak`
-(both `int`, minutes before `openHour`). They carry the `curated_` prefix although
-no sync writes them, because the park column list, the merge and the editor all
-key on it. No feed states early entry, so there is nothing to correct. The
-payload keys drop the prefix: `/v1/parks/:slug/plan/day` adds `hasEarlyEntry`,
-`earlyEntryMinutesPeak` and `earlyEntryMinutesOffPeak` to `context`, and only
-when the flag is `true`. `false` (checked, none) and `null` (not checked) both
-leave the keys out, and minutes that are not positive whole numbers are dropped.
-Peak and off-peak have no calendar behind them: the editor writes whichever
-value holds now (Europa-Park: 45 minutes at an 8:15 opening, 15 at 8:30). The
-rides it applies to are the park's `isHeadliner` ones. The columns are nullable
-on a populated table, so `synchronize` adds them without a backfill.
+Human-only columns still carry the `curated_` prefix because the park column list, the merge and the
+editor key on it.
 
-**`curated_uses_twelve_hour_clock` is the odd one**, and worth knowing about
-before somebody looks for it in a payload: it changes what is _ingested_, not
-what is served. A source that publishes a 12-hour clock unlabelled reports a
-midnight close as `12:00`, and `normalizeClosingTime` cannot repair that — it
-trusts the time-of-day and fixes the date, while here the time-of-day is the
-part that is wrong. The only signal separating it from a park that genuinely
-closes at noon is the closing falling _before_ the opening, which the
-re-anchoring consumes. So the flag runs first, on the raw pair, and only for a
-park somebody has written it on: see `correctTwelveHourClockClose`
-(`src/common/utils/operating-window.util.ts`).
+- **Early entry** (minutes before opening, on the park's `isHeadliner` rides) reaches
+  `/v1/parks/:slug/plan/day` `context` as `hasEarlyEntry`, `earlyEntryMinutesPeak`,
+  `earlyEntryMinutesOffPeak`, only when the flag is `true`; `false` (checked, none) and `null` both leave
+  the keys out, and non-positive minutes are dropped. Peak/off-peak have no calendar behind them: write
+  what holds now (Europa-Park: 45 at an 8:15 opening, 15 at 8:30).
+- **Links, contact and facts** reach the park **detail** payload as one `info` object (`resolveParkInfo`),
+  `null` until one is written; never the listings (re-downloaded every five minutes). One website, not one
+  per locale. A URL is parsed (`new URL()`, `http:`/`https:` only), because a stored `javascript:` URL
+  would be cross-site scripting on a public page.
+- **Timezone is deliberately not curated**: `timezone` is read at ~200 call sites, and a correction
+  resolved only in the DTO would leave the calendar underneath wrong.
 
-Set it from the audit query, never on a hunch — a blanket "reinterpret 12:00"
-would rewrite every legitimate noon closing in the catalogue, and water parks
-and Christmas markets have those:
+**`curated_uses_twelve_hour_clock` changes what is ingested, not what is served.** A source publishing an
+unlabelled 12-hour clock reports a midnight close as `12:00`; `normalizeClosingTime` trusts the time and
+fixes the date, so only the flag repairs it, on the raw pair, before normalisation
+(`correctTwelveHourClockClose`, `src/common/utils/operating-window.util.ts`). Set it from evidence, never
+a hunch — a blanket rule would rewrite every real noon closing (water parks, Christmas markets):
 
 ```sql
 SELECT p.name, s.date,
@@ -366,153 +93,167 @@ WHERE (s."closingTime" AT TIME ZONE p.timezone)::time = '12:00:00'
       > (s."openingTime" AT TIME ZONE p.timezone)::date;
 ```
 
-Measured against production on 2026-09-11 that returns **five rows in one park**
-— Six Flags Qiddiya City, 2026-04-17 through 05-15, stored as a 21-hour day.
-
-**It finds candidates, not cases, and the difference can cost you a curation.**
-The query reads _stored_ rows, which are post-normalization, and two different
-raw shapes land on an identical stored row:
-
-| What the source sent                    | What `normalizeClosingTime` did              | Stored | Flag fires |
-| --------------------------------------- | -------------------------------------------- | ------ | ---------- |
-| close `12:00` on the **opening's** date | before opening → re-anchored, rolled forward | 21 h   | **yes**    |
-| close `12:00` on the **next** date      | nothing — 21 h is a plausible window         | 21 h   | **no**     |
-
-`correctTwelveHourClockClose` needs the raw closing to precede the raw opening,
-and normalization has already overwritten the one value that says whether it
-did. Written on the second kind, the column does nothing at all, silently: the
-next sync rewrites the same 21-hour day and no log line mentions it.
-
-So before flagging a _new_ park, read the source's own payload for one of the
-days (`https://api.themeparks.wiki/v1/entity/{externalId}/schedule`) and look at
-the closing's **date**, not only its time. Afterwards, confirm against the next
-sync that the row actually moved. For Qiddiya the raw shape is on record —
-`opens 15:00 / closes 12:00`, same date, from the 2026-07-27 sweep in `todo.md`
-— which is the first kind.
-
-The flag does not rewrite stored rows either way; it changes what the next sync
-of that park writes.
+It finds candidates, not cases (2026-09-11: Six Flags Qiddiya City, five 21-hour days). Two raw shapes
+store identically: a `12:00` close on the opening's date (the flag fires) and on the next date (it does
+nothing, silently). Read the source's own payload
+(`https://api.themeparks.wiki/v1/entity/{externalId}/schedule`) and check the closing's **date** before
+flagging; confirm the next sync moved the row. Qiddiya's raw shape is on record (`opens 15:00 / closes
+12:00`, same date, the 2026-07-27 sweep, PAR-33). The flag changes what the next sync writes, not stored
+rows.
 
 ### Fast passes, across two rows
 
-Nothing we ingest publishes queue-jump products, so every part is hand-written —
-and the parts sit on different rows on purpose.
+No feed publishes queue-jump products, and the parts sit on different rows on purpose:
 
-| Column                            | Row        | Holds                                     |
-| --------------------------------- | ---------- | ----------------------------------------- |
-| `parks.curated_fast_pass_name`    | park       | The brand: QuickPass, Express Pass        |
-| `parks.curated_currency`          | park       | ISO-4217, what the prices are quoted in   |
-| `parks.curated_fast_pass_term_id` | park       | The glossary entry explaining the product |
-| `attractions.has_fast_pass`       | attraction | Whether this ride sells one               |
-| `attractions.fast_pass_name`      | attraction | Override, for the one ride named apart    |
-| `attractions.fast_pass_price`     | attraction | What it costs on this ride                |
+| Column | Row | Holds |
+| --- | --- | --- |
+| `parks.curated_fast_pass_name` | park | the brand (QuickPass, Express Pass) |
+| `parks.curated_fast_pass_price_from` | park | the floor of a park-wide pass ("ab 25 €") — most parks sell one pass per visit |
+| `parks.curated_currency` | park | ISO 4217 |
+| `parks.curated_fast_pass_term_id` | park | the glossary entry explaining the product |
+| `attractions.has_fast_pass` | attraction | whether this ride sells one |
+| `attractions.fast_pass_name` | attraction | override for the one ride named apart (Lightning Lane Single Pass) |
+| `attractions.fast_pass_price` | attraction | the per-ride price |
 
-The name is on the park because it is a brand. Phantasialand sells QuickPass
-across the whole park; per ride it would be typed forty times and drift into
-"Quick Pass" on the eleventh. The override exists for the resort that really does
-sell a differently-named product on one ride — Disney's Lightning Lane Single
-Pass beside the Multi Pass — and both still point at one glossary term, because
-they are two labels over one idea.
-
-Read through `resolveFastPass(attraction, park)`. It is the only merge that
-reaches across two entities, which is exactly why it is a function.
-
-**The price has three states.** Empty is unknown, and stays empty where the
-operator prices per day: a frozen Lightning Lane price would be wrong most days,
-and the haken without a number is the honest answer there. Zero is **free** — a
-claim, not a missing value, the same reading a curated height of 0 gets.
-Europa-Park's Virtual Line is the worked example: a queue-jump product included
-with admission. A positive price needs a currency and is withheld without one,
-because a bare "12" on a ride page is not a price; free needs none.
-
-**A curated `false` never reaches a visitor.** `has_fast_pass = false` means
-somebody checked and the park sells none, which is worth recording so the next
-editor does not search again — but the payload treats it exactly like `null`.
-Publishing "kein QuickPass" would be our own bookkeeping served as the park's
-statement, which is the rule in CLAUDE.md §4.
-
-**The term id is checked on write.** It is a frontend glossary id and nothing in
-this database can validate one; a wrong id does not error anywhere, the chip just
-links nowhere. `GlossaryTermIdsService` fetches the published list and both
-curation paths — ride profiles and this one — check against it. An unreachable
-frontend skips the check rather than blocking the write.
-
-### Park facts nothing syncs
-
-Eleven columns with one writer and nothing to merge, because no feed states any
-of them:
-
-| Group   | Columns                                                                                                                                   |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Links   | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url` |
-| Contact | `curated_street_address`, `curated_postal_code`, `curated_phone`                                                                          |
-| Facts   | `curated_opened_year`, `curated_area_hectares`                                                                                            |
-
-They reach the frontend as one `info` object on the **park detail** payload
-(`resolveParkInfo`), and the object is `null` — not an object of nulls — until
-somebody has written at least one of them. Never on the listings: the card
-overlay re-downloads its fields every five minutes and a postal code has no
-business in that budget.
-
-Two decisions worth keeping:
-
-- **One website, not one per locale.** Most parks answer their own domain in
-  the visitor's language and the rest are a redirect away; six columns nobody
-  fills for 212 parks is a worse trade than one that is occasionally in the
-  wrong language.
-- **A URL is parsed, not pattern-matched.** `coerce` runs it through `new URL()`
-  and accepts `http:` and `https:` only. These values become `href`s on a public
-  page, so a stored `javascript:` URL would be cross-site scripting with an
-  audit row naming the curator who typed it.
+Read through `resolveFastPass(attraction, park)`, the only merge across two entities. **The price has three
+states:** empty is unknown (and stays empty where the operator prices per day), **0 is free** (a claim, like
+a curated height of 0), a positive price needs a currency and is withheld without one. **A curated `false`
+never reaches a visitor:** it records that somebody checked, but the payload treats it like `null`.
+**The term id is checked on write** against the frontend's published glossary (`GlossaryTermIdsService`);
+an unreachable frontend skips the check rather than blocking the write. The API contract:
+[fast pass](../frontend/fast-pass.md). The Disney brands were written with PAR-386: Tokyo parks
+**Disney Premier Access** (`premier-access`), the six US parks **Lightning Lane** (`lightning-lane`).
 
 ## Reading
 
-Never inline. `resolveCuratedFacts()` for attractions,
-`resolveCuratedPark()` for parks. Both rules were already copied into two DTO
-mappers once, drifted, and shipped a bug.
+Never inline: `resolveCuratedFacts()` for attractions (`attractions/utils/curated-attraction-facts.util.ts`),
+`resolveCuratedPark()` for parks (`parks/utils/curated-park-facts.util.ts`). Both rules were once copied into two DTO mappers,
+drifted, and shipped a bug. Three merges are more than a `??`:
 
-Three of the merges are more than a `??`:
+- **Heights:** `0` means "no minimum at all" (Phantasialand's Winni Splash: the wiki says 100, the park's
+  conditions say under 1.00 m only with an adult). Treating 0 as falsy restores the wrong upstream number.
+- **The unit:** `minimum_height_unit` is never emitted beside a null height; a curated height the sync never
+  saw defaults to `cm`.
+- **Seasonality resolves as a pair:** a curated `false` takes the months down with it; non-empty curated
+  months alone imply seasonal.
 
-**Heights.** `0` means "there is no minimum at all" — a correction overriding
-an upstream number with nothing — not a 0 cm limit. Phantasialand's Winni Splash
-is the worked example: the wiki publishes 100, while the park's own conditions
-say children under 1.00 m may play _when accompanied_, which is no minimum.
-Treating 0 as falsy silently restores the wrong upstream number.
+**A projection must select the curated columns.** The resolvers read properties off an entity; a query
+whose `select` omits them reads `undefined`, falls back to the synced value and reports nothing.
+Discovery's geo structure (cached 24 h), the country summary, the `/nearby` index and three search
+projections each needed the columns added for this reason.
 
-**The unit.** `minimum_height_unit` describes a number, so it must never be
-emitted next to a null height — a bare "cm" renders on the ride page. When
-curation supplies a height the sync never saw, nothing recorded a unit either,
-and every curated figure so far is the metric one off the park's own sign, so it
-defaults to `cm`.
+**What "nothing decided" looks like** is carried by each field's descriptor (`defaultValue`): almost
+every curated column is nullable, but `open_with_park` is `boolean NOT NULL DEFAULT false`, so clearing it
+writes `false` and a stored `false` is not an override (getting that wrong put a "curated" badge on every
+attraction).
 
-**Seasonality resolves as a pair.** A curated `false` takes the months down with
-it. Otherwise the API serves a ride it just called not-seasonal, carrying a list
-of the months it operates in.
+## The editor is generated from descriptors
 
-## Why seasonality needed a correction at all
+`GET /v1/admin/content/fields` serves `ATTRACTION_CURATED_FIELDS` and `PARK_CURATED_FIELDS`
+(`src/admin/content/curated-field.spec-list.ts`): per field the PATCH key, label, type, the synced key it
+corrects (or null), the resolved key it produces, group, options, unit, bounds, hint and `defaultValue`.
+Adding a curated column there makes it appear in the admin with no frontend change.
+`GET /v1/admin/content/resolve` shows synced, curated and resolved values side by side.
 
-`detect-seasonal` runs nightly and is behavioural: it reports what the feed has
-been doing. That is the right default and it is wrong in two recurring ways.
+## Writing
 
-A ride closed for a year-long refurbishment looks **exactly** like a seasonal one
-from outside. And a genuinely seasonal ride in a park we have watched for under
-330 days gets flagged with no months at all — the detector refuses to derive
-months from a recording window, a guard that cleaned up 340 attractions and 954
-shows on 2026-08-15 and must stay.
+Through `AdminCurationService` (`PATCH /v1/admin/content/attractions/:id`, `…/parks/:id`), which publishes
+in the [outside-in order](../rules/publish-outside-in.md). A raw `UPDATE` lands in the database and not
+on the page, and leaves no audit row.
 
-Neither could be fixed in the detector's own columns, because it rewrites them
-every night.
+- **A patch that changes nothing writes nothing** — no save, no eviction, no audit row — so a form that
+  PATCHes on every blur does not bury the real edits.
+- **Only changed columns are written** (`update`, not `save`): `save()` wrote every loaded column, so two
+  editors saving different fields reverted each other.
+- **Recording a check that changed nothing** (PAR-601): `POST /v1/admin/content/parks/:id/verify` with
+  `fields`, optional `reason` and a required http(s) `sourceUrl` writes one `park.verify` audit row
+  (`before` = the fields as they stand, `after` null), saves nothing, evicts nothing, cannot be undone, and
+  returns 500 if the audit write fails. History entries carry `kind: "change" | "verification"`; the
+  dashboard's curation count (`action LIKE '%.curate'`) leaves verifications out. Attractions have no
+  verify action yet.
+- **A whole park's list at once:** `PATCH /v1/admin/content/parks/:id/attractions` (the fast-pass table —
+  forty single PATCHes would each fire a revalidation). Each ride keeps its own diff and audit row; the
+  publish happens once. Every entry is validated before any is written, so a ride from another park or an
+  invalid value rejects the batch; a failure partway still publishes what was written.
+
+### Ride profiles
+
+There is no upstream feed and no seed file: **the `attraction_ride_profiles` rows are the source of
+truth.** Write them in the admin (`/admin/attractions/<id>`, ride profile editor → `PUT` /
+`DELETE /v1/admin/content/attractions/:id/ride-profile`, editor role, audited). The write checks every
+term id against park.fan's `/api/glossary-term-ids` and refuses unknown ones, stamps `seeded_at` (the
+marker `findCuratedSince` picks the caches to evict by) and publishes like every curated write. Never
+touch `stats` / `stats_updated_at`; those belong to the Wikidata importer. What each field means,
+`elements` in ride order included: [ride ↔ glossary](../frontend/ride-glossary-link.md).
+
+A row written by hand in SQL must set `seeded_at = now()` (NOT NULL, no default) and then be published
+with `POST /v1/admin/publish-ride-profiles { "sinceHours": 24 }`, which evicts and revalidates every
+profile stamped in the window; without it a fix surfaces only as TTLs expire (up to 6 h Redis, 900 s
+edge, a day in the frontend's data cache). Match such SQL on `parks.slug` **and** `attractions.slug`:
+park slugs repeat (`disneyland-park` is Anaheim and Paris) and so do ride names ("Goliath" is six
+coasters).
+
+**Term-id audit.** `GET /v1/admin/ride-profile-term-audit` diffs every stored id against park.fan's
+`/api/glossary-term-ids` and names the broken ids and the rides they shorten; it aborts rather than
+reporting when the glossary answers empty. It also runs daily at 06:30 (`CuratedDataProcessor`,
+`ride-profile-term-audit-cron`) and logs a warning without failing the job — the ids only break when
+park.fan renames a term. **Still unguarded:** a ride deleted and re-created upstream loses its profile
+silently (the FK cascades).
+
+#### Sourcing a ride profile
+
+Ride layouts are facts about a physical object. Assemble them from the park's attraction page, the
+manufacturer's project page (Mack, Intamin, Vekoma, B&M and Gerstlauer publish element lists),
+Wikipedia ride articles and on-ride footage. RCDB is a link target and a check of
+manufacturer/model/year, **never a text source** — its terms permit linking, not reuse. Where sources
+disagree on a figure's name, use the manufacturer's name for that installation. Add only an element
+you can point at in footage or a published layout: an incomplete list is fine, a wrong one is worse
+than none.
+
+Measurements, stricter, because a number looks equally authoritative checked or not:
+
+- Join sources on the **RCDB id**, never the name; confirm the source describes *our* installation
+  (our own id pointed at a predecessor ride for four coasters).
+- Found by name, the article must name the ride **and one park** — a search for
+  "Winja's Force Phantasialand" returns Taron.
+- Require two sources within 5 %; where they disagree, write nothing.
+- Sanity: no coaster beats `sqrt(2gh)` without a launch or is taller than half its track. The admin
+  rejects values outside 0–400 km/h, 0–250 m, 0–10,000 m, 0–3,600 s.
+
+Invariants to check by hand, each a mistake that happened: no unknown term ids; a coaster's list
+starts with a lift, launch or drop (Hydra's pre-lift jojo roll is the exception); no ride claims
+inversions with no inverting figure in its list; **two rides with a byte-identical element list are a
+lead, not a fact** — every time it was chased down, members turned out to be another model (a
+"Boomerang" family coaster, an "SLC" that is an MK-900, a B&M floorless filed under a sister ride).
+Verify each against its own RCDB id.
+
+```sql
+-- identical element lists shared by several rides
+SELECT rp.elements, count(*), array_agg(a.slug)
+  FROM attraction_ride_profiles rp JOIN attractions a ON a.id = rp."attractionId"
+ WHERE jsonb_array_length(rp.elements) > 4
+ GROUP BY rp.elements HAVING count(*) > 1 ORDER BY count(*) DESC;
+
+-- rides with an RCDB id and no profile
+SELECT p.slug, a.slug, a.rcdb_id
+  FROM attractions a JOIN parks p ON p.id = a."parkId"
+  LEFT JOIN attraction_ride_profiles rp ON rp."attractionId" = a.id
+ WHERE rp."attractionId" IS NULL AND a.rcdb_id IS NOT NULL;
+```
+
+### Seasons
+
+`park_seasons` is curated only, because nothing derives a season: a Halloween night and a late Saturday
+produce the same schedule row. Editors write it through `POST /v1/admin/content/parks/:id/seasons` and
+`PATCH` / `DELETE …/content/seasons/:id`; an empty `dates` list is stored as `null` (every day between
+the bounds). The fields and what a client reads: [park seasons](../frontend/park-seasons.md).
 
 ## Names are display names
 
-`curated_name` does **not** regenerate the slug.
-
-For attractions this is not a preference: their URLs are indexed, linked from
-blog posts and stored in the media sidecars. Since PAR-687 an old attraction
-slug can redirect: `attraction_slug_aliases` maps it to the ride, and the
-attraction route answers it with a 301. The attraction merge writes the row
-for the slug it removes by itself; **a slug changed by hand needs its alias
-row written in the same step** — otherwise it is a permanent 404 again:
+`curated_name` never regenerates the slug: attraction URLs are indexed, linked from posts and stored in the
+frontend's media sidecars. A slug changed by hand (only for a real error: wrong language, a leftover `-2`)
+needs its `attraction_slug_aliases` row in the same step, or it is a permanent 404 (the merge writes its
+own):
 
 ```sql
 INSERT INTO attraction_slug_aliases ("attractionId", slug)
@@ -520,236 +261,54 @@ VALUES ('<attraction id>', '<old slug>') ON CONFLICT DO NOTHING;
 UPDATE attractions SET slug = '<new slug>' WHERE id = '<attraction id>';
 ```
 
-Change a slug only for a real error (wrong language, a `-2` left behind). A
-better display name goes into `curated_name`, never into the slug.
-
-For parks, changing the address is `ParkRenameService`'s job — it writes a
-`park_slug_aliases` row so the old path keeps redirecting. Renaming for display
-and renaming the address are different decisions and stay different operations.
-
-**Timezone is deliberately not curated.** `timezone` is read at 206 call sites —
-every schedule, every park-local date, the whole seasonality month derivation. A
-curated column resolved only in the DTO would show the right zone on the park
-page while the calendar underneath stayed wrong, which is worse than not
-offering the correction.
-
-## Writing
-
-Through `AdminCurationService`, which owns the part that is easy to get wrong.
-A curation is four steps and the order of the last three is load-bearing:
-
-1. write the curated column (never the sync-owned one),
-2. evict our own Redis entries for the park,
-3. tell the frontend to revalidate,
-4. tell it again after `CDN_SETTLE_MS` (16 min).
-
-Doing 3 before 2 does not publish the change: the frontend refetches the
-pre-write payload, still warm in Redis and at the edge, and pins it in its own
-data cache for 24 hours. That is how a curated ride profile could be written,
-announced, and still missing from the ride page the next morning.
-
-A patch that changes nothing writes nothing — no save, no eviction, no audit
-row. A form that PATCHes every field on every blur would otherwise fill the log
-with empty edits and bury the real ones.
-
-### Recording a check that changed nothing (`park.verify`)
-
-The rule above has a cost: a source check that confirms a curated value cannot
-leave a trace through the PATCH, because the PATCH sees an equal value and
-writes no audit row (`changed: []`, `auditId: null`; PAR-601). So
-`POST /v1/admin/content/parks/:id/verify` takes `fields` (curated keys, checked
-against the park descriptors), an optional `reason` and a required `sourceUrl`
-(http or https), and writes one `park.verify` row:
-
-- `before` holds the named fields as they stand, `after` is null,
-- the park row is not saved, and no cache is evicted or revalidated,
-- it is not undoable, since nothing changed,
-- a failed audit write is a 500, not a silent success. The row is the only
-  thing the call produces.
-
-Every entry from `GET /history` and in a park's or ride's `history` carries
-`kind: "change" | "verification"`, so the admin can show a verify as a check
-and not as a removal, which the `before`-without-`after` shape would otherwise
-look like. The dashboard's curation count (`action LIKE '%.curate'`) leaves
-verifications out. Attractions have no verify action yet.
-
-### Editing a whole park's list at once
-
-`PATCH /v1/admin/content/parks/:id/attractions` takes one entry per ride. It
-exists for the fast-pass table: which rides sell a pass is a decision taken
-across the whole list, and Phantasialand has forty rides. Forty single PATCHes
-would each fire a revalidation webhook at the frontend for one edit.
-
-Only step 4's siblings are hoisted. Each ride keeps its own diff and its own
-audit row, so undo still works one ride at a time; the eviction, the
-revalidation and the delayed sweep happen once for the batch. Every entry is
-loaded and validated before any is written, so a ride from another park or an
-invalid value anywhere in the list rejects the whole batch — a bulk edit stays
-inside the park it was opened from. If a write fails partway, whatever was
-already written is still published.
-
-Every curation writes only the columns it changed (`update`, not `save`):
-`save()` wrote every loaded column, so two editors saving different fields of
-one row reverted each other.
-
-### Ride profiles
-
-`attraction_ride_profiles` had no write path at all. Rows were edited with
-hand-written SQL, matched on `parks.slug` **and** `attractions.slug` together
-(park slugs are not globally unique — `disneyland-park` exists in Anaheim and in
-Paris), with `seeded_at = now()` remembered by the person typing it. Forgetting
-that column meant the correction was written, correct, and invisible:
-`findCuratedSince` uses it as the sole marker for which caches to evict.
-
-Two things move into code. The stamp, so it cannot be forgotten. And the term-id
-check, which used to happen the next morning in a nightly audit — the ids are
-frontend glossary ids that nothing in this database validates, and a wrong one
-does not error, it just makes the ride's layout walkthrough come out shorter.
-
-`elements` is the ride's layout **in ride order**. Repeats are intentional.
-Never sort it, never dedupe it.
-
-## Seasons
-
-`park_seasons` is a table because it cannot be derived. `schedule_entries`
-already knows when a park is open and is no help: a park running Halloween
-Fright Nights and a park having a normal late-closing Saturday produce the same
-row. The difference is what the park is _doing_, which exists in no feed we
-ingest — until now it existed only in prose, in the Halloween guide, in six
-languages.
-
-`dates` sits next to `startDate`/`endDate` because a season is very often not a
-range. Walibi Holland's 2026 calendar: Spooky Days on 14, 15, 19, 20 and 21
-October; Fright Nights on every weekend between 3 October and 1 November plus
-three single dates. Stored as 3 Oct – 1 Nov, that tells a visitor the park is
-haunted on a Tuesday.
-
-`dates: null` means "every day between the bounds" and must stay distinguishable
-from an empty array, which would mean "runs on no day at all" — a state the
-column has no business representing. The endpoint rejects it.
-
-Read publicly at `GET /v1/parks/:continent/:country/:city/:park/seasons`,
-deliberately its own request rather than a field on the park payload: that one
-is fetched for every park page and re-polled every five minutes, while seasons
-change a few times a year.
-
-## Two things the editor has to know about a column
-
-**What "nothing decided" looks like.** Almost every curated column is nullable
-and empty means nothing was decided. `open_with_park` is `boolean NOT NULL
-DEFAULT false`, so its "nothing decided" is `false` — clearing the field writes
-that, not null, and a stored `false` is not an override. Getting the first wrong
-is an UPDATE the database rejects; getting the second wrong put a "curated"
-badge on every attraction in the catalogue. The field descriptor carries
-`defaultValue` so the editor does not have to know which columns are which.
-
-**That a projection must select it.** `resolveCuratedPark` and
-`resolveCuratedFacts` read properties off an entity. Handed a row from a query
-whose `select` omits the curated columns, they read `undefined`, fall back to
-the synced value and report nothing — a silent no-op. Discovery's geo structure,
-the country summary, the `/nearby` coordinate index and three of the search
-projections each needed the columns added for exactly this reason, and the geo
-structure is cached for 24 hours, so the no-op would have outlived several
-curation sessions.
+For parks, changing the address is `ParkRenameService`'s job (it writes `park_slug_aliases`). The name
+itself comes from the operator, never a translation
+([upstream identity rule §4](../rules/automated-retirement-and-identity.md#4-names-come-from-the-operator-never-from-a-translation)).
 
 ## Undo
 
-An undo refuses when the field has moved on. Editor A sets a height null→120,
-editor B corrects it 120→140; undoing A's entry without the check writes null
-and silently discards B's work, leaving B's entry standing in the log as though
-it were current. The check is "is this field still where that entry left it",
-which is exactly what an undo is entitled to assume.
+`POST /v1/admin/content/history/:id/undo` refuses when the field has moved on: undoing A's null→120 after
+B's 120→140 would write null and silently discard B's work. The check is "is this field still where that
+entry left it".
 
 ## Merges
 
-Every `curated_*` column must be on one of
-`AttractionMergeService`'s three inheritance lists, and keep being on it. A merge
-deletes the losing row, so a curation that lived only there is gone with no
-trace and nothing to notice it by — the value simply reverts to whatever the
-sync last wrote, months after anybody remembers deciding otherwise.
-`previewMerge` does not cover the gap: it lists `inheritedColumns` and a
-`droppedCurations` that reaches `attraction_ride_profiles` and nothing else.
+Every `curated_*` column must be on one of `AttractionMergeService`'s inheritance lists: a merge deletes
+the losing row, and a curation that lived only there reverts silently. `previewMerge` lists
+`inheritedColumns` and a `droppedCurations` that covers `attraction_ride_profiles` only.
 
-**`INHERITABLE_COLUMNS` is column by column**, and that is the right shape for
-most of them: the winner takes whatever it lacks and the loser holds.
+- **`INHERITABLE_COLUMNS`**, column by column: the winner takes what it lacks.
+- **`INHERITABLE_COLUMN_SETS`** move a group together or not at all — built for the works period
+  (`curated_out_of_service_from`, `_to`, `_to_uncertain`; PAR-297), whose two input rules
+  (`AdminCurationService` refuses an end before its start and clears the estimate flag with the end) a
+  column-by-column merge would break. The winner inherits the set only when it holds none of the three,
+  and the merged window is checked with the same `worksPeriodEndsBeforeItBegins` the endpoint uses; a stale
+  estimate flag is dropped rather than sinking the dates. A window held back is a silent loss
+  `previewMerge` does not name (PAR-301).
+- **`curated_is_seasonal` / `curated_season_months`** stay column by column on purpose: a winner curated
+  seasonal without months should take the loser's months. The crossed pair (curated `false` beside
+  inherited months) never reaches a reader, because the resolver drops months when seasonality is false.
+- **`INHERITABLE_DEFAULTED_COLUMNS`** is for a column whose "nothing decided" is a value — only
+  `open_with_park`: take the loser's value when the winner sits on the default and the loser does not. It
+  is one-directional: a loser's `false` never clears a winner's `true` (PAR-300).
 
-**`INHERITABLE_COLUMN_SETS` moves a group together or not at all**, and the
-works period is the group it was built for (PAR-297). `curated_out_of_service_from`,
-`_to` and `_to_uncertain` are three columns holding one statement, with two
-rules guarding it on the way in: `AdminCurationService` refuses an end before
-its start, and clears "that end is only an estimate" whenever the end goes away.
-Column by column breaks both — a winner holding a start and no end would take
-the loser's end and carry a window that ends before it begins, and since PAR-287
-that window is served as `worksPeriod`. As a set the winner inherits the columns
-the loser holds (an open-ended window is one or two of them) and only when it
-holds none of the three itself — all three for a window with both dates and an
-estimate flag, one for the ordinary open-ended one.
+`curated-field.spec-list.spec.ts` holds the descriptors against the lists: every hand-editable key must be
+carried by a merge list (the works period sat off all of them for eleven days in September 2026 without
+anything failing).
 
-The window is then asked, on the way out, what the endpoint asks of one being
-typed. It has to be: these columns are reachable by hand, and unlike a value the
-merge merely reads, this one lands on a row that outlives it. A window stating
-nothing — no date, only the estimate flag — stays behind, and so does an
-inverted one, which is exactly the state the set exists to prevent and no better
-for having arrived whole. A stale estimate flag is dropped instead of sinking
-the dates beside it, which is the endpoint's own normalisation: the dates are a
-real curation and the only copy of one. `worksPeriodEndsBeforeItBegins` is
-shared between the two writers rather than written twice — the `??` rules in
-`resolveCuratedFacts` were copied into two DTO mappers once, drifted, and
-shipped a bug.
+## SQL traps when writing these columns by hand
 
-**A window held back is still a silent loss**, and `previewMerge` does not name
-it: where the winner already holds part of a window, the loser's disappears
-without appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301.
-Usually it is the smaller loss, because the survivor keeps a window of its own —
-but not always: a winner holding nothing but a stale `to_uncertain` blocks the
-set and has no window at all, `resolveWorksPeriod` serving `null` for it.
+From the `has_virtual_line` seed (2026-09-22), true for any statement against `queue_data`:
 
-`curated_is_seasonal` / `curated_season_months` deliberately stay column by
-column although `resolveCuratedFacts` resolves them as a pair. A winner curated
-seasonal but without months should take the loser's months, and a set would
-refuse. The one crossed pair column-by-column can build — a curated `false`
-beside inherited months — never reaches a reader, because the resolver drops the
-months whenever the resolved seasonality is false.
-
-**`INHERITABLE_DEFAULTED_COLUMNS` is for a column whose "nothing decided" is a
-value**, and `open_with_park` is the only one. It is `NOT NULL DEFAULT false`,
-so the winner's cell is never empty and the absent-value test the other two
-lists rest on can never fire — the column sat off both lists until PAR-300, and
-a merge whose loser was marked free-flow and whose winner held the default threw
-the statement away silently. The entry names the column and the value that means
-nobody said anything, and the rule reads: take the loser's value when the winner
-is sitting on that value and the loser is not.
-
-Reading a stored `false` as "nobody said" is not a decision this list invents.
-It is the one the editor has run on since the `defaultValue` field existed — see
-"Two things the editor has to know about a column" above — so the spec holds the
-`unset` here against the descriptor's `defaultValue` rather than letting the two
-drift, and refuses a column on this list that has no `defaultValue` at all.
-
-**The rule is one-directional.** A loser's `false` never clears a winner's
-`true`: a `false` is the absence of a statement, and an absence may not unset
-one ([absent facts](../rules/absent-facts.md)).
-
-Measured against production on 2026-09-18, before the change: of the 47 pairs
-`findDuplicatePairs` offers, **none** carries `open_with_park` on either side,
-so the automatic path was losing nothing on the day this was built. The pair it
-guards is the hand-named one — the merge endpoint takes a `winnerId`/`loserId`
-of its caller's choosing and never consults that list. 34 of 7 355 non-retired
-attractions are marked free-flow, and 30 of those 34 are fed by a live source,
-so a free-flow row is not systematically the loser of `chooseDuplicateWinner`
-either.
-
-**A spec holds the descriptors against the lists** (`curated-field.spec-list.spec.ts`),
-and it has one exception left. Against the admin's figure it is the bulk-filled
-four — `has_single_rider`, `has_virtual_line`, `rcdb_id`, `open_with_park`,
-which are not curation.
-Against the inheritance lists there is now none: every hand-editable key is
-carried. No list derives itself from `ATTRACTION_CURATED_FIELDS`, which is how
-the works period's dates sat off all of them from 2026-09-06 to 2026-09-17
-without anything failing.
-
-## Related
-
-- `docs/admin/authentication.md` — who is allowed to write any of this
-- `docs/architecture/attraction-status-and-seasonality.md` — what the detector does
-- frontend: `docs/features/admin.md`
+- `queue_data."attractionId"` is `uuid` (the entity said `text` until PAR-721); `a.id::text = …` aborts
+  with `operator does not exist: text = uuid`.
+- `queue_data."queueType"` is a Postgres enum: a bare literal the database type does not carry aborts the
+  statement, so `::text` makes a paste-anywhere statement safe — at the cost of the
+  `(queueType, status, timestamp)` index.
+- Quote the camelCase physical names (`"attractionId"`, `"queueType"`); snake_case columns need no quotes.
+- `queue_data` compresses after 30 days with no `segmentby`; "has ever reported" is one `DISTINCT` pass,
+  never a correlated `EXISTS` per row.
+- Count in one step, write in a separate one after reading the number (a count between `BEGIN` and an
+  unconditional `UPDATE` is not a gate), guard the write so a re-run cannot overwrite an editor's value
+  (`… IS NULL`), and group by `parks.id`, never the name or slug. Run it through `scripts/prod-psql.sh`
+  ([production one-offs](../rules/automated-retirement-and-identity.md#7-production-one-offs-run-the-deployed-code-from-a-clean-checkout)).

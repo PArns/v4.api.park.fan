@@ -211,7 +211,7 @@ export class PlanDayService {
    * number is worth watching rather than nudging: `min(topN * 3, 60)` means the
    * over-fetch is already zero HERE, so the first park to cross 60 loses both
    * the rides past the cap and the peak-hour re-rank the over-fetch exists for.
-   * See docs/frontend/plan-day-endpoint.md §6.
+   * See docs/frontend/plan-day/rides.md#the-shape_rides--60-cap-does-not-bite.
    */
   private static readonly SHAPE_RIDES = 60;
 
@@ -720,8 +720,8 @@ export class PlanDayService {
    * uncleared litter, reaching 1,396 days back. Only 152 entries lead their own
    * snapshot at all, and 109 of those are performances past midnight
    * (00:00–05:30, Universal's late programme) that belong to the day they were
-   * published on. `getShowtimesOnDate` now unfolds those the way §5 unfolds
-   * opening hours — but only where the previous day's PUBLISHED window covers
+   * published on. `getShowtimesOnDate` now unfolds those the way
+   * `docs/frontend/plan-day/midnight.md` unfolds opening hours — but only where the previous day's PUBLISHED window covers
    * them, and no Universal park publishes one that does: measured on
    * 2026-09-15, zero of these entries fall inside their previous day's
    * `OPERATING` hours, because Halloween Horror Nights runs as a
@@ -2180,7 +2180,7 @@ export class PlanDayService {
    * ride the feed called CLOSED all day is a season or a refurbishment, not a
    * fault: without the DOWN requirement this reported nine of Phantasialand's
    * winter-only and water attractions as down every day of the summer, which is
-   * the same conflation `docs/architecture/attraction-status-and-seasonality.md`
+   * the same conflation `docs/architecture/attraction-status/README.md`
    * is written about.
    *
    * Yesterday is the PARK's yesterday, and it is expressed as a timestamp RANGE
@@ -2262,7 +2262,8 @@ export class PlanDayService {
    * surfaces answering differently about one ride on one day is the failure this
    * closes — and the window is not one night wide, because `detect-seasonal` is
    * a daily job that has already been out for **73 days** without anyone
-   * noticing (`docs/architecture/attraction-status-and-seasonality.md`).
+   * noticing
+   * (`docs/architecture/attraction-status/seasonality.md#running-and-changing-the-detector`).
    *
    * **It reaches as far as the note it contradicts**, which is today and
    * tomorrow ({@link SEASON_NOW_HORIZON_DAYS}). The caller decides what may be
@@ -2610,7 +2611,7 @@ export class PlanDayService {
    * arrive at `MIN_OBSERVED_DAYS` (330) of history, so a headliner shut for
    * refurbishment in September would otherwise vanish from a plan for
    * 20 December with no field saying why. An absent fact may not become a
-   * confident one (`claude.md` §4).
+   * confident one (`docs/rules/absent-facts.md`).
    *
    * So past {@link SEASON_NOW_HORIZON_DAYS} the note is dropped and only the
    * calendar question is left — which, with no months on file, answers `null`
@@ -2790,7 +2791,8 @@ export class PlanDayService {
    * park-local midnight and unfolded past it (a 01:00 close is 1500).
    *
    * From the published opening and closing where the operator stated them.
-   * Otherwise — the observed-hours fallback (§4 of the endpoint doc) — the
+   * Otherwise — the observed-hours fallback
+   * (`docs/frontend/plan-day/tiers.md#opening-hours-can-come-from-the-data`) — the
    * whole hours the window was derived from: `openHour:00` to the end of the
    * last measured hour, marked as not published so nothing is aligned to an
    * opening nobody announced.

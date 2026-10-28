@@ -2,13 +2,14 @@
 
 Loads each park's trained GP-STGNN, builds the context up to NOW from the live panel,
 predicts the next H 15-min slots, and writes the served quantiles (q0.5 display, q0.8
-crowd) to pcn_forecasts. This is the going-forward shadow (design doc §12): forecasts
-are stored at inference time so they can be scored later against actuals — CatBoost's
+crowd) to pcn_forecasts. This is the going-forward shadow (docs/ml/pcn.md#shadow-boards):
+forecasts are stored at inference time so they can be scored later against actuals — CatBoost's
 own intraday preds are dedup-destroyed for past origins, so a fair head-to-head MUST
 capture both forward.
 
 PCN runs in the SHADOW — it only writes pcn_forecasts; CatBoost stays the served
-champion until score.py shows a busy/headliner win (gate §8). Inference is cheap and the
+champion until score.py shows a busy/headliner win (gate:
+docs/ml/model-overview.md#how-a-model-change-is-judged). Inference is cheap and the
 GPU is ~99% idle, so re-inferring every 15 min with the current state is effectively
 free and never touches CatBoost (CPU).
 

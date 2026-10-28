@@ -9,7 +9,7 @@
  * Two regimes coexist. Daily/historical aggregates compare a day's peak to
  * a **typical day's peak**; point-in-time/live signals are
  * **ratio-vs-P50**. They are never mixed on a single surface.
- * See docs/analytics/crowd-level-typical-day-peak.md for the full story.
+ * See docs/analytics/crowd-levels.md for the full story.
  *
  * - **Calendar daily crowd level:** a day's value is the **AVG across
  *   headliner rides** of each ride's daily P90 (peak-of-day, every

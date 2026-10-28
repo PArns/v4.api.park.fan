@@ -1,7 +1,8 @@
 # A ride's live crowd level and best visit times
 
-Applies to every ride in the park payload (`attractions[]`), the attraction detail
-payload and the favorites card.
+What a ride's `crowdLevel` and `bestVisitTimes` mean and when each reads `unknown` or
+drops the current slot. Applies to every ride in the park payload (`attractions[]`),
+the attraction detail payload and the favorites card.
 
 ## `crowdLevel` is a measurement, never a forecast
 
@@ -15,10 +16,9 @@ It takes one of:
 | `closed` | The ride's `effectiveStatus` is `CLOSED` |
 | `unknown` | Anything else: no live wait (a `DOWN` ride — even one whose row still carries a posted number or the 0 ingestion writes for a non-`OPERATING` status — an `OPERATING` ride whose row carries no minutes, an `UNKNOWN` ride), no baseline, a thin park, or a park whose wait times we cannot read |
 
-Before PAR-1029 a ride with no live wait took the model's forecast level for the
-current UTC hour (at 14:50 that was the 14:00 row), or `very_low` when there was
-none. For a broken-down ride that read as "walk on". It is now `unknown`, by the
-rule in [An absent fact never becomes a confident one](../rules/absent-facts.md).
+Before PAR-1029 a ride with no live wait took the model's forecast level, which for a
+broken-down ride read as "walk on"; it is now `unknown`
+([absent facts](../rules/absent-facts.md)).
 
 What the frontend must do with it:
 
@@ -28,8 +28,7 @@ What the frontend must do with it:
 - The park's own `analytics.statistics.crowdLevel` / `occupancy.crowdLevel` is a
   separate computation over live waits (`calculateParkOccupancy`); it never read
   the per-ride `crowdLevel`, so it is unaffected.
-- Favorites used to send `null` where the other surfaces sent `unknown`; it
-  sends `unknown` now too.
+- Favorites sends `unknown` like the other surfaces.
 
 ## `bestVisitTimes` never offers "now" for a ride that is not running
 

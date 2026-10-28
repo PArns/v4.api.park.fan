@@ -27,7 +27,7 @@ Nothing here is served. The nightly job writes the latest levels to
 ``driver_level_forecasts`` (one row per ride and target date, replaced every
 night); the forward archive copies them into ``forecast_archive_curves.
 driver_day_peak`` at capture, and the scorer pairs them with the served dayPeak
-as model ``driver_level`` (docs/ml/forward-archive.md).
+as model ``driver_level`` (docs/ml/forward-archive/model-comparison.md#the-shadow-levels).
 """
 
 from __future__ import annotations

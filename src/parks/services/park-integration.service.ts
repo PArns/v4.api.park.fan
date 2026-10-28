@@ -1554,7 +1554,7 @@ export class ParkIntegrationService {
    * The key is the name, and it may not become the slug. A slug is a frozen
    * name that renames deliberately leave alone, so a row keeps the slug of
    * whatever it was called when it was created — identity is the `externalId`
-   * (see `docs/architecture/attraction-status-and-seasonality.md` §4a), and
+   * (see `docs/architecture/attraction-status/identity.md`), and
    * that column does not reach this DTO. Keying attractions on `name` plus the
    * slug base was measured on 2026-09-20 over all 210 parks and all 7300 rows:
    * it splits exactly three groups, and in each one the ride the odd slug

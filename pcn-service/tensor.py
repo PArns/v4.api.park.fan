@@ -1,6 +1,6 @@
 """Cross-ride tensor assembly — the Phase-0 foundation for the GP-STGNN / bake-off.
 
-This is the one new data artifact the design doc (§11.6) calls for: the full
+This is the one new data artifact the design (docs/ml/pcn.md#model) calls for: the full
 **[rides × slots] park matrix**, not the scalar park-mean that nf-service's
 `add_occupancy` collapses it to. Keeping the whole matrix is the point — it lets an
 adaptive-graph STGNN (AGCRN / Graph WaveNet) LEARN the ride×ride coupling (the
@@ -28,7 +28,8 @@ import pandas as pd
 # down       = DOWN-status count in the slot (pent-up-demand / reopening signal);
 # slot/hour sin·cos = time-of-day (shared across rides, broadcast per node);
 # park_occ   = the SCALAR cross-ride busyness baseline (what the STGNN must beat);
-# dow sin·cos + is_weekend = day-of-week (design doc §4.3 known-future: weekday vs
+# dow sin·cos + is_weekend = day-of-week (docs/ml/pcn.md#tensor-channels-tensorchannels,
+#   known-future: weekday vs
 #   weekend day-shapes differ and a 2-day context can't tell Fri→Sat from Mon→Tue).
 #
 # EVOLUTION CONTRACT: only APPEND new channels. Checkpoints store the channel list

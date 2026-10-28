@@ -82,7 +82,8 @@ export class RemainingQuartilesDto {
  *
  * ## What this is, and what it is not
  *
- * `docs/analytics/ride-downtime.md` §6 refuses "when will this ride break next,
+ * `docs/analytics/ride-downtime/refused.md#no-forecast-of-the-next-outage` refuses
+ * "when will this ride break next,
  * and for how long". This is the other question — *it is broken now; what
  * happened to outages that got this far* — and it survives the four objections
  * that sank the first one. The full argument is on `DowntimeRecoveryCurve`; the

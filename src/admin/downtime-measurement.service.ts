@@ -42,7 +42,8 @@ const COUNT_LIMITS: StatementLimits = {
  * 3. **Which parks are in the artefact regime**, where every run consists of a
  *    single reading and a duration cannot be read out of it at all.
  *
- * The event floor of 24 in `docs/analytics/ride-downtime.md` is re-derived from
+ * The event floor of 24 in `docs/analytics/ride-downtime/publishing.md#ride-gates` is
+ * re-derived from
  * what this returns, or replaced by it.
  *
  * ## Why this is not the reconstruction

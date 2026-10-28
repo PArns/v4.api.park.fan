@@ -1,7 +1,7 @@
 """Fair INTRADAY NOWCAST backtest: TFT vs CatBoost on the hourly surface.
 
 Fixes the three flaws that made the 2026-05-23 hourly PoC verdict inconclusive
-(see docs/ml/busy-day-prediction-challenger.md "Hourly TFT vs CatBoost"):
+(see docs/ml/tft.md#rejected-measured "Hourly TFT vs CatBoost"):
 
   1. **0-fill underbias → `available_mask`.** Closed hours kept the grid regular but
      0-filled `y`, so the StudentT mean was dragged down (~−6.6 bias) and the loss
