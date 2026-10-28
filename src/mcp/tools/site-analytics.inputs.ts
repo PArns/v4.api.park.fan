@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   EVENT_DIMS,
   FILTER_DIMS,
+  HOURLY_RETENTION_DAYS,
   INTERVALS,
   MAX_ADMIN_WINDOW_DAYS,
   MAX_COMPARABLE_DAYS,
@@ -22,6 +23,15 @@ import {
  * reads a number from them.
  */
 
+/**
+ * What `hourlyFrom` says, for the descriptions: the hourly rows hold about
+ * three months, so a filter no daily roll-up can serve loses the older days.
+ */
+export const HOURLY_FROM_DESCRIPTION =
+  `hourlyFrom, when not null, is the first UTC day a figure that needed the hourly rows (kept about ` +
+  `${HOURLY_RETENTION_DAYS} days; the daily roll-ups for 400) is complete from: older days are missing ` +
+  "from filtered or hourly figures, in the window or only in the window before.";
+
 /** Appended to the descriptions of the tools that report traffic. */
 export const SITE_ANALYTICS_CAVEATS =
   "Numbers: park.fan's own cookieless statistic, counted per UTC hour, over UTC days: the last " +
@@ -37,7 +47,9 @@ export const SITE_ANALYTICS_CAVEATS =
   "and avgTimeOnPageSeconds are measured foreground time (the tab visible), whole seconds, null " +
   "with nothing to divide by; a visit's exit is counted once it has been idle 30 minutes. " +
   "Series points carry partial: true when the period reaches past the window or is still under " +
-  "way. Reports lag the " +
+  "way. " +
+  HOURLY_FROM_DESCRIPTION +
+  " Reports lag the " +
   "site by up to about six minutes. Readers with Do Not Track, Global Privacy Control or the " +
   "privacy page's opt-out, and bots, are not counted.";
 
@@ -189,6 +201,7 @@ export function windowOf(report: {
   interval: SiteInterval;
   locale: string | null;
   filters: string[];
+  hourlyFrom?: string | null;
 }) {
   return {
     from: report.from,
@@ -197,6 +210,7 @@ export function windowOf(report: {
     interval: report.interval,
     locale: report.locale,
     filters: report.filters,
+    hourlyFrom: report.hourlyFrom ?? null,
   };
 }
 

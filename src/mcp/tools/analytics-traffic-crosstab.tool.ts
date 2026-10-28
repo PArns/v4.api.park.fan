@@ -9,6 +9,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { CROSSTAB_SMALL_CELLS, foldCrosstab } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const SIDE_HELP =
@@ -29,6 +30,8 @@ export const analyticsTrafficCrosstabTool = defineMcpTool({
     "period. A filter on a visit dimension needs metric=visits. " +
     VISITOR_DATA_DESCRIPTION +
     " " +
+    CROSSTAB_SMALL_CELLS +
+    " " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     metric: z
@@ -45,14 +48,10 @@ export const analyticsTrafficCrosstabTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .trafficCrosstab({ ...siteQuery(input), metric, row, col });
-    const rowIndex = new Map(report.rows.map((value, i) => [value, i]));
-    const colIndex = new Map(report.cols.map((value, i) => [value, i]));
-    const counts = report.rows.map(() => report.cols.map(() => 0));
-    for (const cell of report.cells) {
-      const i = rowIndex.get(cell.row);
-      const j = colIndex.get(cell.col);
-      if (i !== undefined && j !== undefined) counts[i][j] += cell.count;
-    }
+    const folded = foldCrosstab(report.rows, report.cols, report.cells, {
+      row: report.row !== "day",
+      col: report.col !== "day",
+    });
     return withVisitorData(
       {
         ...windowOf(report),
@@ -61,7 +60,7 @@ export const analyticsTrafficCrosstabTool = defineMcpTool({
         col: report.col,
         total: report.total,
       },
-      { rows: report.rows, cols: report.cols, counts },
+      folded,
     );
   },
 });

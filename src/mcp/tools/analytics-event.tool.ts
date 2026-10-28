@@ -2,7 +2,18 @@ import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsService } from "../../site-analytics/site-analytics.service";
 import { EVENT_NAME_PATTERN } from "../../site-analytics/site-analytics.hits";
-import { siteQuery, eventWindowInput, windowOf } from "./site-analytics.inputs";
+import {
+  HOURLY_FROM_DESCRIPTION,
+  siteQuery,
+  eventWindowInput,
+  windowOf,
+} from "./site-analytics.inputs";
+import {
+  SMALL_CELLS_DESCRIPTION,
+  SMALL_SERIES_DESCRIPTION,
+  foldSmallRows,
+  hideSmallInSeries,
+} from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsEventTool = defineMcpTool({
@@ -17,7 +28,14 @@ export const analyticsEventTool = defineMcpTool({
     "bucket), never free text. Entities are resolved from park.fan's own tables, unresolvable ones " +
     "left out. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers " +
     "are missing. " +
-    VISITOR_DATA_DESCRIPTION,
+    VISITOR_DATA_DESCRIPTION +
+    " " +
+    SMALL_CELLS_DESCRIPTION +
+    ' Under (other) an entity has no id, kind or path and a combination reads "(other)" for ' +
+    "its properties. " +
+    SMALL_SERIES_DESCRIPTION +
+    " " +
+    HOURLY_FROM_DESCRIPTION,
   input: {
     name: z
       .string()
@@ -45,14 +63,21 @@ export const analyticsEventTool = defineMcpTool({
     // Names and paths of entities come from park.fan's own tables; one that
     // no longer resolves is left out rather than shown by its raw id.
     const resolved = report.entities.filter((entity) => entity.kind !== null);
+    const values = { dims: ["value"], count: "count", sum: ["count"] };
+    const hide = hideSmallInSeries(report.series, ["count"]);
     return withVisitorData(
       {
         ...windowOf(report),
         name: report.name,
         total: report.total,
         ...(report.blocked && { blocked: true }),
-        entities: resolved.slice(0, limit),
+        entities: foldSmallRows(resolved.slice(0, limit), {
+          dims: ["name"],
+          count: "count",
+          sum: ["count"],
+        }),
         unresolvedEntities: report.entities.length - resolved.length,
+        ...(series && { smallValuesHidden: hide.hidden }),
       },
       {
         props: report.props.map((prop) => {
@@ -62,14 +87,18 @@ export const analyticsEventTool = defineMcpTool({
             .reduce((sum, entry) => sum + entry.count, 0);
           return {
             prop: prop.prop,
-            values: kept,
+            values: foldSmallRows(kept, values),
             otherCount: prop.otherCount + cut,
           };
         }),
-        combinations: report.combinations.slice(0, limit),
-        byPageType: report.byPageType.slice(0, limit),
-        byDevice: report.byDevice,
-        ...(series && { series: report.series }),
+        combinations: foldSmallRows(report.combinations.slice(0, limit), {
+          dims: ["props"],
+          count: "count",
+          sum: ["count"],
+        }),
+        byPageType: foldSmallRows(report.byPageType.slice(0, limit), values),
+        byDevice: foldSmallRows(report.byDevice, values),
+        ...(series && { series: hide.series }),
       },
     );
   },

@@ -1,4 +1,4 @@
-import { Column, Entity, Index, PrimaryColumn } from "typeorm";
+import { Column, Entity, PrimaryColumn } from "typeorm";
 
 /**
  * Unique visitors of one finished UTC day with one value of one dimension
@@ -6,12 +6,12 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
  * (`scope = 'all'`) or one language, written once by the nightly snapshot from
  * that day's Redis HyperLogLog (insert-only), beside the day's own in
  * `site_visitor_days`. Today is read from Redis live. An estimate, like the
- * day's; a reader who started visits from two channels counts under both. A hypertable
- * on `day` (`HYPERTABLES`), compressed after seven days, its chunks dropped
- * after `RETENTION_DAYS` like the daily tables'. docs/frontend/site-analytics.md.
+ * day's; a reader who started visits from two channels counts under both. A
+ * few hundred rows a day in a plain table, which the nightly job deletes past
+ * `DAILY_RETENTION_DAYS` like the other visitor counts.
+ * docs/frontend/site-analytics.md.
  */
 @Entity("site_visitor_dim_days")
-@Index("site_visitor_dim_days_day_idx", ["day"])
 export class SiteVisitorDimDay {
   /** `YYYY-MM-DD`, UTC. */
   @PrimaryColumn({ type: "date" })

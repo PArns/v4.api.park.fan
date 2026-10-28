@@ -5,7 +5,7 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
 
 /**
  * The site statistic's jobs (docs/frontend/site-analytics.md), all of them
- * insert-only or whole-chunk:
+ * insert-only or whole-chunk, but for the last step of `drop-old-chunks`:
  *
  * - `flush`, every five minutes: first the visits idle for 30 minutes are
  *   ended with an exit each, then the finished Redis windows go into
@@ -17,7 +17,9 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
  *   `site_visitor_hours` and `site_visitor_dim_days`, once;
  * - `rollup-days`, four times a day: the finished days summed into the daily
  *   tables the long reports read, each cuboid of each day once;
- * - `drop-old-chunks`, nightly: chunks past 400 days, dropped whole.
+ * - `drop-old-chunks`, nightly: the hourly chunks past 90 days, once all their
+ *   days are rolled up, and the daily ones past 400, dropped whole; then the
+ *   small tables (visitor counts, roll-up markers) lose their old rows.
  */
 @Processor("site-analytics")
 export class SiteAnalyticsProcessor {
@@ -69,11 +71,24 @@ export class SiteAnalyticsProcessor {
 
   @Process("drop-old-chunks")
   async handleDropOldChunks(_job: Job): Promise<void> {
-    const dropped = await this.storage.dropOldChunks();
-    const total = Object.values(dropped).reduce((a, b) => a + b, 0);
+    const { dropped, skipped, pruned } = await this.storage.dropOldChunks();
+    const total =
+      Object.values(dropped).reduce((a, b) => a + b, 0) +
+      Object.values(pruned).reduce((a, b) => a + b, 0);
     if (total > 0) {
       this.logger.log(
-        `🧹 Dropped site statistic chunks: ${JSON.stringify(dropped)}`,
+        `🧹 Dropped site statistic chunks ${JSON.stringify(dropped)}, deleted rows ${JSON.stringify(pruned)}`,
+      );
+    }
+    // The safe chunks are gone by now; failing the job is what puts the rest
+    // in front of the admin (the failing-jobs report), as a day that does
+    // not add up does for `rollup-days`.
+    if (skipped.length > 0) {
+      const days = skipped.flatMap((chunk) => chunk.days).sort();
+      throw new Error(
+        `${skipped.length} hourly chunk(s) kept, ${days.length} day(s) without a complete roll-up ` +
+          `(${days.slice(0, 5).join(", ")}${days.length > 5 ? ", …" : ""}): ` +
+          "the chunks go once `rollup-days` has rolled those days up",
       );
     }
   }

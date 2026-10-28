@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsSeoService } from "../../site-analytics/site-analytics-seo.service";
-import { siteQuery, pageWindowInput, windowOf } from "./site-analytics.inputs";
+import {
+  HOURLY_FROM_DESCRIPTION,
+  siteQuery,
+  pageWindowInput,
+  windowOf,
+} from "./site-analytics.inputs";
+import { SMALL_CELLS_DESCRIPTION, foldSmallRows } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const seoNotFoundTool = defineMcpTool({
@@ -14,7 +20,11 @@ export const seoNotFoundTool = defineMcpTool({
     "inside the site. Candidates for a redirect or a fixed link. Takes no visit-dimension filter. " +
     "UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers are " +
     "missing. " +
-    VISITOR_DATA_DESCRIPTION,
+    VISITOR_DATA_DESCRIPTION +
+    " " +
+    SMALL_CELLS_DESCRIPTION +
+    " Under (other) the referrers are null. " +
+    HOURLY_FROM_DESCRIPTION,
   input: {
     ...pageWindowInput,
     limit: z
@@ -30,11 +40,18 @@ export const seoNotFoundTool = defineMcpTool({
       .get(SiteAnalyticsSeoService)
       .notFound({ ...siteQuery(input), limit });
     return withVisitorData(windowOf(report), {
-      items: report.items.map((item) => ({
-        path: item.path,
-        views: item.views,
-        referrers: item.referrers.slice(0, 5),
-      })),
+      items: foldSmallRows(
+        report.items.map((item) => ({
+          path: item.path,
+          views: item.views,
+          referrers: foldSmallRows(item.referrers.slice(0, 5), {
+            dims: ["value"],
+            count: "visits",
+            sum: ["visits"],
+          }),
+        })),
+        { dims: ["path"], count: "views", sum: ["views"] },
+      ),
     });
   },
 });

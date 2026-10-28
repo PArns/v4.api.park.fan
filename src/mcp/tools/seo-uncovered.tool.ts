@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsSeoService } from "../../site-analytics/site-analytics-seo.service";
-import { siteQuery, siteWindowInput, windowOf } from "./site-analytics.inputs";
+import {
+  HOURLY_FROM_DESCRIPTION,
+  siteQuery,
+  siteWindowInput,
+  windowOf,
+} from "./site-analytics.inputs";
 
 export const seoUncoveredTool = defineMcpTool({
   name: "seo_uncovered",
@@ -12,7 +17,9 @@ export const seoUncoveredTool = defineMcpTool({
     "count of all such pages against all pages of that kind. A ride renamed since its old path was " +
     "found is listed too. UTC days; up to six minutes behind the site; Do Not Track, GPC and " +
     "opted-out readers are missing, so a page with very little traffic can be listed although it " +
-    "had a visit.",
+    "had a visit. The list holds our own parks and rides that had no search visit at all, so it has " +
+    "no counts to fold. " +
+    HOURLY_FROM_DESCRIPTION,
   input: {
     kind: z
       .enum(["park", "attraction"])

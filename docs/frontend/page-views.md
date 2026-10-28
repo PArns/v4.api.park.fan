@@ -35,7 +35,8 @@ so one list over all languages would be the German list for every reader.
 
 A read is a row of `site_events` with `name = 'page_read'`, written through the statistic's Redis
 buffer and five-minute flusher ([storage](site-analytics.md#storage-insert-only-no-dead-tuples)):
-insert-only, compressed after a week, chunks dropped after 400 days. A ranking sums `count` per key
+insert-only, compressed after a week, chunks dropped after 90 days (90 to 97 days, [retention](site-analytics.md#retention);
+the longest window a ranking takes is 90). A ranking sums `count` per key
 over the window's rows, so it lags the beacon by one to six minutes, far less than its hour of cache.
 The counts end up in Postgres, not Redis: this Redis runs `volatile-lru`, and a ranking that
 silently loses a day under memory pressure ranks wrong without saying so. The buffer holds a window

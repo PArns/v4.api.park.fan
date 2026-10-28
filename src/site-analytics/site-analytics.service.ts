@@ -1230,7 +1230,11 @@ export class SiteAnalyticsService {
   }
 }
 
-/** The fields every report echoes. */
+/**
+ * The fields every report carries: the window it echoes, and `hourlyFrom`, the
+ * day from which the figures that needed hourly rows are complete. Read after
+ * the statements have run, since they are what tell the window's `reach`.
+ */
 export function echo(window: SiteAnalyticsWindow) {
   return {
     from: window.from,
@@ -1239,6 +1243,7 @@ export function echo(window: SiteAnalyticsWindow) {
     interval: window.interval,
     locale: window.locale,
     filters: window.filters.map((f) => `${f.dim}:${f.value}`),
+    hourlyFrom: window.reach.hourlyFrom,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   type SiteInterval,
   type SiteLocale,
 } from "./site-analytics.constants";
+import { HourlyReach, hourlyHorizon } from "./site-analytics.retention";
 
 /** `filter=<dim>:<value>`, as the admin sends it. */
 export const FILTER_PATTERN = new RegExp(
@@ -64,7 +65,7 @@ export interface SiteAnalyticsRange {
  * Today is under way, so the window before ends at the same hour of its last
  * day: a change compares like with like, not today so far with a whole day.
  * Over {@link MAX_COMPARABLE_DAYS} there is no window before, since most of it
- * would lie past the retention.
+ * would lie past the daily rows' retention.
  */
 export interface SiteAnalyticsWindow extends SiteAnalyticsRange {
   days: number;
@@ -75,6 +76,14 @@ export interface SiteAnalyticsWindow extends SiteAnalyticsRange {
   interval: SiteInterval;
   /** Whether the SQL groups by the hour; otherwise by the day. */
   hourly: boolean;
+  /** The first UTC day the hourly rows hold today; see {@link hourlyHorizon}. */
+  horizon: string;
+  /**
+   * What the report's statements read from hourly rows beyond the horizon.
+   * Each statement adds to it as it plans its read, and `echo` reports it, so
+   * no report names `hourlyFrom` by hand.
+   */
+  reach: HourlyReach;
 }
 
 /**
@@ -151,6 +160,7 @@ export function siteAnalyticsWindow(
       `interval=hour takes at most ${MAX_HOURLY_DAYS} days`,
     );
   }
+  const horizon = hourlyHorizon(now);
   const shift = days * 86_400_000;
   const startMs = Date.parse(`${from}T00:00:00Z`);
   // A window that ends today compares with a window before that ends at the
@@ -178,6 +188,8 @@ export function siteAnalyticsWindow(
           },
     interval,
     hourly: interval === "hour",
+    horizon,
+    reach: new HourlyReach(horizon),
   };
 }
 

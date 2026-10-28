@@ -12,8 +12,16 @@ import { GeoipService } from "../../src/geoip/geoip.service";
 import { SiteAnalyticsCollectService } from "../../src/site-analytics/site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "../../src/site-analytics/site-analytics-storage.service";
 import { SiteReportRunner } from "../../src/site-analytics/site-analytics-report-runner";
+import { SiteAnalyticsProcessor } from "../../src/queues/processors/site-analytics.processor";
+import {
+  chunkStartDay,
+  hourlyHorizon,
+} from "../../src/site-analytics/site-analytics.retention";
 import { ROLLUP_TABLES } from "../../src/site-analytics/site-analytics.rollup";
-import { SITE_ANALYTICS_KEYS } from "../../src/site-analytics/site-analytics.constants";
+import {
+  SITE_ANALYTICS_KEYS,
+  SITE_CHUNK_DAYS,
+} from "../../src/site-analytics/site-analytics.constants";
 import {
   PARK_DEPENDENCIES,
   applyMergeDependencies,
@@ -1815,51 +1823,253 @@ describe("Site analytics (e2e)", () => {
     });
   });
 
-  it("drops chunks past 400 days and keeps the rest", async () => {
-    const old = new Date(`${addIsoDays(today, -430)}T00:00:00Z`);
-    const kept = new Date(`${addIsoDays(today, -20)}T00:00:00Z`);
-    for (const bucket of [old, kept]) {
-      await dataSource.query(
+  describe("retention", () => {
+    // The runner keeps the days of a cuboid a minute; each case seeds its own.
+    beforeEach(() => {
+      (
+        app.get(SiteReportRunner) as unknown as { rolled: Map<string, unknown> }
+      ).rolled.clear();
+    });
+
+    const at = (day: string) => new Date(`${day}T00:00:00Z`);
+    /** A day in the middle of the week chunk that lies `back` days before today, at the least. */
+    const chunkDay = (back: number) =>
+      addIsoDays(chunkStartDay(addIsoDays(today, -back)), 2);
+
+    const pageview = (day: string) =>
+      dataSource.query(
         `INSERT INTO site_pageviews (bucket, locale, path, page_type, device,
                                      browser, os, country, views)
          VALUES ($1, 'de', '/de', 'home', 'mobile', 'safari', 'ios', 'de', 1)`,
-        [bucket],
+        [at(day)],
       );
-    }
-    await dataSource.query(
-      `INSERT INTO site_pageviews_daily
-         (bucket, cuboid, locale, path, page_type, device, browser, os,
-          country, browser_language, entry, referrer, channel,
-          views, seconds, visits, engaged, visit_seconds, exits,
-          visit_span_seconds)
-       SELECT b, 1, 'de', '', '', '', '', '', '', '', '', '', '', 1, 0, 0,
-              0, 0, 0, 0
-         FROM unnest($1::timestamptz[]) b`,
-      [[old, kept]],
-    );
-    await dataSource.query(
-      `INSERT INTO site_visitor_dim_days (day, scope, dim, value, visitors)
-       SELECT d::date, 'all', 'country', 'de', 1
-         FROM unnest($1::timestamptz[]) d`,
-      [[old, kept]],
-    );
-    const dropped = await app.get(SiteAnalyticsStorageService).dropOldChunks();
-    expect(dropped.site_pageviews).toBe(1);
-    expect(dropped.site_pageviews_daily).toBe(1);
-    expect(dropped.site_visitor_dim_days).toBe(1);
-    expect(
+    const eventRow = (day: string) =>
+      dataSource.query(
+        `INSERT INTO site_events (bucket, name, locale, path, page_type,
+                                  device, browser, os, country, count)
+         VALUES ($1, 'tab_changed', 'de', '/de', 'home', 'mobile', 'safari',
+                 'ios', 'de', 1)`,
+        [at(day)],
+      );
+    const daily = (day: string, cuboid: number, views: number) =>
+      dataSource.query(
+        `INSERT INTO site_pageviews_daily
+           (bucket, cuboid, locale, path, page_type, device, browser, os,
+            country, browser_language, entry, referrer, channel,
+            views, seconds, visits, engaged, visit_seconds, exits,
+            visit_span_seconds)
+         VALUES ($1, $2, 'de', '', '', '', '', '', $3, '', '', '', '', $4,
+                 0, 0, 0, 0, 0, 0)`,
+        [at(day), cuboid, cuboid === 7 ? "de" : "", views],
+      );
+    /** The markers of a day: every cuboid of both sources, but `except`. */
+    const mark = (day: string, except: Array<[string, number]> = []) =>
+      dataSource.query(
+        `INSERT INTO site_rollup_days (source, cuboid, day, rows)
+         SELECT source, cuboid, $1::date, 1
+           FROM (VALUES ${Object.values(ROLLUP_TABLES)
+             .flatMap((table) =>
+               table.cuboids.map(
+                 (cuboid) => `('${table.source}', ${cuboid.id})`,
+               ),
+             )
+             .join(", ")}) AS c(source, cuboid)
+          WHERE (source, cuboid) NOT IN (${
+            except
+              .map(([source, cuboid]) => `('${source}', ${cuboid})`)
+              .join(", ") || "('', 0)"
+          })`,
+        [day],
+      );
+    const count = async (table: string, column = "bucket") =>
+      (
+        await dataSource.query(
+          `SELECT to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+             FROM ${table} ORDER BY 1`,
+        )
+      ).map((row: { day: string }) => row.day);
+
+    // Two chunks past 90 days, inside a window of 120 days: the one of
+    // `rolled` rolled up, the one of `waiting` missing the marker of one
+    // events cuboid; and one chunk within the 90.
+    const rolled = chunkDay(100);
+    const waiting = addIsoDays(chunkStartDay(rolled), -5);
+    const recent = addIsoDays(today, -20);
+
+    const seed = async () => {
+      for (const day of [rolled, waiting, recent]) {
+        await pageview(day);
+        await eventRow(day);
+      }
+      await mark(rolled);
+      await mark(waiting, [["events", 4]]);
+      // What the roll-up of the dropped days left: the daily rows.
+      await daily(rolled, 1, 7);
+      await daily(rolled, 7, 7);
+      await daily(waiting, 1, 1);
+      await daily(waiting, 7, 1);
+    };
+
+    it("puts a row in the chunk the grid says, as TimescaleDB cuts it", async () => {
+      await pageview(rolled);
+      const [chunk] = await dataSource.query(
+        `SELECT to_char(range_start AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS start,
+                to_char(range_end AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS end
+           FROM timescaledb_information.chunks
+          WHERE hypertable_name = 'site_pageviews'`,
+      );
+      expect(chunk.start).toBe(chunkStartDay(rolled));
+      expect(chunk.end).toBe(
+        addIsoDays(chunkStartDay(rolled), SITE_CHUNK_DAYS),
+      );
+    });
+
+    it("drops an hourly chunk past 90 days only once every day in it is rolled up, and fails to say the other is kept", async () => {
+      await seed();
+      const result = await app.get(SiteAnalyticsStorageService).dropOldChunks();
+      expect(result.dropped).toMatchObject({
+        site_pageviews: 1,
+        site_events: 1,
+      });
+      // The rolled chunk is gone, the waiting one and the recent one stay.
+      expect(await count("site_pageviews")).toEqual([waiting, recent]);
+      expect(await count("site_events")).toEqual([waiting, recent]);
+      expect(result.skipped).toEqual([
+        {
+          table: "site_pageviews",
+          from: chunkStartDay(waiting),
+          days: [waiting],
+        },
+        { table: "site_events", from: chunkStartDay(waiting), days: [waiting] },
+      ]);
+      // The job fails on it, as the failing-jobs report reads.
+      const failing = app
+        .get(SiteAnalyticsProcessor)
+        .handleDropOldChunks({} as never);
+      await expect(failing).rejects.toThrow(/2 hourly chunk\(s\) kept/);
+      // Once the day is rolled up the next night takes it.
       await dataSource.query(
-        `SELECT count(*)::int AS n FROM site_visitor_dim_days`,
-      ),
-    ).toEqual([{ n: 1 }]);
-    expect(
-      await dataSource.query(`SELECT count(*)::int AS n FROM site_pageviews`),
-    ).toEqual([{ n: 1 }]);
-    expect(
+        `INSERT INTO site_rollup_days (source, cuboid, day, rows)
+         VALUES ('events', 4, $1::date, 1)`,
+        [waiting],
+      );
+      await expect(
+        app.get(SiteAnalyticsStorageService).dropOldChunks(),
+      ).resolves.toMatchObject({
+        dropped: { site_pageviews: 1, site_events: 1 },
+        skipped: [],
+      });
+      expect(await count("site_pageviews")).toEqual([recent]);
+    });
+
+    it("keeps the daily rows and the visitor counts 400 days and the markers a while longer, and drops what is past", async () => {
+      const old = addIsoDays(today, -430);
+      const kept = addIsoDays(today, -100);
+      await daily(old, 1, 1);
+      await daily(kept, 1, 1);
+      for (const day of [old, kept]) {
+        await dataSource.query(
+          `INSERT INTO site_visitor_days (day, scope, visitors) VALUES ($1, 'all', 5)`,
+          [day],
+        );
+        await dataSource.query(
+          `INSERT INTO site_visitor_hours (hour, scope, visitors) VALUES ($1, 'all', 5)`,
+          [at(day)],
+        );
+        await dataSource.query(
+          `INSERT INTO site_visitor_dim_days (day, scope, dim, value, visitors)
+           VALUES ($1, 'all', 'country', 'de', 5)`,
+          [day],
+        );
+      }
+      // A marker 410 days back outlives the daily rows' 400 days, one past 414 goes.
       await dataSource.query(
-        `SELECT count(*)::int AS n FROM site_pageviews_daily`,
-      ),
-    ).toEqual([{ n: 1 }]);
+        `INSERT INTO site_rollup_days (source, cuboid, day, rows)
+         VALUES ('pageviews', 1, $1::date, 1), ('pageviews', 1, $2::date, 1),
+                ('pageviews', 1, $3::date, 1)`,
+        [addIsoDays(today, -420), addIsoDays(today, -410), kept],
+      );
+      const result = await app.get(SiteAnalyticsStorageService).dropOldChunks();
+      expect(result.dropped.site_pageviews_daily).toBe(1);
+      expect(await count("site_pageviews_daily")).toEqual([kept]);
+      // The visitor counts by dimension are deleted past 400 days like the
+      // other visitor counts.
+      expect(
+        await dataSource.query(
+          `SELECT to_char(day, 'YYYY-MM-DD') AS day FROM site_visitor_dim_days`,
+        ),
+      ).toEqual([{ day: kept }]);
+      expect(result.pruned).toEqual({
+        visitorDays: 1,
+        visitorHours: 1,
+        visitorDimDays: 1,
+        rollupMarkers: 1,
+      });
+      expect(
+        await dataSource.query(
+          `SELECT to_char(day, 'YYYY-MM-DD') AS day FROM site_visitor_days`,
+        ),
+      ).toEqual([{ day: kept }]);
+      expect(
+        await dataSource.query(
+          `SELECT to_char(day, 'YYYY-MM-DD') AS day FROM site_rollup_days ORDER BY 1`,
+        ),
+      ).toEqual([{ day: addIsoDays(today, -410) }, { day: kept }]);
+    });
+
+    it("says from which day a report over 120 days that needs hourly rows can count, for the window and the one before", async () => {
+      await seed();
+      await app.get(SiteAnalyticsStorageService).dropOldChunks();
+      const horizon = hourlyHorizon(new Date());
+      const hourlyOnly = "&filter=path:/de";
+
+      // No cuboid has a path filter with a country: hourly rows. The rolled
+      // chunk is gone, so its day is missing; the waiting chunk is still there.
+      const breakdown = await admin(
+        `/v1/admin/analytics/breakdown?dim=country&days=120${hourlyOnly}`,
+      ).expect(200);
+      expect(breakdown.body.hourlyFrom).toBe(horizon);
+      expect(breakdown.body.total.views).toBe(2);
+
+      // The same window a cuboid serves reads the daily rows of the rolled
+      // day, and says nothing.
+      const covered = await admin(
+        "/v1/admin/analytics/breakdown?dim=country&days=120",
+      ).expect(200);
+      expect(covered.body.hourlyFrom).toBeNull();
+      expect(covered.body.total.views).toBe(2 + 7);
+
+      // A window the hourly rows hold whole.
+      const recent = await admin(
+        `/v1/admin/analytics/breakdown?dim=country&days=30${hourlyOnly}`,
+      ).expect(200);
+      expect(recent.body.hourlyFrom).toBeNull();
+      expect(recent.body.total.views).toBe(1);
+
+      // The window before alone: 60 days start after the horizon, the 60
+      // before them before it.
+      await mark(addIsoDays(today, -100));
+      const events = await admin(
+        "/v1/admin/analytics/events?days=60&filter=country:de",
+      ).expect(200);
+      expect(events.body.from).toBe(addIsoDays(today, -59));
+      expect(events.body.hourlyFrom).toBe(horizon);
+
+      // An hourly series over a day whose chunk is gone.
+      const series = await admin(
+        `/v1/admin/analytics/overview?from=${rolled}&to=${rolled}&interval=hour`,
+      ).expect(200);
+      expect(series.body.hourlyFrom).toBe(horizon);
+    });
+
+    it("says nothing for a statistic younger than the hourly horizon, which has dropped nothing", async () => {
+      await pageview(recent);
+      await mark(recent);
+      const young = await admin(
+        "/v1/admin/analytics/breakdown?dim=country&days=120&filter=path:/de",
+      ).expect(200);
+      expect(young.body.hourlyFrom).toBeNull();
+    });
   });
 
   it("refuses the reports without a session", async () => {
