@@ -332,16 +332,16 @@ describe("Search Console (e2e)", () => {
     await importService.run("cron");
     const viewer = await account("gsc-reports@example.invalid", "viewer");
 
-    // The window is 7 days; Google has rows up to d(2), so five days are read
-    // (d(6)…d(2)) against the first five of the window before (d(13)…d(9)).
+    // The window is the 7 days up to the last day with data, d(8)…d(2), against
+    // the 7 days right before, d(15)…d(9).
     const queries = await get(
       "/v1/admin/search-console/queries?days=7",
       viewer.session,
     ).expect(200);
     expect(queries.headers["cache-control"]).toContain("no-store");
     expect(queries.body).toMatchObject({
-      from: d(6),
-      to: d(0),
+      from: d(8),
+      to: d(2),
       days: 7,
       locale: null,
       // Query rows only: 10 clicks on d(4), 20 on d(3), 30 on d(2) (the
@@ -411,6 +411,8 @@ describe("Search Console (e2e)", () => {
     ).expect(200);
     expect(series.body.interval).toBe("day");
     expect(series.body.series.map((p: { day: string }) => p.day)).toEqual([
+      d(8),
+      d(7),
       d(6),
       d(5),
       d(4),
@@ -418,13 +420,13 @@ describe("Search Console (e2e)", () => {
       d(2),
     ]);
     expect(series.body.series[0]).toEqual({
-      day: d(6),
+      day: d(8),
       clicks: 0,
       impressions: 0,
       ctr: 0,
       position: null,
     });
-    expect(series.body.series[4]).toMatchObject({ day: d(2), clicks: 48 });
+    expect(series.body.series[6]).toMatchObject({ day: d(2), clicks: 48 });
 
     const long = await get(
       "/v1/admin/search-console/series?days=365",

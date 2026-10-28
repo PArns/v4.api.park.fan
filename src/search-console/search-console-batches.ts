@@ -48,3 +48,21 @@ export async function currentBatches(
     ]),
   );
 }
+
+/**
+ * The newest day whose current batch has rows in the layout the reports
+ * read: the day a rolling window ends on. Null before the first import.
+ */
+export async function lastDataDay(
+  db: Pick<DataSource, "query">,
+  format: number,
+): Promise<string | null> {
+  const [row]: Array<{ day: string | null }> = await db.query(
+    `SELECT MAX(day)::text AS day
+       FROM (SELECT DISTINCT ON (day) day, rows, format
+               FROM search_console_batches ORDER BY day, id DESC) b
+      WHERE rows > 0 AND format >= $1`,
+    [format],
+  );
+  return row?.day ?? null;
+}

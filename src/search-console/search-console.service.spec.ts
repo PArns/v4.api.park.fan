@@ -44,6 +44,13 @@ function build(options: {
           position_sum: 0,
         }));
       }
+      if (sql.includes("MAX(day)::text AS day")) {
+        const withRows = (options.batches ?? [])
+          .filter((b) => b.rows > 0 && (b.format ?? 2) >= 2)
+          .map((b) => b.day)
+          .sort();
+        return [{ day: withRows[withRows.length - 1] ?? null }];
+      }
       if (sql.includes("MIN(day)::text AS first"))
         return [options.coverage ?? { first: null, last: null, rows: 0 }];
       if (sql.includes("MAX(finished_at)"))
@@ -157,7 +164,7 @@ describe("SearchConsoleService.status", () => {
 });
 
 describe("SearchConsoleService.queries", () => {
-  it("reads up to the last day with data and compares with as many days at the start of the window before", async () => {
+  it("ends a rolling window on the last day with data and compares it with the days right before", async () => {
     const { service, calls } = build({
       batches: WEEK,
       items: [
@@ -177,20 +184,20 @@ describe("SearchConsoleService.queries", () => {
     const report = await service.queries({ days: 7 }, NOW);
 
     expect(report).toMatchObject({
-      from: "2026-10-22",
-      to: "2026-10-28",
+      from: "2026-10-19",
+      to: "2026-10-25",
       days: 7,
       locale: null,
       totals: { clicks: 30, impressions: 400, ctr: 0.075, position: 4 },
       previous: { clicks: 20, impressions: 300, ctr: 0.0667, position: 5 },
     });
     const grouped = calls.find((c) => c.sql.includes("GROUP BY r.query"))!;
-    // current 22–25, previous 15–18: four days each.
+    // current 19–25, previous 12–18: seven days each.
     expect(grouped.params).toEqual(
       expect.arrayContaining([
-        "2026-10-22",
+        "2026-10-19",
         "2026-10-25",
-        "2026-10-15",
+        "2026-10-12",
         "2026-10-18",
       ]),
     );
@@ -344,11 +351,11 @@ describe("SearchConsoleService.pages", () => {
     expect(site.params).toEqual(
       expect.arrayContaining([["/de/parks", "/en/news"]]),
     );
-    // The site's own window is the whole requested one, not cut at the data.
+    // The site's own numbers cover the same anchored window.
     expect(site.params).toEqual(
       expect.arrayContaining([
-        "2026-10-22T00:00:00.000Z",
-        "2026-10-29T00:00:00.000Z",
+        "2026-10-19T00:00:00.000Z",
+        "2026-10-26T00:00:00.000Z",
       ]),
     );
   });
@@ -381,25 +388,28 @@ describe("SearchConsoleService.series", () => {
     const { service } = build({ batches: WEEK, perDay });
     const report = await service.series({ days: 7 }, NOW);
     expect(report).toMatchObject({
-      from: "2026-10-22",
-      to: "2026-10-28",
+      from: "2026-10-19",
+      to: "2026-10-25",
       days: 7,
       interval: "day",
     });
     expect(report.series.map((p) => p.day)).toEqual([
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
       "2026-10-22",
       "2026-10-23",
       "2026-10-24",
       "2026-10-25",
     ]);
-    expect(report.series[0]).toEqual({
+    expect(report.series[3]).toEqual({
       day: "2026-10-22",
       clicks: 4,
       impressions: 100,
       ctr: 0.04,
       position: 4,
     });
-    expect(report.series[1]).toEqual({
+    expect(report.series[4]).toEqual({
       day: "2026-10-23",
       clicks: 0,
       impressions: 0,
@@ -411,7 +421,7 @@ describe("SearchConsoleService.series", () => {
   it("folds days into ISO weeks, the periods the window or the data cut being partial", async () => {
     const { service } = build({ batches: WEEK, perDay });
     const report = await service.series({ days: 7, interval: "week" }, NOW);
-    // 22–25 October 2026 is Thursday to Sunday of the week of Monday the 19th.
+    // The anchored window 19–25 October 2026 is one whole ISO week.
     expect(report.series).toEqual([
       {
         day: "2026-10-19",
@@ -419,7 +429,6 @@ describe("SearchConsoleService.series", () => {
         impressions: 200,
         ctr: 0.05,
         position: 3,
-        partial: true,
       },
     ]);
   });
@@ -449,6 +458,15 @@ describe("SearchConsoleService.series", () => {
     await service.series({ days: 7, query: "phantasialand" }, NOW);
     const grouped = calls.find((c) => c.sql.includes("GROUP BY r.day"))!;
     expect(grouped.sql).toContain("r.query IS NOT NULL");
+  });
+
+  it("keeps an explicit window as asked, whatever the last day with data", async () => {
+    const { service } = build({ batches: WEEK, perDay: [] });
+    const report = await service.series(
+      { from: "2026-10-22", to: "2026-10-28" },
+      NOW,
+    );
+    expect(report).toMatchObject({ from: "2026-10-22", to: "2026-10-28" });
   });
 
   it("answers an empty window as an empty series", async () => {

@@ -113,6 +113,9 @@ export function parseFilters(raw: SiteAnalyticsQuery["filter"]): SiteFilter[] {
     });
 }
 
+/** The window length when a query names neither `days` nor `from`/`to`. */
+export const DEFAULT_WINDOW_DAYS = 30;
+
 /**
  * The window a query asks for, and the one before it. `days` (1–365) ends
  * today; `from`–`to` is any stretch of up to {@link MAX_RANGE_DAYS} days that
@@ -147,7 +150,7 @@ export function siteAnalyticsWindow(
       );
     }
   } else {
-    const days = query.days ?? 30;
+    const days = query.days ?? DEFAULT_WINDOW_DAYS;
     if (!Number.isInteger(days) || days < 1 || days > MAX_ADMIN_WINDOW_DAYS) {
       throw new BadRequestException(`days is 1 to ${MAX_ADMIN_WINDOW_DAYS}`);
     }

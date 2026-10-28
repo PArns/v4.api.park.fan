@@ -85,10 +85,13 @@ Search Console's own, imported as they are, with four things a reader of them mu
 - **Days are Pacific time**, Google's, not UTC like the site statistic's. A report over UTC days reads
   Google's days of the same dates.
 - **The newest two or three days are not final.** The import asks for final data only, so those days
-  have no rows yet. A report reads its window up to the last day with data (`coverage.to` of the
-  status says which) and compares it with as many days from the start of the window before, so a
-  change compares like with like. A window that ends today and a series that stops at `coverage.to`
-  are normal.
+  have no rows yet. A rolling window (`days`, or none given) therefore ends at the last day with data
+  (`coverage.to` of the status, counted only for days in the current layout) and starts `days - 1`
+  before it, as Search Console's own "last 28 days" does; `from` and `to` of the response are that
+  anchored window, the site's own numbers on the `pages` report cover it too, and `previous` is the
+  `days` before it. Before the first import the window ends today. A fixed window (`from`/`to`) stays
+  as asked and is read up to the last day with data, with `previous` cut to as many days from the start
+  of the window before, so a change compares like with like.
 - **Google leaves out the queries it anonymises** (rare ones, often a third or more of the
   impressions) as soon as a page is combined with a country or a device. The `queries` report therefore
   sums the queries Google lists, and its totals are lower than those of `pages` and `series`.
