@@ -600,8 +600,8 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
    * skipped rather than written as zero. An hour nobody visited has no key, so
    * the 24 hours of every language are written (with zeros) only when the
    * day's all-languages key was found: then the day was counted, and an hour
-   * or a language without a key had no visitors. Runs four times in the hour after midnight, the hour a day's
-   * and its hours' keys outlive their day. Returns the day keys found, and the
+   * or a language without a key had no visitors. Runs every quarter hour from midnight to 04:00, well inside the
+   * time a day's and its hours' keys outlive their day. Returns the day keys found, and the
    * day and hour rows written.
    */
   async snapshotVisitors(
@@ -684,7 +684,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
    * (`site_visitor_dim_days`) from the HyperLogLogs the day's index lists,
    * once: a row already written stays, and a key that is gone, or counted
    * nobody, is skipped rather than written as zero. Runs with
-   * {@link snapshotVisitors}, four times in the hour after midnight. Returns
+   * {@link snapshotVisitors}, every quarter hour from midnight to 04:00. Returns
    * the keys the index listed and the rows written.
    */
   async snapshotVisitorDims(

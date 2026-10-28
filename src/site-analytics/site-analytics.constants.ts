@@ -296,10 +296,11 @@ export const REALTIME_SERIES_MINUTES = 30;
 
 /**
  * How long a day's visitor HyperLogLog, and each of its hours' and
- * dimension values', outlives the day: the hour in which the snapshot runs four times, so no key outlives its
- * day by more and none is older than 25 hours.
+ * dimension values', outlives the day: a worker down through the hour after
+ * midnight still finds yesterday's keys when it comes back, and no key is
+ * older than 49 hours. The snapshot is idempotent.
  */
-export const VISITOR_KEY_GRACE_SECONDS = 3600;
+export const VISITOR_KEY_GRACE_SECONDS = 25 * 3600;
 
 /** The length of one flush window: how often counts move to Postgres. */
 export const FLUSH_WINDOW_SECONDS = 5 * 60;

@@ -1132,9 +1132,9 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Site statistic (PAR-1151): the finished five-minute windows from Redis
     // into the hypertables a minute after each window ends, yesterday's
-    // unique visitors four times in the hour after midnight (a day's
-    // HyperLogLog outlives its day by that hour and no more, so one run may
-    // fail), the finished days summed into the daily tables four times a day
+    // unique visitors every quarter hour from midnight to 04:00 (a day's
+    // HyperLogLog outlives its day by a day and an hour, so a worker that
+    // was down then still finds it), the finished days summed into the daily tables four times a day
     // (a day is rolled once it has settled; the other runs find nothing to do,
     // or catch up after a failed one), and the chunks past 400 days at 01:47.
     // A failing flush keeps
@@ -1145,7 +1145,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       [
         "snapshot-visitors",
         "site-analytics-visitors-cron",
-        "5-50/15 0 * * *",
+        "5-50/15 0-3 * * *",
         undefined,
       ],
       [
@@ -1161,13 +1161,15 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         undefined,
       ],
     ] as const) {
-      if (await this.hasRepeatableJob(this.siteAnalyticsQueue, jobId, cron))
+      if (
+        await this.hasRepeatableJob(this.siteAnalyticsQueue, jobId, cron, "UTC")
+      )
         continue;
       await this.siteAnalyticsQueue.add(
         name,
         {},
         {
-          repeat: { cron },
+          repeat: { cron, tz: "UTC" },
           jobId,
           removeOnComplete: 100,
           ...(removeOnFail && { removeOnFail }),
@@ -1462,6 +1464,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     queue: Queue,
     jobId: string,
     expectedCron?: string,
+    expectedTz?: string,
   ): Promise<boolean> {
     this.runs.checkpoint();
     const repeatableJobs = await queue.getRepeatableJobs();
@@ -1469,10 +1472,16 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     if (!existing) return false;
 
-    // If the cron expression changed, remove and re-register with the new schedule.
-    if (expectedCron && existing.cron !== expectedCron) {
+    // If the cron expression or its timezone changed, remove and re-register
+    // with the new schedule: the timezone is part of Bull's repeat key, so the
+    // old entry would otherwise keep running beside the new one.
+    if (
+      expectedCron &&
+      (existing.cron !== expectedCron ||
+        (expectedTz !== undefined && existing.tz !== expectedTz))
+    ) {
       this.logger.warn(
-        `Repeatable job "${jobId}" has outdated cron "${existing.cron}" (expected "${expectedCron}"), re-registering`,
+        `Repeatable job "${jobId}" has outdated cron "${existing.cron}" ${existing.tz ?? "no tz"} (expected "${expectedCron}" ${expectedTz ?? "any tz"}), re-registering`,
       );
       await queue.removeRepeatableByKey(existing.key);
       return false;

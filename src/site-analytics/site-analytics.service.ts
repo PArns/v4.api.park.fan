@@ -1016,7 +1016,7 @@ export class SiteAnalyticsService {
     const days = new Map(rows.map((row) => [row.day, num(row.visitors)]));
     const hours = new Map(hourRows.map((row) => [row.hour, num(row.visitors)]));
 
-    const graceDays = Math.ceil(VISITOR_KEY_GRACE_SECONDS / 86_400);
+    const graceDays = Math.floor(VISITOR_KEY_GRACE_SECONDS / 86_400);
     const liveFrom = addIsoDays(today, -graceDays);
     const live = daysBetween(liveFrom, today).filter(
       (day) => day >= first && day <= window.to && !days.has(day),
@@ -1151,7 +1151,7 @@ export class SiteAnalyticsService {
     const today = utcDay(now);
     const liveFrom = addIsoDays(
       today,
-      -Math.ceil(VISITOR_KEY_GRACE_SECONDS / 86_400),
+      -Math.floor(VISITOR_KEY_GRACE_SECONDS / 86_400),
     );
     const live = daysBetween(liveFrom, today)
       .filter((day) => day >= from && day <= to)

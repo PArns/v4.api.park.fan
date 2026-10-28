@@ -11,7 +11,7 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
  *   ended with an exit each, then the finished Redis windows go into
  *   `site_pageviews` and `site_events`, each window on its own, so one that
  *   fails does not hold up the rest;
- * - `snapshot-visitors`, four times in the hour after midnight: yesterday's
+ * - `snapshot-visitors`, every quarter hour from midnight to 04:00: yesterday's
  *   unique visitors, each hour's, and those by country, device, browser, OS
  *   and channel, from their HyperLogLogs into `site_visitor_days`,
  *   `site_visitor_hours` and `site_visitor_dim_days`, once;

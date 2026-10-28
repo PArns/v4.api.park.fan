@@ -22,17 +22,17 @@ refuses text. Body at most 16 KiB, as text or JSON (413), `{ v: 1, hits: [...] }
 400; otherwise **204**, counted or not, `no-store`, and `Cross-Origin-Resource-Policy: cross-origin`
 (helmet's `same-origin` would make the browser block the beacon's empty answer and log an error).
 
-| Field | Hit | Rule (`site-analytics.hits.ts`) | When it fails |
-| --- | --- | --- | --- |
-| `t` | all | `pageview`, `event` or `engagement` | hit dropped |
-| `locale` | all | one of the six | hit dropped |
-| `path` | all | `^/(en\|de\|nl\|fr\|es\|it)(/[a-z0-9][a-z0-9._~-]{0,99}){0,8}$`, first segment = `locale` | hit dropped |
-| `pageType` | all | `^[a-z][a-z0-9_]{0,31}$` | hit dropped |
-| `referrer` | page view | `^[a-z0-9][a-z0-9.-]{0,99}$` with a dot in it, not park.fan: the host of an external referrer | referrer dropped |
-| `name` | event | `^[a-z][a-z0-9_]{1,47}$` | hit dropped |
-| `props` | event | up to 8 in key order; key `^[a-z][a-z0-9_]{0,31}$`; value a finite number, a boolean or a string `^[\p{L}\p{N}][\p{L}\p{N} ._:/+#-]{0,119}$` | that prop dropped |
-| `entity` | event | lowercase UUID of a park, ride, show or restaurant | entity dropped |
-| `seconds` | engagement | a whole number, 1–1800 (`MAX_ENGAGEMENT_SECONDS`) | hit dropped |
+| Field      | Hit        | Rule (`site-analytics.hits.ts`)                                                                                                              | When it fails     |
+| ---------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `t`        | all        | `pageview`, `event` or `engagement`                                                                                                          | hit dropped       |
+| `locale`   | all        | one of the six                                                                                                                               | hit dropped       |
+| `path`     | all        | `^/(en\|de\|nl\|fr\|es\|it)(/[a-z0-9][a-z0-9._~-]{0,99}){0,8}$`, first segment = `locale`                                                    | hit dropped       |
+| `pageType` | all        | `^[a-z][a-z0-9_]{0,31}$`                                                                                                                     | hit dropped       |
+| `referrer` | page view  | `^[a-z0-9][a-z0-9.-]{0,99}$` with a dot in it, not park.fan: the host of an external referrer                                                | referrer dropped  |
+| `name`     | event      | `^[a-z][a-z0-9_]{1,47}$`                                                                                                                     | hit dropped       |
+| `props`    | event      | up to 8 in key order; key `^[a-z][a-z0-9_]{0,31}$`; value a finite number, a boolean or a string `^[\p{L}\p{N}][\p{L}\p{N} ._:/+#-]{0,119}$` | that prop dropped |
+| `entity`   | event      | lowercase UUID of a park, ride, show or restaurant                                                                                           | entity dropped    |
+| `seconds`  | engagement | a whole number, 1–1800 (`MAX_ENGAGEMENT_SECONDS`)                                                                                            | hit dropped       |
 
 **Engagement.** The frontend times each page view while the tab is visible and reports it as
 `{ t: "engagement", locale, path, pageType, seconds }`, with the page's later hits or when
@@ -102,20 +102,20 @@ its props and their values in the data. Two rules hold everywhere:
 
 There is no schema, so the guards are generic. Each counts per UTC day in Redis.
 
-| Guard | Limit (`site-analytics.constants.ts`) | Past it |
-| --- | --- | --- |
-| hits per address (IPv4, IPv6 /56) | 3000 (`MAX_HITS_PER_ADDRESS_PER_DAY`) | dropped |
-| hits per five-minute window, all readers | 5000 (`MAX_HITS_PER_WINDOW`) | dropped |
-| distinct event names; `page_read` exempt | 300, 20 new per address (`SITE_GUARDS.names`) | a new name dropped |
-| distinct page types | 100, 10 new per address | stored as `other` |
-| distinct paths | 20,000, 200 new per address | stored as `(other)`, the entry too |
-| distinct referring sites outside the known search engines, AI assistants and social networks | 1000, 10 new per address | stored as `(other)`, channel kept |
-| property combinations (with the entity) per event; `page_read` exempt | 2000, 100 new per address | counted with props `{ "_overflow": "1" }`, no entity |
-| `page_read` per reader and page | 3 (`MAX_VIEWS_PER_READER_PER_DAY`) | dropped |
-| `page_read` per address and page, whatever the User-Agent | 10 (`MAX_VIEWS_PER_ADDRESS_AND_PAGE_PER_DAY`) | dropped |
-| `page_read` per address | 200 (`MAX_VIEWS_PER_ADDRESS_PER_DAY`) | dropped |
-| `page_read` of a park or ride that does not exist | the ids, cached ten minutes (`SiteEntityNames.knownIds`) | dropped |
-| blocked names | the admin's list (`PUT /v1/admin/analytics/blocked-events/:name`) | dropped; each instance rereads the list within a minute |
+| Guard                                                                                        | Limit (`site-analytics.constants.ts`)                             | Past it                                                 |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- |
+| hits per address (IPv4, IPv6 /56)                                                            | 3000 (`MAX_HITS_PER_ADDRESS_PER_DAY`)                             | dropped                                                 |
+| hits per five-minute window, all readers                                                     | 5000 (`MAX_HITS_PER_WINDOW`)                                      | dropped                                                 |
+| distinct event names; `page_read` exempt                                                     | 300, 20 new per address (`SITE_GUARDS.names`)                     | a new name dropped                                      |
+| distinct page types                                                                          | 100, 10 new per address                                           | stored as `other`                                       |
+| distinct paths                                                                               | 20,000, 200 new per address                                       | stored as `(other)`, the entry too                      |
+| distinct referring sites outside the known search engines, AI assistants and social networks | 1000, 10 new per address                                          | stored as `(other)`, channel kept                       |
+| property combinations (with the entity) per event; `page_read` exempt                        | 2000, 100 new per address                                         | counted with props `{ "_overflow": "1" }`, no entity    |
+| `page_read` per reader and page                                                              | 3 (`MAX_VIEWS_PER_READER_PER_DAY`)                                | dropped                                                 |
+| `page_read` per address and page, whatever the User-Agent                                    | 10 (`MAX_VIEWS_PER_ADDRESS_AND_PAGE_PER_DAY`)                     | dropped                                                 |
+| `page_read` per address                                                                      | 200 (`MAX_VIEWS_PER_ADDRESS_PER_DAY`)                             | dropped                                                 |
+| `page_read` of a park or ride that does not exist                                            | the ids, cached ten minutes (`SiteEntityNames.knownIds`)          | dropped                                                 |
+| blocked names                                                                                | the admin's list (`PUT /v1/admin/analytics/blocked-events/:name`) | dropped; each instance rereads the list within a minute |
 
 Each value guard is one Lua script (`ADMIT_SCRIPT` in `site-analytics-scripts.ts`), atomic in Redis: a value in today's
 set passes; **a value in yesterday's set joins without using the address's budget**, up to twice the
@@ -175,22 +175,22 @@ request.
   count one hit: what makes them anonymous is that they hold no identifier and no visit thread, not
   that they are large.
 
-| Redis key family | Holds | Lives at most |
-| --- | --- | --- |
-| `site-analytics:visit:<hmac>` | how a visit began, its page views, its first and last hit, its exit row | until the flush ends the visit (30 to 35 min after its last hit), at most 40 min after it |
-| `site-analytics:visits:open` | the open visits' pseudonyms, scored by their last hit | a member until its visit ends; never older than 2 h |
-| `site-analytics:cap:`, `read:`, `read-page:`, `read-addr:`, `new:<hmac>` | a reader's or an address's counts today | to the end of its UTC day + 1 min (≤ 24 h 1 min) |
-| `site-analytics:uv:<day>:<scope>` | the day's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h) |
-| `site-analytics:uvh:<hour>:<scope>` | the hour's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h), as the day's, so the snapshot can read it |
-| `site-analytics:uvd:<day>:<scope>:<dim>:<value>` | the day's visitor HyperLogLog of one country, device, browser, OS or channel (`dim`), all languages or one | to the end of its day + 1 h (≤ 25 h), as the day's |
-| `site-analytics:uvd-index:<day>` | the `scope\|dim\|value` of every `uvd` key the day wrote, so the snapshot finds them without a scan; no reader in it | the same |
-| `site-analytics:rt:uv:`, `rt:pv:`, `rt:ev:<minute>:<scope>` | the minute's visitor HyperLogLog, page views, events | 35 min |
-| `site-analytics:live:<list>:<minute>:<scope>` | the minute's page views by page, country and device, visits started by channel and referrer site, events by name; no reader in them | 35 min |
-| `site-analytics:guard:<guard>:<day>` | the day's admitted names, page types, paths, referrer sites, combination hashes | to the end of the next day + 1 min (≤ 48 h); no reader in them |
-| `site-analytics:window-hits:<window>` | all hits of a five-minute window | 15 min |
-| `site-analytics:drops:<day>` | drop and overflow counts by reason | to the end of the next day + 1 min |
-| `site-analytics:buf:<window>`, `…:flushing` | a window's counts until written | no TTL; written within about six minutes |
-| `site-analytics:buf:<window>:parked` | a window the flusher gave up on | 7 days |
+| Redis key family                                                         | Holds                                                                                                                               | Lives at most                                                                             |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `site-analytics:visit:<hmac>`                                            | how a visit began, its page views, its first and last hit, its exit row                                                             | until the flush ends the visit (30 to 35 min after its last hit), at most 40 min after it |
+| `site-analytics:visits:open`                                             | the open visits' pseudonyms, scored by their last hit                                                                               | a member until its visit ends; never older than 2 h                                       |
+| `site-analytics:cap:`, `read:`, `read-page:`, `read-addr:`, `new:<hmac>` | a reader's or an address's counts today                                                                                             | to the end of its UTC day + 1 min (≤ 24 h 1 min)                                          |
+| `site-analytics:uv:<day>:<scope>`                                        | the day's visitor HyperLogLog                                                                                                       | to the end of its day + 25 h (≤ 49 h)                                                     |
+| `site-analytics:uvh:<hour>:<scope>`                                      | the hour's visitor HyperLogLog                                                                                                      | to the end of its day + 25 h (≤ 49 h), as the day's, so the snapshot can read it          |
+| `site-analytics:uvd:<day>:<scope>:<dim>:<value>`                         | the day's visitor HyperLogLog of one country, device, browser, OS or channel (`dim`), all languages or one                          | to the end of its day + 25 h (≤ 49 h), as the day's                                       |
+| `site-analytics:uvd-index:<day>`                                         | the `scope\|dim\|value` of every `uvd` key the day wrote, so the snapshot finds them without a scan; no reader in it                | the same                                                                                  |
+| `site-analytics:rt:uv:`, `rt:pv:`, `rt:ev:<minute>:<scope>`              | the minute's visitor HyperLogLog, page views, events                                                                                | 35 min                                                                                    |
+| `site-analytics:live:<list>:<minute>:<scope>`                            | the minute's page views by page, country and device, visits started by channel and referrer site, events by name; no reader in them | 35 min                                                                                    |
+| `site-analytics:guard:<guard>:<day>`                                     | the day's admitted names, page types, paths, referrer sites, combination hashes                                                     | to the end of the next day + 1 min (≤ 48 h); no reader in them                            |
+| `site-analytics:window-hits:<window>`                                    | all hits of a five-minute window                                                                                                    | 15 min                                                                                    |
+| `site-analytics:drops:<day>`                                             | drop and overflow counts by reason                                                                                                  | to the end of the next day + 1 min                                                        |
+| `site-analytics:buf:<window>`, `…:flushing`                              | a window's counts until written                                                                                                     | no TTL; written within about six minutes                                                  |
+| `site-analytics:buf:<window>:parked`                                     | a window the flusher gave up on                                                                                                     | 7 days                                                                                    |
 
 ## Visits, visitors, bounce, realtime
 
@@ -213,8 +213,8 @@ request.
   dimensions as its start (in the hour of the second page view), so whatever a filter selects, its
   bounce rate is `1 − engaged / visits`.
 - **Visitors**: a HyperLogLog per UTC day, all languages and per language, and per hour (for an hourly
-  series), of the reader's daily pseudonym. Four runs of `snapshot-visitors` in the hour after midnight
-  insert yesterday's counts into `site_visitor_days`, the 24 hours of each language into
+  series), of the reader's daily pseudonym. `snapshot-visitors` runs every quarter hour from midnight to 04:00 and
+  inserts yesterday's counts into `site_visitor_days`, the 24 hours of each language into
   `site_visitor_hours` and the counts by dimension (below) into `site_visitor_dim_days`, once (a row
   already written stays; a lost day key is skipped, not written as zero, and then so are its hours; an
   hour or a language without a key on a day that was counted had no visitors and is written as zero);
@@ -305,13 +305,13 @@ also reaches the data-quality report's failing jobs.
 **The tables** are TimescaleDB hypertables (`HYPERTABLES`), never updated and never deleted from; how long
 each keeps its rows is [below](#retention):
 
-| Table | Row | Compression |
-| --- | --- | --- |
-| `site_pageviews` | the UTC hour, `locale`, `path`, `page_type`, `device`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the three visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
-| `site_events` | the UTC hour, `name`, the page dimensions (with `device`) without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count` | the same, segment by `name` |
-| `site_analytics_flushes` | the written claims of each window | 30-day chunks |
-| `site_pageviews_daily` | `site_pageviews` summed per UTC day and [cuboid](#the-daily-level): the day's midnight as `bucket`, `cuboid`, `locale`, the dimensions the cuboid names (the others `''`), the seven sums as `bigint` | 7-day chunks, compressed after 7 days, segment by `cuboid`, order by `bucket DESC` |
-| `site_events_daily` | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint` | the same |
+| Table                    | Row                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Compression                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `site_pageviews`         | the UTC hour, `locale`, `path`, `page_type`, `device`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the three visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
+| `site_events`            | the UTC hour, `name`, the page dimensions (with `device`) without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count`                                                                                                                                                                                                                                                                                  | the same, segment by `name`                                                        |
+| `site_analytics_flushes` | the written claims of each window                                                                                                                                                                                                                                                                                                                                                                                                                           | 30-day chunks                                                                      |
+| `site_pageviews_daily`   | `site_pageviews` summed per UTC day and [cuboid](#the-daily-level): the day's midnight as `bucket`, `cuboid`, `locale`, the dimensions the cuboid names (the others `''`), the seven sums as `bigint`                                                                                                                                                                                                                                                       | 7-day chunks, compressed after 7 days, segment by `cuboid`, order by `bucket DESC` |
+| `site_events_daily`      | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint`                                                                                                                                                                                                                                                                                                              | the same                                                                           |
 
 A row's `bucket` is its hour (`bucketOf`); the flusher still writes every five minutes, so an hour
 holds up to twelve rows per combination, summed when read. The nightly `drop-old-chunks` drops a
@@ -427,15 +427,15 @@ The nightly `site-analytics` / `drop-old-chunks` (01:47 UTC, `SiteAnalyticsStora
 keeps each table as long as its figures are of use. The numbers are named constants in
 `site-analytics.constants.ts`, per hypertable in `HYPERTABLE_RETENTION_DAYS`:
 
-| Table | Kept | Constant | Removed by |
-| --- | --- | --- | --- |
-| `site_pageviews`, `site_events` | 90 days | `HOURLY_RETENTION_DAYS` | chunks dropped whole, once every day with rows in them is rolled up |
-| `site_analytics_flushes` | 90 days | `HOURLY_RETENTION_DAYS` | chunks dropped whole (30-day chunks): a claim only has to outlive its window's retry, and follows the hourly rows it stands for |
-| `site_pageviews_daily`, `site_events_daily` | 400 days | `DAILY_RETENTION_DAYS` | chunks dropped whole |
-| `site_visitor_days`, `site_visitor_hours` | 400 days | `DAILY_RETENTION_DAYS` | rows deleted |
-| `site_visitor_dim_days` | 400 days | `DAILY_RETENTION_DAYS` | rows deleted |
-| `site_rollup_days` | 414 days | `ROLLUP_MARKER_RETENTION_DAYS` | rows deleted: a marker outlives the daily rows it vouches for, which live up to a chunk past 400 days, so a report never reads a day hourly while its daily rows are there and the job never rolls a day up twice |
-| `site_blocked_events`, `site_entity_merges`, `site_analytics_imports` | kept | | |
+| Table                                                                 | Kept     | Constant                       | Removed by                                                                                                                                                                                                        |
+| --------------------------------------------------------------------- | -------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `site_pageviews`, `site_events`                                       | 90 days  | `HOURLY_RETENTION_DAYS`        | chunks dropped whole, once every day with rows in them is rolled up                                                                                                                                               |
+| `site_analytics_flushes`                                              | 90 days  | `HOURLY_RETENTION_DAYS`        | chunks dropped whole (30-day chunks): a claim only has to outlive its window's retry, and follows the hourly rows it stands for                                                                                   |
+| `site_pageviews_daily`, `site_events_daily`                           | 400 days | `DAILY_RETENTION_DAYS`         | chunks dropped whole                                                                                                                                                                                              |
+| `site_visitor_days`, `site_visitor_hours`                             | 400 days | `DAILY_RETENTION_DAYS`         | rows deleted                                                                                                                                                                                                      |
+| `site_visitor_dim_days`                                               | 400 days | `DAILY_RETENTION_DAYS`         | rows deleted                                                                                                                                                                                                      |
+| `site_rollup_days`                                                    | 414 days | `ROLLUP_MARKER_RETENTION_DAYS` | rows deleted: a marker outlives the daily rows it vouches for, which live up to a chunk past 400 days, so a report never reads a day hourly while its daily rows are there and the job never rolls a day up twice |
+| `site_blocked_events`, `site_entity_merges`, `site_analytics_imports` | kept     |                                |                                                                                                                                                                                                                   |
 
 The hourly rows carry every dimension at once; the daily rows only a few at a time (the
 [cuboids](#the-daily-level)), which is what a comparison between years needs. So a statement a cuboid
@@ -601,13 +601,13 @@ counted first, values seen only; filters do not apply. 503 when Redis does not a
 a slow report from taking the database with it. The Traffic page asks for sixteen at once, and each
 click on a filter asks again.
 
-| Setting | Default | What it bounds |
-| --- | --- | --- |
-| `SITE_ANALYTICS_REPORT_CONCURRENCY` | 4 | reports one process runs at once; the rest wait their turn |
-| `SITE_ANALYTICS_REPORT_QUEUE` | 32 | reports that may wait; one more is refused at once |
-| `SITE_ANALYTICS_REPORT_QUEUE_WAIT_MS` | 30000 | how long one waits for a place before it is refused |
-| `SITE_ANALYTICS_STATEMENT_TIMEOUT_MS` | 15000 | how long one statement of a report may run |
-| `SITE_ANALYTICS_REPORT_WORK_MEM_MB` | 32 | memory of each sort and hash of a report's statement |
+| Setting                               | Default | What it bounds                                             |
+| ------------------------------------- | ------- | ---------------------------------------------------------- |
+| `SITE_ANALYTICS_REPORT_CONCURRENCY`   | 4       | reports one process runs at once; the rest wait their turn |
+| `SITE_ANALYTICS_REPORT_QUEUE`         | 32      | reports that may wait; one more is refused at once         |
+| `SITE_ANALYTICS_REPORT_QUEUE_WAIT_MS` | 30000   | how long one waits for a place before it is refused        |
+| `SITE_ANALYTICS_STATEMENT_TIMEOUT_MS` | 15000   | how long one statement of a report may run                 |
+| `SITE_ANALYTICS_REPORT_WORK_MEM_MB`   | 32      | memory of each sort and hash of a report's statement       |
 
 A refused or stopped report answers **503** with `{ statusCode: 503, error, reason, message }`: `reason:
 "busy"` ("Too many statistic reports are running at once. Try again in a few seconds.") or `reason:
@@ -622,22 +622,22 @@ and runs at most 15 s a statement (up to four statements of one report run in pa
 which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any failed call
 ("failed on the server; try again or narrow the call").
 
-| Endpoint | Answers |
-| --- | --- |
-| `POST /v1/analytics/collect` | the beacon (above) |
-| `GET /v1/admin/analytics/overview` | the figures above for the window and the one before; a series with all of them; realtime |
-| `GET /v1/admin/analytics/breakdown?dim=&limit=` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages |
-| `GET /v1/admin/analytics/crosstab?row=&col=&metric=` | page views or visits by two dimensions (above) |
-| `GET /v1/admin/analytics/live?locale=` | the last half hour from Redis (above) |
-| `GET /v1/admin/analytics/events` | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series |
-| `GET /v1/admin/analytics/events/:name` | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and device, the 50 top entities (name and frontend path; `kind` null once gone), series |
-| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=` | one event by two sides: `page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval |
-| `GET /v1/admin/analytics/search` | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and device; result kinds, positions, browse items; series |
-| `GET /v1/admin/analytics/seo/landing-pages?channel=search&limit=` | the pages visits from one channel entered on: visits, previous, change, bounce rate, average visit, top 5 sources |
-| `GET /v1/admin/analytics/seo/trends?channel=search` | rising and falling landing pages, 25 each, at least 10 visits over both windows, with the window's average visit; at most 180 days |
-| `GET /v1/admin/analytics/seo/not-found` | paths that showed `pageType: not_found`, with the referrers of the visits that **entered** on them (`visits` each): a Google result pointing at a dead page shows `google`; a broken link inside the site brings views and no referrer, whatever the visit came from |
-| `GET /v1/admin/analytics/seo/uncovered?kind=park\|attraction` | parks or rides no search visit entered on: matched on the frontend path in any language, so a ride renamed since shows as uncovered |
-| `GET`, `PUT`, `DELETE /v1/admin/analytics/blocked-events[/:name]` | the block list; writes need `editor` and are audited |
+| Endpoint                                                          | Answers                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /v1/analytics/collect`                                      | the beacon (above)                                                                                                                                                                                                                                                                                     |
+| `GET /v1/admin/analytics/overview`                                | the figures above for the window and the one before; a series with all of them; realtime                                                                                                                                                                                                               |
+| `GET /v1/admin/analytics/breakdown?dim=&limit=`                   | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages                                 |
+| `GET /v1/admin/analytics/crosstab?row=&col=&metric=`              | page views or visits by two dimensions (above)                                                                                                                                                                                                                                                         |
+| `GET /v1/admin/analytics/live?locale=`                            | the last half hour from Redis (above)                                                                                                                                                                                                                                                                  |
+| `GET /v1/admin/analytics/events`                                  | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series                                                                                                                                                                                 |
+| `GET /v1/admin/analytics/events/:name`                            | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and device, the 50 top entities (name and frontend path; `kind` null once gone), series                                                                                                      |
+| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=`         | one event by two sides: `page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval |
+| `GET /v1/admin/analytics/search`                                  | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and device; result kinds, positions, browse items; series          |
+| `GET /v1/admin/analytics/seo/landing-pages?channel=search&limit=` | the pages visits from one channel entered on: visits, previous, change, bounce rate, average visit, top 5 sources                                                                                                                                                                                      |
+| `GET /v1/admin/analytics/seo/trends?channel=search`               | rising and falling landing pages, 25 each, at least 10 visits over both windows, with the window's average visit; at most 180 days                                                                                                                                                                     |
+| `GET /v1/admin/analytics/seo/not-found`                           | paths that showed `pageType: not_found`, with the referrers of the visits that **entered** on them (`visits` each): a Google result pointing at a dead page shows `google`; a broken link inside the site brings views and no referrer, whatever the visit came from                                   |
+| `GET /v1/admin/analytics/seo/uncovered?kind=park\|attraction`     | parks or rides no search visit entered on: matched on the frontend path in any language, so a ride renamed since shows as uncovered                                                                                                                                                                    |
+| `GET`, `PUT`, `DELETE /v1/admin/analytics/blocked-events[/:name]` | the block list; writes need `editor` and are audited                                                                                                                                                                                                                                                   |
 
 All admin routes need a session (`AdminAuthGuard`, any role) and answer `private, no-store`.
 `SiteAnalyticsService`, `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` return exactly these
@@ -692,17 +692,17 @@ other builds, so the times are upper bounds. It ran with 49 page-view cuboids, n
 - **Reading, a year.** The Traffic page asks for sixteen reports at once (the overview, the events,
   thirteen breakdowns, one crosstab), here through the runner's four places. Median of three, ms:
 
-| Reports, 365 days | Hourly rows only | Daily level |
-| --- | --- | --- |
-| the Traffic page, all at once | 17,600 | **2,850** |
-| the Traffic page under `country:de` / `channel:search` | 8,400 / 10,200 | 2,550 / 4,900 |
-| the SEO page (landing pages, trends over 180 days, not found), at once | 3,500 | 1,600 |
-| event, crosstab and search reports, at once | 3,400 | 1,350 |
-| overview / events | 1,114 / 1,554 | 65 / 101 |
-| breakdown by channel / page type / device / browser / OS | 1,075 / 1,061 / 1,112 / 1,024 / 846 | 26 / 29 / 28 / 29 / 26 |
-| breakdown by referrer / country / browser language / language | 695 / 1,240 / 1,236 / 377 | 77 / 91 / 93 / 22 |
-| breakdown by path / entry page / exit | 2,780 / 1,570 / 2,660 | 2,439 / 696 / 1,920 |
-| crosstab OS × device | 743 | 41 |
+| Reports, 365 days                                                      | Hourly rows only                    | Daily level            |
+| ---------------------------------------------------------------------- | ----------------------------------- | ---------------------- |
+| the Traffic page, all at once                                          | 17,600                              | **2,850**              |
+| the Traffic page under `country:de` / `channel:search`                 | 8,400 / 10,200                      | 2,550 / 4,900          |
+| the SEO page (landing pages, trends over 180 days, not found), at once | 3,500                               | 1,600                  |
+| event, crosstab and search reports, at once                            | 3,400                               | 1,350                  |
+| overview / events                                                      | 1,114 / 1,554                       | 65 / 101               |
+| breakdown by channel / page type / device / browser / OS               | 1,075 / 1,061 / 1,112 / 1,024 / 846 | 26 / 29 / 28 / 29 / 26 |
+| breakdown by referrer / country / browser language / language          | 695 / 1,240 / 1,236 / 377           | 77 / 91 / 93 / 22      |
+| breakdown by path / entry page / exit                                  | 2,780 / 1,570 / 2,660               | 2,439 / 696 / 1,920    |
+| crosstab OS × device                                                   | 743                                 | 41                     |
 
 The path, the entry page and the exit are what is left: a grouping by 125,000 paths a year sums three
 million daily rows in one hash table, however they are read. The slowest page is the one under a
@@ -712,19 +712,19 @@ read the hourly rows.
 **Reads by window** on the daily level (median of three after one run, ms; each cell "unfiltered /
 `country:de` / `channel:search`" where the row says so):
 
-| Report | 1 day | 30 days | 90 days | 365 days |
-| --- | --- | --- | --- | --- |
-| overview / `country:de` / `channel:search` | 38 / 14 / 10 | 59 / 188 / 23 | 105 / 345 / 41 | 124 / 573 / 52 |
-| overview by week | 21 | 54 | 79 | 247 |
-| breakdown `path` / under `channel:search` | 3 / 3 | 367 / 211 | 927 / 644 | 2,695 / 1,863 |
-| breakdown `exit` / under `channel:search` | 4 / 3 | 315 / 303 | 656 / 613 | 2,184 / 2,460 |
-| breakdown `referrer` / `country` / `browser_language` | 3 / 4 / 3 | 10 / 13 / 24 | 42 / 33 / 36 | 163 / 119 / 150 |
-| traffic crosstab `os` × `device` / `channel` × `exit` | 3 / 3 | 7 / 509 | 20 / 1,239 | 41 / 3,163 |
-| events | 14 | 28 | 73 | 138 |
-| event `tab_changed` | 8 | 120 | 186 | 659 |
-| crosstab | 4 | 42 | 140 | 536 |
-| search | 9 | 96 | 269 | 1,174 |
-| SEO landing pages / trends (180 days at most) / not found | 14 / 23 / 2 | 293 / 383 / 117 | 716 / 930 / 256 | 1,793 / 1,533 / 725 |
+| Report                                                    | 1 day        | 30 days         | 90 days         | 365 days            |
+| --------------------------------------------------------- | ------------ | --------------- | --------------- | ------------------- |
+| overview / `country:de` / `channel:search`                | 38 / 14 / 10 | 59 / 188 / 23   | 105 / 345 / 41  | 124 / 573 / 52      |
+| overview by week                                          | 21           | 54              | 79              | 247                 |
+| breakdown `path` / under `channel:search`                 | 3 / 3        | 367 / 211       | 927 / 644       | 2,695 / 1,863       |
+| breakdown `exit` / under `channel:search`                 | 4 / 3        | 315 / 303       | 656 / 613       | 2,184 / 2,460       |
+| breakdown `referrer` / `country` / `browser_language`     | 3 / 4 / 3    | 10 / 13 / 24    | 42 / 33 / 36    | 163 / 119 / 150     |
+| traffic crosstab `os` × `device` / `channel` × `exit`     | 3 / 3        | 7 / 509         | 20 / 1,239      | 41 / 3,163          |
+| events                                                    | 14           | 28              | 73              | 138                 |
+| event `tab_changed`                                       | 8            | 120             | 186             | 659                 |
+| crosstab                                                  | 4            | 42              | 140             | 536                 |
+| search                                                    | 9            | 96              | 269             | 1,174               |
+| SEO landing pages / trends (180 days at most) / not found | 14 / 23 / 2  | 293 / 383 / 117 | 716 / 930 / 256 | 1,793 / 1,533 / 725 |
 
 The one-day column reads the hourly rows: a one-day window is drawn by the hour. The `channel` ×
 `exit` crosstab reads them for any window, since no cuboid pairs the path with another dimension.
