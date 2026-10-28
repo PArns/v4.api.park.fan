@@ -6,12 +6,14 @@ import {
 import { Reflector } from "@nestjs/core";
 import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import { AdminSessionStore } from "./admin-session.store";
+import type { AdminApiTokenStore } from "./admin-api-token.store";
 import { RedisMock } from "../../../test/mocks/redis.mock";
 import {
   ADMIN_ALLOW_PENDING_PASSWORD_KEY,
   ADMIN_LEGACY_ALLOWED_KEY,
   ADMIN_MIN_ROLE_KEY,
   ADMIN_PUBLIC_KEY,
+  ADMIN_TOKEN_ONLY_KEY,
 } from "./admin-auth.decorators";
 import type { AdminRole } from "./entities/admin-user.entity";
 import type { RequestWithAdmin } from "./admin-principal";
@@ -42,6 +44,9 @@ function reflectorReturning(
 
 describe("AdminAuthGuard", () => {
   let sessions: AdminSessionStore;
+  const apiTokens = {
+    resolvePrincipal: jest.fn(async () => null),
+  } as unknown as AdminApiTokenStore;
 
   const LEGACY = "a-long-shared-secret-value";
 
@@ -71,7 +76,11 @@ describe("AdminAuthGuard", () => {
   }
 
   it("refuses a request with no credential at all", async () => {
-    const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+    const guard = new AdminAuthGuard(
+      reflectorReturning({}),
+      sessions,
+      apiTokens,
+    );
     await expect(guard.canActivate(contextFor({}))).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
@@ -81,13 +90,18 @@ describe("AdminAuthGuard", () => {
     const guard = new AdminAuthGuard(
       reflectorReturning({ [ADMIN_PUBLIC_KEY]: true }),
       sessions,
+      apiTokens,
     );
     await expect(guard.canActivate(contextFor({}))).resolves.toBe(true);
   });
 
   it("accepts a bearer session and attaches the principal", async () => {
     const token = await tokenFor("editor");
-    const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+    const guard = new AdminAuthGuard(
+      reflectorReturning({}),
+      sessions,
+      apiTokens,
+    );
     const request: Partial<RequestWithAdmin> = {
       headers: { authorization: `Bearer ${token}` },
     };
@@ -106,7 +120,11 @@ describe("AdminAuthGuard", () => {
   it("refuses a bearer token that no longer resolves", async () => {
     const token = await tokenFor("editor");
     await sessions.destroy(token);
-    const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+    const guard = new AdminAuthGuard(
+      reflectorReturning({}),
+      sessions,
+      apiTokens,
+    );
     await expect(
       guard.canActivate(
         contextFor({ headers: { authorization: `Bearer ${token}` } }),
@@ -120,6 +138,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_MIN_ROLE_KEY]: "owner" }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(
@@ -135,6 +154,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_MIN_ROLE_KEY]: "editor" }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(
@@ -145,7 +165,11 @@ describe("AdminAuthGuard", () => {
 
     it("lets any session read an endpoint that declares nothing", async () => {
       const token = await tokenFor("viewer");
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       await expect(
         guard.canActivate(
           contextFor({ headers: { authorization: `Bearer ${token}` } }),
@@ -157,7 +181,11 @@ describe("AdminAuthGuard", () => {
   describe("a session that owes a password change", () => {
     it("is refused everywhere by default", async () => {
       const token = await tokenFor("owner", true);
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       await expect(
         guard.canActivate(
           contextFor({ headers: { authorization: `Bearer ${token}` } }),
@@ -170,6 +198,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_ALLOW_PENDING_PASSWORD_KEY]: true }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(
@@ -182,7 +211,11 @@ describe("AdminAuthGuard", () => {
   describe("the deprecated shared pass", () => {
     it("authenticates from the query string when configured", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       const context = contextFor({ query: { pass: LEGACY } });
       await expect(guard.canActivate(context)).resolves.toBe(true);
       expect(
@@ -192,7 +225,11 @@ describe("AdminAuthGuard", () => {
 
     it("authenticates from the header too", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       await expect(
         guard.canActivate(contextFor({ headers: { "x-admin-pass": LEGACY } })),
       ).resolves.toBe(true);
@@ -200,7 +237,11 @@ describe("AdminAuthGuard", () => {
 
     it("refuses a wrong value, and one that is merely a prefix", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       for (const pass of ["wrong", LEGACY.slice(0, -1), LEGACY + "x", ""]) {
         await expect(
           guard.canActivate(contextFor({ query: { pass } })),
@@ -209,7 +250,11 @@ describe("AdminAuthGuard", () => {
     });
 
     it("is unavailable when no secret is configured", async () => {
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       await expect(
         guard.canActivate(contextFor({ query: { pass: "" } })),
       ).rejects.toBeInstanceOf(UnauthorizedException);
@@ -218,7 +263,11 @@ describe("AdminAuthGuard", () => {
     it("can be switched off while the secret is still set", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
       process.env.ADMIN_LEGACY_PASS_ENABLED = "false";
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       await expect(
         guard.canActivate(contextFor({ query: { pass: LEGACY } })),
       ).rejects.toBeInstanceOf(UnauthorizedException);
@@ -230,6 +279,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_MIN_ROLE_KEY]: "owner" }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(contextFor({ query: { pass: LEGACY } })),
@@ -244,6 +294,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: false }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(contextFor({ query: { pass: LEGACY } })),
@@ -257,6 +308,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: true }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(contextFor({ query: { pass: LEGACY } })),
@@ -268,6 +320,7 @@ describe("AdminAuthGuard", () => {
       const guard = new AdminAuthGuard(
         reflectorReturning({ [ADMIN_LEGACY_ALLOWED_KEY]: false }),
         sessions,
+        apiTokens,
       );
       await expect(
         guard.canActivate(
@@ -279,7 +332,11 @@ describe("AdminAuthGuard", () => {
     it("never wins over a valid session", async () => {
       process.env.ADMIN_LEGACY_PASS = LEGACY;
       const token = await tokenFor("viewer");
-      const guard = new AdminAuthGuard(reflectorReturning({}), sessions);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({}),
+        sessions,
+        apiTokens,
+      );
       const context = contextFor({
         headers: { authorization: `Bearer ${token}` },
         query: { pass: LEGACY },
@@ -288,6 +345,114 @@ describe("AdminAuthGuard", () => {
       expect(
         (context.switchToHttp().getRequest() as RequestWithAdmin).admin,
       ).toMatchObject({ legacy: false, role: "viewer" });
+    });
+  });
+
+  describe("API tokens", () => {
+    const tokenPrincipal = {
+      userId: "user-1",
+      email: "you@park.fan",
+      displayName: "You",
+      role: "viewer" as const,
+      sessionToken: null,
+      legacy: false,
+      ip: null,
+      mustChangePassword: false,
+      mustEnrolTotp: false,
+      apiToken: {
+        id: "token-1",
+        kind: "pat" as const,
+        clientName: null,
+        scope: "admin:read",
+      },
+    };
+
+    function storeResolving(principal: unknown): AdminApiTokenStore {
+      return {
+        resolvePrincipal: jest.fn(async () => principal),
+      } as unknown as AdminApiTokenStore;
+    }
+
+    it("are refused on every endpoint that does not ask for them", async () => {
+      const store = storeResolving(tokenPrincipal);
+      const guard = new AdminAuthGuard(reflectorReturning({}), sessions, store);
+      await expect(
+        guard.canActivate(
+          contextFor({ headers: { authorization: "Bearer pfa_whatever" } }),
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(store.resolvePrincipal).not.toHaveBeenCalled();
+    });
+
+    it("are the only thing a token-only endpoint accepts", async () => {
+      const store = storeResolving(tokenPrincipal);
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_TOKEN_ONLY_KEY]: true }),
+        sessions,
+        store,
+      );
+      const context = contextFor({
+        headers: { authorization: "Bearer pfa_whatever" },
+      });
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+      expect(
+        (context.switchToHttp().getRequest() as RequestWithAdmin).admin,
+      ).toMatchObject({ apiToken: { id: "token-1" }, role: "viewer" });
+    });
+
+    it("leave a token-only endpoint closed to a session", async () => {
+      const token = await tokenFor("owner");
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_TOKEN_ONLY_KEY]: true }),
+        sessions,
+        storeResolving(null),
+      );
+      await expect(
+        guard.canActivate(
+          contextFor({ headers: { authorization: `Bearer ${token}` } }),
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it("leave a token-only endpoint closed to the shared pass", async () => {
+      process.env.ADMIN_LEGACY_PASS = LEGACY;
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_TOKEN_ONLY_KEY]: true }),
+        sessions,
+        storeResolving(null),
+      );
+      await expect(
+        guard.canActivate(contextFor({ query: { pass: LEGACY } })),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it("cannot reach past the token's role", async () => {
+      const guard = new AdminAuthGuard(
+        reflectorReturning({
+          [ADMIN_TOKEN_ONLY_KEY]: true,
+          [ADMIN_MIN_ROLE_KEY]: "editor",
+        }),
+        sessions,
+        storeResolving(tokenPrincipal),
+      );
+      await expect(
+        guard.canActivate(
+          contextFor({ headers: { authorization: "Bearer pfa_whatever" } }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("are refused for an account that owes a password change", async () => {
+      const guard = new AdminAuthGuard(
+        reflectorReturning({ [ADMIN_TOKEN_ONLY_KEY]: true }),
+        sessions,
+        storeResolving({ ...tokenPrincipal, mustChangePassword: true }),
+      );
+      await expect(
+        guard.canActivate(
+          contextFor({ headers: { authorization: "Bearer pfa_whatever" } }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });

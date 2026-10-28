@@ -26,6 +26,7 @@ import {
 import { generateTotpSecret, totpStep, totpUri, verifyTotp } from "./totp.util";
 import { AdminSessionStore, type AdminSession } from "./admin-session.store";
 import { AdminLoginRateLimitService } from "./admin-login-rate-limit.service";
+import { AdminApiTokenStore } from "./admin-api-token.store";
 import {
   getBootstrapAdmin,
   getLoginLockoutMinutes,
@@ -120,6 +121,7 @@ export class AdminAuthService implements OnModuleInit {
     private readonly users: Repository<AdminUser>,
     private readonly sessions: AdminSessionStore,
     private readonly loginLimiter: AdminLoginRateLimitService,
+    private readonly apiTokens: AdminApiTokenStore,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -404,6 +406,18 @@ export class AdminAuthService implements OnModuleInit {
     await this.sessions.destroy(token);
   }
 
+  /**
+   * End every way into this account: its sessions, its personal access tokens
+   * and its OAuth grants. Whatever ends the sessions ends the tokens too, so
+   * a deactivation or a password reset cannot be outlived by an MCP client.
+   * Returns the number of sessions ended.
+   */
+  async signOutEverywhere(userId: string, reason: string): Promise<number> {
+    const sessions = await this.sessions.destroyAllForUser(userId);
+    await this.apiTokens.revokeAllForUser(userId, reason);
+    return sessions;
+  }
+
   // ── accounts ──────────────────────────────────────────────────────────────
 
   async findById(id: string): Promise<AdminUser | null> {
@@ -511,7 +525,7 @@ export class AdminAuthService implements OnModuleInit {
             .then(() => Object.assign(user, changes));
 
     if (patch.isActive === false) {
-      await this.sessions.destroyAllForUser(id);
+      await this.signOutEverywhere(id, "deactivated");
     } else {
       await this.sessions.patchUserSessions(id, {
         role: saved.role,
@@ -589,7 +603,7 @@ export class AdminAuthService implements OnModuleInit {
     );
 
     const kept = keepToken ? await this.sessions.resolve(keepToken) : null;
-    await this.sessions.destroyAllForUser(userId);
+    await this.signOutEverywhere(userId, "password-change");
     if (!kept) return { reissuedToken: null, expiresAt: null };
 
     // Re-issuing rather than sparing the old token: a password change is a
@@ -649,7 +663,7 @@ export class AdminAuthService implements OnModuleInit {
         lockedUntil: null,
       },
     );
-    await this.sessions.destroyAllForUser(id);
+    await this.signOutEverywhere(id, "password-reset");
     return { mustChangePassword: true };
   }
 
@@ -672,7 +686,7 @@ export class AdminAuthService implements OnModuleInit {
       { id },
       { totpEnabled: false, totpSecret: null, totpLastStep: null },
     );
-    await this.sessions.destroyAllForUser(id);
+    await this.signOutEverywhere(id, "totp-reset");
   }
 
   // ── TOTP enrolment ────────────────────────────────────────────────────────
