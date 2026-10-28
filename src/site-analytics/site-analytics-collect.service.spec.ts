@@ -598,7 +598,7 @@ describe("SiteAnalyticsCollectService", () => {
     expect(ttlOf("site-analytics:read-addr:")).toBe(toMidnight + 60);
     expect(ttlOf("site-analytics:new:")).toBe(toMidnight + 60);
     expect(ttlOf("site-analytics:uv:2026-10-28:all")).toBe(toMidnight + 3600);
-    expect(ttlOf("site-analytics:uvh:2026102821:all")).toBe(toMidnight + 60);
+    expect(ttlOf("site-analytics:uvh:2026102821:all")).toBe(toMidnight + 3600);
     expect(ttlOf("site-analytics:rt:uv:202610282116:all")).toBe(2100);
     expect(ttlOf("site-analytics:rt:pv:202610282116:all")).toBe(2100);
     expect(ttlOf("site-analytics:live:pages:202610282116:all")).toBe(2100);

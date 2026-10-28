@@ -134,6 +134,27 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     compressAfterDays: 30,
     description: "Site statistic: written flush windows",
   },
+  // The reports' daily level (PAR-1157): the two tables above summed to the
+  // UTC day per cuboid by the nightly `rollup-days` job, one segment per
+  // cuboid so a report reads only the one it needs.
+  {
+    table: "site_pageviews_daily",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: page views by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_events_daily",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: events by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
   // Google Search Console (PAR-1160): insert-only, a batch per import of a
   // day, the reports read the newest batch of each day. Month chunks,
   // compressed 35 days after the day (a day is imported again for the first
@@ -157,6 +178,8 @@ export const SITE_ANALYTICS_HYPERTABLES = [
   "site_pageviews",
   "site_events",
   "site_analytics_flushes",
+  "site_pageviews_daily",
+  "site_events_daily",
 ] as const;
 
 /**

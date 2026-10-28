@@ -340,6 +340,54 @@ export function columnOf(dim: FilterDim): string {
   return dim;
 }
 
+/** Instants that bound rows: `[start, end)`. */
+export interface BucketRange {
+  start: string;
+  end: string;
+}
+
+/**
+ * The stretches of buckets a report reads: the window's, and with `both` the
+ * window before's as well, which is one stretch with the window when it ends
+ * where the window starts and two when it ends at an earlier hour.
+ */
+export function bucketRanges(
+  window: Pick<SiteAnalyticsWindow, "start" | "end" | "previous">,
+  scope: "current" | "both",
+): BucketRange[] {
+  const previous = scope === "both" ? window.previous : null;
+  if (!previous) return [{ start: window.start, end: window.end }];
+  if (previous.end < window.start) {
+    return [
+      { start: previous.start, end: previous.end },
+      { start: window.start, end: window.end },
+    ];
+  }
+  return [{ start: previous.start, end: window.end }];
+}
+
+/**
+ * The window's language and filters as conditions on the dimension columns,
+ * values as parameters; the same on every table a report reads.
+ */
+export function dimConditionsOf(
+  params: SqlParams,
+  window: Pick<SiteAnalyticsWindow, "locale" | "filters">,
+  alias = "",
+): string[] {
+  const col = (name: string) => (alias ? `${alias}.${name}` : name);
+  const conditions: string[] = [];
+  if (window.locale) {
+    conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
+  }
+  for (const filter of window.filters) {
+    conditions.push(
+      `${col(columnOf(filter.dim))} = ${params.add(filter.value)}`,
+    );
+  }
+  return conditions;
+}
+
 /**
  * The `WHERE` of a report over `site_pageviews` or `site_events`: the window's
  * rows, or with `both` the window's and the one before's, the language and
@@ -357,26 +405,22 @@ export function whereOf(
   alias = "",
 ): string {
   const col = (name: string) => (alias ? `${alias}.${name}` : name);
-  const previous = scope === "both" ? window.previous : null;
+  const ranges = bucketRanges(window, scope);
+  const first = ranges[0];
+  const last = ranges[ranges.length - 1];
   const conditions = [
-    `${col("bucket")} >= ${params.add(previous?.start ?? window.start)}::timestamptz`,
-    `${col("bucket")} < ${params.add(window.end)}::timestamptz`,
+    `${col("bucket")} >= ${params.add(first.start)}::timestamptz`,
+    `${col("bucket")} < ${params.add(last.end)}::timestamptz`,
   ];
-  if (previous && previous.end < window.start) {
+  if (ranges.length > 1) {
     conditions.push(
-      `NOT (${col("bucket")} >= ${params.add(previous.end)}::timestamptz ` +
-        `AND ${col("bucket")} < ${params.add(window.start)}::timestamptz)`,
+      `NOT (${col("bucket")} >= ${params.add(first.end)}::timestamptz ` +
+        `AND ${col("bucket")} < ${params.add(last.start)}::timestamptz)`,
     );
   }
-  if (window.locale) {
-    conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
-  }
-  for (const filter of window.filters) {
-    conditions.push(
-      `${col(columnOf(filter.dim))} = ${params.add(filter.value)}`,
-    );
-  }
-  return conditions.join(" AND ");
+  return [...conditions, ...dimConditionsOf(params, window, alias)].join(
+    " AND ",
+  );
 }
 
 /**
@@ -401,12 +445,31 @@ export function periodText(value: unknown, hourly: boolean): string | null {
   return hourly ? `${iso.slice(0, 13)}:00:00Z` : iso.slice(0, 10);
 }
 
-/** Most counted first, ties in the given order. */
-export function byCountDesc<T>(items: T[], count: (item: T) => number): T[] {
+/**
+ * Most counted first. Ties go by `tie` (a plain string comparison) when it is
+ * given, else in the given order: an order that came out of a `GROUP BY` is
+ * whatever plan produced it, so a list built from one gives `tie`, and the
+ * answer is the same whichever table the rows were read from.
+ */
+export function byCountDesc<T>(
+  items: T[],
+  count: (item: T) => number,
+  tie?: (item: T) => string,
+): T[] {
   return items
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => count(b.item) - count(a.item) || a.index - b.index)
+    .sort(
+      (a, b) =>
+        count(b.item) - count(a.item) ||
+        (tie ? compareText(tie(a.item), tie(b.item)) : 0) ||
+        a.index - b.index,
+    )
     .map(({ item }) => item);
+}
+
+/** Code-unit order, the same in every runtime and for every database collation. */
+export function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export type Count = string | number | null;

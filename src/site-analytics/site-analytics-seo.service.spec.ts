@@ -31,8 +31,13 @@ describe("SiteAnalyticsSeoService", () => {
         return routes.find(([match]) => sql.includes(match))?.[1] ?? [];
       },
     };
+    const runner = {
+      run: <T>(report: () => Promise<T>) => report(),
+      query: db.query,
+      rolledDays: async () => new Set<string>(),
+    };
     service = new SiteAnalyticsSeoService(
-      db as never,
+      runner as never,
       { find: async () => parks } as never,
       { find: async () => attractions } as never,
     );

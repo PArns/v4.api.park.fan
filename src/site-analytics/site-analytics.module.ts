@@ -16,6 +16,10 @@ import { SiteVisitorDay } from "./entities/site-visitor-day.entity";
 import { SiteBlockedEvent } from "./entities/site-blocked-event.entity";
 import { SiteEntityMerge } from "./entities/site-entity-merge.entity";
 import { SiteAnalyticsFlush } from "./entities/site-analytics-flush.entity";
+import { SitePageviewDay } from "./entities/site-pageview-day.entity";
+import { SiteEventDay } from "./entities/site-event-day.entity";
+import { SiteRollupDay } from "./entities/site-rollup-day.entity";
+import { SiteVisitorHour } from "./entities/site-visitor-hour.entity";
 import { SiteAnalyticsImport } from "./entities/site-analytics-import.entity";
 import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "./site-analytics-storage.service";
@@ -23,6 +27,7 @@ import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
+import { SiteReportRunner } from "./site-analytics-report-runner";
 import { SiteEntityNames } from "./site-entity-names.service";
 import {
   AdminSiteAnalyticsController,
@@ -38,8 +43,8 @@ export const COLLECT_ROUTE = {
 
 /**
  * Our own cookieless, aggregate-only site statistic: page views, visits,
- * visitors and any event the site sends, counted per UTC hour, and
- * the admin's reports on them. `SiteAnalyticsService`,
+ * visitors and any event the site sends, counted per UTC hour and, for the
+ * finished days, rolled up per day, and the admin's reports on them. `SiteAnalyticsService`,
  * `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` are exported for
  * the admin's MCP tools,
  * `SiteAnalyticsCollectService` for the most-read counter's old endpoint.
@@ -51,6 +56,10 @@ export const COLLECT_ROUTE = {
       SitePageviewRow,
       SiteEventRow,
       SiteVisitorDay,
+      SiteVisitorHour,
+      SitePageviewDay,
+      SiteEventDay,
+      SiteRollupDay,
       SiteBlockedEvent,
       SiteEntityMerge,
       SiteAnalyticsFlush,
@@ -66,6 +75,7 @@ export const COLLECT_ROUTE = {
   providers: [
     SiteAnalyticsCollectService,
     SiteAnalyticsStorageService,
+    SiteReportRunner,
     SiteAnalyticsService,
     SiteAnalyticsSeoService,
     SiteAnalyticsLiveService,

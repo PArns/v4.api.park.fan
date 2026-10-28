@@ -550,7 +550,7 @@ export class SiteAnalyticsCollectService
           pipeline.pfadd(dayKey, visitor).expire(dayKey, dayKeyTtl, "NX");
           pipeline
             .pfadd(hourKeyName, visitor)
-            .expire(hourKeyName, dayTtl, "NX");
+            .expire(hourKeyName, dayKeyTtl, "NX");
           index += 4;
         }
       }

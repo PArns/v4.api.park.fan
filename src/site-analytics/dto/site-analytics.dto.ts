@@ -439,7 +439,7 @@ export class SiteOverviewDto extends WindowDto {
   @ApiProperty({
     type: [SiteSeriesPointDto],
     description:
-      "Every period of the interval, zeros included; hours up to the current one. An earlier day's hour has null visitors.",
+      "Every period of the interval, zeros included; hours up to the current one. An hour's visitors are live for today and the nightly snapshot's for a finished day, null only for a day from before the snapshot kept hours.",
   })
   series: SiteSeriesPointDto[];
 

@@ -160,7 +160,7 @@ request.
 | `site-analytics:visits:open` | the open visits' pseudonyms, scored by their last hit | a member until its visit ends; never older than 2 h |
 | `site-analytics:cap:`, `read:`, `read-page:`, `read-addr:`, `new:<hmac>` | a reader's or an address's counts today | to the end of its UTC day + 1 min (≤ 24 h 1 min) |
 | `site-analytics:uv:<day>:<scope>` | the day's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h) |
-| `site-analytics:uvh:<hour>:<scope>` | the hour's visitor HyperLogLog | to the end of its day + 1 min |
+| `site-analytics:uvh:<hour>:<scope>` | the hour's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h), as the day's, so the snapshot can read it |
 | `site-analytics:rt:uv:`, `rt:pv:`, `rt:ev:<minute>:<scope>` | the minute's visitor HyperLogLog, page views, events | 35 min |
 | `site-analytics:live:<list>:<minute>:<scope>` | the minute's page views by page, country and viewport, visits started by channel and referrer site, events by name; no reader in them | 35 min |
 | `site-analytics:guard:<guard>:<day>` | the day's admitted names, page types, paths, referrer sites, campaigns, combination hashes | to the end of the next day + 1 min (≤ 48 h); no reader in them |
@@ -189,11 +189,14 @@ request.
 - **Bounce**: the second page view of a visit adds `engaged = 1` to a visit row with the same
   dimensions as its start (in the hour of the second page view), so whatever a filter selects, its
   bounce rate is `1 − engaged / visits`.
-- **Visitors**: a HyperLogLog per UTC day, all languages and per language (and per hour, for today's
-  hours in an hourly series), of the reader's daily pseudonym. Four runs of `snapshot-visitors` in the hour after
-  midnight insert yesterday's counts into `site_visitor_days`, once (a day already written stays; a
-  lost key is skipped, not written as zero); today and, until then, yesterday are read live. A reader
-  who comes back on another day counts again, so a window's visitors are the sum of its days.
+- **Visitors**: a HyperLogLog per UTC day, all languages and per language, and per hour (for an hourly
+  series), of the reader's daily pseudonym. Four runs of `snapshot-visitors` in the hour after midnight
+  insert yesterday's counts into `site_visitor_days`, and the 24 hours of each language into
+  `site_visitor_hours`, once (a row already written stays; a lost day key is skipped, not written as
+  zero, and then so are its hours; an hour or a language without a key on a day that was counted had
+  no visitors and is written as zero); today and, until then, yesterday are read live. A reader who
+  comes back on another day counts again, so a window's visitors are the sum of its days, and one who
+  comes back in another hour counts in each, so the hours of a day do not add up to its visitors.
   Visitors cannot be split by anything but the language: with a filter they are `null`. HyperLogLog's
   standard error is 0.81 %.
 - **Languages**: a visitor counts in every language they read a page in, a visit in the language of
@@ -260,17 +263,21 @@ also reaches the data-quality report's failing jobs.
 | `site_pageviews` | the UTC hour, `locale`, `path`, `page_type`, `viewport`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`, `campaign`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the four visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
 | `site_events` | the UTC hour, `name`, the page dimensions without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count` | the same, segment by `name` |
 | `site_analytics_flushes` | the written claims of each window | 30-day chunks |
+| `site_pageviews_daily` | `site_pageviews` summed per UTC day and [cuboid](#the-daily-level): the day's midnight as `bucket`, `cuboid`, `locale`, the dimensions the cuboid names (the others `''`), the seven sums as `bigint` | 7-day chunks, compressed after 7 days, segment by `cuboid`, order by `bucket DESC` |
+| `site_events_daily` | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint` | the same |
 
 A row's `bucket` is its hour (`bucketOf`); the flusher still writes every five minutes, so an hour
 holds up to twelve rows per combination, summed when read. The nightly `drop-old-chunks` drops chunks
 wholly older than 400 days (`RETENTION_DAYS`) with `drop_chunks` under a 5-second `lock_timeout`, one
 table at a time; a chunk it cannot lock waits for the next night rather than queueing the API behind it
 ([lock queues](../troubleshooting/timescaledb-lock-queues.md)). A dropped chunk is a dropped table:
-nothing for VACUUM. `site_visitor_days` (seven rows a day), `site_blocked_events` and
-`site_entity_merges` are small plain tables.
+nothing for VACUUM. `site_visitor_days` (seven rows a day), `site_visitor_hours` (168 a day),
+`site_rollup_days` (a marker per cuboid and day), `site_blocked_events` and `site_entity_merges` are
+small plain tables, kept.
 
 **Schema.** The entities declare the bucket index `create_hypertable` makes
-(`site_pageviews_bucket_idx`, `site_events_bucket_idx`) and the `props` default as a plain `{}`: with
+(`site_pageviews_bucket_idx`, `site_events_bucket_idx`, and the same for the daily tables, which also
+have an index on `(cuboid, bucket)` for the chunks not compressed yet) and the `props` default as a plain `{}`: with
 the default as an SQL expression, `synchronize` altered the column on every start, an `ACCESS
 EXCLUSIVE` lock on the hypertable. The e2e suite asserts that `synchronize` finds nothing to change in
 these tables after the hypertables are made.
@@ -279,6 +286,86 @@ these tables after the hypertables are made.
 records `loser → winner` in `site_entity_merges` (`recordEntityMerge`, a `custom` entry of all four
 dependency lists in `src/parks/utils/merge-dependencies.ts`), always pointing at the final survivor,
 and the reports and rankings read `COALESCE(winner_id, entity)`.
+
+## The daily level
+
+A year of the hourly rows is what makes a long report slow: ten million rows are read for every figure,
+however small the answer. So the `site-analytics` / `rollup-days` job sums every finished UTC day into
+`site_pageviews_daily` and `site_events_daily`, and the reports read whole past days there and only the
+hours that are not rolled up from the hourly rows: today, a day the job has not reached, and the hour a
+window before ends at. The answers are the same either way (below); only the rows read differ.
+
+**Cuboids.** Summing a day over every dimension would not shrink it: a page view's row is nearly unique
+at this traffic (25,300 rows a day with every dimension but the hour, against 29,600 hourly). So the
+daily rows are groupings of the day by a few dimensions at a time, **cuboids**. A cuboid's rows carry
+`locale` (every cuboid keeps the language), the dimensions it names, and the sums; the other dimension
+columns hold `''`. There are 49 for page views (`PAGEVIEW_CUBOIDS`): the day alone; each dimension a
+panel groups by (path with its page type, page type, viewport, browser, OS, country, browser language,
+entry page, referrer, channel, campaign); the entry page with referrer, channel and page type, for the
+SEO reports; and every pair of the nine narrow dimensions (page type, viewport, browser, OS, country,
+browser language, channel, campaign, referrer), a filter on one with a panel on another. A pair with
+the path or the entry page has 12,000 to 15,000 rows a day, against the hourly rows' 29,600, and is
+not kept. There are four for events (`EVENT_CUBOIDS`): the name; the name with its property combination; the name with page type, viewport
+and property combination (an event's detail, the search report's openings); the name with the entity.
+Their ids are stored in every row and marker, so they never move: a new grouping takes the next number
+and the job fills it in for the old days.
+
+**What a report reads.** Every statement lists the columns it reads, the window's language and filters
+included, and `chooseCuboid` takes the smallest cuboid that has them all; with none (a filter on the
+path or entry page, three filters, a crosstab of the path with another dimension, an event filtered by
+country) it reads the hourly rows as before. `rowsOf` then reads, for each whole day of the window that
+has a marker, the cuboid's rows, and the hourly rows for the rest, in one `UNION ALL` with the same
+language and filters in both branches. The branches select only the cuboid's columns, so a statement
+that reads one the cuboid lacks fails instead of reading `''`. A statement that reads no day (a
+breakdown, a crosstab without `day`, the properties and entities of one event) first sums each branch
+over the columns it reads, which lets Postgres aggregate in parallel; not for the path and entry page,
+whose hundred thousand values a year cost more to sum twice. The hourly series (`interval=hour`, at most
+two days) reads the hourly rows.
+
+**The same answer.** Every figure is a sum, and a sum of sums is the sum, so a cuboid's rows give what
+the hourly rows give. Every list that came out of a `GROUP BY` without an `ORDER BY` (the sides of a
+crosstab and its cells, an event's page types and property combinations, the search report's surfaces,
+result kinds and browse items) is ordered by count and then by name, not by the order the database
+returned the rows, so two plans cannot give two orders. The checks: the unit specs pin the cuboid
+numbers, the choice, the day split and the SQL; `site-analytics.e2e-spec.ts` seeds twelve days, asks
+840 report URLs (windows, filters, languages, intervals) from the hourly rows, rolls the days up,
+asks them again and expects every body to be equal; and the same comparison ran on the synthetic year:
+1,127 answers (every report; windows from a day to a year, eight filter sets, two languages) were
+identical, and the 40 the reports refuse (a visit filter on events, say) were refused both ways.
+
+**The job** (`SiteAnalyticsStorageService.rollupDays`, 02:35, 08:35, 14:35 and 20:35 UTC; a run with
+nothing to do costs three small queries). It rolls the days from the oldest hourly row (at most 400 days
+back) to the last day that has settled: ended two hours ago (`ROLLUP_SETTLE_SECONDS`, the flusher's
+retries and the visits' exits are in by then) and before any flush window still waiting in Redis. For
+each such day it adds the cuboids that have no marker in `site_rollup_days`, oldest day first, a day in
+one transaction under an advisory lock (and a Redis lock for the run): one statement per cuboid, `INSERT
+… SELECT … GROUP BY` of the day's hourly rows, that writes the rows and the marker (with the rows'
+count) together and only if the cuboid has no marker for the day. Nothing is updated or deleted. Before
+a day commits, each cuboid written is summed and compared with the day's hourly totals; one that does
+not add up rolls the day back, fails the job (it is retried by the next run and reaches the failing-jobs
+report) and leaves the day to be read hourly. The first run backfills what the hourly tables hold, at
+about 1.3 s a day on an idle machine (365 days took 581 s on a shared host), and stops starting days
+after 25 minutes (`ROLLUP_RUN_BUDGET_MS`); a new cuboid is filled in the same way.
+
+**What the reports know about a day.** `SiteReportRunner.rolledDays` reads the markers of a cuboid (a
+day is rolled once and never taken back) and keeps them a minute, so a day just rolled is read hourly
+for a minute longer, and when they cannot be read the reports read the hourly rows. A statement takes a
+day from the daily rows only if its cuboid has the day's marker; rows and marker go in together, so
+there is no half-written day.
+
+**Retention** is the nightly `drop-old-chunks`, which drops the daily tables' chunks after 400 days with
+the others. A row that reaches the hourly tables after its day was rolled up (a window the flusher
+parked and somebody wrote by hand: nothing in the code does) is not in the daily rows.
+
+**Why not continuous aggregates.** One takes a plain `GROUP BY`, no grouping sets, so each cuboid
+would be a view of its own with a materialization hypertable and a refresh policy; and the one that
+fits a single view, every dimension, does not shrink the data (above). Measured on the same year, a
+view over every dimension held 9.2 M rows (the hourly rows are 10.8 M) in 3.0 GB uncompressed, took
+6 min 40 s to refresh, and a path breakdown over it took 7.2 s. A single late hourly row marks its
+day for a refresh that deletes the day's rows in the materialization hypertable and writes them
+again (3.0 s here). And while the view exists Postgres refuses to drop a column of `site_pageviews`
+that it reads, which is what `synchronize` does when an entity changes (the entities are the
+schema). Insert-only rows written once, with a marker, give the same reads without any of that.
 
 ## Reports
 
@@ -298,8 +385,9 @@ weeks, from Monday, UTC) or `month`. Without one it is the hour for a one-day wi
 (`2026-10-28`, or `2026-10-28T07:00:00Z` for an hour; a week's Monday; the first of a month), zeros
 included; hours run up to the current one. A period the window cuts at either end, or that is still
 under way (today, this hour), carries `partial: true`; a whole one has no `partial` field. The SQL
-groups hours or days, and the code folds days into weeks and months. Visitors of an hour are known
-for today only (the hour HyperLogLogs end with their day): an earlier day's hour has
+groups hours or days, and the code folds days into weeks and months. The visitors of an hour come from
+its HyperLogLog for today (and for yesterday until the snapshot has run), and from `site_visitor_hours`
+for every earlier day since the snapshot keeps hours; an hour of a day before that has
 `visitors: null`. A week's or a month's visitors are the sum of its days in the window, as the totals
 count them.
 
@@ -395,6 +483,31 @@ and `devices` count the page views of those five minutes; `channels` (all) and `
 the visits started in the last 30; `events` (top 15) the events of the last 30. Lists are most
 counted first, values seen only; filters do not apply. 503 when Redis does not answer.
 
+**Bounds.** Every report, the admin's and its MCP tools', runs through `SiteReportRunner`, which keeps
+a slow report from taking the database with it. The Traffic page asks for sixteen at once, and each
+click on a filter asks again.
+
+| Setting | Default | What it bounds |
+| --- | --- | --- |
+| `SITE_ANALYTICS_REPORT_CONCURRENCY` | 4 | reports one process runs at once; the rest wait their turn |
+| `SITE_ANALYTICS_REPORT_QUEUE` | 32 | reports that may wait; one more is refused at once |
+| `SITE_ANALYTICS_REPORT_QUEUE_WAIT_MS` | 30000 | how long one waits for a place before it is refused |
+| `SITE_ANALYTICS_STATEMENT_TIMEOUT_MS` | 15000 | how long one statement of a report may run |
+| `SITE_ANALYTICS_REPORT_WORK_MEM_MB` | 32 | memory of each sort and hash of a report's statement |
+
+A refused or stopped report answers **503** with `{ statusCode: 503, error, reason, message }`: `reason:
+"busy"` ("Too many statistic reports are running at once. Try again in a few seconds.") or `reason:
+"timeout"` ("The report took longer than 15 s and was stopped. Try a shorter window, a coarser interval
+or a filter."). The timeout, the memory and `timescaledb.enable_chunkwise_aggregation = off` are set
+with `set_config(…, true)` inside the transaction each statement runs in, so only that statement has
+them and the pool's other work keeps its own; Postgres cancels the statement and the connection goes
+back. Chunk-wise aggregation builds a hash table per chunk and merges them, which a grouping by path
+pays for fifty times over; one table over all chunks was two to three times faster on every report, on
+the hourly rows too. The wait for a place is not part of the timeout, so a report waits at most 30 s
+and runs at most 15 s a statement (up to four statements of one report run in parallel). The live view,
+which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any failed call
+("failed on the server; try again or narrow the call").
+
 | Endpoint | Answers |
 | --- | --- |
 | `POST /v1/analytics/collect` | the beacon (above) |
@@ -443,30 +556,66 @@ chunks read 0 updates, 0 deletes and **0 dead tuples** afterwards. The run takes
 key it wrote was still alive at the end: Redis held 34 MB and 27,851 live keys, where production
 keeps only the last 35 minutes of live keys.
 
-**Reads** (median of three after one run, ms; 10× traffic):
+**The daily level** (PAR-1157) was measured on 365 synthetic days of the same shape (5.84 M page
+views in 10.8 M hourly rows, 331 MB, and 7.0 M event rows, 185 MB, compressed after seven days), in a
+scratch container with 4 CPUs, 5 GB, `shared_buffers` 1 GB and `work_mem` 32 MB on a host shared with
+other builds, so the times are upper bounds.
 
-| Report | 1 day | 30 days | 90 days |
-| --- | --- | --- | --- |
-| overview / `filter=country:de` / `filter=channel:search` | 9 / 6 / 11 | 260 / 189 / 129 | 390 / 225 / 172 |
-| overview by week |  |  | 375 |
-| breakdown `path` / under `channel:search` | 2 / 2 | 325 / 142 | 745 / 400 |
-| breakdown `exit` / under `channel:search` | 2 / 2 | 317 / 156 | 756 / 462 |
-| breakdown `referrer` / `country` / `browser_language` | 2 / 2 / 1 | 87 / 143 / 115 | 220 / 326 / 331 |
-| traffic crosstab `os` × `viewport` / `channel` × `exit` | 1 / 1 | 92 / 385 | 236 / 1,020 |
-| events | 13 | 234 | 369 |
-| event `tab_changed` | 3 | 96 | 251 |
-| crosstab | 1 | 40 | 95 |
-| search | 2 | 114 | 306 |
-| SEO landing pages / trends / not found | 8 / 12 / 1 | 365 / 315 / 174 | 650 / 465 / 506 |
-| `/page-views/top` news / attractions (7, 30, 90 days) |  | 14 / 20, 47 / 52, 92 / 171 |  |
-| admin page-views (7, 30, 90 days) |  | 87, 355, 1,005 |  |
+- **Size.** The 49 page-view cuboids hold 18.2 M rows, 50,000 a day (8,400 for the path, 6,700 for
+  the SEO grouping, 6 to 3,200 for the others), 3,197 MB that compressed to 324 MB (9.9×), 439 MB
+  with the two uncompressed chunks of the current fortnight; the four event cuboids 4.3 M rows,
+  742 MB to 70 MB (10.5×), 99 MB. The year takes about **1.05 GB**, the hourly rows' 0.52 and the
+  daily 0.54, and a tenth of that at today's traffic. `pg_stat_user_tables` read 0 updates, 0 deletes
+  and **0 dead tuples** on both tables and the 19,398 markers after the backfill.
+- **Writing.** A compressed day takes 1.1 s for its 49 page-view cuboids (50,000 rows) and 0.2 s for
+  the four event cuboids (11,700 rows); the 365-day backfill 581 s on the shared host. Rows and
+  marker of a cuboid are one statement.
+- **Reading, a year.** The Traffic page asks for sixteen reports at once (the overview, the events,
+  thirteen breakdowns, one crosstab), here through the runner's four places. Median of three, ms:
+
+| Reports, 365 days | Hourly rows only | Daily level |
+| --- | --- | --- |
+| the Traffic page, all at once | 17,600 | **2,850** |
+| the Traffic page under `country:de` / `channel:search` | 8,400 / 10,200 | 2,550 / 4,900 |
+| the SEO page (landing pages, trends over 180 days, not found), at once | 3,500 | 1,600 |
+| event, crosstab and search reports, at once | 3,400 | 1,350 |
+| overview / events | 1,114 / 1,554 | 65 / 101 |
+| breakdown by channel / page type / viewport / browser / OS | 1,075 / 1,061 / 1,112 / 1,024 / 846 | 26 / 29 / 28 / 29 / 26 |
+| breakdown by referrer / country / browser language / campaign / language | 695 / 1,240 / 1,236 / 520 / 377 | 77 / 91 / 93 / 29 / 22 |
+| breakdown by path / entry page / exit | 2,780 / 1,570 / 2,660 | 2,439 / 696 / 1,920 |
+| crosstab OS × viewport | 743 | 41 |
+
+The path, the entry page and the exit are what is left: a grouping by 125,000 paths a year sums three
+million daily rows in one hash table, however they are read. The slowest page is the one under a
+visit filter (`channel:search`), whose breakdowns of the path, entry page and exit have no cuboid and
+read the hourly rows.
+
+**Reads by window** on the daily level (median of three after one run, ms; each cell "unfiltered /
+`country:de` / `channel:search`" where the row says so):
+
+| Report | 1 day | 30 days | 90 days | 365 days |
+| --- | --- | --- | --- | --- |
+| overview / `country:de` / `channel:search` | 38 / 14 / 10 | 59 / 188 / 23 | 105 / 345 / 41 | 124 / 573 / 52 |
+| overview by week | 21 | 54 | 79 | 247 |
+| breakdown `path` / under `channel:search` | 3 / 3 | 367 / 211 | 927 / 644 | 2,695 / 1,863 |
+| breakdown `exit` / under `channel:search` | 4 / 3 | 315 / 303 | 656 / 613 | 2,184 / 2,460 |
+| breakdown `referrer` / `country` / `browser_language` | 3 / 4 / 3 | 10 / 13 / 24 | 42 / 33 / 36 | 163 / 119 / 150 |
+| traffic crosstab `os` × `viewport` / `channel` × `exit` | 3 / 3 | 7 / 509 | 20 / 1,239 | 41 / 3,163 |
+| events | 14 | 28 | 73 | 138 |
+| event `tab_changed` | 8 | 120 | 186 | 659 |
+| crosstab | 4 | 42 | 140 | 536 |
+| search | 9 | 96 | 269 | 1,174 |
+| SEO landing pages / trends (180 days at most) / not found | 14 / 23 / 2 | 293 / 383 / 117 | 716 / 930 / 256 | 1,793 / 1,533 / 725 |
+
+The one-day column reads the hourly rows: a one-day window is drawn by the hour. The `channel` ×
+`exit` crosstab reads them for any window, since no cuboid pairs the path with another dimension.
+The most-read reads (`/page-views/top`, the admin's page views) are unchanged and read the hourly
+event rows: 14 / 20, 47 / 52 and 92 / 171 ms for news and attractions at 7, 30 and 90 days, and 87,
+355 and 1,005 ms for the admin's, measured before this change on the 90-day set with 2 CPUs.
 
 The days are grouped with `time_bucket` and printed in code: grouping by `to_char(date_trunc(…))` per
-row made a 60-day event series 569 ms instead of 75. A report reads every row of its window once, so
-a year's report takes about four times the 90-day figure; at today's traffic (a tenth) it is a few
-hundred milliseconds. The visits ended by their last page (`exit`, and `channel` × `exit`) read every
-row for its `exits`, which the compressed batches cannot skip. If year views become the daily tool,
-insert-only daily rollups written by the nightly job are the next step.
+row made a 60-day event series 569 ms instead of 75. Before the daily level a report read every row of
+its window once, so a year's took about four times the 90-day figure.
 
 ## Limits
 
@@ -475,7 +624,14 @@ insert-only daily rollups written by the nightly job are the next step.
 - Time on page and visit are lower bounds: a page view that never reported counts zero seconds.
 - A visit ends 30 to 35 minutes after its last hit, as the flush runs, and its exit reaches the
   reports with that run.
-- `visit_span_seconds` is stored on the exit rows and in no report yet.
+- `visit_span_seconds` is stored on the exit rows and rolled up with them, and in no report yet.
+- A filter on the path or the entry page, three or more filters, and a pair of a panel and a filter
+  that no cuboid holds (anything with the path or the entry page) read the hourly rows: a year of
+  them takes seconds, not milliseconds, and is the first thing the statement timeout stops.
+- A day is read from the daily rows only once the job has rolled it (two hours past midnight at the
+  earliest, and up to six hours with a failed run); until then, and for today, it is read hourly.
+  A row written to the hourly tables after its day was rolled up is not in the daily rows.
+- Hours of the days before `site_visitor_hours` existed have `visitors: null`.
 - Page views and events cannot be filtered by how their visit began (see Reports).
 - A `utm_source` is told from a referrer host by its missing dot.
 - With Redis down the guards, visits and visitors are off and an instance holds at most 5000 fields in

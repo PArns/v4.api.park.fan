@@ -274,9 +274,9 @@ export const REALTIME_ACTIVE_MINUTES = 5;
 export const REALTIME_SERIES_MINUTES = 30;
 
 /**
- * How long a day's visitor HyperLogLog outlives the day: the hour in which the
- * snapshot runs four times, so no key outlives its day by more and none is
- * older than 25 hours.
+ * How long a day's visitor HyperLogLog, and each of its hours', outlives the
+ * day: the hour in which the snapshot runs four times, so no key outlives its
+ * day by more and none is older than 25 hours.
  */
 export const VISITOR_KEY_GRACE_SECONDS = 3600;
 
@@ -319,6 +319,48 @@ export const RETENTION_DAYS = 400;
 
 /** The longest window the admin may ask for. */
 export const MAX_ADMIN_WINDOW_DAYS = 365;
+
+/**
+ * How long one statement of an admin report may run before Postgres cancels
+ * it and the report answers 503 (`SITE_ANALYTICS_STATEMENT_TIMEOUT_MS`). The
+ * slowest report of a year of ten times today's traffic takes about a second
+ * on the daily level and three on the hourly rows.
+ */
+export const REPORT_STATEMENT_TIMEOUT_MS = 15_000;
+
+/**
+ * How many admin reports one process runs at once, how many more may wait for
+ * a place, and how long one waits before it answers 503
+ * (`SITE_ANALYTICS_REPORT_CONCURRENCY`, `_QUEUE`, `_QUEUE_WAIT_MS`). The
+ * Traffic page asks for about sixteen at once; they queue behind these four
+ * rather than fill the pool and every CPU of the database.
+ */
+export const REPORT_CONCURRENCY = 4;
+export const REPORT_QUEUE_LIMIT = 32;
+export const REPORT_QUEUE_WAIT_MS = 30_000;
+
+/**
+ * The memory a report statement may use for each sort and hash
+ * (`SITE_ANALYTICS_REPORT_WORK_MEM_MB`), so that a grouping by path does not
+ * spill to disk on a server whose default is 4 MB. The most it can hold is
+ * this times the hash tables of its parallel workers, for the few reports
+ * that run at once.
+ */
+export const REPORT_WORK_MEM_MB = 32;
+
+/** How long a process keeps the list of rolled-up days it read. */
+export const ROLLED_DAYS_CACHE_MS = 60_000;
+
+/**
+ * A day is rolled up only this long after it ended: the flusher has written
+ * its last windows (a window that fails is retried for an hour) and ended
+ * its last visits (30 to 35 minutes after the last hit), whose exits belong
+ * to the day.
+ */
+export const ROLLUP_SETTLE_SECONDS = 2 * 3600;
+
+/** One run of the rollup job stops starting new days after this long. */
+export const ROLLUP_RUN_BUDGET_MS = 25 * 60 * 1000;
 
 /** Visitors over all languages, beside one row per language. */
 export const ALL_LOCALES_SCOPE = "all";
@@ -375,7 +417,7 @@ export const SITE_ANALYTICS_KEYS = {
   newMembers: (hash: string) => `site-analytics:new:${hash}`,
   /** One UTC day's visitors, all languages or one: a HyperLogLog. */
   visitors: (day: string, scope: string) => `site-analytics:uv:${day}:${scope}`,
-  /** One UTC hour's visitors, for the hourly view of today. */
+  /** One UTC hour's visitors: a HyperLogLog, until the snapshot writes it. */
   hourVisitors: (hour: string, scope: string) =>
     `site-analytics:uvh:${hour}:${scope}`,
   /** One minute's active visitors: a HyperLogLog. */
@@ -411,6 +453,8 @@ export const SITE_ANALYTICS_KEYS = {
   parkedWindows: "site-analytics:buf:parked",
   /** Held by the one instance that is flushing. */
   flushLock: "site-analytics:flush-lock",
+  /** Held by the one instance that is rolling days up. */
+  rollupLock: "site-analytics:rollup-lock",
 } as const;
 
 /** The field of a claimed window that names its claim. */

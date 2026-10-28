@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
-import { DataSource, IsNull, Repository } from "typeorm";
+import { InjectRepository } from "@nestjs/typeorm";
+import { IsNull, Repository } from "typeorm";
 import {
   frontendAttractionPath,
   frontendParkPath,
@@ -15,6 +15,7 @@ import {
   TREND_ITEMS,
   type Channel,
 } from "./site-analytics.constants";
+import { rowsOf } from "./site-analytics.rollup";
 import {
   SqlParams,
   averageSeconds,
@@ -22,11 +23,11 @@ import {
   num,
   refuseFiltersBeyond,
   siteAnalyticsWindow,
-  whereOf,
   type Count,
   type SiteAnalyticsQuery,
   type SiteAnalyticsWindow,
 } from "./site-analytics.query";
+import { SiteReportRunner } from "./site-analytics-report-runner";
 import { echo } from "./site-analytics.service";
 import type {
   SiteLandingPagesDto,
@@ -58,11 +59,17 @@ interface EntryRow {
 @Injectable()
 export class SiteAnalyticsSeoService {
   constructor(
-    @InjectDataSource() private readonly db: DataSource,
+    private readonly runner: SiteReportRunner,
     @InjectRepository(Park) private readonly parks: Repository<Park>,
     @InjectRepository(Attraction)
     private readonly attractions: Repository<Attraction>,
   ) {}
+
+  /** The days of a cuboid the nightly job has rolled up, for {@link rowsOf}. */
+  private readonly rolled = (
+    source: Parameters<SiteReportRunner["rolledDays"]>[0],
+    cuboid: number,
+  ) => this.runner.rolledDays(source, cuboid);
 
   /**
    * The pages visits from one channel (`search` unless asked) entered on, with
@@ -73,33 +80,36 @@ export class SiteAnalyticsSeoService {
     query: SiteAnalyticsQuery & { channel?: Channel; limit: number },
     now = new Date(),
   ): Promise<SiteLandingPagesDto> {
-    const window = siteAnalyticsWindow(query, now);
-    const channel = query.channel ?? "search";
-    const rows = await this.entries(window, channel, query.limit);
-    const sources = await this.split(
-      window,
-      rows.map((row) => row.path),
-      `channel = $CHANNEL`,
-      channel,
-    );
-    return {
-      ...echo(window),
-      channel,
-      items: rows.map((row) => {
-        const visits = num(row.visits);
-        const previous = window.previous ? num(row.previous) : null;
-        return {
-          path: row.path,
-          pageType: row.page_type ?? "",
-          visits,
-          previous,
-          change: previous === null ? null : visits - previous,
-          bounceRate: bounceRate(visits, num(row.engaged)),
-          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
-          sources: sources.get(row.path) ?? [],
-        };
-      }),
-    };
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      const channel = query.channel ?? "search";
+      const rows = await this.entries(window, channel, query.limit);
+      const sources = await this.split(
+        window,
+        rows.map((row) => row.path),
+        "channel",
+        `channel = $CHANNEL`,
+        channel,
+      );
+      return {
+        ...echo(window),
+        channel,
+        items: rows.map((row) => {
+          const visits = num(row.visits);
+          const previous = window.previous ? num(row.previous) : null;
+          return {
+            path: row.path,
+            pageType: row.page_type ?? "",
+            visits,
+            previous,
+            change: previous === null ? null : visits - previous,
+            bounceRate: bounceRate(visits, num(row.engaged)),
+            avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
+            sources: sources.get(row.path) ?? [],
+          };
+        }),
+      };
+    });
   }
 
   /**
@@ -113,41 +123,43 @@ export class SiteAnalyticsSeoService {
     query: SiteAnalyticsQuery & { channel?: Channel },
     now = new Date(),
   ): Promise<SiteTrendsDto> {
-    const window = siteAnalyticsWindow(query, now);
-    if (!window.previous) {
-      throw new BadRequestException(
-        `Trends compare with the window before, so at most ${MAX_COMPARABLE_DAYS} days`,
-      );
-    }
-    const channel = query.channel ?? "search";
-    const rows = (await this.entries(window, channel, null))
-      .map((row) => {
-        const visits = num(row.visits);
-        const previous = num(row.previous);
-        return {
-          path: row.path,
-          pageType: row.page_type ?? "",
-          visits,
-          previous,
-          change: visits - previous,
-          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
-        };
-      })
-      .filter((row) => row.visits + row.previous >= MIN_TREND_VISITS);
-    const byChange = (a: { change: number; path: string }, b: typeof a) =>
-      b.change - a.change || (a.path < b.path ? -1 : 1);
-    return {
-      ...echo(window),
-      channel,
-      rising: rows
-        .filter((row) => row.change > 0)
-        .sort(byChange)
-        .slice(0, TREND_ITEMS),
-      falling: rows
-        .filter((row) => row.change < 0)
-        .sort((a, b) => -byChange(a, b))
-        .slice(0, TREND_ITEMS),
-    };
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      if (!window.previous) {
+        throw new BadRequestException(
+          `Trends compare with the window before, so at most ${MAX_COMPARABLE_DAYS} days`,
+        );
+      }
+      const channel = query.channel ?? "search";
+      const rows = (await this.entries(window, channel, null))
+        .map((row) => {
+          const visits = num(row.visits);
+          const previous = num(row.previous);
+          return {
+            path: row.path,
+            pageType: row.page_type ?? "",
+            visits,
+            previous,
+            change: visits - previous,
+            avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
+          };
+        })
+        .filter((row) => row.visits + row.previous >= MIN_TREND_VISITS);
+      const byChange = (a: { change: number; path: string }, b: typeof a) =>
+        b.change - a.change || (a.path < b.path ? -1 : 1);
+      return {
+        ...echo(window),
+        channel,
+        rising: rows
+          .filter((row) => row.change > 0)
+          .sort(byChange)
+          .slice(0, TREND_ITEMS),
+        falling: rows
+          .filter((row) => row.change < 0)
+          .sort((a, b) => -byChange(a, b))
+          .slice(0, TREND_ITEMS),
+      };
+    });
   }
 
   /**
@@ -160,34 +172,47 @@ export class SiteAnalyticsSeoService {
     query: SiteAnalyticsQuery & { limit: number },
     now = new Date(),
   ): Promise<SiteNotFoundDto> {
-    const window = siteAnalyticsWindow(query, now);
-    refuseFiltersBeyond(window, "The not-found report", PAGE_DIMS);
-    const params = new SqlParams();
-    const rows: Array<{ path: string; views: Count }> = await this.db.query(
-      `SELECT path, SUM(views) AS views
-         FROM site_pageviews
-        WHERE ${whereOf(params, window, "current")}
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      refuseFiltersBeyond(window, "The not-found report", PAGE_DIMS);
+      const params = new SqlParams();
+      const source = await rowsOf(
+        this.rolled,
+        "pageviews",
+        params,
+        window,
+        "current",
+        ["path", "page_type"],
+        { collapse: true },
+      );
+      const rows: Array<{ path: string; views: Count }> =
+        await this.runner.query(
+          `SELECT path, SUM(views) AS views
+         FROM ${source.from}
+        WHERE ${source.where}
           AND page_type = ${params.add(NOT_FOUND_PAGE_TYPE)}
         GROUP BY path
         HAVING SUM(views) > 0
         ORDER BY 2 DESC, 1 ASC
         LIMIT ${params.add(query.limit)}`,
-      params.values,
-    );
-    const referrers = await this.split(
-      window,
-      rows.map((row) => row.path),
-      `page_type = $CHANNEL AND referrer <> ''`,
-      NOT_FOUND_PAGE_TYPE,
-    );
-    return {
-      ...echo(window),
-      items: rows.map((row) => ({
-        path: row.path,
-        views: num(row.views),
-        referrers: referrers.get(row.path) ?? [],
-      })),
-    };
+          params.values,
+        );
+      const referrers = await this.split(
+        window,
+        rows.map((row) => row.path),
+        "page_type",
+        `page_type = $CHANNEL AND referrer <> ''`,
+        NOT_FOUND_PAGE_TYPE,
+      );
+      return {
+        ...echo(window),
+        items: rows.map((row) => ({
+          path: row.path,
+          views: num(row.views),
+          referrers: referrers.get(row.path) ?? [],
+        })),
+      };
+    });
   }
 
   /**
@@ -199,56 +224,67 @@ export class SiteAnalyticsSeoService {
     query: SiteAnalyticsQuery & { kind: "park" | "attraction"; limit: number },
     now = new Date(),
   ): Promise<SiteUncoveredDto> {
-    const window = siteAnalyticsWindow(query, now);
-    const params = new SqlParams();
-    const covered: Array<{ path: string }> = await this.db.query(
-      `SELECT DISTINCT substring(entry from 4) AS path
-         FROM site_pageviews
-        WHERE ${whereOf(params, window, "current")}
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      const params = new SqlParams();
+      const source = await rowsOf(
+        this.rolled,
+        "pageviews",
+        params,
+        window,
+        "current",
+        ["entry", "channel"],
+        { collapse: true },
+      );
+      const covered: Array<{ path: string }> = await this.runner.query(
+        `SELECT DISTINCT substring(entry from 4) AS path
+         FROM ${source.from}
+        WHERE ${source.where}
           AND channel = 'search' AND visits > 0 AND entry <> ''`,
-      params.values,
-    );
-    const found = new Set(covered.map((row) => row.path));
+        params.values,
+      );
+      const found = new Set(covered.map((row) => row.path));
 
-    const pages =
-      query.kind === "park"
-        ? (await this.parks.find({ where: { retiredAt: IsNull() } })).map(
-            (park) => ({
-              id: park.id,
-              name: park.name,
-              park: null as string | null,
-              url: frontendParkPath(park),
-            }),
-          )
-        : (
-            await this.attractions.find({
-              where: { retiredAt: IsNull() },
-              relations: { park: true },
-            })
-          )
-            .filter((ride) => ride.park && !ride.park.retiredAt)
-            .map((ride) => ({
-              id: ride.id,
-              name: ride.name,
-              park: ride.park.name,
-              url: frontendAttractionPath(ride.park, ride),
-            }));
-    const uncovered = pages
-      .filter((page) => page.url && !found.has(page.url))
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return {
-      ...echo(window),
-      kind: query.kind,
-      total: pages.length,
-      uncovered: uncovered.length,
-      items: uncovered.slice(0, query.limit).map((page) => ({
-        id: page.id,
+      const pages =
+        query.kind === "park"
+          ? (await this.parks.find({ where: { retiredAt: IsNull() } })).map(
+              (park) => ({
+                id: park.id,
+                name: park.name,
+                park: null as string | null,
+                url: frontendParkPath(park),
+              }),
+            )
+          : (
+              await this.attractions.find({
+                where: { retiredAt: IsNull() },
+                relations: { park: true },
+              })
+            )
+              .filter((ride) => ride.park && !ride.park.retiredAt)
+              .map((ride) => ({
+                id: ride.id,
+                name: ride.name,
+                park: ride.park.name,
+                url: frontendAttractionPath(ride.park, ride),
+              }));
+      const uncovered = pages
+        .filter((page) => page.url && !found.has(page.url))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return {
+        ...echo(window),
         kind: query.kind,
-        name: page.name,
-        ...(page.park && { park: page.park }),
-        url: page.url as string,
-      })),
-    };
+        total: pages.length,
+        uncovered: uncovered.length,
+        items: uncovered.slice(0, query.limit).map((page) => ({
+          id: page.id,
+          kind: query.kind,
+          name: page.name,
+          ...(page.park && { park: page.park }),
+          url: page.url as string,
+        })),
+      };
+    });
   }
 
   /**
@@ -263,17 +299,24 @@ export class SiteAnalyticsSeoService {
     limit: number | null,
   ): Promise<EntryRow[]> {
     const params = new SqlParams();
-    const where = whereOf(params, window, "both");
+    const source = await rowsOf(
+      this.rolled,
+      "pageviews",
+      params,
+      window,
+      "both",
+      ["entry", "channel", "page_type"],
+    );
     const start = params.add(window.start);
-    return this.db.query(
+    return this.runner.query(
       `SELECT entry AS path,
               SUM(visits) FILTER (WHERE bucket >= ${start}::timestamptz) AS visits,
               SUM(visits) FILTER (WHERE bucket < ${start}::timestamptz) AS previous,
               SUM(engaged) FILTER (WHERE bucket >= ${start}::timestamptz) AS engaged,
               SUM(visit_seconds) FILTER (WHERE bucket >= ${start}::timestamptz) AS visit_seconds,
               MAX(page_type) FILTER (WHERE visits > 0) AS page_type
-         FROM site_pageviews
-        WHERE ${where} AND channel = ${params.add(channel)} AND entry <> ''
+         FROM ${source.from}
+        WHERE ${source.where} AND channel = ${params.add(channel)} AND entry <> ''
         GROUP BY entry
         ${limit === null ? "" : `HAVING SUM(visits) FILTER (WHERE bucket >= ${start}::timestamptz) > 0`}
         ORDER BY 2 DESC NULLS LAST, 1 ASC
@@ -285,23 +328,32 @@ export class SiteAnalyticsSeoService {
   /**
    * The referrers of the visits that entered on a list of pages in the
    * window, the largest {@link SOURCES_PER_ITEM} per page. `condition` names
-   * its one parameter `$CHANNEL`.
+   * its one parameter `$CHANNEL` and reads `column` of the rows.
    */
   private async split(
     window: SiteAnalyticsWindow,
     pages: string[],
+    column: "channel" | "page_type",
     condition: string,
     value: string,
   ): Promise<Map<string, Array<{ value: string; visits: number }>>> {
     const split = new Map<string, Array<{ value: string; visits: number }>>();
     if (pages.length === 0) return split;
     const params = new SqlParams();
-    const where = whereOf(params, window, "current");
+    const source = await rowsOf(
+      this.rolled,
+      "pageviews",
+      params,
+      window,
+      "current",
+      ["entry", "referrer", column],
+      { collapse: true },
+    );
     const rows: Array<{ page: string; referrer: string; count: Count }> =
-      await this.db.query(
+      await this.runner.query(
         `SELECT entry AS page, referrer, SUM(visits) AS count
-           FROM site_pageviews
-          WHERE ${where} AND visits > 0
+           FROM ${source.from}
+          WHERE ${source.where} AND visits > 0
             AND ${condition.replace("$CHANNEL", params.add(value))}
             AND entry = ANY(${params.add(pages)}::text[])
           GROUP BY 1, 2
