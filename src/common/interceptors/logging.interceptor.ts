@@ -11,6 +11,17 @@ import { Request, Response } from "express";
 import { redactUrl } from "../utils/redact-url.util";
 
 /**
+ * The reader counters (page views, the site statistic) promise readers that
+ * they keep no address, and a log line is a place one would be kept.
+ */
+const ADDRESS_FREE_PATHS = ["/v1/page-views", "/v1/analytics/collect"];
+
+/** Whether a request's log line must leave the caller's address out. */
+export function isAddressFreePath(url: string): boolean {
+  return ADDRESS_FREE_PATHS.some((path) => url.startsWith(path));
+}
+
+/**
  * Global logging interceptor for HTTP requests.
  *
  * Only logs interesting events:
@@ -56,9 +67,7 @@ export class LoggingInterceptor implements NestInterceptor {
 
         if (isError || isSlow || isAdminOrML) {
           const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
-          // The page-view counter promises readers that it keeps no address,
-          // and a log line is a place it would be kept.
-          const who = url.startsWith("/v1/page-views") ? "" : ` - ${ip}`;
+          const who = isAddressFreePath(url) ? "" : ` - ${ip}`;
           this.logger.log(
             `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms${who}`,
           );

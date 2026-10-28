@@ -142,6 +142,20 @@ export class GeoipService implements OnModuleInit {
   }
 
   /**
+   * ISO 3166-1 alpha-2 country of an address, lowercase (`de`), or null when
+   * the database is not loaded or does not place it. The site statistic keeps
+   * this and nothing else of the address.
+   */
+  lookupCountry(ip: string): string | null {
+    if (!this.lookup) return null;
+    if (!maxmind.validate(ip)) return null;
+    const code = this.lookup.get(ip)?.country?.iso_code;
+    return typeof code === "string" && /^[A-Za-z]{2}$/.test(code)
+      ? code.toLowerCase()
+      : null;
+  }
+
+  /**
    * Whether the GeoIP database is available for lookups.
    */
   isAvailable(): boolean {

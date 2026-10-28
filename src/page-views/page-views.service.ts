@@ -2,10 +2,16 @@ import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { Redis } from "ioredis";
-import { createHmac, randomBytes } from "crypto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { addIsoDays } from "../common/utils/date.util";
 import { addressBucket } from "../common/utils/request.util";
+import {
+  readerHash,
+  readerHashSecret,
+  secondsUntilUtcDayEnds,
+  utcDay,
+} from "../common/utils/reader-hash.util";
+import { ensureTableStorageOptions } from "../database/table-storage-options";
 import { buildAttractionUrl, buildParkUrl } from "../common/utils/url.util";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -57,11 +63,6 @@ export interface PageView {
   userAgent: string | null;
 }
 
-/** Today's UTC date, `YYYY-MM-DD`. A view's day is UTC, see `PageViewDay`. */
-export function utcDay(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
-
 /**
  * The page-view counter behind the "most read" lists and the admin's
  * popularity overview. See docs/frontend/page-views.md.
@@ -88,42 +89,21 @@ export class PageViewsService implements OnModuleInit {
     private readonly attractions: Repository<Attraction>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {
-    const configured = process.env.PAGE_VIEWS_HASH_SECRET?.trim();
-    if (!configured) {
-      // Still no address in Redis; only the cap stops being shared between
-      // instances and across a restart.
-      this.logger.warn(
-        "PAGE_VIEWS_HASH_SECRET is not set; the page-view cap uses a per-process secret.",
-      );
-    }
-    this.hashSecret = configured || randomBytes(32).toString("hex");
+    this.hashSecret = readerHashSecret(
+      ["PAGE_VIEWS_HASH_SECRET"],
+      this.logger,
+      "the page-view cap",
+    );
   }
 
-  /**
-   * Writes {@link PAGE_VIEW_STORAGE_OPTIONS} when they differ. `ALTER TABLE …
-   * SET` takes a lock that blocks neither reads nor writes, and the fill only
-   * shapes pages written from then on. A failure is logged, not thrown: the
-   * counter works without it.
-   */
+  /** Writes {@link PAGE_VIEW_STORAGE_OPTIONS} when the table lacks them. */
   async onModuleInit(): Promise<void> {
-    try {
-      const rows: Array<{ reloptions: string[] | null }> =
-        await this.views.query(
-          `SELECT reloptions FROM pg_class WHERE oid = 'page_view_days'::regclass`,
-        );
-      const current = rows[0]?.reloptions ?? [];
-      if (PAGE_VIEW_STORAGE_OPTIONS.every((o) => current.includes(o))) return;
-      await this.views.query(
-        `ALTER TABLE page_view_days SET (${PAGE_VIEW_STORAGE_OPTIONS.join(", ")})`,
-      );
-      this.logger.log(
-        `page_view_days: ${PAGE_VIEW_STORAGE_OPTIONS.join(", ")}`,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Could not set page_view_days storage options: ${(error as Error).message}`,
-      );
-    }
+    await ensureTableStorageOptions(
+      this.views,
+      "page_view_days",
+      PAGE_VIEW_STORAGE_OPTIONS,
+      this.logger,
+    );
   }
 
   /**
@@ -166,9 +146,7 @@ export class PageViewsService implements OnModuleInit {
       SEEN_PREFIX +
       this.hash(day, bucket, view.userAgent ?? "", view.kind, view.key);
     const address = ADDRESS_PREFIX + this.hash(day, bucket);
-    const endOfDay = Date.parse(`${addIsoDays(day, 1)}T00:00:00Z`);
-    const ttl =
-      Math.ceil((endOfDay - now.getTime()) / 1000) + SEEN_GRACE_SECONDS;
+    const ttl = secondsUntilUtcDayEnds(now, SEEN_GRACE_SECONDS);
     try {
       // One round trip; `EXPIRE … NX` on every call heals a key whose first
       // EXPIRE was lost, as in `incrementWithWindow`.
@@ -194,10 +172,7 @@ export class PageViewsService implements OnModuleInit {
   }
 
   private hash(...parts: string[]): string {
-    return createHmac("sha256", this.hashSecret)
-      .update(parts.join("|"))
-      .digest("hex")
-      .slice(0, 32);
+    return readerHash(this.hashSecret, ...parts);
   }
 
   /** The first UTC day of a window of `days` days ending today. */

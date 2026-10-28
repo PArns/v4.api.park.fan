@@ -106,6 +106,7 @@ describe("merge dependency tables", () => {
     "queue_data_aggregates",
     "ride_alerts",
     "schedule_entries",
+    "site_event_entity_days",
     "tft_forecasts",
     "tft_forecasts_shadow",
     "tft_forecasts_shadow_drivers",
@@ -174,6 +175,7 @@ describe("merge dependency tables", () => {
     "schedule_day_versions",
     "schedule_entries",
     "shows",
+    "site_event_entity_days",
     "weather_data",
     "weather_forecast_issues",
     "weather_warnings",
@@ -363,6 +365,31 @@ describe("merge dependency tables", () => {
     }
   });
 
+  it("moves a merged park's, ride's and show's event counts onto the survivor, adding up shared days", async () => {
+    for (const list of [
+      ATTRACTION_DEPENDENCIES,
+      PARK_DEPENDENCIES,
+      SHOW_DEPENDENCIES,
+    ]) {
+      const entry = list.find((d) => d.table === "site_event_entity_days");
+      expect(entry?.strategy).toBe("custom");
+      const calls: Array<[string, unknown[] | undefined]> = [];
+      await entry!.apply!(
+        { query: async (sql, params) => calls.push([sql, params]) },
+        "winner",
+        "loser",
+      );
+      expect(calls[0][0]).toMatch(/^INSERT INTO site_event_entity_days/);
+      expect(calls[0][0]).toContain("WHERE entity = $1::uuid");
+      expect(calls[0][0]).toContain(
+        "DO UPDATE SET count = site_event_entity_days.count + EXCLUDED.count",
+      );
+      expect(calls[0][1]).toEqual(["loser", "winner"]);
+      expect(calls[1][0]).toMatch(/^DELETE FROM site_event_entity_days/);
+      expect(calls[1][1]).toEqual(["loser"]);
+    }
+  });
+
   it("hands attraction_review_marks to a function of its own", () => {
     // One of five `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
@@ -399,7 +426,22 @@ describe("merge dependency tables", () => {
     const parkViews = PARK_DEPENDENCIES.find(
       (d) => d.table === "page_view_days",
     );
-    expect(custom).toEqual([aggregates, marks, seasons, rideViews, parkViews]);
+    // The site statistic's event counts, the same shape for all three kinds.
+    const [rideEvents, parkEvents, showEvents] = [
+      ATTRACTION_DEPENDENCIES,
+      PARK_DEPENDENCIES,
+      SHOW_DEPENDENCIES,
+    ].map((list) => list.find((d) => d.table === "site_event_entity_days"));
+    expect(custom).toEqual([
+      aggregates,
+      marks,
+      seasons,
+      rideViews,
+      rideEvents,
+      parkViews,
+      parkEvents,
+      showEvents,
+    ]);
   });
 
   it("names the two attraction columns review marks really has", () => {
@@ -601,6 +643,7 @@ describe("merge dependency tables", () => {
     "show_follows",
     "show_live_data",
     "show_schedule_patterns",
+    "site_event_entity_days",
   ];
 
   const RESTAURANT_REFERENCING_TABLES = [

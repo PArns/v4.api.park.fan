@@ -106,6 +106,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
+    @InjectQueue("site-analytics") private siteAnalyticsQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
     @InjectQueue("forecast-archive-score")
@@ -1123,6 +1124,39 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "45 4 * * *" },
           jobId: "trip-sweep-cron",
+        },
+      );
+    }
+
+    // Site statistic: yesterday's unique visitors from Redis into Postgres
+    // at 00:13, once the UTC day is over, and the 400-day retention at 01:47.
+    // A HyperLogLog lives three days past its own, so a missed snapshot is
+    // caught up the next night.
+    const hasVisitorSnapshotCron = await this.hasRepeatableJob(
+      this.siteAnalyticsQueue,
+      "site-analytics-visitors-cron",
+    );
+    if (!hasVisitorSnapshotCron) {
+      await this.siteAnalyticsQueue.add(
+        "snapshot-visitors",
+        {},
+        {
+          repeat: { cron: "13 0 * * *" },
+          jobId: "site-analytics-visitors-cron",
+        },
+      );
+    }
+    const hasSiteAnalyticsPruneCron = await this.hasRepeatableJob(
+      this.siteAnalyticsQueue,
+      "site-analytics-prune-cron",
+    );
+    if (!hasSiteAnalyticsPruneCron) {
+      await this.siteAnalyticsQueue.add(
+        "prune-old-days",
+        {},
+        {
+          repeat: { cron: "47 1 * * *" },
+          jobId: "site-analytics-prune-cron",
         },
       );
     }

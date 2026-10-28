@@ -29,11 +29,13 @@ export interface MergeDependency {
    *             more than one column, or carries a constraint across two of
    *             them, cannot be expressed as one column plus a conflict key,
    *             because every statement the three strategies issue names
-   *             exactly one column. Declared on exactly three entries:
-   *             `attraction_review_marks` (PAR-149), `park_seasons`, whose
-   *             ride ids sit inside a jsonb array (PAR-106), and
-   *             `queue_data_aggregates`, whose primary key holds a hash of the
-   *             attraction id (PAR-704).
+   *             exactly one column. Declared on `attraction_review_marks`
+   *             (PAR-149), `park_seasons`, whose ride ids sit inside a jsonb
+   *             array (PAR-106), `queue_data_aggregates`, whose primary key
+   *             holds a hash of the attraction id (PAR-704), and the two
+   *             reader counts whose rows are added up on a collision,
+   *             `page_view_days` (PAR-1089) and `site_event_entity_days`
+   *             (PAR-1151).
    */
   strategy: MergeStrategy;
   /**
@@ -497,6 +499,33 @@ function mergePageViewDays(kind: "park" | "attraction") {
       [loserId, kind],
     );
   };
+}
+
+/**
+ * Moves the site statistic's event counts about a merged-away park, ride or
+ * show onto the survivor (`site_event_entity_days`, PAR-1151). The id sits in
+ * `entity` beside the event name, language and day, all four the primary key,
+ * so a row the survivor already has is added up rather than moved: both are
+ * real events about one place. An id is unique across the three kinds, so one
+ * function serves all three lists.
+ */
+export async function mergeSiteEventEntityDays(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  await manager.query(
+    `INSERT INTO site_event_entity_days (name, day, locale, entity, kind, count)
+     SELECT name, day, locale, $2::uuid, kind, count FROM site_event_entity_days
+      WHERE entity = $1::uuid
+     ON CONFLICT (name, day, locale, entity)
+     DO UPDATE SET count = site_event_entity_days.count + EXCLUDED.count`,
+    [loserId, winnerId],
+  );
+  await manager.query(
+    `DELETE FROM site_event_entity_days WHERE entity = $1::uuid`,
+    [loserId],
+  );
 }
 
 /**
@@ -1049,6 +1078,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "custom",
     apply: mergePageViewDays("attraction"),
   },
+  {
+    // The ride's id sits in `entity` beside a name and a day, see
+    // `mergeSiteEventEntityDays`.
+    table: "site_event_entity_days",
+    column: "entity",
+    strategy: "custom",
+    apply: mergeSiteEventEntityDays,
+  },
 ];
 
 /**
@@ -1140,6 +1177,13 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     strategy: "move",
     conflictColumns: ["subscriptionId"],
   },
+  {
+    // The show's id sits in `entity`, see `mergeSiteEventEntityDays`.
+    table: "site_event_entity_days",
+    column: "entity",
+    strategy: "custom",
+    apply: mergeSiteEventEntityDays,
+  },
 ];
 
 /**
@@ -1218,6 +1262,13 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
     column: "key",
     strategy: "custom",
     apply: mergePageViewDays("park"),
+  },
+  {
+    // The park's id sits in `entity`, see `mergeSiteEventEntityDays`.
+    table: "site_event_entity_days",
+    column: "entity",
+    strategy: "custom",
+    apply: mergeSiteEventEntityDays,
   },
   {
     table: "park_slug_aliases",
