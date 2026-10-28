@@ -3,6 +3,16 @@
  */
 
 /**
+ * `value` without its trailing slashes. A scan rather than `/\/+$/`, which
+ * backtracks quadratically on a long run of slashes in a caller's text.
+ */
+export function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
+/**
  * Interface for entities with geocoded slugs
  */
 export interface GeocodedEntity {
