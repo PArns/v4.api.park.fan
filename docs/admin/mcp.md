@@ -126,7 +126,7 @@ against these rules.
 | `analytics_breakdown` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits | `SiteAnalyticsService.breakdown` |
 | `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix | `SiteAnalyticsService.trafficCrosstab` |
 | `analytics_events` | every event name with count, previous, change, blocked | `SiteAnalyticsService.events` |
-| `analytics_event` | one event: props with top values, combinations, page types, viewports, entities | `SiteAnalyticsService.event` |
+| `analytics_event` | one event: props with top values, combinations, page types, devices, entities | `SiteAnalyticsService.event` |
 | `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix | `SiteAnalyticsService.crosstab` |
 | `search_report` | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where | `SiteAnalyticsService.search` |
 | `seo_landing_pages` | the pages visits of one channel (search by default) entered on, with change, bounce, sources | `SiteAnalyticsSeoService.landingPages` |
@@ -225,7 +225,7 @@ What was checked when this was built, and where it is enforced:
 - **Authorize from strangers:** a pending request is written to Redis before anybody signs in, so at
   most 30 per address bucket and 30 per client live in any 10 minutes (an error page, or
   `temporarily_unavailable` at the client's redirect).
-- **Prompt injection through the statistic:** paths, referrers, campaigns, event names and property
+- **Prompt injection through the statistic:** paths, referrers, event names and property
   values reach the public collector from anybody's browser. Every tool returns them under
   `visitorData`, beside a `visitorDataNotice` saying they are data and never instructions, and its
   description says the same; parks and rides come by the name in park.fan's own tables, and keys that

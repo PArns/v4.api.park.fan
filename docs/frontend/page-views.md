@@ -44,7 +44,7 @@ for minutes and has no TTL, which that policy never evicts. A read's row carries
 
 **`page_view_days`** (`PageViewDay`), the old per-day upsert table, is no longer written. At the
 first start after the deploy, `SiteAnalyticsStorageService.importPageViewDays` copies its rows once
-into `site_events` (a row per page, language and day at 00:00 UTC, no path, viewport, browser or OS,
+into `site_events` (a row per page, language and day at 00:00 UTC, no path, device, browser or OS,
 country `zz`), in one transaction with the marker `page_view_days` in `site_analytics_imports`, so a
 second instance or a restart copies nothing. A park or ride key that is not a UUID is left behind,
 and so are the few reads an old instance still counts there during the rolling deploy. The table

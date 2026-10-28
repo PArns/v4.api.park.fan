@@ -27,7 +27,7 @@ export const FILTER_PATTERN = new RegExp(
  * property (`prop:<key>`). Events carry no visit dimension.
  */
 export const CROSSTAB_AXIS_PATTERN =
-  /^(page_type|viewport|locale|day|path|country|browser|os|prop:[a-z_][a-z0-9_]{0,31})$/;
+  /^(page_type|device|locale|day|path|country|browser|os|prop:[a-z_][a-z0-9_]{0,31})$/;
 
 export interface SiteFilter {
   dim: FilterDim;

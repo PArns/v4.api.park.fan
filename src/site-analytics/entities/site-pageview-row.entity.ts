@@ -13,11 +13,10 @@ import {
  * kinds of row:
  *
  * - a page view's: its page dimensions, `views` and `seconds` (foreground
- *   time reported for it); `entry`, `referrer`, `channel` and `campaign`
- *   empty, so no page in the middle of a visit is tied to where its reader
- *   came from;
+ *   time reported for it); `entry`, `referrer` and `channel` empty, so no
+ *   page in the middle of a visit is tied to where its reader came from;
  * - a visit's start: the first page view's dimensions, `entry` (that page's
- *   path), `referrer`, `channel`, `campaign`, `visits` = visits started,
+ *   path), `referrer`, `channel`, `visits` = visits started,
  *   `engaged` = those that reached a second page view (added in the hour of
  *   the second one) and `visit_seconds`, the visit's foreground time (added
  *   as it is reported), so the bounce rate of anything a filter selects is
@@ -51,8 +50,9 @@ export class SitePageviewRow {
   @Column({ name: "page_type", type: "varchar", length: 32 })
   pageType: string;
 
+  /** `mobile`, `tablet` or `desktop`, from the User-Agent (`SITE_DEVICES`). */
   @Column({ type: "varchar", length: 8 })
-  viewport: string;
+  device: string;
 
   @Column({ type: "varchar", length: 10 })
   browser: string;
@@ -77,16 +77,12 @@ export class SitePageviewRow {
   @Column({ type: "varchar", length: 820, default: "" })
   entry: string;
 
-  /** A visit's referrer site (`google`, a host, a `utm_source`); `''` direct, and on a page view's row. */
+  /** A visit's referrer site (`google`, or the external host); `''` direct, and on a page view's row. */
   @Column({ type: "varchar", length: 100, default: "" })
   referrer: string;
 
   @Column({ type: "varchar", length: 10, default: "" })
   channel: string;
-
-  /** A visit's `utm_campaign`; `''` without one, and on a page view's row. */
-  @Column({ type: "varchar", length: 100, default: "" })
-  campaign: string;
 
   @Column({ type: "integer", default: 0 })
   views: number;

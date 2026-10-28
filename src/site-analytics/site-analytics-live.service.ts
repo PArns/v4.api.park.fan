@@ -127,8 +127,8 @@ export class SiteAnalyticsLiveService {
       referrers: ranked("referrers", LIVE_TOP_REFERRERS).map(
         ([referrer, visits]) => ({ referrer, visits }),
       ),
-      devices: ranked("devices").map(([viewport, views]) => ({
-        viewport,
+      devices: ranked("devices").map(([device, views]) => ({
+        device,
         views,
       })),
       events: ranked("events", LIVE_TOP_EVENTS).map(([name, count]) => ({

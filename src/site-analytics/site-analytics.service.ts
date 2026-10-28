@@ -18,7 +18,7 @@ import {
   REALTIME_ACTIVE_MINUTES,
   REALTIME_SERIES_MINUTES,
   SITE_ANALYTICS_KEYS as KEYS,
-  SITE_VIEWPORTS,
+  SITE_DEVICES,
   VISITOR_KEY_GRACE_SECONDS,
   VISIT_DIMS,
   isVisitDim,
@@ -251,7 +251,7 @@ export class SiteAnalyticsService {
    * The values of one dimension, most counted first, with the total over all
    * values. A page dimension counts page views with their average time on
    * the page, `path` also the visits that ended there (`exits`, `exitRate`).
-   * A visit dimension (`entry`, `referrer`, `channel`, `campaign`), or any
+   * A visit dimension (`entry`, `referrer`, `channel`), or any
    * dimension under a filter on one, counts visits started (`measure:
    * "visits"`, a view being a visit) from the rows that record visits, with
    * a bounce rate and the average visit: `dim=path` under `channel:search`
@@ -294,7 +294,7 @@ export class SiteAnalyticsService {
               "visits",
               ...(column === "path" ? ["exits"] : []),
             ];
-      const nonEmpty = ["entry", "referrer", "campaign"].includes(query.dim)
+      const nonEmpty = ["entry", "referrer"].includes(query.dim)
         ? `AND ${column} <> ''`
         : "";
       const rows: Array<
@@ -442,7 +442,7 @@ export class SiteAnalyticsService {
 
   /**
    * One event: its total, every property key seen with its top values, the
-   * most frequent property combinations, the kinds of page and viewports it
+   * most frequent property combinations, the kinds of page and devices it
    * came from, the entities it was about (a merged-away one under its
    * survivor) and its series. Three statements in parallel.
    */
@@ -477,7 +477,7 @@ export class SiteAnalyticsService {
       // The grouping sets draw the series, so they read the days; the
       // property values and the entities do not.
       const [scanRows, propRowsSource, entitySource] = await Promise.all([
-        rows(scan, ["name", "page_type", "viewport", "props_key"]),
+        rows(scan, ["name", "page_type", "device", "props_key"]),
         rows(props, ["name", "props_key"], { alias: "e", collapse: true }),
         rows(entities, ["name", "entity"], { alias: "e", collapse: true }),
       ]);
@@ -485,19 +485,19 @@ export class SiteAnalyticsService {
         this.runner.query(
           // Every grouped column is NOT NULL, so a NULL says which grouping
           // set produced the row, and the empty set gives the total.
-          `SELECT page_type, viewport, props_key, period, SUM(count) AS count
-           FROM (SELECT page_type, viewport, props_key, count,
+          `SELECT page_type, device, props_key, period, SUM(count) AS count
+           FROM (SELECT page_type, device, props_key, count,
                         ${periodOf(window.hourly)} AS period
                    FROM ${scanRows.from}
                   WHERE name = ${nameParam}
                     AND ${scanRows.where}) s
-          GROUP BY GROUPING SETS ((page_type), (viewport), (props_key),
+          GROUP BY GROUPING SETS ((page_type), (device), (props_key),
                                   (period), ())`,
           scan.values,
         ) as Promise<
           Array<{
             page_type: string | null;
-            viewport: string | null;
+            device: string | null;
             props_key: string | null;
             period: string | null;
             count: Count;
@@ -528,16 +528,16 @@ export class SiteAnalyticsService {
 
       for (const row of grouped)
         row.period = periodText(row.period, window.hourly);
-      const set = (key: "page_type" | "viewport" | "props_key" | "period") =>
+      const set = (key: "page_type" | "device" | "props_key" | "period") =>
         grouped.filter(
           (row) =>
             row[key] !== null &&
-            (["page_type", "viewport", "props_key", "period"] as const).every(
+            (["page_type", "device", "props_key", "period"] as const).every(
               (other) => other === key || row[other] === null,
             ),
         );
       const valueCounts = (
-        key: "page_type" | "viewport",
+        key: "page_type" | "device",
         known: readonly string[] = [],
       ) => {
         const found = new Map(
@@ -557,7 +557,7 @@ export class SiteAnalyticsService {
         );
       };
       const total = grouped.find((row) =>
-        (["page_type", "viewport", "props_key", "period"] as const).every(
+        (["page_type", "device", "props_key", "period"] as const).every(
           (key) => row[key] === null,
         ),
       );
@@ -590,7 +590,7 @@ export class SiteAnalyticsService {
             count: num(row.count),
           })),
         byPageType: valueCounts("page_type"),
-        byViewport: valueCounts("viewport", SITE_VIEWPORTS),
+        byDevice: valueCounts("device", SITE_DEVICES),
         entities: entityRows.map((row) => ({
           id: row.entity,
           kind: named.get(row.entity)?.kind ?? null,
@@ -673,7 +673,7 @@ export class SiteAnalyticsService {
    * views' rows, `metric=visits` over the visit dimensions and the first
    * page's dimensions of the visits' start rows. With `exit` on a side the
    * visits are those that ended, counted on their exit rows, whose page
-   * dimensions are the last page's. "OS by device" is `row=os&col=viewport`,
+   * dimensions are the last page's. "OS by device" is `row=os&col=device`,
    * "channel by country" `metric=visits&row=channel&col=country`.
    */
   async trafficCrosstab(
@@ -739,7 +739,7 @@ export class SiteAnalyticsService {
   /**
    * Which search is used, where and how well, over the `search_*` events:
    * per surface seen the openings, typed queries, clicks and dead ends with
-   * their rates; openings by kind of page and viewport; what was clicked and
+   * their rates; openings by kind of page and device; what was clicked and
    * at which position; the openings per day. Three statements, each over only
    * the events its figures need.
    */
@@ -750,7 +750,7 @@ export class SiteAnalyticsService {
     return this.runner.run(async () => {
       const window = siteAnalyticsWindow(query, now);
       refuseFiltersBeyond(window, "The search report", EVENT_DIMS);
-      // The openings are drawn by page type, viewport and day; the other
+      // The openings are drawn by page type, device and day; the other
       // scopes need only their properties, summed over the window.
       const scope = async (names: readonly string[], drawn: boolean) => {
         const params = new SqlParams();
@@ -761,14 +761,14 @@ export class SiteAnalyticsService {
           params,
           window,
           "current",
-          ["name", "props_key", ...(drawn ? ["page_type", "viewport"] : [])],
+          ["name", "props_key", ...(drawn ? ["page_type", "device"] : [])],
           { collapse: !drawn },
         );
         const sql = `SELECT name, COALESCE(props->>'surface', '') AS surface,
                           COALESCE(props->>'result', '') AS result,
                           COALESCE(props->>'item', '') AS item,
                           COALESCE(props->>'position', '') AS position,
-                          ${drawn ? `page_type, viewport, ${periodOf(window.hourly)} AS period,` : ""}
+                          ${drawn ? `page_type, device, ${periodOf(window.hourly)} AS period,` : ""}
                           count
                      FROM ${source.from}
                     WHERE name = ANY(${namesParam}::text[])
@@ -782,7 +782,7 @@ export class SiteAnalyticsService {
         item: string | null;
         position: string | null;
         page_type: string | null;
-        viewport: string | null;
+        device: string | null;
         period: string | null;
         count: Count;
       };
@@ -798,10 +798,10 @@ export class SiteAnalyticsService {
           all.params.values,
         ),
         this.runner.query(
-          `SELECT name, surface, page_type, viewport, period, SUM(count) AS count
+          `SELECT name, surface, page_type, device, period, SUM(count) AS count
            FROM (${opened.sql}) s
           GROUP BY GROUPING SETS ((name, surface, page_type),
-                                  (name, surface, viewport),
+                                  (name, surface, device),
                                   (name, surface, period))`,
           opened.params.values,
         ),
@@ -852,10 +852,10 @@ export class SiteAnalyticsService {
         };
       });
 
-      const viewports = new Map(
+      const devices = new Map(
         openedRows
-          .filter((row) => row.viewport !== null)
-          .map((row) => [`${row.surface}|${row.viewport}`, num(row.count)]),
+          .filter((row) => row.device !== null)
+          .map((row) => [`${row.surface}|${row.device}`, num(row.count)]),
       );
       const series = new Map<string, number>();
       for (const row of openedRows) {
@@ -902,11 +902,11 @@ export class SiteAnalyticsService {
           (item) => item.opened,
           (item) => `${item.surface}|${item.pageType}`,
         ),
-        bySurfaceAndViewport: surfaceNames.flatMap((surface) =>
-          SITE_VIEWPORTS.map((viewport) => ({
+        bySurfaceAndDevice: surfaceNames.flatMap((surface) =>
+          SITE_DEVICES.map((device) => ({
             surface,
-            viewport,
-            opened: viewports.get(`${surface}|${viewport}`) ?? 0,
+            device,
+            opened: devices.get(`${surface}|${device}`) ?? 0,
           })),
         ),
         resultTypes: desc(

@@ -13,7 +13,6 @@ const base = {
   locale: "de",
   path: "/de/parks/europe/germany/bruehl/phantasialand",
   pageType: "park",
-  viewport: "mobile",
 };
 const pageview = (overrides: Record<string, unknown> = {}) => ({
   t: "pageview",
@@ -36,7 +35,7 @@ const event = (
  * The wire format at the door. There is no event schema, so what is pinned is
  * the pattern of every field: only `{ v: 1, hits: 1..20 }` parses; a hit with
  * a malformed base field or name is dropped alone; a malformed property,
- * referrer, campaign or entity is dropped and the hit kept; properties are
+ * referrer or entity is dropped and the hit kept; properties are
  * kept in key order, at most eight, with an unambiguous canonical key; an
  * engagement is whole seconds within a bound; and `page_read`, the one event
  * the API knows, keeps the most-read counter's key rules.
@@ -84,20 +83,20 @@ describe("validateHit", () => {
     ).toBeNull();
   });
 
-  it("accepts a page view with its referrer and campaign, the campaign lowercased", () => {
-    expect(
-      validateHit(
-        pageview({ referrer: "google.com", campaign: "Summer-2026" }),
-      ),
-    ).toEqual({
+  it("accepts a page view with its external referrer host", () => {
+    expect(validateHit(pageview({ referrer: "google.com" }))).toEqual({
       t: "pageview",
       ...base,
       referrer: "google.com",
-      campaign: "summer-2026",
+    });
+    expect(validateHit(pageview())).toEqual({
+      t: "pageview",
+      ...base,
+      referrer: null,
     });
   });
 
-  it("drops a referrer or campaign that is malformed or the site itself, not the hit", () => {
+  it("drops a referrer that is no external host, not the hit", () => {
     for (const referrer of [
       "Google.com",
       "https://google.com",
@@ -105,14 +104,35 @@ describe("validateHit", () => {
       "park.fan",
       "www.park.fan",
       "x".repeat(101),
+      // Not a host: what a `utm_source` looked like.
+      "newsletter",
       7,
     ]) {
       expect(validateHit(pageview({ referrer }))).toMatchObject({
         referrer: null,
       });
     }
-    expect(validateHit(pageview({ campaign: "a b" }))).toMatchObject({
-      campaign: null,
+  });
+
+  it("counts a hit that still carries `viewport` or `campaign`, and keeps neither", () => {
+    const stale = { viewport: "mobile", campaign: "summer-2026" };
+    expect(validateHit(pageview({ ...stale, referrer: "google.com" }))).toEqual(
+      {
+        t: "pageview",
+        ...base,
+        referrer: "google.com",
+      },
+    );
+    expect(
+      validateHit({ t: "engagement", ...base, ...stale, seconds: 3 }),
+    ).toEqual({ t: "engagement", ...base, seconds: 3 });
+    expect(validateHit(event("search_opened", undefined, stale))).toEqual({
+      t: "event",
+      ...base,
+      name: "search_opened",
+      props: {},
+      propsKey: "",
+      entity: null,
     });
   });
 
@@ -132,7 +152,6 @@ describe("validateHit", () => {
       pageview({ pageType: "Park" }),
       pageview({ pageType: "1park" }),
       pageview({ pageType: "x".repeat(33) }),
-      pageview({ viewport: "watch" }),
     ]) {
       expect(validateHit(hit)).toBeNull();
     }

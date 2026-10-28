@@ -172,7 +172,7 @@ export class AdminSiteAnalyticsController {
   @ApiOperation({
     summary: "Views and visits per value of one dimension",
     description:
-      "For entry, referrer, channel and campaign a view is a visit started, " +
+      "For entry, referrer and channel a view is a visit started, " +
       "with a bounce rate and the average visit; for exit a visit that ended " +
       "on the page. A page dimension has the average time on the page, path " +
       "also exits and exit rate.",
@@ -200,7 +200,7 @@ export class AdminSiteAnalyticsController {
   @ApiParam({ name: "name", example: "search_result_clicked" })
   @ApiOperation({
     summary:
-      "One event by property, combination, page type, viewport, entity and day",
+      "One event by property, combination, page type, device, entity and day",
   })
   @ApiResponse({ status: 200, type: SiteEventDetailDto })
   @ApiResponse({ status: 503, description: REPORT_BUSY })
@@ -216,7 +216,7 @@ export class AdminSiteAnalyticsController {
   @ApiOperation({
     summary: "One event counted by two sides at once",
     description:
-      "`row` and `col`: page_type, viewport, locale, day, path, country, " +
+      "`row` and `col`: page_type, device, locale, day, path, country, " +
       "browser, os or prop:<key>. 30 values per side by count, the rest " +
       "folded into `__rest__`.",
   })
@@ -234,7 +234,7 @@ export class AdminSiteAnalyticsController {
     summary: "Page views or visits counted by two dimensions at once",
     description:
       "metric=pageviews over the page dimensions and the day; metric=visits " +
-      "also over entry, referrer, channel, campaign and exit. 30 values per " +
+      "also over entry, referrer, channel and exit. 30 values per " +
       "side by count, the rest folded into `__rest__`.",
   })
   @ApiResponse({ status: 200, type: SiteTrafficCrosstabDto })

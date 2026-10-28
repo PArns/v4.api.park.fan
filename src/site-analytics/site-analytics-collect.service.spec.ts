@@ -41,7 +41,6 @@ const pageview = (overrides: Record<string, unknown> = {}) => ({
   locale: "de",
   path: PATH,
   pageType: "park",
-  viewport: "mobile",
   ...overrides,
 });
 const engagement = (
@@ -52,7 +51,6 @@ const engagement = (
   locale: "de",
   path: PATH,
   pageType: "park",
-  viewport: "mobile",
   seconds,
   ...overrides,
 });
@@ -65,7 +63,6 @@ const event = (
   locale: "de",
   path: PATH,
   pageType: "park",
-  viewport: "mobile",
   name,
   props,
   ...overrides,
@@ -175,9 +172,9 @@ describe("SiteAnalyticsCollectService", () => {
     expect(await redis.smembers(KEYS.windows)).toEqual([WINDOW]);
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
     expect(buffered().pageviews).toEqual([
-      { dims: [...page, "", "", "", ""], counts: counts({ views: 1 }) },
+      { dims: [...page, "", "", ""], counts: counts({ views: 1 }) },
       {
-        dims: [...page, PATH, "google", "search", ""],
+        dims: [...page, PATH, "google", "search"],
         counts: counts({ visits: 1 }),
       },
     ]);
@@ -411,7 +408,7 @@ describe("SiteAnalyticsCollectService", () => {
     expect(drops()[DROP_REASONS.combination]).toBe("1");
   });
 
-  it("files a page type, path, referrer or campaign past its guard under an overflow value", async () => {
+  it("files a page type, path or referrer past its guard under an overflow value", async () => {
     redis.sets.set(
       KEYS.guard("pageTypes", DAY),
       filled(SITE_GUARDS.pageTypes.limit),
@@ -421,16 +418,11 @@ describe("SiteAnalyticsCollectService", () => {
       KEYS.guard("referrers", DAY),
       filled(SITE_GUARDS.referrers.limit),
     );
-    redis.sets.set(
-      KEYS.guard("campaigns", DAY),
-      filled(SITE_GUARDS.campaigns.limit),
-    );
     await collect([
       pageview({
         pageType: "brand_new",
         path: "/de/never-seen",
         referrer: "forum.example.org",
-        campaign: "summer",
       }),
     ]);
     const visit = buffered().pageviews.find((row) => row.counts.visits > 0)!;
@@ -445,8 +437,7 @@ describe("SiteAnalyticsCollectService", () => {
       "zz",
       OVERFLOW_VALUE,
       OVERFLOW_VALUE,
-      "campaign",
-      OVERFLOW_VALUE,
+      "referral",
     ]);
   });
 
@@ -682,17 +673,15 @@ describe("SiteAnalyticsCollectService", () => {
     const key = visitKeys()[0];
     const member = key.slice("site-analytics:visit:".length);
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
-    const visitDims = [PATH, "google", "search", ""];
+    const visitDims = [PATH, "google", "search"];
     const hash = () => Object.fromEntries(redis.hashes.get(key) ?? []);
     expect(hash()).toEqual({
       c: JSON.stringify({
         locale: "de",
         path: PATH,
         pageType: "park",
-        viewport: "mobile",
         referrer: "google",
         channel: "search",
-        campaign: "",
       }),
       n: "1",
       s: String(seconds(NOW)),
@@ -749,11 +738,11 @@ describe("SiteAnalyticsCollectService", () => {
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
     expect(buffered().pageviews).toEqual([
       {
-        dims: [...page, "", "", "", ""],
+        dims: [...page, "", "", ""],
         counts: counts({ views: 1, seconds: 42 }),
       },
       {
-        dims: [...page, PATH, "bing", "search", ""],
+        dims: [...page, PATH, "bing", "search"],
         counts: counts({ visits: 1, visitSeconds: 42 }),
       },
     ]);
@@ -772,7 +761,6 @@ describe("SiteAnalyticsCollectService", () => {
           "ios",
           "zz",
           "zz",
-          "",
           "",
           "",
           "",
@@ -802,6 +790,73 @@ describe("SiteAnalyticsCollectService", () => {
     const rows = buffered();
     expect(rows.pageviews.map((row) => row.dims[7])).toEqual(["fr", "fr"]);
     expect(rows.events[0].dims).not.toContain("fr");
+  });
+
+  it("takes the device class from the User-Agent, for page views, visits, events and the live view alike", async () => {
+    const IPAD =
+      "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+    for (const userAgent of [BROWSER, IPAD, DESKTOP]) {
+      await collect([pageview(), event("search_opened", { surface: "hero" })], {
+        userAgent,
+      });
+    }
+    const device = (dims: string[]) => dims[3];
+    expect(
+      buffered()
+        .pageviews.filter((row) => row.counts.views > 0)
+        .map((row) => device(row.dims))
+        .sort(),
+    ).toEqual(["desktop", "mobile", "tablet"]);
+    expect(
+      buffered()
+        .events.map((row) => row.dims[4])
+        .sort(),
+    ).toEqual(["desktop", "mobile", "tablet"]);
+    expect(
+      Object.fromEntries(
+        redis.hashes.get(`site-analytics:live:devices:202610282116:all`) ?? [],
+      ),
+    ).toEqual({ desktop: "1", mobile: "1", tablet: "1" });
+    // The visit's exit row carries it too, from the same request's User-Agent.
+    const exits = visitKeys().map((key) =>
+      JSON.parse(redis.hashes.get(key)?.get("x") ?? "[]"),
+    );
+    expect(exits.map(device).sort()).toEqual(["desktop", "mobile", "tablet"]);
+  });
+
+  it("counts a hit that still sends `viewport` and `campaign`, and stores neither", async () => {
+    await expect(
+      collect([
+        pageview({
+          viewport: "desktop",
+          campaign: "summer-2026",
+          referrer: "www.google.de",
+        }),
+        engagement(12, { viewport: "desktop", campaign: "summer-2026" }),
+      ]),
+    ).resolves.toBe(2);
+    // The User-Agent is an iPhone's: the device is the server's, not the hit's.
+    expect(pageviewRows().map((row) => row.path)).toEqual([PATH, PATH]);
+    const visit = buffered().pageviews.find((row) => row.counts.visits > 0)!;
+    expect(visit.dims).toEqual([
+      "de",
+      PATH,
+      "park",
+      "mobile",
+      "safari",
+      "ios",
+      "nl",
+      "zz",
+      PATH,
+      "google",
+      "search",
+    ]);
+    const stored = JSON.stringify([
+      [...redis.hashes.values()].map((hash) => [...hash]),
+      [...redis.sets.values()].map((set) => [...set]),
+    ]);
+    expect(stored).not.toContain("summer-2026");
+    expect(stored).not.toContain("desktop");
   });
 
   it("counts the live view's minute: pages, countries, devices, visits by channel and referrer, events", async () => {

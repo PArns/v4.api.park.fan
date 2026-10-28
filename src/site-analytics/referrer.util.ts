@@ -9,7 +9,7 @@ import type { Channel } from "./site-analytics.constants";
 
 interface ReferrerRule {
   site: string;
-  channel: Exclude<Channel, "campaign" | "direct">;
+  channel: Exclude<Channel, "direct">;
   /** Hosts matched as themselves or as a parent domain (`x.y` matches `a.x.y`). */
   hosts?: readonly string[];
   /** For sites with country domains (`google.co.uk`). */
@@ -116,21 +116,16 @@ function matches(rule: ReferrerRule, host: string): boolean {
 }
 
 /**
- * The site and channel of a visit. The wire's `referrer` is a host, or the
- * `utm_source` value when the link had one; a value without a dot is taken
- * for a `utm_source`, since every host has one. A visit with a campaign or a
- * `utm_source` is `campaign`, one without a referrer `direct`.
+ * The site and channel of a visit. The wire's `referrer` is the host of the
+ * external page that linked to the site; a visit without one is `direct`.
  */
-export function classifyReferrer(
-  referrer: string | null,
-  campaign: string | null,
-): { referrer: string; channel: Channel } {
-  if (!referrer)
-    return { referrer: "", channel: campaign ? "campaign" : "direct" };
-  if (!referrer.includes(".")) return { referrer, channel: "campaign" };
+export function classifyReferrer(referrer: string | null): {
+  referrer: string;
+  channel: Channel;
+} {
+  if (!referrer) return { referrer: "", channel: "direct" };
   const host = referrer.replace(HOST_PREFIX, "");
   const rule = REFERRER_RULES.find((r) => matches(r, host));
-  if (campaign) return { referrer: rule?.site ?? host, channel: "campaign" };
   return rule
     ? { referrer: rule.site, channel: rule.channel }
     : { referrer: host, channel: "referral" };

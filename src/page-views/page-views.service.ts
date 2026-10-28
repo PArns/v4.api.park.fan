@@ -75,8 +75,8 @@ export class PageViewsService {
 
   /**
    * Records one view sent to the deprecated `POST /v1/page-views` as a
-   * `page_read`. The old beacon knows no path, page type or viewport, so its
-   * row has none (`''`, the kind, `unknown`). Returns whether it counted.
+   * `page_read`. The old beacon knows no path, so its row has none (`''`),
+   * and its page type is the kind. Returns whether it counted.
    */
   async record(view: PageView, now: Date = new Date()): Promise<boolean> {
     const entityKind = view.kind === "park" || view.kind === "attraction";
@@ -88,7 +88,6 @@ export class PageViewsService {
       locale: view.locale,
       path: "",
       pageType: view.kind === "article" ? "guide" : view.kind,
-      viewport: "unknown",
       name: PAGE_READ_EVENT,
       props,
       propsKey: propsKeyOf(props),

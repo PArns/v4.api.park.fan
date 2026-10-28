@@ -28,39 +28,62 @@ refuses text. Body at most 16 KiB, as text or JSON (413), `{ v: 1, hits: [...] }
 | `locale` | all | one of the six | hit dropped |
 | `path` | all | `^/(en\|de\|nl\|fr\|es\|it)(/[a-z0-9][a-z0-9._~-]{0,99}){0,8}$`, first segment = `locale` | hit dropped |
 | `pageType` | all | `^[a-z][a-z0-9_]{0,31}$` | hit dropped |
-| `viewport` | all | `mobile`, `tablet`, `desktop` | hit dropped |
-| `referrer` | page view | `^[a-z0-9][a-z0-9.-]{0,99}$`, not park.fan; a host, or `utm_source` | referrer dropped |
-| `campaign` | page view | `utm_campaign`, lowercased, `^[a-z0-9][a-z0-9._+-]{0,99}$` | campaign dropped |
+| `referrer` | page view | `^[a-z0-9][a-z0-9.-]{0,99}$` with a dot in it, not park.fan: the host of an external referrer | referrer dropped |
 | `name` | event | `^[a-z][a-z0-9_]{1,47}$` | hit dropped |
 | `props` | event | up to 8 in key order; key `^[a-z][a-z0-9_]{0,31}$`; value a finite number, a boolean or a string `^[\p{L}\p{N}][\p{L}\p{N} ._:/+#-]{0,119}$` | that prop dropped |
 | `entity` | event | lowercase UUID of a park, ride, show or restaurant | entity dropped |
 | `seconds` | engagement | a whole number, 1–1800 (`MAX_ENGAGEMENT_SECONDS`) | hit dropped |
 
 **Engagement.** The frontend times each page view while the tab is visible and reports it as
-`{ t: "engagement", locale, path, pageType, viewport, seconds }`, with the page's later hits or when
+`{ t: "engagement", locale, path, pageType, seconds }`, with the page's later hits or when
 the page is hidden; a page view may report in parts, which add up. It is a hit like any other: it
 counts against the address's cap and passes the path and page-type guards. Its seconds go to the
 page's row (`seconds`) and, while the visit's key knows how the visit began, to the visit's start row
 (`visit_seconds`); without a visit (no address, Redis away, the visit already ended) to the page
 only. The browser sends no time: the seconds land in the hour the report arrives in.
 
+A hit carries no device class and no window width, and the beacon reads no query parameter of the
+landing URL: `utm_source` and `utm_campaign` are not read, and `referrer` is the external host and
+nothing else. A field the table does not list is ignored, so a tab that still runs an older script and
+sends `viewport` or `campaign` is counted all the same and neither is stored.
+
 **No location-derived entity.** `nearby_parks_loaded` and every `compass_*` event lose their `entity`
 on the way in, whatever a client sends (`LOCATION_DERIVED_EVENTS`): the park near a reader would be
 where the reader is. Their props stay. The list is one constant; a new event of that kind goes there.
 
-The server adds, per hit and never from the client: browser and OS family (`user-agent.util.ts`, seven
-families each, no version, from the first 512 characters), the country from the request address
+The server adds, per hit and never from the client: browser and OS family and the **device class**
+(`user-agent.util.ts`, seven families each and three classes, no version, from the first 512
+characters), the country from the request address
 through the GeoLite2 lookup the API already runs (`GeoipService.lookupCountry`, `zz` when unknown),
 and per visit the referrer **site** and **channel** (`referrer.util.ts`): `google.de` and
 `www.google.com` are `google`; `search` (Google, Bing, DuckDuckGo, Ecosia, Yahoo, Yandex, Baidu,
 Qwant, Startpage, Brave, Kagi, …), `ai` (ChatGPT, Perplexity, Gemini, Copilot, Claude, …), `social`,
-`referral` (any other host, under its own name), `campaign` (a `utm_source`, i.e. a referrer without a
-dot, or a `campaign`), `direct`. Only a search engine's own host is `search`: `mail.google.com`,
+`referral` (any other host, under its own name), `direct` (no referrer). Only a search engine's own host is `search`: `mail.google.com`,
 `docs.google.com`, `maps.google.de` or `news.google.com` send readers as any site does and are
 `referral`. A new site is one line in `REFERRER_RULES`. The **browser language** is the primary
 subtag of the first `Accept-Language` tag, lowercased (`de-AT, en;q=0.8` → `de`), and `zz` for
 anything that is not two letters (`browser-language.util.ts`). The site's language is the path's;
 this one says what the browser asked for, and only the rows of `site_pageviews` carry it.
+
+**The device class** (`deviceClassOf`, `mobile`, `tablet` or `desktop`, `SITE_DEVICES`) is read from the
+request's User-Agent alone, in this order, with plain `includes` tests (no regular expression, so no
+input makes it slow):
+
+1. `tablet`: the User-Agent says `iPad`, `Tablet`, `Kindle`, `Silk` or `PlayBook`;
+2. `mobile`: it says `Mobi` (which is `Mobile`, `IEMobile`, `Opera Mobi`), `iPhone`, `iPod`,
+   `Windows Phone` or `Opera Mini`;
+3. `tablet`: it says `Android` and none of the above, which is an Android without `Mobile`: Chrome and
+   Firefox leave `Mobile` out on a tablet;
+4. `desktop`: everything else.
+
+The tablet names come first because an iPad and Silk also say `Mobile`; Windows Phone and Opera Mini
+come before the Android rule because they also say `Android`. The browser asks for no client hint, and
+the beacon sends no window width, so the class is what the header says and nothing more. **Known
+limits:** an iPad on iPadOS 13 or later asks for desktop sites and sends the User-Agent of a Mac, so it
+counts as a `desktop`; so does a phone or tablet whose browser asked for the desktop site (`X11`,
+`Macintosh`); an Android device that says no `Mobile` and is no tablet (a television, a car) counts as a
+`tablet`. One reader has one class for the whole visit, since the visit key is the address and the
+User-Agent.
 
 ## Adding an event
 
@@ -86,8 +109,7 @@ There is no schema, so the guards are generic. Each counts per UTC day in Redis.
 | distinct event names; `page_read` exempt | 300, 20 new per address (`SITE_GUARDS.names`) | a new name dropped |
 | distinct page types | 100, 10 new per address | stored as `other` |
 | distinct paths | 20,000, 200 new per address | stored as `(other)`, the entry too |
-| distinct referring sites outside the known search engines, AI assistants and social networks, and `utm_source` values | 1000, 10 new per address | stored as `(other)`, channel kept |
-| distinct campaigns | 200, 5 new per address | stored as `(other)` |
+| distinct referring sites outside the known search engines, AI assistants and social networks | 1000, 10 new per address | stored as `(other)`, channel kept |
 | property combinations (with the entity) per event; `page_read` exempt | 2000, 100 new per address | counted with props `{ "_overflow": "1" }`, no entity |
 | `page_read` per reader and page | 3 (`MAX_VIEWS_PER_READER_PER_DAY`) | dropped |
 | `page_read` per address and page, whatever the User-Agent | 10 (`MAX_VIEWS_PER_ADDRESS_AND_PAGE_PER_DAY`) | dropped |
@@ -121,7 +143,7 @@ request.
   sends nothing under Do Not Track, GPC, the privacy page's opt-out, or off the production hosts.
 - **No address and no User-Agent is stored**, in Postgres, in Redis or in a log line
   (no log line of this API carries an address, [the rule](../rules/no-address-in-logs.md)). The address becomes the bucket for the
-  caps, the country, and a pseudonym; the User-Agent becomes two families and a pseudonym.
+  caps, the country, and a pseudonym; the User-Agent becomes two families, a device class and a pseudonym.
 - **Every Redis key that stands for a reader or an address is pseudonymous for one UTC day**: an
   HMAC-SHA256 under that day's key, `HMAC(secret, day)` (`dailyHashKey`), where the secret is
   `ANALYTICS_HASH_SECRET` (falling back to `PAGE_VIEWS_HASH_SECRET`, then to a random per-process
@@ -130,10 +152,9 @@ request.
   a day that has not expired; the secret lives in the environment, never in Redis. A visit that runs
   over midnight UTC is two visits.
 - **What a visit key holds** (`site-analytics:visit:<hmac>`, a hash): `c` how the visit began (its
-  first page view's language, path, page type and viewport, the referrer site, channel and
-  campaign), `n` its page views, `s` and `l` the server's clock in UTC seconds at its first and its
+  first page view's language, path and page type, the referrer site and channel), `n` its page views, `s` and `l` the server's clock in UTC seconds at its first and its
   last hit, and `x` the exit row its last page view would make (that page's language, path, page
-  type and viewport, browser, OS, country and browser language, with how the visit began). It lives
+  type with the device, browser, OS, country and browser language, with how the visit began). It lives
   40 minutes past the last hit (`VISIT_KEY_TTL_SECONDS`) and is deleted when the flush ends the
   visit. No address, no User-Agent. The two times, and the open visits' score that repeats the last,
   are the only moments Redis keeps about a reader; they end with the visit and never reach Postgres,
@@ -143,12 +164,12 @@ request.
   the collector drops any member older than two hours (`OPEN_VISIT_MAX_AGE_SECONDS`), so even with
   the flusher stopped no pseudonym stays there longer.
 - **What a row holds**: an hour, never a moment, and counts. A page view's row carries the page and
-  the device (language, path, page type, viewport, browser, OS, country, browser language), `views`
-  and `seconds`, and **nothing of the visit**; a visit's start row carries the first page and the
-  device plus the entry, referrer site, channel and campaign, with `visits`, `engaged` and
-  `visit_seconds`; an exit row carries the last page and the device plus how the visit began, with
+  its reader's classes (language, path, page type, device class, browser, OS, country, browser
+  language), `views` and `seconds`, and **nothing of the visit**; a visit's start row carries the
+  first page and the classes plus the entry, referrer site and channel, with `visits`, `engaged` and
+  `visit_seconds`; an exit row carries the last page and the classes plus how the visit began, with
   `exits` and `visit_span_seconds` (last hit minus first, summed); an event's row carries the page,
-  the device without the browser language, the event and its props and entity, and nothing of the
+  the classes without the browser language, the event and its props and entity, and nothing of the
   visit. So no row ties a page in the middle of a visit to where the reader came from; an exit row
   ties the last page to it, as the start row ties the first. At today's traffic most rows still
   count one hit: what makes them anonymous is that they hold no identifier and no visit thread, not
@@ -162,8 +183,8 @@ request.
 | `site-analytics:uv:<day>:<scope>` | the day's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h) |
 | `site-analytics:uvh:<hour>:<scope>` | the hour's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h), as the day's, so the snapshot can read it |
 | `site-analytics:rt:uv:`, `rt:pv:`, `rt:ev:<minute>:<scope>` | the minute's visitor HyperLogLog, page views, events | 35 min |
-| `site-analytics:live:<list>:<minute>:<scope>` | the minute's page views by page, country and viewport, visits started by channel and referrer site, events by name; no reader in them | 35 min |
-| `site-analytics:guard:<guard>:<day>` | the day's admitted names, page types, paths, referrer sites, campaigns, combination hashes | to the end of the next day + 1 min (≤ 48 h); no reader in them |
+| `site-analytics:live:<list>:<minute>:<scope>` | the minute's page views by page, country and device, visits started by channel and referrer site, events by name; no reader in them | 35 min |
+| `site-analytics:guard:<guard>:<day>` | the day's admitted names, page types, paths, referrer sites, combination hashes | to the end of the next day + 1 min (≤ 48 h); no reader in them |
 | `site-analytics:window-hits:<window>` | all hits of a five-minute window | 15 min |
 | `site-analytics:drops:<day>` | drop and overflow counts by reason | to the end of the next day + 1 min |
 | `site-analytics:buf:<window>`, `…:flushing` | a window's counts until written | no TTL; written within about six minutes |
@@ -260,8 +281,8 @@ also reaches the data-quality report's failing jobs.
 
 | Table | Row | Compression |
 | --- | --- | --- |
-| `site_pageviews` | the UTC hour, `locale`, `path`, `page_type`, `viewport`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`, `campaign`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the four visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
-| `site_events` | the UTC hour, `name`, the page dimensions without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count` | the same, segment by `name` |
+| `site_pageviews` | the UTC hour, `locale`, `path`, `page_type`, `device`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the three visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
+| `site_events` | the UTC hour, `name`, the page dimensions (with `device`) without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count` | the same, segment by `name` |
 | `site_analytics_flushes` | the written claims of each window | 30-day chunks |
 | `site_pageviews_daily` | `site_pageviews` summed per UTC day and [cuboid](#the-daily-level): the day's midnight as `bucket`, `cuboid`, `locale`, the dimensions the cuboid names (the others `''`), the seven sums as `bigint` | 7-day chunks, compressed after 7 days, segment by `cuboid`, order by `bucket DESC` |
 | `site_events_daily` | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint` | the same |
@@ -299,14 +320,15 @@ window before ends at. The answers are the same either way (below); only the row
 at this traffic (25,300 rows a day with every dimension but the hour, against 29,600 hourly). So the
 daily rows are groupings of the day by a few dimensions at a time, **cuboids**. A cuboid's rows carry
 `locale` (every cuboid keeps the language), the dimensions it names, and the sums; the other dimension
-columns hold `''`. There are 49 for page views (`PAGEVIEW_CUBOIDS`): the day alone; each dimension a
-panel groups by (path with its page type, page type, viewport, browser, OS, country, browser language,
-entry page, referrer, channel, campaign); the entry page with referrer, channel and page type, for the
-SEO reports; and every pair of the nine narrow dimensions (page type, viewport, browser, OS, country,
-browser language, channel, campaign, referrer), a filter on one with a panel on another. A pair with
+columns hold `''`. There are 40 for page views (`PAGEVIEW_CUBOIDS`): the day alone (1); the path with
+its page type (1); each dimension a panel groups by (page type, device, browser, OS, country, browser
+language, entry page, referrer, channel: 9); the entry page with referrer, channel and page type, for
+the SEO reports (1); and every pair of the eight narrow dimensions (page type, device, browser, OS,
+country, browser language, channel, referrer: 28), a filter on one with a panel on another. A pair with
 the path or the entry page has 12,000 to 15,000 rows a day, against the hourly rows' 29,600, and is
-not kept. There are four for events (`EVENT_CUBOIDS`): the name; the name with its property combination; the name with page type, viewport
-and property combination (an event's detail, the search report's openings); the name with the entity.
+not kept. There are four for events (`EVENT_CUBOIDS`): the name; the name with its property combination;
+the name with page type, device and property combination (an event's detail, the search report's
+openings); the name with the entity.
 Their ids are stored in every row and marker, so they never move: a new grouping takes the next number
 and the job fills it in for the old days.
 
@@ -328,9 +350,9 @@ crosstab and its cells, an event's page types and property combinations, the sea
 result kinds and browse items) is ordered by count and then by name, not by the order the database
 returned the rows, so two plans cannot give two orders. The checks: the unit specs pin the cuboid
 numbers, the choice, the day split and the SQL; `site-analytics.e2e-spec.ts` seeds twelve days, asks
-840 report URLs (windows, filters, languages, intervals) from the hourly rows, rolls the days up,
-asks them again and expects every body to be equal; and the same comparison ran on the synthetic year:
-1,127 answers (every report; windows from a day to a year, eight filter sets, two languages) were
+810 report URLs (windows, filters, languages, intervals) from the hourly rows, rolls the days up,
+asks them again and expects every body to be equal; and the same comparison ran on the synthetic year,
+with the 49 cuboids it had then (nine named `campaign`): 1,127 answers (every report; windows from a day to a year, eight filter sets, two languages) were
 identical, and the 40 the reports refuse (a visit filter on events, say) were refused both ways.
 
 **The job** (`SiteAnalyticsStorageService.rollupDays`, 02:35, 08:35, 14:35 and 20:35 UTC; a run with
@@ -372,8 +394,8 @@ schema). Insert-only rows written once, with a marker, give the same reads witho
 Days are UTC days, not a park's: a reader belongs to no park
 ([park timezone](../rules/park-timezone.md)). Every admin report takes a window, `locale`,
 `interval`, and `filter=<dim>:<value>` (repeatable, AND; dim ∈ `path`, `page_type`, `country`,
-`viewport`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
-`referrer`, `channel`, `campaign`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`.
+`device`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
+`referrer`, `channel`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`.
 
 **The window** is `days` (1–365, the last days with today; 30 without one) or `from` and `to`
 (`YYYY-MM-DD`, both included, `to` today at the latest, at most 366 days). Both at once, one of
@@ -399,7 +421,7 @@ Visitors of the window before count its last day whole, since visitors are per d
 (`MAX_COMPARABLE_DAYS`) there is no window before, since most of it would lie past the retention:
 `previous` and every change are `null`, and the trends report refuses the window.
 
-**Visit dimensions** (`entry`, `referrer`, `channel`, `campaign`) live only on the rows that record a
+**Visit dimensions** (`entry`, `referrer`, `channel`) live only on the rows that record a
 visit. A breakdown by one counts visits started (`measure: "visits"`, a view being a visit) and
 carries a bounce rate and the average visit. A filter on one selects visits by how they began:
 
@@ -471,7 +493,7 @@ only, for a page that polls every five seconds:
   "countries": [{ "country": "DE", "views": 0 }],
   "channels": [{ "channel": "search", "visits": 0 }],
   "referrers": [{ "referrer": "google", "visits": 0 }],
-  "devices": [{ "viewport": "mobile", "views": 0 }],
+  "devices": [{ "device": "mobile", "views": 0 }],
   "events": [{ "name": "search_opened", "count": 0 }]
 }
 ```
@@ -516,9 +538,9 @@ which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any
 | `GET /v1/admin/analytics/crosstab?row=&col=&metric=` | page views or visits by two dimensions (above) |
 | `GET /v1/admin/analytics/live?locale=` | the last half hour from Redis (above) |
 | `GET /v1/admin/analytics/events` | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series |
-| `GET /v1/admin/analytics/events/:name` | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and viewport, the 50 top entities (name and frontend path; `kind` null once gone), series |
-| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=` | one event by two sides: `page_type`, `viewport`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval |
-| `GET /v1/admin/analytics/search` | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and viewport; result kinds, positions, browse items; series |
+| `GET /v1/admin/analytics/events/:name` | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and device, the 50 top entities (name and frontend path; `kind` null once gone), series |
+| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=` | one event by two sides: `page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval |
+| `GET /v1/admin/analytics/search` | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and device; result kinds, positions, browse items; series |
 | `GET /v1/admin/analytics/seo/landing-pages?channel=search&limit=` | the pages visits from one channel entered on: visits, previous, change, bounce rate, average visit, top 5 sources |
 | `GET /v1/admin/analytics/seo/trends?channel=search` | rising and falling landing pages, 25 each, at least 10 visits over both windows, with the window's average visit; at most 180 days |
 | `GET /v1/admin/analytics/seo/not-found` | paths that showed `pageType: not_found`, with the referrers of the visits that **entered** on them (`visits` each): a Google result pointing at a dead page shows `google`; a broken link inside the site brings views and no referrer, whatever the visit came from |
@@ -559,15 +581,16 @@ keeps only the last 35 minutes of live keys.
 **The daily level** (PAR-1157) was measured on 365 synthetic days of the same shape (5.84 M page
 views in 10.8 M hourly rows, 331 MB, and 7.0 M event rows, 185 MB, compressed after seven days), in a
 scratch container with 4 CPUs, 5 GB, `shared_buffers` 1 GB and `work_mem` 32 MB on a host shared with
-other builds, so the times are upper bounds.
+other builds, so the times are upper bounds. It ran with 49 page-view cuboids, nine of them naming
+`campaign`; the 40 kept now are the other ones, so every size below is an upper bound too.
 
-- **Size.** The 49 page-view cuboids hold 18.2 M rows, 50,000 a day (8,400 for the path, 6,700 for
+- **Size.** The 49 page-view cuboids of that run hold 18.2 M rows, 50,000 a day (8,400 for the path, 6,700 for
   the SEO grouping, 6 to 3,200 for the others), 3,197 MB that compressed to 324 MB (9.9×), 439 MB
   with the two uncompressed chunks of the current fortnight; the four event cuboids 4.3 M rows,
   742 MB to 70 MB (10.5×), 99 MB. The year takes about **1.05 GB**, the hourly rows' 0.52 and the
   daily 0.54, and a tenth of that at today's traffic. `pg_stat_user_tables` read 0 updates, 0 deletes
   and **0 dead tuples** on both tables and the 19,398 markers after the backfill.
-- **Writing.** A compressed day takes 1.1 s for its 49 page-view cuboids (50,000 rows) and 0.2 s for
+- **Writing.** A compressed day takes 1.1 s for those 49 page-view cuboids (50,000 rows) and 0.2 s for
   the four event cuboids (11,700 rows); the 365-day backfill 581 s on the shared host. Rows and
   marker of a cuboid are one statement.
 - **Reading, a year.** The Traffic page asks for sixteen reports at once (the overview, the events,
@@ -580,10 +603,10 @@ other builds, so the times are upper bounds.
 | the SEO page (landing pages, trends over 180 days, not found), at once | 3,500 | 1,600 |
 | event, crosstab and search reports, at once | 3,400 | 1,350 |
 | overview / events | 1,114 / 1,554 | 65 / 101 |
-| breakdown by channel / page type / viewport / browser / OS | 1,075 / 1,061 / 1,112 / 1,024 / 846 | 26 / 29 / 28 / 29 / 26 |
-| breakdown by referrer / country / browser language / campaign / language | 695 / 1,240 / 1,236 / 520 / 377 | 77 / 91 / 93 / 29 / 22 |
+| breakdown by channel / page type / device / browser / OS | 1,075 / 1,061 / 1,112 / 1,024 / 846 | 26 / 29 / 28 / 29 / 26 |
+| breakdown by referrer / country / browser language / language | 695 / 1,240 / 1,236 / 377 | 77 / 91 / 93 / 22 |
 | breakdown by path / entry page / exit | 2,780 / 1,570 / 2,660 | 2,439 / 696 / 1,920 |
-| crosstab OS × viewport | 743 | 41 |
+| crosstab OS × device | 743 | 41 |
 
 The path, the entry page and the exit are what is left: a grouping by 125,000 paths a year sums three
 million daily rows in one hash table, however they are read. The slowest page is the one under a
@@ -600,7 +623,7 @@ read the hourly rows.
 | breakdown `path` / under `channel:search` | 3 / 3 | 367 / 211 | 927 / 644 | 2,695 / 1,863 |
 | breakdown `exit` / under `channel:search` | 4 / 3 | 315 / 303 | 656 / 613 | 2,184 / 2,460 |
 | breakdown `referrer` / `country` / `browser_language` | 3 / 4 / 3 | 10 / 13 / 24 | 42 / 33 / 36 | 163 / 119 / 150 |
-| traffic crosstab `os` × `viewport` / `channel` × `exit` | 3 / 3 | 7 / 509 | 20 / 1,239 | 41 / 3,163 |
+| traffic crosstab `os` × `device` / `channel` × `exit` | 3 / 3 | 7 / 509 | 20 / 1,239 | 41 / 3,163 |
 | events | 14 | 28 | 73 | 138 |
 | event `tab_changed` | 8 | 120 | 186 | 659 |
 | crosstab | 4 | 42 | 140 | 536 |
@@ -633,7 +656,12 @@ its window once, so a year's took about four times the 90-day figure.
   A row written to the hourly tables after its day was rolled up is not in the daily rows.
 - Hours of the days before `site_visitor_hours` existed have `visitors: null`.
 - Page views and events cannot be filtered by how their visit began (see Reports).
-- A `utm_source` is told from a referrer host by its missing dot.
+- The referrer is the host the browser reports and nothing else: a link's `utm_` parameters are not
+  read, so a newsletter or an ad is a `referral` under its own host, or `direct` when the mail client
+  or the app sends none.
 - With Redis down the guards, visits and visitors are off and an instance holds at most 5000 fields in
   memory; past that, hits are dropped and counted.
-- The first 512 characters of a User-Agent decide browser, OS and bot.
+- The first 512 characters of a User-Agent decide browser, OS, device class and bot.
+- The device class is the User-Agent's word, not the screen's: an iPad on iPadOS 13 or later counts as
+  a desktop (it sends a Mac's User-Agent), a browser that asked for the desktop site does too, and an
+  Android television counts as a tablet (see the device class under Wire format).

@@ -423,7 +423,7 @@ describe("Search Console (e2e)", () => {
     await importService.run("cron");
     const bucket = new Date(`${d(3)}T10:00:00Z`);
     await dataSource.query(
-      `INSERT INTO site_pageviews (bucket, locale, path, page_type, viewport, browser, os,
+      `INSERT INTO site_pageviews (bucket, locale, path, page_type, device, browser, os,
                                    country, entry, referrer, channel, views, visits, engaged, visit_seconds)
        VALUES ($1, 'de', $2, 'park', 'mobile', 'safari', 'ios', 'de', $2, 'google', 'search', 0, 20, 5, 1200),
               ($1, 'de', $2, 'park', 'mobile', 'safari', 'ios', 'de', $2, '', 'direct', 0, 50, 10, 500),

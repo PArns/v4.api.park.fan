@@ -43,7 +43,7 @@ import { defineCloseVisitCommand } from "./site-analytics-scripts";
 
 /**
  * A buffered page-view field's dimensions. A page view's row leaves the last
- * four (the visit's) empty; a visit's start row carries the first page view's
+ * three (the visit's) empty; a visit's start row carries the first page view's
  * and the visit's, `entry` being the first page view's path; its exit row the
  * last page view's and the visit's.
  */
@@ -51,7 +51,7 @@ export type PageviewDims = [
   locale: string,
   path: string,
   pageType: string,
-  viewport: string,
+  device: string,
   browser: string,
   os: string,
   country: string,
@@ -59,7 +59,6 @@ export type PageviewDims = [
   entry: string,
   referrer: string,
   channel: string,
-  campaign: string,
 ];
 
 /** A buffered event field's dimensions: the page's, never the visit's. */
@@ -68,7 +67,7 @@ export type EventDims = [
   locale: string,
   path: string,
   pageType: string,
-  viewport: string,
+  device: string,
   browser: string,
   os: string,
   country: string,
@@ -474,19 +473,19 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
         chunk.map((row) => row.counts[key]);
       await manager.query(
         `INSERT INTO site_pageviews
-           (bucket, locale, path, page_type, viewport, browser, os, country,
-            browser_language, entry, referrer, channel, campaign, views,
+           (bucket, locale, path, page_type, device, browser, os, country,
+            browser_language, entry, referrer, channel, views,
             seconds, visits, engaged, visit_seconds, exits,
             visit_span_seconds)
          SELECT $1::timestamptz, *
            FROM unnest($2::text[], $3::text[], $4::text[], $5::text[],
                        $6::text[], $7::text[], $8::text[], $9::text[],
-                       $10::text[], $11::text[], $12::text[], $13::text[],
-                       $14::int[], $15::int[], $16::int[], $17::int[],
-                       $18::int[], $19::int[], $20::int[])`,
+                       $10::text[], $11::text[], $12::text[],
+                       $13::int[], $14::int[], $15::int[], $16::int[],
+                       $17::int[], $18::int[], $19::int[])`,
         [
           bucket,
-          ...Array.from({ length: 12 }, (_, i) => column(i)),
+          ...Array.from({ length: 11 }, (_, i) => column(i)),
           count("views"),
           count("seconds"),
           count("visits"),
@@ -502,15 +501,15 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       const column = (i: number) => chunk.map((row) => row.dims[i]);
       await manager.query(
         `INSERT INTO site_events
-           (bucket, name, locale, path, page_type, viewport, browser, os,
+           (bucket, name, locale, path, page_type, device, browser, os,
             country, props_key, props, entity, count)
-         SELECT $1::timestamptz, name, locale, path, page_type, viewport,
+         SELECT $1::timestamptz, name, locale, path, page_type, device,
                 browser, os, country, props_key, props::jsonb,
                 NULLIF(entity, '')::uuid, count
            FROM unnest($2::text[], $3::text[], $4::text[], $5::text[],
                        $6::text[], $7::text[], $8::text[], $9::text[],
                        $10::text[], $11::text[], $12::text[], $13::int[])
-             AS e(name, locale, path, page_type, viewport, browser, os,
+             AS e(name, locale, path, page_type, device, browser, os,
                   country, props_key, props, entity, count)`,
         [
           bucket,
@@ -851,7 +850,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       const result: unknown[] = await manager.query(
         `WITH copied AS (
            INSERT INTO site_events
-             (bucket, name, locale, path, page_type, viewport, browser, os,
+             (bucket, name, locale, path, page_type, device, browser, os,
               country, props_key, props, entity, count)
            SELECT day::timestamp AT TIME ZONE 'UTC', $1, locale, '',
                   CASE kind WHEN 'article' THEN 'guide' ELSE kind END,
@@ -965,7 +964,7 @@ export function rowsOfFields(fields: Record<string, string>): {
       continue;
     }
     const column = PAGEVIEW_COLUMNS[measure as PageviewMeasure];
-    if (!column || dims.length !== 12) continue;
+    if (!column || dims.length !== 11) continue;
     const row = pageviews.get(json) ?? {
       dims: dims as PageviewDims,
       counts: {

@@ -29,7 +29,6 @@ const pageview = (overrides: Record<string, unknown> = {}) => ({
   locale: "de",
   path: PARK_PATH,
   pageType: "park",
-  viewport: "mobile",
   ...overrides,
 });
 const event = (
@@ -41,7 +40,6 @@ const event = (
   locale: "de",
   path: "/de",
   pageType: "home",
-  viewport: "desktop",
   name,
   props,
   ...overrides,
@@ -158,18 +156,17 @@ describe("Site analytics (e2e)", () => {
     await expect(flush()).resolves.toMatchObject({ windows: 0 });
     expect(await redis.smembers(SITE_ANALYTICS_KEYS.windows)).toEqual([]);
 
-    const device = {
-      viewport: "mobile",
+    const reader = {
+      device: "mobile",
       browser: "safari",
       os: "ios",
       country: "zz",
-      campaign: "",
     };
-    const page = { ...device, entry: "", referrer: "", channel: "" };
+    const page = { ...reader, entry: "", referrer: "", channel: "" };
     expect(
       await dataSource.query(
-        `SELECT path, page_type, viewport, browser, os, country, entry,
-                referrer, channel, campaign, views, visits, engaged
+        `SELECT path, page_type, device, browser, os, country, entry,
+                referrer, channel, views, visits, engaged
            FROM site_pageviews ORDER BY path, entry, channel`,
       ),
     ).toEqual([
@@ -192,7 +189,7 @@ describe("Site analytics (e2e)", () => {
       },
       // A visit's row: its first page, where it came from, its engaged.
       {
-        ...device,
+        ...reader,
         path: PARK_PATH,
         page_type: "park",
         entry: PARK_PATH,
@@ -203,7 +200,7 @@ describe("Site analytics (e2e)", () => {
         engaged: 0,
       },
       {
-        ...device,
+        ...reader,
         path: PARK_PATH,
         page_type: "park",
         entry: PARK_PATH,
@@ -249,6 +246,91 @@ describe("Site analytics (e2e)", () => {
            FROM site_analytics_flushes`,
       ),
     ).toEqual([{ pageview_rows: 4, event_rows: 1, claimed: true }]);
+  });
+
+  it("takes the device from the User-Agent and counts a batch whose hits still carry `viewport` and `campaign`", async () => {
+    const stale = { viewport: "desktop", campaign: "summer-2026" };
+    const send = (userAgent: string, ip: string, hits: unknown[]) =>
+      request(app.getHttpServer())
+        .post("/v1/analytics/collect")
+        .set("Content-Type", "text/plain;charset=UTF-8")
+        .set("User-Agent", userAgent)
+        .set("CF-Connecting-IP", ip)
+        .send(JSON.stringify({ v: 1, hits }));
+    // The global pipe rejects unknown fields on DTOs; the collect body is none.
+    await send(UA, "203.0.113.21", [
+      pageview({ ...stale, path: "/de/stale-a", referrer: "www.google.de" }),
+      event("search_opened", { surface: "hero" }, stale),
+    ]).expect(204);
+    await send(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "203.0.113.22",
+      [pageview({ path: "/de/stale-b" })],
+    ).expect(204);
+    await send(
+      "Mozilla/5.0 (Linux; Android 13; SM-X700) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "203.0.113.23",
+      [pageview({ path: "/de/stale-c", ...stale })],
+    ).expect(204);
+    await flush();
+    expect(
+      await dataSource.query(
+        `SELECT path, device, channel, views, visits FROM site_pageviews
+          ORDER BY path, channel`,
+      ),
+    ).toEqual([
+      {
+        path: "/de/stale-a",
+        device: "mobile",
+        channel: "",
+        views: 1,
+        visits: 0,
+      },
+      {
+        path: "/de/stale-a",
+        device: "mobile",
+        channel: "search",
+        views: 0,
+        visits: 1,
+      },
+      {
+        path: "/de/stale-b",
+        device: "desktop",
+        channel: "",
+        views: 1,
+        visits: 0,
+      },
+      {
+        path: "/de/stale-b",
+        device: "desktop",
+        channel: "direct",
+        views: 0,
+        visits: 1,
+      },
+      {
+        path: "/de/stale-c",
+        device: "tablet",
+        channel: "",
+        views: 1,
+        visits: 0,
+      },
+      {
+        path: "/de/stale-c",
+        device: "tablet",
+        channel: "direct",
+        views: 0,
+        visits: 1,
+      },
+    ]);
+    expect(
+      await dataSource.query(`SELECT device, count FROM site_events`),
+    ).toEqual([{ device: "mobile", count: 1 }]);
+    const columns = await dataSource.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_name LIKE 'site\\_%'
+          AND column_name IN ('viewport', 'campaign')`,
+    );
+    expect(columns).toEqual([]);
   });
 
   it("leaves the statistic's tables as synchronize finds them after the hypertables are made", async () => {
@@ -346,7 +428,6 @@ describe("Site analytics (e2e)", () => {
             locale: "nl",
             path: "/nl/gone",
             pageType: "not_found",
-            viewport: "desktop",
           }),
         ],
       ],
@@ -514,10 +595,10 @@ describe("Site analytics (e2e)", () => {
     const collector = app.get(SiteAnalyticsCollectService);
     const at = new Date(`${addIsoDays(today, -1)}T00:20:00Z`);
     const gone = (path: string) => pageview({ path, pageType: "not_found" });
-    // A newsletter visit that then follows a broken link inside the site.
+    // A visit from a newsletter's site that then follows a broken link inside the site.
     await collector.collect(
       {
-        hits: [pageview({ referrer: "newsletter", campaign: "october" })],
+        hits: [pageview({ referrer: "newsletter.example.org" })],
         ip: "203.0.113.50",
         userAgent: UA,
       },
@@ -862,7 +943,6 @@ describe("Site analytics (e2e)", () => {
       locale: "de",
       path,
       pageType: path === PARK_PATH ? "park" : "news_index",
-      viewport: "mobile",
       seconds,
     });
     const reader = {
@@ -1105,7 +1185,7 @@ describe("Site analytics (e2e)", () => {
       ]),
     );
     const devices = await admin(
-      `/v1/admin/analytics/crosstab?${window}&row=browser_language&col=viewport`,
+      `/v1/admin/analytics/crosstab?${window}&row=browser_language&col=device`,
     ).expect(200);
     expect(devices.body.cells).toEqual(
       expect.arrayContaining([
@@ -1114,7 +1194,7 @@ describe("Site analytics (e2e)", () => {
       ]),
     );
     await admin(
-      `/v1/admin/analytics/crosstab?${window}&row=os&col=viewport&filter=channel:search`,
+      `/v1/admin/analytics/crosstab?${window}&row=os&col=device&filter=channel:search`,
     ).expect(400);
 
     // The live view reads what came in just now, from Redis only.
@@ -1143,7 +1223,7 @@ describe("Site analytics (e2e)", () => {
       countries: [{ country: expect.any(String), views: 1 }],
       channels: [{ channel: "search", visits: 1 }],
       referrers: [{ referrer: "bing", visits: 1 }],
-      devices: [{ viewport: "mobile", views: 1 }],
+      devices: [{ device: "mobile", views: 1 }],
       events: [{ name: "search_opened", count: 1 }],
     });
     expect(live.body.perMinute).toHaveLength(31);
@@ -1238,6 +1318,8 @@ describe("Site analytics (e2e)", () => {
       "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
     const WINDOWS =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0";
+    const IPAD =
+      "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
     const ENTITY = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const BYPASS = "daily-level-e2e";
 
@@ -1256,7 +1338,7 @@ describe("Site analytics (e2e)", () => {
         { ip: "203.0.113.11", ua: UA },
         { ip: "203.0.113.12", ua: ANDROID },
         { ip: "203.0.113.13", ua: WINDOWS },
-        { ip: "203.0.113.14", ua: UA },
+        { ip: "203.0.113.14", ua: IPAD },
       ];
       for (let back = 12; back >= 1; back--) {
         if (back === 7) continue;
@@ -1269,22 +1351,19 @@ describe("Site analytics (e2e)", () => {
           const entry = [
             pageview({
               referrer: ["google.com", "bing.com", "chatgpt.com", undefined][i],
-              viewport: ["mobile", "mobile", "desktop", "tablet"][i],
             }),
             pageview({
               locale: "en",
               path: `/en/parks/europe/germany/bruehl/park-${back}`,
               pageType: "park",
               referrer: "www.google.com",
-              viewport: "desktop",
             }),
             pageview({
               locale: "nl",
               path: `/nl/gone-${i}`,
               pageType: "not_found",
-              viewport: "mobile",
             }),
-            pageview({ path: "/de", pageType: "home", campaign: "autumn" }),
+            pageview({ path: "/de", pageType: "home" }),
           ][i];
           await collector.collect(
             { hits: [entry], ip: reader.ip, userAgent: reader.ua },
@@ -1300,7 +1379,6 @@ describe("Site analytics (e2e)", () => {
                   locale: "de",
                   path: "/de/news",
                   pageType: "news_index",
-                  viewport: "mobile",
                   seconds: 20 + i,
                 },
                 event(
@@ -1339,12 +1417,12 @@ describe("Site analytics (e2e)", () => {
         "",
         "&filter=os:ios",
         "&filter=channel:search",
-        "&filter=viewport:mobile&filter=page_type:park",
+        "&filter=device:mobile&filter=page_type:park",
         "&filter=path:/de/news",
         "&filter=entry:/de",
       ];
       const dims =
-        "channel referrer path page_type entry exit country campaign browser_language locale viewport browser os".split(
+        "channel referrer path page_type entry exit country browser_language locale device browser os".split(
           " ",
         );
       const base = "/v1/admin/analytics";
@@ -1355,7 +1433,7 @@ describe("Site analytics (e2e)", () => {
           list.push(`${base}/overview?${q}`);
           for (const dim of dims)
             list.push(`${base}/breakdown?dim=${dim}&${q}`);
-          list.push(`${base}/crosstab?row=os&col=viewport&metric=visits&${q}`);
+          list.push(`${base}/crosstab?row=os&col=device&metric=visits&${q}`);
           list.push(`${base}/crosstab?row=channel&col=exit&metric=visits&${q}`);
           list.push(`${base}/crosstab?row=path&col=day&metric=pageviews&${q}`);
           list.push(`${base}/seo/landing-pages?${q}`);
@@ -1457,7 +1535,7 @@ describe("Site analytics (e2e)", () => {
         },
         {
           source: "pageviews",
-          n: first.days * 49,
+          n: first.days * ROLLUP_TABLES.pageviews.cuboids.length,
           days: first.days,
           last: expect.any(String),
         },
@@ -1484,7 +1562,7 @@ describe("Site analytics (e2e)", () => {
                 sum(seconds)::int AS seconds, sum(exits)::int AS exits
            FROM site_pageviews_daily GROUP BY cuboid ORDER BY cuboid`,
       );
-      expect(perCuboid).toHaveLength(49);
+      expect(perCuboid).toHaveLength(ROLLUP_TABLES.pageviews.cuboids.length);
       for (const row of perCuboid) {
         const { cuboid: _cuboid, ...sums } = row;
         expect(sums).toEqual(hourly);
@@ -1620,7 +1698,7 @@ describe("Site analytics (e2e)", () => {
     const kept = new Date(`${addIsoDays(today, -20)}T00:00:00Z`);
     for (const bucket of [old, kept]) {
       await dataSource.query(
-        `INSERT INTO site_pageviews (bucket, locale, path, page_type, viewport,
+        `INSERT INTO site_pageviews (bucket, locale, path, page_type, device,
                                      browser, os, country, views)
          VALUES ($1, 'de', '/de', 'home', 'mobile', 'safari', 'ios', 'de', 1)`,
         [bucket],
@@ -1628,11 +1706,11 @@ describe("Site analytics (e2e)", () => {
     }
     await dataSource.query(
       `INSERT INTO site_pageviews_daily
-         (bucket, cuboid, locale, path, page_type, viewport, browser, os,
-          country, browser_language, entry, referrer, channel, campaign,
+         (bucket, cuboid, locale, path, page_type, device, browser, os,
+          country, browser_language, entry, referrer, channel,
           views, seconds, visits, engaged, visit_seconds, exits,
           visit_span_seconds)
-       SELECT b, 1, 'de', '', '', '', '', '', '', '', '', '', '', '', 1, 0, 0,
+       SELECT b, 1, 'de', '', '', '', '', '', '', '', '', '', '', 1, 0, 0,
               0, 0, 0, 0
          FROM unnest($1::timestamptz[]) b`,
       [[old, kept]],

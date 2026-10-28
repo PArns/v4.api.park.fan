@@ -22,7 +22,7 @@ import {
   MAX_RANGE_DAYS,
   PAGE_DIMS,
   SITE_LOCALES,
-  SITE_VIEWPORTS,
+  SITE_DEVICES,
   VISIT_DIMS,
   type BreakdownDim,
   type Channel,
@@ -61,21 +61,13 @@ export class CollectHitDto {
   @ApiProperty({ example: "park", pattern: "^[a-z][a-z0-9_]{0,31}$" })
   pageType: string;
 
-  @ApiProperty({ enum: SITE_VIEWPORTS })
-  viewport: string;
-
   @ApiPropertyOptional({
     example: "google.com",
     description:
-      "Page views, first of a page load: the external referrer's host or `utm_source`.",
+      "Page views, first of a page load: the host of the external referrer, nothing else. " +
+      "Query parameters of the landing URL are not read.",
   })
   referrer?: string;
-
-  @ApiPropertyOptional({
-    example: "summer-2026",
-    description: "Page views, first of a page load: `utm_campaign`.",
-  })
-  campaign?: string;
 
   @ApiPropertyOptional({
     example: "search_opened",
@@ -176,7 +168,7 @@ export class SiteAnalyticsQueryDto {
     example: ["channel:search", "country:nl"],
     description:
       `\`<dim>:<value>\`, repeatable, all must match. dim: ${FILTER_DIMS.join(", ")}. ` +
-      "entry, referrer, channel and campaign select visits by how they began: visit figures " +
+      "entry, referrer and channel select visits by how they began: visit figures " +
       "follow them, page views and events are null, and the reports that count page views or " +
       "events (events, event, crosstab, search, not-found, traffic crosstab with " +
       "metric=pageviews) answer 400. Events carry no browser_language either.",
@@ -209,7 +201,7 @@ export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {
   @ApiProperty({
     example: "prop:surface",
     description:
-      "`page_type`, `viewport`, `locale`, `day`, `path`, `country`, `browser`, `os` or " +
+      "`page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or " +
       "`prop:<key>`. `day` steps by the window's interval.",
   })
   @Matches(CROSSTAB_AXIS_PATTERN)
@@ -226,13 +218,13 @@ export class SiteTrafficCrosstabQueryDto extends SiteAnalyticsQueryDto {
     example: "os",
     description:
       "metric=pageviews: a page dimension or `day`. metric=visits also entry, referrer, " +
-      "channel, campaign and exit; the page dimensions are then the first page's, or the " +
+      "channel and exit; the page dimensions are then the first page's, or the " +
       "last page's with `exit` on a side. `day` steps by the window's interval.",
   })
   @IsIn(TRAFFIC_CROSSTAB_SIDES)
   row: string;
 
-  @ApiProperty({ enum: TRAFFIC_CROSSTAB_SIDES, example: "viewport" })
+  @ApiProperty({ enum: TRAFFIC_CROSSTAB_SIDES, example: "device" })
   @IsIn(TRAFFIC_CROSSTAB_SIDES)
   col: string;
 
@@ -587,7 +579,7 @@ export class SiteEventDetailDto extends WindowDto {
   @ApiProperty({ type: [SiteCombinationDto], description: "Top 50." })
   combinations: SiteCombinationDto[];
   @ApiProperty({ type: [SiteValueCountDto] }) byPageType: SiteValueCountDto[];
-  @ApiProperty({ type: [SiteValueCountDto] }) byViewport: SiteValueCountDto[];
+  @ApiProperty({ type: [SiteValueCountDto] }) byDevice: SiteValueCountDto[];
   @ApiProperty({
     type: [SiteEventEntityDto],
     description: "Top 50; a merged-away entity counts under its survivor.",
@@ -622,7 +614,7 @@ export class SiteTrafficCrosstabDto extends WindowDto {
   @ApiProperty({ enum: ["pageviews", "visits"] })
   metric: "pageviews" | "visits";
   @ApiProperty({ example: "os" }) row: string;
-  @ApiProperty({ example: "viewport" }) col: string;
+  @ApiProperty({ example: "device" }) col: string;
   @ApiProperty({
     type: [String],
     description:
@@ -674,7 +666,7 @@ export class SiteLiveReferrerDto {
 }
 
 export class SiteLiveDeviceDto {
-  @ApiProperty({ enum: SITE_VIEWPORTS }) viewport: string;
+  @ApiProperty({ enum: SITE_DEVICES }) device: string;
   @ApiProperty() views: number;
 }
 
@@ -753,9 +745,9 @@ export class SiteSearchPageTypeDto {
   @ApiProperty() opened: number;
 }
 
-export class SiteSearchViewportDto {
+export class SiteSearchDeviceDto {
   @ApiProperty() surface: string;
-  @ApiProperty() viewport: string;
+  @ApiProperty() device: string;
   @ApiProperty() opened: number;
 }
 
@@ -789,8 +781,8 @@ export class SiteSearchDto extends WindowDto {
   surfaces: SiteSearchSurfaceDto[];
   @ApiProperty({ type: [SiteSearchPageTypeDto] })
   bySurfaceAndPageType: SiteSearchPageTypeDto[];
-  @ApiProperty({ type: [SiteSearchViewportDto] })
-  bySurfaceAndViewport: SiteSearchViewportDto[];
+  @ApiProperty({ type: [SiteSearchDeviceDto] })
+  bySurfaceAndDevice: SiteSearchDeviceDto[];
   @ApiProperty({ type: [SiteSearchResultTypeDto] })
   resultTypes: SiteSearchResultTypeDto[];
   @ApiProperty({

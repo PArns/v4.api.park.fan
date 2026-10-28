@@ -265,7 +265,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const bucket = new Date();
     bucket.setUTCMinutes(0, 0, 0);
     await dataSource.query(
-      `INSERT INTO site_pageviews (bucket, locale, path, page_type, viewport, browser, os,
+      `INSERT INTO site_pageviews (bucket, locale, path, page_type, device, browser, os,
                                    country, entry, referrer, channel, views, visits, engaged)
        VALUES ($1, 'de', '/de/parks/europe/germany/bruehl/phantasialand', 'park', 'mobile',
                'safari', 'ios', 'de', '/de/parks/europe/germany/bruehl/phantasialand',

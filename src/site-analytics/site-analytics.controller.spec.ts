@@ -35,7 +35,7 @@ const hit = {
   locale: "de",
   path: "/de",
   pageType: "home",
-  viewport: "desktop",
+  device: "desktop",
 };
 const body = JSON.stringify({ v: 1, hits: [hit] });
 
@@ -320,7 +320,7 @@ describe("SiteAnalyticsController", () => {
         "/v1/admin/analytics/overview?interval=year",
         "/v1/admin/analytics/crosstab?row=os",
         "/v1/admin/analytics/crosstab?row=prop:surface&col=os",
-        "/v1/admin/analytics/crosstab?row=os&col=viewport&metric=events",
+        "/v1/admin/analytics/crosstab?row=os&col=device&metric=events",
         "/v1/admin/analytics/live?locale=pt",
         "/v1/admin/analytics/breakdown",
         "/v1/admin/analytics/breakdown?dim=user",
@@ -405,14 +405,13 @@ describe("SiteAnalyticsController", () => {
     });
 
     it("serves the traffic crosstab, page views unless asked, and the live view", async () => {
-      await get("/v1/admin/analytics/crosstab?row=os&col=viewport").expect(
-        200,
-        { ok: "traffic-crosstab" },
-      );
+      await get("/v1/admin/analytics/crosstab?row=os&col=device").expect(200, {
+        ok: "traffic-crosstab",
+      });
       expect(reports.trafficCrosstab).toHaveBeenLastCalledWith(
         expect.objectContaining({
           row: "os",
-          col: "viewport",
+          col: "device",
           metric: "pageviews",
         }),
       );

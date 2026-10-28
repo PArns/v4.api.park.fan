@@ -16,7 +16,7 @@ export const seoLandingPagesTool = defineMcpTool({
   title: "SEO landing pages",
   description:
     "The pages that visits from one channel (search engines by default; also ai, social, " +
-    "referral, campaign, direct) entered park.fan on, most visits first: path, page type, visits, " +
+    "referral, direct) entered park.fan on, most visits first: path, page type, visits, " +
     "the previous window's visits and the change in visits (absolute; both null beyond 180 days), " +
     "the bounce rate, the average visit in seconds (avgVisitSeconds) and the top " +
     "sources (google, bing, chatgpt …). The closest thing to organic search performance this site " +

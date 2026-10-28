@@ -12,8 +12,8 @@ import {
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const SIDE_HELP =
-  "metric=pageviews: path, page_type, country, viewport, browser, os, locale, " +
-  "browser_language or day. metric=visits also entry, referrer, channel, campaign and exit " +
+  "metric=pageviews: path, page_type, country, device, browser, os, locale, " +
+  "browser_language or day. metric=visits also entry, referrer, channel and exit " +
   "(the page the visit ended on); there the page dimensions are the visit's first page, or with " +
   "exit on a side its last page. day steps by the interval";
 
@@ -22,7 +22,7 @@ export const analyticsTrafficCrosstabTool = defineMcpTool({
   title: "Traffic by two dimensions",
   description:
     "Page views or visits counted by two dimensions at once, as a matrix: counts[i][j] is the " +
-    'count for rows[i] and cols[j]. Answers "which OS on which device" (row=os, col=viewport), ' +
+    'count for rows[i] and cols[j]. Answers "which OS on which device" (row=os, col=device), ' +
     '"which channel from which country" (metric=visits, row=channel, col=country) or "where do ' +
     'search visits end" (metric=visits, row=channel, col=exit). Each side keeps its 30 largest ' +
     'values and folds the rest into "__rest__"; "(none)" is an empty value; day keeps every ' +

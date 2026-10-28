@@ -31,7 +31,7 @@ export const SITE_ANALYTICS_CAVEATS =
   "filter but the language. Bounce rate = 1 − engaged / visits, engaged meaning a visit with a " +
   "second page view. `previous` is the window of the same length right before, its last day cut " +
   `at the current hour so today so far compares with the same part of a day; null for more than ` +
-  `${MAX_COMPARABLE_DAYS} days. A filter on entry, referrer, channel or campaign selects visits by ` +
+  `${MAX_COMPARABLE_DAYS} days. A filter on entry, referrer or channel selects visits by ` +
   "how they began: visits and bounce follow it, page views and events are null. avgVisitSeconds " +
   "and avgTimeOnPageSeconds are measured foreground time (the tab visible), whole seconds, null " +
   "with nothing to divide by; a visit's exit is counted once it has been idle 30 minutes. " +
@@ -42,12 +42,11 @@ export const SITE_ANALYTICS_CAVEATS =
 
 export const FILTER_DIM_HELP =
   "path (e.g. /de/parks/europe/germany/bruehl/phantasialand), page_type (home, park, attraction, " +
-  "guide, news, search, not_found …), country (ISO alpha-2, zz unknown), viewport (mobile, " +
-  "tablet, desktop), browser, os, locale, browser_language (the browser's first language, " +
+  "guide, news, search, not_found …), country (ISO alpha-2, zz unknown), device (mobile, " +
+  "tablet, desktop, from the User-Agent), browser, os, locale, browser_language (the browser's first language, " +
   "two letters, zz unknown; page views only, not events); and the visit dimensions entry (the visit's first " +
   "path), referrer (google, chatgpt, a site name), channel (search, ai, social, referral, " +
-  "campaign, direct), campaign (utm_campaign), which only visits carry. (other) stands for values " +
-  "past the day's limit";
+  "direct), which only visits carry. (other) stands for values past the day's limit";
 
 export const siteWindowInput = {
   days: z
@@ -93,7 +92,7 @@ export const siteWindowInput = {
     .optional()
     .describe(
       "Rows must match all of these, e.g. [{dim:'channel',value:'search'}]. Visit dimensions " +
-        "(entry, referrer, channel, campaign) select visits by how they began; the event, " +
+        "(entry, referrer, channel) select visits by how they began; the event, " +
         "crosstab, search and not-found tools refuse them",
     ),
 };
@@ -110,7 +109,7 @@ export const pageWindowInput = {
         dim: z
           .enum(PAGE_DIMS)
           .describe(
-            "path, page_type, country, viewport, browser, os, locale, browser_language; the " +
+            "path, page_type, country, device, browser, os, locale, browser_language; the " +
               "visit dimensions do not apply to page views",
           ),
         value: z.string().min(1).max(820).describe("The exact value"),
@@ -132,7 +131,7 @@ export const eventWindowInput = {
         dim: z
           .enum(EVENT_DIMS)
           .describe(
-            "path, page_type, country, viewport, browser, os, locale; events carry neither " +
+            "path, page_type, country, device, browser, os, locale; events carry neither " +
               "the visit dimensions nor the browser language",
           ),
         value: z.string().min(1).max(820).describe("The exact value"),

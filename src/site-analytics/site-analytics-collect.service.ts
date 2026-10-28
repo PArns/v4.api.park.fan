@@ -97,10 +97,15 @@ export interface CollectRequest {
   acceptLanguage?: string | null;
 }
 
-/** What the server derives about the browser, never what it is. */
+/**
+ * What the server derives about the reader, never what the browser says:
+ * families and a class from the User-Agent, the country from the address, the
+ * language from `Accept-Language`.
+ */
 interface Reader {
   browser: string;
   os: string;
+  device: string;
   country: string;
   browserLanguage: string;
 }
@@ -113,10 +118,8 @@ export interface VisitStart {
   locale: string;
   path: string;
   pageType: string;
-  viewport: string;
   referrer: string;
   channel: Channel;
-  campaign: string;
 }
 
 /** A hit that passed the guards, with what Redis said about its visit. */
@@ -258,11 +261,12 @@ export class SiteAnalyticsCollectService
     const day = utcDay(now);
     const window = flushWindowOf(now);
     const capBucket = addressBucket(ip, ADDRESS_CAP_IPV6_PREFIX) ?? NO_ADDRESS;
-    const { browser, os } = parseUserAgent(userAgent);
+    const { browser, os, device } = parseUserAgent(userAgent);
     const country = (ip && this.geoip.lookupCountry(ip)) || UNKNOWN_COUNTRY;
     const reader = {
       browser,
       os,
+      device,
       country,
       browserLanguage: browserLanguage(acceptLanguage),
     };
@@ -303,6 +307,7 @@ export class SiteAnalyticsCollectService
     await this.buffer(window, day, increments, visit, drops, now, {
       hits: observed.hits,
       country,
+      device,
     });
     return observed.hits.length;
   }
@@ -440,18 +445,15 @@ export class SiteAnalyticsCollectService
       const pageType = guard("pageTypes", hit.pageType);
       const path = guard("paths", hit.path);
       if (hit.t === "pageview") {
-        const source = classifyReferrer(hit.referrer, hit.campaign);
+        const source = classifyReferrer(hit.referrer);
         visitSources.set(hit, source);
         // Search engines, AI assistants and social networks are a closed
-        // list; every other site, and a utm_source, is open-ended.
-        const open =
-          source.referrer &&
-          (source.channel === "referral" || source.channel === "campaign");
+        // list; every other site is open-ended.
+        const open = source.referrer && source.channel === "referral";
         return {
           pageType,
           path,
           referrer: open ? guard("referrers", source.referrer) : null,
-          campaign: hit.campaign ? guard("campaigns", hit.campaign) : null,
           name: null,
           combination: null,
         };
@@ -461,7 +463,6 @@ export class SiteAnalyticsCollectService
           pageType,
           path,
           referrer: null,
-          campaign: null,
           name: null,
           combination: null,
         };
@@ -471,7 +472,6 @@ export class SiteAnalyticsCollectService
         pageType,
         path,
         referrer: null,
-        campaign: null,
         name: read ? null : guard("names", hit.name),
         combination: read
           ? null
@@ -618,19 +618,12 @@ export class SiteAnalyticsCollectService
             referrer = OVERFLOW_VALUE;
             countDrop(drops, DROP_REASONS.referrer);
           }
-          let campaign = hit.campaign ?? "";
-          if (campaign && !passed(checks.campaign)) {
-            campaign = OVERFLOW_VALUE;
-            countDrop(drops, DROP_REASONS.campaign);
-          }
           current = {
             locale: hit.locale,
             path: hit.path,
             pageType: hit.pageType,
-            viewport: hit.viewport,
             referrer,
             channel: source.channel,
-            campaign,
           };
           opened = true;
           observed.push({ hit, start: current, engaged: null });
@@ -706,7 +699,7 @@ export class SiteAnalyticsCollectService
     visit: VisitUpdate | null,
     drops: Drops,
     now: Date,
-    live: { hits: ObservedHit[]; country: string },
+    live: { hits: ObservedHit[]; country: string; device: string },
   ): Promise<void> {
     const key = KEYS.buffer(window);
     const fields = [...increments.keys()];
@@ -720,7 +713,7 @@ export class SiteAnalyticsCollectService
         tx.hincrby(key, field, increments.get(field) ?? 0);
       tx.sadd(KEYS.windows, window);
       if (visit) this.updateVisit(tx, visit, now);
-      this.addLive(tx, live.hits, live.country, now);
+      this.addLive(tx, live.hits, live.country, live.device, now);
       this.addDrops(tx, day, drops, now);
       const results = await tx.exec();
       if (results) {
@@ -779,13 +772,14 @@ export class SiteAnalyticsCollectService
 
   /**
    * The live view's minute, all languages and each: page views by page,
-   * country and viewport, visits started by channel and referrer site, events
+   * country and device, visits started by channel and referrer site, events
    * by name, and the events counter. The values are the guarded ones.
    */
   private addLive(
     tx: ReturnType<Redis["multi"]>,
     hits: ObservedHit[],
     country: string,
+    device: string,
     now: Date,
   ): void {
     const minute = minuteKey(now);
@@ -804,7 +798,7 @@ export class SiteAnalyticsCollectService
       if (hit.t === "pageview" && "start" in entry) {
         add("pages", hit.locale, JSON.stringify([hit.path, hit.pageType]));
         add("countries", hit.locale, country);
-        add("devices", hit.locale, hit.viewport);
+        add("devices", hit.locale, device);
         if (entry.start) {
           add("channels", hit.locale, entry.start.channel);
           if (entry.start.referrer)
@@ -924,12 +918,11 @@ function pageDims(
     hit.locale,
     hit.path,
     hit.pageType,
-    hit.viewport,
+    reader.device,
     reader.browser,
     reader.os,
     reader.country,
     reader.browserLanguage,
-    "",
     "",
     "",
     "",
@@ -942,7 +935,7 @@ function visitDims(start: VisitStart, reader: Reader): PageviewDims {
     start.locale,
     start.path,
     start.pageType,
-    start.viewport,
+    reader.device,
     reader.browser,
     reader.os,
     reader.country,
@@ -950,7 +943,6 @@ function visitDims(start: VisitStart, reader: Reader): PageviewDims {
     start.path,
     start.referrer,
     start.channel,
-    start.campaign,
   ];
 }
 
@@ -974,7 +966,6 @@ export function exitDimsOf(
     start.path,
     start.referrer,
     start.channel,
-    start.campaign,
   ] as PageviewDims;
 }
 
@@ -1005,7 +996,7 @@ export function bufferIncrements(
           hit.locale,
           hit.path,
           hit.pageType,
-          hit.viewport,
+          reader.device,
           reader.browser,
           reader.os,
           reader.country,

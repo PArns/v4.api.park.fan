@@ -11,18 +11,22 @@ import {
 export const SITE_LOCALES = PAGE_VIEW_LOCALES;
 export type SiteLocale = PageViewLocale;
 
-/** Below 768, 768–1023 and from 1024 CSS pixels of `window.innerWidth`. */
-export const SITE_VIEWPORTS = ["mobile", "tablet", "desktop"] as const;
+/**
+ * The device classes, from the request's User-Agent on the server
+ * (`deviceClassOf`); the browser sends nothing about its screen.
+ */
+export const SITE_DEVICES = ["mobile", "tablet", "desktop"] as const;
+export type SiteDevice = (typeof SITE_DEVICES)[number];
 
 /**
  * The dimensions of an event's row, which every other row carries too: the
- * page and the device.
+ * page, and the device class, browser, OS and country of its reader.
  */
 export const EVENT_DIMS = [
   "path",
   "page_type",
   "country",
-  "viewport",
+  "device",
   "browser",
   "os",
   "locale",
@@ -42,7 +46,7 @@ export const PAGE_DIMS = [...EVENT_DIMS, "browser_language"] as const;
  * its reader came from. A breakdown by one, or under a filter on one, counts
  * visits; a report that counts page views or events refuses a filter on one.
  */
-export const VISIT_DIMS = ["entry", "referrer", "channel", "campaign"] as const;
+export const VISIT_DIMS = ["entry", "referrer", "channel"] as const;
 export type VisitDim = (typeof VISIT_DIMS)[number];
 
 /**
@@ -89,7 +93,6 @@ export const CHANNELS = [
   "ai",
   "social",
   "referral",
-  "campaign",
   "direct",
 ] as const;
 export type Channel = (typeof CHANNELS)[number];
@@ -101,8 +104,8 @@ export const NOT_FOUND_PAGE_TYPE = "not_found";
 export const OVERFLOW_PAGE_TYPE = "other";
 
 /**
- * The path, referrer or campaign a hit is stored under when its own is past
- * the day's guard: the hit still counts, the value is not kept.
+ * The path or referrer a hit is stored under when its own is past the day's
+ * guard: the hit still counts, the value is not kept.
  */
 export const OVERFLOW_VALUE = "(other)";
 
@@ -173,8 +176,7 @@ export const MAX_HITS_PER_WINDOW = 5000;
  *   `page_read` is exempt, its keys are checked one by one.
  * - `paths`: the site has some 40,000 pages in six languages.
  * - `referrers`: referring sites outside the known search engines, AI
- *   assistants and social networks, and `utm_source` values.
- * - `campaigns`: `utm_campaign` values.
+ *   assistants and social networks.
  */
 export const SITE_GUARDS = {
   names: { limit: 300, perAddress: 20 },
@@ -182,7 +184,6 @@ export const SITE_GUARDS = {
   combinations: { limit: 2000, perAddress: 100 },
   paths: { limit: 20000, perAddress: 200 },
   referrers: { limit: 1000, perAddress: 10 },
-  campaigns: { limit: 200, perAddress: 5 },
 } as const;
 export type SiteGuard = keyof typeof SITE_GUARDS;
 
@@ -212,7 +213,6 @@ export const DROP_REASONS = {
   pageType: "overflow:page_type",
   path: "overflow:path",
   referrer: "overflow:referrer",
-  campaign: "overflow:campaign",
   combination: "overflow:combination",
 } as const;
 export type DropReason = (typeof DROP_REASONS)[keyof typeof DROP_REASONS];

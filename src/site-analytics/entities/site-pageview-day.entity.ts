@@ -42,8 +42,9 @@ export class SitePageviewDay {
   @Column({ name: "page_type", type: "varchar", length: 32 })
   pageType: string;
 
+  /** `mobile`, `tablet` or `desktop`, from the User-Agent (`SITE_DEVICES`). */
   @Column({ type: "varchar", length: 8 })
-  viewport: string;
+  device: string;
 
   @Column({ type: "varchar", length: 10 })
   browser: string;
@@ -65,9 +66,6 @@ export class SitePageviewDay {
 
   @Column({ type: "varchar", length: 10 })
   channel: string;
-
-  @Column({ type: "varchar", length: 100 })
-  campaign: string;
 
   @Column({ type: "bigint" })
   views: string;

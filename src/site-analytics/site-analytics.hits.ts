@@ -9,7 +9,6 @@ import {
   MAX_EVENT_PROPS,
   PAGE_READ_EVENT,
   SITE_LOCALES,
-  SITE_VIEWPORTS,
   isLocationDerivedEvent,
   type SiteLocale,
 } from "./site-analytics.constants";
@@ -43,11 +42,8 @@ export const SITE_PATH_MAX_LENGTH = 3 + 8 * 101;
 /** What kind of page a hit came from, as the frontend derives it. */
 export const PAGE_TYPE_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 
-/** A referrer host (`www.` stripped) or a `utm_source` value. */
+/** The host of an external referrer (`www.` stripped). */
 export const REFERRER_PATTERN = /^[a-z0-9][a-z0-9.-]{0,99}$/;
-
-/** A `utm_campaign` value, lowercased. */
-export const CAMPAIGN_PATTERN = /^[a-z0-9][a-z0-9._+-]{0,99}$/;
 
 /** An event name. */
 export const EVENT_NAME_PATTERN = /^[a-z][a-z0-9_]{1,47}$/;
@@ -66,14 +62,12 @@ interface ValidHitBase {
   locale: SiteLocale;
   path: string;
   pageType: string;
-  viewport: (typeof SITE_VIEWPORTS)[number];
 }
 
 export interface ValidPageviewHit extends ValidHitBase {
   t: "pageview";
   /** Counted only when this page view opens a visit. */
   referrer: string | null;
-  campaign: string | null;
 }
 
 export interface ValidEventHit extends ValidHitBase {
@@ -176,12 +170,14 @@ export function sanitizeProps(raw: unknown): Record<string, string> {
 
 /**
  * One hit checked field by field, or null to drop it. A field the wire format
- * does not know is ignored. A malformed referrer, campaign, property or entity
- * is dropped and the hit kept; a malformed base field or name drops the hit.
+ * does not know is ignored, so a tab that still runs an older script and
+ * sends `viewport` and `campaign` keeps counting. A malformed referrer,
+ * property or entity is dropped and the hit kept; a malformed base field or
+ * name drops the hit.
  */
 export function validateHit(raw: unknown): ValidHit | null {
   if (!isRecord(raw)) return null;
-  const { t, locale, path, pageType, viewport } = raw;
+  const { t, locale, path, pageType } = raw;
   if (!isOneOf(SITE_LOCALES, locale)) return null;
   if (typeof path !== "string" || !SITE_PATH_PATTERN.test(path)) return null;
   // The language is the path's first segment; a hit that disagrees with its
@@ -189,16 +185,10 @@ export function validateHit(raw: unknown): ValidHit | null {
   if (path.split("/")[1] !== locale) return null;
   if (typeof pageType !== "string" || !PAGE_TYPE_PATTERN.test(pageType))
     return null;
-  if (!isOneOf(SITE_VIEWPORTS, viewport)) return null;
-  const base = { locale, path, pageType, viewport };
+  const base = { locale, path, pageType };
 
   if (t === "pageview") {
-    return {
-      t,
-      ...base,
-      referrer: validReferrer(raw.referrer),
-      campaign: validCampaign(raw.campaign),
-    };
+    return { t, ...base, referrer: validReferrer(raw.referrer) };
   }
   if (t === "engagement") {
     const { seconds } = raw;
@@ -251,16 +241,14 @@ function pageRead(
   return { props: { key, kind }, entity: null };
 }
 
-/** A referrer, or null for none, a malformed one or the site itself. */
+/**
+ * A referrer, or null for none, a malformed one, one without a dot (not a
+ * host: the frontend sends the external host and nothing else) or the site
+ * itself.
+ */
 function validReferrer(value: unknown): string | null {
   if (typeof value !== "string" || !REFERRER_PATTERN.test(value)) return null;
+  if (!value.includes(".")) return null;
   if (value === "park.fan" || value.endsWith(".park.fan")) return null;
   return value;
-}
-
-/** A campaign, lowercased, or null. */
-function validCampaign(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const lower = value.toLowerCase();
-  return CAMPAIGN_PATTERN.test(lower) ? lower : null;
 }

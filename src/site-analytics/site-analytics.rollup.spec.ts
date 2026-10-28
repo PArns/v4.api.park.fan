@@ -18,13 +18,12 @@ const DAY = "T00:00:00.000Z";
 /** The narrow dimensions whose pairs are cuboids, in the order of their numbers. */
 const NARROW = [
   "page_type",
-  "viewport",
+  "device",
   "browser",
   "os",
   "country",
   "browser_language",
   "channel",
-  "campaign",
   "referrer",
 ];
 
@@ -40,15 +39,15 @@ const NARROW = [
  */
 describe("site-analytics.rollup", () => {
   describe("the cuboids", () => {
-    it("number the page-view groupings 1 to 49 and keep the pairs in the order of the narrow dimensions", () => {
+    it("number the page-view groupings 1 to 40 and keep the pairs in the order of the narrow dimensions", () => {
       expect(PAGEVIEW_CUBOIDS.map((c) => c.id)).toEqual(
-        Array.from({ length: 49 }, (_, i) => i + 1),
+        Array.from({ length: 40 }, (_, i) => i + 1),
       );
-      expect(PAGEVIEW_CUBOIDS.slice(0, 13)).toEqual([
+      expect(PAGEVIEW_CUBOIDS.slice(0, 12)).toEqual([
         { id: 1, dims: [] },
         { id: 2, dims: ["path", "page_type"] },
         { id: 3, dims: ["page_type"] },
-        { id: 4, dims: ["viewport"] },
+        { id: 4, dims: ["device"] },
         { id: 5, dims: ["browser"] },
         { id: 6, dims: ["os"] },
         { id: 7, dims: ["country"] },
@@ -56,20 +55,19 @@ describe("site-analytics.rollup", () => {
         { id: 9, dims: ["entry"] },
         { id: 10, dims: ["referrer"] },
         { id: 11, dims: ["channel"] },
-        { id: 12, dims: ["campaign"] },
-        { id: 13, dims: ["page_type", "entry", "referrer", "channel"] },
+        { id: 12, dims: ["page_type", "entry", "referrer", "channel"] },
       ]);
       const pairs = NARROW.flatMap((a, i) =>
         NARROW.slice(i + 1).map((b) => [a, b]),
       );
-      expect(PAGEVIEW_CUBOIDS.slice(13).map((c) => c.dims)).toEqual(pairs);
+      expect(PAGEVIEW_CUBOIDS.slice(12).map((c) => c.dims)).toEqual(pairs);
     });
 
     it("number the event groupings 1 to 4", () => {
       expect(EVENT_CUBOIDS).toEqual([
         { id: 1, dims: ["name"] },
         { id: 2, dims: ["name", "props_key"] },
-        { id: 3, dims: ["name", "page_type", "viewport", "props_key"] },
+        { id: 3, dims: ["name", "page_type", "device", "props_key"] },
         { id: 4, dims: ["name", "entity"] },
       ]);
     });
@@ -119,16 +117,16 @@ describe("site-analytics.rollup", () => {
     it("takes the smallest cuboid that has every column, whatever order they come in", () => {
       expect(chooseCuboid("pageviews", [])?.id).toBe(1);
       expect(chooseCuboid("pageviews", ["country"])?.id).toBe(7);
-      expect(chooseCuboid("pageviews", ["os", "country"])?.id).toBe(35);
-      expect(chooseCuboid("pageviews", ["country", "os"])?.id).toBe(35);
+      expect(chooseCuboid("pageviews", ["os", "country"])?.id).toBe(31);
+      expect(chooseCuboid("pageviews", ["country", "os"])?.id).toBe(31);
       expect(chooseCuboid("pageviews", ["path"])?.id).toBe(2);
       expect(
         chooseCuboid("pageviews", ["entry", "channel", "page_type"])?.id,
-      ).toBe(13);
+      ).toBe(12);
       expect(chooseCuboid("events", ["name", "props_key"])?.id).toBe(2);
-      expect(
-        chooseCuboid("events", ["name", "props_key", "viewport"])?.id,
-      ).toBe(3);
+      expect(chooseCuboid("events", ["name", "props_key", "device"])?.id).toBe(
+        3,
+      );
     });
 
     it("never needs the language, which every cuboid keeps", () => {
@@ -231,7 +229,7 @@ describe("site-analytics.rollup", () => {
       const params = new SqlParams();
       const source = rolledSource(
         "pageviews",
-        PAGEVIEW_CUBOIDS[16],
+        PAGEVIEW_CUBOIDS[15],
         params,
         window,
         [{ start: window.start, end: window.end }],
@@ -253,7 +251,7 @@ describe("site-analytics.rollup", () => {
         2,
       );
       // The window's language and filter once, however many tables read them.
-      expect(params.values.slice(0, 3)).toEqual(["de", "de", 17]);
+      expect(params.values.slice(0, 3)).toEqual(["de", "de", 16]);
       expect(params.values).toHaveLength(7);
     });
 
@@ -376,7 +374,7 @@ describe("site-analytics.rollup", () => {
         "current",
         ["country"],
       );
-      expect(rolledDays).toHaveBeenCalledWith("pageviews", 35);
+      expect(rolledDays).toHaveBeenCalledWith("pageviews", 31);
       expect(rows.where).toBe("TRUE");
       expect(rows.from).toContain("site_pageviews_daily");
     });
@@ -397,11 +395,11 @@ describe("site-analytics.rollup", () => {
 
   describe("rollupSql", () => {
     it("groups a page-view cuboid by its dimensions and fills the others with empty values", () => {
-      const sql = rollupSql("pageviews", PAGEVIEW_CUBOIDS[16]);
+      const sql = rollupSql("pageviews", PAGEVIEW_CUBOIDS[15]);
       expect(sql).toContain("INSERT INTO site_pageviews_daily");
       expect(sql).toContain("GROUP BY locale, page_type, country");
       expect(sql).toMatch(
-        /locale, '', page_type, '', '', '', country, '', '', '', '', '', SUM\(views\)::bigint/,
+        /locale, '', page_type, '', '', '', country, '', '', '', '', SUM\(views\)::bigint/,
       );
       expect(sql).toContain("FROM site_pageviews, open");
       expect(sql).toContain("SUM(visit_span_seconds)::bigint");

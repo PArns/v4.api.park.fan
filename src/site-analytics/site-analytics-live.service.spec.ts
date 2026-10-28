@@ -85,8 +85,8 @@ describe("SiteAnalyticsLiveService", () => {
       { country: "ZZ", views: 1 },
     ]);
     expect(live.devices).toEqual([
-      { viewport: "desktop", views: 2 },
-      { viewport: "mobile", views: 2 },
+      { device: "desktop", views: 2 },
+      { device: "mobile", views: 2 },
     ]);
     expect(live.channels).toEqual([
       { channel: "search", visits: 3 },

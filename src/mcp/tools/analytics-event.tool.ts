@@ -11,7 +11,7 @@ export const analyticsEventTool = defineMcpTool({
   description:
     "One event in detail: its total, every property it carries with the most frequent values (the " +
     "rest summed in otherCount), the most frequent property combinations, the page types and " +
-    "viewports it came from, the parks, rides, shows or restaurants it was about (name and park.fan " +
+    "devices it came from, the parks, rides, shows or restaurants it was about (name and park.fan " +
     "path; kind null once the entity is gone) and optionally its count per period of the interval. Event names come " +
     "from analytics_events. Properties are choices the site defines (a surface, a tab, a position " +
     "bucket), never free text. Entities are resolved from park.fan's own tables, unresolvable ones " +
@@ -68,7 +68,7 @@ export const analyticsEventTool = defineMcpTool({
         }),
         combinations: report.combinations.slice(0, limit),
         byPageType: report.byPageType.slice(0, limit),
-        byViewport: report.byViewport,
+        byDevice: report.byDevice,
         ...(series && { series: report.series }),
       },
     );

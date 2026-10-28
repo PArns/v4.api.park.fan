@@ -20,7 +20,7 @@ export const analyticsBreakdownTool = defineMcpTool({
     "the total: which pages, page types, countries, devices, browsers, site languages, browser " +
     "languages, each with the average time on the page in seconds (and for path the visits that " +
     "ended there, exits, and exitRate = exits / views) — or, for the visit dimensions entry, " +
-    "referrer, channel and campaign, where visits came from and landed, counted as visits " +
+    "referrer and channel, where visits came from and landed, counted as visits " +
     "started (measure: visits, a view is a visit) with a bounce rate and the average visit in " +
     "seconds each. dim=exit lists the pages visits ended on (measure: exits). A " +
     "filter on a visit dimension switches any breakdown to visits started: dim=path with " +

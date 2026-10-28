@@ -245,7 +245,7 @@ describe("site statistic tools", () => {
         ...visit,
         name: "tab_changed",
         row: "day",
-        col: "viewport",
+        col: "device",
       }).success,
     ).toBe(false);
     // Traffic tools take them: they select visits.
@@ -342,7 +342,7 @@ describe("site statistic tools", () => {
           { props: { surface: "header" }, count: 30 },
         ],
         byPageType: [{ value: "home", count: 60 }],
-        byViewport: [{ value: "mobile", count: 70 }],
+        byDevice: [{ value: "mobile", count: 70 }],
         entities: [
           {
             id: "p1",
@@ -469,9 +469,7 @@ describe("site statistic tools", () => {
       ],
     });
     const schema = z.object(analyticsTrafficCrosstabTool.input);
-    expect(schema.parse({ row: "os", col: "viewport" }).metric).toBe(
-      "pageviews",
-    );
+    expect(schema.parse({ row: "os", col: "device" }).metric).toBe("pageviews");
     expect(schema.safeParse({ row: "prop:x", col: "os" }).success).toBe(false);
   });
 
@@ -491,7 +489,7 @@ describe("site statistic tools", () => {
       countries: [{ country: "DE", views: 2 }],
       channels: [{ channel: "search", visits: 1 }],
       referrers: [{ referrer: "google", visits: 1 }],
-      devices: [{ viewport: "mobile", views: 2 }],
+      devices: [{ device: "mobile", views: 2 }],
       events: [{ name: "search_opened", count: 1 }],
     };
     const service = { live: jest.fn(async () => live) };
@@ -532,7 +530,7 @@ describe("site statistic tools", () => {
           { surface: "hero", pageType: "home", opened: 3 },
           { surface: "hero", pageType: "park", opened: 1 },
         ],
-        bySurfaceAndViewport: [],
+        bySurfaceAndDevice: [],
         resultTypes: [],
         positions: [],
         browseItems: [],

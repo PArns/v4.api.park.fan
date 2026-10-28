@@ -12,7 +12,7 @@ const row = (fields: Record<string, string | null>, count: number) => ({
   item: null,
   position: null,
   page_type: null,
-  viewport: null,
+  device: null,
   props_key: null,
   period: null,
   ...fields,
@@ -598,9 +598,9 @@ describe("SiteAnalyticsService", () => {
             "tab_changed",
             {
               days: 7,
-              filter: ["campaign:x"],
+              filter: ["channel:direct"],
               row: "prop:tab",
-              col: "viewport",
+              col: "device",
             },
             NOW,
           ),
@@ -624,7 +624,7 @@ describe("SiteAnalyticsService", () => {
             row({}, 10),
             row({ page_type: "home" }, 8),
             row({ page_type: "park" }, 2),
-            row({ viewport: "mobile" }, 10),
+            row({ device: "mobile" }, 10),
             row({ props_key: "result=park&surface=hero" }, 7),
             row({ props_key: "result=show&surface=header" }, 3),
             row({ period: "2026-10-28" }, 10),
@@ -669,7 +669,7 @@ describe("SiteAnalyticsService", () => {
           { value: "home", count: 8 },
           { value: "park", count: 2 },
         ],
-        byViewport: [
+        byDevice: [
           { value: "mobile", count: 10 },
           { value: "tablet", count: 0 },
           { value: "desktop", count: 0 },
@@ -722,7 +722,7 @@ describe("SiteAnalyticsService", () => {
         NOW,
       );
       expect(sqlOf("per_value")[0]).toContain("site_pageviews_daily");
-      expect(sqlOf("per_value")[1].slice(0, 2)).toEqual(["ios", 35]);
+      expect(sqlOf("per_value")[1].slice(0, 2)).toEqual(["ios", 31]);
 
       // `exit` reads the path's cuboid and its exits; a path filter is none.
       calls = [];
@@ -759,7 +759,7 @@ describe("SiteAnalyticsService", () => {
       await service.events({ days: 7, filter: ["country:de"] }, NOW);
       expect(sqlOf("FROM site_events")[0]).not.toContain("_daily");
       calls = [];
-      await service.events({ days: 7, filter: ["viewport:mobile"] }, NOW);
+      await service.events({ days: 7, filter: ["device:mobile"] }, NOW);
       expect(sqlOf("_daily")[0]).toContain("site_events_daily");
     });
 
@@ -769,9 +769,9 @@ describe("SiteAnalyticsService", () => {
       const [all, opened, clicks] = calls
         .map(([sql]) => sql)
         .filter((sql) => sql.includes("FROM site_events_daily"));
-      expect(opened).toContain("page_type, viewport");
-      expect(all).not.toContain("viewport");
-      expect(clicks).not.toContain("viewport");
+      expect(opened).toContain("page_type, device");
+      expect(all).not.toContain("device");
+      expect(clicks).not.toContain("device");
     });
   });
 
@@ -898,7 +898,7 @@ describe("SiteAnalyticsService", () => {
       ];
       const byDay = await service.crosstab(
         "search_opened",
-        { days: 30, row: "day", col: "viewport" },
+        { days: 30, row: "day", col: "device" },
         NOW,
       );
       expect(byDay.rows).toHaveLength(30);
@@ -918,19 +918,19 @@ describe("SiteAnalyticsService", () => {
         ],
       ];
       const result = await service.trafficCrosstab(
-        { days: 7, row: "os", col: "viewport", metric: "pageviews" },
+        { days: 7, row: "os", col: "device", metric: "pageviews" },
         NOW,
       );
       expect(result).toMatchObject({
         metric: "pageviews",
         row: "os",
-        col: "viewport",
+        col: "device",
         rows: ["ios", "windows"],
         cols: ["mobile", "desktop"],
         total: 8,
       });
       const [sql] = calls[0];
-      expect(sql).toContain("SELECT os AS r, viewport AS c");
+      expect(sql).toContain("SELECT os AS r, device AS c");
       expect(sql).toContain("SUM(views) AS count");
       expect(sql).toContain("AND views > 0");
 
@@ -990,7 +990,7 @@ describe("SiteAnalyticsService", () => {
           {
             days: 7,
             row: "os",
-            col: "viewport",
+            col: "device",
             metric: "pageviews",
             filter: ["channel:search"],
           },
@@ -1002,7 +1002,7 @@ describe("SiteAnalyticsService", () => {
   });
 
   describe("search", () => {
-    it("lists the surfaces seen with their rates, fills viewports, keeps the position order, draws every day", async () => {
+    it("lists the surfaces seen with their rates, fills devices, keeps the position order, draws every day", async () => {
       routes = [
         [
           "SELECT name, surface, SUM(count)",
@@ -1037,7 +1037,7 @@ describe("SiteAnalyticsService", () => {
               40,
             ),
             row(
-              { name: "search_opened", surface: "hero", viewport: "mobile" },
+              { name: "search_opened", surface: "hero", device: "mobile" },
               30,
             ),
             row(
@@ -1100,10 +1100,10 @@ describe("SiteAnalyticsService", () => {
         { surface: "hero", pageType: "home", opened: 40 },
         { surface: "header", pageType: "park", opened: 6 },
       ]);
-      expect(result.bySurfaceAndViewport).toHaveLength(9);
-      expect(result.bySurfaceAndViewport[0]).toEqual({
+      expect(result.bySurfaceAndDevice).toHaveLength(9);
+      expect(result.bySurfaceAndDevice[0]).toEqual({
         surface: "hero",
-        viewport: "mobile",
+        device: "mobile",
         opened: 30,
       });
       expect(result.resultTypes).toEqual([

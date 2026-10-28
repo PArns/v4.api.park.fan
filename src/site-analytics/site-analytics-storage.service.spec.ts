@@ -29,14 +29,12 @@ const PAGE: PageviewDims = [
   "",
   "",
   "",
-  "",
 ];
 const VISIT: PageviewDims = [
   ...PAGE.slice(0, 8),
   "/de",
   "google",
   "search",
-  "",
 ] as PageviewDims;
 const EVENT: EventDims = [
   "search_opened",
@@ -186,7 +184,7 @@ describe("SiteAnalyticsStorageService", () => {
       );
       buffer("2026-10-28T09:55:00.000Z", fields);
       await service.flush(NOW);
-      expect(statements[1][1]?.[13]).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(statements[1][1]?.[12]).toEqual([1, 2, 3, 4, 5, 6, 7]);
     });
 
     it("writes a claim with a marker no second time", async () => {
@@ -248,7 +246,7 @@ describe("SiteAnalyticsStorageService", () => {
       expect(markers[0][1]?.[1]).not.toBe(markers[1][1]?.[1]);
       const views = statements
         .filter(([sql]) => sql.includes("INSERT INTO site_pageviews"))
-        .map(([, params]) => params?.[13]);
+        .map(([, params]) => params?.[12]);
       expect(views).toEqual([[3], [2]]);
       expect(await redis.smembers(KEYS.windows)).toEqual([]);
     });
@@ -306,7 +304,6 @@ describe("SiteAnalyticsStorageService", () => {
       "/de",
       "google",
       "search",
-      "",
     ] as PageviewDims;
     const openVisit = (member: string, first: string, last: string) => {
       redis.hashes.set(
@@ -641,7 +638,7 @@ describe("SiteAnalyticsStorageService", () => {
       oldest = "2026-10-25";
       markers = [
         ...markersOf("2026-10-25"),
-        ...markersOf("2026-10-26", [["pageviews", 49]]),
+        ...markersOf("2026-10-26", [["pageviews", 40]]),
       ];
       await expect(
         service.rollupDays(new Date("2026-10-28T03:00:00Z")),
@@ -656,7 +653,7 @@ describe("SiteAnalyticsStorageService", () => {
     });
 
     it("counts only the cuboids it wrote, not one another instance wrote first", async () => {
-      rolledBefore.add("2026-10-27:49");
+      rolledBefore.add("2026-10-27:40");
       oldest = "2026-10-27";
       const rolled = await service.rollupDays(new Date("2026-10-28T03:00:00Z"));
       expect(rolled.cuboids).toBe(ALL_PAGEVIEW_CUBOIDS + ALL_EVENT_CUBOIDS - 1);
