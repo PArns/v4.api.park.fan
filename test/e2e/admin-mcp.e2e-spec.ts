@@ -157,6 +157,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const approved = await client
       .post(`/v1/admin/oauth/requests/${id}/approve`)
       .set("Authorization", `Bearer ${session}`)
+      .send({ password: PASSWORD })
       .expect(200);
     const callback = new URL(approved.body.redirectTo);
     expect(`${callback.origin}${callback.pathname}`).toBe(REDIRECT);
@@ -936,6 +937,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     await client
       .post(`/v1/admin/oauth/requests/${id}/approve`)
       .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ password: PASSWORD })
       .expect(404);
   });
 });
