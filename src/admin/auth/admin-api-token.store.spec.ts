@@ -25,9 +25,20 @@ function row(overrides: Record<string, unknown> = {}) {
 
 function build(rows: unknown[] = []) {
   const secrets = { query: jest.fn(async (): Promise<unknown> => rows) };
-  const tokens = { query: jest.fn(async (): Promise<unknown> => [[], 0]) };
+  const manager = {
+    query: jest.fn(async (): Promise<unknown> => [[], 0]),
+    insert: jest.fn(async (): Promise<unknown> => undefined),
+    update: jest.fn(async (): Promise<unknown> => undefined),
+  };
+  const tokens = {
+    query: jest.fn(async (): Promise<unknown> => [[], 0]),
+    manager: {
+      transaction: async (work: (m: typeof manager) => Promise<unknown>) =>
+        work(manager),
+    },
+  };
   const store = new AdminApiTokenStore(tokens as never, secrets as never);
-  return { store, secrets, tokens };
+  return { store, secrets, tokens, manager };
 }
 
 describe("lesserRole", () => {
@@ -132,7 +143,6 @@ describe("AdminApiTokenStore.rotateRefreshToken", () => {
   it("revokes the grant when a token used outside the grace window comes back", async () => {
     const { store, secrets, tokens } = build();
     secrets.query
-      .mockResolvedValueOnce([[], 0])
       .mockResolvedValueOnce([{ token_id: row().id, reused: true }])
       .mockResolvedValue([[], 0]);
     tokens.query.mockResolvedValueOnce([
@@ -160,13 +170,29 @@ describe("AdminApiTokenStore.rotateRefreshToken", () => {
 
   it("treats a token used a moment ago as a race, not a theft", async () => {
     const { store, secrets, tokens } = build();
-    secrets.query
-      .mockResolvedValueOnce([[], 0])
-      .mockResolvedValueOnce([{ token_id: row().id, reused: false }]);
+    secrets.query.mockResolvedValueOnce([
+      { token_id: row().id, reused: false },
+    ]);
     expect(await store.rotateRefreshToken("pfr_old", "pfc_x")).toEqual({
       outcome: "invalid",
     });
     expect(tokens.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("AdminApiTokenStore.rotateRefreshToken atomicity", () => {
+  it("leaves the claim undone when the new secrets cannot be stored", async () => {
+    const { store, secrets, manager } = build();
+    manager.query.mockResolvedValueOnce([
+      [{ token_id: row().id, user_id: USER, scope: "admin:read" }],
+      1,
+    ]);
+    manager.insert.mockRejectedValueOnce(new Error("disk full"));
+    await expect(store.rotateRefreshToken("pfr_old", "pfc_x")).rejects.toThrow(
+      "disk full",
+    );
+    // The claim ran inside the transaction, so nothing reads it as a reuse.
+    expect(secrets.query).not.toHaveBeenCalled();
   });
 });
 

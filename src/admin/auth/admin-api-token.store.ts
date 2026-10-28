@@ -267,32 +267,51 @@ export class AdminApiTokenStore {
     }
     const hash = hashToken(refreshToken);
 
-    const claimed = returnedRows<{
-      token_id: string;
-      user_id: string;
-      scope: string;
-    }>(
-      await this.secrets.query(
-        `UPDATE admin_api_token_secrets s
-            SET consumed_at = now()
-           FROM admin_api_tokens t
-          WHERE s.token_hash = $1
-            AND s.kind = 'refresh'
-            AND s.consumed_at IS NULL
-            AND s.expires_at > now()
-            AND t.id = s.token_id
-            AND t.revoked_at IS NULL
-            AND t.client_id = $2
-            AND EXISTS (
-              SELECT 1 FROM admin_users u
-               WHERE u.id = t.user_id AND u.is_active
-                 AND (u.tokens_revoked_at IS NULL OR t.created_at > u.tokens_revoked_at)
-            )
-        RETURNING t.id AS token_id, t.user_id, t.scope`,
-        [hash, clientId],
-      ),
-    );
-    const grant = claimed[0];
+    // The claim and the new secrets are one transaction: a failure between
+    // them must not leave the token consumed, or the client's retry would
+    // look like a reuse and revoke a healthy grant.
+    const access = generateToken(OAUTH_ACCESS_PREFIX);
+    const refresh = generateToken(OAUTH_REFRESH_PREFIX);
+    const refreshExpiresAt = this.refreshExpiry();
+    const grant = await this.tokens.manager.transaction(async (manager) => {
+      const claimed = returnedRows<{
+        token_id: string;
+        user_id: string;
+        scope: string;
+      }>(
+        await manager.query(
+          `UPDATE admin_api_token_secrets s
+              SET consumed_at = now()
+             FROM admin_api_tokens t
+            WHERE s.token_hash = $1
+              AND s.kind = 'refresh'
+              AND s.consumed_at IS NULL
+              AND s.expires_at > now()
+              AND t.id = s.token_id
+              AND t.revoked_at IS NULL
+              AND t.client_id = $2
+              AND EXISTS (
+                SELECT 1 FROM admin_users u
+                 WHERE u.id = t.user_id AND u.is_active
+                   AND (u.tokens_revoked_at IS NULL OR t.created_at > u.tokens_revoked_at)
+              )
+          RETURNING t.id AS token_id, t.user_id, t.scope`,
+          [hash, clientId],
+        ),
+      );
+      const found = claimed[0];
+      if (!found) return null;
+      await manager.insert(AdminApiTokenSecret, [
+        this.accessSecret(access, found.token_id),
+        this.refreshSecret(refresh, found.token_id, refreshExpiresAt),
+      ]);
+      await manager.update(
+        AdminApiToken,
+        { id: found.token_id },
+        { prefix: displayPrefix(access), expiresAt: refreshExpiresAt },
+      );
+      return found;
+    });
 
     if (!grant) {
       const [seen] = (await this.secrets.query(
@@ -321,21 +340,7 @@ export class AdminApiTokenStore {
         ? grant.scope
         : DEFAULT_ADMIN_TOKEN_SCOPE
     ) as AdminTokenScope;
-    const access = generateToken(OAUTH_ACCESS_PREFIX);
-    const refresh = generateToken(OAUTH_REFRESH_PREFIX);
-    const refreshExpiresAt = this.refreshExpiry();
 
-    await this.tokens.manager.transaction(async (manager) => {
-      await manager.insert(AdminApiTokenSecret, [
-        this.accessSecret(access, grant.token_id),
-        this.refreshSecret(refresh, grant.token_id, refreshExpiresAt),
-      ]);
-      await manager.update(
-        AdminApiToken,
-        { id: grant.token_id },
-        { prefix: displayPrefix(access), expiresAt: refreshExpiresAt },
-      );
-    });
     this.purgeExpiredSoon();
 
     return {
