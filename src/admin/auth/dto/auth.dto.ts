@@ -10,6 +10,7 @@ import {
   MinLength,
 } from "class-validator";
 import { ADMIN_ROLES, type AdminRole } from "../entities/admin-user.entity";
+import { PAT_EXPIRY_DAYS } from "../admin-api-token.constants";
 
 export class AdminLoginDto {
   @ApiProperty({ example: "you@park.fan" })
@@ -145,4 +146,25 @@ export class AdminTotpDisableDto {
   @IsString()
   @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
   code: string;
+}
+
+export class AdminCreateApiTokenDto {
+  @ApiProperty({
+    description: "What the token is for, shown in the token list.",
+    example: "Laptop",
+  })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name: string;
+
+  @ApiPropertyOptional({
+    description: "Days until it expires; null or absent never expires.",
+    enum: PAT_EXPIRY_DAYS,
+    nullable: true,
+    example: 90,
+  })
+  @IsOptional()
+  @IsIn(PAT_EXPIRY_DAYS)
+  expiresInDays?: (typeof PAT_EXPIRY_DAYS)[number] | null;
 }

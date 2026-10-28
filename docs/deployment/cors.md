@@ -54,6 +54,17 @@ that is served it fails. Endpoints answering `private, no-store`
 cached endpoint needs an origin-independent answer, set at Cloudflare, before a
 browser may call it directly.
 
+## The admin MCP's public surface
+
+`buildCorsDelegate` (what `src/main.ts` passes) answers `/v1/mcp`, `/v1/oauth/register`,
+`/v1/oauth/token`, `/v1/oauth/revoke` and `/.well-known/oauth-*` with
+`Access-Control-Allow-Origin: *` and no credentials, whatever `CORS_ORIGINS` says, and exposes
+`WWW-Authenticate`. A browser-based MCP client (the MCP Inspector) calls them from its own origin,
+and none of them reads a cookie: the credential is a bearer token or a PKCE verifier the caller
+attaches itself. `*` is also origin-independent, so the cached discovery documents do not run into
+the `Vary` problem above. `/v1/oauth/authorize` is a navigation and the consent endpoints go
+through park.fan's proxy, so they keep the list. See [admin MCP](../admin/mcp.md).
+
 ## Checking it
 
 ```bash

@@ -309,10 +309,17 @@ export class AdminAuthController {
 
   @Post("sessions/revoke-all")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Sign out everywhere, including here" })
+  @ApiOperation({
+    summary: "Sign out everywhere, including here",
+    description:
+      "Ends every session of the account and revokes its API tokens and OAuth grants.",
+  })
   async revokeAll(@CurrentAdmin() admin: AdminPrincipal) {
     if (!admin.userId) return { revoked: 0 };
-    const revoked = await this.sessions.destroyAllForUser(admin.userId);
+    const revoked = await this.auth.signOutEverywhere(
+      admin.userId,
+      "sessions-reset",
+    );
     await this.audit.record({
       actor: admin,
       action: "auth.sessions.revoke-all",

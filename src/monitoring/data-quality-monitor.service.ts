@@ -265,6 +265,32 @@ export class DataQualityMonitorService {
   ) {}
 
   /**
+   * The admin's data-quality report in one read: the four detectors the
+   * dashboard and the MCP server show side by side. `windowDays` bounds the
+   * cluster detector only.
+   */
+  async report(windowDays: number) {
+    const [
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    ] = await Promise.all([
+      this.findSilencedClusters(windowDays),
+      this.findFailingJobs(),
+      this.findAbsenceRetiredUnreviewed(),
+      this.findReissueCandidates(),
+    ]);
+    return {
+      windowDays,
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    };
+  }
+
+  /**
    * Parks where a block of attractions stopped reporting on the same day.
    *
    * The window is the whole design. `lastOperating` must fall between

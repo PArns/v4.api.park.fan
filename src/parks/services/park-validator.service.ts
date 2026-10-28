@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Not, IsNull } from "typeorm";
+import { Repository, Not, IsNull, In } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
@@ -8,7 +8,10 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
 import { normalizeForMatching } from "../../common/utils/slug.util";
 import { calculateHaversineDistance } from "../../common/utils/distance.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
-import { calculateNameSimilarity } from "../utils/park-merge.util";
+import {
+  calculateNameSimilarity,
+  determineMergeWinner,
+} from "../utils/park-merge.util";
 import { MAX_INHERIT_DISTANCE_KM } from "../utils/source-id-inheritance.util";
 
 export interface MismatchedQtId {
@@ -368,6 +371,18 @@ export interface DuplicatePair {
    */
   safe: boolean;
   /** Why a human has to look, or null when nobody has to. */
+  reviewReason: string | null;
+}
+
+/** A duplicate pair with the row a merge would keep. */
+export interface DuplicatePairVerdict {
+  park1: DuplicatePair["park1"];
+  park2: DuplicatePair["park2"];
+  score: number;
+  reason: string;
+  winnerId: string | null;
+  loserId: string | null;
+  safe: boolean;
   reviewReason: string | null;
 }
 
@@ -1031,5 +1046,40 @@ export class ParkValidatorService {
 
   getParkRepository(): Repository<Park> {
     return this.parkRepository;
+  }
+
+  /**
+   * The detected duplicates, each with the row a merge would keep. The winner
+   * comes from `determineMergeWinner`, the function the merge itself uses,
+   * because the order two ids are typed in carries no weight and an operator
+   * who believes otherwise deletes the wrong park.
+   */
+  async findDuplicatesWithWinners(): Promise<DuplicatePairVerdict[]> {
+    const duplicates = await this.findDuplicates();
+    if (duplicates.length === 0) return [];
+
+    // One query for every park involved, rather than two per pair.
+    const ids = Array.from(
+      new Set(duplicates.flatMap((d) => [d.park1.id, d.park2.id])),
+    );
+    const parks = await this.parkRepository.find({ where: { id: In(ids) } });
+    const parkById = new Map(parks.map((park) => [park.id, park]));
+
+    return duplicates.map((duplicate) => {
+      const park1 = parkById.get(duplicate.park1.id);
+      const park2 = parkById.get(duplicate.park2.id);
+      const verdict =
+        park1 && park2 ? determineMergeWinner(park1, park2) : null;
+      return {
+        park1: duplicate.park1,
+        park2: duplicate.park2,
+        score: duplicate.score,
+        reason: duplicate.reason,
+        winnerId: verdict?.winnerId ?? null,
+        loserId: verdict?.loserId ?? null,
+        safe: duplicate.safe,
+        reviewReason: duplicate.reviewReason,
+      };
+    });
   }
 }

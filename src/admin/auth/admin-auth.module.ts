@@ -3,6 +3,10 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { RedisModule } from "../../common/redis/redis.module";
 import { AdminUser } from "./entities/admin-user.entity";
 import { AdminAuditLog } from "./entities/admin-audit-log.entity";
+import { AdminApiToken } from "./entities/admin-api-token.entity";
+import { AdminApiTokenSecret } from "./entities/admin-api-token-secret.entity";
+import { AdminApiTokenStore } from "./admin-api-token.store";
+import { AdminApiTokensController } from "./admin-api-tokens.controller";
 import { AdminAuthService } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
@@ -22,11 +26,20 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
  */
 @Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([AdminUser, AdminAuditLog]), RedisModule],
-  controllers: [AdminAuthController],
+  imports: [
+    TypeOrmModule.forFeature([
+      AdminUser,
+      AdminAuditLog,
+      AdminApiToken,
+      AdminApiTokenSecret,
+    ]),
+    RedisModule,
+  ],
+  controllers: [AdminAuthController, AdminApiTokensController],
   providers: [
     AdminAuthService,
     AdminSessionStore,
+    AdminApiTokenStore,
     AdminAuditService,
     AdminTurnstileService,
     AdminLoginRateLimitService,
@@ -36,6 +49,7 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
   exports: [
     AdminAuthService,
     AdminSessionStore,
+    AdminApiTokenStore,
     AdminAuditService,
     AdminTurnstileService,
     AdminLoginRateLimitService,

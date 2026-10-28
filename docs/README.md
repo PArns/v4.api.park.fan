@@ -80,6 +80,7 @@ Start at the first page: which model serves which surface today.
 - [endpoints](admin/endpoints.md) — Every `/v1/admin` route by purpose with required role and what it triggers, linking the owning docs
 - [authentication](admin/authentication.md) — Admin accounts, Redis sessions, scrypt, TOTP, roles, login limits, Turnstile, legacy pass
 - [curation](admin/curation.md) — Curated columns on parks and attractions, resolvers, editor descriptors, publish, undo, merges
+- [mcp](admin/mcp.md) — The admin MCP server: connecting Claude, OAuth 2.1 flow, API tokens, tools, security, edge rules
 
 ## Development
 
