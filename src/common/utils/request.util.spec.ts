@@ -99,8 +99,17 @@ describe("truncateIp", () => {
 
   it("takes the /48 of a fully written IPv6 address", () => {
     expect(truncateIp("2001:0db8:85a3:0000:0000:8a2e:0370:7334")).toBe(
-      "2001:0db8:85a3::/48",
+      "2001:db8:85a3::/48",
     );
+  });
+
+  it("writes each hextet in lower case without leading zeros", () => {
+    expect(truncateIp("2001:DB8:00A3::1")).toBe("2001:db8:a3::/48");
+  });
+
+  it("decodes a hex IPv4-mapped address before cutting", () => {
+    expect(truncateIp("::ffff:cb00:712f")).toBe("203.0.113.0/24");
+    expect(truncateIp("::FFFF:CB00:712F")).toBe("203.0.113.0/24");
   });
 
   it("handles the loopback, which compresses everything but one group", () => {

@@ -1,6 +1,7 @@
 import { ModulesContainer, NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { Logger, ValidationPipe, LogLevel } from "@nestjs/common";
+import { warnWhenCfOriginSecretUnset } from "./common/throttler/throttler.config";
 import { Request, Response, NextFunction } from "express";
 import compression from "compression";
 import helmet from "helmet";
@@ -146,6 +147,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(port);
 
   const logger = new Logger("Bootstrap");
+  warnWhenCfOriginSecretUnset(logger);
   logger.log(`🚀 park.fan API v4 running on: http://localhost:${port}/v1`);
   logger.log(`📚 API Documentation: http://localhost:${port}/api`);
   logger.log(`📊 Bull Board Dashboard: http://localhost:3001`);

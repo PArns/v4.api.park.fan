@@ -101,13 +101,23 @@ export function addressBucket(
  */
 export function truncateIp(ip: string | null | undefined): string | null {
   if (!ip) return null;
-  const clean = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  const lower = ip.toLowerCase();
+  let clean = lower.startsWith("::ffff:") ? lower.slice(7) : lower;
+  // ::ffff:c000:0201 is 192.0.2.1 written in hex.
+  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(clean);
+  if (hex) {
+    const [high, low] = [parseInt(hex[1], 16), parseInt(hex[2], 16)];
+    clean = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+  }
   if (isIP(clean) === 4) {
     const parts = clean.split(".");
     return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
   }
   if (isIP(clean) === 6) {
-    return `${expandIpv6(clean).slice(0, 3).join(":")}::/48`;
+    const hextets = expandIpv6(clean)
+      .slice(0, 3)
+      .map((group) => parseInt(group, 16).toString(16));
+    return `${hextets.join(":")}::/48`;
   }
   return null;
 }

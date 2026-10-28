@@ -110,3 +110,19 @@ export const carriesCfOriginSecret = (
   const values = Array.isArray(provided) ? provided : [provided];
   return values.some((value) => typeof value === "string" && value === secret);
 };
+
+/**
+ * Says once, at boot, that an unset `CF_ORIGIN_SECRET` in production leaves
+ * the client-address headers believed from any caller. Returns whether it did.
+ */
+export const warnWhenCfOriginSecretUnset = (logger: {
+  warn(message: string): void;
+}): boolean => {
+  if (process.env.NODE_ENV !== "production" || getCfOriginSecret()) {
+    return false;
+  }
+  logger.warn(
+    "CF_ORIGIN_SECRET is not set: CF-Connecting-IP is trusted from any caller, so a direct request can pick its own rate-limit key",
+  );
+  return true;
+};
