@@ -35,6 +35,7 @@ import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
 import { SearchConsoleProcessor } from "./processors/search-console.processor";
+import { AdminAuditMaintenanceProcessor } from "./processors/admin-audit-maintenance.processor";
 import {
   ForecastArchiveProcessor,
   ForecastArchiveScoreProcessor,
@@ -200,6 +201,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention
     SearchConsoleProcessor, // Search Console: nightly import, retention
+    AdminAuditMaintenanceProcessor, // Audit log: nightly address retention
     ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
     ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue
     ShowPatternProcessor, // Nightly per-weekday showtime patterns

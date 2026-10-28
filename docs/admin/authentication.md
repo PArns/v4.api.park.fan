@@ -104,13 +104,66 @@ password change; enrolling clears that on the sessions already open.
 
 `admin_audit_log` exists because the `curated_*` columns are claims about the world and a claim needs an
 author (`curated_minimum_height = 0` on Winni Splash means somebody read Phantasialand's conditions).
-It keeps the actor's whole address (`actor_ip`): the table is accounts' actions, not visitors'
-requests, and is not a log in the sense of
+It keeps the network the actor came from (`actor_ip`), never the address: `AdminAuditService.record`
+stores `truncateIp` of the caller's address, a /24 for IPv4 and a /48 for IPv6, the cut
+`admin_users.last_login_ip` has. That answers "did this session come from somewhere new" and is no
+movement history. The table is accounts' actions, not visitors' requests, and is not a log in the sense of
 [no address in logs](../rules/no-address-in-logs.md), whose lines carry none (an admin request line
 at most a /24 or /48).
 Mutating endpoints audit themselves through `AdminAuditInterceptor`; the ones that write a richer row are
 `@SelfAudited()`. `before` / `after` hold **only the changed fields**, which is what makes undo possible
 ([curation](curation.md#undo)).
+
+### Address retention
+
+`AUDIT_ADDRESS_RETENTION_DAYS` (90, in `admin-audit-retention.service.ts`) is how long a row keeps its
+network. Then `actor_ip` is set to NULL and the row stays: account, action, time and what changed.
+
+The job `admin-audit` / `sweep-addresses` runs at 01:15 UTC ([job queues](../architecture/job-queues.md))
+and does two things, in this order:
+
+1. clears `actor_ip` on every row older than the retention, in one statement against the database's clock
+   (`now() - $1::interval`; an instant, not a park's day, so no timezone helper applies);
+2. walks the rows that still hold a value, 500 at a time, and cuts each to its network with `truncateIp`
+   in TypeScript, writing back only those that differ. A value that is already a network is left alone,
+   and text that is neither an address nor a network is cleared, so a second run changes nothing.
+
+It logs counts and nothing that identifies a row (`🧹 Audit log: cleared N past retention, cut N to their
+network, cleared N unreadable`), and says nothing when there was nothing to do. A failure is rethrown, so
+Bull retries it and the failing-jobs sweep reports it ([job queues](../architecture/job-queues.md)).
+
+`actor_ip` is nullable `text` and stays that, so the sweep needs no schema change; a type such as `inet`
+would rewrite the table at the next boot
+([the entities are the schema](../rules/the-entities-are-the-schema.md)).
+
+**The first run is a mass write.** Rows written before the write path truncated hold full addresses, and
+the first run clears or cuts all of them. Neither can be undone, which is the purpose. Count it
+read-only before the deploy, through `scripts/prod-psql.sh`, and put the numbers in the pull request
+([destructive jobs](../rules/automated-retirement-and-identity.md)):
+
+```sql
+SELECT count(*) FILTER (WHERE created_at < now() - interval '90 days') AS to_clear,
+       count(*) FILTER (WHERE created_at >= now() - interval '90 days'
+                          AND actor_ip NOT LIKE '%/%') AS to_cut
+  FROM admin_audit_log
+ WHERE actor_ip IS NOT NULL;
+```
+
+`to_cut` also holds any value that is no address (the job clears those and counts them as unreadable).
+Afterwards the same query returns 0 and 0 and no `actor_ip` older than the retention remains.
+
+### Notice for admin accounts
+
+For everyone who holds an admin account. The audit log records every sign-in and every change you make
+in the admin (reading pages is not recorded): your account's email address, what you did and to what, the
+time, and the network your connection came from, which is the first three parts of an IPv4 address or the
+first three groups of an IPv6 address and never the whole address.
+
+The network is deleted after 90 days. The rest of the entry stays, so that a change can still be traced
+and, where possible, undone.
+
+We keep this because we have a legitimate interest in tracing changes and in the security of the accounts
+and of the data they can change (Art. 6(1)(f) GDPR).
 
 ## The bootstrap account
 

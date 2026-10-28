@@ -19,13 +19,15 @@ writing a `logger` call, a `logToFile` record or a request filter that touches t
 - **Bound parameters are cut too.** The slow-query file and the error line of a failed statement
   write the parameters; `withoutAddresses` (`typeorm-slow-query-logger.ts`) turns any address among
   them into its network. A statement that binds a visitor's address does not exist, and the audit
-  row's `actor_ip` is the one an account's statement does bind.
+  row's `actor_ip` is a network before it is bound.
 
 ## What is kept, and why that is not a log
 
-- **`admin_audit_log.actor_ip`** holds the whole address of the account that did something, as the
-  audit trail needs it ([authentication](../admin/authentication.md#the-audit-log)). It is a table of
-  accounts' actions, not of visitors' requests, and it is kept as it was.
+- **`admin_audit_log.actor_ip`** holds the network of the account that did something, a /24 or a /48
+  from `truncateIp`, which is all the audit trail needs ("did this come from somewhere new"). A nightly
+  job clears it after 90 days and cuts any full address still stored
+  ([authentication](../admin/authentication.md#the-audit-log)). It is a table of accounts' actions, not
+  of visitors' requests.
 - **Redis counters** key on an address bucket or on an HMAC under the day's key and expire with the
   day ([site statistic](../frontend/site-analytics.md#privacy)); no address is a key's text.
 - The host's and Cloudflare's own logs are outside this API.

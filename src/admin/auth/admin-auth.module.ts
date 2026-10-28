@@ -10,6 +10,7 @@ import { AdminApiTokensController } from "./admin-api-tokens.controller";
 import { AdminAuthService } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
+import { AdminAuditRetentionService } from "./admin-audit-retention.service";
 import { AdminTurnstileService } from "./admin-turnstile.service";
 import { AdminLoginRateLimitService } from "./admin-login-rate-limit.service";
 import { AdminAuthGuard } from "./admin-auth.guard";
@@ -41,6 +42,7 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
     AdminSessionStore,
     AdminApiTokenStore,
     AdminAuditService,
+    AdminAuditRetentionService,
     AdminTurnstileService,
     AdminLoginRateLimitService,
     AdminAuthGuard,
@@ -51,6 +53,7 @@ import { AdminAuditInterceptor } from "./admin-audit.interceptor";
     AdminSessionStore,
     AdminApiTokenStore,
     AdminAuditService,
+    AdminAuditRetentionService,
     AdminTurnstileService,
     AdminLoginRateLimitService,
     AdminAuthGuard,

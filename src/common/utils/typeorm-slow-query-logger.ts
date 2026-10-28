@@ -6,8 +6,9 @@ import { truncateIp } from "./request.util";
 
 /**
  * The bound parameters of a statement for a log, with every address cut to its
- * network. A slow or failed `INSERT INTO admin_audit_log` carries `actor_ip`
- * as a parameter, and the privacy policy says no log line holds an address
+ * network. The audit row's `actor_ip` is a network before it is bound, so
+ * this is the net under that write and under any statement that comes to bind
+ * an address; the privacy policy says no log line holds one
  * (docs/rules/no-address-in-logs.md). Strings and the strings of an array are
  * checked; nothing else can be one.
  */
