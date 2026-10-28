@@ -5,6 +5,7 @@ import {
   hoursOf,
   parseFilters,
   periodOf,
+  periodText,
   rate,
   siteAnalyticsWindow,
   whereOf,
@@ -89,11 +90,16 @@ describe("site-analytics.query", () => {
     ).toThrow();
   });
 
-  it("buckets by the UTC day or hour, whatever the session's zone", () => {
-    expect(periodOf(false)).toContain("date_trunc('day', bucket, 'UTC')");
-    expect(periodOf(true, "e")).toContain(
-      "date_trunc('hour', e.bucket, 'UTC')",
+  it("buckets by the UTC day or hour and prints the period after the grouping", () => {
+    expect(periodOf(false)).toBe("time_bucket('1 day'::interval, bucket)");
+    expect(periodOf(true, "e")).toBe(
+      "time_bucket('1 hour'::interval, e.bucket)",
     );
+    const bucket = new Date("2026-10-28T06:00:00Z");
+    expect(periodText(bucket, false)).toBe("2026-10-28");
+    expect(periodText(bucket, true)).toBe("2026-10-28T06:00:00Z");
+    expect(periodText("2026-10-27 22:00:00+00", false)).toBe("2026-10-27");
+    expect(periodText(null, true)).toBeNull();
   });
 
   it("rounds a rate to four places, divides by zero to zero, and bounces what never saw a second page", () => {

@@ -30,6 +30,7 @@ import {
   hoursOf,
   num,
   periodOf,
+  periodText,
   rate,
   siteAnalyticsWindow,
   whereOf,
@@ -126,6 +127,9 @@ export class SiteAnalyticsService {
       this.realtime(window.locale, now),
     ]);
 
+    for (const row of [...trafficRows, ...eventRows]) {
+      row.period = periodText(row.period, window.hourly) as string;
+    }
     const byPeriod = new Map(trafficRows.map((row) => [row.period, row]));
     const eventsByPeriod = new Map(
       eventRows.map((row) => [row.period, num(row.events)]),
@@ -263,7 +267,10 @@ export class SiteAnalyticsService {
     for (const name of blocked) perName.set(name, new Map());
     for (const row of rows) {
       const periods = perName.get(row.name) ?? new Map<string, number>();
-      periods.set(row.period, num(row.count));
+      periods.set(
+        periodText(row.period, window.hourly) as string,
+        num(row.count),
+      );
       perName.set(row.name, periods);
     }
     const points = seriesPoints(window, now);
@@ -357,6 +364,8 @@ export class SiteAnalyticsService {
       this.blocklist.names(),
     ]);
 
+    for (const row of grouped)
+      row.period = periodText(row.period, window.hourly);
     const set = (key: "page_type" | "viewport" | "props_key" | "period") =>
       grouped.filter(
         (row) =>
@@ -446,7 +455,7 @@ export class SiteAnalyticsService {
     };
     const rowExpr = axis(query.row);
     const colExpr = axis(query.col);
-    const cells: Array<{ r: string; c: string; count: Count }> =
+    const cells: Array<{ r: unknown; c: unknown; count: Count }> =
       await this.db.query(
         `SELECT ${rowExpr} AS r, ${colExpr} AS c, SUM(count) AS count
            FROM site_events
@@ -454,9 +463,14 @@ export class SiteAnalyticsService {
           GROUP BY 1, 2`,
         params.values,
       );
-    const label = (value: string) => (value === "" ? NONE : value);
+    const label = (value: unknown) =>
+      value instanceof Date
+        ? (periodText(value, window.hourly) as string)
+        : value === "" || value === null
+          ? NONE
+          : String(value);
     const sideOf = (
-      pick: (cell: { r: string; c: string }) => string,
+      pick: (cell: { r: unknown; c: unknown }) => unknown,
       side: string,
     ) => {
       const totals = new Map<string, number>();
@@ -610,7 +624,10 @@ export class SiteAnalyticsService {
     const series = new Map(
       openedRows
         .filter((row) => row.period !== null)
-        .map((row) => [`${row.period}|${row.surface}`, num(row.count)]),
+        .map((row) => [
+          `${periodText(row.period, window.hourly)}|${row.surface}`,
+          num(row.count),
+        ]),
     );
     const positions = new Map(
       clickRows

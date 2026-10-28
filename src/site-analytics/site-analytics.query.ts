@@ -151,12 +151,26 @@ export function whereOf(
   return conditions.join(" AND ");
 }
 
-/** The SQL of a bucket's UTC day or hour, as the reports print it. */
+/**
+ * The SQL of a bucket's UTC day or hour, to group by. `time_bucket` groups the
+ * compressed batches without formatting every row, so the text is made in
+ * {@link periodText} after the grouping.
+ */
 export function periodOf(hourly: boolean, alias = ""): string {
   const bucket = alias ? `${alias}.bucket` : "bucket";
-  return hourly
-    ? `to_char(date_trunc('hour', ${bucket}, 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24":00:00Z"')`
-    : `to_char(date_trunc('day', ${bucket}, 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
+  return `time_bucket('${hourly ? "1 hour" : "1 day"}'::interval, ${bucket})`;
+}
+
+/**
+ * A period as the reports print it: `2026-10-28`, or `2026-10-28T07:00:00Z`
+ * for an hour. Null stays null (a grouping set without the period).
+ */
+export function periodText(value: unknown, hourly: boolean): string | null {
+  if (value === null || value === undefined) return null;
+  const iso = (
+    value instanceof Date ? value : new Date(String(value))
+  ).toISOString();
+  return hourly ? `${iso.slice(0, 13)}:00:00Z` : iso.slice(0, 10);
 }
 
 /** Most counted first, ties in the given order. */

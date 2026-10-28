@@ -196,7 +196,7 @@ describe("SiteAnalyticsService", () => {
         visitors: 2,
         events: 0,
       });
-      expect(sqlOf("SUM(engaged)")[0]).toContain("date_trunc('hour'");
+      expect(sqlOf("SUM(engaged)")[0]).toContain("time_bucket('1 hour'");
     });
   });
 

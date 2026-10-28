@@ -12,6 +12,7 @@ import {
   propsKeyOf,
   type ValidEventHit,
 } from "../site-analytics/site-analytics.hits";
+import { periodText } from "../site-analytics/site-analytics.query";
 import {
   PAGE_VIEW_KINDS,
   isPageKeyFor,
@@ -150,7 +151,7 @@ export class PageViewsService {
         views: string | number;
         rank: string | number;
       }>,
-      Array<{ day: string; kind: PageViewKind; views: string | number }>,
+      Array<{ day: Date | string; kind: PageViewKind; views: string | number }>,
     ] = await Promise.all([
       this.db.query(
         `SELECT kind, locale, SUM(count) AS views
@@ -186,8 +187,7 @@ export class PageViewsService {
       ),
       this.db.query(
         // As text, and the UTC day: the session's zone must not move a read.
-        `SELECT to_char(date_trunc('day', bucket, 'UTC') AT TIME ZONE 'UTC',
-                        'YYYY-MM-DD') AS day,
+        `SELECT time_bucket('1 day'::interval, bucket) AS day,
                 kind, SUM(count) AS views
            FROM (${READS_SQL}) r
           GROUP BY 1, 2`,
@@ -231,7 +231,7 @@ export class PageViewsService {
       daily.set(day, {});
     }
     for (const row of byDay) {
-      const entry = daily.get(row.day);
+      const entry = daily.get(periodText(row.day, false) as string);
       if (entry) entry[row.kind] = Number(row.views);
     }
 
