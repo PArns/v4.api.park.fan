@@ -22,7 +22,7 @@ The deprecated shared pass is refused here except on `me` and `logout`.
 | POST | `auth/change-password` | viewer | own password; `@Throttle` 5/min |
 | GET | `auth/sessions` | viewer | this account's sessions |
 | DELETE | `auth/sessions/:id` | viewer | ends one of them |
-| POST | `auth/sessions/revoke-all` | viewer | ends all of them, this one included |
+| POST | `auth/sessions/revoke-all` | viewer | ends all of them, this one included, and revokes the account's API tokens and OAuth grants |
 | POST | `auth/totp/begin` | viewer | starts two-factor enrolment; `@Throttle` 10/min |
 | POST | `auth/totp/confirm` | viewer | enables two-factor |
 | POST | `auth/totp/disable` | viewer | needs password and code; `@Throttle` 5/min |
@@ -31,6 +31,24 @@ The deprecated shared pass is refused here except on `me` and `logout`.
 | PATCH | `auth/users/:id` | owner | name, role, activation |
 | POST | `auth/users/:id/reset-totp` | owner | clears another account's second factor |
 | POST | `auth/users/:id/reset-password` | owner | resets another account's password |
+
+## API tokens and the admin MCP
+
+Session only: API tokens are refused here like everywhere but `/v1/mcp`, and so is the shared pass.
+The MCP server, the OAuth endpoints and how a client connects: [admin MCP](mcp.md).
+
+| Method | Path | Role | Does |
+| --- | --- | --- | --- |
+| GET | `auth/tokens` | viewer | `{ items }`: the account's active PATs (`kind: "pat"`) and OAuth grants (`kind: "oauth"`, `name` null, `clientName` set); `?userId=` lists another account's, owner only |
+| POST | `auth/tokens` | viewer | `{ name, expiresInDays: 30 \| 90 \| 365 \| null }` → `201 { token, item }`; the `pfa_…` token appears in this answer and nowhere else; audited `auth.token.create` |
+| DELETE | `auth/tokens/:id` | viewer | `204`, revokes a PAT or a whole grant; another account's, owner only (`404` for anybody else); audited `auth.token.revoke` |
+| GET | `oauth/requests/:id` | viewer | `{ id, clientId, clientName, redirectHost, scope, expiresAt }` for the consent page; `404` when unknown, expired or answered |
+| POST | `oauth/requests/:id/approve` | viewer | `{ redirectTo }`: the client's registered redirect URI with `code`, `state` and `iss`; audited `auth.oauth.grant`; `404` without side effects when used or expired |
+| POST | `oauth/requests/:id/deny` | viewer | `{ redirectTo }` with `error=access_denied`; `404` the same way |
+
+`item` is `{ id, kind, name, clientName, prefix, scope, createdAt, lastUsedAt, expiresAt }`, the
+dates ISO strings or null. `redirectHost` is the redirect URI's host, with its port when it has one
+(`localhost:33418` for Claude Code).
 
 ## Sync and background jobs
 

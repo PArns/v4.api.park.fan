@@ -1,8 +1,9 @@
 # Admin authentication
 
 How `/v1/admin/*` is protected: named accounts, opaque Redis sessions, scrypt passwords, TOTP, roles, the
-audit log, the login rate limits and Turnstile, and the deprecated shared pass. Open this before adding an
-admin endpoint or touching the login. The UI on the other side: the frontend's `docs/features/admin.md`.
+audit log, the login rate limits and Turnstile, the API tokens of the admin MCP, and the deprecated shared
+pass. Open this before adding an admin endpoint or touching the login. The UI on the other side: the
+frontend's `docs/features/admin.md`.
 
 Cloudflare's rule is the outer lock and this is the inner one: without it, anything
 reaching the origin directly could merge parks or flush caches, unattributed.
@@ -11,7 +12,9 @@ reaching the origin directly could merge parks or flush caches, unattributed.
 
 `AdminAuthGuard` sits on the controller **class**, so a new endpoint is protected unless it says
 otherwise (`@AdminPublic()`, used by the login). `@AdminMinRole('editor')` sets a minimum role;
-undecorated endpoints need any valid session.
+undecorated endpoints need any valid session. An endpoint marked `@AdminTokenOnly()` (only
+`/v1/mcp`) takes an API token instead and nothing else; every other endpoint refuses API tokens
+([below](#api-tokens-and-oauth-grants)).
 
 | Role | May |
 | --- | --- |
@@ -129,6 +132,26 @@ requests that returned (a `tap()`), `HttpExceptionFilter` the ones that threw; b
 (`src/common/utils/redact-url.util.ts`). The failing half matters most: `cache/reset` without
 `?confirm=true`, and every `@AdminLegacyAccess(false)` endpoint, refuse a pass after authenticating it.
 
+## API tokens and OAuth grants
+
+The [admin MCP](mcp.md) authenticates with a personal access token (`pfa_…`) or an OAuth access
+token (`pfo_…`), never with a session. They are a third way into the guard, deliberately narrow:
+
+- **Postgres, not Redis.** `AdminApiTokenStore` keeps `admin_api_tokens` (one row per PAT or grant)
+  and `admin_api_token_secrets` (the SHA-256 of each secret), because a token outlives a session by
+  weeks and a Redis flush must not forget that a refresh token was already used.
+- **Checked at request time.** Every lookup joins `admin_users`: an inactive account is refused at
+  its next request, and `mustChangePassword` / the `ADMIN_REQUIRE_TOTP` debt refuse it as they do a
+  session. The role is the lesser of the account's and the token's cap (`viewer` in v1).
+- **One audience.** Only `@AdminTokenOnly()` endpoints resolve them, and those accept no session and
+  no shared pass, so a token never reaches an admin REST route, the token endpoints or the consent.
+- **Ended with the sessions.** `AdminAuthService.signOutEverywhere` revokes them wherever the
+  account's sessions end: deactivation, password change or reset, second-factor reset, sign out
+  everywhere.
+- **Created only with a session.** `GET/POST/DELETE /v1/admin/auth/tokens` and the consent endpoints
+  are `@AdminLegacyAccess(false)` and reachable by sessions only; creating, revoking and granting
+  write audit rows.
+
 ## Environment
 
 | Variable | Meaning |
@@ -143,6 +166,8 @@ requests that returned (a `tap()`), `HttpExceptionFilter` the ones that threw; b
 | `ADMIN_TURNSTILE_TIMEOUT_MS` | siteverify timeout, default 5000 |
 | `ADMIN_LOGIN_TURNSTILE` | `false` switches the check off |
 | `THROTTLE_BYPASS_KEYS` | the frontend's key; exempts it from the throttler and Turnstile |
+| `API_PUBLIC_URL`, `FRONTEND_URL`, `OAUTH_REDIRECT_HOSTS` | the admin MCP's OAuth server ([admin MCP](mcp.md#environment)) |
 
-`admin_users` and `admin_audit_log` come from `synchronize`; every column is nullable or defaulted
+`admin_users`, `admin_audit_log`, `admin_api_tokens`, `admin_api_token_secrets` and `admin_oauth_clients`
+come from `synchronize`; every column is nullable or defaulted
 ([the entities are the schema](../rules/the-entities-are-the-schema.md)).

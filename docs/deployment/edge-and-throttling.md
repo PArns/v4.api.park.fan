@@ -14,7 +14,7 @@ Three interceptors, innermost first. The global one stays out of a response that
 | Interceptor | Sends | Where |
 | --- | --- | --- |
 | `HttpCacheInterceptor(maxAge, sMaxAge?, isDegraded?)` (`src/common/interceptors/cache.interceptor.ts`) | `public, max-age=<maxAge>, s-maxage=<sMaxAge ?? maxAge>, stale-while-revalidate=<maxAge ≤ 120 ? maxAge : 2 × maxAge>`; `CDN-Cache-Control` only when `sMaxAge` differs (no route uses the split today); `no-store` when `isDegraded(body)` is true | per route, on most public reads; each TTL is on the route's contract page under [`docs/frontend/`](../frontend/README.md) |
-| `NoCdnCacheInterceptor` (`no-cdn-cache.interceptor.ts`) | `private, no-store, no-cache, must-revalidate` and `Pragma: no-cache` | answers that depend on the caller: `/v1/favorites`, `/v1/discovery/nearby`, `POST /v1/page-views`, and the `trips`, `push`, `push/ride-alerts` and `push/show-follows` controllers |
+| `NoCdnCacheInterceptor` (`no-cdn-cache.interceptor.ts`) | `private, no-store, no-cache, must-revalidate` and `Pragma: no-cache` | answers that depend on the caller: `/v1/favorites`, `/v1/discovery/nearby`, `POST /v1/page-views`, the `trips`, `push`, `push/ride-alerts` and `push/show-follows` controllers, and `/v1/mcp` |
 | `CacheControlInterceptor` (`cache-control.interceptor.ts`, global in `src/main.ts`) | by path, see below | every other response |
 
 The global policy by path, first match wins:
@@ -72,7 +72,8 @@ and Cloudflare absorbs most reads before they reach the origin.
 - **Skipped:** `@SkipThrottle()` (the health controller) and every request with a valid bypass key,
   which park.fan sends on every server-side call. The `@Throttle()` overrides on the admin login
   (10 a minute), `change-password` (5), `totp/begin` (10) and `totp/disable` (5) are skipped for it too,
-  so they only bind callers that do not go through the frontend.
+  so they only bind callers that do not go through the frontend. The OAuth endpoints of the admin MCP (`register` 10,
+  `authorize` 30, `token` 60, `revoke` 30) are such callers: MCP clients call them directly.
 - **Read the variables lazily.** `ConfigModule` loads `.env` after the imports run; a module-level
   `process.env` read falls back to its default silently. This is why the config file exports functions.
 
@@ -125,7 +126,8 @@ Redis itself, on every request:
 | `PushFollowWriteRateLimitService` (through `PushFollowAccessGuard.writeGuard`) | `getRateLimitIp` | 60 an hour each for `subscription`, `ride-alert`, `show-follow` | [push](../frontend/push.md) |
 | the caps in `PageViewsService` | `addressBucket(getRateLimitIp)` (an IPv6 address counts as its /64) and the User-Agent | 3 views per reader and page, 500 per address, per UTC day | [page views](../frontend/page-views.md) |
 | `AdminLoginRateLimitService` | `clientIp` and the account | failures per 15 min: 25 per address, 10 per account, 10 per account and action | [admin authentication](../admin/authentication.md) |
+| `OAuthClientService.register` | `addressBucket(getRateLimitIp)` | 10 client registrations an hour, and none while 500 sit unused | [admin MCP](../admin/mcp.md#security) |
 
-All four let a request through when Redis fails. Without a readable address the first three do not
-count at all and the admin login counts the account only: a limiter that refuses everybody because a
+All five let a request through when Redis fails. Without a readable address the trip, push, page-view
+and registration limits do not count at all and the admin login counts the account only: a limiter that refuses everybody because a
 header went missing is worse than one that briefly counts nothing.
