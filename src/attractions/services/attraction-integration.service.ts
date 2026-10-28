@@ -107,21 +107,25 @@ export class AttractionIntegrationService {
    *
    * @param attraction - Attraction entity
    * @param days - Number of days of history to include (default: 30)
+   * @param countHit - False for a read that is not a visitor's, so the
+   *   popularity ranking reflects real demand (the admin MCP)
    * @returns Complete attraction DTO with all integrated live data
    */
   async buildIntegratedResponse(
     attraction: Attraction,
     days: number = 30,
+    countHit: boolean = true,
   ): Promise<AttractionResponseDto> {
     // Try cache first
     const cacheKey = CacheKeys.attractionIntegrated(attraction.id, days);
 
-    // Track popularity hit (background)
-    this.popularityService
-      .recordAttractionHit(attraction.id)
-      .catch((err) =>
-        this.logger.debug(`Failed to record attraction hit: ${err}`),
-      );
+    if (countHit) {
+      this.popularityService
+        .recordAttractionHit(attraction.id)
+        .catch((err) =>
+          this.logger.debug(`Failed to record attraction hit: ${err}`),
+        );
+    }
 
     const cached = await this.redis.get(cacheKey);
     const cachedDto = safeJsonParse<AttractionResponseDto>(cached);

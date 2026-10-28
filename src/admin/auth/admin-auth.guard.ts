@@ -7,9 +7,9 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { timingSafeEqual } from "crypto";
 import { isIP } from "net";
 import { AdminSessionStore } from "./admin-session.store";
+import { constantTimeEquals } from "./token-hash.util";
 import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
 import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
 import {
@@ -17,7 +17,9 @@ import {
   ADMIN_LEGACY_ALLOWED_KEY,
   ADMIN_MIN_ROLE_KEY,
   ADMIN_PUBLIC_KEY,
+  ADMIN_TOKEN_ONLY_KEY,
 } from "./admin-auth.decorators";
+import { AdminApiTokenStore } from "./admin-api-token.store";
 import {
   getLegacyAdminPass,
   getLegacyAdminPassRole,
@@ -47,6 +49,11 @@ import {
  *     Compared in constant time, logged on every use, granted a configurable
  *     role, and switchable off with one environment variable.
  *
+ * An endpoint marked `@AdminTokenOnly()` (the MCP server) has a third and
+ * accepts nothing else: `Authorization: Bearer pfa_…|pfo_…`, a personal access
+ * token or an OAuth access token, looked up in Postgres with its account and
+ * capped at the token's role.
+ *
  * Cloudflare's rule stays where it is. This is the second lock, on the inside
  * of the same door.
  */
@@ -58,6 +65,7 @@ export class AdminAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly sessions: AdminSessionStore,
+    private readonly apiTokens: AdminApiTokenStore,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -68,8 +76,14 @@ export class AdminAuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<RequestWithAdmin>();
-    const principal =
-      (await this.fromSession(request)) ?? this.fromLegacyPass(request);
+    const tokenOnly =
+      this.reflector.getAllAndOverride<boolean>(
+        ADMIN_TOKEN_ONLY_KEY,
+        targets,
+      ) === true;
+    const principal = tokenOnly
+      ? await this.fromApiToken(request)
+      : ((await this.fromSession(request)) ?? this.fromLegacyPass(request));
 
     if (!principal) {
       throw new UnauthorizedException(
@@ -121,14 +135,18 @@ export class AdminAuthGuard implements CanActivate {
     return true;
   }
 
+  private async fromApiToken(
+    request: RequestWithAdmin,
+  ): Promise<AdminPrincipal | null> {
+    const token = bearerToken(request);
+    if (!token) return null;
+    return this.apiTokens.resolvePrincipal(token, clientIp(request));
+  }
+
   private async fromSession(
     request: RequestWithAdmin,
   ): Promise<AdminPrincipal | null> {
-    const header = request.headers?.authorization;
-    const raw = Array.isArray(header) ? header[0] : header;
-    if (!raw || !raw.toLowerCase().startsWith("bearer ")) return null;
-
-    const token = raw.slice(7).trim();
+    const token = bearerToken(request);
     if (!token) return null;
 
     const session = await this.sessions.resolve(token);
@@ -190,6 +208,15 @@ export class AdminAuthGuard implements CanActivate {
   }
 }
 
+/** The value of `Authorization: Bearer …`, or null. */
+export function bearerToken(request: RequestWithAdmin): string | null {
+  const header = request.headers?.authorization;
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw || !raw.toLowerCase().startsWith("bearer ")) return null;
+  const token = raw.slice(7).trim();
+  return token || null;
+}
+
 /**
  * Whether this request came through our own frontend.
  *
@@ -214,22 +241,6 @@ function isFromTrustedProxy(request: RequestWithAdmin): boolean {
       typeof value === "string" &&
       keys.some((key) => constantTimeEquals(value, key)),
   );
-}
-
-/** Length-safe constant-time comparison. */
-function constantTimeEquals(a: string, b: string): boolean {
-  if (!a || !b) return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  // timingSafeEqual throws on a length mismatch, which would itself leak the
-  // length. Compare a fixed-size digest-shaped pair instead: pad both to the
-  // longer length so the comparison always runs.
-  const length = Math.max(bufA.length, bufB.length);
-  const paddedA = Buffer.alloc(length);
-  const paddedB = Buffer.alloc(length);
-  bufA.copy(paddedA);
-  bufB.copy(paddedB);
-  return timingSafeEqual(paddedA, paddedB) && bufA.length === bufB.length;
 }
 
 /**

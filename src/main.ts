@@ -13,7 +13,7 @@ import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
-import { buildCorsOptions } from "./common/cors/cors.config";
+import { buildCorsDelegate } from "./common/cors/cors.config";
 import {
   GLOBAL_PREFIX,
   GLOBAL_PREFIX_OPTIONS,
@@ -110,7 +110,7 @@ async function bootstrap(): Promise<void> {
 
   // Cloudflare adds no CORS headers; the allowed origins live here. See
   // docs/deployment/cors.md.
-  app.enableCors(buildCorsOptions(process.env.NODE_ENV === "production"));
+  app.enableCors(buildCorsDelegate(process.env.NODE_ENV === "production"));
 
   // API versioning prefix (exclude root controller — docs page and robots.txt,
   // both of which must stay at the host root to be found)

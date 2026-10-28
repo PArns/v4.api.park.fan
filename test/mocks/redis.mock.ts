@@ -57,6 +57,12 @@ export class RedisMock {
     return "OK";
   }
 
+  async getdel(key: string): Promise<string | null> {
+    const value = await this.get(key);
+    this.strings.delete(key);
+    return value;
+  }
+
   async del(...keys: string[]): Promise<number> {
     let removed = 0;
     for (const key of keys) {

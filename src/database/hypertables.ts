@@ -1,3 +1,5 @@
+import { SITE_CHUNK_DAYS } from "../site-analytics/site-analytics.constants";
+
 /**
  * The hypertables this schema has, as data.
  *
@@ -40,11 +42,12 @@ export interface HypertableSpec {
   /** What the table holds — shown in the boot log. */
   readonly description: string;
   /**
-   * `timescaledb.compress_segmentby`. Only `wait_time_predictions` has one in
-   * production, and the absence elsewhere is load-bearing rather than a gap:
-   * segmenting by a column a merge REWRITES lets TimescaleDB decompress that
-   * one segment instead of every batch the rows sit in, which is an easier case
-   * than the one production runs.
+   * `timescaledb.compress_segmentby`. Among the tables a merge writes, only
+   * `wait_time_predictions` has one, and the absence on the others is
+   * load-bearing rather than a gap: segmenting by a column a merge REWRITES
+   * lets TimescaleDB decompress that one segment instead of every batch the
+   * rows sit in, which is an easier case than the one production runs. The
+   * site statistic's tables have one because no merge writes them.
    */
   readonly segmentBy?: string;
   /** `timescaledb.compress_orderby`, column plus direction. */
@@ -103,7 +106,83 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     segmentBy: "attractionId",
     orderBy: "predictedTime ASC",
   },
+  // The site statistic (PAR-1151): insert-only, one row per dimension
+  // combination and flush window, bucketed by the UTC hour. Week chunks, so a
+  // chunk is compressed a week after it closes and dropped whole, after its
+  // retention (`HYPERTABLE_RETENTION_DAYS`), by the nightly `site-analytics` /
+  // `drop-old-chunks` job, never deleted from.
+  {
+    table: "site_pageviews",
+    timeColumn: "bucket",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
+    compressAfterDays: 7,
+    description: "Site statistic: page views",
+    segmentBy: "locale",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_events",
+    timeColumn: "bucket",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
+    compressAfterDays: 7,
+    description: "Site statistic: events",
+    segmentBy: "name",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_analytics_flushes",
+    timeColumn: "bucket",
+    chunkInterval: "30 days",
+    compressAfterDays: 30,
+    description: "Site statistic: written flush windows",
+  },
+  // The reports' daily level (PAR-1157): the two tables above summed to the
+  // UTC day per cuboid by the nightly `rollup-days` job, one segment per
+  // cuboid so a report reads only the one it needs.
+  {
+    table: "site_pageviews_daily",
+    timeColumn: "bucket",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
+    compressAfterDays: 7,
+    description: "Site statistic: page views by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_events_daily",
+    timeColumn: "bucket",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
+    compressAfterDays: 7,
+    description: "Site statistic: events by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
+  // Google Search Console (PAR-1160): insert-only, a batch per import of a
+  // day, the reports read the newest batch of each day. Month chunks,
+  // compressed 35 days after the day (a day is imported again for the first
+  // few days) and dropped whole past 500 days by the nightly
+  // `search-console` / `drop-old-chunks` job. One compressed segment per
+  // batch, so the reports' `batch_id = ANY(…)` skips the batches that a
+  // re-import replaced.
+  {
+    table: "search_console_rows",
+    timeColumn: "day",
+    chunkInterval: "30 days",
+    compressAfterDays: 35,
+    description: "Search Console: queries and pages by day",
+    segmentBy: "batch_id",
+    orderBy: "page ASC",
+  },
 ];
+
+/** The site statistic's hypertables, whose chunks its nightly job drops. */
+export const SITE_ANALYTICS_HYPERTABLES = [
+  "site_pageviews",
+  "site_events",
+  "site_analytics_flushes",
+  "site_pageviews_daily",
+  "site_events_daily",
+] as const;
 
 /**
  * `wait_time_predictions` chunks whose whole range is older than this many days

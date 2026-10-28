@@ -31,7 +31,16 @@ and nothing outside `vercel.app`.
 
 A write with a JSON body — park.fan's trip and push calls — is preceded by an
 `OPTIONS` preflight. `maxAge: 7200` lets the browser keep that answer for two
-hours, which is Chrome's cap, so one visit pays for it once.
+hours, which is Chrome's cap, so one visit pays for it once. The site
+statistic's beacon (`POST /v1/analytics/collect`) sends its JSON as
+`text/plain` through `navigator.sendBeacon`, a simple request without a
+preflight; it reads no answer, so it needs no CORS header either. It does
+need `Cross-Origin-Resource-Policy: cross-origin` on its answer, which the
+collect route and the deprecated `POST /v1/page-views` send in place of
+helmet's `same-origin`: a no-cors request whose answer that policy refuses
+counts, and still shows as a blocked request in the browser. The origin check
+that keeps previews and scripts out of its counts is the collector's own
+([site statistic](../frontend/site-analytics.md#privacy)), not CORS.
 
 ## An origin that is not on the list gets a normal answer
 
@@ -53,6 +62,17 @@ that is served it fails. Endpoints answering `private, no-store`
 (`/v1/discovery/nearby`, `/v1/favorites`) bypass the cache and are safe. A
 cached endpoint needs an origin-independent answer, set at Cloudflare, before a
 browser may call it directly.
+
+## The admin MCP's public surface
+
+`buildCorsDelegate` (what `src/main.ts` passes) answers `/v1/mcp`, `/v1/oauth/register`,
+`/v1/oauth/token`, `/v1/oauth/revoke` and `/.well-known/oauth-*` with
+`Access-Control-Allow-Origin: *` and no credentials, whatever `CORS_ORIGINS` says, and exposes
+`WWW-Authenticate`. A browser-based MCP client (the MCP Inspector) calls them from its own origin,
+and none of them reads a cookie: the credential is a bearer token or a PKCE verifier the caller
+attaches itself. `*` is also origin-independent, so the cached discovery documents do not run into
+the `Vary` problem above. `/v1/oauth/authorize` is a navigation and the consent endpoints go
+through park.fan's proxy, so they keep the list. See [admin MCP](../admin/mcp.md).
 
 ## Checking it
 

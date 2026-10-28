@@ -34,14 +34,17 @@ async function build(overrides: Record<string, unknown> = {}) {
     findOne: jest.fn(async (): Promise<unknown> => user),
     update: jest.fn(async (): Promise<unknown> => ({ affected: 1 })),
     count: jest.fn(async (): Promise<number> => 1),
+    query: jest.fn(async (): Promise<unknown> => [[], 1]),
   };
 
   const sessions = new AdminSessionStore(new RedisMock() as never);
   const limiter = new AdminLoginRateLimitService(new RedisMock() as never);
+  const apiTokens = { revokeAllForUser: jest.fn(async () => 0) };
   const service = new AdminAuthService(
     users as never,
     sessions,
     limiter as never,
+    apiTokens as never,
   );
 
   // The session the change is made from — the one that survives.
@@ -56,7 +59,7 @@ async function build(overrides: Record<string, unknown> = {}) {
     mustEnrolTotp: true,
   });
 
-  return { service, sessions, users, token };
+  return { service, sessions, users, token, apiTokens };
 }
 
 describe("changeOwnPassword", () => {
@@ -136,6 +139,25 @@ describe("changeOwnPassword", () => {
     expect(await sessions.resolve(other.token)).toBeNull();
     // Including the one it was made from: the replacement is a new token.
     expect(await sessions.resolve(token)).toBeNull();
+  });
+
+  it("revokes the account's API tokens with its sessions", async () => {
+    const { service, token, apiTokens, users } = await build();
+    await service.changeOwnPassword(
+      "user-1",
+      OLD_PASSWORD,
+      NEW_PASSWORD,
+      token,
+    );
+    expect(apiTokens.revokeAllForUser).toHaveBeenCalledWith(
+      "user-1",
+      "password-change",
+    );
+    // The cut-off that refuses tokens and codes minted meanwhile.
+    expect(users.query).toHaveBeenCalledWith(
+      expect.stringContaining("tokens_revoked_at = clock_timestamp()"),
+      ["user-1"],
+    );
   });
 
   it("reports the new session's own expiry, not the idle window", async () => {

@@ -30,7 +30,11 @@ import {
   AdminPublic,
   CurrentAdmin,
 } from "./admin-auth.decorators";
-import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
+import {
+  requireAccount,
+  type AdminPrincipal,
+  type RequestWithAdmin,
+} from "./admin-principal";
 import {
   AdminChangePasswordDto,
   AdminCreateUserDto,
@@ -130,8 +134,11 @@ export class AdminAuthController {
         // body from `message` and `error`. Now that it carries the rest of a
         // thrown body (PAR-146), a field withheld from a client has to be
         // withheld here, where the decision is.
+        // No address: this is the one line a stranger's request writes, and
+        // the policy says the server logs no IP addresses
+        // (docs/rules/no-address-in-logs.md).
         this.logger.warn(
-          `Turnstile refused an admin login from ${clientIp(request) ?? "an unknown address"}: ${verdict.reason ?? "no reason given"}`,
+          `Turnstile refused an admin login: ${verdict.reason ?? "no reason given"}`,
         );
         throw new ForbiddenException({
           error: "turnstile-failed",
@@ -309,10 +316,17 @@ export class AdminAuthController {
 
   @Post("sessions/revoke-all")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Sign out everywhere, including here" })
+  @ApiOperation({
+    summary: "Sign out everywhere, including here",
+    description:
+      "Ends every session of the account and revokes its API tokens and OAuth grants.",
+  })
   async revokeAll(@CurrentAdmin() admin: AdminPrincipal) {
     if (!admin.userId) return { revoked: 0 };
-    const revoked = await this.sessions.destroyAllForUser(admin.userId);
+    const revoked = await this.auth.signOutEverywhere(
+      admin.userId,
+      "sessions-reset",
+    );
     await this.audit.record({
       actor: admin,
       action: "auth.sessions.revoke-all",
@@ -342,9 +356,7 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpBeginDto,
   ) {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    return this.auth.beginTotpEnrolment(admin.userId, body.password);
+    return this.auth.beginTotpEnrolment(requireAccount(admin), body.password);
   }
 
   @Post("totp/confirm")
@@ -355,9 +367,8 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpConfirmDto,
   ): Promise<void> {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    await this.auth.confirmTotpEnrolment(admin.userId, body.code);
+    const userId = requireAccount(admin);
+    await this.auth.confirmTotpEnrolment(userId, body.code);
     await this.audit.record({
       actor: admin,
       action: "auth.totp.enable",
@@ -378,9 +389,8 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpDisableDto,
   ): Promise<void> {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    await this.auth.disableTotp(admin.userId, body.password, body.code);
+    const userId = requireAccount(admin);
+    await this.auth.disableTotp(userId, body.password, body.code);
     await this.audit.record({
       actor: admin,
       action: "auth.totp.disable",

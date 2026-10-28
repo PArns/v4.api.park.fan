@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 import {
   IsBoolean,
   IsEmail,
@@ -10,6 +10,7 @@ import {
   MinLength,
 } from "class-validator";
 import { ADMIN_ROLES, type AdminRole } from "../entities/admin-user.entity";
+import { PAT_EXPIRY_DAYS } from "../admin-api-token.constants";
 
 export class AdminLoginDto {
   @ApiProperty({ example: "you@park.fan" })
@@ -146,3 +147,54 @@ export class AdminTotpDisableDto {
   @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
   code: string;
 }
+
+export class AdminCreateApiTokenDto {
+  @ApiProperty({
+    description: "What the token is for, shown in the token list.",
+    example: "Laptop",
+  })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name: string;
+
+  @ApiPropertyOptional({
+    description: "Days until it expires; null or absent never expires.",
+    enum: PAT_EXPIRY_DAYS,
+    nullable: true,
+    example: 90,
+  })
+  @IsOptional()
+  @IsIn(PAT_EXPIRY_DAYS)
+  expiresInDays?: (typeof PAT_EXPIRY_DAYS)[number] | null;
+
+  @ApiProperty({
+    description:
+      "The account password, asked again: a session alone does not mint a " +
+      "credential that outlives it. Wrong → 401 `invalid-password`.",
+  })
+  @IsString()
+  @MaxLength(256)
+  password: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Six-digit TOTP code, required when the account has two-factor on " +
+      "(401 `totp-required` without it, `invalid-totp` when it does not " +
+      "match or was already used).",
+    example: "492013",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
+  totpCode?: string;
+}
+
+/**
+ * The identity proof the consent page sends with an approval: the password
+ * and, with two-factor on, a code, as when a personal access token is made.
+ */
+export class AdminOAuthApproveDto extends PickType(AdminCreateApiTokenDto, [
+  "password",
+  "totpCode",
+] as const) {}

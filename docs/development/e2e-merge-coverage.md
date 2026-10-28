@@ -46,9 +46,13 @@ flag; an entity table never gets it (a missing one is a bug, and skipping it wou
 
 ## Hypertables come from one list
 
-Production has seven compressed hypertables, and the merge writes to all of them: `queue_data`,
+Production has ten compressed hypertables. The merge writes to seven of them: `queue_data`,
 `forecast_data`, `weather_data`, `show_live_data`, `restaurant_live_data`, `queue_data_aggregates`,
-`wait_time_predictions`. `synchronize` makes none of them a hypertable. They are `HYPERTABLES` in
+`wait_time_predictions`. The site statistic's three (`site_pageviews`, `site_events`,
+`site_analytics_flushes`) are insert-only: a merge records `loser → winner` in the plain table
+`site_entity_merges` and the reports resolve it when they read
+([site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples)).
+`synchronize` makes none of them a hypertable. They are `HYPERTABLES` in
 `src/database/hypertables.ts` (table, partitioning column, `chunk_time_interval`, compression settings),
 which `TimescaleInitService.initializeHypertables` applies in production and `global-setup.ts` imports.
 Before that list existed the test setup converted one, then three, tables by hand, so cases about
@@ -56,9 +60,11 @@ compressed rows were measuring plain tables. Adding a hypertable is one entry th
 
 Two consequences that are easy to miss:
 
-1. **`TimescaleInitService.enableCompression` is a silent no-op on a plain table**, and the first suite
-   to boot decides the compression state later ones inherit. A test that toggles compression reads the
-   current state and restores only what it changed (`park-merge.e2e-spec.ts` does); a hard
+1. **`TimescaleInitService.enableCompression` is a silent no-op on a plain table.** `global-setup.ts`
+   runs the service's setup once after the hypertables exist, so compression and its policies are on
+   before the first suite boots; left to that boot, its `ALTER TABLE … SET (timescaledb.compress)` ran
+   beside the first test's `TRUNCATE … CASCADE` and deadlocked it. A test that toggles compression
+   reads the current state and restores only what it changed (`park-merge.e2e-spec.ts` does); a hard
    `SET (timescaledb.compress = false)` disables it for every later file and orphans the policy.
 2. **`create_hypertable` failures only warn**, so a table can quietly stay plain.
    `park-merge.e2e-spec.ts` asserts every `HYPERTABLES` entry against

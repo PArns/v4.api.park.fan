@@ -38,7 +38,7 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 | 🔍 **Search** | `GET /search?q=…` | Parks and attractions by name or place |
 | 📈 **Analytics** | `GET /analytics/realtime` · `/geo-live` · `/ticker` · `/best-times` | Platform-wide live figures and best times to visit |
 | 📖 **Glossary** | `GET /glossary/terms/counts` · `/glossary/terms/{termId}/attractions` | Rides that feature a glossary term |
-| ⭐ **Personal** | `/favorites` · `/trips` · `/push` · `/push/ride-alerts` · `/push/show-follows` · `/page-views` | Favorites, stored day plans, web push, page-view counts |
+| ⭐ **Personal** | `/favorites` · `/trips` · `/push` · `/push/ride-alerts` · `/push/show-follows` · `/page-views` · `/analytics/collect` | Favorites, stored day plans, web push, page-view counts, the site's own cookieless statistic |
 | 🩺 **Health** | `GET /health` · `/health/ready` · `/health/ping` · `/ml/health` | Liveness, readiness, ML service state |
 
 ### Conventions worth knowing

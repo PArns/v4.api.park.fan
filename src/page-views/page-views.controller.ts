@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Post,
@@ -20,6 +21,10 @@ import { Request } from "express";
 import { getRateLimitIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
+import {
+  BEACON_RESOURCE_POLICY,
+  isFromSite,
+} from "../site-analytics/from-site.util";
 import { PageViewsService } from "./page-views.service";
 import {
   AdminPageViewsQueryDto,
@@ -30,7 +35,8 @@ import {
 } from "./dto/page-view.dto";
 
 /**
- * The public half: the beacon's write and the rankings the frontend renders.
+ * The public half: the rankings the frontend renders, and the old beacon's
+ * write, now an alias that records a `page_read` in the site statistic.
  *
  * The browser sends the write straight here, never through the frontend's
  * relay, so its own address and User-Agent are the request's. The write
@@ -38,7 +44,8 @@ import {
  * counted view from a refused one could probe the cap and the bot rule, and
  * nothing the beacon does depends on the answer. A browser that sends Do Not
  * Track or Global Privacy Control is not counted even if a page's beacon
- * failed to ask first.
+ * failed to ask first, and in production neither is a request from anywhere
+ * but park.fan, as on the collect endpoint.
  */
 @ApiTags("page-views")
 @Controller("page-views")
@@ -47,14 +54,18 @@ export class PageViewsController {
 
   @Post()
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Header("Cross-Origin-Resource-Policy", BEACON_RESOURCE_POLICY)
   @UseInterceptors(new NoCdnCacheInterceptor())
   @ApiOperation({
-    summary: "Count one page view",
+    deprecated: true,
+    summary:
+      "Count one page view (deprecated: send `page_read` to /v1/analytics/collect)",
     description:
-      "Sent by the frontend once a reader has stayed on a post, park or ride " +
-      "page for a few seconds. Bots, `DNT: 1` and `Sec-GPC: 1` are not " +
+      "Kept for one release while the frontend moves its beacon to the " +
+      "site statistic; records the same `page_read` event. Bots, `DNT: 1`, " +
+      "`Sec-GPC: 1` and, in production, other origins than park.fan are not " +
       "counted; one reader counts a page at most three times a day, one " +
-      "address 500 views a day. Always 204.",
+      "address ten times a day and 200 reads in all. Always 204.",
   })
   @ApiResponse({ status: 204 })
   @ApiResponse({
@@ -68,6 +79,7 @@ export class PageViewsController {
     @Req() request: Request,
   ): Promise<void> {
     if (request.get("dnt") === "1" || request.get("sec-gpc") === "1") return;
+    if (!isFromSite(request, process.env.NODE_ENV === "production")) return;
     await this.pageViews.record({
       kind: body.kind,
       key: body.key,

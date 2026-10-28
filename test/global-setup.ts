@@ -8,6 +8,7 @@ import * as dotenv from "dotenv";
 import * as path from "path";
 import { createMlForecastTables } from "./helpers/ml-forecast-tables";
 import { HYPERTABLES } from "../src/database/hypertables";
+import { TimescaleInitService } from "../src/database/timescale-init.service";
 
 /**
  * One TimescaleDB and one Redis for the whole E2E run.
@@ -176,8 +177,8 @@ async function createSchema(database: string): Promise<void> {
     //
     // Second effect, easy to miss: every suite that boots `AppModule` runs
     // `TimescaleInitService`, whose `enableCompression` is a silent no-op on a
-    // non-hypertable. It takes hold the moment a table becomes one, so the
-    // first suite to boot decides the compression state the later ones inherit.
+    // non-hypertable. It takes hold the moment a table becomes one; it is run
+    // once more below, before any suite, for the reason given there.
     //
     // Unlike `TimescaleInitService.createHypertable`, this does not rebuild the
     // primary key around the time column — it does not have to, because every
@@ -213,6 +214,14 @@ async function createSchema(database: string): Promise<void> {
         );
       }
     }
+
+    // Compression, its policies and the truncate behaviour, as the first
+    // `AppModule` boot would set them. Left to that boot, its ALTER TABLE …
+    // SET (timescaledb.compress) statements ran beside the first test's
+    // TRUNCATE … CASCADE and the two deadlocked, failing whichever test ran
+    // first. Done here, every boot finds them in place and only reads the
+    // catalog; the state the suites start from is the same.
+    await new TimescaleInitService(dataSource)["initializeHypertables"]();
 
     // The two merge tables no entity owns, so `synchronize` above never made
     // them. Unguarded on purpose, unlike the extensions and the hypertable: a

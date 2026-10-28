@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,8 +12,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, LessThan, Or, Repository } from "typeorm";
 import { randomBytes } from "crypto";
-import { isIP } from "net";
-import { expandIpv6 } from "../../common/utils/request.util";
+import { truncateIp } from "../../common/utils/request.util";
 import {
   ADMIN_ROLES,
   AdminRole,
@@ -26,6 +27,7 @@ import {
 import { generateTotpSecret, totpStep, totpUri, verifyTotp } from "./totp.util";
 import { AdminSessionStore, type AdminSession } from "./admin-session.store";
 import { AdminLoginRateLimitService } from "./admin-login-rate-limit.service";
+import { AdminApiTokenStore } from "./admin-api-token.store";
 import {
   getBootstrapAdmin,
   getLoginLockoutMinutes,
@@ -57,26 +59,6 @@ export interface PublicAdminUser {
   totpEnabled: boolean;
   lastLoginAt: string | null;
   createdAt: string;
-}
-
-/**
- * Truncate an address before it is stored.
- *
- * The useful question an audit row answers is "did this session come from
- * somewhere new", not "where was this person". A /24 or /48 answers that and
- * stops the log from being a movement history of the three people who use it.
- */
-export function truncateIp(ip: string | null | undefined): string | null {
-  if (!ip) return null;
-  const clean = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-  if (isIP(clean) === 4) {
-    const parts = clean.split(".");
-    return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-  }
-  if (isIP(clean) === 6) {
-    return `${expandIpv6(clean).slice(0, 3).join(":")}::/48`;
-  }
-  return null;
 }
 
 export function toPublicUser(user: AdminUser): PublicAdminUser {
@@ -120,6 +102,7 @@ export class AdminAuthService implements OnModuleInit {
     private readonly users: Repository<AdminUser>,
     private readonly sessions: AdminSessionStore,
     private readonly loginLimiter: AdminLoginRateLimitService,
+    private readonly apiTokens: AdminApiTokenStore,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -404,6 +387,24 @@ export class AdminAuthService implements OnModuleInit {
     await this.sessions.destroy(token);
   }
 
+  /**
+   * End every way into this account: its sessions, its personal access tokens
+   * and its OAuth grants. Whatever ends the sessions ends the tokens too, so
+   * a deactivation or a password reset cannot be outlived by an MCP client.
+   * Returns the number of sessions ended.
+   */
+  async signOutEverywhere(userId: string, reason: string): Promise<number> {
+    // First, so a token or code minted while the rest runs is already older
+    // than the cut-off (`AdminApiTokenStore` checks it at issue and at use).
+    await this.users.query(
+      `UPDATE admin_users SET tokens_revoked_at = clock_timestamp() WHERE id = $1::uuid`,
+      [userId],
+    );
+    const sessions = await this.sessions.destroyAllForUser(userId);
+    await this.apiTokens.revokeAllForUser(userId, reason);
+    return sessions;
+  }
+
   // ── accounts ──────────────────────────────────────────────────────────────
 
   async findById(id: string): Promise<AdminUser | null> {
@@ -511,7 +512,7 @@ export class AdminAuthService implements OnModuleInit {
             .then(() => Object.assign(user, changes));
 
     if (patch.isActive === false) {
-      await this.sessions.destroyAllForUser(id);
+      await this.signOutEverywhere(id, "deactivated");
     } else {
       await this.sessions.patchUserSessions(id, {
         role: saved.role,
@@ -589,7 +590,7 @@ export class AdminAuthService implements OnModuleInit {
     );
 
     const kept = keepToken ? await this.sessions.resolve(keepToken) : null;
-    await this.sessions.destroyAllForUser(userId);
+    await this.signOutEverywhere(userId, "password-change");
     if (!kept) return { reissuedToken: null, expiresAt: null };
 
     // Re-issuing rather than sparing the old token: a password change is a
@@ -649,7 +650,7 @@ export class AdminAuthService implements OnModuleInit {
         lockedUntil: null,
       },
     );
-    await this.sessions.destroyAllForUser(id);
+    await this.signOutEverywhere(id, "password-reset");
     return { mustChangePassword: true };
   }
 
@@ -672,7 +673,7 @@ export class AdminAuthService implements OnModuleInit {
       { id },
       { totpEnabled: false, totpSecret: null, totpLastStep: null },
     );
-    await this.sessions.destroyAllForUser(id);
+    await this.signOutEverywhere(id, "totp-reset");
   }
 
   // ── TOTP enrolment ────────────────────────────────────────────────────────
@@ -803,6 +804,94 @@ export class AdminAuthService implements OnModuleInit {
       { id: userId },
       { totpEnabled: false, totpSecret: null, totpLastStep: null },
     );
+  }
+
+  /**
+   * Ask a signed-in account to prove itself again before something that
+   * outlives the session: the password, and with two-factor on a code too.
+   *
+   * Used for a personal access token, which a stolen session could otherwise
+   * mint and keep for a year after the session ended. The refusals are three
+   * answers a form can act on (`invalid-password`, `totp-required`,
+   * `invalid-totp`, all 401) and a 429 from the action limiter, which counts
+   * only attempts that were wrong: a missing code is the form asking again,
+   * not a guess. The code is single-use like at the login, claimed with a
+   * conditional write so two parallel requests cannot spend one step twice;
+   * so a code already used to sign in is refused until the next step.
+   */
+  async confirmIdentity(
+    userId: string,
+    password: string,
+    totpCode: string | undefined,
+    action: string,
+  ): Promise<void> {
+    const limit = await this.loginLimiter.checkAction(action, userId);
+    if (!limit.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          error: "rate-limited",
+          message: `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+          retryAfterSeconds: limit.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        passwordHash: true,
+        totpEnabled: true,
+        totpSecret: true,
+        totpLastStep: true,
+      },
+    });
+    if (!user) throw new NotFoundException("No such account");
+
+    if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure(action, userId);
+      throw new UnauthorizedException({
+        error: "invalid-password",
+        message: "Password is incorrect",
+      });
+    }
+
+    if (user.totpEnabled) {
+      if (!totpCode) {
+        throw new UnauthorizedException({
+          error: "totp-required",
+          message: "Enter a current two-factor code",
+        });
+      }
+      const check = verifyTotp(
+        user.totpSecret ?? "",
+        totpCode,
+        user.totpLastStep ? Number(user.totpLastStep) : null,
+      );
+      const claimed =
+        check.valid &&
+        ((
+          await this.users.update(
+            {
+              id: user.id,
+              totpLastStep: Or(IsNull(), LessThan(String(check.step))),
+            },
+            { totpLastStep: String(check.step) },
+          )
+        ).affected ?? 0) > 0;
+      if (!claimed) {
+        await this.loginLimiter.recordActionFailure(action, userId);
+        throw new UnauthorizedException({
+          error: "invalid-totp",
+          message:
+            "That code did not match or was already used; wait for the next one",
+        });
+      }
+    }
+
+    await this.loginLimiter.recordActionSuccess(action, userId);
   }
 }
 

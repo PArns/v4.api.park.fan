@@ -7,6 +7,7 @@ import * as os from "os";
 import * as fs from "fs";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { readSiteAnalyticsBacklog } from "../site-analytics/site-analytics-storage.service";
 
 // Read lazily: ConfigModule only assigns a .env file into process.env at
 // runtime, after this module's imports are evaluated. The Docker defaults are
@@ -41,6 +42,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
+      siteAnalytics,
       catboost,
       tft,
       pcnComparison,
@@ -51,6 +53,11 @@ export class SystemHealthService {
       this.safe("postgres", () => this.postgres()),
       this.safe("redis", () => this.redisStats()),
       this.safe("freshness", () => this.freshness()),
+      // The site statistic's flush backlog and today's drops: a stalled
+      // flusher or a flood shows here before it shows in a report.
+      this.safe("siteAnalytics", () =>
+        readSiteAnalyticsBacklog(this.redis, this.dataSource),
+      ),
       this.safe("catboost", () => this.catboost()),
       this.safe("tft", () => this.tft()),
       this.safe("pcnComparison", () => this.intradayComparison()),
@@ -63,6 +70,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
+      siteAnalytics,
       ml: {
         catboost,
         tft,

@@ -92,6 +92,25 @@ describe("QueueSchedulerService — repeatable entry whose next run lost its nam
     );
   });
 
+  it("replaces an entry that has no timezone when UTC is expected", async () => {
+    const { queue, raw } = fakeQueue("calculate-percentiles");
+    const check = (
+      service as unknown as {
+        hasRepeatableJob(
+          q: Queue,
+          id: string,
+          cron: string,
+          tz: string,
+        ): Promise<boolean>;
+      }
+    ).hasRepeatableJob(queue, "percentiles-cron", "0 2 * * *", "UTC");
+
+    await expect(check).resolves.toBe(false);
+    expect(raw.removeRepeatableByKey).toHaveBeenCalledWith(
+      PERCENTILES_ENTRY.key,
+    );
+  });
+
   it("still re-registers an overdue entry without looking at the job", async () => {
     jest
       .spyOn(Date, "now")

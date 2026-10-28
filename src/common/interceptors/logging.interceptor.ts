@@ -9,6 +9,29 @@ import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
 import { redactUrl } from "../utils/redact-url.util";
+import { truncateIp } from "../utils/request.util";
+
+/**
+ * The one surface whose log lines name where a request came from: the admin,
+ * which only accounts reach. Every other route is a visitor's or a client's,
+ * and the privacy policy says the server logs no IP addresses, so its lines
+ * carry none. Even the admin's carry a /24 (IPv4) or /48 (IPv6), never the
+ * address, which is also all `admin_audit_log.actor_ip` keeps
+ * (docs/rules/no-address-in-logs.md).
+ */
+const OPERATOR_PATH = /^\/v1\/admin(?:[/?#]|$)/i;
+
+/**
+ * What a request's log line may say about its caller: a truncated address on
+ * an admin route, nothing on any other, and nothing for an address that is
+ * not one.
+ */
+export function addressForLog(
+  url: string,
+  ip: string | null | undefined,
+): string | null {
+  return OPERATOR_PATH.test(url) ? truncateIp(ip) : null;
+}
 
 /**
  * Global logging interceptor for HTTP requests.
@@ -49,16 +72,16 @@ export class LoggingInterceptor implements NestInterceptor {
         // Only log interesting events:
         const isError = statusCode >= 400;
         const isSlow = responseTime > 1000; // >1s
+        const lowerUrl = url.toLowerCase();
         const isAdminOrML =
-          url.includes("/admin") ||
-          url.includes("/ml") ||
-          url.includes("/train");
+          lowerUrl.includes("/admin") ||
+          lowerUrl.includes("/ml") ||
+          lowerUrl.includes("/train");
 
         if (isError || isSlow || isAdminOrML) {
           const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
-          // The page-view counter promises readers that it keeps no address,
-          // and a log line is a place it would be kept.
-          const who = url.startsWith("/v1/page-views") ? "" : ` - ${ip}`;
+          const address = addressForLog(url, ip);
+          const who = address ? ` - ${address}` : "";
           this.logger.log(
             `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms${who}`,
           );

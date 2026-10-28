@@ -29,11 +29,14 @@ export interface MergeDependency {
    *             more than one column, or carries a constraint across two of
    *             them, cannot be expressed as one column plus a conflict key,
    *             because every statement the three strategies issue names
-   *             exactly one column. Declared on exactly three entries:
-   *             `attraction_review_marks` (PAR-149), `park_seasons`, whose
-   *             ride ids sit inside a jsonb array (PAR-106), and
-   *             `queue_data_aggregates`, whose primary key holds a hash of the
-   *             attraction id (PAR-704).
+   *             exactly one column. Declared on `attraction_review_marks`
+   *             (PAR-149), `park_seasons`, whose ride ids sit inside a jsonb
+   *             array (PAR-106), `queue_data_aggregates`, whose primary key
+   *             holds a hash of the attraction id (PAR-704), and the two
+   *             reader counts, `page_view_days` (PAR-1089), whose rows are
+   *             added up on a collision, and `site_entity_merges`
+   *             (PAR-1151), which records a merge so that `site_events` is
+   *             read under the survivor instead of being rewritten.
    */
   strategy: MergeStrategy;
   /**
@@ -498,6 +501,49 @@ function mergePageViewDays(kind: "park" | "attraction") {
     );
   };
 }
+
+/**
+ * Records that a park, ride, show or restaurant was merged into another, for
+ * the site statistic (`site_entity_merges`, PAR-1151). Its events keep the id
+ * they were counted under in `site_events`, a compressed hypertable, and are
+ * mapped to the survivor when read, because moving them would be DML on
+ * compressed chunks. The table always names the final survivor: whatever was
+ * merged into the loser earlier now points at the winner, and the winner,
+ * should it once have been merged away and back, maps to nothing. An id is
+ * unique across the four kinds, so one function serves all four lists.
+ */
+export async function recordEntityMerge(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  await manager.query(
+    `DELETE FROM site_entity_merges WHERE loser_id = $1::uuid`,
+    [winnerId],
+  );
+  await manager.query(
+    `UPDATE site_entity_merges SET winner_id = $1::uuid WHERE winner_id = $2::uuid`,
+    [winnerId, loserId],
+  );
+  await manager.query(
+    `INSERT INTO site_entity_merges (loser_id, winner_id) VALUES ($2::uuid, $1::uuid)
+     ON CONFLICT (loser_id) DO UPDATE SET winner_id = EXCLUDED.winner_id,
+                                          merged_at = now()`,
+    [winnerId, loserId],
+  );
+}
+
+/**
+ * The entry every entity list carries for the site statistic: `site_events`
+ * names entities too, and is left as it is; the merge is written here
+ * instead, see `recordEntityMerge`.
+ */
+const SITE_ENTITY_MERGES_DEPENDENCY: MergeDependency = {
+  table: "site_entity_merges",
+  column: "loser_id",
+  strategy: "custom",
+  apply: recordEntityMerge,
+};
 
 /**
  * Rewrites the ride ids inside `park_seasons.attraction_ids` (a jsonb array
@@ -1049,6 +1095,8 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "custom",
     apply: mergePageViewDays("attraction"),
   },
+  // `site_events` is not moved; the merge is recorded, see `recordEntityMerge`.
+  SITE_ENTITY_MERGES_DEPENDENCY,
 ];
 
 /**
@@ -1140,6 +1188,8 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     strategy: "move",
     conflictColumns: ["subscriptionId"],
   },
+  // `site_events` is not moved; the merge is recorded, see `recordEntityMerge`.
+  SITE_ENTITY_MERGES_DEPENDENCY,
 ];
 
 /**
@@ -1157,6 +1207,8 @@ export const RESTAURANT_DEPENDENCIES: MergeDependency[] = [
     column: "restaurantId",
     strategy: "move",
   },
+  // `site_events` is not moved; the merge is recorded, see `recordEntityMerge`.
+  SITE_ENTITY_MERGES_DEPENDENCY,
 ];
 
 /**
@@ -1219,6 +1271,8 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
     strategy: "custom",
     apply: mergePageViewDays("park"),
   },
+  // `site_events` is not moved; the merge is recorded, see `recordEntityMerge`.
+  SITE_ENTITY_MERGES_DEPENDENCY,
   {
     table: "park_slug_aliases",
     column: "parkId",

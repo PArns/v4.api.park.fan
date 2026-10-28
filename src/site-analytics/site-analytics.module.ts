@@ -1,0 +1,99 @@
+import {
+  MiddlewareConsumer,
+  Module,
+  NestModule,
+  RequestMethod,
+} from "@nestjs/common";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { RedisModule } from "../common/redis/redis.module";
+import { Park } from "../parks/entities/park.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
+import { Show } from "../shows/entities/show.entity";
+import { Restaurant } from "../restaurants/entities/restaurant.entity";
+import { SitePageviewRow } from "./entities/site-pageview-row.entity";
+import { SiteEventRow } from "./entities/site-event-row.entity";
+import { SiteVisitorDay } from "./entities/site-visitor-day.entity";
+import { SiteBlockedEvent } from "./entities/site-blocked-event.entity";
+import { SiteEntityMerge } from "./entities/site-entity-merge.entity";
+import { SiteAnalyticsFlush } from "./entities/site-analytics-flush.entity";
+import { SitePageviewDay } from "./entities/site-pageview-day.entity";
+import { SiteEventDay } from "./entities/site-event-day.entity";
+import { SiteRollupDay } from "./entities/site-rollup-day.entity";
+import { SiteVisitorHour } from "./entities/site-visitor-hour.entity";
+import { SiteVisitorDimDay } from "./entities/site-visitor-dim-day.entity";
+import { SiteAnalyticsImport } from "./entities/site-analytics-import.entity";
+import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
+import { SiteAnalyticsStorageService } from "./site-analytics-storage.service";
+import { SiteAnalyticsService } from "./site-analytics.service";
+import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
+import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
+import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
+import { SiteReportRunner } from "./site-analytics-report-runner";
+import { SiteEntityNames } from "./site-entity-names.service";
+import {
+  AdminSiteAnalyticsController,
+  SiteAnalyticsCollectController,
+} from "./site-analytics.controller";
+import { collectBodyMiddleware } from "./collect-body.middleware";
+
+/** The route that reads a `text/plain` body, and the only one. */
+export const COLLECT_ROUTE = {
+  path: "analytics/collect",
+  method: RequestMethod.POST,
+};
+
+/**
+ * Our own cookieless, aggregate-only site statistic: page views, visits,
+ * visitors and any event the site sends, counted per UTC hour and, for the
+ * finished days, rolled up per day, and the admin's reports on them. `SiteAnalyticsService`,
+ * `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` are exported for
+ * the admin's MCP tools,
+ * `SiteAnalyticsCollectService` for the most-read counter's old endpoint.
+ * See docs/frontend/site-analytics.md.
+ */
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([
+      SitePageviewRow,
+      SiteEventRow,
+      SiteVisitorDay,
+      SiteVisitorHour,
+      SiteVisitorDimDay,
+      SitePageviewDay,
+      SiteEventDay,
+      SiteRollupDay,
+      SiteBlockedEvent,
+      SiteEntityMerge,
+      SiteAnalyticsFlush,
+      SiteAnalyticsImport,
+      Park,
+      Attraction,
+      Show,
+      Restaurant,
+    ]),
+    RedisModule,
+  ],
+  controllers: [SiteAnalyticsCollectController, AdminSiteAnalyticsController],
+  providers: [
+    SiteAnalyticsCollectService,
+    SiteAnalyticsStorageService,
+    SiteReportRunner,
+    SiteAnalyticsService,
+    SiteAnalyticsSeoService,
+    SiteAnalyticsLiveService,
+    SiteAnalyticsBlocklist,
+    SiteEntityNames,
+  ],
+  exports: [
+    SiteAnalyticsCollectService,
+    SiteAnalyticsStorageService,
+    SiteAnalyticsService,
+    SiteAnalyticsSeoService,
+    SiteAnalyticsLiveService,
+  ],
+})
+export class SiteAnalyticsModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(collectBodyMiddleware()).forRoutes(COLLECT_ROUTE);
+  }
+}

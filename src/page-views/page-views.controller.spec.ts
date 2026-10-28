@@ -66,6 +66,9 @@ describe("PageViewsController", () => {
       .send({ kind: "article", key: "tokyo-disney-resort-guide", locale: "de" })
       .expect(204);
     expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.headers["cross-origin-resource-policy"]).toBe(
+      "cross-origin",
+    );
     expect(record).toHaveBeenCalledWith({
       kind: "article",
       key: "tokyo-disney-resort-guide",
@@ -132,6 +135,26 @@ describe("PageViewsController", () => {
         .expect(204);
     }
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it("counts in production only what park.fan sent, as the collect endpoint does", async () => {
+    const before = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const send = (headers: Record<string, string>) =>
+        request(app.getHttpServer())
+          .post("/v1/page-views")
+          .set(headers)
+          .send({ kind: "news", key: "a-news-post", locale: "de" })
+          .expect(204);
+      await send({});
+      await send({ Origin: "https://park-abc-arns.vercel.app" });
+      expect(record).not.toHaveBeenCalled();
+      await send({ Origin: "https://park.fan" });
+      expect(record).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = before;
+    }
   });
 
   it("accepts a park's UUID as the key", async () => {
