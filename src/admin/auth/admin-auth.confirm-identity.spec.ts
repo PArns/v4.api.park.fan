@@ -51,6 +51,10 @@ async function refusal(promise: Promise<unknown>): Promise<HttpException> {
 }
 
 describe("confirmIdentity", () => {
+  // Every password check runs scrypt (~100 ms, several times that on a busy
+  // runner), and the limiter's tests make ten to twenty of them.
+  jest.setTimeout(30_000);
+
   it("lets a right password through when the account has no second factor", async () => {
     const { service } = await build();
     await expect(
