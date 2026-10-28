@@ -13,6 +13,8 @@ import {
   SMALL_SERIES_DESCRIPTION,
   foldSmallRows,
   hideSmallInSeries,
+  hideSmallTotal,
+  isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
@@ -70,11 +72,14 @@ export const analyticsEventsTool = defineMcpTool({
         ...(series && { series: hide ? hide.series : null }),
       };
     });
+    const total = hideSmallTotal(list.total, input);
     return withVisitorData(
       {
         ...windowOf(report),
-        total: list.total,
-        ...(series && { smallValuesHidden: hidden }),
+        total: total.total,
+        ...((series || isNarrowed(input)) && {
+          smallValuesHidden: hidden || total.hidden,
+        }),
       },
       { items },
     );

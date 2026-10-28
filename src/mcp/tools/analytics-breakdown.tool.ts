@@ -10,7 +10,12 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
-import { SMALL_CELLS_DESCRIPTION, foldSmallRows } from "./small-cells";
+import {
+  SMALL_CELLS_DESCRIPTION,
+  foldSmallRows,
+  hideSmallInSeries,
+  isNarrowed,
+} from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsBreakdownTool = defineMcpTool({
@@ -54,12 +59,16 @@ export const analyticsBreakdownTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .breakdown({ ...siteQuery(input), dim, limit });
+    const total = isNarrowed(input)
+      ? hideSmallInSeries([report.total], ["views", "visits"])
+      : { series: [report.total], hidden: false };
     return withVisitorData(
       {
         ...windowOf(report),
         dim: report.dim,
         measure: report.measure,
-        total: report.total,
+        total: total.series[0],
+        ...(isNarrowed(input) && { smallValuesHidden: total.hidden }),
       },
       {
         items: foldSmallRows(report.items, {

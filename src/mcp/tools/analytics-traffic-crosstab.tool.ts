@@ -9,7 +9,12 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
-import { CROSSTAB_SMALL_CELLS, foldCrosstab } from "./small-cells";
+import {
+  CROSSTAB_SMALL_CELLS,
+  foldCrosstab,
+  hideSmallTotal,
+  isNarrowed,
+} from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const SIDE_HELP =
@@ -52,13 +57,15 @@ export const analyticsTrafficCrosstabTool = defineMcpTool({
       row: report.row !== "day",
       col: report.col !== "day",
     });
+    const total = hideSmallTotal(report.total, input);
     return withVisitorData(
       {
         ...windowOf(report),
         metric: report.metric,
         row: report.row,
         col: report.col,
-        total: report.total,
+        total: total.total,
+        ...(isNarrowed(input) && { smallValuesHidden: total.hidden }),
       },
       folded,
     );

@@ -13,6 +13,8 @@ import {
   SMALL_SERIES_DESCRIPTION,
   foldSmallRows,
   hideSmallInSeries,
+  hideSmallTotal,
+  isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
@@ -65,11 +67,12 @@ export const analyticsEventTool = defineMcpTool({
     const resolved = report.entities.filter((entity) => entity.kind !== null);
     const values = { dims: ["value"], count: "count", sum: ["count"] };
     const hide = hideSmallInSeries(report.series, ["count"]);
+    const total = hideSmallTotal(report.total, input);
     return withVisitorData(
       {
         ...windowOf(report),
         name: report.name,
-        total: report.total,
+        total: total.total,
         ...(report.blocked && { blocked: true }),
         entities: foldSmallRows(resolved.slice(0, limit), {
           dims: ["name"],
@@ -77,7 +80,9 @@ export const analyticsEventTool = defineMcpTool({
           sum: ["count"],
         }),
         unresolvedEntities: report.entities.length - resolved.length,
-        ...(series && { smallValuesHidden: hide.hidden }),
+        ...((series || isNarrowed(input)) && {
+          smallValuesHidden: (series && hide.hidden) || total.hidden,
+        }),
       },
       {
         props: report.props.map((prop) => {

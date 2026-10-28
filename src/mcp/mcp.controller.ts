@@ -115,11 +115,19 @@ export class McpController {
       return;
     }
 
-    const server = this.servers.create(admin);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
+    let server: ReturnType<McpServerFactory["create"]>;
+    let transport: StreamableHTTPServerTransport;
+    try {
+      server = this.servers.create(admin);
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+    } catch (error) {
+      // The close handler below is not registered yet.
+      this.inFlight.release(holder);
+      throw error;
+    }
     response.on("close", () => {
       this.inFlight.release(holder);
       void transport.close();

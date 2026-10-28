@@ -1216,8 +1216,12 @@ describe("site statistic tools", () => {
         }),
       ]);
       expect(filtered.smallValuesHidden).toBe(true);
-      // The totals are not a series: as counted.
-      expect(filtered.totals).toMatchObject({ visits: 3, pageviews: 9 });
+      // The totals are small cells too under a filter.
+      expect(filtered.totals).toMatchObject({
+        visits: null,
+        pageviews: 9,
+        viewsPerVisit: null,
+      });
       const german = await run(
         analyticsOverviewTool,
         { series: true, locale: "de" },

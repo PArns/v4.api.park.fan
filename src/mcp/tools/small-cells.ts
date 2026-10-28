@@ -18,13 +18,15 @@ export const OTHER_ROW = OVERFLOW_VALUE;
 /** One sentence for the descriptions of the tools whose lists fold. */
 export const SMALL_CELLS_DESCRIPTION =
   `Values counted fewer than ${MCP_MIN_CELL} times are folded into one "${OTHER_ROW}" row ` +
-  "(the counts added up, rates, averages and durations null); totals are complete.";
+  "(the counts added up, rates, averages and durations null); totals are complete, but under a " +
+  `filter or a language a total from 1 to ${MCP_MIN_CELL - 1} is null and smallValuesHidden says so.`;
 
 /** The sentence for the crosstabs, whose small values are cells as well as rows. */
 export const CROSSTAB_SMALL_CELLS =
   `A value on a side whose cells add up to fewer than ${MCP_MIN_CELL} is folded into "${OTHER_ROW}" ` +
   `on that side (a day side keeps every period); a cell below ${MCP_MIN_CELL} is null in counts and ` +
-  "counted in other: { cells, count }; the total is complete.";
+  "counted in other: { cells, count }; the total is complete, but under a filter or a language a total from 1 to " +
+  `${MCP_MIN_CELL - 1} is null and smallValuesHidden says so.`;
 
 /** One sentence for the tools that draw a series by something. */
 export const SMALL_SERIES_DESCRIPTION =
@@ -241,4 +243,18 @@ export function hideSmallInSeries<P extends object>(
     return next;
   });
   return { series: masked as P[], hidden };
+}
+
+/**
+ * A total with its small count hidden when the window is narrowed by a
+ * filter or a language: a targeted filter could otherwise read one reader's
+ * count off it. `hidden` says whether it was.
+ */
+export function hideSmallTotal(
+  total: number,
+  input: { filters?: readonly unknown[]; locale?: unknown },
+): { total: number | null; hidden: boolean } {
+  if (!isNarrowed(input)) return { total, hidden: false };
+  const [point] = hideSmallInSeries([{ total }], ["total"]).series;
+  return { total: point.total, hidden: point.total !== total };
 }

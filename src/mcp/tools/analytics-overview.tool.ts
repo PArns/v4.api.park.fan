@@ -37,7 +37,7 @@ export const analyticsOverviewTool = defineMcpTool({
     "with analytics_breakdown; analytics_live shows the last half hour minute by minute. " +
     `Under a filter or a language the series has its values from 1 to ${MCP_MIN_CELL - 1} (and the ` +
     "rates and averages computed from them) as null, and smallValuesHidden says whether any were; " +
-    "totals and a series of the whole site are as counted. " +
+    "the totals and the previous window are hidden the same way, those of the whole site are as counted. " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     ...siteWindowInput,
@@ -57,32 +57,33 @@ export const analyticsOverviewTool = defineMcpTool({
       viewsPerVisit: round3(point.viewsPerVisit),
       bounceRate: round3(point.bounceRate),
     }));
-    // A series of the whole site's totals is as it is; under a filter or a
-    // language each point is a small cell.
-    const shown = isNarrowed(input)
-      ? hideSmallInSeries(
-          points,
-          ["pageviews", "visits", "visitors", "events"],
-          {
-            viewsPerVisit: ["visits", "pageviews"],
-            bounceRate: ["visits"],
-            avgVisitSeconds: ["visits"],
-            avgTimeOnPageSeconds: ["pageviews"],
-          },
-        )
-      : { series: points, hidden: false };
+    // The whole site's figures are as counted; under a filter or a language
+    // each total, each previous figure and each point is a small cell.
+    const narrowed = isNarrowed(input);
+    const counts = ["pageviews", "visits", "visitors", "events"];
+    const derived = {
+      viewsPerVisit: ["visits", "pageviews"],
+      bounceRate: ["visits"],
+      avgVisitSeconds: ["visits"],
+      avgTimeOnPageSeconds: ["pageviews"],
+    };
+    const hide = <P extends object>(rows: P[]) =>
+      narrowed
+        ? hideSmallInSeries(rows, counts, derived)
+        : { series: rows, hidden: false };
+    const shown = hide(points);
+    const current = hide([totals(report.totals)]);
+    const before = report.previous ? hide([totals(report.previous)]) : null;
+    const [now, was] = [current.series[0], before?.series[0] ?? null];
     return {
       ...windowOf(report),
-      totals: totals(report.totals),
-      previous: report.previous ? totals(report.previous) : null,
-      change: report.previous
+      totals: now,
+      previous: was,
+      change: was
         ? {
-            pageviews: changeRatio(
-              report.totals.pageviews,
-              report.previous.pageviews,
-            ),
-            visits: changeRatio(report.totals.visits, report.previous.visits),
-            events: changeRatio(report.totals.events, report.previous.events),
+            pageviews: changeRatio(now.pageviews, was.pageviews),
+            visits: changeRatio(now.visits, was.visits),
+            events: changeRatio(now.events, was.events),
           }
         : null,
       realtime: {
@@ -94,7 +95,10 @@ export const analyticsOverviewTool = defineMcpTool({
       },
       ...(series && {
         series: shown.series,
-        ...(isNarrowed(input) && { smallValuesHidden: shown.hidden }),
+      }),
+      ...(narrowed && {
+        smallValuesHidden:
+          (series && shown.hidden) || current.hidden || !!before?.hidden,
       }),
     };
   },

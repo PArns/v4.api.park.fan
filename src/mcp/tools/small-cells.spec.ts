@@ -5,6 +5,7 @@ import {
   foldSmallCounts,
   foldSmallRows,
   hideSmallInSeries,
+  hideSmallTotal,
   isNarrowed,
 } from "./small-cells";
 
@@ -454,6 +455,26 @@ describe("small-cells", () => {
         ],
         hidden: false,
       });
+    });
+  });
+
+  describe("hideSmallTotal", () => {
+    it("hides a total of 1 to 4 under a filter or a language only", () => {
+      const filters = [{ dim: "country", value: "is" }];
+      expect(hideSmallTotal(3, { filters })).toEqual({
+        total: null,
+        hidden: true,
+      });
+      expect(hideSmallTotal(3, { locale: "de" })).toEqual({
+        total: null,
+        hidden: true,
+      });
+      expect(hideSmallTotal(5, { filters })).toEqual({
+        total: 5,
+        hidden: false,
+      });
+      expect(hideSmallTotal(0, { filters }).total).toBe(0);
+      expect(hideSmallTotal(3, {})).toEqual({ total: 3, hidden: false });
     });
   });
 

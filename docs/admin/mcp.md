@@ -176,7 +176,9 @@ the count that decides, and the measures that add up.
   rates, and a field that names the row (a page type, an entity's id and path, a page's sources, a
   series). Nothing is added to `(other)` that a tool did not list as additive, so a new field never
   carries one row's value onto the others'. A list without a small row comes back as it is. Totals are
-  not folded and still count every value: `total`, a report's `totals`, `previous`.
+  not folded and still count every value: `total`, a report's `totals`, `previous`; but under a
+  filter or a language a total or previous count of 1 to 4 is null (with the rates computed from it,
+  and the `change` that needs it) and `smallValuesHidden` says so.
 - **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
   page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,
   events), `search_report` (surfaces, openings by page type and device, result types, positions, browse
