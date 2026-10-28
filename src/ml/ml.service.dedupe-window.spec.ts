@@ -131,8 +131,9 @@ describe("MLService — dedupe createdAt window", () => {
     // created before now-48h cannot hold a future slot. Covering exactly 48h
     // would leave no slack for clock skew between this process and Postgres.
     expect(ageMs).toBeGreaterThan(48 * HOUR);
+    // The window is taken from a clock read between `before` and `after`.
     expect(createdAfter.getTime()).toBeLessThanOrEqual(
-      before - DEDUPE_CREATED_AFTER_HOURS.hourly * HOUR,
+      after - DEDUPE_CREATED_AFTER_HOURS.hourly * HOUR,
     );
     expect(createdAfter.getTime()).toBeGreaterThan(
       before - DEDUPE_CREATED_AFTER_HOURS.hourly * HOUR - 60_000,
