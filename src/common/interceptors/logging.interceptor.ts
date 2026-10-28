@@ -9,16 +9,28 @@ import { Observable } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Request, Response } from "express";
 import { redactUrl } from "../utils/redact-url.util";
+import { truncateIp } from "../utils/request.util";
 
 /**
- * The reader counters (page views, the site statistic) promise readers that
- * they keep no address, and a log line is a place one would be kept.
+ * The one surface whose log lines name where a request came from: the admin,
+ * which only accounts reach. Every other route is a visitor's or a client's,
+ * and the privacy policy says the server logs no IP addresses, so its lines
+ * carry none. Even the admin's carry a /24 (IPv4) or /48 (IPv6), never the
+ * address: `admin_audit_log.actor_ip` is where an account's full address is
+ * kept (docs/rules/no-address-in-logs.md).
  */
-const ADDRESS_FREE_PATHS = ["/v1/page-views", "/v1/analytics/collect"];
+const OPERATOR_PATH = /^\/v1\/admin(?:[/?#]|$)/i;
 
-/** Whether a request's log line must leave the caller's address out. */
-export function isAddressFreePath(url: string): boolean {
-  return ADDRESS_FREE_PATHS.some((path) => url.startsWith(path));
+/**
+ * What a request's log line may say about its caller: a truncated address on
+ * an admin route, nothing on any other, and nothing for an address that is
+ * not one.
+ */
+export function addressForLog(
+  url: string,
+  ip: string | null | undefined,
+): string | null {
+  return OPERATOR_PATH.test(url) ? truncateIp(ip) : null;
 }
 
 /**
@@ -68,7 +80,8 @@ export class LoggingInterceptor implements NestInterceptor {
 
         if (isError || isSlow || isAdminOrML) {
           const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";
-          const who = isAddressFreePath(url) ? "" : ` - ${ip}`;
+          const address = addressForLog(url, ip);
+          const who = address ? ` - ${address}` : "";
           this.logger.log(
             `${emoji} ${method} ${url} ${statusCode} - ${responseTime}ms${who}`,
           );

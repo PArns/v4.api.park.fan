@@ -167,4 +167,25 @@ export class AdminCreateApiTokenDto {
   @IsOptional()
   @IsIn(PAT_EXPIRY_DAYS)
   expiresInDays?: (typeof PAT_EXPIRY_DAYS)[number] | null;
+
+  @ApiProperty({
+    description:
+      "The account password, asked again: a session alone does not mint a " +
+      "credential that outlives it. Wrong → 401 `invalid-password`.",
+  })
+  @IsString()
+  @MaxLength(256)
+  password: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Six-digit TOTP code, required when the account has two-factor on " +
+      "(401 `totp-required` without it, `invalid-totp` when it does not " +
+      "match or was already used).",
+    example: "492013",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
+  totpCode?: string;
 }

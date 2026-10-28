@@ -2,7 +2,7 @@
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
-site statistic and its SEO reports, system and ML health, job queues, data-quality findings,
+site statistic and its SEO reports, Google Search Console, system and ML health, job queues, data-quality findings,
 duplicate and retirement candidates, outage statistics and the audit log. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
@@ -24,7 +24,7 @@ hands Claude Code its tokens. It refreshes them itself; a grant unused for 30 da
 `https://api.park.fan/v1/mcp`, no client id or secret. *Connect* runs the same consent.
 
 **A personal access token instead of OAuth** — create one on the admin account page ("API access /
-MCP", shown once), then:
+MCP", shown once; it asks for your password, and your two-factor code if you use one), then:
 
 ```bash
 claude mcp add --transport http parkfan-admin https://api.park.fan/v1/mcp \
@@ -80,7 +80,7 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
 | | PAT `pfa_…` | OAuth access `pfo_…` | OAuth refresh `pfr_…` |
 | --- | --- | --- | --- |
 | Lifetime | 30, 90, 365 days or none | 1 hour | 30 days, renewed with each refresh |
-| Made by | `POST /v1/admin/auth/tokens` (session) | the code or refresh exchange | the same |
+| Made by | `POST /v1/admin/auth/tokens` (session and password) | the code or refresh exchange | the same |
 | Revoked by | `DELETE /v1/admin/auth/tokens/:id`, an owner, the account's sign-out | revoking the grant | revoking the grant; reuse |
 
 - **Codes** are single-use, live 60 s, are stored hashed in Redis and bound to the client, the
@@ -133,6 +133,10 @@ against these rules.
 | `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
 | `seo_not_found` | paths that showed the not-found page, with the referrers of the visits that entered on them | `SiteAnalyticsSeoService.notFound` |
 | `seo_uncovered` | parks or rides no search visit entered on | `SiteAnalyticsSeoService.uncovered` |
+| `gsc_status` | whether Google Search Console is connected, when it last imported, the days covered | `SearchConsoleService.status` |
+| `gsc_queries` | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device | `SearchConsoleService.queries` |
+| `gsc_pages` | the pages found in Google, with the site's own visits, bounce and visit length from search | `SearchConsoleService.pages` |
+| `gsc_series` | clicks, impressions, ctr and position per day, week or month | `SearchConsoleService.series` |
 
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
@@ -167,11 +171,11 @@ writes would set `minRole` and needs a scope above `admin:read`; v1 issues none.
 | GET | `/v1/oauth/authorize` | public (browser) | validates, parks the request, 302 to the consent page |
 | POST | `/v1/oauth/token` | public client | `authorization_code` (PKCE S256), `refresh_token` |
 | POST | `/v1/oauth/revoke` | public client | RFC 7009; revokes the whole grant |
-| GET | `/v1/admin/oauth/requests/:id` | session, any role | what the consent page shows |
+| GET | `/v1/admin/oauth/requests/:id` | session, any role | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes) and `expiresAt` |
 | POST | `/v1/admin/oauth/requests/:id/approve` | session, any role | `{ redirectTo }` with the code |
 | POST | `/v1/admin/oauth/requests/:id/deny` | session, any role | `{ redirectTo }` with `access_denied` |
 | GET | `/v1/admin/auth/tokens[?userId=]` | session; `userId` owner only | active PATs and grants |
-| POST | `/v1/admin/auth/tokens` | session | `{ token, item }`, the token shown once |
+| POST | `/v1/admin/auth/tokens` | session + password (+ `totpCode`) | `{ token, item }`, the token shown once |
 | DELETE | `/v1/admin/auth/tokens/:id` | session; others' owner only | revokes a PAT or a grant |
 
 The shared pass is refused on every row. The response shapes the frontend reads are in
@@ -270,5 +274,6 @@ What was checked when this was built, and where it is enforced:
 - **Consent cookie.** The admin cookie is `SameSite=Strict`, so the first page load of a consent link
   that started on claude.ai carries no cookie; the consent page has to read the session from the
   browser, not from that first request.
-- A PAT can be created with a session alone, without the password: a stolen session can mint a
-  read-only token that outlives it until the account signs out everywhere.
+- A PAT is created with the password (and the two-factor code), but a stolen session plus the
+  password can still mint a read-only token that outlives the session, until the account signs out
+  everywhere.

@@ -107,6 +107,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("site-analytics") private siteAnalyticsQueue: Queue,
+    @InjectQueue("search-console") private searchConsoleQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
     @InjectQueue("forecast-archive-score")
@@ -1169,6 +1170,28 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           jobId,
           removeOnComplete: 100,
           ...(removeOnFail && { removeOnFail }),
+        },
+      );
+    }
+
+    // Google Search Console (PAR-1160): the import at 09:20 (Google's finished
+    // days are in by then, and the CatBoost training window is over) and the
+    // chunks past 500 days at 01:55. Without credentials the import returns
+    // at once.
+    for (const [name, jobId, cron] of [
+      ["import", "search-console-import-cron", "20 9 * * *"],
+      ["drop-old-chunks", "search-console-chunks-cron", "55 1 * * *"],
+    ] as const) {
+      if (await this.hasRepeatableJob(this.searchConsoleQueue, jobId, cron))
+        continue;
+      await this.searchConsoleQueue.add(
+        name,
+        { trigger: "cron" },
+        {
+          repeat: { cron },
+          jobId,
+          removeOnComplete: 100,
+          removeOnFail: 100,
         },
       );
     }

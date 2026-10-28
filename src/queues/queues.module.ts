@@ -34,6 +34,7 @@ import { PushNotificationProcessor } from "./processors/push-notification.proces
 import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
+import { SearchConsoleProcessor } from "./processors/search-console.processor";
 import {
   ForecastArchiveProcessor,
   ForecastArchiveScoreProcessor,
@@ -86,6 +87,7 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
 import { PushModule } from "../push/push.module";
 import { TripsModule } from "../trips/trips.module";
 import { SiteAnalyticsModule } from "../site-analytics/site-analytics.module";
+import { SearchConsoleModule } from "../search-console/search-console.module";
 import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
@@ -157,6 +159,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     PushModule, // Web-push subscriptions and sending
     TripsModule, // The stored plans the notification job walks
     SiteAnalyticsModule, // The site statistic's visitor snapshot and prune
+    SearchConsoleModule, // The Search Console import and its retention
     RideAlertsModule, // Wait-time alerts — checked from WaitTimesProcessor
     ShowFollowsModule, // Followed shows — the push-notifications job's other half
     RedisModule, // For cache warmup service
@@ -196,6 +199,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     RainSoonPushService, // …and its `rain-soon` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention
+    SearchConsoleProcessor, // Search Console: nightly import, retention
     ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
     ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue
     ShowPatternProcessor, // Nightly per-weekday showtime patterns

@@ -1,3 +1,4 @@
+import { withoutTrailingSlashes } from "../common/utils/url.util";
 import { getRevalidateUrl } from "./revalidation.config";
 
 /**
@@ -15,17 +16,13 @@ export const DEFAULT_OAUTH_REDIRECT_HOSTS = ["claude.ai", "claude.com"];
 /** Paths an `https` redirect URI may have when `OAUTH_REDIRECT_PATHS` is unset: claude.ai's connector callback. */
 export const DEFAULT_OAUTH_REDIRECT_PATHS = ["/api/mcp/auth_callback"];
 
-function withoutTrailingSlash(url: string): string {
-  return url.replace(/\/+$/, "");
-}
-
 /**
  * This API's public origin, which is the OAuth issuer and the base of the MCP
  * resource URL. Both are compared byte for byte by clients, so a deployment
  * behind another host name has to say so.
  */
 export function getApiPublicUrl(): string {
-  return withoutTrailingSlash(
+  return withoutTrailingSlashes(
     process.env.API_PUBLIC_URL?.trim() || DEFAULT_API_PUBLIC_URL,
   );
 }
@@ -36,7 +33,7 @@ export function getApiPublicUrl(): string {
  */
 export function getFrontendUrl(): string {
   const configured = process.env.FRONTEND_URL?.trim();
-  if (configured) return withoutTrailingSlash(configured);
+  if (configured) return withoutTrailingSlashes(configured);
   return new URL(getRevalidateUrl()).origin;
 }
 

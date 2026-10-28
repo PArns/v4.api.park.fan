@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { withoutTrailingSlashes } from "../../common/utils/url.util";
 import {
   checkRateLimit,
   hashRateLimitKey,
@@ -63,6 +64,8 @@ interface PendingRequest {
   codeChallenge: string;
   state: string | null;
   scope: AdminTokenScope;
+  /** Epoch ms the request was parked; absent on one parked before it was stored. */
+  createdAt?: number;
   expiresAt: number;
 }
 
@@ -89,6 +92,8 @@ export interface PendingRequestSummary {
   clientName: string;
   redirectHost: string;
   scope: string;
+  /** When the client started the request: the consent page shows its age and warns on an old one. */
+  createdAt: string;
   expiresAt: string;
 }
 
@@ -131,15 +136,9 @@ function optionalField(params: Params, name: string): string | undefined {
   return value || undefined;
 }
 
-/**
- * RFC 8707: the only resource tokens are issued for is the MCP endpoint.
- * Trailing slashes are trimmed by a scan rather than `/\/+$/`, which
- * backtracks quadratically on a long run of slashes in a caller's parameter.
- */
+/** RFC 8707: the only resource tokens are issued for is the MCP endpoint. */
 function isMcpResource(value: string): boolean {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
-  return value.slice(0, end) === getMcpResourceUrl();
+  return withoutTrailingSlashes(value) === getMcpResourceUrl();
 }
 
 /**
@@ -259,6 +258,7 @@ export class OAuthAuthorizationService {
     }
 
     const id = generateToken();
+    const now = Date.now();
     const pending: PendingRequest = {
       id,
       clientId: client.clientId,
@@ -270,7 +270,8 @@ export class OAuthAuthorizationService {
       // v1 has one scope. Whatever else was asked for is not granted, which
       // RFC 6749 §3.3 allows; the token response names what was.
       scope: DEFAULT_ADMIN_TOKEN_SCOPE,
-      expiresAt: Date.now() + PENDING_REQUEST_TTL_SECONDS * 1000,
+      createdAt: now,
+      expiresAt: now + PENDING_REQUEST_TTL_SECONDS * 1000,
     };
     await this.redis.set(
       REQUEST_PREFIX + hashToken(id),
@@ -292,6 +293,12 @@ export class OAuthAuthorizationService {
       clientName: pending.clientName,
       redirectHost: new URL(pending.redirectUri).host,
       scope: pending.scope,
+      // A request parked before `createdAt` was stored has its start in its
+      // expiry: the lifetime is a constant.
+      createdAt: new Date(
+        pending.createdAt ??
+          pending.expiresAt - PENDING_REQUEST_TTL_SECONDS * 1000,
+      ).toISOString(),
       expiresAt: new Date(pending.expiresAt).toISOString(),
     };
   }

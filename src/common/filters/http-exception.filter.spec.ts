@@ -422,4 +422,70 @@ describe("HttpExceptionFilter — server errors", () => {
     const [file] = (logToFile as jest.Mock).mock.calls[0] as [string];
     expect(file).toBe("api-errors");
   });
+
+  describe("the caller's address", () => {
+    const ADDRESS = "203.0.113.47";
+
+    /** A request that carries the address in every place this API reads one. */
+    function hostWithAddress(url: string) {
+      const json = jest.fn();
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => ({
+            status: jest.fn(() => ({ json })),
+            headersSent: false,
+            header: jest.fn(),
+          }),
+          getRequest: () => ({
+            method: "GET",
+            url,
+            ip: ADDRESS,
+            headers: {
+              "x-forwarded-for": ADDRESS,
+              "cf-connecting-ip": ADDRESS,
+            },
+            socket: { remoteAddress: ADDRESS },
+          }),
+        }),
+      } as unknown as ArgumentsHost;
+      return host;
+    }
+
+    function everythingWritten(): string {
+      return JSON.stringify([
+        warn.mock.calls,
+        error.mock.calls,
+        (logToFile as jest.Mock).mock.calls,
+      ]);
+    }
+
+    let warn: jest.SpyInstance;
+    let error: jest.SpyInstance;
+    beforeEach(() => {
+      (logToFile as jest.Mock).mockClear();
+      warn = jest.spyOn(Logger.prototype, "warn").mockImplementation();
+      error = jest.spyOn(Logger.prototype, "error").mockImplementation();
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    it("is in no 4xx log line, not even when the URL names it", () => {
+      new HttpExceptionFilter().catch(
+        new BadRequestException("Could not resolve location from IP"),
+        hostWithAddress(`/v1/location/nearby?ip=${ADDRESS}&radius=50`),
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(everythingWritten()).not.toContain(ADDRESS);
+      expect(everythingWritten()).toContain("/v1/location/nearby?ip=***");
+    });
+
+    it("is in no 5xx log line and no error file record", () => {
+      new HttpExceptionFilter().catch(
+        new Error("boom"),
+        hostWithAddress(`/v1/favorites?ip=${ADDRESS}`),
+      );
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(logToFile).toHaveBeenCalledTimes(1);
+      expect(everythingWritten()).not.toContain(ADDRESS);
+    });
+  });
 });

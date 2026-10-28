@@ -155,6 +155,22 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     segmentBy: "cuboid",
     orderBy: "bucket DESC",
   },
+  // Google Search Console (PAR-1160): insert-only, a batch per import of a
+  // day, the reports read the newest batch of each day. Month chunks,
+  // compressed 35 days after the day (a day is imported again for the first
+  // few days) and dropped whole past 500 days by the nightly
+  // `search-console` / `drop-old-chunks` job. One compressed segment per
+  // batch, so the reports' `batch_id = ANY(…)` skips the batches that a
+  // re-import replaced.
+  {
+    table: "search_console_rows",
+    timeColumn: "day",
+    chunkInterval: "30 days",
+    compressAfterDays: 35,
+    description: "Search Console: queries and pages by day",
+    segmentBy: "batch_id",
+    orderBy: "page ASC",
+  },
 ];
 
 /** The site statistic's hypertables, whose chunks its nightly job drops. */

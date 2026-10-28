@@ -120,7 +120,7 @@ request.
   without one is answered 204 and not counted. The frontend asks for none of this to be bypassed: it
   sends nothing under Do Not Track, GPC, the privacy page's opt-out, or off the production hosts.
 - **No address and no User-Agent is stored**, in Postgres, in Redis or in a log line
-  (`LoggingInterceptor` leaves the address out for this path). The address becomes the bucket for the
+  (no log line of this API carries an address, [the rule](../rules/no-address-in-logs.md)). The address becomes the bucket for the
   caps, the country, and a pseudonym; the User-Agent becomes two families and a pseudonym.
 - **Every Redis key that stands for a reader or an address is pseudonymous for one UTC day**: an
   HMAC-SHA256 under that day's key, `HMAC(secret, day)` (`dailyHashKey`), where the secret is
