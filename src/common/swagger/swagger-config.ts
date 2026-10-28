@@ -12,8 +12,20 @@ import * as packageJson from "../../../package.json";
  */
 export const GLOBAL_PREFIX = "v1";
 
-// Root controller — docs page and robots.txt must stay at the host root to be found.
-export const GLOBAL_PREFIX_OPTIONS = { exclude: ["/", "/robots.txt"] };
+/**
+ * Routes that must stay at the host root to be found: the docs page and
+ * robots.txt, and the OAuth discovery documents, whose paths RFC 8414 and
+ * RFC 9728 fix under `/.well-known/`.
+ */
+export const GLOBAL_PREFIX_OPTIONS = {
+  exclude: [
+    "/",
+    "/robots.txt",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/v1/mcp",
+    "/.well-known/oauth-authorization-server",
+  ],
+};
 
 export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
   return (
@@ -42,6 +54,11 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
       )
       // Utility tags
       .addTag("root", "API root and documentation")
+      .addTag(
+        "oauth",
+        "OAuth 2.1 authorization server for the admin MCP (discovery, registration, tokens)",
+      )
+      .addTag("mcp", "🔒 Admin MCP server — read-only tools for MCP clients")
       .addTag(
         "favorites",
         "User favorites management for parks, attractions, and more",
@@ -80,6 +97,17 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
             "revocable — it is looked up in Redis on every request, not decoded.",
         },
         "admin-auth",
+      )
+      .addBearerAuth(
+        {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "opaque",
+          description:
+            "A personal access token (pfa_…) from the admin account page, or an OAuth access " +
+            "token (pfo_…) from /v1/oauth/token. Accepted by /v1/mcp only, read-only.",
+        },
+        "admin-api-token",
       )
       .build()
   );

@@ -36,6 +36,14 @@ const REDACTED_PARAMS = new Set([
   "password",
   "secret",
   "endpoint",
+  // OAuth (docs/admin/mcp.md). None belongs in a URL this API is sent, but
+  // a confused client puts them there, and an error line is where it shows.
+  "code",
+  "code_verifier",
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  "state",
 ]);
 
 export function redactUrl(url: string): string {

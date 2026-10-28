@@ -45,6 +45,7 @@
   },
   "dependencies": {
     "@elsikora/string-similarity": "^1.0.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@nestjs/bull": "^12.0.0",
     "@nestjs/common": "^12.2.0",
     "@nestjs/config": "^12.0.1",
@@ -72,7 +73,8 @@
     "tar": "^7.5.22",
     "transliteration": "^2.7.0",
     "typeorm": "^1.1.2",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.10",

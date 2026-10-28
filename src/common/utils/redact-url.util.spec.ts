@@ -53,4 +53,17 @@ describe("redactUrl", () => {
   it("keeps the path when a redacted parameter was the only one", () => {
     expect(redactUrl("/v1/admin/x?pass=a")).toBe("/v1/admin/x?pass=***");
   });
+
+  it("hides OAuth secrets a client put in the query string", () => {
+    expect(
+      redactUrl(
+        "/v1/oauth/token?code=abc&code_verifier=def&refresh_token=pfr_x&client_id=pfc_1",
+      ),
+    ).toBe(
+      "/v1/oauth/token?code=***&code_verifier=***&refresh_token=***&client_id=pfc_1",
+    );
+    expect(redactUrl("/v1/mcp?access_token=pfo_x")).toBe(
+      "/v1/mcp?access_token=***",
+    );
+  });
 });

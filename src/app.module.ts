@@ -28,6 +28,8 @@ import { PushModule } from "./push/push.module";
 import { RideAlertsModule } from "./ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "./show-follows/show-follows.module";
 import { AdminModule } from "./admin/admin.module";
+import { OAuthModule } from "./admin/oauth/oauth.module";
+import { McpModule } from "./mcp/mcp.module";
 import { StatsModule } from "./stats/stats.module";
 import { PopularityModule } from "./popularity/popularity.module";
 import { PageViewsModule } from "./page-views/page-views.module";
@@ -106,6 +108,8 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
 
     // Admin utilities
     AdminModule,
+    OAuthModule,
+    McpModule,
   ],
   controllers: [AppController],
   providers: [
