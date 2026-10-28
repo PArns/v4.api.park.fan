@@ -152,7 +152,7 @@ SELECT count(*) FILTER (WHERE created_at < now() - interval '90 days') AS to_cle
 `to_cut` also holds any value that is no address (the job clears those and counts them as unreadable).
 Afterwards the same query returns 0 and 0 and no `actor_ip` older than the retention remains.
 
-### Notice for admin accounts
+### What the audit log keeps about an account
 
 For everyone who holds an admin account. The audit log records every sign-in and every change you make
 in the admin (reading pages is not recorded): your account's email address, what you did and to what, the
@@ -161,9 +161,6 @@ first three groups of an IPv6 address and never the whole address.
 
 The network is deleted after 90 days. The rest of the entry stays, so that a change can still be traced
 and, where possible, undone.
-
-We keep this because we have a legitimate interest in tracing changes and in the security of the accounts
-and of the data they can change (Art. 6(1)(f) GDPR).
 
 ## The bootstrap account
 
