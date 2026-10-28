@@ -126,7 +126,8 @@ Redis itself, on every request:
 | `PushFollowWriteRateLimitService` (through `PushFollowAccessGuard.writeGuard`) | `getRateLimitIp` | 60 an hour each for `subscription`, `ride-alert`, `show-follow` | [push](../frontend/push.md) |
 | the caps in `SiteAnalyticsCollectService` | `addressBucket(getRateLimitIp, 56)` (an IPv6 address counts as its /56; a reader is the /64 and the User-Agent) | 3000 hits per address and UTC day, 5000 per five-minute window for everybody; for `page_read` also 3 per reader and page, 10 per address and page, 200 per address; new values per address in the day's guards | [site statistic](../frontend/site-analytics.md#guards), [page views](../frontend/page-views.md) |
 | `AdminLoginRateLimitService` | `clientIp` and the account | failures per 15 min: 25 per address, 10 per account, 10 per account and action | [admin authentication](../admin/authentication.md) |
-| `OAuthClientService.register` | `addressBucket(getRateLimitIp)` | 10 client registrations an hour | [admin MCP](../admin/mcp.md#security) |
+| `OAuthClientService.register` | `addressBucket(getRateLimitIp)` | 10 client registrations an hour |
+| `OAuthAuthorizationService.authorize` | `addressBucket(getRateLimitIp)`, and the client id | 30 pending authorization requests per 10 minutes each | [admin MCP](../admin/mcp.md#security) |
 
 All five let a request through when Redis fails. Without a readable address the trip, push, page-view
 statistic and registration limits do not count at all and the admin login counts the account only: a limiter that refuses everybody because a

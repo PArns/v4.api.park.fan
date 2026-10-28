@@ -34,6 +34,7 @@ async function build(overrides: Record<string, unknown> = {}) {
     findOne: jest.fn(async (): Promise<unknown> => user),
     update: jest.fn(async (): Promise<unknown> => ({ affected: 1 })),
     count: jest.fn(async (): Promise<number> => 1),
+    query: jest.fn(async (): Promise<unknown> => [[], 1]),
   };
 
   const sessions = new AdminSessionStore(new RedisMock() as never);
@@ -141,7 +142,7 @@ describe("changeOwnPassword", () => {
   });
 
   it("revokes the account's API tokens with its sessions", async () => {
-    const { service, token, apiTokens } = await build();
+    const { service, token, apiTokens, users } = await build();
     await service.changeOwnPassword(
       "user-1",
       OLD_PASSWORD,
@@ -151,6 +152,11 @@ describe("changeOwnPassword", () => {
     expect(apiTokens.revokeAllForUser).toHaveBeenCalledWith(
       "user-1",
       "password-change",
+    );
+    // The cut-off that refuses tokens and codes minted meanwhile.
+    expect(users.query).toHaveBeenCalledWith(
+      expect.stringContaining("tokens_revoked_at = clock_timestamp()"),
+      ["user-1"],
     );
   });
 

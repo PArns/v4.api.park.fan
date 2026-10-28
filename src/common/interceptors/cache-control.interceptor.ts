@@ -73,7 +73,14 @@ export class CacheControlInterceptor implements NestInterceptor {
     return null;
   }
 
-  private getCacheHeaderForPath(path: string, method: string): string | null {
+  private getCacheHeaderForPath(
+    rawPath: string,
+    method: string,
+  ): string | null {
+    // Express matches routes case-insensitively, so `/V1/ADMIN/…` reaches an
+    // admin handler; the policy must read the path the same way.
+    const path = rawPath.toLowerCase();
+
     // No caching for write operations
     if (method !== "GET" && method !== "HEAD") {
       return "no-store, no-cache, must-revalidate";

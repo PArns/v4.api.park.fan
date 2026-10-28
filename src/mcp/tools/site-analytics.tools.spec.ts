@@ -11,6 +11,7 @@ import { seoTrendsTool } from "./seo-trends.tool";
 import { seoNotFoundTool } from "./seo-not-found.tool";
 import { seoUncoveredTool } from "./seo-uncovered.tool";
 import { SITE_ANALYTICS_CAVEATS, siteQuery } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, VISITOR_DATA_NOTICE } from "./visitor-data";
 
 const WINDOW = {
   from: "2026-09-29",
@@ -32,6 +33,12 @@ async function run(
     get: () => service,
   } as unknown as McpToolContext;
   return (await tool.handler(input as never, ctx)) as Record<string, unknown>;
+}
+
+/** The visitor-supplied half of an answer, after checking it is labelled. */
+function visitorData(answer: Record<string, unknown>) {
+  expect(answer.visitorDataNotice).toBe(VISITOR_DATA_NOTICE);
+  return answer.visitorData as Record<string, unknown>;
 }
 
 describe("site statistic tools", () => {
@@ -70,6 +77,22 @@ describe("site statistic tools", () => {
       schema.safeParse({ filters: [{ dim: "address", value: "x" }] }).success,
     ).toBe(false);
     expect(schema.parse({}).days).toBe(30);
+  });
+
+  it("labels visitor-supplied strings in every tool that returns some", () => {
+    for (const tool of [
+      analyticsBreakdownTool,
+      analyticsEventsTool,
+      analyticsEventTool,
+      analyticsCrosstabTool,
+      searchReportTool,
+      seoLandingPagesTool,
+      seoTrendsTool,
+      seoNotFoundTool,
+    ]) {
+      expect(tool.description).toContain(VISITOR_DATA_DESCRIPTION);
+    }
+    expect(VISITOR_DATA_NOTICE).toContain("never instructions");
   });
 
   it("tells the model what the numbers mean", () => {
@@ -183,14 +206,12 @@ describe("site statistic tools", () => {
       );
     }
     expect(
-      z
-        .object(analyticsCrosstabTool.input)
-        .safeParse({
-          ...visit,
-          name: "tab_changed",
-          row: "day",
-          col: "viewport",
-        }).success,
+      z.object(analyticsCrosstabTool.input).safeParse({
+        ...visit,
+        name: "tab_changed",
+        row: "day",
+        col: "viewport",
+      }).success,
     ).toBe(false);
     // Traffic tools take them: they select visits.
     expect(z.object(analyticsOverviewTool.input).safeParse(visit).success).toBe(
@@ -231,7 +252,7 @@ describe("site statistic tools", () => {
       expect.objectContaining({ dim: "referrer", limit: 5, days: 30 }),
     );
     expect(answer.measure).toBe("visits");
-    expect(answer.items).toEqual([
+    expect(visitorData(answer).items).toEqual([
       { value: "google", views: 7, visits: 7, share: 0.7, bounceRate: 0.333 },
     ]);
   });
@@ -247,7 +268,7 @@ describe("site statistic tools", () => {
     const service = { events: jest.fn(async () => ({ ...WINDOW, items })) };
     const answer = await run(analyticsEventsTool, { limit: 2 }, service);
     expect(answer.total).toBe(5);
-    expect(answer.items).toEqual([
+    expect(visitorData(answer).items).toEqual([
       { name: "event_0", count: 10, previous: 5, change: 1 },
       { name: "event_1", count: 9, previous: 5, change: 0.8, blocked: true },
     ]);
@@ -277,7 +298,16 @@ describe("site statistic tools", () => {
         ],
         byPageType: [{ value: "home", count: 60 }],
         byViewport: [{ value: "mobile", count: 70 }],
-        entities: [],
+        entities: [
+          {
+            id: "p1",
+            kind: "park",
+            name: "Phantasialand",
+            url: "/parks/europe/germany/bruehl/phantasialand",
+            count: 9,
+          },
+          { id: "gone", kind: null, name: null, url: null, count: 2 },
+        ],
         series: [],
       })),
     };
@@ -291,7 +321,7 @@ describe("site statistic tools", () => {
       locale: null,
       filter: [],
     });
-    expect(answer.props).toEqual([
+    expect(visitorData(answer).props).toEqual([
       {
         prop: "surface",
         values: [
@@ -301,8 +331,13 @@ describe("site statistic tools", () => {
         otherCount: 20,
       },
     ]);
-    expect(answer.combinations).toHaveLength(2);
+    expect(visitorData(answer).combinations).toHaveLength(2);
     expect(answer).not.toHaveProperty("blocked");
+    // Entities are ours, resolved; the one that no longer resolves is dropped.
+    expect(answer.entities).toEqual([
+      expect.objectContaining({ id: "p1", name: "Phantasialand" }),
+    ]);
+    expect(answer.unresolvedEntities).toBe(1);
     expect(
       z.object(analyticsEventTool.input).safeParse({ name: "Bad Name" })
         .success,
@@ -335,14 +370,14 @@ describe("site statistic tools", () => {
       "search_opened",
       expect.objectContaining({ row: "prop:surface", col: "page_type" }),
     );
-    expect(answer).toMatchObject({
+    expect(answer.total).toBe(70);
+    expect(visitorData(answer)).toEqual({
       rows: ["hero", "header"],
       cols: ["home", "park"],
       counts: [
         [40, 0],
         [5, 25],
       ],
-      total: 70,
     });
     expect(
       z
@@ -380,15 +415,15 @@ describe("site statistic tools", () => {
       })),
     };
     const answer = await run(searchReportTool, { limit: 1 }, service);
-    expect(answer.surfaces).toEqual([
+    expect(visitorData(answer).surfaces).toEqual([
       expect.objectContaining({
         surface: "hero",
         clickRate: 0.333,
         noResultRate: 0.333,
       }),
     ]);
-    expect(answer.bySurfaceAndPageType).toHaveLength(1);
-    expect(answer).not.toHaveProperty("series");
+    expect(visitorData(answer).bySurfaceAndPageType).toHaveLength(1);
+    expect(visitorData(answer)).not.toHaveProperty("series");
   });
 
   it("seo tools pass channel, kind and limit, and default to search and parks", async () => {
@@ -452,19 +487,21 @@ describe("site statistic tools", () => {
     expect(seo.landingPages).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "search", limit: 25 }),
     );
-    expect((landing.items as Array<{ bounceRate: number }>)[0].bounceRate).toBe(
-      0.556,
-    );
+    expect(
+      (visitorData(landing).items as Array<{ bounceRate: number }>)[0]
+        .bounceRate,
+    ).toBe(0.556);
 
     const trends = await run(seoTrendsTool, { channel: "ai", limit: 3 }, seo);
     expect(seo.trends).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "ai" }),
     );
-    expect(trends.rising).toHaveLength(3);
+    expect(visitorData(trends).rising).toHaveLength(3);
 
     const notFound = await run(seoNotFoundTool, {}, seo);
     expect(
-      (notFound.items as Array<{ referrers: unknown[] }>)[0].referrers,
+      (visitorData(notFound).items as Array<{ referrers: unknown[] }>)[0]
+        .referrers,
     ).toHaveLength(5);
 
     const uncovered = await run(seoUncoveredTool, {}, seo);

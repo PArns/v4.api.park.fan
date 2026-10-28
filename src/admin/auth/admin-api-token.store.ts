@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { EntityManager, Repository } from "typeorm";
 import { AdminApiToken } from "./entities/admin-api-token.entity";
 import { AdminApiTokenSecret } from "./entities/admin-api-token-secret.entity";
 import { lesserRole, type AdminRole } from "./entities/admin-user.entity";
@@ -64,6 +64,30 @@ export const REFRESH_REUSE_GRACE_SECONDS = 10;
 const LAST_USED_RESOLUTION_MS = 60_000;
 const PURGE_INTERVAL_MS = 60 * 60 * 1000;
 
+/** An exchange for an account that signed out everywhere after the approval. */
+export class GrantRefusedError extends Error {
+  constructor() {
+    super("The account signed out everywhere after this code was approved");
+  }
+}
+
+/**
+ * Lock the account's row for the rest of the transaction and read its
+ * sign-out cut-off. `signOutEverywhere` writes the cut-off on the same row, so
+ * a token is either issued before it (and revoked with the rest) or after it.
+ */
+async function lockAccount(
+  manager: EntityManager,
+  userId: string,
+): Promise<Date | null> {
+  const rows = (await manager.query(
+    `SELECT tokens_revoked_at FROM admin_users WHERE id = $1::uuid FOR UPDATE`,
+    [userId],
+  )) as Array<{ tokens_revoked_at: Date | null }>;
+  if (rows.length === 0) throw new GrantRefusedError();
+  return rows[0].tokens_revoked_at ? new Date(rows[0].tokens_revoked_at) : null;
+}
+
 /** Lets each row of an UPDATE … RETURNING through TypeORM's `[rows, count]`. */
 function returnedRows<T>(result: unknown): T[] {
   if (Array.isArray(result) && Array.isArray(result[0]))
@@ -120,15 +144,6 @@ export class AdminApiTokenStore {
     name: string,
     expiresInDays: number | null,
   ): Promise<{ token: string; item: AdminApiTokenItem }> {
-    const active = await this.activeQuery(userId)
-      .andWhere("t.kind = 'pat'")
-      .getCount();
-    if (active >= MAX_ACTIVE_PATS_PER_USER) {
-      throw new BadRequestException(
-        `At most ${MAX_ACTIVE_PATS_PER_USER} active tokens per account — revoke one first`,
-      );
-    }
-
     const token = generateToken(PAT_PREFIX);
     const expiresAt = expiresInDays
       ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
@@ -136,6 +151,20 @@ export class AdminApiTokenStore {
     const scope = DEFAULT_ADMIN_TOKEN_SCOPE;
 
     const row = await this.tokens.manager.transaction(async (manager) => {
+      // Counted under the account's row lock, so two parallel creations
+      // cannot both pass the cap.
+      await lockAccount(manager, userId);
+      const [{ active }] = (await manager.query(
+        `SELECT count(*)::int AS active FROM admin_api_tokens
+          WHERE user_id = $1::uuid AND kind = 'pat' AND revoked_at IS NULL
+            AND (expires_at IS NULL OR expires_at > now())`,
+        [userId],
+      )) as Array<{ active: number }>;
+      if (active >= MAX_ACTIVE_PATS_PER_USER) {
+        throw new BadRequestException(
+          `At most ${MAX_ACTIVE_PATS_PER_USER} active tokens per account — revoke one first`,
+        );
+      }
       const saved = await manager.save(
         manager.create(AdminApiToken, {
           userId,
@@ -165,18 +194,27 @@ export class AdminApiTokenStore {
     return { token, item: toTokenItem(row) };
   }
 
-  /** A new grant for an approved, exchanged authorization code. */
+  /**
+   * A new grant for an approved, exchanged authorization code. Refused with
+   * {@link GrantRefusedError} when the account signed out everywhere after
+   * the approval: the code was meant to die with its sessions.
+   */
   async issueOAuthGrant(input: {
     userId: string;
     clientId: string;
     clientName: string;
     scope: AdminTokenScope;
+    approvedAt: Date;
   }): Promise<IssuedOAuthTokens> {
     const access = generateToken(OAUTH_ACCESS_PREFIX);
     const refresh = generateToken(OAUTH_REFRESH_PREFIX);
     const refreshExpiresAt = this.refreshExpiry();
 
     const row = await this.tokens.manager.transaction(async (manager) => {
+      const cutoff = await lockAccount(manager, input.userId);
+      if (cutoff && input.approvedAt.getTime() <= cutoff.getTime()) {
+        throw new GrantRefusedError();
+      }
       const saved = await manager.save(
         manager.create(AdminApiToken, {
           userId: input.userId,
@@ -248,6 +286,7 @@ export class AdminApiTokenStore {
             AND EXISTS (
               SELECT 1 FROM admin_users u
                WHERE u.id = t.user_id AND u.is_active
+                 AND (u.tokens_revoked_at IS NULL OR t.created_at > u.tokens_revoked_at)
             )
         RETURNING t.id AS token_id, t.user_id, t.scope`,
         [hash, clientId],
@@ -336,7 +375,8 @@ export class AdminApiTokenStore {
           AND s.kind IN ('pat', 'access')
           AND (s.expires_at IS NULL OR s.expires_at > now())
           AND t.revoked_at IS NULL
-          AND (t.expires_at IS NULL OR t.expires_at > now())`,
+          AND (t.expires_at IS NULL OR t.expires_at > now())
+          AND (u.tokens_revoked_at IS NULL OR t.created_at > u.tokens_revoked_at)`,
       [hashToken(token)],
     )) as Array<{
       id: string;

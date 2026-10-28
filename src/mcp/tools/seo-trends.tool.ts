@@ -7,6 +7,7 @@ import {
   siteQuery,
   windowOf,
 } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const seoTrendsTool = defineMcpTool({
   name: "seo_trends",
@@ -17,7 +18,8 @@ export const seoTrendsTool = defineMcpTool({
     "(absolute visits). Only pages with at least 10 visits over both windows, so noise does not " +
     "rank. Use a window of 7 or 28 days to compare like weekdays; at most 180. The window before " +
     "ends at the current hour, like today. UTC days; up to six minutes " +
-    "behind the site; Do Not Track, GPC and opted-out readers are missing.",
+    "behind the site; Do Not Track, GPC and opted-out readers are missing. " +
+    VISITOR_DATA_DESCRIPTION,
   input: {
     channel: z
       .enum(CHANNELS)
@@ -36,11 +38,12 @@ export const seoTrendsTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsSeoService)
       .trends({ ...siteQuery(input), channel });
-    return {
-      ...windowOf(report),
-      channel: report.channel,
-      rising: report.rising.slice(0, limit),
-      falling: report.falling.slice(0, limit),
-    };
+    return withVisitorData(
+      { ...windowOf(report), channel: report.channel },
+      {
+        rising: report.rising.slice(0, limit),
+        falling: report.falling.slice(0, limit),
+      },
+    );
   },
 });

@@ -153,6 +153,14 @@ export class AdminUser {
   @Column({ name: "totp_last_step", type: "bigint", nullable: true })
   totpLastStep: string | null;
 
+  /**
+   * When every way into the account was last ended (`signOutEverywhere`). An
+   * API token created before it, or an OAuth code approved before it, is
+   * refused even when its own row was written in the same instant.
+   */
+  @Column({ name: "tokens_revoked_at", type: "timestamptz", nullable: true })
+  tokensRevokedAt: Date | null;
+
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 

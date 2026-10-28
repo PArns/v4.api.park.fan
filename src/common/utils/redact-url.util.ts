@@ -46,7 +46,14 @@ const REDACTED_PARAMS = new Set([
   "state",
 ]);
 
-export function redactUrl(url: string): string {
+/**
+ * Path segments that are capabilities: the id of a pending OAuth request, which
+ * any admin session could answer while it lives (docs/admin/mcp.md).
+ */
+const REDACTED_PATH = /(\/admin\/oauth\/requests\/)[^/?#]+/i;
+
+export function redactUrl(rawUrl: string): string {
+  const url = rawUrl.replace(REDACTED_PATH, "$1***");
   const cut = url.indexOf("?");
   if (cut === -1) return url;
 

@@ -1,6 +1,9 @@
 import { checkRedirectUri, isRegisteredRedirect } from "./redirect-uri.util";
 
-const CLAUDE = ["claude.ai", "claude.com"];
+const CLAUDE = {
+  hosts: ["claude.ai", "claude.com"],
+  paths: ["/api/mcp/auth_callback"],
+};
 
 describe("checkRedirectUri", () => {
   it.each([
@@ -16,7 +19,23 @@ describe("checkRedirectUri", () => {
 
   it.each([
     ["an https host off the list", "https://evil.example/cb"],
-    ["a subdomain of an allowed host", "https://evil.claude.ai/cb"],
+    [
+      "a subdomain of an allowed host",
+      "https://evil.claude.ai/api/mcp/auth_callback",
+    ],
+    ["another path on an allowed host", "https://claude.ai/share/abc"],
+    [
+      "the callback with a query",
+      "https://claude.ai/api/mcp/auth_callback?next=/x",
+    ],
+    [
+      "the callback on another port",
+      "https://claude.ai:8443/api/mcp/auth_callback",
+    ],
+    [
+      "the callback with a trailing slash",
+      "https://claude.ai/api/mcp/auth_callback/",
+    ],
     ["plain http elsewhere", "http://claude.ai/cb"],
     ["plain http on a LAN address", "http://192.168.1.2/cb"],
     ["a loopback look-alike", "http://localhost.evil.example/cb"],
@@ -35,9 +54,26 @@ describe("checkRedirectUri", () => {
     expect(checkRedirectUri("", CLAUDE).ok).toBe(false);
   });
 
-  it("allows any https host when the list is *", () => {
-    expect(checkRedirectUri("https://chatgpt.com/cb", "*").ok).toBe(true);
-    expect(checkRedirectUri("http://chatgpt.com/cb", "*").ok).toBe(false);
+  it("allows any https host when the host list is *, still on the pinned paths", () => {
+    const anyHost = { hosts: "*" as const, paths: ["/cb"] };
+    expect(checkRedirectUri("https://chatgpt.com/cb", anyHost).ok).toBe(true);
+    expect(checkRedirectUri("https://chatgpt.com/other", anyHost).ok).toBe(
+      false,
+    );
+    expect(checkRedirectUri("http://chatgpt.com/cb", anyHost).ok).toBe(false);
+  });
+
+  it("allows any path when the path list is *", () => {
+    const anyPath = { hosts: ["claude.ai"], paths: "*" as const };
+    expect(checkRedirectUri("https://claude.ai/anything?x=1", anyPath).ok).toBe(
+      true,
+    );
+  });
+
+  it("keeps loopback redirects free of the path list", () => {
+    expect(
+      checkRedirectUri("http://localhost:6274/oauth/callback", CLAUDE).ok,
+    ).toBe(true);
   });
 });
 

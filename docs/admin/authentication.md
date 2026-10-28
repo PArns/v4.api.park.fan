@@ -147,7 +147,8 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
   no shared pass, so a token never reaches an admin REST route, the token endpoints or the consent.
 - **Ended with the sessions.** `AdminAuthService.signOutEverywhere` revokes them wherever the
   account's sessions end: deactivation, password change or reset, second-factor reset, sign out
-  everywhere.
+  everywhere. It sets `admin_users.tokens_revoked_at` first, and every lookup refuses a token created
+  before it, so one issued while the sweep ran does not survive it.
 - **Created only with a session.** `GET/POST/DELETE /v1/admin/auth/tokens` and the consent endpoints
   are `@AdminLegacyAccess(false)` and reachable by sessions only; creating, revoking and granting
   write audit rows.

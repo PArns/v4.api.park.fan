@@ -6,7 +6,8 @@ export const whoamiTool = defineMcpTool({
   description:
     "The park.fan admin account this connection acts for: email, name, the role it may use here " +
     "(always read-only through this server) and how it signed in (personal access token or OAuth " +
-    "grant, with the client name). Call it to check the connection works.",
+    "grant, with the name the OAuth client registered itself under, unverified). Call it to check " +
+    "the connection works.",
   input: {},
   async handler(_input, { admin }) {
     return {

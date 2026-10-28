@@ -37,6 +37,7 @@ async function rejection(promise: Promise<unknown>): Promise<OAuthError> {
 describe("OAuthClientService.register", () => {
   beforeEach(() => {
     delete process.env.OAUTH_REDIRECT_HOSTS;
+    delete process.env.OAUTH_REDIRECT_PATHS;
   });
 
   it("registers a public client and says so whatever was asked for", async () => {
@@ -116,14 +117,14 @@ describe("OAuthClientService.register", () => {
     const { service } = build();
     const answer = await service.register(
       {
-        client_name: `Claude\u0000‮${"x".repeat(200)}`,
+        client_name: `Claude${String.fromCodePoint(0x00, 0x202e)}${"x".repeat(200)}`,
         redirect_uris: ["http://localhost/cb"],
       },
       null,
     );
     expect(answer.client_name.startsWith("Claude")).toBe(true);
-    expect(answer.client_name).not.toContain("\u0000");
-    expect(answer.client_name).not.toContain("\u202e");
+    expect(answer.client_name).not.toContain(String.fromCodePoint(0x00));
+    expect(answer.client_name).not.toContain(String.fromCodePoint(0x202e));
     expect(answer.client_name.length).toBeLessThanOrEqual(100);
   });
 
@@ -136,15 +137,52 @@ describe("OAuthClientService.register", () => {
     await expect(service.register(body, "203.0.113.9")).resolves.toBeDefined();
   });
 
-  it("makes room by deleting the oldest unused registrations, never by refusing", async () => {
+  it("makes room by deleting the oldest unused registrations past their first hour", async () => {
     const { service, repository } = build(1000);
     await expect(
       service.register({ redirect_uris: ["http://localhost/cb"] }, null),
     ).resolves.toBeDefined();
-    expect(repository.find).toHaveBeenCalledWith(
-      expect.objectContaining({ order: { createdAt: "ASC" }, take: 1 }),
+    const [query] = repository.find.mock.calls[0] as unknown as [
+      { where: { createdAt: { value: Date } }; order: unknown; take: number },
+    ];
+    expect(query).toMatchObject({ order: { createdAt: "ASC" }, take: 1 });
+    // Nothing registered within the last hour is a candidate.
+    expect(query.where.createdAt.value.getTime()).toBeLessThanOrEqual(
+      Date.now() - 60 * 60 * 1000 + 1000,
     );
     expect(repository.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it("trims a registrant's own surplus first, whoever else is waiting", async () => {
+    const { service, repository } = build(10);
+    await service.register(
+      { redirect_uris: ["http://localhost/cb"] },
+      "198.51.100.7",
+    );
+    expect(repository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ registrant: expect.any(String) }),
+        order: { createdAt: "DESC" },
+        skip: 19,
+      }),
+    );
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registrant: expect.stringMatching(/^[0-9a-f]{32}$/),
+      }),
+    );
+  });
+
+  it("refuses only when the hard bound is full of young registrations", async () => {
+    const { service, repository } = build(5000);
+    repository.find.mockResolvedValue([]);
+    const error = await rejection(
+      service.register({ redirect_uris: ["http://localhost/cb"] }, null),
+    );
+    expect(error).toMatchObject({
+      code: "temporarily_unavailable",
+      status: 429,
+    });
   });
 
   it("deletes stale registrations nobody used before counting", async () => {

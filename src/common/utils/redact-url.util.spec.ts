@@ -66,4 +66,16 @@ describe("redactUrl", () => {
       "/v1/mcp?access_token=***",
     );
   });
+
+  it("hides the id of a pending OAuth request in the path", () => {
+    expect(redactUrl("/v1/admin/oauth/requests/AbC-123_xyz")).toBe(
+      "/v1/admin/oauth/requests/***",
+    );
+    expect(redactUrl("/v1/admin/oauth/requests/AbC-123_xyz/approve")).toBe(
+      "/v1/admin/oauth/requests/***/approve",
+    );
+    expect(redactUrl("/V1/ADMIN/OAUTH/REQUESTS/AbC/deny?pass=x")).toBe(
+      "/V1/ADMIN/OAUTH/REQUESTS/***/deny?pass=***",
+    );
+  });
 });

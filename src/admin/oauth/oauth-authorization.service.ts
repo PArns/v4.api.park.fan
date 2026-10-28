@@ -2,12 +2,19 @@ import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
+  checkRateLimit,
+  hashRateLimitKey,
+} from "../../common/redis/rate-limit.util";
+import {
   getApiPublicUrl,
   getFrontendUrl,
   getMcpResourceUrl,
-  getOAuthRedirectHosts,
+  getOAuthRedirectPolicy,
 } from "../../config/oauth.config";
-import { AdminApiTokenStore } from "../auth/admin-api-token.store";
+import {
+  AdminApiTokenStore,
+  GrantRefusedError,
+} from "../auth/admin-api-token.store";
 import type { IssuedOAuthTokens } from "../auth/admin-api-token.store";
 import { AdminAuthService } from "../auth/admin-auth.service";
 import { AdminAuditService } from "../auth/admin-audit.service";
@@ -34,6 +41,14 @@ const USED_CODE_MEMORY_SECONDS = 10 * 60;
 
 const MAX_STATE_LENGTH = 1024;
 
+/**
+ * Pending requests are written to Redis before anybody has signed in, so
+ * strangers can create them: per address bucket (IPv4, IPv6 /64) and per
+ * client, at most this many in {@link PENDING_REQUEST_TTL_SECONDS}.
+ */
+export const MAX_PENDING_PER_ADDRESS = 30;
+export const MAX_PENDING_PER_CLIENT = 30;
+
 const REQUEST_PREFIX = "admin:oauth:request:";
 const CODE_PREFIX = "admin:oauth:code:";
 const USED_CODE_PREFIX = "admin:oauth:code-used:";
@@ -52,6 +67,8 @@ interface PendingRequest {
 }
 
 interface StoredCode {
+  /** Epoch ms of the approval; a sign-out-everywhere after it voids the code. */
+  approvedAt: number;
   clientId: string;
   redirectUri: string;
   redirectUriGiven: boolean;
@@ -153,7 +170,20 @@ export class OAuthAuthorizationService {
    * page here: an error sent to an unchecked URI is an open redirect. After
    * that, failures go back to the client as RFC 6749 §4.1.2.1 errors.
    */
-  async authorize(params: Params): Promise<AuthorizeOutcome> {
+  async authorize(
+    params: Params,
+    addressBucket: string | null = null,
+  ): Promise<AuthorizeOutcome> {
+    if (
+      addressBucket &&
+      !(await this.withinLimit(
+        `admin:oauth:authorize:${hashRateLimitKey(addressBucket)}`,
+        MAX_PENDING_PER_ADDRESS,
+      ))
+    ) {
+      return { kind: "error-page", message: "rate-limited" };
+    }
+
     const clientId = single(params, "client_id");
     const client = clientId ? await this.clients.find(clientId) : null;
     if (!client) return { kind: "error-page", message: "unknown-client" };
@@ -174,7 +204,7 @@ export class OAuthAuthorizationService {
       return { kind: "error-page", message: "invalid-request" };
     }
     // The allowed hosts may have narrowed since the client registered.
-    if (!checkRedirectUri(redirectUri, getOAuthRedirectHosts()).ok) {
+    if (!checkRedirectUri(redirectUri, getOAuthRedirectPolicy()).ok) {
       return { kind: "error-page", message: "invalid-redirect" };
     }
 
@@ -214,6 +244,18 @@ export class OAuthAuthorizationService {
     }
     if (single(params, "scope") === null) {
       return fail("invalid_scope", "scope was given more than once");
+    }
+
+    if (
+      !(await this.withinLimit(
+        `admin:oauth:pending:${client.clientId}`,
+        MAX_PENDING_PER_CLIENT,
+      ))
+    ) {
+      return fail(
+        "temporarily_unavailable",
+        "Too many open authorization requests for this client; try again in a few minutes",
+      );
     }
 
     const id = generateToken();
@@ -267,6 +309,7 @@ export class OAuthAuthorizationService {
 
     const code = generateToken();
     const stored: StoredCode = {
+      approvedAt: Date.now(),
       clientId: pending.clientId,
       redirectUri: pending.redirectUri,
       redirectUriGiven: pending.redirectUriGiven,
@@ -373,12 +416,21 @@ export class OAuthAuthorizationService {
       throw new OAuthError("invalid_grant", "The account is not active");
     }
 
-    const issued = await this.tokens.issueOAuthGrant({
-      userId: stored.userId,
-      clientId: client.clientId,
-      clientName: client.clientName,
-      scope: stored.scope,
-    });
+    let issued: IssuedOAuthTokens;
+    try {
+      issued = await this.tokens.issueOAuthGrant({
+        userId: stored.userId,
+        clientId: client.clientId,
+        clientName: client.clientName,
+        scope: stored.scope,
+        approvedAt: new Date(stored.approvedAt ?? 0),
+      });
+    } catch (error) {
+      if (error instanceof GrantRefusedError) {
+        throw new OAuthError("invalid_grant", error.message);
+      }
+      throw error;
+    }
     await this.redis.set(
       USED_CODE_PREFIX + codeHash,
       issued.tokenId,
@@ -427,6 +479,18 @@ export class OAuthAuthorizationService {
     const token = requireField(params, "token");
     const clientId = requireField(params, "client_id");
     await this.tokens.revokeByValue(token, clientId);
+  }
+
+  private async withinLimit(key: string, max: number): Promise<boolean> {
+    const verdict = await checkRateLimit({
+      redis: this.redis,
+      logger: this.logger,
+      label: "OAuth authorize limiter",
+      key,
+      max,
+      windowSeconds: PENDING_REQUEST_TTL_SECONDS,
+    });
+    return verdict.allowed;
   }
 
   private async readPending(

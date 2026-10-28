@@ -7,6 +7,7 @@ import {
   pageWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const searchReportTool = defineMcpTool({
   name: "search_report",
@@ -19,7 +20,8 @@ export const searchReportTool = defineMcpTool({
     "typed; openings by page type and viewport; which kinds of result were clicked and at which " +
     "position; optionally the openings per day and surface. Search queries themselves are never " +
     "recorded. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers " +
-    "are missing.",
+    "are missing. " +
+    VISITOR_DATA_DESCRIPTION,
   input: {
     ...pageWindowInput,
     limit: z
@@ -36,8 +38,7 @@ export const searchReportTool = defineMcpTool({
   },
   async handler({ limit, series, ...input }, ctx) {
     const report = await ctx.get(SiteAnalyticsService).search(siteQuery(input));
-    return {
-      ...windowOf(report),
+    return withVisitorData(windowOf(report), {
       surfaces: report.surfaces.map((surface) => ({
         ...surface,
         clickRate: round3(surface.clickRate),
@@ -49,6 +50,6 @@ export const searchReportTool = defineMcpTool({
       positions: report.positions,
       browseItems: report.browseItems.slice(0, limit),
       ...(series && { series: report.series }),
-    };
+    });
   },
 });

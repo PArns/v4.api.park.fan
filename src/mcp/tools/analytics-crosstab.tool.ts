@@ -4,6 +4,7 @@ import { SiteAnalyticsService } from "../../site-analytics/site-analytics.servic
 import { EVENT_NAME_PATTERN } from "../../site-analytics/site-analytics.hits";
 import { CROSSTAB_AXIS_PATTERN } from "../../site-analytics/site-analytics.query";
 import { siteQuery, pageWindowInput, windowOf } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const SIDE_HELP =
   "page_type, viewport, locale, day, path, country, browser, os, or " +
@@ -20,7 +21,8 @@ export const analyticsCrosstabTool = defineMcpTool({
     'col=viewport). Each side keeps its 30 largest values and folds the rest into "__rest__" ' +
     '(a page type may itself be "other"); "(none)" is an empty value; day ' +
     "keeps every day. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out " +
-    "readers are missing.",
+    "readers are missing. " +
+    VISITOR_DATA_DESCRIPTION,
   input: {
     name: z
       .string()
@@ -48,15 +50,15 @@ export const analyticsCrosstabTool = defineMcpTool({
       const j = colIndex.get(cell.col);
       if (i !== undefined && j !== undefined) counts[i][j] += cell.count;
     }
-    return {
-      ...windowOf(report),
-      name: report.name,
-      row: report.row,
-      col: report.col,
-      total: report.total,
-      rows: report.rows,
-      cols: report.cols,
-      counts,
-    };
+    return withVisitorData(
+      {
+        ...windowOf(report),
+        name: report.name,
+        row: report.row,
+        col: report.col,
+        total: report.total,
+      },
+      { rows: report.rows, cols: report.cols, counts },
+    );
   },
 });
