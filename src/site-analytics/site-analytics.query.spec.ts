@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { EVENT_DIMS, PAGE_DIMS } from "./site-analytics.constants";
+import { HourlyReach } from "./site-analytics.retention";
 import {
   SqlParams,
   averageSeconds,
@@ -51,6 +52,9 @@ describe("site-analytics.query", () => {
         end: "2026-09-28T08:00:00.000Z",
       },
       hourly: false,
+      // The chunk of 30 July is the oldest the nightly job keeps today.
+      horizon: "2026-07-30",
+      reach: expect.any(HourlyReach),
     });
     expect(siteAnalyticsWindow({ days: 1, locale: "nl" }, NOW)).toMatchObject({
       from: "2026-10-28",
@@ -70,9 +74,20 @@ describe("site-analytics.query", () => {
     ).toBe("2026-10-22T00:00:00.000Z");
   });
 
-  it("has no window before past 180 days, which would lie past the retention", () => {
+  it("has no window before past 180 days, which would lie past the daily rows' retention", () => {
     expect(siteAnalyticsWindow({ days: 180 }, NOW).previous).not.toBeNull();
     expect(siteAnalyticsWindow({ days: 181 }, NOW).previous).toBeNull();
+  });
+
+  it("gives every window its own reach, which says nothing until a statement has read hourly rows past the horizon", () => {
+    const first = siteAnalyticsWindow({ days: 365 }, NOW);
+    const second = siteAnalyticsWindow({ days: 365 }, NOW);
+    first.reach.note(
+      [{ start: "2025-10-29T00:00:00.000Z", end: "2026-10-29T00:00:00.000Z" }],
+      new Set(["2026-01-01"]),
+    );
+    expect(first.reach.hourlyFrom).toBe("2026-07-30");
+    expect(second.reach.hourlyFrom).toBeNull();
   });
 
   it("makes a from–to window ending before today, with a whole window before it", () => {

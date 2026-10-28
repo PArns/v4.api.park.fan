@@ -264,6 +264,29 @@ export function splitRanges(
   return { daily, hourly };
 }
 
+/**
+ * The ranges, each one that ends inside a day taking the rest of the day when
+ * that day lies before `horizon` and is rolled up. The window before ends at
+ * the hour of its last day, so that the change compares like with like; past
+ * the horizon the hourly rows of that day are gone, and the daily row, which
+ * holds the whole day, is all there is. A little more than its share of one
+ * day in ninety is better than the hours missing.
+ */
+export function takeRolledDaysWhole(
+  ranges: readonly BucketRange[],
+  horizon: string,
+  rolled: ReadonlySet<string>,
+): BucketRange[] {
+  return ranges.map((range) => {
+    const end = Date.parse(range.end);
+    const startOfDay = Math.floor(end / DAY_MS) * DAY_MS;
+    const day = dayOfMs(startOfDay);
+    return end !== startOfDay && day < horizon && rolled.has(day)
+      ? { start: range.start, end: new Date(startOfDay + DAY_MS).toISOString() }
+      : { ...range };
+  });
+}
+
 /** `bucket >= $1 AND bucket < $2`, and `(…) OR (…)` for more than one range. */
 function rangesCondition(params: SqlParams, ranges: BucketRange[]): string {
   const parts = ranges.map(
@@ -343,6 +366,24 @@ export type RolledDays = (
 ) => Promise<ReadonlySet<string>>;
 
 /**
+ * Tells the window's report that a statement reads these ranges from the
+ * hourly rows, which matters only for days before the hourly horizon whose
+ * chunk the nightly job has dropped. A day's marker for the first cuboid of
+ * the source says it was rolled up and so may be gone; the markers are read
+ * only when a range reaches before the horizon at all.
+ */
+async function noteHourlyReads(
+  reach: SiteAnalyticsWindow["reach"],
+  source: RollupSource,
+  ranges: readonly BucketRange[],
+  rolledDays: RolledDays,
+): Promise<void> {
+  if (!reach.reachesBefore(ranges)) return;
+  const [first] = ROLLUP_TABLES[source].cuboids;
+  reach.note(ranges, await rolledDays(source, first.id));
+}
+
+/**
  * What a statement puts after `FROM` and `WHERE` to read the page-view or
  * event rows of a window: the hourly table as before, or, when the statement
  * reads only columns of some cuboid and whole days of the window are rolled
@@ -351,7 +392,12 @@ export type RolledDays = (
  * statement lists in `needed` every dimension column it reads; those of the
  * window's filters are added. An hourly series reads the hourly rows.
  * `collapse` says the statement reads no bucket, only those columns: the days
- * are summed together before the statement groups them.
+ * are summed together before the statement groups them. A statement tells
+ * the window's `reach` which days before the hourly horizon it may be
+ * missing: those it reads from the hourly rows for want of a cuboid, for an
+ * hourly series, or because the daily rows lack them for its cuboid. The
+ * window before's last day, which its end cuts at an hour, is taken whole from
+ * the daily rows past the horizon ({@link takeRolledDaysWhole}).
  */
 export async function rowsOf(
   rolledDays: RolledDays,
@@ -359,7 +405,14 @@ export async function rowsOf(
   params: SqlParams,
   window: Pick<
     SiteAnalyticsWindow,
-    "locale" | "filters" | "start" | "end" | "previous" | "hourly"
+    | "locale"
+    | "filters"
+    | "start"
+    | "end"
+    | "previous"
+    | "hourly"
+    | "reach"
+    | "horizon"
   >,
   scope: "current" | "both",
   needed: readonly string[],
@@ -371,19 +424,43 @@ export async function rowsOf(
     from: alias ? `${table.hourly} ${alias}` : table.hourly,
     where: whereOf(params, window, scope, alias),
   });
-  if (window.hourly) return hourly();
-  const cuboid = chooseCuboid(source, [
-    ...needed,
-    ...window.filters.map((filter) => columnOf(filter.dim)),
-  ]);
-  if (!cuboid) return hourly();
+  const cuboid = window.hourly
+    ? null
+    : chooseCuboid(source, [
+        ...needed,
+        ...window.filters.map((filter) => columnOf(filter.dim)),
+      ]);
+  if (!cuboid) {
+    await noteHourlyReads(
+      window.reach,
+      source,
+      bucketRanges(window, scope),
+      rolledDays,
+    );
+    return hourly();
+  }
+  const rolled = await rolledDays(source, cuboid.id);
+  const ranges = takeRolledDaysWhole(
+    bucketRanges(window, scope),
+    window.horizon,
+    rolled,
+  );
+  // What the daily rows cannot give is read hourly: today, and a day not
+  // rolled up for this cuboid. Where that lies before the horizon and the
+  // statistic rolled the day up for another, the hourly rows are gone.
+  await noteHourlyReads(
+    window.reach,
+    source,
+    splitRanges(ranges, rolled).hourly,
+    rolledDays,
+  );
   const from = rolledSource(
     source,
     cuboid,
     params,
     window,
-    bucketRanges(window, scope),
-    await rolledDays(source, cuboid.id),
+    ranges,
+    rolled,
     alias || table.hourly,
     options.collapse ? needed : null,
   );

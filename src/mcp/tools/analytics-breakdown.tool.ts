@@ -10,6 +10,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { SMALL_CELLS_DESCRIPTION, foldSmallRows } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsBreakdownTool = defineMcpTool({
@@ -28,6 +29,8 @@ export const analyticsBreakdownTool = defineMcpTool({
     "dim=referrer with channel=ai which AI assistants send readers. Direct visits have no " +
     "referrer. " +
     VISITOR_DATA_DESCRIPTION +
+    " " +
+    SMALL_CELLS_DESCRIPTION +
     " " +
     SITE_ANALYTICS_CAVEATS,
   input: {
@@ -57,7 +60,11 @@ export const analyticsBreakdownTool = defineMcpTool({
         total: report.total,
       },
       {
-        items: report.items.map((item) => ({
+        items: foldSmallRows(report.items, {
+          dims: ["value"],
+          count: "views",
+          sum: ["views", "visits", "share", "exits"],
+        }).map((item) => ({
           value: item.value,
           views: item.views,
           visits: item.visits,

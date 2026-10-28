@@ -9,6 +9,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { MCP_MIN_CELL, hideSmallInSeries, isNarrowed } from "./small-cells";
 import type { SiteTotalsDto } from "../../site-analytics/dto/site-analytics.dto";
 
 function totals(t: SiteTotalsDto) {
@@ -34,6 +35,9 @@ export const analyticsOverviewTool = defineMcpTool({
     "active visitors of the last five minutes and page views of the last 30, and optionally a " +
     "point per period of the interval with every one of those figures. Start here, then narrow " +
     "with analytics_breakdown; analytics_live shows the last half hour minute by minute. " +
+    `Under a filter or a language the series has its values from 1 to ${MCP_MIN_CELL - 1} (and the ` +
+    "rates and averages computed from them) as null, and smallValuesHidden says whether any were; " +
+    "totals and a series of the whole site are as counted. " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     ...siteWindowInput,
@@ -48,6 +52,25 @@ export const analyticsOverviewTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .overview(siteQuery(input));
+    const points = report.series.map((point) => ({
+      ...point,
+      viewsPerVisit: round3(point.viewsPerVisit),
+      bounceRate: round3(point.bounceRate),
+    }));
+    // A series of the whole site's totals is as it is; under a filter or a
+    // language each point is a small cell.
+    const shown = isNarrowed(input)
+      ? hideSmallInSeries(
+          points,
+          ["pageviews", "visits", "visitors", "events"],
+          {
+            viewsPerVisit: ["visits", "pageviews"],
+            bounceRate: ["visits"],
+            avgVisitSeconds: ["visits"],
+            avgTimeOnPageSeconds: ["pageviews"],
+          },
+        )
+      : { series: points, hidden: false };
     return {
       ...windowOf(report),
       totals: totals(report.totals),
@@ -70,11 +93,8 @@ export const analyticsOverviewTool = defineMcpTool({
         ),
       },
       ...(series && {
-        series: report.series.map((point) => ({
-          ...point,
-          viewsPerVisit: round3(point.viewsPerVisit),
-          bounceRate: round3(point.bounceRate),
-        })),
+        series: shown.series,
+        ...(isNarrowed(input) && { smallValuesHidden: shown.hidden }),
       }),
     };
   },

@@ -9,6 +9,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { SMALL_CELLS_DESCRIPTION, foldSmallRows } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const seoLandingPagesTool = defineMcpTool({
@@ -23,6 +24,8 @@ export const seoLandingPagesTool = defineMcpTool({
     "has; it knows nothing of rankings, impressions or queries. " +
     VISITOR_DATA_DESCRIPTION +
     " " +
+    SMALL_CELLS_DESCRIPTION +
+    " Under (other) the page type, bounce rate, average visit and sources are null. " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     channel: z
@@ -45,7 +48,21 @@ export const seoLandingPagesTool = defineMcpTool({
     return withVisitorData(
       { ...windowOf(report), channel: report.channel },
       {
-        items: report.items.map((page) => ({
+        items: foldSmallRows(
+          report.items.map((page) => ({
+            ...page,
+            sources: foldSmallRows(page.sources, {
+              dims: ["value"],
+              count: "visits",
+              sum: ["visits"],
+            }),
+          })),
+          {
+            dims: ["path"],
+            count: "visits",
+            sum: ["visits", "previous", "change"],
+          },
+        ).map((page) => ({
           ...page,
           bounceRate: round3(page.bounceRate),
         })),

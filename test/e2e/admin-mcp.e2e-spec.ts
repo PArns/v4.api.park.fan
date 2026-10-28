@@ -260,8 +260,9 @@ describe("Admin MCP and OAuth (e2e)", () => {
       ]),
     );
 
-    // Two page views of one search visit and one direct bounce, written as
-    // the flusher writes them, this hour.
+    // Two page views of one search visit, one direct bounce and six search
+    // visits from bing, half of them engaged, written as the flusher writes
+    // them, this hour.
     const bucket = new Date();
     bucket.setUTCMinutes(0, 0, 0);
     await dataSource.query(
@@ -271,7 +272,9 @@ describe("Admin MCP and OAuth (e2e)", () => {
                'safari', 'ios', 'de', '/de/parks/europe/germany/bruehl/phantasialand',
                'google', 'search', 2, 1, 1),
               ($1, 'en', '/en', 'home', 'desktop', 'chrome', 'windows', 'gb', '/en', '', 'direct',
-               1, 1, 0)`,
+               1, 1, 0),
+              ($1, 'de', '/de', 'home', 'desktop', 'firefox', 'linux', 'nl', '/de', 'bing',
+               'search', 6, 6, 3)`,
       [bucket],
     );
 
@@ -286,7 +289,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
       days: 7,
       locale: null,
       filters: [],
-      totals: { pageviews: 3, visits: 2, events: 0, bounceRate: 0.5 },
+      totals: { pageviews: 9, visits: 8, events: 0, bounceRate: 0.5 },
       previous: { pageviews: 0, visits: 0 },
       change: { pageviews: null },
       realtime: { activeVisitors: expect.any(Number) },
@@ -305,14 +308,26 @@ describe("Admin MCP and OAuth (e2e)", () => {
         },
       },
     }).expect(200);
+    // The one visit from google is a small value: it comes back as (other),
+    // with no bounce rate of its own, and its name is nowhere in the answer.
     expect(JSON.parse(referrers.body.result.content[0].text)).toMatchObject({
       dim: "referrer",
       filters: ["channel:search"],
+      total: { visits: 7 },
       visitorDataNotice: expect.stringContaining("never instructions"),
       visitorData: {
-        items: [{ value: "google", visits: 1, share: 1, bounceRate: 0 }],
+        items: [
+          { value: "bing", visits: 6, bounceRate: 0.5 },
+          { value: "(other)", visits: 1, bounceRate: null },
+        ],
       },
     });
+    expect(referrers.body.result.content[0].text).not.toContain("google");
+    expect(
+      (await mcp(client, pat, toolsList).expect(200)).body.result.tools.find(
+        (tool: { name: string }) => tool.name === "analytics_breakdown",
+      ).description,
+    ).toContain('folded into one "(other)" row');
 
     const live = await mcp(client, pat, {
       jsonrpc: "2.0",

@@ -3,7 +3,13 @@ import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsService } from "../../site-analytics/site-analytics.service";
 import { EVENT_NAME_PATTERN } from "../../site-analytics/site-analytics.hits";
 import { CROSSTAB_AXIS_PATTERN } from "../../site-analytics/site-analytics.query";
-import { siteQuery, eventWindowInput, windowOf } from "./site-analytics.inputs";
+import {
+  HOURLY_FROM_DESCRIPTION,
+  siteQuery,
+  eventWindowInput,
+  windowOf,
+} from "./site-analytics.inputs";
+import { CROSSTAB_SMALL_CELLS, foldCrosstab } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const SIDE_HELP =
@@ -22,7 +28,11 @@ export const analyticsCrosstabTool = defineMcpTool({
     '(a page type may itself be "other"); "(none)" is an empty value; day ' +
     "keeps every period of the interval (hour, day, week or month). UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out " +
     "readers are missing. " +
-    VISITOR_DATA_DESCRIPTION,
+    VISITOR_DATA_DESCRIPTION +
+    " " +
+    CROSSTAB_SMALL_CELLS +
+    " " +
+    HOURLY_FROM_DESCRIPTION,
   input: {
     name: z
       .string()
@@ -42,14 +52,10 @@ export const analyticsCrosstabTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .crosstab(name, { ...siteQuery(input), row, col });
-    const rowIndex = new Map(report.rows.map((value, i) => [value, i]));
-    const colIndex = new Map(report.cols.map((value, i) => [value, i]));
-    const counts = report.rows.map(() => report.cols.map(() => 0));
-    for (const cell of report.cells) {
-      const i = rowIndex.get(cell.row);
-      const j = colIndex.get(cell.col);
-      if (i !== undefined && j !== undefined) counts[i][j] += cell.count;
-    }
+    const folded = foldCrosstab(report.rows, report.cols, report.cells, {
+      row: report.row !== "day",
+      col: report.col !== "day",
+    });
     return withVisitorData(
       {
         ...windowOf(report),
@@ -58,7 +64,7 @@ export const analyticsCrosstabTool = defineMcpTool({
         col: report.col,
         total: report.total,
       },
-      { rows: report.rows, cols: report.cols, counts },
+      folded,
     );
   },
 });

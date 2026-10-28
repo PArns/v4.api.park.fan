@@ -15,13 +15,16 @@ import { SITE_ANALYTICS_HYPERTABLES } from "../database/hypertables";
 import {
   ALL_LOCALES_SCOPE,
   CLAIM_FIELD,
+  DAILY_RETENTION_DAYS,
   DROP_REASONS,
   FLUSH_WINDOW_SECONDS,
+  HOURLY_RETENTION_DAYS,
+  HYPERTABLE_RETENTION_DAYS,
   MAX_FLUSH_ATTEMPTS,
   MAX_VISITS_CLOSED_PER_RUN,
   PAGE_READ_EVENT,
   PARKED_WINDOW_TTL_SECONDS,
-  RETENTION_DAYS,
+  ROLLUP_MARKER_RETENTION_DAYS,
   ROLLUP_RUN_BUDGET_MS,
   ROLLUP_SETTLE_SECONDS,
   SITE_ANALYTICS_KEYS as KEYS,
@@ -39,6 +42,11 @@ import {
   type Cuboid,
   type RollupSource,
 } from "./site-analytics.rollup";
+import {
+  retentionCutoff,
+  unrolledDays,
+  type RollupMarker,
+} from "./site-analytics.retention";
 import { defineCloseVisitCommand } from "./site-analytics-scripts";
 
 /**
@@ -145,6 +153,55 @@ const INSERT_CHUNK_ROWS = 5000;
 
 /** How long a chunk drop waits for its lock before trying again tomorrow. */
 const DROP_LOCK_TIMEOUT = "5s";
+
+/** The hourly tables, whose chunks wait for their roll-up before they go. */
+const HOURLY_TABLES: ReadonlySet<string> = new Set(
+  Object.values(ROLLUP_TABLES).map((table) => table.hourly),
+);
+
+/**
+ * The markers a rolled-up day has: every cuboid of both sources, which one
+ * transaction writes together. A cuboid added later has none for the days
+ * before it, until the job has filled them in.
+ */
+const WANTED_MARKERS: ReadonlyArray<{ source: string; cuboid: number }> =
+  Object.values(ROLLUP_TABLES).flatMap((table) =>
+    table.cuboids.map((cuboid) => ({
+      source: table.source,
+      cuboid: cuboid.id,
+    })),
+  );
+
+/** A chunk's range, `[start, end)`. */
+interface ChunkRange {
+  start: Date;
+  end: Date;
+}
+
+/** An hourly chunk the drop left in place, and the days that kept it. */
+export interface SkippedChunk {
+  table: string;
+  /** The chunk's first UTC day. */
+  from: string;
+  /** Its days with rows that miss a roll-up marker. */
+  days: string[];
+}
+
+/** Rows deleted from the small plain tables. */
+export interface PrunedRows {
+  visitorDays: number;
+  visitorHours: number;
+  rollupMarkers: number;
+}
+
+/** What one run of the nightly retention did. */
+export interface DropOldChunksResult {
+  /** Chunks dropped per hypertable. */
+  dropped: Record<string, number>;
+  /** Hourly chunks kept because a day in them is not rolled up. */
+  skipped: SkippedChunk[];
+  pruned: PrunedRows;
+}
 
 /** The name of the one-off copy of the old most-read table. */
 export const PAGE_VIEW_DAYS_IMPORT = "page_view_days";
@@ -685,7 +742,8 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
 
   /**
    * The first day to look at: the day of the oldest hourly row, at most
-   * `RETENTION_DAYS` back; null with no rows.
+   * `DAILY_RETENTION_DAYS` back, since an older day would go with the daily
+   * rows' next chunk drop; null with no rows.
    */
   private async firstRollableDay(now: Date): Promise<string | null> {
     const rows: Array<{ day: string | null }> = await this.dataSource.query(
@@ -696,7 +754,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
     );
     const oldest = rows[0]?.day;
     if (!oldest) return null;
-    const floor = addIsoDays(utcDay(now), -RETENTION_DAYS);
+    const floor = addIsoDays(utcDay(now), -DAILY_RETENTION_DAYS);
     return oldest > floor ? oldest : floor;
   }
 
@@ -788,38 +846,175 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   }
 
   /**
-   * Drops the chunks of the statistic's hypertables that lie wholly before
-   * {@link RETENTION_DAYS}. A dropped chunk is a dropped table: nothing for
-   * VACUUM. Each drop waits at most {@link DROP_LOCK_TIMEOUT} for its lock
-   * and otherwise leaves the chunk for the next night, so a long admin read
-   * of an old chunk never queues the API behind it
-   * (docs/troubleshooting/timescaledb-lock-queues.md). Returns the chunks
-   * dropped per table.
+   * Applies the retention of every table the statistic keeps: the chunks of
+   * its hypertables that lie wholly before their cutoff
+   * (`HYPERTABLE_RETENTION_DAYS`), and the rows of the small plain tables
+   * past theirs (`pruneSmallTables`). A dropped chunk is a dropped table:
+   * nothing for VACUUM. Each drop waits at most {@link DROP_LOCK_TIMEOUT} for
+   * its lock and otherwise leaves the chunk for the next night, so a long
+   * admin read of an old chunk never queues the API behind it
+   * (docs/troubleshooting/timescaledb-lock-queues.md).
+   *
+   * An hourly chunk goes only when every day with rows in it is rolled up:
+   * has the marker of every cuboid of both sources. What the daily rows
+   * lack, the hourly rows are the only copy of. A chunk with a day that is
+   * not rolled up stays and is returned in `skipped`, for the job to fail on.
    */
-  async dropOldChunks(): Promise<Record<string, number>> {
+  async dropOldChunks(now = new Date()): Promise<DropOldChunksResult> {
     const dropped: Record<string, number> = {};
+    const skipped: SkippedChunk[] = [];
     for (const table of SITE_ANALYTICS_HYPERTABLES) {
+      dropped[table] = 0;
+      const cutoff = retentionCutoff(now, HYPERTABLE_RETENTION_DAYS[table]);
       try {
-        const chunks: unknown[] = await this.dataSource.transaction(
-          async (manager) => {
-            await manager.query(
-              `SELECT set_config('lock_timeout', '${DROP_LOCK_TIMEOUT}', true)`,
+        for (const chunk of await this.chunksBefore(table, cutoff)) {
+          const missing = HOURLY_TABLES.has(table)
+            ? await this.unrolledDaysOf(table, chunk)
+            : [];
+          if (missing.length > 0) {
+            skipped.push({
+              table,
+              from: utcDay(chunk.start),
+              days: missing,
+            });
+            continue;
+          }
+          try {
+            dropped[table] += await this.dropChunk(table, chunk);
+          } catch (error) {
+            this.logger.warn(
+              `Could not drop the ${table} chunk of ${utcDay(chunk.start)}, next night: ${(error as Error).message}`,
             );
-            return manager.query(
-              `SELECT drop_chunks($1::regclass, older_than => $2::interval)`,
-              [table, `${RETENTION_DAYS} days`],
-            );
-          },
-        );
-        dropped[table] = chunks.length;
+          }
+        }
       } catch (error) {
         this.logger.warn(
-          `Could not drop old ${table} chunks, next night: ${(error as Error).message}`,
+          `Could not check old ${table} chunks, next night: ${(error as Error).message}`,
         );
-        dropped[table] = 0;
       }
     }
-    return dropped;
+    if (skipped.length > 0) {
+      this.logger.warn(
+        `Kept ${skipped.length} hourly chunk(s) past ${HOURLY_RETENTION_DAYS} days: ` +
+          `${skipped.reduce((sum, chunk) => sum + chunk.days.length, 0)} day(s) have no roll-up marker yet`,
+      );
+    }
+    return { dropped, skipped, pruned: await this.pruneSmallTables(now) };
+  }
+
+  /** The chunks of a hypertable that lie wholly before `cutoff`, oldest first. */
+  private async chunksBefore(
+    table: string,
+    cutoff: string,
+  ): Promise<ChunkRange[]> {
+    const rows: Array<{ start: Date | string; end: Date | string }> =
+      await this.dataSource.query(
+        `SELECT range_start AS start, range_end AS end
+           FROM timescaledb_information.chunks
+          WHERE hypertable_schema = 'public' AND hypertable_name = $1
+            AND range_end <= $2::timestamptz
+          ORDER BY range_start`,
+        [table, cutoff],
+      );
+    return rows.map((row) => ({
+      start: new Date(row.start),
+      end: new Date(row.end),
+    }));
+  }
+
+  /**
+   * The days of an hourly chunk that have rows and miss a roll-up marker.
+   * A day without rows needs none: the first chunk of a table reaches back
+   * before its first row.
+   */
+  private async unrolledDaysOf(
+    table: string,
+    chunk: ChunkRange,
+  ): Promise<string[]> {
+    const days: Array<{ day: string }> = await this.dataSource.query(
+      `SELECT DISTINCT to_char(bucket AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+         FROM ${table}
+        WHERE bucket >= $1::timestamptz AND bucket < $2::timestamptz`,
+      [chunk.start.toISOString(), chunk.end.toISOString()],
+    );
+    if (days.length === 0) return [];
+    const markers: RollupMarker[] = await this.dataSource.query(
+      `SELECT source, cuboid, to_char(day, 'YYYY-MM-DD') AS day
+         FROM site_rollup_days
+        WHERE day = ANY($1::date[])`,
+      [days.map((row) => row.day)],
+    );
+    return unrolledDays(
+      days.map((row) => row.day).sort(),
+      markers,
+      WANTED_MARKERS,
+    );
+  }
+
+  /**
+   * Drops exactly one chunk: `drop_chunks` takes the chunks wholly inside
+   * `[newer_than, older_than]`, which for a chunk's own range is that chunk.
+   */
+  private async dropChunk(table: string, chunk: ChunkRange): Promise<number> {
+    const dropped: unknown[] = await this.dataSource.transaction(
+      async (manager) => {
+        await manager.query(
+          `SELECT set_config('lock_timeout', '${DROP_LOCK_TIMEOUT}', true)`,
+        );
+        return manager.query(
+          `SELECT drop_chunks($1::regclass, older_than => $2::timestamptz,
+                              newer_than => $3::timestamptz)`,
+          [table, chunk.end.toISOString(), chunk.start.toISOString()],
+        );
+      },
+    );
+    return dropped.length;
+  }
+
+  /**
+   * Deletes what the small plain tables hold past their retention: the
+   * visitor counts after {@link DAILY_RETENTION_DAYS}, the roll-up markers
+   * after {@link ROLLUP_MARKER_RETENTION_DAYS}. They are small, so a plain
+   * delete that autovacuum keeps up with does. A table that fails keeps its
+   * rows for the next night.
+   */
+  private async pruneSmallTables(now: Date): Promise<PrunedRows> {
+    const visitorCutoff = retentionCutoff(now, DAILY_RETENTION_DAYS);
+    const markerCutoff = retentionCutoff(now, ROLLUP_MARKER_RETENTION_DAYS);
+    // A statement that selects from the delete, so the driver answers with
+    // the count rather than its own pair of rows and affected count.
+    const prune = async (table: string, test: string, cutoff: string) => {
+      try {
+        const [row]: Array<{ deleted: number }> = await this.dataSource.query(
+          `WITH gone AS (DELETE FROM ${table} WHERE ${test} RETURNING 1)
+           SELECT count(*)::int AS deleted FROM gone`,
+          [cutoff],
+        );
+        return Number(row?.deleted ?? 0);
+      } catch (error) {
+        this.logger.warn(
+          `Could not prune old ${table} rows, next night: ${(error as Error).message}`,
+        );
+        return 0;
+      }
+    };
+    return {
+      visitorDays: await prune(
+        "site_visitor_days",
+        "day < $1::date",
+        visitorCutoff,
+      ),
+      visitorHours: await prune(
+        "site_visitor_hours",
+        "hour < $1::timestamptz",
+        visitorCutoff,
+      ),
+      rollupMarkers: await prune(
+        "site_rollup_days",
+        "day < $1::date",
+        markerCutoff,
+      ),
+    };
   }
 
   /** What waits in Redis and what was dropped; see {@link readSiteAnalyticsBacklog}. */

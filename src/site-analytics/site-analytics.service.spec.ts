@@ -775,6 +775,80 @@ describe("SiteAnalyticsService", () => {
     });
   });
 
+  describe("hourlyFrom", () => {
+    /** Every day of the 200 before today is rolled up. */
+    const rolledBack = () =>
+      new Set(
+        Array.from({ length: 200 }, (_, i) =>
+          new Date(Date.parse("2026-10-27T00:00:00Z") - i * 86_400_000)
+            .toISOString()
+            .slice(0, 10),
+        ),
+      );
+
+    it("is null for a report every statement of which a cuboid serves, however long the window", async () => {
+      rolled = rolledBack();
+      expect(
+        await service.overview({ days: 180, interval: "month" }, NOW),
+      ).toMatchObject({ hourlyFrom: null });
+      expect(
+        await service.breakdown({ days: 180, dim: "country", limit: 5 }, NOW),
+      ).toMatchObject({ hourlyFrom: null });
+    });
+
+    it("names the horizon when a statement no cuboid serves read hourly rows for a window that starts before it", async () => {
+      rolled = rolledBack();
+      const filtered = {
+        days: 120,
+        dim: "country" as const,
+        limit: 5,
+        filter: ["path:/de/news"],
+      };
+      expect(await service.breakdown(filtered, NOW)).toMatchObject({
+        days: 120,
+        hourlyFrom: "2026-07-30",
+      });
+      expect(
+        await service.breakdown({ ...filtered, days: 30 }, NOW),
+      ).toMatchObject({ hourlyFrom: null });
+    });
+
+    it("is named for the window before alone, which a report without one never reads", async () => {
+      rolled = rolledBack();
+      // 60 days: the window starts 30 August, after the horizon; the window
+      // before starts 30 June, before it.
+      const events = await service.events(
+        { days: 60, filter: ["country:de"] },
+        NOW,
+      );
+      expect(events.from).toBe("2026-08-30");
+      expect(events.hourlyFrom).toBe("2026-07-30");
+      const breakdown = await service.breakdown(
+        { days: 60, dim: "country", limit: 5, filter: ["path:/de/news"] },
+        NOW,
+      );
+      expect(breakdown.hourlyFrom).toBeNull();
+    });
+
+    it("is named by an hourly series over a day before the horizon", async () => {
+      rolled = rolledBack();
+      const overview = await service.overview(
+        { from: "2026-06-01", to: "2026-06-02", interval: "hour" },
+        NOW,
+      );
+      expect(overview.hourlyFrom).toBe("2026-07-30");
+    });
+
+    it("is null while no day before the horizon is rolled up", async () => {
+      rolled = new Set(["2026-10-01", "2026-10-02"]);
+      const overview = await service.overview(
+        { days: 120, filter: ["country:de", "os:ios", "device:mobile"] },
+        NOW,
+      );
+      expect(overview.hourlyFrom).toBeNull();
+    });
+  });
+
   describe("an hourly series' visitors", () => {
     it("reads past hours from the snapshot's rows, and the hours it has not written from Redis", async () => {
       routes = [

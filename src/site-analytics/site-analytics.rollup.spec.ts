@@ -9,6 +9,7 @@ import {
   rolledSource,
   rowsOf,
   splitRanges,
+  takeRolledDaysWhole,
 } from "./site-analytics.rollup";
 import { SqlParams, siteAnalyticsWindow } from "./site-analytics.query";
 
@@ -218,6 +219,35 @@ describe("site-analytics.rollup", () => {
     });
   });
 
+  describe("takeRolledDaysWhole", () => {
+    const cut = [
+      { start: "2026-06-01T00:00:00.000Z", end: "2026-06-30T08:00:00.000Z" },
+    ];
+    const rolled = new Set(["2026-06-30"]);
+
+    it("gives a range that ends inside a rolled day before the horizon the rest of that day", () => {
+      expect(takeRolledDaysWhole(cut, "2026-07-30", rolled)).toEqual([
+        { start: "2026-06-01T00:00:00.000Z", end: "2026-07-01T00:00:00.000Z" },
+      ]);
+    });
+
+    it("leaves a range alone that ends at midnight, inside a day not rolled up, or from the horizon on", () => {
+      const whole = [
+        { start: "2026-06-01T00:00:00.000Z", end: "2026-07-01T00:00:00.000Z" },
+      ];
+      expect(takeRolledDaysWhole(whole, "2026-07-30", rolled)).toEqual(whole);
+      expect(takeRolledDaysWhole(cut, "2026-07-30", new Set())).toEqual(cut);
+      expect(takeRolledDaysWhole(cut, "2026-06-30", rolled)).toEqual(cut);
+      expect(takeRolledDaysWhole(cut, "2026-06-29", rolled)).toEqual(cut);
+    });
+
+    it("does not change the ranges it was given", () => {
+      const copy = structuredClone(cut);
+      takeRolledDaysWhole(cut, "2026-07-30", rolled);
+      expect(cut).toEqual(copy);
+    });
+  });
+
   describe("rolledSource", () => {
     const window = siteAnalyticsWindow(
       { days: 7, filter: ["country:de"], locale: "de" },
@@ -390,6 +420,161 @@ describe("site-analytics.rollup", () => {
         [],
       );
       expect(rows.from).toBe("site_pageviews");
+    });
+
+    describe("what the window's reach learns", () => {
+      /** Every day from 400 days back to yesterday is rolled up. */
+      const everyDay = async () =>
+        new Set(
+          Array.from({ length: 400 }, (_, i) =>
+            new Date(Date.parse("2026-10-27T00:00:00Z") - i * 86_400_000)
+              .toISOString()
+              .slice(0, 10),
+          ),
+        );
+      const plan = async (
+        query: Parameters<typeof siteAnalyticsWindow>[0],
+        needed: string[],
+        rolled: () => Promise<ReadonlySet<string>> = everyDay,
+        scope: "current" | "both" = "both",
+        source: "pageviews" | "events" = "pageviews",
+      ) => {
+        const window = siteAnalyticsWindow(query, NOW);
+        const asked = jest.fn(rolled);
+        await rowsOf(asked, source, new SqlParams(), window, scope, needed);
+        return { window, asked };
+      };
+
+      it("is cut when a statement no cuboid serves reads a window that starts before the horizon", async () => {
+        const { window, asked } = await plan(
+          { days: 120, filter: ["path:/de/news"] },
+          ["country"],
+        );
+        expect(window.reach.hourlyFrom).toBe("2026-07-30");
+        // The days of cuboid 1, the day alone, say which days were rolled.
+        expect(asked).toHaveBeenCalledWith("pageviews", 1);
+      });
+
+      it("asks an event statement for the first cuboid of the events", async () => {
+        const { window, asked } = await plan(
+          { days: 120, filter: ["country:de"] },
+          ["name"],
+          everyDay,
+          "both",
+          "events",
+        );
+        expect(window.reach.hourlyFrom).toBe("2026-07-30");
+        expect(asked).toHaveBeenCalledWith("events", 1);
+      });
+
+      it("is cut by an hourly series over a day before the horizon", async () => {
+        const window = siteAnalyticsWindow(
+          { from: "2026-06-01", to: "2026-06-02", interval: "hour" },
+          NOW,
+        );
+        await rowsOf(
+          everyDay,
+          "pageviews",
+          new SqlParams(),
+          window,
+          "both",
+          [],
+        );
+        expect(window.reach.hourlyFrom).toBe("2026-07-30");
+      });
+
+      it("is cut by the window before alone, which then starts earlier than the window", async () => {
+        // 60 days: the window starts 29 August, the one before on 30 June.
+        const { window } = await plan({ days: 60, filter: ["path:/de/news"] }, [
+          "country",
+        ]);
+        expect(window.from).toBe("2026-08-30");
+        expect(window.reach.hourlyFrom).toBe("2026-07-30");
+        // The window alone is held whole.
+        const current = await plan(
+          { days: 60, filter: ["path:/de/news"] },
+          ["country"],
+          everyDay,
+          "current",
+        );
+        expect(current.window.reach.hourlyFrom).toBeNull();
+      });
+
+      it("is not cut by a window the hourly rows hold whole, and reads no markers for it", async () => {
+        const { window, asked } = await plan(
+          { days: 30, filter: ["path:/de/news"] },
+          ["country"],
+        );
+        expect(window.reach.hourlyFrom).toBeNull();
+        expect(asked).not.toHaveBeenCalled();
+      });
+
+      it("is not cut by a window older than the statistic: no day before the horizon is rolled", async () => {
+        const { window } = await plan(
+          { days: 120, filter: ["path:/de/news"] },
+          ["country"],
+          async () => new Set(["2026-09-01", "2026-09-02"]),
+        );
+        expect(window.reach.hourlyFrom).toBeNull();
+      });
+
+      it("is not cut by a statement a cuboid serves: the days before the horizon come from the daily rows", async () => {
+        const { window } = await plan({ days: 365 }, ["country"]);
+        expect(window.reach.hourlyFrom).toBeNull();
+      });
+
+      it("is not cut by the window before's last day, which a cuboid's daily row holds whole past the horizon", async () => {
+        // 120 days: the window before ends on 1 July, at the 08 hour, with
+        // the hourly rows of that day gone.
+        const window = siteAnalyticsWindow({ days: 120 }, NOW);
+        expect(window.previous?.end).toBe("2026-06-30T08:00:00.000Z");
+        const params = new SqlParams();
+        const rows = await rowsOf(
+          everyDay,
+          "pageviews",
+          params,
+          window,
+          "both",
+          ["country"],
+        );
+        expect(window.reach.hourlyFrom).toBeNull();
+        // Daily rows to the end of the day, hourly rows for today only.
+        expect(params.values).toContain("2026-07-01T00:00:00.000Z");
+        expect(params.values).not.toContain("2026-06-30T08:00:00.000Z");
+        expect(rows.from).toContain("site_pageviews_daily");
+      });
+
+      it("is cut by a day rolled up for the first cuboid and not for the cuboid the statement reads, whose hourly rows are gone", async () => {
+        // A cuboid added after the hourly rows of these days were dropped.
+        const { window } = await plan(
+          { days: 120 },
+          ["country"],
+          async () => new Set(),
+        );
+        expect(window.reach.hourlyFrom).toBeNull();
+        const window2 = siteAnalyticsWindow({ days: 120 }, NOW);
+        const days = await everyDay();
+        await rowsOf(
+          async (_source, cuboid) => (cuboid === 1 ? days : new Set<string>()),
+          "pageviews",
+          new SqlParams(),
+          window2,
+          "both",
+          ["country"],
+        );
+        expect(window2.reach.hourlyFrom).toBe("2026-07-30");
+      });
+
+      it("is not cut by the hours of a cuboid's window that no marker covers", async () => {
+        // Rolled days are daily; today and the days not rolled stay hourly,
+        // none of them before the horizon.
+        const { window } = await plan(
+          { days: 365 },
+          ["country"],
+          async () => new Set(["2026-10-20"]),
+        );
+        expect(window.reach.hourlyFrom).toBeNull();
+      });
     });
   });
 

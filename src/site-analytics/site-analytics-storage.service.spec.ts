@@ -719,24 +719,247 @@ describe("SiteAnalyticsStorageService", () => {
   });
 
   describe("dropOldChunks", () => {
-    it("drops whole chunks under a lock timeout, and leaves a busy one for tomorrow", async () => {
+    const THURSDAY = "2026-07-23T00:00:00.000Z";
+    const NEXT = "2026-07-30T00:00:00.000Z";
+    const OLDER = "2026-07-16T00:00:00.000Z";
+    /** The marker rows of a day with every cuboid of both sources. */
+    const allMarkers = (day: string) =>
+      Object.values(ROLLUP_TABLES).flatMap((table) =>
+        table.cuboids.map((cuboid) => ({
+          source: table.source,
+          cuboid: cuboid.id,
+          day,
+        })),
+      );
+
+    let chunks: Record<string, Array<{ start: string; end: string }>>;
+    let rowDays: Record<string, string[]>;
+    let markers: Array<{ source: string; cuboid: number; day: string }>;
+    let dropped: Array<unknown[] | undefined>;
+    let lockedChunk: string | null;
+    let deletes: Array<[string, unknown[] | undefined]>;
+
+    beforeEach(() => {
+      chunks = {};
+      rowDays = {};
+      markers = [];
+      dropped = [];
+      lockedChunk = null;
+      deletes = [];
       manager.query.mockImplementation(async (sql: string, params) => {
         statements.push([sql, params]);
-        if (sql.includes("drop_chunks") && params?.[0] === "site_events")
-          throw new Error("canceling statement due to lock timeout");
-        return sql.includes("drop_chunks") ? [{ drop_chunks: "c" }] : [];
+        if (sql.includes("timescaledb_information.chunks")) {
+          const [table, cutoff] = params as [string, string];
+          return (chunks[table] ?? [])
+            .filter((chunk) => chunk.end <= cutoff)
+            .map((chunk) => ({ start: chunk.start, end: chunk.end }));
+        }
+        if (sql.includes("SELECT DISTINCT to_char(bucket")) {
+          const [start, end] = params as [string, string];
+          const table = /FROM (site_\w+)/.exec(sql)?.[1] as string;
+          return (rowDays[`${table}:${start}`] ?? []).map((day) => ({
+            day,
+            end,
+          }));
+        }
+        if (sql.includes("FROM site_rollup_days")) {
+          const days = (params as [string[]])[0];
+          return markers.filter((marker) => days.includes(marker.day));
+        }
+        if (sql.includes("drop_chunks")) {
+          if ((params as string[])[2] === lockedChunk)
+            throw new Error("canceling statement due to lock timeout");
+          dropped.push(params);
+          return [{ drop_chunks: "c" }];
+        }
+        return [];
       });
-      await expect(service.dropOldChunks()).resolves.toEqual({
-        site_pageviews: 1,
-        site_events: 0,
-        site_analytics_flushes: 1,
-        site_pageviews_daily: 1,
-        site_events_daily: 1,
+      dataSource.query.mockImplementation(async (sql: string, params) => {
+        if (sql.includes("DELETE FROM")) {
+          deletes.push([sql, params]);
+          return [{ deleted: 0 }];
+        }
+        return manager.query(sql, params);
       });
-      expect(statements[0][0]).toContain(
+    });
+
+    afterEach(() => {
+      dataSource.query.mockImplementation(async (sql, params) =>
+        manager.query(sql, params),
+      );
+    });
+
+    const run = () => service.dropOldChunks(new Date("2026-10-28T01:47:00Z"));
+
+    it("takes the hourly tables' chunks wholly before 90 days, the daily ones before 400, each by its own range", async () => {
+      chunks.site_pageviews = [{ start: OLDER, end: THURSDAY }];
+      chunks.site_events = [{ start: OLDER, end: THURSDAY }];
+      chunks.site_pageviews_daily = [{ start: OLDER, end: THURSDAY }];
+      chunks.site_analytics_flushes = [{ start: OLDER, end: THURSDAY }];
+      const day = "2026-07-18";
+      rowDays[`site_pageviews:${OLDER}`] = [day];
+      rowDays[`site_events:${OLDER}`] = [day];
+      markers = allMarkers(day);
+
+      await expect(run()).resolves.toMatchObject({
+        dropped: {
+          site_pageviews: 1,
+          site_events: 1,
+          // Wholly older than 90 days, not than 400: kept.
+          site_pageviews_daily: 0,
+          site_analytics_flushes: 1,
+          site_events_daily: 0,
+        },
+        skipped: [],
+      });
+      const cutoffs = statements
+        .filter(([sql]) => sql.includes("timescaledb_information.chunks"))
+        .map(([, params]) => params);
+      expect(cutoffs).toEqual([
+        ["site_pageviews", "2026-07-30T00:00:00.000Z"],
+        ["site_events", "2026-07-30T00:00:00.000Z"],
+        ["site_analytics_flushes", "2026-07-30T00:00:00.000Z"],
+        ["site_pageviews_daily", "2025-09-23T00:00:00.000Z"],
+        ["site_events_daily", "2025-09-23T00:00:00.000Z"],
+      ]);
+      expect(dropped).toContainEqual(["site_pageviews", THURSDAY, OLDER]);
+    });
+
+    it("keeps an hourly chunk with a day that has rows and not every marker, and says which", async () => {
+      chunks.site_pageviews = [{ start: OLDER, end: THURSDAY }];
+      rowDays[`site_pageviews:${OLDER}`] = ["2026-07-16", "2026-07-17"];
+      markers = [
+        ...allMarkers("2026-07-16"),
+        // One cuboid short.
+        ...allMarkers("2026-07-17").slice(1),
+      ];
+
+      const result = await run();
+      expect(result.dropped.site_pageviews).toBe(0);
+      expect(result.skipped).toEqual([
+        { table: "site_pageviews", from: "2026-07-16", days: ["2026-07-17"] },
+      ]);
+      expect(dropped).toEqual([]);
+    });
+
+    it("drops the rolled chunks of a table and keeps the one that is not, in one run", async () => {
+      chunks.site_events = [
+        { start: OLDER, end: THURSDAY },
+        { start: THURSDAY, end: NEXT },
+      ];
+      rowDays[`site_events:${OLDER}`] = ["2026-07-16"];
+      rowDays[`site_events:${THURSDAY}`] = ["2026-07-24"];
+      markers = allMarkers("2026-07-24");
+
+      const result = await run();
+      expect(result.dropped.site_events).toBe(1);
+      expect(result.skipped).toEqual([
+        { table: "site_events", from: "2026-07-16", days: ["2026-07-16"] },
+      ]);
+      expect(dropped).toEqual([["site_events", NEXT, THURSDAY]]);
+    });
+
+    it("needs no marker for a day without rows: the first chunk of a table reaches back before its first row", async () => {
+      chunks.site_pageviews = [{ start: OLDER, end: THURSDAY }];
+      // Rows from the 20th on, markers from the 20th on.
+      rowDays[`site_pageviews:${OLDER}`] = ["2026-07-20", "2026-07-21"];
+      markers = [...allMarkers("2026-07-20"), ...allMarkers("2026-07-21")];
+      await expect(run()).resolves.toMatchObject({
+        dropped: { site_pageviews: 1 },
+        skipped: [],
+      });
+    });
+
+    it("drops an empty hourly chunk, which has nothing to lose", async () => {
+      chunks.site_events = [{ start: OLDER, end: THURSDAY }];
+      await expect(run()).resolves.toMatchObject({
+        dropped: { site_events: 1 },
+        skipped: [],
+      });
+    });
+
+    it("never asks the daily tables or the flush claims for markers", async () => {
+      chunks.site_pageviews_daily = [
+        { start: "2025-08-01T00:00:00.000Z", end: "2025-08-08T00:00:00.000Z" },
+      ];
+      chunks.site_analytics_flushes = [{ start: OLDER, end: THURSDAY }];
+      await expect(run()).resolves.toMatchObject({
+        dropped: { site_pageviews_daily: 1, site_analytics_flushes: 1 },
+        skipped: [],
+      });
+      expect(statements.some(([sql]) => sql.includes("site_rollup_days"))).toBe(
+        false,
+      );
+    });
+
+    it("drops each chunk under a lock timeout, and leaves a busy one for tomorrow", async () => {
+      chunks.site_pageviews_daily = [
+        { start: "2025-07-01T00:00:00.000Z", end: "2025-07-08T00:00:00.000Z" },
+        { start: "2025-07-08T00:00:00.000Z", end: "2025-07-15T00:00:00.000Z" },
+      ];
+      lockedChunk = "2025-07-01T00:00:00.000Z";
+      const result = await run();
+      expect(result.dropped.site_pageviews_daily).toBe(1);
+      expect(dropped).toEqual([
+        [
+          "site_pageviews_daily",
+          "2025-07-15T00:00:00.000Z",
+          "2025-07-08T00:00:00.000Z",
+        ],
+      ]);
+      const drop = statements.find(([sql]) => sql.includes("drop_chunks"));
+      expect(statements[statements.indexOf(drop as never) - 1][0]).toContain(
         "set_config('lock_timeout', '5s', true)",
       );
-      expect(statements[1][1]).toEqual(["site_pageviews", "400 days"]);
+    });
+
+    it("goes on with the other tables when one cannot list its chunks", async () => {
+      chunks.site_events_daily = [
+        { start: "2025-07-01T00:00:00.000Z", end: "2025-07-08T00:00:00.000Z" },
+      ];
+      const original = manager.query.getMockImplementation();
+      manager.query.mockImplementation(async (sql: string, params) => {
+        if (
+          sql.includes("timescaledb_information.chunks") &&
+          params?.[0] === "site_pageviews"
+        )
+          throw new Error("catalog busy");
+        return (original as typeof manager.query)(sql, params);
+      });
+      const result = await run();
+      expect(result.dropped.site_pageviews).toBe(0);
+      expect(result.dropped.site_events_daily).toBe(1);
+    });
+
+    it("deletes the visitor counts past 400 days and the roll-up markers past the 14 days beyond", async () => {
+      await run();
+      expect(deletes).toEqual([
+        [
+          expect.stringContaining("FROM site_visitor_days"),
+          ["2025-09-23T00:00:00.000Z"],
+        ],
+        [
+          expect.stringContaining("FROM site_visitor_hours"),
+          ["2025-09-23T00:00:00.000Z"],
+        ],
+        [
+          expect.stringContaining("FROM site_rollup_days"),
+          ["2025-09-09T00:00:00.000Z"],
+        ],
+      ]);
+    });
+
+    it("counts the rows it deleted, and keeps going when a table cannot delete", async () => {
+      dataSource.query.mockImplementation(async (sql: string, params) => {
+        if (sql.includes("DELETE FROM site_visitor_days"))
+          throw new Error("locked");
+        if (sql.includes("DELETE FROM"))
+          return [{ deleted: sql.includes("site_rollup_days") ? 2 : 1 }];
+        return manager.query(sql, params);
+      });
+      await expect(run()).resolves.toMatchObject({
+        pruned: { visitorDays: 0, visitorHours: 1, rollupMarkers: 2 },
+      });
     });
   });
 });

@@ -14,6 +14,7 @@ import {
   BREAKDOWN_DIMS,
   CHANNELS,
   FILTER_DIMS,
+  HOURLY_RETENTION_DAYS,
   INTERVALS,
   MAX_ADMIN_WINDOW_DAYS,
   MAX_COMPARABLE_DAYS,
@@ -321,6 +322,21 @@ class WindowDto {
 
   @ApiProperty({ type: [String], example: ["channel:search"] })
   filters: string[];
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    example: null,
+    description:
+      `The hourly rows are kept ${HOURLY_RETENTION_DAYS} days, in whole weeks, so up to a week more; the ` +
+      "daily roll-ups are kept longer. A statement no daily roll-up can serve (a filter on the " +
+      "path or the entry page, three filters, an hourly series) reads the hourly rows, and for " +
+      "older days it finds nothing. When one did, this is the first UTC day its figures are " +
+      "complete from, and the report answers with what it has: the figures that read hourly rows " +
+      "miss the days before it, in the window, in `previous` (the window before), or in both. " +
+      "Null when every figure covers the days it should.",
+  })
+  hourlyFrom: string | null;
 }
 
 export class SiteTotalsDto {

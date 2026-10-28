@@ -277,7 +277,8 @@ the oldest one's age, parked windows, the visits not yet ended (`openVisits`), t
 today's and yesterday's drop counts by reason; `healthy` is false once a window waits past three runs or one is parked. A failing flush job
 also reaches the data-quality report's failing jobs.
 
-**The tables** are TimescaleDB hypertables (`HYPERTABLES`), never updated and never deleted from:
+**The tables** are TimescaleDB hypertables (`HYPERTABLES`), never updated and never deleted from; how long
+each keeps its rows is [below](#retention):
 
 | Table | Row | Compression |
 | --- | --- | --- |
@@ -288,13 +289,14 @@ also reaches the data-quality report's failing jobs.
 | `site_events_daily` | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint` | the same |
 
 A row's `bucket` is its hour (`bucketOf`); the flusher still writes every five minutes, so an hour
-holds up to twelve rows per combination, summed when read. The nightly `drop-old-chunks` drops chunks
-wholly older than 400 days (`RETENTION_DAYS`) with `drop_chunks` under a 5-second `lock_timeout`, one
-table at a time; a chunk it cannot lock waits for the next night rather than queueing the API behind it
-([lock queues](../troubleshooting/timescaledb-lock-queues.md)). A dropped chunk is a dropped table:
-nothing for VACUUM. `site_visitor_days` (seven rows a day), `site_visitor_hours` (168 a day),
-`site_rollup_days` (a marker per cuboid and day), `site_blocked_events` and `site_entity_merges` are
-small plain tables, kept.
+holds up to twelve rows per combination, summed when read. The nightly `drop-old-chunks` drops a
+chunk with `drop_chunks` under a 5-second `lock_timeout` once all of it is older than its table's
+retention ([retention](#retention)); a chunk it cannot lock waits for the next night rather than
+queueing the API behind it ([lock queues](../troubleshooting/timescaledb-lock-queues.md)). A dropped
+chunk is a dropped table: nothing for VACUUM. `site_visitor_days` (seven rows a day),
+`site_visitor_hours` (168 a day) and `site_rollup_days` (a marker per cuboid and day) are small plain
+tables whose old rows the same job deletes, a few hundred a night; `site_blocked_events`,
+`site_entity_merges` and `site_analytics_imports` are small plain tables, kept.
 
 **Schema.** The entities declare the bucket index `create_hypertable` makes
 (`site_pageviews_bucket_idx`, `site_events_bucket_idx`, and the same for the daily tables, which also
@@ -357,7 +359,7 @@ identical, and the 40 the reports refuse (a visit filter on events, say) were re
 
 **The job** (`SiteAnalyticsStorageService.rollupDays`, 02:35, 08:35, 14:35 and 20:35 UTC; a run with
 nothing to do costs three small queries). It rolls the days from the oldest hourly row (at most 400 days
-back) to the last day that has settled: ended two hours ago (`ROLLUP_SETTLE_SECONDS`, the flusher's
+back, `DAILY_RETENTION_DAYS`: an older day would go with the daily rows' next chunk) to the last day that has settled: ended two hours ago (`ROLLUP_SETTLE_SECONDS`, the flusher's
 retries and the visits' exits are in by then) and before any flush window still waiting in Redis. For
 each such day it adds the cuboids that have no marker in `site_rollup_days`, oldest day first, a day in
 one transaction under an advisory lock (and a Redis lock for the run): one statement per cuboid, `INSERT
@@ -375,9 +377,11 @@ for a minute longer, and when they cannot be read the reports read the hourly ro
 day from the daily rows only if its cuboid has the day's marker; rows and marker go in together, so
 there is no half-written day.
 
-**Retention** is the nightly `drop-old-chunks`, which drops the daily tables' chunks after 400 days with
-the others. A row that reaches the hourly tables after its day was rolled up (a window the flusher
-parked and somebody wrote by hand: nothing in the code does) is not in the daily rows.
+**The window before's last day.** A window that ends today compares with a window before that ends at the same
+hour, so that today so far meets the same part of a day. Where that day lies before the hourly horizon
+([retention](#retention)) its hourly rows are gone and its day is rolled up, so a statement a cuboid
+serves takes the whole day from the daily rows (`takeRolledDaysWhole`): the window before then holds up
+to one day in ninety more than its share, rather than lacking the hours.
 
 **Why not continuous aggregates.** One takes a plain `GROUP BY`, no grouping sets, so each cuboid
 would be a view of its own with a materialization hypertable and a refresh policy; and the one that
@@ -389,13 +393,54 @@ again (3.0 s here). And while the view exists Postgres refuses to drop a column 
 that it reads, which is what `synchronize` does when an entity changes (the entities are the
 schema). Insert-only rows written once, with a marker, give the same reads without any of that.
 
+## Retention
+
+The nightly `site-analytics` / `drop-old-chunks` (01:47 UTC, `SiteAnalyticsStorageService.dropOldChunks`)
+keeps each table as long as its figures are of use. The numbers are named constants in
+`site-analytics.constants.ts`, per hypertable in `HYPERTABLE_RETENTION_DAYS`:
+
+| Table | Kept | Constant | Removed by |
+| --- | --- | --- | --- |
+| `site_pageviews`, `site_events` | 90 days | `HOURLY_RETENTION_DAYS` | chunks dropped whole, once every day with rows in them is rolled up |
+| `site_analytics_flushes` | 90 days | `HOURLY_RETENTION_DAYS` | chunks dropped whole (30-day chunks): a claim only has to outlive its window's retry, and follows the hourly rows it stands for |
+| `site_pageviews_daily`, `site_events_daily` | 400 days | `DAILY_RETENTION_DAYS` | chunks dropped whole |
+| `site_visitor_days`, `site_visitor_hours` | 400 days | `DAILY_RETENTION_DAYS` | rows deleted |
+| `site_rollup_days` | 414 days | `ROLLUP_MARKER_RETENTION_DAYS` | rows deleted: a marker outlives the daily rows it vouches for, which live up to a chunk past 400 days, so a report never reads a day hourly while its daily rows are there and the job never rolls a day up twice |
+| `site_blocked_events`, `site_entity_merges`, `site_analytics_imports` | kept | | |
+
+The hourly rows carry every dimension at once; the daily rows only a few at a time (the
+[cuboids](#the-daily-level)), which is what a comparison between years needs. So a statement a cuboid
+serves reaches 400 days back, and one that needs the hourly rows 90 or so.
+
+**How long a row really lives.** The week chunks are cut on Thursdays (TimescaleDB counts them from the
+Unix epoch), and a chunk goes when all of it is older than the cutoff, the UTC midnight 90 days before
+today. A row written on a chunk's last day is dropped by the run on the 91st day after it, one on its
+first day by the run on the 97th: **an hourly row lives 90 to 97 days** (and the two hours to the run),
+a daily row 400 to 407, a flush claim (30-day chunks) 90 to 120, a marker 414. The most-read rankings read the hourly rows for up to 90 days
+(`MAX_ADMIN_WINDOW_DAYS` of the page views), which the retention holds whole. `hourlyHorizon` is the first
+day of the oldest chunk the job keeps: from that UTC day on, every hour is there.
+
+**The drop guard.** An hourly chunk is the only copy of what the daily rows have not summed yet, so the job
+drops it only when every UTC day with rows in it has the marker of every page-view cuboid and every event
+cuboid in `site_rollup_days` (`unrolledDays`; a day without rows, such as the first days of a table's first
+chunk, needs none). For each chunk due, `dropOldChunks` lists it from `timescaledb_information.chunks`,
+reads the days that have rows (`SELECT DISTINCT` over the chunk) and their markers, and then either drops
+that one chunk (`drop_chunks` bounded by the chunk's own range, under the `lock_timeout`) or keeps it.
+A kept chunk is logged (a warning with the count of chunks and days), returned in `skipped`, and fails the job
+once the chunks that could go are gone, as a day that does not add up fails `rollup-days`: the job reaches
+the data-quality report's failing jobs with the first days and the count. The chunk goes the night after
+`rollup-days` has rolled its days up; nothing is lost meanwhile, and the job fails every night until then.
+A cuboid added to the lists is rolled up for the days that still have hourly rows, so it makes the guard
+wait for that run, and for days whose hourly rows are already gone it cannot be filled in: a report
+that needs it finds those days empty, which `hourlyFrom` says (below).
+
 ## Reports
 
 Days are UTC days, not a park's: a reader belongs to no park
 ([park timezone](../rules/park-timezone.md)). Every admin report takes a window, `locale`,
 `interval`, and `filter=<dim>:<value>` (repeatable, AND; dim ∈ `path`, `page_type`, `country`,
 `device`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
-`referrer`, `channel`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`.
+`referrer`, `channel`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters` and `hourlyFrom`.
 
 **The window** is `days` (1–365, the last days with today; 30 without one) or `from` and `to`
 (`YYYY-MM-DD`, both included, `to` today at the latest, at most 366 days). Both at once, one of
@@ -413,12 +458,30 @@ for every earlier day since the snapshot keeps hours; an hour of a day before th
 `visitors: null`. A week's or a month's visitors are the sum of its days in the window, as the totals
 count them.
 
+**`hourlyFrom`** says when a report could not cover its window. The hourly rows reach back to the
+[horizon](#retention) only. A statement that no cuboid serves (a filter on the path or the entry page,
+three filters, an event filtered by country, browser or system, a crosstab of the path with another
+dimension) and an hourly series (`interval=hour`) read them, and for a window or a window before that
+starts before the horizon they find nothing for the days whose chunk is dropped: the report answers
+with what it has and `hourlyFrom` is `YYYY-MM-DD`, the horizon, the first UTC day its hourly figures are
+complete from. It is null when every statement was served in full, which is every statement a
+cuboid serves, however long the window. It is on every report that takes a window, in one place
+(`echo`, the `WindowDto` of the API and each MCP tool's echo), set by the statements themselves as they
+plan their read (`SiteAnalyticsWindow.reach`, `rowsOf`), never per report. The figures a report
+reads from daily rows are complete either way; `hourlyFrom` does not say which of the report's figures are
+cut, only that some read hourly rows before the horizon, in the window, in `previous` or in both (a window
+of 60 days that starts after the horizon has a window before that starts 120 days back). A day counts
+only if it is rolled up (the first cuboid's marker): a statistic younger than the horizon has dropped
+nothing and answers null, and so does a day whose chunk waits for its roll-up. `previous` keeps its
+meaning: null past 180 days, a window otherwise, partial when `hourlyFrom` says so.
+
 **The window before** (`previous`) is the same number of days right before `from`. When the window
 ends today it ends at the same hour of its last day as now: today is under way, so a change compares
 today so far with the same part of a day, not with a whole one (the hour itself is taken whole on
 both sides). A `from`–`to` window that ended before today compares with a whole window before.
 Visitors of the window before count its last day whole, since visitors are per day. Over 180 days
-(`MAX_COMPARABLE_DAYS`) there is no window before, since most of it would lie past the retention:
+(`MAX_COMPARABLE_DAYS`) there is no window before, since most of it would lie past the daily rows'
+retention:
 `previous` and every change are `null`, and the trends report refuses the window.
 
 **Visit dimensions** (`entry`, `referrer`, `channel`) live only on the rows that record a
@@ -566,8 +629,8 @@ bounce's on its start row when both fall in one window.
 reported in a later window, 0.58 M visit rows and 0.36 M exit rows. Compressed, 455 MB became 55 MB
 (8.2×) and the events' 1.73 M rows 361 MB → 27 MB (13.5×). A year at ten times today's traffic comes
 to about **530 MB** with the two uncompressed chunks of the current fortnight (261 MB page views and
-128 MB events compressed, 138 MB uncompressed), and stays there: chunks past 400 days are dropped.
-Before the seconds, exits and browser language it was about 410 MB.
+128 MB events compressed, 138 MB uncompressed). Before the seconds, exits and browser language it was
+about 410 MB. These sizes hold a year of hourly rows; they are kept [90 to 97 days](#retention).
 
 **Write.** 20,000 beacons (a page view, its seconds four times in five, and 0–2 events each, the
 day's 168 windows so far) through the real collector, its Lua guards and the live view's counters
@@ -589,7 +652,11 @@ other builds, so the times are upper bounds. It ran with 49 page-view cuboids, n
   with the two uncompressed chunks of the current fortnight; the four event cuboids 4.3 M rows,
   742 MB to 70 MB (10.5×), 99 MB. The year takes about **1.05 GB**, the hourly rows' 0.52 and the
   daily 0.54, and a tenth of that at today's traffic. `pg_stat_user_tables` read 0 updates, 0 deletes
-  and **0 dead tuples** on both tables and the 19,398 markers after the backfill.
+  and **0 dead tuples** on both tables and the 19,398 markers after the backfill. With the
+  [retention](#retention) (hourly rows 97 days at most, daily 400 days) the steady state is the daily
+  level's 400 days plus 97 days of hourly rows: about 0.8 GB at ten times today's traffic, scaled from
+  the per-day sizes above (about 1.1 MB a compressed day on each level, and the uncompressed
+  fortnight), not measured again.
 - **Writing.** A compressed day takes 1.1 s for those 49 page-view cuboids (50,000 rows) and 0.2 s for
   the four event cuboids (11,700 rows); the 365-day backfill 581 s on the shared host. Rows and
   marker of a cuboid are one statement.
@@ -650,7 +717,13 @@ its window once, so a year's took about four times the 90-day figure.
 - `visit_span_seconds` is stored on the exit rows and rolled up with them, and in no report yet.
 - A filter on the path or the entry page, three or more filters, and a pair of a panel and a filter
   that no cuboid holds (anything with the path or the entry page) read the hourly rows: a year of
-  them takes seconds, not milliseconds, and is the first thing the statement timeout stops.
+  them takes seconds, not milliseconds, and is the first thing the statement timeout stops. They
+  only reach back 90 to 97 days; for older days the report answers with what it has and says so in
+  `hourlyFrom`.
+- A window older than the daily rows (400 days) has nothing in either: the figures are zero and
+  `hourlyFrom` does not say so.
+- An hourly series (`interval=hour`) over a day past the horizon has page views and events of zero and
+  `hourlyFrom` set; its visitors still come from `site_visitor_hours`, which keeps 400 days.
 - A day is read from the daily rows only once the job has rolled it (two hours past midnight at the
   earliest, and up to six hours with a failed run); until then, and for today, it is read hourly.
   A row written to the hourly tables after its day was rolled up is not in the daily rows.

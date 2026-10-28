@@ -1,3 +1,5 @@
+import { SITE_CHUNK_DAYS } from "../site-analytics/site-analytics.constants";
+
 /**
  * The hypertables this schema has, as data.
  *
@@ -106,13 +108,13 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
   },
   // The site statistic (PAR-1151): insert-only, one row per dimension
   // combination and flush window, bucketed by the UTC hour. Week chunks, so a
-  // chunk is compressed a week after it closes and dropped whole after 400
-  // days by the nightly `site-analytics` / `drop-old-chunks` job, never
-  // deleted from.
+  // chunk is compressed a week after it closes and dropped whole, after its
+  // retention (`HYPERTABLE_RETENTION_DAYS`), by the nightly `site-analytics` /
+  // `drop-old-chunks` job, never deleted from.
   {
     table: "site_pageviews",
     timeColumn: "bucket",
-    chunkInterval: "7 days",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
     compressAfterDays: 7,
     description: "Site statistic: page views",
     segmentBy: "locale",
@@ -121,7 +123,7 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
   {
     table: "site_events",
     timeColumn: "bucket",
-    chunkInterval: "7 days",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
     compressAfterDays: 7,
     description: "Site statistic: events",
     segmentBy: "name",
@@ -140,7 +142,7 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
   {
     table: "site_pageviews_daily",
     timeColumn: "bucket",
-    chunkInterval: "7 days",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
     compressAfterDays: 7,
     description: "Site statistic: page views by day and cuboid",
     segmentBy: "cuboid",
@@ -149,7 +151,7 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
   {
     table: "site_events_daily",
     timeColumn: "bucket",
-    chunkInterval: "7 days",
+    chunkInterval: `${SITE_CHUNK_DAYS} days`,
     compressAfterDays: 7,
     description: "Site statistic: events by day and cuboid",
     segmentBy: "cuboid",

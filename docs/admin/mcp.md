@@ -124,10 +124,10 @@ against these rules.
 | `analytics_overview` | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview` |
 | `analytics_live` | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events | `SiteAnalyticsLiveService.live` |
 | `analytics_breakdown` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits | `SiteAnalyticsService.breakdown` |
-| `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix | `SiteAnalyticsService.trafficCrosstab` |
+| `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix, small values folded | `SiteAnalyticsService.trafficCrosstab` |
 | `analytics_events` | every event name with count, previous, change, blocked | `SiteAnalyticsService.events` |
 | `analytics_event` | one event: props with top values, combinations, page types, devices, entities | `SiteAnalyticsService.event` |
-| `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix | `SiteAnalyticsService.crosstab` |
+| `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix, small values folded | `SiteAnalyticsService.crosstab` |
 | `search_report` | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where | `SiteAnalyticsService.search` |
 | `seo_landing_pages` | the pages visits of one channel (search by default) entered on, with change, bounce, sources | `SiteAnalyticsSeoService.landingPages` |
 | `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
@@ -158,6 +158,47 @@ the name park.fan's tables give them ([security](#security)).
 
 Reads made through the tools do not count as popularity hits (`countHit = false`). A tool that
 writes would set `minRole` and needs a scope above `admin:read`; v1 issues none.
+
+### Small values
+
+The admin's reports and its UI show every number. The tools, whose answers a model reads and may repeat
+elsewhere, do not show a value counted fewer than **5** times (`MCP_MIN_CELL` in `tools/small-cells.ts`).
+One helper, `foldSmallRows`, does it for every list; each tool names, per list, the keys that name a row,
+the count that decides, and the measures that add up.
+
+- **Lists fold.** Every row below 5 goes into one row at the end whose names are `(other)`: the label the
+  collector's day guard already uses for values past its limit, so a row that is already `(other)` joins
+  it and there is one. The count that decides is the row's `visitors` when it has them, otherwise its
+  `views`, `visits`, `count` or the like (a landing page's visits in the window, a surface's openings).
+  The additive measures are summed onto the `(other)` row (views, visits, events, counts, exits, the
+  previous window's count, the share); everything else is `null` there: bounce rate, averages, durations,
+  rates, and a field that names the row (a page type, an entity's id and path, a page's sources, a
+  series). Nothing is added to `(other)` that a tool did not list as additive, so a new field never
+  carries one row's value onto the others'. A list without a small row comes back as it is. Totals are
+  not folded and still count every value: `total`, a report's `totals`, `previous`.
+- **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
+  page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,
+  events), `search_report` (surfaces, openings by page type and device, result types, positions, browse
+  items), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
+  referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per
+  language). `seo_uncovered` lists our own parks and rides that had no search visit at all, so there is no
+  count in it to fold; `gsc_*` (Google drops rare queries itself) and `audit_log` are as they were.
+- **Crosstabs.** A side value whose cells add up to fewer than 5 goes under `(other)` on that side (a `day`
+  side keeps every period, `__rest__` and `(none)` are values like the others); then every cell below 5
+  is `null` in `counts`, and `other: { cells, count }` holds how many there are and their sum, `null`
+  when none. The numbers in `counts` and in `other` add up to `total`.
+- **Series.** A series of the whole site's totals (the overview's, the live view's minutes) is as counted.
+  A series under a filter or a language, and one per event name or search surface, has every value from 1
+  to 4 as `null`, and so every rate and average computed from one (an overview point with 3 visits has
+  no bounce rate), and the answer carries `smallValuesHidden`: whether any value was hidden. A zero is a
+  zero. `page_views` hides the days of one `kind` the same way.
+- **The descriptions say so.** Each tool's description carries one sentence for the list rows
+  (`SMALL_CELLS_DESCRIPTION`), the crosstabs another and the tools with series a third, next to the
+  `visitorData` sentence; the strings stay under `visitorData`, the label `(other)` among them.
+
+The answer also carries `hourlyFrom`, the day from which a figure that needed the hourly rows is complete
+(null when none was cut): the hourly rows hold 90 to 97 days, the daily roll-ups 400
+([retention](../frontend/site-analytics.md#retention)).
 
 ## Endpoints
 

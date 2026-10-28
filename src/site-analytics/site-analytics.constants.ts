@@ -2,6 +2,7 @@
  * Limits, dimensions and Redis keys of the site statistic. See
  * docs/frontend/site-analytics.md.
  */
+import type { SITE_ANALYTICS_HYPERTABLES } from "../database/hypertables";
 import {
   PAGE_VIEW_LOCALES,
   type PageViewLocale,
@@ -291,7 +292,7 @@ export const BUCKET_SECONDS = 3600;
 
 /**
  * Reports over more days than this have no `previous`: the window before
- * would lie mostly past {@link RETENTION_DAYS}.
+ * would lie mostly past {@link DAILY_RETENTION_DAYS}.
  */
 export const MAX_COMPARABLE_DAYS = 180;
 
@@ -312,10 +313,51 @@ export const MAX_FLUSH_ATTEMPTS = 12;
 export const PARKED_WINDOW_TTL_SECONDS = 7 * 24 * 3600;
 
 /**
- * Chunks wholly older than this are dropped by the nightly job: a year and a
- * month, so a year compares with the one before.
+ * The days the hourly rows (`site_pageviews`, `site_events`) are kept at the
+ * least. They carry every dimension at once, so they are the finest and the
+ * largest data the statistic holds; the daily roll-ups answer anything older
+ * than this.
  */
-export const RETENTION_DAYS = 400;
+export const HOURLY_RETENTION_DAYS = 90;
+
+/**
+ * The days the daily roll-ups (`site_pageviews_daily`, `site_events_daily`)
+ * and the visitor counts (`site_visitor_days`, `site_visitor_hours`) are kept
+ * at the least: a year and a month, so a year compares with the one before.
+ */
+export const DAILY_RETENTION_DAYS = 400;
+
+/**
+ * The span of one chunk of the statistic's week-chunked hypertables. A chunk
+ * is dropped whole once all of it is older than its retention, so a row
+ * lives up to this many days longer than the retention says.
+ */
+export const SITE_CHUNK_DAYS = 7;
+
+/**
+ * The days a roll-up marker (`site_rollup_days`) is kept: past the daily rows
+ * it vouches for, which live up to a chunk longer than
+ * {@link DAILY_RETENTION_DAYS}, so a report never reads a day from the hourly
+ * rows while its daily rows are still there, and the job never rolls a day up
+ * twice.
+ */
+export const ROLLUP_MARKER_RETENTION_DAYS =
+  DAILY_RETENTION_DAYS + 2 * SITE_CHUNK_DAYS;
+
+/**
+ * How long each of the statistic's hypertables is kept, whole chunks at a
+ * time. The flush claims only have to outlive a window's retry, and follow
+ * the hourly rows they stand for.
+ */
+export const HYPERTABLE_RETENTION_DAYS: Readonly<
+  Record<(typeof SITE_ANALYTICS_HYPERTABLES)[number], number>
+> = {
+  site_pageviews: HOURLY_RETENTION_DAYS,
+  site_events: HOURLY_RETENTION_DAYS,
+  site_analytics_flushes: HOURLY_RETENTION_DAYS,
+  site_pageviews_daily: DAILY_RETENTION_DAYS,
+  site_events_daily: DAILY_RETENTION_DAYS,
+};
 
 /** The longest window the admin may ask for. */
 export const MAX_ADMIN_WINDOW_DAYS = 365;
