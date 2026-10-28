@@ -123,13 +123,9 @@ describe("SiteAnalyticsController", () => {
       })
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
-    // As in main.ts, so the beacon's own resource policy is seen to win.
-    app.use(
-      helmet({
-        contentSecurityPolicy: false,
-        crossOriginEmbedderPolicy: false,
-      }),
-    );
+    // Helmet's defaults set `Cross-Origin-Resource-Policy: same-origin`, the
+    // header the beacon's own policy has to win against.
+    app.use(helmet());
     app.setGlobalPrefix("v1");
     app.useGlobalPipes(
       new ValidationPipe({
