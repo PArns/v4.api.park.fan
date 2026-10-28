@@ -10,6 +10,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsBreakdownTool = defineMcpTool({
   name: "analytics_breakdown",
@@ -21,6 +22,8 @@ export const analyticsBreakdownTool = defineMcpTool({
     "counted as visits started (a view is a visit) with a bounce rate each. Combine with filters, " +
     "e.g. dim=path with channel=search for the pages search visitors read, or dim=referrer with " +
     "channel=ai for which AI assistants send readers. Direct visits have no referrer. " +
+    VISITOR_DATA_DESCRIPTION +
+    " " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     dim: z
@@ -39,19 +42,19 @@ export const analyticsBreakdownTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .breakdown({ ...siteQuery(input), dim, limit });
-    return {
-      ...windowOf(report),
-      dim: report.dim,
-      total: report.total,
-      items: report.items.map((item) => ({
-        value: item.value,
-        views: item.views,
-        visits: item.visits,
-        share: round3(item.share),
-        ...(item.bounceRate !== undefined && {
-          bounceRate: round3(item.bounceRate),
-        }),
-      })),
-    };
+    return withVisitorData(
+      { ...windowOf(report), dim: report.dim, total: report.total },
+      {
+        items: report.items.map((item) => ({
+          value: item.value,
+          views: item.views,
+          visits: item.visits,
+          share: round3(item.share),
+          ...(item.bounceRate !== undefined && {
+            bounceRate: round3(item.bounceRate),
+          }),
+        })),
+      },
+    );
   },
 });

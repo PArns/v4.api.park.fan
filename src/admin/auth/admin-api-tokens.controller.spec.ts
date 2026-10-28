@@ -79,7 +79,7 @@ describe("AdminApiTokensController", () => {
   it("creates a token under a cleaned name and audits it without the secret", async () => {
     const { controller, tokens, audit } = build();
     const created = await controller.create(admin("viewer"), {
-      name: "  Laptop‮ ",
+      name: `  Laptop${String.fromCodePoint(0x202e)} `,
       expiresInDays: 90,
     });
     expect(tokens.createPersonalToken).toHaveBeenCalledWith(SELF, "Laptop", 90);
@@ -92,7 +92,9 @@ describe("AdminApiTokensController", () => {
   it("refuses a name that is only invisible characters", async () => {
     const { controller } = build();
     await expect(
-      controller.create(admin("viewer"), { name: "​​" }),
+      controller.create(admin("viewer"), {
+        name: String.fromCodePoint(0x200b, 0x200b),
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 

@@ -7,7 +7,8 @@ import { Column, CreateDateColumn, Entity, PrimaryColumn } from "typeorm";
  *
  * Registration is anonymous by design, so a row proves nothing about who made
  * it; the consent page is where a person decides. Rows never used for a grant
- * are deleted after a week, the oldest earlier when more than 1000 wait.
+ * are deleted after a week; beyond 1000 of them a registrant's own surplus and
+ * then the oldest past their first hour give way.
  */
 @Entity("admin_oauth_clients")
 export class AdminOAuthClient {
@@ -19,6 +20,13 @@ export class AdminOAuthClient {
 
   @Column({ name: "redirect_uris", type: "jsonb" })
   redirectUris: string[];
+
+  /**
+   * A hash of the registering address bucket (IPv4, IPv6 /64), so a flood of
+   * registrations evicts its own before anybody else's. Null without one.
+   */
+  @Column({ name: "registrant", type: "text", nullable: true })
+  registrant: string | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

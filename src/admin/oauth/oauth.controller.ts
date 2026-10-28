@@ -69,9 +69,13 @@ export class OAuthController {
   })
   async authorize(
     @Query() query: Params,
+    @Req() request: Request,
     @Res() response: Response,
   ): Promise<void> {
-    const outcome = await this.authorization.authorize(query);
+    const outcome = await this.authorization.authorize(
+      query,
+      addressBucket(getRateLimitIp(request)),
+    );
     if (outcome.kind === "error-page") {
       sendAuthorizeErrorPage(response, outcome.message);
       return;

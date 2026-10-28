@@ -28,6 +28,29 @@ import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.inter
 import { McpAuthChallengeFilter } from "./mcp-auth-challenge.filter";
 import { McpServerFactory } from "./mcp-server.factory";
 
+/** Tool calls one token may have running at once, per API instance. */
+export const MAX_CONCURRENT_REQUESTS_PER_TOKEN = 4;
+
+/** Counts requests in flight per holder; a holder at its limit is refused. */
+export class InFlightCounter {
+  private readonly counts = new Map<string, number>();
+
+  constructor(private readonly limit: number) {}
+
+  acquire(holder: string): boolean {
+    const current = this.counts.get(holder) ?? 0;
+    if (current >= this.limit) return false;
+    this.counts.set(holder, current + 1);
+    return true;
+  }
+
+  release(holder: string): void {
+    const current = this.counts.get(holder) ?? 0;
+    if (current <= 1) this.counts.delete(holder);
+    else this.counts.set(holder, current - 1);
+  }
+}
+
 /**
  * The admin MCP server, over Streamable HTTP in stateless mode: every POST
  * carries its own bearer token and gets a server built for that principal,
@@ -45,6 +68,10 @@ import { McpServerFactory } from "./mcp-server.factory";
 @UseInterceptors(NoCdnCacheInterceptor)
 export class McpController {
   private readonly logger = new Logger(McpController.name);
+
+  private readonly inFlight = new InFlightCounter(
+    MAX_CONCURRENT_REQUESTS_PER_TOKEN,
+  );
 
   constructor(private readonly servers: McpServerFactory) {}
 
@@ -65,12 +92,36 @@ export class McpController {
     @Res() response: Response,
     @CurrentAdmin() admin: AdminPrincipal,
   ): Promise<void> {
+    // A JSON-RPC batch would run up to 100 tool calls for one request the
+    // throttler counts once; the 2025-06-18 protocol dropped batches anyway.
+    if (Array.isArray(request.body)) {
+      jsonRpcError(
+        response,
+        400,
+        -32600,
+        "Batches are not supported; send one message per request",
+      );
+      return;
+    }
+    const holder = admin.apiToken?.id ?? admin.userId ?? "unknown";
+    if (!this.inFlight.acquire(holder)) {
+      response.setHeader("Retry-After", "1");
+      jsonRpcError(
+        response,
+        429,
+        -32000,
+        `At most ${MAX_CONCURRENT_REQUESTS_PER_TOKEN} requests at once per token`,
+      );
+      return;
+    }
+
     const server = this.servers.create(admin);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
     response.on("close", () => {
+      this.inFlight.release(holder);
       void transport.close();
       void server.close();
     });
@@ -104,6 +155,17 @@ export class McpController {
   endSession(@Res() response: Response): void {
     methodNotAllowed(response);
   }
+}
+
+function jsonRpcError(
+  response: Response,
+  status: number,
+  code: number,
+  message: string,
+): void {
+  response
+    .status(status)
+    .json({ jsonrpc: "2.0", error: { code, message }, id: null });
 }
 
 function methodNotAllowed(response: Response): void {

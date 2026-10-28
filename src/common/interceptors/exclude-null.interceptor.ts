@@ -52,7 +52,7 @@ import { map } from "rxjs/operators";
  * is private, so the two cannot disagree about what counts as admin.
  */
 /** "/admin" as a path segment, so a slug like ".../adminton-park" is not one. */
-const ADMIN_PATH = /\/admin(\/|$|\?)/;
+const ADMIN_PATH = /\/admin(\/|$|\?)/i;
 
 @Injectable()
 export class ExcludeNullInterceptor implements NestInterceptor {

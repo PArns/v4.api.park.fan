@@ -9,7 +9,7 @@ import {
   hashRateLimitKey,
 } from "../../common/redis/rate-limit.util";
 import { AdminOAuthClient } from "./entities/admin-oauth-client.entity";
-import { getOAuthRedirectHosts } from "../../config/oauth.config";
+import { getOAuthRedirectPolicy } from "../../config/oauth.config";
 import { checkRedirectUri } from "./redirect-uri.util";
 import { OAuthError } from "./oauth-error";
 import { DEFAULT_ADMIN_TOKEN_SCOPE } from "../auth/admin-api-token.constants";
@@ -24,6 +24,22 @@ const REGISTRATIONS_PER_HOUR = 10;
  * a few dozen addresses close registration for everybody.
  */
 export const MAX_UNUSED_CLIENTS = 1000;
+
+/** Unused registrations one address bucket keeps; its own oldest go first. */
+export const MAX_UNUSED_PER_REGISTRANT = 20;
+
+/**
+ * A registration this young is never evicted for others: a real client
+ * registers and asks for consent within minutes, so a flood of registrations
+ * cannot push it out before the admin approves.
+ */
+const PROTECTED_CLIENT_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Unused registrations beyond which new ones are refused, reachable only when
+ * more than the soft bound arrived within the protected hour.
+ */
+export const MAX_UNUSED_CLIENTS_HARD = 5000;
 
 /**
  * A registration never used for a grant is deleted after this long. Generous,
@@ -80,12 +96,13 @@ export class OAuthClientService {
     this.checkResponseTypes(body.response_types);
     const clientName = this.clientName(body.client_name);
 
-    if (addressBucket) {
+    const registrant = addressBucket ? hashRateLimitKey(addressBucket) : null;
+    if (registrant) {
       const verdict = await checkRateLimit({
         redis: this.redis,
         logger: this.logger,
         label: "OAuth registration limiter",
-        key: `admin:oauth:register:${hashRateLimitKey(addressBucket)}`,
+        key: `admin:oauth:register:${registrant}`,
         max: REGISTRATIONS_PER_HOUR,
         windowSeconds: 60 * 60,
       });
@@ -103,13 +120,14 @@ export class OAuthClientService {
       lastUsedAt: IsNull(),
       createdAt: LessThan(new Date(Date.now() - UNUSED_CLIENT_TTL_MS)),
     });
-    await this.makeRoom();
+    await this.makeRoom(registrant);
 
     const saved = await this.clients.save(
       this.clients.create({
         clientId: `pfc_${randomBytes(16).toString("base64url")}`,
         clientName,
         redirectUris,
+        registrant,
         lastUsedAt: null,
       }),
     );
@@ -128,21 +146,56 @@ export class OAuthClientService {
     };
   }
 
-  /** Deletes the oldest unused registrations beyond `MAX_UNUSED_CLIENTS - 1`. */
-  private async makeRoom(): Promise<void> {
+  /**
+   * Keep unused registrations bounded without letting one caller evict
+   * another's fresh one: a registrant's own surplus goes first, then the
+   * oldest beyond the soft bound that are past the protected hour.
+   */
+  private async makeRoom(registrant: string | null): Promise<void> {
+    if (registrant) {
+      const surplus = await this.clients.find({
+        where: { lastUsedAt: IsNull(), registrant },
+        order: { createdAt: "DESC" },
+        skip: MAX_UNUSED_PER_REGISTRANT - 1,
+        take: MAX_UNUSED_CLIENTS_HARD,
+        select: { clientId: true },
+      });
+      await this.deleteClients(surplus);
+    }
+
     const unused = await this.clients.count({
       where: { lastUsedAt: IsNull() },
     });
     if (unused < MAX_UNUSED_CLIENTS) return;
     const oldest = await this.clients.find({
-      where: { lastUsedAt: IsNull() },
+      where: {
+        lastUsedAt: IsNull(),
+        createdAt: LessThan(new Date(Date.now() - PROTECTED_CLIENT_AGE_MS)),
+      },
       order: { createdAt: "ASC" },
       take: unused - MAX_UNUSED_CLIENTS + 1,
       select: { clientId: true },
     });
-    await this.clients.delete({ clientId: In(oldest.map((c) => c.clientId)) });
+    await this.deleteClients(oldest);
+    if (unused - oldest.length >= MAX_UNUSED_CLIENTS_HARD) {
+      throw new OAuthError(
+        "temporarily_unavailable",
+        "Registration is paused; try again later",
+        429,
+        60 * 60,
+      );
+    }
+  }
+
+  private async deleteClients(
+    rows: Array<{ clientId: string }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    await this.clients.delete({
+      clientId: In(rows.map((row) => row.clientId)),
+    });
     this.logger.warn(
-      `${oldest.length} unused OAuth registrations deleted to make room`,
+      `${rows.length} unused OAuth registrations deleted to make room`,
     );
   }
 
@@ -170,9 +223,9 @@ export class OAuthClientService {
         `At most ${MAX_REDIRECT_URIS} redirect URIs`,
       );
     }
-    const allowedHosts = getOAuthRedirectHosts();
+    const policy = getOAuthRedirectPolicy();
     for (const uri of value) {
-      const verdict = checkRedirectUri(uri, allowedHosts);
+      const verdict = checkRedirectUri(uri, policy);
       if (!verdict.ok) {
         throw new OAuthError("invalid_redirect_uri", verdict.reason);
       }

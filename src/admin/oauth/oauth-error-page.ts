@@ -18,7 +18,7 @@ const CONTENT_SECURITY_POLICY = [
 ].join("; ");
 
 export type AuthorizeErrorMessage =
-  "unknown-client" | "invalid-redirect" | "invalid-request";
+  "unknown-client" | "invalid-redirect" | "invalid-request" | "rate-limited";
 
 const MESSAGES: Record<AuthorizeErrorMessage, string> = {
   "unknown-client":
@@ -27,6 +27,8 @@ const MESSAGES: Record<AuthorizeErrorMessage, string> = {
     "This application asked to be sent somewhere it never registered. Nothing was authorized.",
   "invalid-request":
     "The authorization request is incomplete or malformed. Start the connection again from the application.",
+  "rate-limited":
+    "Too many authorization requests from this network. Wait a few minutes and start the connection again.",
 };
 
 export function sendAuthorizeErrorPage(
@@ -34,7 +36,7 @@ export function sendAuthorizeErrorPage(
   message: AuthorizeErrorMessage,
 ): void {
   response
-    .status(400)
+    .status(message === "rate-limited" ? 429 : 400)
     .setHeader("Content-Type", "text/html; charset=utf-8")
     .setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY)
     .setHeader("Cache-Control", "no-store")
