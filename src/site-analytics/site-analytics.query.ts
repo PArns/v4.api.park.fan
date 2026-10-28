@@ -3,6 +3,7 @@ import { addIsoDays } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
   BUCKET_SECONDS,
+  DAY_MS,
   FILTER_DIMS,
   INTERVALS,
   MAX_ADMIN_WINDOW_DAYS,
@@ -164,7 +165,7 @@ export function siteAnalyticsWindow(
     );
   }
   const horizon = hourlyHorizon(now);
-  const shift = days * 86_400_000;
+  const shift = days * DAY_MS;
   const startMs = Date.parse(`${from}T00:00:00Z`);
   // A window that ends today compares with a window before that ends at the
   // same hour, the current hour taken whole on both sides: rows are hours,
@@ -301,7 +302,7 @@ export function refuseFiltersBeyond(
 
 /** How many days lie from `from` to `to`, both included. */
 function dayCount(from: string, to: string): number {
-  return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  return Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS) + 1;
 }
 
 /** Every day from `from` to `to`, both included. */

@@ -9,13 +9,8 @@ import {
   eventWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
-import {
-  CROSSTAB_SMALL_CELLS,
-  foldCrosstab,
-  hideSmallTotal,
-  isNarrowed,
-} from "./small-cells";
-import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
+import { CROSSTAB_SMALL_CELLS, crosstabAnswer } from "./small-cells";
+import { VISITOR_DATA_DESCRIPTION } from "./visitor-data";
 
 const SIDE_HELP =
   "page_type, device, locale, day, path, country, browser, os, or " +
@@ -57,21 +52,9 @@ export const analyticsCrosstabTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsService)
       .crosstab(name, { ...siteQuery(input), row, col });
-    const folded = foldCrosstab(report.rows, report.cols, report.cells, {
-      row: report.row !== "day",
-      col: report.col !== "day",
+    return crosstabAnswer(report, input, {
+      ...windowOf(report),
+      name: report.name,
     });
-    const total = hideSmallTotal(report.total, input);
-    return withVisitorData(
-      {
-        ...windowOf(report),
-        name: report.name,
-        row: report.row,
-        col: report.col,
-        total: total.total,
-        ...(isNarrowed(input) && { smallValuesHidden: total.hidden }),
-      },
-      folded,
-    );
   },
 });

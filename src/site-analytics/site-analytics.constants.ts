@@ -8,6 +8,9 @@ import {
   type PageViewLocale,
 } from "../page-views/page-view.constants";
 
+/** Milliseconds in a UTC day. */
+export const DAY_MS = 86_400_000;
+
 /** The site's six languages, the same list the page-view rankings use. */
 export const SITE_LOCALES = PAGE_VIEW_LOCALES;
 export type SiteLocale = PageViewLocale;

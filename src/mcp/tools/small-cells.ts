@@ -1,4 +1,5 @@
 import { OVERFLOW_VALUE } from "../../site-analytics/site-analytics.constants";
+import { withVisitorData } from "./visitor-data";
 
 /**
  * Small values in what the site-statistic tools answer. A list of values with
@@ -257,4 +258,38 @@ export function hideSmallTotal(
   if (!isNarrowed(input)) return { total, hidden: false };
   const [point] = hideSmallInSeries([{ total }], ["total"]).series;
   return { total: point.total, hidden: point.total !== total };
+}
+
+/**
+ * The answer of a crosstab tool: `head` (the window and what was counted),
+ * the report's sides and total with small counts hidden, and the folded matrix
+ * under `visitorData`.
+ */
+export function crosstabAnswer<H extends object>(
+  report: {
+    row: string;
+    col: string;
+    rows: readonly string[];
+    cols: readonly string[];
+    cells: readonly CrosstabCell[];
+    total: number;
+  },
+  input: { filters?: readonly unknown[]; locale?: unknown },
+  head: H,
+) {
+  const folded = foldCrosstab(report.rows, report.cols, report.cells, {
+    row: report.row !== "day",
+    col: report.col !== "day",
+  });
+  const total = hideSmallTotal(report.total, input);
+  return withVisitorData(
+    {
+      ...head,
+      row: report.row,
+      col: report.col,
+      total: total.total,
+      ...(isNarrowed(input) && { smallValuesHidden: total.hidden }),
+    },
+    folded,
+  );
 }

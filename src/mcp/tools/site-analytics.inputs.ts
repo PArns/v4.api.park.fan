@@ -110,51 +110,47 @@ export const siteWindowInput = {
     ),
 };
 
+/** The `filters` input of a tool that offers only some of the dimensions. */
+function filtersOf<const D extends readonly [string, ...string[]]>(
+  dims: D,
+  dimHelp: string,
+  example: string,
+) {
+  return z
+    .array(
+      z.object({
+        dim: z.enum(dims).describe(dimHelp),
+        value: z.string().min(1).max(820).describe("The exact value"),
+      }),
+    )
+    .max(8)
+    .optional()
+    .describe(`Rows must match all of these, e.g. [${example}]`);
+}
+
 /**
  * The window input of a tool over page views: the visit dimensions are not
  * offered, rather than refused by the report.
  */
 export const pageWindowInput = {
   ...siteWindowInput,
-  filters: z
-    .array(
-      z.object({
-        dim: z
-          .enum(PAGE_DIMS)
-          .describe(
-            "path, page_type, country, device, browser, os, locale, browser_language; the " +
-              "visit dimensions do not apply to page views",
-          ),
-        value: z.string().min(1).max(820).describe("The exact value"),
-      }),
-    )
-    .max(8)
-    .optional()
-    .describe(
-      "Rows must match all of these, e.g. [{dim:'page_type',value:'park'}]",
-    ),
+  filters: filtersOf(
+    PAGE_DIMS,
+    "path, page_type, country, device, browser, os, locale, browser_language; the " +
+      "visit dimensions do not apply to page views",
+    "{dim:'page_type',value:'park'}",
+  ),
 };
 
 /** The window input of a tool over events, which carry fewer dimensions. */
 export const eventWindowInput = {
   ...siteWindowInput,
-  filters: z
-    .array(
-      z.object({
-        dim: z
-          .enum(EVENT_DIMS)
-          .describe(
-            "path, page_type, country, device, browser, os, locale; events carry neither " +
-              "the visit dimensions nor the browser language",
-          ),
-        value: z.string().min(1).max(820).describe("The exact value"),
-      }),
-    )
-    .max(8)
-    .optional()
-    .describe(
-      "Rows must match all of these, e.g. [{dim:'page_type',value:'park'}]",
-    ),
+  filters: filtersOf(
+    EVENT_DIMS,
+    "path, page_type, country, device, browser, os, locale; events carry neither " +
+      "the visit dimensions nor the browser language",
+    "{dim:'page_type',value:'park'}",
+  ),
 };
 
 /** The window input of a tool that compares with the window before. */

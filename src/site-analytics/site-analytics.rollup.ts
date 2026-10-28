@@ -14,6 +14,7 @@
  * day instead of 29,600), so the cuboids are the few dimensions a panel or a
  * filter asks about at a time.
  */
+import { DAY_MS } from "./site-analytics.constants";
 import {
   type BucketRange,
   type SiteAnalyticsWindow,
@@ -222,8 +223,6 @@ export function chooseCuboid(
   }
   return best;
 }
-
-const DAY_MS = 86_400_000;
 
 /** The UTC day of an instant, `YYYY-MM-DD`. */
 function dayOfMs(ms: number): string {

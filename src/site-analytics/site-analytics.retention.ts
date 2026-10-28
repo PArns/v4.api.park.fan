@@ -7,11 +7,11 @@
 import { addIsoDays } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
+  DAY_MS,
   HOURLY_RETENTION_DAYS,
   SITE_CHUNK_DAYS,
 } from "./site-analytics.constants";
 
-const DAY_MS = 86_400_000;
 const CHUNK_MS = SITE_CHUNK_DAYS * DAY_MS;
 
 /** A stretch of instants, `[start, end)`, as ISO strings. */
