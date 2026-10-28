@@ -9,6 +9,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const seoLandingPagesTool = defineMcpTool({
   name: "seo_landing_pages",
@@ -19,6 +20,8 @@ export const seoLandingPagesTool = defineMcpTool({
     "the previous window's visits, the change in visits (absolute), the bounce rate and the top " +
     "sources (google, bing, chatgpt …). The closest thing to organic search performance this site " +
     "has; it knows nothing of rankings, impressions or queries. " +
+    VISITOR_DATA_DESCRIPTION +
+    " " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     channel: z
@@ -38,13 +41,14 @@ export const seoLandingPagesTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsSeoService)
       .landingPages({ ...siteQuery(input), channel, limit });
-    return {
-      ...windowOf(report),
-      channel: report.channel,
-      items: report.items.map((page) => ({
-        ...page,
-        bounceRate: round3(page.bounceRate),
-      })),
-    };
+    return withVisitorData(
+      { ...windowOf(report), channel: report.channel },
+      {
+        items: report.items.map((page) => ({
+          ...page,
+          bounceRate: round3(page.bounceRate),
+        })),
+      },
+    );
   },
 });

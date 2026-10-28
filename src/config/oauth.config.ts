@@ -12,6 +12,9 @@ const DEFAULT_API_PUBLIC_URL = "https://api.park.fan";
 /** Hosts an `https` redirect URI may name when `OAUTH_REDIRECT_HOSTS` is unset. */
 export const DEFAULT_OAUTH_REDIRECT_HOSTS = ["claude.ai", "claude.com"];
 
+/** Paths an `https` redirect URI may have when `OAUTH_REDIRECT_PATHS` is unset: claude.ai's connector callback. */
+export const DEFAULT_OAUTH_REDIRECT_PATHS = ["/api/mcp/auth_callback"];
+
 function withoutTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
@@ -59,10 +62,44 @@ export function getMcpResourceMetadataUrl(): string {
  * claude.ai session, which checks `state` against it.
  */
 export function getOAuthRedirectHosts(): string[] | "*" {
-  const configured = (process.env.OAUTH_REDIRECT_HOSTS ?? "")
+  return listFromEnv(
+    "OAUTH_REDIRECT_HOSTS",
+    DEFAULT_OAUTH_REDIRECT_HOSTS,
+    true,
+  );
+}
+
+/** A comma-separated list from the environment, or `*`, or the default. */
+function listFromEnv(
+  name: string,
+  fallback: string[],
+  lowercase: boolean,
+): string[] | "*" {
+  const configured = (process.env[name] ?? "")
     .split(",")
-    .map((host) => host.trim().toLowerCase())
-    .filter((host) => host.length > 0);
+    .map((entry) => (lowercase ? entry.trim().toLowerCase() : entry.trim()))
+    .filter((entry) => entry.length > 0);
   if (configured.includes("*")) return "*";
-  return configured.length > 0 ? configured : DEFAULT_OAUTH_REDIRECT_HOSTS;
+  return configured.length > 0 ? configured : fallback;
+}
+
+/**
+ * Paths an `https` redirect URI may have, on any allowed host; `*` allows any
+ * path. Pinned because a host allows more than its callback: any page of
+ * claude.ai that reflects a query parameter would otherwise receive codes.
+ */
+export function getOAuthRedirectPaths(): string[] | "*" {
+  return listFromEnv(
+    "OAUTH_REDIRECT_PATHS",
+    DEFAULT_OAUTH_REDIRECT_PATHS,
+    false,
+  );
+}
+
+/** Where an `https` redirect URI may point: `OAUTH_REDIRECT_HOSTS` and `OAUTH_REDIRECT_PATHS`. */
+export function getOAuthRedirectPolicy(): {
+  hosts: string[] | "*";
+  paths: string[] | "*";
+} {
+  return { hosts: getOAuthRedirectHosts(), paths: getOAuthRedirectPaths() };
 }

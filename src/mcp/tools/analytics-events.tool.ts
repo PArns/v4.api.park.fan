@@ -7,6 +7,7 @@ import {
   siteWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsEventsTool = defineMcpTool({
   name: "analytics_events",
@@ -17,7 +18,8 @@ export const analyticsEventsTool = defineMcpTool({
     "count, the previous window's count, the change as a ratio, and whether an admin blocked it " +
     "(a blocked name is no longer recorded). Use analytics_event for one event's properties and " +
     "analytics_crosstab to cut it by two sides. UTC days; up to six minutes behind the site; " +
-    "Do Not Track, GPC and opted-out readers are missing.",
+    "Do Not Track, GPC and opted-out readers are missing. " +
+    VISITOR_DATA_DESCRIPTION,
   input: {
     ...siteWindowInput,
     limit: z
@@ -35,17 +37,18 @@ export const analyticsEventsTool = defineMcpTool({
   async handler({ limit, series, ...input }, ctx) {
     const report = await ctx.get(SiteAnalyticsService).events(siteQuery(input));
     const list = capped(report.items, limit);
-    return {
-      ...windowOf(report),
-      total: list.total,
-      items: list.items.map((item) => ({
-        name: item.name,
-        count: item.count,
-        previous: item.previous,
-        change: changeRatio(item.count, item.previous),
-        ...(item.blocked && { blocked: true }),
-        ...(series && { series: item.series }),
-      })),
-    };
+    return withVisitorData(
+      { ...windowOf(report), total: list.total },
+      {
+        items: list.items.map((item) => ({
+          name: item.name,
+          count: item.count,
+          previous: item.previous,
+          change: changeRatio(item.count, item.previous),
+          ...(item.blocked && { blocked: true }),
+          ...(series && { series: item.series }),
+        })),
+      },
+    );
   },
 });

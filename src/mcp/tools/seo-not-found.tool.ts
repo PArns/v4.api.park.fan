@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsSeoService } from "../../site-analytics/site-analytics-seo.service";
 import { siteQuery, siteWindowInput, windowOf } from "./site-analytics.inputs";
+import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const seoNotFoundTool = defineMcpTool({
   name: "seo_not_found",
@@ -11,7 +12,8 @@ export const seoNotFoundTool = defineMcpTool({
     "came from: a referrer such as google means a dead URL still indexed or linked from outside; " +
     "views without any referrer usually mean a broken link inside the site. Candidates for a " +
     "redirect or a fixed link. UTC days; up to six minutes behind the site; Do Not Track, GPC and " +
-    "opted-out readers are missing.",
+    "opted-out readers are missing. " +
+    VISITOR_DATA_DESCRIPTION,
   input: {
     ...siteWindowInput,
     limit: z
@@ -26,13 +28,12 @@ export const seoNotFoundTool = defineMcpTool({
     const report = await ctx
       .get(SiteAnalyticsSeoService)
       .notFound({ ...siteQuery(input), limit });
-    return {
-      ...windowOf(report),
+    return withVisitorData(windowOf(report), {
       items: report.items.map((item) => ({
         path: item.path,
         views: item.views,
         referrers: item.referrers.slice(0, 5),
       })),
-    };
+    });
   },
 });

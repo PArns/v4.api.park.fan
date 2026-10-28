@@ -2,6 +2,7 @@ import { NotFoundException } from "@nestjs/common";
 import { RedisMock } from "../../../test/mocks/redis.mock";
 import { OAuthAuthorizationService } from "./oauth-authorization.service";
 import { OAuthError } from "./oauth-error";
+import { GrantRefusedError } from "../auth/admin-api-token.store";
 import { s256Challenge } from "./pkce.util";
 import type { AdminPrincipal } from "../auth/admin-principal";
 
@@ -88,6 +89,7 @@ describe("OAuthAuthorizationService", () => {
       FRONTEND_URL: "https://park.fan",
     };
     delete process.env.OAUTH_REDIRECT_HOSTS;
+    delete process.env.OAUTH_REDIRECT_PATHS;
   });
   afterAll(() => {
     process.env = env;
@@ -97,7 +99,7 @@ describe("OAuthAuthorizationService", () => {
     service: OAuthAuthorizationService,
     request: Record<string, unknown> = validRequest,
   ): Promise<string> {
-    const outcome = await service.authorize(request);
+    const outcome = await service.authorize(request, null);
     if (outcome.kind !== "redirect") throw new Error("expected a redirect");
     const id = new URL(outcome.location).searchParams.get("request")!;
     const { redirectTo } = await service.approve(id, ADMIN);
@@ -107,7 +109,7 @@ describe("OAuthAuthorizationService", () => {
   describe("authorize", () => {
     it("parks a valid request and sends the browser to the consent page", async () => {
       const { service } = build();
-      const outcome = await service.authorize(validRequest);
+      const outcome = await service.authorize(validRequest, null);
       expect(outcome.kind).toBe("redirect");
       const location = new URL((outcome as { location: string }).location);
       expect(`${location.origin}${location.pathname}`).toBe(
@@ -180,7 +182,10 @@ describe("OAuthAuthorizationService", () => {
       "sends %s back to the client as an error",
       async (_label, patch, error) => {
         const { service } = build();
-        const outcome = await service.authorize({ ...validRequest, ...patch });
+        const outcome = await service.authorize(
+          { ...validRequest, ...patch },
+          null,
+        );
         expect(outcome.kind).toBe("redirect");
         const location = new URL((outcome as { location: string }).location);
         expect(`${location.origin}${location.pathname}`).toBe(
@@ -191,6 +196,31 @@ describe("OAuthAuthorizationService", () => {
         expect(location.searchParams.get("iss")).toBe("https://api.park.fan");
       },
     );
+
+    it("limits pending requests per address bucket with a page", async () => {
+      const { service } = build();
+      for (let i = 0; i < 30; i++) {
+        await service.authorize(validRequest, "198.51.100.0");
+      }
+      expect(await service.authorize(validRequest, "198.51.100.0")).toEqual({
+        kind: "error-page",
+        message: "rate-limited",
+      });
+    });
+
+    it("limits pending requests per client with an error at its redirect", async () => {
+      const { service } = build();
+      for (let i = 0; i < 30; i++) {
+        await service.authorize(validRequest, `198.51.100.${i}`);
+      }
+      const outcome = await service.authorize(validRequest, "203.0.113.1");
+      expect(outcome.kind).toBe("redirect");
+      expect(
+        new URL((outcome as { location: string }).location).searchParams.get(
+          "error",
+        ),
+      ).toBe("temporarily_unavailable");
+    });
 
     it("accepts the resource with a trailing slash", async () => {
       const { service } = build();
@@ -222,7 +252,7 @@ describe("OAuthAuthorizationService", () => {
   describe("consent", () => {
     it("answers a request once", async () => {
       const { service } = build();
-      const outcome = await service.authorize(validRequest);
+      const outcome = await service.authorize(validRequest, null);
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
@@ -235,7 +265,7 @@ describe("OAuthAuthorizationService", () => {
 
     it("hands the code to the registered redirect with state and issuer, and audits it", async () => {
       const { service, audit, clients } = build();
-      const outcome = await service.authorize(validRequest);
+      const outcome = await service.authorize(validRequest, null);
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
@@ -256,7 +286,7 @@ describe("OAuthAuthorizationService", () => {
 
     it("sends a denial back as access_denied", async () => {
       const { service } = build();
-      const outcome = await service.authorize(validRequest);
+      const outcome = await service.authorize(validRequest, null);
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
@@ -268,7 +298,7 @@ describe("OAuthAuthorizationService", () => {
 
     it("refuses a principal without an account", async () => {
       const { service } = build();
-      const outcome = await service.authorize(validRequest);
+      const outcome = await service.authorize(validRequest, null);
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
@@ -303,6 +333,7 @@ describe("OAuthAuthorizationService", () => {
         clientId: CLIENT.clientId,
         clientName: "Claude Code",
         scope: "admin:read",
+        approvedAt: expect.any(Date),
       });
     });
 
@@ -402,6 +433,16 @@ describe("OAuthAuthorizationService", () => {
         "invalid_grant",
       );
       expect(tokens.issueOAuthGrant).not.toHaveBeenCalled();
+    });
+
+    it("refuses a code approved before the account signed out everywhere", async () => {
+      const { service, tokens } = build();
+      const code = await approvedCode(service);
+      tokens.issueOAuthGrant.mockRejectedValueOnce(new GrantRefusedError());
+      await expectOAuthError(
+        service.exchangeCode(exchange(code)),
+        "invalid_grant",
+      );
     });
 
     it("refuses a repeated parameter", async () => {

@@ -413,6 +413,12 @@ export class AdminAuthService implements OnModuleInit {
    * Returns the number of sessions ended.
    */
   async signOutEverywhere(userId: string, reason: string): Promise<number> {
+    // First, so a token or code minted while the rest runs is already older
+    // than the cut-off (`AdminApiTokenStore` checks it at issue and at use).
+    await this.users.query(
+      `UPDATE admin_users SET tokens_revoked_at = clock_timestamp() WHERE id = $1::uuid`,
+      [userId],
+    );
     const sessions = await this.sessions.destroyAllForUser(userId);
     await this.apiTokens.revokeAllForUser(userId, reason);
     return sessions;

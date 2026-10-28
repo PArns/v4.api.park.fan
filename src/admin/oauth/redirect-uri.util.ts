@@ -3,8 +3,9 @@
  * sent to this address, so it is the one value in the flow that decides who
  * receives the grant.
  *
- * - `https://<host>/…` where the host is on `OAUTH_REDIRECT_HOSTS` (claude.ai
- *   by default), or any host when that list is `*`;
+ * - `https://<host><path>` where the host is on `OAUTH_REDIRECT_HOSTS` (claude.ai
+ *   and claude.com by default) and the path on `OAUTH_REDIRECT_PATHS`
+ *   (`/api/mcp/auth_callback` by default) with no query; `*` lifts either list;
  * - `http://127.0.0.1|localhost|[::1][:port]/…`, a loopback listener such as
  *   Claude Code's (RFC 8252 §7.3);
  * - nothing else: no other scheme, no user info, no fragment.
@@ -15,6 +16,12 @@ export const MAX_REDIRECT_URI_LENGTH = 2000;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export type RedirectUriVerdict = { ok: true } | { ok: false; reason: string };
+
+/** Where an https redirect may point; see `getOAuthRedirectPolicy`. */
+export interface RedirectPolicy {
+  hosts: string[] | "*";
+  paths: string[] | "*";
+}
 
 function parse(uri: string): URL | null {
   try {
@@ -31,7 +38,7 @@ export function isLoopbackRedirect(url: URL): boolean {
 /** Whether `uri` may be registered as a redirect URI. */
 export function checkRedirectUri(
   uri: unknown,
-  allowedHosts: string[] | "*",
+  policy: RedirectPolicy,
 ): RedirectUriVerdict {
   if (typeof uri !== "string" || uri.length === 0) {
     return { ok: false, reason: "a redirect URI must be a string" };
@@ -54,10 +61,21 @@ export function checkRedirectUri(
       reason: "a redirect URI must be https, or http on a loopback address",
     };
   }
-  if (allowedHosts !== "*" && !allowedHosts.includes(url.hostname)) {
+  if (policy.hosts !== "*" && !policy.hosts.includes(url.hostname)) {
     return {
       ok: false,
       reason: `redirects to ${url.hostname} are not allowed on this server`,
+    };
+  }
+  if (
+    policy.paths !== "*" &&
+    (!policy.paths.includes(url.pathname) ||
+      url.search !== "" ||
+      url.port !== "")
+  ) {
+    return {
+      ok: false,
+      reason: `only ${policy.paths.join(", ")} may receive codes on ${url.hostname}`,
     };
   }
   return { ok: true };

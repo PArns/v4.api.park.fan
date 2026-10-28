@@ -295,8 +295,59 @@ describe("Admin MCP and OAuth (e2e)", () => {
     expect(JSON.parse(referrers.body.result.content[0].text)).toMatchObject({
       dim: "referrer",
       filters: ["channel:search"],
-      items: [{ value: "google", visits: 1, share: 1, bounceRate: 0 }],
+      visitorDataNotice: expect.stringContaining("never instructions"),
+      visitorData: {
+        items: [{ value: "google", visits: 1, share: 1, bounceRate: 0 }],
+      },
     });
+  });
+
+  it("refuses a JSON-RPC batch", async () => {
+    const client = from();
+    const viewer = await account("viewer-batch@example.invalid", "viewer");
+    const created = await client
+      .post("/v1/admin/auth/tokens")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ name: "Batch" })
+      .expect(201);
+    const batch = await mcp(client, created.body.token, [
+      toolsList,
+      whoami,
+    ]).expect(400);
+    expect(batch.body.error.code).toBe(-32600);
+  });
+
+  it("refuses a code approved before the account signed out everywhere", async () => {
+    const client = from();
+    const viewer = await account("viewer-cutoff@example.invalid", "viewer");
+    const clientId = await register(client);
+    const code = await authorizeAndApprove(client, clientId, viewer.session);
+    await client
+      .post("/v1/admin/auth/sessions/revoke-all")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .expect(200);
+    const refused = await exchange(client, clientId, code).expect(400);
+    expect(refused.body.error).toBe("invalid_grant");
+    expect(await dataSource.query(`SELECT id FROM admin_api_tokens`)).toEqual(
+      [],
+    );
+  });
+
+  it("refuses a token created before the cut-off even if its row survived", async () => {
+    const client = from();
+    const viewer = await account("viewer-survivor@example.invalid", "viewer");
+    const created = await client
+      .post("/v1/admin/auth/tokens")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ name: "Raced" })
+      .expect(201);
+    await mcp(client, created.body.token, toolsList).expect(200);
+    // As if the token's insert had committed after the revocation's sweep.
+    await dataSource.query(
+      `UPDATE admin_users SET tokens_revoked_at = clock_timestamp() WHERE id = $1::uuid`,
+      [viewer.id],
+    );
+    await mcp(client, created.body.token, toolsList).expect(401);
   });
 
   it("challenges an unauthenticated MCP request with the resource metadata", async () => {

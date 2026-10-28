@@ -60,10 +60,11 @@ export class LoggingInterceptor implements NestInterceptor {
         // Only log interesting events:
         const isError = statusCode >= 400;
         const isSlow = responseTime > 1000; // >1s
+        const lowerUrl = url.toLowerCase();
         const isAdminOrML =
-          url.includes("/admin") ||
-          url.includes("/ml") ||
-          url.includes("/train");
+          lowerUrl.includes("/admin") ||
+          lowerUrl.includes("/ml") ||
+          lowerUrl.includes("/train");
 
         if (isError || isSlow || isAdminOrML) {
           const emoji = isError ? "❌" : isSlow ? "🐌" : "🔧";

@@ -69,7 +69,10 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   capped at `viewer`; an owner's token is a viewer.
 - **A deactivated account is refused at its next request**, revoked or not.
 - **Whatever ends an account's sessions ends its tokens:** deactivation, a password change or reset,
-  a second-factor reset, *sign out everywhere* (`AdminAuthService.signOutEverywhere`).
+  a second-factor reset, *sign out everywhere* (`AdminAuthService.signOutEverywhere`). It first sets
+  `admin_users.tokens_revoked_at`; a token created before that instant is refused at every request
+  even if its row escaped the sweep, and a code approved before it is refused at the exchange.
+  Tokens are issued under a lock on the account's row, so issuing and signing out never interleave.
 - **Tokens reach `/v1/mcp` and nothing else.** `AdminAuthGuard` accepts them only on an endpoint
   marked `@AdminTokenOnly()`, and such an endpoint accepts neither a session nor the shared pass.
   So a token cannot list, mint or extend tokens, approve a consent or call an admin REST route.
@@ -86,7 +89,8 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   after its use revokes the whole grant (the thief and the client both hold it, and the server cannot
   tell which is which). Within those 10 s it is a race between two processes of one client and only
   answers `invalid_grant`.
-- **Limits:** 25 active PATs per account; a new grant beyond 20 active ones revokes the oldest.
+- **Limits:** 25 active PATs per account, counted under the account's row lock; a new grant beyond
+  20 active ones revokes the oldest.
 - `last_used_at` is written at most once a minute per token.
 - **Audit rows:** `auth.token.create`, `auth.token.revoke`, `auth.oauth.grant` (at the approval,
   with the redirect host). A reuse or code replay revokes and logs a warning; it has no actor.
@@ -134,7 +138,9 @@ descriptions carry what a model must know to read the numbers: visitors are dail
 over the window and `null` under any filter but the language, bounce is `1 − engaged / visits`,
 reports lag the site by up to six minutes, and Do Not Track, GPC and opted-out readers are missing
 ([site statistic](../frontend/site-analytics.md)). Rates are rounded to three places, lists cut to
-the `limit` each takes, series only on request.
+the `limit` each takes, series only on request. Strings the collector took from visitors' browsers come
+back under `visitorData` with a `visitorDataNotice` (`tools/visitor-data.ts`), parks and rides by
+the name park.fan's tables give them ([security](#security)).
 
 Reads made through the tools do not count as popularity hits (`countHit = false`). A tool that
 writes would set `minRole` and needs a scope above `admin:read`; v1 issues none.
@@ -161,9 +167,11 @@ writes would set `minRole` and needs a scope above `admin:read`; v1 issues none.
 The shared pass is refused on every row. The response shapes the frontend reads are in
 [endpoints](endpoints.md#api-tokens-and-the-admin-mcp).
 
-Redirect URIs: `https://` on a host in `OAUTH_REDIRECT_HOSTS` (default `claude.ai`, `claude.com`),
-or `http://127.0.0.1|localhost|[::1]` with any port. Matched exactly, except that a loopback URI may
-name another port than it registered (RFC 8252 §7.3). An unknown client or an unregistered redirect
+Redirect URIs: `https://` on a host in `OAUTH_REDIRECT_HOSTS` (default `claude.ai`, `claude.com`)
+with a path in `OAUTH_REDIRECT_PATHS` (default `/api/mcp/auth_callback`, claude.ai's connector
+callback) and no query or port, or `http://127.0.0.1|localhost|[::1]` with any port and path.
+Matched exactly, except that a loopback URI may name another port than it registered (RFC 8252
+§7.3). An unknown client or an unregistered redirect
 URI gets an HTML error page from `/v1/oauth/authorize`, never a redirect.
 
 ## Security
@@ -174,13 +182,16 @@ What was checked when this was built, and where it is enforced:
   compared in constant time; the code is consumed (`GETDEL`) before the verifier is checked, so a
   wrong guess burns it.
 - **Redirect URIs:** validated at registration and again at authorize (the allowed hosts may have
-  narrowed), exact match, no fragment or user info. Errors before the redirect URI is trusted are a
+  narrowed), exact match, no fragment or user info, and on an allowed https host only the pinned
+  callback path: any other page of claude.ai that echoes a query parameter would otherwise receive
+  codes. Errors before the redirect URI is trusted are a
   page here, so `/v1/oauth/authorize` is no open redirect; `redirectTo` is always a registered URI.
 - **Replay:** codes single-use and 60 s, a replayed code revokes its grant; refresh tokens rotate
   with reuse detection (conditional `UPDATE`, so of two parallel refreshes exactly one wins).
 - **Leakage:** secrets stored only as SHA-256 (pending requests and codes in Redis too); tokens only
   in the `Authorization` header, never in a URL; `code`, `code_verifier`, `access_token`,
-  `refresh_token`, `client_secret` and `state` are redacted from logged URLs (`redactUrl`); nothing
+  `refresh_token`, `client_secret` and `state` are redacted from logged URLs (`redactUrl`), and so is
+  the pending request id in `/v1/admin/oauth/requests/:id`; nothing
   logs headers or OAuth bodies; every OAuth answer is `no-store`, the authorize redirect too, and
   API answers carry `Referrer-Policy: no-referrer`.
 - **Consent CSRF:** the approve call reaches the API only through park.fan's admin proxy with the
@@ -190,10 +201,24 @@ What was checked when this was built, and where it is enforced:
 - **Consent phishing:** anyone may register a client called "Claude", so the consent page shows the
   redirect host, and https redirects are limited to `OAUTH_REDIRECT_HOSTS`. A grant obtained through
   a phished approval lands in the approving admin's own claude.ai session or on their own machine.
-- **DCR abuse:** 10 registrations per address and hour (Redis) plus 10 a minute (throttler), names
-  stripped of control and bidi characters and cut at 100, at most 10 redirect URIs. Registrations
-  never used for a grant are deleted after a week, and beyond 1000 of them the oldest give way;
-  refusing new ones instead would let a few dozen addresses close registration for everybody.
+- **DCR abuse:** 10 registrations per address bucket (IPv4, IPv6 /64) and hour (Redis) plus 10 a
+  minute (throttler), names stripped of control, bidi, zero-width, separator, filler and tag
+  characters (`stripInvisibleCharacters`) and cut at 100, at most 10 redirect URIs. Registrations
+  never used for a grant are deleted after a week. A bucket keeps at most 20 unused ones, its own
+  oldest going first; beyond 1000 overall the oldest older than an hour give way, so a flood cannot
+  push out a client that registered minutes ago; only past 5000, all younger than an hour, are new
+  ones refused.
+- **Authorize from strangers:** a pending request is written to Redis before anybody signs in, so at
+  most 30 per address bucket and 30 per client live in any 10 minutes (an error page, or
+  `temporarily_unavailable` at the client's redirect).
+- **Prompt injection through the statistic:** paths, referrers, campaigns, event names and property
+  values reach the public collector from anybody's browser. Every tool returns them under
+  `visitorData`, beside a `visitorDataNotice` saying they are data and never instructions, and its
+  description says the same; parks and rides come by the name in park.fan's own tables, and keys that
+  no longer resolve are left out. OAuth client names are self-chosen too: `whoami` and `audit_log`
+  say so.
+- **Amplification:** JSON-RPC batches are refused (one tool call per request, which the throttler
+  counts), and one token runs at most 4 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
   consent endpoints above; the tools a role may not use are not even listed, and are refused again
   at call time.
@@ -214,7 +239,8 @@ What was checked when this was built, and where it is enforced:
 - **Caching:** `/v1/mcp` is `NoCdnCacheInterceptor`; the OAuth answers set `no-store` themselves;
   the discovery documents are public for 5 minutes like any GET.
 - **Throttling:** the global limiter applies (none of this comes through the frontend's bypass key),
-  with `@Throttle()` per minute: register 10, authorize 30, token 60, revoke 30.
+  with `@Throttle()` per minute: register 10, authorize 30, token 60, revoke 30. Registration and
+  authorize also count per address bucket in Redis (above).
 
 ## Environment
 
@@ -223,6 +249,7 @@ What was checked when this was built, and where it is enforced:
 | `API_PUBLIC_URL` | this API's public origin: issuer and resource base; default `https://api.park.fan` |
 | `FRONTEND_URL` | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL` |
 | `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com` |
+| `OAUTH_REDIRECT_PATHS` | the paths an https redirect may have on those hosts, `*` for any; default `/api/mcp/auth_callback` |
 
 ## Known limits
 

@@ -56,6 +56,10 @@ describe("CacheControlInterceptor", () => {
       "/v1/ml/monitoring/alerts",
       "/v1/ml/health",
       "/v1/ml/accuracy/system",
+      // Express routes these to the same handlers, case-insensitively.
+      "/V1/ADMIN/analytics/overview",
+      "/v1/Admin/oauth/requests/x",
+      "/V1/ML/dashboard",
     ])("marks %s as private, no-store", async (url) => {
       const { ctx, headers } = buildMockContext(url);
       await firstValueFrom(interceptor.intercept(ctx, handlerOf({ ok: true })));
