@@ -80,7 +80,7 @@ The `/v1/ml/*` routes (`dashboard`, `models/metrics-history`, `accuracy/system`,
 | GET | `downtime-measurement` | viewer | read-only outage counts ([ride downtime](../analytics/ride-downtime/README.md)) |
 | GET | `downtime-erasure` | viewer | read-only count of rewritten `DOWN` readings |
 | GET | `ride-profile-term-audit` | viewer | ride-profile term ids the glossary no longer defines |
-| GET | `page-views?days=30&limit=25&locale=` | viewer | page views by kind, page and language ([page views](../frontend/page-views.md)) |
+| GET | `page-views?days=30&limit=25&locale=` | viewer | page reads by kind, page and language, from the site statistic ([page views](../frontend/page-views.md)) |
 | GET | `content/fields`, `content/resolve`, `content/overview`, `content/parks`, `content/parks/:id`, `content/parks/:id/attractions`, `content/attractions`, `content/attractions/:id`, `content/seasons`, `content/history` | viewer | the curation editor's reads ([curation](curation.md)) |
 | PATCH | `content/parks/:id`, `content/attractions/:id`, `content/parks/:id/attractions` | editor | writes curated fields and publishes them |
 | POST | `content/parks/:id/verify` | editor | records a check that changed nothing |
@@ -89,6 +89,24 @@ The `/v1/ml/*` routes (`dashboard`, `models/metrics-history`, `accuracy/system`,
 | POST | `content/history/:id/undo` | editor | undoes one curation ([undo](curation.md#undo)) |
 | POST | `parks/:id/correct-location` | owner | corrects a park's city and coordinates (`ParkRenameService.correctLocation`) |
 | POST | `validate-and-repair-parks` | owner | checks every park against Queue-Times and Wartezeiten.app; repairs ids with `{ autoFix: true }` |
+
+## Site statistic (`admin/analytics`)
+
+The reports of park.fan's own statistic, on `AdminSiteAnalyticsController`; every one takes `days`
+(1–365), `locale` and repeatable `filter=<dim>:<value>`. Shapes, filters and the measured times:
+[site statistic](../frontend/site-analytics.md#reports). Its writes are audited too.
+
+| Method | Path | Role | Does |
+| --- | --- | --- | --- |
+| GET | `analytics/overview` | viewer | page views, visits, visitors, events, bounce rate, the window before, series, realtime |
+| GET | `analytics/breakdown?dim=&limit=` | viewer | one dimension's values by views and visits |
+| GET | `analytics/events` | viewer | every event name seen, blocked ones included |
+| GET | `analytics/events/:name` | viewer | one event's props, values, combinations, entities and series |
+| GET | `analytics/events/:name/crosstab?row=&col=` | viewer | one event by two sides |
+| GET | `analytics/search` | viewer | the search funnel per surface |
+| GET | `analytics/seo/landing-pages?channel=&limit=`, `analytics/seo/trends?channel=`, `analytics/seo/not-found`, `analytics/seo/uncovered?kind=` | viewer | landing pages, rising and falling ones, broken paths, parks or rides no search visit entered on |
+| GET | `analytics/blocked-events` | viewer | the event block list |
+| PUT, DELETE | `analytics/blocked-events/:name` | editor | blocks or unblocks an event name; the collector drops it within a minute |
 
 ## Merges and retirement
 

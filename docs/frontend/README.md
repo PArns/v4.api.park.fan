@@ -53,3 +53,4 @@ page for the field or endpoint you are reading or changing.
 | [ride-glossary-link](./ride-glossary-link.md) | `rideProfile` and the glossary → rides lookup |
 | [weather-warnings](./weather-warnings.md) | `weather.warnings` |
 | [page-views](./page-views.md) | `/v1/page-views`: the most-read counter |
+| [site-analytics](./site-analytics.md) | `/v1/analytics/collect` and `/v1/admin/analytics/*`: the site statistic, its events and reports |

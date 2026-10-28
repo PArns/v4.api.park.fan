@@ -14,7 +14,7 @@ Three interceptors, innermost first. The global one stays out of a response that
 | Interceptor | Sends | Where |
 | --- | --- | --- |
 | `HttpCacheInterceptor(maxAge, sMaxAge?, isDegraded?)` (`src/common/interceptors/cache.interceptor.ts`) | `public, max-age=<maxAge>, s-maxage=<sMaxAge ?? maxAge>, stale-while-revalidate=<maxAge ≤ 120 ? maxAge : 2 × maxAge>`; `CDN-Cache-Control` only when `sMaxAge` differs (no route uses the split today); `no-store` when `isDegraded(body)` is true | per route, on most public reads; each TTL is on the route's contract page under [`docs/frontend/`](../frontend/README.md) |
-| `NoCdnCacheInterceptor` (`no-cdn-cache.interceptor.ts`) | `private, no-store, no-cache, must-revalidate` and `Pragma: no-cache` | answers that depend on the caller: `/v1/favorites`, `/v1/discovery/nearby`, `POST /v1/page-views`, and the `trips`, `push`, `push/ride-alerts` and `push/show-follows` controllers |
+| `NoCdnCacheInterceptor` (`no-cdn-cache.interceptor.ts`) | `private, no-store, no-cache, must-revalidate` and `Pragma: no-cache` | answers that depend on the caller: `/v1/favorites`, `/v1/discovery/nearby`, `POST /v1/page-views`, `POST /v1/analytics/collect`, and the `trips`, `push`, `push/ride-alerts` and `push/show-follows` controllers |
 | `CacheControlInterceptor` (`cache-control.interceptor.ts`, global in `src/main.ts`) | by path, see below | every other response |
 
 The global policy by path, first match wins:
@@ -123,7 +123,7 @@ Redis itself, on every request:
 | --- | --- | --- | --- |
 | `TripWriteRateLimitService` | `getRateLimitIp` | 20 creates and 600 updates or deletes an hour | [trips](../frontend/trips.md) |
 | `PushFollowWriteRateLimitService` (through `PushFollowAccessGuard.writeGuard`) | `getRateLimitIp` | 60 an hour each for `subscription`, `ride-alert`, `show-follow` | [push](../frontend/push.md) |
-| the caps in `PageViewsService` | `addressBucket(getRateLimitIp)` (an IPv6 address counts as its /64) and the User-Agent | 3 views per reader and page, 500 per address, per UTC day | [page views](../frontend/page-views.md) |
+| the caps in `SiteAnalyticsCollectService` | `addressBucket(getRateLimitIp)` (an IPv6 address counts as its /64) and the User-Agent | 3000 hits per address; for `page_read` also 3 per reader and page, 500 per address; per UTC day | [site statistic](../frontend/site-analytics.md#guards), [page views](../frontend/page-views.md) |
 | `AdminLoginRateLimitService` | `clientIp` and the account | failures per 15 min: 25 per address, 10 per account, 10 per account and action | [admin authentication](../admin/authentication.md) |
 
 All four let a request through when Redis fails. Without a readable address the first three do not
