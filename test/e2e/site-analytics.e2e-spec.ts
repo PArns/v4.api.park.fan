@@ -10,6 +10,8 @@ import { AdminSessionStore } from "../../src/admin/auth/admin-session.store";
 import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { SiteAnalyticsCollectService } from "../../src/site-analytics/site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "../../src/site-analytics/site-analytics-storage.service";
+import { SiteReportRunner } from "../../src/site-analytics/site-analytics-report-runner";
+import { ROLLUP_TABLES } from "../../src/site-analytics/site-analytics.rollup";
 import { SITE_ANALYTICS_KEYS } from "../../src/site-analytics/site-analytics.constants";
 import {
   PARK_DEPENDENCIES,
@@ -256,19 +258,40 @@ describe("Site analytics (e2e)", () => {
     expect(
       pending.upQueries
         .map((q) => q.query)
-        .filter((sql) => /site_(pageviews|events|analytics_flushes)/.test(sql)),
+        .filter((sql) =>
+          /site_(pageviews|events|analytics_flushes|rollup_days|visitor_hours)/.test(
+            sql,
+          ),
+        ),
     ).toEqual([]);
-    // And the bucket indexes create_hypertable made are still there.
+    // And the bucket indexes create_hypertable made are still there, on the
+    // daily tables too.
     const indexes = await dataSource.query(
       `SELECT indexname FROM pg_indexes
-        WHERE tablename IN ('site_pageviews', 'site_events')`,
+        WHERE tablename IN ('site_pageviews', 'site_events',
+                            'site_pageviews_daily', 'site_events_daily')`,
     );
     expect(indexes.map((i: { indexname: string }) => i.indexname)).toEqual(
       expect.arrayContaining([
         "site_pageviews_bucket_idx",
         "site_events_bucket_idx",
+        "site_pageviews_daily_bucket_idx",
+        "site_events_daily_bucket_idx",
+        "idx_site_pageviews_daily_cuboid_bucket",
+        "idx_site_events_daily_cuboid_bucket",
       ]),
     );
+    // Hypertables with the compression the daily tables are meant to have.
+    const settings = await dataSource.query(
+      `SELECT hypertable_name, compression_enabled
+         FROM timescaledb_information.hypertables
+        WHERE hypertable_name IN ('site_pageviews_daily', 'site_events_daily')
+        ORDER BY 1`,
+    );
+    expect(settings).toEqual([
+      { hypertable_name: "site_events_daily", compression_enabled: true },
+      { hypertable_name: "site_pageviews_daily", compression_enabled: true },
+    ]);
   });
 
   it("answers 400 for a malformed body and records nothing for a bot", async () => {
@@ -1163,10 +1186,12 @@ describe("Site analytics (e2e)", () => {
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
       written: 2,
+      hoursWritten: 48,
     });
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
       written: 0,
+      hoursWritten: 0,
     });
     const overview = await admin("/v1/admin/analytics/overview?days=2").expect(
       200,
@@ -1175,6 +1200,389 @@ describe("Site analytics (e2e)", () => {
       overview.body.series.map((d: { visitors: number }) => d.visitors),
     ).toEqual([2, 1]);
     expect(overview.body.realtime.activeVisitors).toBe(1);
+
+    // The hours of yesterday, which has no HyperLogLog any more once the
+    // snapshot has run: noon had two readers, the rest of the day none.
+    await redis.del(...(await redis.keys("site-analytics:uv*")));
+    const yesterday = addIsoDays(today, -1);
+    const hourly = await admin(
+      `/v1/admin/analytics/overview?from=${yesterday}&to=${yesterday}&interval=hour`,
+    ).expect(200);
+    expect(hourly.body.series).toHaveLength(24);
+    expect(
+      hourly.body.series.map((h: { visitors: number | null }) => h.visitors),
+    ).toEqual(Array.from({ length: 24 }, (_, h) => (h === 12 ? 2 : 0)));
+    // Another language has its own hours.
+    const english = await admin(
+      `/v1/admin/analytics/overview?from=${yesterday}&to=${yesterday}&interval=hour&locale=en`,
+    ).expect(200);
+    expect(
+      english.body.series.every((h: { visitors: number }) => h.visitors === 0),
+    ).toBe(true);
+    // A day from before the snapshot kept hours stays unknown.
+    const before = addIsoDays(today, -5);
+    const unknown = await admin(
+      `/v1/admin/analytics/overview?from=${before}&to=${before}&interval=hour`,
+    ).expect(200);
+    expect(
+      unknown.body.series.every(
+        (h: { visitors: number | null }) => h.visitors === null,
+      ),
+    ).toBe(true);
+  });
+
+  describe("the daily level", () => {
+    const ANDROID =
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
+    const WINDOWS =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0";
+    const ENTITY = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+    /** Twelve past days of varied traffic, one of them empty, flushed. */
+    const seedDays = async () => {
+      const collector = app.get(SiteAnalyticsCollectService);
+      const readers = [
+        { ip: "203.0.113.11", ua: UA },
+        { ip: "203.0.113.12", ua: ANDROID },
+        { ip: "203.0.113.13", ua: WINDOWS },
+        { ip: "203.0.113.14", ua: UA },
+      ];
+      for (let back = 12; back >= 1; back--) {
+        if (back === 7) continue;
+        const day = addIsoDays(today, -back);
+        for (const [i, reader] of readers.entries()) {
+          const at = (minute: number) =>
+            new Date(
+              `${day}T${String(8 + i).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00Z`,
+            );
+          const entry = [
+            pageview({
+              referrer: ["google.com", "bing.com", "chatgpt.com", undefined][i],
+              viewport: ["mobile", "mobile", "desktop", "tablet"][i],
+            }),
+            pageview({
+              locale: "en",
+              path: `/en/parks/europe/germany/bruehl/park-${back}`,
+              pageType: "park",
+              referrer: "www.google.com",
+              viewport: "desktop",
+            }),
+            pageview({
+              locale: "nl",
+              path: `/nl/gone-${i}`,
+              pageType: "not_found",
+              viewport: "mobile",
+            }),
+            pageview({ path: "/de", pageType: "home", campaign: "autumn" }),
+          ][i];
+          await collector.collect(
+            { hits: [entry], ip: reader.ip, userAgent: reader.ua },
+            at(0),
+          );
+          // A second page, its seconds, and events.
+          await collector.collect(
+            {
+              hits: [
+                pageview({ path: "/de/news", pageType: "news_index" }),
+                {
+                  t: "engagement",
+                  locale: "de",
+                  path: "/de/news",
+                  pageType: "news_index",
+                  viewport: "mobile",
+                  seconds: 20 + i,
+                },
+                event(
+                  "tab_changed",
+                  { tab: ["map", "shows"][i % 2] },
+                  { entity: ENTITY },
+                ),
+                event("search_opened", { surface: ["hero", "header"][i % 2] }),
+                event("search_result_clicked", {
+                  surface: "hero",
+                  result: "park",
+                  position: "1",
+                }),
+              ],
+              ip: reader.ip,
+              userAgent: reader.ua,
+            },
+            at(5),
+          );
+        }
+      }
+      await flush();
+    };
+
+    /** Every report the admin and its MCP tools ask, with the filters its panels apply. */
+    const urls = () => {
+      const from = addIsoDays(today, -11);
+      const windows = [
+        "days=14",
+        "days=14&interval=week",
+        `from=${from}&to=${addIsoDays(today, -2)}`,
+        `from=${from}&to=${addIsoDays(today, -2)}&locale=de`,
+        "days=1",
+      ];
+      const filters = [
+        "",
+        "&filter=os:ios",
+        "&filter=channel:search",
+        "&filter=viewport:mobile&filter=page_type:park",
+        "&filter=path:/de/news",
+        "&filter=entry:/de",
+      ];
+      const dims =
+        "channel referrer path page_type entry exit country campaign browser_language locale viewport browser os".split(
+          " ",
+        );
+      const base = "/v1/admin/analytics";
+      const list: string[] = [];
+      for (const window of windows) {
+        for (const filter of filters) {
+          const q = `${window}${filter}`;
+          list.push(`${base}/overview?${q}`);
+          for (const dim of dims)
+            list.push(`${base}/breakdown?dim=${dim}&${q}`);
+          list.push(`${base}/crosstab?row=os&col=viewport&metric=visits&${q}`);
+          list.push(`${base}/crosstab?row=channel&col=exit&metric=visits&${q}`);
+          list.push(`${base}/crosstab?row=path&col=day&metric=pageviews&${q}`);
+          list.push(`${base}/seo/landing-pages?${q}`);
+          list.push(`${base}/seo/not-found?${q}`);
+          list.push(`${base}/seo/uncovered?kind=park&${q}`);
+          list.push(`${base}/seo/trends?${q}`);
+          list.push(`${base}/events?${q}`);
+          list.push(`${base}/events/tab_changed?${q}`);
+          list.push(`${base}/events/page_read?${q}`);
+          list.push(
+            `${base}/events/search_opened/crosstab?row=prop:surface&col=page_type&${q}`,
+          );
+          list.push(
+            `${base}/events/search_opened/crosstab?row=prop:surface&col=day&${q}`,
+          );
+          list.push(
+            `${base}/events/search_opened/crosstab?row=prop:surface&col=browser&${q}`,
+          );
+          list.push(`${base}/search?${q}`);
+        }
+      }
+      return list;
+    };
+
+    /** What a report answers, without the realtime minute that moves with the clock. */
+    const answers = async () =>
+      Promise.all(
+        urls().map(async (url) => {
+          const response = await admin(url);
+          const { realtime: _realtime, ...body } = response.body;
+          return [url, response.status, body] as const;
+        }),
+      );
+
+    it("reads whole rolled days from the daily rows and answers exactly as the hourly rows do", async () => {
+      await seedDays();
+      await savePark();
+      const runner = app.get(SiteReportRunner);
+      const storage = app.get(SiteAnalyticsStorageService);
+      const sql: string[] = [];
+      const query = runner.query.bind(runner);
+      jest.spyOn(runner, "query").mockImplementation((text, params) => {
+        sql.push(text);
+        return query(text, params);
+      });
+      const forgetRolledDays = () =>
+        (runner as unknown as { rolled: Map<string, unknown> }).rolled.clear();
+
+      const hourly = await answers();
+      expect(sql.some((text) => text.includes("_daily"))).toBe(false);
+      expect(
+        hourly.filter(([, status]) => status === 200).length,
+      ).toBeGreaterThan(hourly.length / 2);
+
+      const rolled = await storage.rollupDays(new Date());
+      expect(rolled.days).toBeGreaterThanOrEqual(10);
+      expect(rolled.rows).toBeGreaterThan(0);
+      forgetRolledDays();
+      sql.length = 0;
+      const daily = await answers();
+      expect(sql.some((text) => text.includes("site_pageviews_daily"))).toBe(
+        true,
+      );
+      expect(sql.some((text) => text.includes("site_events_daily"))).toBe(true);
+      expect(daily).toEqual(hourly);
+    });
+
+    it("rolls each cuboid of each day once, adds up to the hourly rows, and never rewrites a row", async () => {
+      await seedDays();
+      const storage = app.get(SiteAnalyticsStorageService);
+      const first = await storage.rollupDays(new Date());
+      const cuboids =
+        ROLLUP_TABLES.pageviews.cuboids.length +
+        ROLLUP_TABLES.events.cuboids.length;
+      expect(first.cuboids).toBe(first.days * cuboids);
+      const markers = await dataSource.query(
+        `SELECT source, count(*)::int AS n, count(DISTINCT day)::int AS days,
+                to_char(max(day), 'YYYY-MM-DD') AS last
+           FROM site_rollup_days GROUP BY source ORDER BY source`,
+      );
+      expect(markers).toEqual([
+        {
+          source: "events",
+          n: first.days * 4,
+          days: first.days,
+          last: expect.any(String),
+        },
+        {
+          source: "pageviews",
+          n: first.days * 49,
+          days: first.days,
+          last: expect.any(String),
+        },
+      ]);
+      // The empty day has its markers and no rows.
+      const empty = addIsoDays(today, -7);
+      expect(
+        await dataSource.query(
+          `SELECT sum(rows)::int AS rows FROM site_rollup_days WHERE day = $1::date`,
+          [empty],
+        ),
+      ).toEqual([{ rows: 0 }]);
+
+      // Every cuboid adds up to the hourly rows of the days rolled.
+      const through = markers[0].last as string;
+      const [hourly] = await dataSource.query(
+        `SELECT sum(views)::int AS views, sum(visits)::int AS visits,
+                sum(seconds)::int AS seconds, sum(exits)::int AS exits
+           FROM site_pageviews WHERE bucket < ($1::date + 1)::timestamptz`,
+        [through],
+      );
+      const perCuboid = await dataSource.query(
+        `SELECT cuboid, sum(views)::int AS views, sum(visits)::int AS visits,
+                sum(seconds)::int AS seconds, sum(exits)::int AS exits
+           FROM site_pageviews_daily GROUP BY cuboid ORDER BY cuboid`,
+      );
+      expect(perCuboid).toHaveLength(49);
+      for (const row of perCuboid) {
+        const { cuboid: _cuboid, ...sums } = row;
+        expect(sums).toEqual(hourly);
+      }
+
+      // A second run finds nothing to do and writes nothing.
+      const before = await dataSource.query(
+        `SELECT (SELECT count(*) FROM site_pageviews_daily)::int AS pv,
+                (SELECT count(*) FROM site_events_daily)::int AS ev,
+                (SELECT count(*) FROM site_rollup_days)::int AS markers`,
+      );
+      await expect(storage.rollupDays(new Date())).resolves.toEqual({
+        days: 0,
+        cuboids: 0,
+        rows: 0,
+      });
+      expect(
+        await dataSource.query(
+          `SELECT (SELECT count(*) FROM site_pageviews_daily)::int AS pv,
+                  (SELECT count(*) FROM site_events_daily)::int AS ev,
+                  (SELECT count(*) FROM site_rollup_days)::int AS markers`,
+        ),
+      ).toEqual(before);
+    });
+
+    it("waits for a day to settle, and for the windows of the day to be flushed", async () => {
+      const collector = app.get(SiteAnalyticsCollectService);
+      const storage = app.get(SiteAnalyticsStorageService);
+      const yesterday = addIsoDays(today, -1);
+      const last = async () =>
+        (
+          await dataSource.query(
+            `SELECT to_char(max(day), 'YYYY-MM-DD') AS day FROM site_rollup_days`,
+          )
+        )[0].day;
+      await collector.collect(
+        { hits: [pageview()], ip: "203.0.113.21", userAgent: UA },
+        new Date(`${addIsoDays(today, -3)}T10:00:00Z`),
+      );
+      // A hit of yesterday's last minutes whose window is still in Redis.
+      await collector.collect(
+        { hits: [pageview()], ip: "203.0.113.22", userAgent: UA },
+        new Date(`${yesterday}T23:58:00Z`),
+      );
+      await flush();
+      await collector.collect(
+        { hits: [pageview()], ip: "203.0.113.23", userAgent: UA },
+        new Date(`${yesterday}T23:59:00Z`),
+      );
+      // Not yet two hours past midnight: yesterday waits, the day before is done.
+      await storage.rollupDays(new Date(`${today}T01:30:00Z`));
+      expect(await last()).toBe(addIsoDays(today, -2));
+      // Two hours on, but a window of yesterday is not written yet.
+      await storage.rollupDays(new Date(`${today}T02:30:00Z`));
+      expect(await last()).toBe(addIsoDays(today, -2));
+      await flush();
+      await storage.rollupDays(new Date(`${today}T02:30:00Z`));
+      expect(await last()).toBe(yesterday);
+      expect(
+        await dataSource.query(
+          `SELECT sum(views)::int AS views FROM site_pageviews_daily
+            WHERE cuboid = 1 AND bucket = $1::timestamptz`,
+          [`${yesterday}T00:00:00Z`],
+        ),
+      ).toEqual([{ views: 2 }]);
+    });
+
+    it("fills in a cuboid added to the lists after the days were rolled", async () => {
+      await seedDays();
+      const storage = app.get(SiteAnalyticsStorageService);
+      await storage.rollupDays(new Date());
+      // As if the lists had one cuboid fewer when these days were rolled.
+      await dataSource.query(
+        `DELETE FROM site_pageviews_daily WHERE cuboid = 7`,
+      );
+      await dataSource.query(
+        `DELETE FROM site_rollup_days WHERE source = 'pageviews' AND cuboid = 7`,
+      );
+      const filled = await storage.rollupDays(new Date());
+      expect(filled.cuboids).toBeGreaterThan(0);
+      expect(
+        await dataSource.query(
+          `SELECT count(DISTINCT bucket)::int AS days FROM site_pageviews_daily WHERE cuboid = 7`,
+        ),
+      ).toEqual([{ days: filled.days }]);
+    });
+
+    it("refuses with 503 and a message when a statement runs past its timeout", async () => {
+      await app
+        .get(SiteAnalyticsCollectService)
+        .collect({ hits: [pageview()], ip: "203.0.113.31", userAgent: UA });
+      await flush();
+      // A statement that cannot finish within the limit.
+      const runner = app.get(SiteReportRunner) as unknown as {
+        timeoutMs: number;
+      };
+      const was = runner.timeoutMs;
+      runner.timeoutMs = 1;
+      try {
+        const response = await admin("/v1/admin/analytics/overview?days=30");
+        // One millisecond may or may not be enough on a warm database; when it
+        // is not, the answer is the 503, never a 500.
+        expect([200, 503]).toContain(response.status);
+        if (response.status === 503) {
+          expect(response.body).toMatchObject({
+            statusCode: 503,
+            reason: "timeout",
+          });
+          expect(response.body.message).toContain("was stopped");
+        }
+        const slow = await app
+          .get(SiteReportRunner)
+          .query("SELECT pg_sleep(0.5)")
+          .catch((error: { response?: { reason?: string } }) => error);
+        expect(
+          (slow as { response?: { reason?: string } }).response?.reason,
+        ).toBe("timeout");
+      } finally {
+        runner.timeoutMs = was;
+      }
+    });
   });
 
   it("drops chunks past 400 days and keeps the rest", async () => {
@@ -1188,10 +1596,27 @@ describe("Site analytics (e2e)", () => {
         [bucket],
       );
     }
+    await dataSource.query(
+      `INSERT INTO site_pageviews_daily
+         (bucket, cuboid, locale, path, page_type, viewport, browser, os,
+          country, browser_language, entry, referrer, channel, campaign,
+          views, seconds, visits, engaged, visit_seconds, exits,
+          visit_span_seconds)
+       SELECT b, 1, 'de', '', '', '', '', '', '', '', '', '', '', '', 1, 0, 0,
+              0, 0, 0, 0
+         FROM unnest($1::timestamptz[]) b`,
+      [[old, kept]],
+    );
     const dropped = await app.get(SiteAnalyticsStorageService).dropOldChunks();
     expect(dropped.site_pageviews).toBe(1);
+    expect(dropped.site_pageviews_daily).toBe(1);
     expect(
       await dataSource.query(`SELECT count(*)::int AS n FROM site_pageviews`),
+    ).toEqual([{ n: 1 }]);
+    expect(
+      await dataSource.query(
+        `SELECT count(*)::int AS n FROM site_pageviews_daily`,
+      ),
     ).toEqual([{ n: 1 }]);
   });
 

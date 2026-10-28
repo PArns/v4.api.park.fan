@@ -22,13 +22,23 @@ import {
   PAGE_READ_EVENT,
   PARKED_WINDOW_TTL_SECONDS,
   RETENTION_DAYS,
+  ROLLUP_RUN_BUDGET_MS,
+  ROLLUP_SETTLE_SECONDS,
   SITE_ANALYTICS_KEYS as KEYS,
   SITE_LOCALES,
   VISIT_IDLE_SECONDS,
   bucketOf,
   flushWindowOf,
+  hourKey,
 } from "./site-analytics.constants";
 import { propsOfKey } from "./site-analytics.hits";
+import { daysBetween } from "./site-analytics.query";
+import {
+  ROLLUP_TABLES,
+  rollupSql,
+  type Cuboid,
+  type RollupSource,
+} from "./site-analytics.rollup";
 import { defineCloseVisitCommand } from "./site-analytics-scripts";
 
 /**
@@ -165,8 +175,8 @@ export interface SiteAnalyticsBacklog {
  * The statistic's Postgres side, all of it insert-only: the flusher that moves
  * finished Redis windows into the hypertables, the direct write the collector
  * uses for what it held in memory while Redis was away, the visitor
- * snapshot, the nightly chunk drop, and the one-off import of
- * `page_view_days`. Nothing here updates or deletes a counted row, which is
+ * snapshot, the roll-up of finished days into the daily tables, the nightly
+ * chunk drop, and the one-off import of `page_view_days`. Nothing here updates or deletes a counted row, which is
  * what keeps the tables free of dead tuples. docs/frontend/site-analytics.md.
  */
 @Injectable()
@@ -516,22 +526,36 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
 
   /**
    * Writes yesterday's visitors from its HyperLogLogs (all languages, and
-   * each language), once: a day already written stays as it is, and a key
-   * that is gone (expired, or lost with Redis) is skipped rather than written
-   * as zero. Runs four times in the hour after midnight, the hour a day's key
-   * outlives its day. Returns the keys found and the rows written.
+   * each language), once, and each hour's beside them: a day already written
+   * stays as it is, and a key that is gone (expired, or lost with Redis) is
+   * skipped rather than written as zero. An hour nobody visited has no key, so
+   * the 24 hours of every language are written (with zeros) only when the
+   * day's all-languages key was found: then the day was counted, and an hour
+   * or a language without a key had no visitors. Runs four times in the hour after midnight, the hour a day's
+   * and its hours' keys outlive their day. Returns the day keys found, and the
+   * day and hour rows written.
    */
   async snapshotVisitors(
     now = new Date(),
-  ): Promise<{ found: number; written: number }> {
+  ): Promise<{ found: number; written: number; hoursWritten: number }> {
     const day = addIsoDays(utcDay(now), -1);
-    const keys = [ALL_LOCALES_SCOPE, ...SITE_LOCALES].map((scope) => ({
+    const scopes = [ALL_LOCALES_SCOPE, ...SITE_LOCALES];
+    const keys = scopes.map((scope) => ({
       day,
       scope,
       key: KEYS.visitors(day, scope),
     }));
+    const hours = Array.from({ length: 24 }, (_, h) => {
+      const start = new Date(`${day}T${String(h).padStart(2, "0")}:00:00Z`);
+      return { start, key: hourKey(start) };
+    });
     const pipeline = this.redis.pipeline();
     for (const { key } of keys) pipeline.exists(key).pfcount(key);
+    for (const { scope } of keys) {
+      for (const hour of hours) {
+        pipeline.pfcount(KEYS.hourVisitors(hour.key, scope));
+      }
+    }
     const results = (await pipeline.exec()) ?? [];
     const rows = keys
       .map((entry, i) => ({
@@ -540,7 +564,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
         visitors: Number(results[2 * i + 1]?.[1] ?? 0),
       }))
       .filter((row) => row.exists && Number.isFinite(row.visitors));
-    if (rows.length === 0) return { found: 0, written: 0 };
+    if (rows.length === 0) return { found: 0, written: 0, hoursWritten: 0 };
 
     const inserted: unknown[] = await this.dataSource.query(
       `INSERT INTO site_visitor_days (day, scope, visitors)
@@ -553,7 +577,215 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
         rows.map((row) => row.visitors),
       ],
     );
-    return { found: rows.length, written: inserted.length };
+
+    // Without the all-languages key nothing says the day was counted.
+    const counted = rows.some((row) => row.scope === ALL_LOCALES_SCOPE);
+    const base = 2 * keys.length;
+    const wanted = !counted
+      ? []
+      : keys
+          .flatMap((entry, s) =>
+            hours.map((hour, h) => ({
+              hour: hour.start.toISOString(),
+              scope: entry.scope,
+              visitors: Number(results[base + s * hours.length + h]?.[1] ?? 0),
+            })),
+          )
+          .filter((row) => Number.isFinite(row.visitors));
+    const hoursInserted: unknown[] = await this.dataSource.query(
+      `INSERT INTO site_visitor_hours (hour, scope, visitors)
+       SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::int[])
+       ON CONFLICT (hour, scope) DO NOTHING
+       RETURNING hour`,
+      [
+        wanted.map((row) => row.hour),
+        wanted.map((row) => row.scope),
+        wanted.map((row) => row.visitors),
+      ],
+    );
+    return {
+      found: rows.length,
+      written: inserted.length,
+      hoursWritten: hoursInserted.length,
+    };
+  }
+
+  /**
+   * Rolls the finished days up into the daily tables (`site_pageviews_daily`,
+   * `site_events_daily`), oldest first, for every cuboid of a day that has no
+   * marker yet: the first run backfills what the hourly tables hold, later
+   * runs add the day that ended, and a cuboid added to the lists later is
+   * filled in for the old days the same way. A day is rolled only when it
+   * ended `ROLLUP_SETTLE_SECONDS` ago and no flush window of it waits in
+   * Redis any more, so no hourly row can still arrive for it. One instance
+   * at a time (a Redis lock), within `ROLLUP_RUN_BUDGET_MS`; what is left is
+   * the next run's. A day is one transaction, which checks that every cuboid
+   * it wrote adds up to the hourly rows' totals before it commits. Returns
+   * what was written.
+   */
+  async rollupDays(now = new Date()): Promise<{
+    days: number;
+    cuboids: number;
+    rows: number;
+    skipped?: "locked";
+  }> {
+    const done = { days: 0, cuboids: 0, rows: 0 };
+    const token = randomUUID();
+    const locked = await this.redis.set(
+      KEYS.rollupLock,
+      token,
+      "PX",
+      ROLLUP_RUN_BUDGET_MS + FLUSH_LOCK_MS,
+      "NX",
+    );
+    if (locked !== "OK") return { ...done, skipped: "locked" };
+    try {
+      const last = await this.lastRollableDay(now);
+      const first = await this.firstRollableDay(now);
+      if (!first || first > last) return done;
+      const rolled = await this.rolledMarkers(first, last);
+      const deadline = Date.now() + ROLLUP_RUN_BUDGET_MS;
+      for (const day of daysBetween(first, last)) {
+        if (Date.now() > deadline) break;
+        const missing = (Object.keys(ROLLUP_TABLES) as RollupSource[])
+          .map((source) => ({
+            source,
+            cuboids: ROLLUP_TABLES[source].cuboids.filter(
+              (cuboid) => !rolled.has(`${source}:${cuboid.id}:${day}`),
+            ),
+          }))
+          .filter((entry) => entry.cuboids.length > 0);
+        if (missing.length === 0) continue;
+        const written = await this.rollupDay(day, missing);
+        done.days += 1;
+        done.cuboids += written.cuboids;
+        done.rows += written.rows;
+      }
+    } finally {
+      if ((await this.redis.get(KEYS.rollupLock)) === token) {
+        await this.redis.del(KEYS.rollupLock);
+      }
+    }
+    return done;
+  }
+
+  /**
+   * The last day that is safe to roll up: ended `ROLLUP_SETTLE_SECONDS` ago,
+   * and before the oldest flush window still waiting in Redis.
+   */
+  private async lastRollableDay(now: Date): Promise<string> {
+    const settled = addIsoDays(
+      utcDay(new Date(now.getTime() - ROLLUP_SETTLE_SECONDS * 1000)),
+      -1,
+    );
+    const oldest = (await this.redis.smembers(KEYS.windows)).sort()[0];
+    return oldest
+      ? minDay(settled, addIsoDays(oldest.slice(0, 10), -1))
+      : settled;
+  }
+
+  /**
+   * The first day to look at: the day of the oldest hourly row, at most
+   * `RETENTION_DAYS` back; null with no rows.
+   */
+  private async firstRollableDay(now: Date): Promise<string | null> {
+    const rows: Array<{ day: string | null }> = await this.dataSource.query(
+      `SELECT to_char(LEAST(
+                (SELECT min(bucket) FROM site_pageviews),
+                (SELECT min(bucket) FROM site_events)) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD') AS day`,
+    );
+    const oldest = rows[0]?.day;
+    if (!oldest) return null;
+    const floor = addIsoDays(utcDay(now), -RETENTION_DAYS);
+    return oldest > floor ? oldest : floor;
+  }
+
+  /** `source:cuboid:day` of every marker from `first` to `last`. */
+  private async rolledMarkers(
+    first: string,
+    last: string,
+  ): Promise<Set<string>> {
+    const rows: Array<{ source: string; cuboid: number; day: string }> =
+      await this.dataSource.query(
+        `SELECT source, cuboid, to_char(day, 'YYYY-MM-DD') AS day
+           FROM site_rollup_days
+          WHERE day BETWEEN $1::date AND $2::date`,
+        [first, last],
+      );
+    return new Set(rows.map((r) => `${r.source}:${r.cuboid}:${r.day}`));
+  }
+
+  /**
+   * Writes the missing cuboids of one day in one transaction, serialised
+   * with any other roller by an advisory lock, and checks that each adds up to
+   * the day's hourly totals before it commits: a cuboid that does not is a
+   * bug, and rolling it back leaves the day unrolled, read hourly.
+   */
+  private async rollupDay(
+    day: string,
+    missing: Array<{ source: RollupSource; cuboids: readonly Cuboid[] }>,
+  ): Promise<{ cuboids: number; rows: number }> {
+    const bucket = `${day}T00:00:00.000Z`;
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('site-analytics-rollup'))`,
+      );
+      let cuboids = 0;
+      let rows = 0;
+      for (const { source, cuboids: wanted } of missing) {
+        const written: number[] = [];
+        for (const cuboid of wanted) {
+          const result: Array<{ rows: number }> = await manager.query(
+            rollupSql(source, cuboid),
+            [bucket, day, cuboid.id],
+          );
+          if (result.length === 0) continue;
+          written.push(cuboid.id);
+          cuboids += 1;
+          rows += result[0].rows;
+        }
+        await this.checkRolledTotals(manager, source, bucket, written);
+      }
+      return { cuboids, rows };
+    });
+  }
+
+  /** Throws when a cuboid written for the day does not sum to the hourly rows. */
+  private async checkRolledTotals(
+    manager: EntityManager,
+    source: RollupSource,
+    bucket: string,
+    cuboids: number[],
+  ): Promise<void> {
+    if (cuboids.length === 0) return;
+    const table = ROLLUP_TABLES[source];
+    const sums = table.measures
+      .map((m) => `COALESCE(SUM(${m}), 0)::text AS ${m}`)
+      .join(", ");
+    const [hourly]: Array<Record<string, string>> = await manager.query(
+      `SELECT ${sums} FROM ${table.hourly}
+        WHERE bucket >= $1::timestamptz
+          AND bucket < $1::timestamptz + interval '1 day'`,
+      [bucket],
+    );
+    const daily: Array<Record<string, string>> = await manager.query(
+      `SELECT cuboid::text AS cuboid, ${sums} FROM ${table.daily}
+        WHERE bucket = $1::timestamptz AND cuboid = ANY($2::smallint[])
+        GROUP BY cuboid`,
+      [bucket, cuboids],
+    );
+    const seen = new Map(daily.map((row) => [Number(row.cuboid), row]));
+    for (const id of cuboids) {
+      for (const measure of table.measures) {
+        const rolled = BigInt(seen.get(id)?.[measure] ?? "0");
+        if (rolled !== BigInt(hourly[measure])) {
+          throw new Error(
+            `${source} cuboid ${id} of ${bucket.slice(0, 10)} adds up to ${rolled} ${measure}, the hourly rows to ${hourly[measure]}`,
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -698,6 +930,11 @@ export async function readSiteAnalyticsBacklog(
       Number(parked) === 0 &&
       (oldestPendingMinutes ?? 0) <= (3 * FLUSH_WINDOW_SECONDS) / 60 + 5,
   };
+}
+
+/** The earlier of two `YYYY-MM-DD` days. */
+function minDay(a: string, b: string): string {
+  return a < b ? a : b;
 }
 
 /** The page-view and event rows a window's fields stand for. */

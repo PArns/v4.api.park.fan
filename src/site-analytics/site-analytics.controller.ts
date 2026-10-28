@@ -69,6 +69,10 @@ import {
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
 
+/** What every report answers when it is bounded; the body's `reason` says which. */
+const REPORT_BUSY =
+  "A statement ran past its time limit (`reason: timeout`), or too many reports are running at once (`reason: busy`); the message says what to try.";
+
 /** An event name from the path, or 400. */
 function eventName(name: string): string {
   if (!EVENT_NAME_PATTERN.test(name)) {
@@ -159,6 +163,7 @@ export class AdminSiteAnalyticsController {
       "Page views, visits, visitors, events, bounce rate and time on site, the window before, a series and realtime",
   })
   @ApiResponse({ status: 200, type: SiteOverviewDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   overview(@Query() query: SiteAnalyticsQueryDto): Promise<SiteOverviewDto> {
     return this.analytics.overview(query);
   }
@@ -173,6 +178,7 @@ export class AdminSiteAnalyticsController {
       "also exits and exit rate.",
   })
   @ApiResponse({ status: 200, type: SiteBreakdownDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   breakdown(
     @Query() query: SiteAnalyticsBreakdownQueryDto,
   ): Promise<SiteBreakdownDto> {
@@ -185,6 +191,7 @@ export class AdminSiteAnalyticsController {
       "Every event seen, and every blocked one, with its count, the window before and a series",
   })
   @ApiResponse({ status: 200, type: SiteEventsDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   events(@Query() query: SiteAnalyticsQueryDto): Promise<SiteEventsDto> {
     return this.analytics.events(query);
   }
@@ -196,6 +203,7 @@ export class AdminSiteAnalyticsController {
       "One event by property, combination, page type, viewport, entity and day",
   })
   @ApiResponse({ status: 200, type: SiteEventDetailDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   event(
     @Param("name") name: string,
     @Query() query: SiteAnalyticsQueryDto,
@@ -213,6 +221,7 @@ export class AdminSiteAnalyticsController {
       "folded into `__rest__`.",
   })
   @ApiResponse({ status: 200, type: SiteCrosstabDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   crosstab(
     @Param("name") name: string,
     @Query() query: SiteCrosstabQueryDto,
@@ -229,6 +238,7 @@ export class AdminSiteAnalyticsController {
       "side by count, the rest folded into `__rest__`.",
   })
   @ApiResponse({ status: 200, type: SiteTrafficCrosstabDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   trafficCrosstab(
     @Query() query: SiteTrafficCrosstabQueryDto,
   ): Promise<SiteTrafficCrosstabDto> {
@@ -256,6 +266,7 @@ export class AdminSiteAnalyticsController {
     summary: "Which search is used, from where, and how well",
   })
   @ApiResponse({ status: 200, type: SiteSearchDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   search(@Query() query: SiteAnalyticsQueryDto): Promise<SiteSearchDto> {
     return this.analytics.search(query);
   }
@@ -266,6 +277,7 @@ export class AdminSiteAnalyticsController {
       "Pages visits from one channel (search by default) entered on, with change, bounce and sources",
   })
   @ApiResponse({ status: 200, type: SiteLandingPagesDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   landingPages(
     @Query() query: SiteLandingPagesQueryDto,
   ): Promise<SiteLandingPagesDto> {
@@ -278,6 +290,7 @@ export class AdminSiteAnalyticsController {
       "Landing pages of one channel rising and falling against the window before",
   })
   @ApiResponse({ status: 200, type: SiteTrendsDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   trends(@Query() query: SiteTrendsQueryDto): Promise<SiteTrendsDto> {
     return this.seo.trends(query);
   }
@@ -285,6 +298,7 @@ export class AdminSiteAnalyticsController {
   @Get("seo/not-found")
   @ApiOperation({ summary: "Paths that showed the not-found page" })
   @ApiResponse({ status: 200, type: SiteNotFoundDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   notFound(@Query() query: SiteNotFoundQueryDto): Promise<SiteNotFoundDto> {
     return this.seo.notFound(query);
   }
@@ -294,6 +308,7 @@ export class AdminSiteAnalyticsController {
     summary: "Parks or rides no search visit entered on in the window",
   })
   @ApiResponse({ status: 200, type: SiteUncoveredDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
   uncovered(@Query() query: SiteUncoveredQueryDto): Promise<SiteUncoveredDto> {
     return this.seo.uncovered(query);
   }

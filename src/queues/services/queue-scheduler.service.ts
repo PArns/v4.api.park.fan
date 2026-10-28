@@ -1132,7 +1132,10 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // into the hypertables a minute after each window ends, yesterday's
     // unique visitors four times in the hour after midnight (a day's
     // HyperLogLog outlives its day by that hour and no more, so one run may
-    // fail), and the chunks past 400 days at 01:47. A failing flush keeps
+    // fail), the finished days summed into the daily tables four times a day
+    // (a day is rolled once it has settled; the other runs find nothing to do,
+    // or catch up after a failed one), and the chunks past 400 days at 01:47.
+    // A failing flush keeps
     // its last hundred failures, eight hours of them, rather than the
     // queue's 500: the failing-jobs sweep needs only the newest.
     for (const [name, jobId, cron, removeOnFail] of [
@@ -1141,6 +1144,12 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         "snapshot-visitors",
         "site-analytics-visitors-cron",
         "5-50/15 0 * * *",
+        undefined,
+      ],
+      [
+        "rollup-days",
+        "site-analytics-rollup-cron",
+        "35 2,8,14,20 * * *",
         undefined,
       ],
       [

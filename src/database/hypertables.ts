@@ -134,6 +134,27 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     compressAfterDays: 30,
     description: "Site statistic: written flush windows",
   },
+  // The reports' daily level (PAR-1157): the two tables above summed to the
+  // UTC day per cuboid by the nightly `rollup-days` job, one segment per
+  // cuboid so a report reads only the one it needs.
+  {
+    table: "site_pageviews_daily",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: page views by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_events_daily",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: events by day and cuboid",
+    segmentBy: "cuboid",
+    orderBy: "bucket DESC",
+  },
 ];
 
 /** The site statistic's hypertables, whose chunks its nightly job drops. */
@@ -141,6 +162,8 @@ export const SITE_ANALYTICS_HYPERTABLES = [
   "site_pageviews",
   "site_events",
   "site_analytics_flushes",
+  "site_pageviews_daily",
+  "site_events_daily",
 ] as const;
 
 /**

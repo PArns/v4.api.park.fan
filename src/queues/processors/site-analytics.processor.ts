@@ -12,7 +12,10 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
  *   `site_pageviews` and `site_events`, each window on its own, so one that
  *   fails does not hold up the rest;
  * - `snapshot-visitors`, four times in the hour after midnight: yesterday's
- *   unique visitors from its HyperLogLogs into `site_visitor_days`, once;
+ *   unique visitors, and each hour's, from their HyperLogLogs into
+ *   `site_visitor_days` and `site_visitor_hours`, once;
+ * - `rollup-days`, four times a day: the finished days summed into the daily
+ *   tables the long reports read, each cuboid of each day once;
  * - `drop-old-chunks`, nightly: chunks past 400 days, dropped whole.
  */
 @Processor("site-analytics")
@@ -39,12 +42,26 @@ export class SiteAnalyticsProcessor {
 
   @Process("snapshot-visitors")
   async handleSnapshotVisitors(_job: Job): Promise<void> {
-    const { found, written } = await this.storage.snapshotVisitors();
+    const { found, written, hoursWritten } =
+      await this.storage.snapshotVisitors();
     // A day of traffic leaves seven HyperLogLogs; none means Redis lost them.
     if (found === 0) {
       this.logger.warn("No visitor HyperLogLog found for yesterday");
-    } else if (written > 0) {
-      this.logger.log(`Wrote ${written} daily visitor counts`);
+    } else if (written > 0 || hoursWritten > 0) {
+      this.logger.log(
+        `Wrote ${written} daily and ${hoursWritten} hourly visitor counts`,
+      );
+    }
+  }
+
+  @Process("rollup-days")
+  async handleRollupDays(_job: Job): Promise<void> {
+    const started = Date.now();
+    const rolled = await this.storage.rollupDays();
+    if (rolled.days > 0) {
+      this.logger.log(
+        `Rolled up ${rolled.days} day(s): ${rolled.cuboids} cuboid(s), ${rolled.rows} rows, in ${Date.now() - started} ms`,
+      );
     }
   }
 

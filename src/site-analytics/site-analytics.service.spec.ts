@@ -38,6 +38,7 @@ describe("SiteAnalyticsService", () => {
   let blocked: Set<string>;
   let resolve: jest.Mock;
   let pfcounts: Map<string, number>;
+  let rolled: Set<string>;
 
   const db = {
     query: jest.fn(async (sql: string, params: unknown[]) => {
@@ -45,11 +46,18 @@ describe("SiteAnalyticsService", () => {
       return routes.find(([match]) => sql.includes(match))?.[1] ?? [];
     }),
   };
+  /** The runner without a gate or a timeout; `rolled` is what the nightly job has done. */
+  const runner = {
+    run: <T>(report: () => Promise<T>) => report(),
+    query: db.query,
+    rolledDays: async () => rolled,
+  };
   const redis = {
     pipeline: () => {
       const keys: string[] = [];
       const chain = {
         pfcount: (key: string) => (keys.push(key), chain),
+        exists: (key: string) => (keys.push(key), chain),
         exec: async () => keys.map((key) => [null, pfcounts.get(key) ?? 0]),
       };
       return chain;
@@ -67,10 +75,11 @@ describe("SiteAnalyticsService", () => {
     calls = [];
     blocked = new Set();
     pfcounts = new Map();
+    rolled = new Set();
     resolve = jest.fn(async () => new Map());
     db.query.mockClear();
     service = new SiteAnalyticsService(
-      db as never,
+      runner as never,
       redis as never,
       { names: async () => blocked } as never,
       { resolve } as never,
@@ -682,6 +691,139 @@ describe("SiteAnalyticsService", () => {
       });
       expect(result.props.map((p) => p.prop)).toEqual(["result", "surface"]);
       expect(resolve).toHaveBeenCalledWith([PARK_ID, GONE_ID]);
+    });
+  });
+
+  describe("the daily level", () => {
+    const week = ["2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25"];
+
+    it("reads rolled days from the daily rows and today from the hourly ones, with the window before", async () => {
+      rolled = new Set([...week, "2026-10-26", "2026-10-27", "2026-10-15"]);
+      await service.overview({ days: 7 }, NOW);
+      const [sql, params] = sqlOf("SUM(engaged) AS engaged");
+      expect(sql).toContain("FROM site_pageviews_daily WHERE cuboid = $1");
+      expect(sql).toMatch(/UNION ALL SELECT .* FROM site_pageviews WHERE/s);
+      expect(sql).toContain(") AS site_pageviews");
+      // The cuboid of the day alone, then the bounds of the rolled and the hourly ranges.
+      expect(params[0]).toBe(1);
+      expect(sqlOf("SUM(count) AS events")[0]).toContain(
+        "FROM site_events_daily WHERE cuboid = $1",
+      );
+    });
+
+    it("picks the cuboid of the dimension, of the dimension and the filter, and none when no cuboid has both", async () => {
+      rolled = new Set(week);
+      await service.breakdown({ days: 7, dim: "country", limit: 5 }, NOW);
+      expect(sqlOf("per_value")[1][0]).toBe(7);
+
+      calls = [];
+      await service.breakdown(
+        { days: 7, dim: "country", limit: 5, filter: ["os:ios"] },
+        NOW,
+      );
+      expect(sqlOf("per_value")[0]).toContain("site_pageviews_daily");
+      expect(sqlOf("per_value")[1].slice(0, 2)).toEqual(["ios", 35]);
+
+      // `exit` reads the path's cuboid and its exits; a path filter is none.
+      calls = [];
+      await service.breakdown({ days: 7, dim: "exit", limit: 5 }, NOW);
+      expect(sqlOf("per_value")[1][0]).toBe(2);
+      calls = [];
+      await service.breakdown(
+        { days: 7, dim: "country", limit: 5, filter: ["path:/de"] },
+        NOW,
+      );
+      expect(sqlOf("per_value")[0]).not.toContain("_daily");
+      expect(sqlOf("per_value")[0]).toContain("FROM site_pageviews\n");
+    });
+
+    it("reads the hourly rows when nothing of the window is rolled up, and for an hourly series", async () => {
+      await service.breakdown({ days: 7, dim: "country", limit: 5 }, NOW);
+      expect(sqlOf("per_value")[0]).not.toContain("_daily");
+      rolled = new Set(["2026-10-27"]);
+      calls = [];
+      await service.overview({ days: 2, interval: "hour" }, NOW);
+      expect(sqlOf("SUM(engaged)")[0]).not.toContain("_daily");
+    });
+
+    it("reads each statement of an event from the cuboid it needs", async () => {
+      rolled = new Set(week);
+      await service.event("tab_changed", { days: 7 }, NOW);
+      expect(sqlOf("GROUPING SETS")[1].slice(1, 2)).toEqual([3]);
+      expect(sqlOf("jsonb_each_text")[1]).toContain(2);
+      expect(sqlOf("LEFT JOIN site_entity_merges")[1]).toContain(4);
+    });
+
+    it("leaves a filter on a dimension no events cuboid has to the hourly rows", async () => {
+      rolled = new Set(week);
+      await service.events({ days: 7, filter: ["country:de"] }, NOW);
+      expect(sqlOf("FROM site_events")[0]).not.toContain("_daily");
+      calls = [];
+      await service.events({ days: 7, filter: ["viewport:mobile"] }, NOW);
+      expect(sqlOf("_daily")[0]).toContain("site_events_daily");
+    });
+
+    it("gives the search report's statements the columns they read and no more", async () => {
+      rolled = new Set(week);
+      await service.search({ days: 7 }, NOW);
+      const [all, opened, clicks] = calls
+        .map(([sql]) => sql)
+        .filter((sql) => sql.includes("FROM site_events_daily"));
+      expect(opened).toContain("page_type, viewport");
+      expect(all).not.toContain("viewport");
+      expect(clicks).not.toContain("viewport");
+    });
+  });
+
+  describe("an hourly series' visitors", () => {
+    it("reads past hours from the snapshot's rows, and the hours it has not written from Redis", async () => {
+      routes = [
+        [
+          "FROM site_visitor_hours",
+          [
+            { hour: "2026-10-27T00:00:00Z", visitors: 4 },
+            { hour: "2026-10-27T01:00:00Z", visitors: 0 },
+          ],
+        ],
+      ];
+      pfcounts.set("site-analytics:uvh:2026102802:all", 3);
+      const overview = await service.overview(
+        { days: 2, interval: "hour" },
+        NOW,
+      );
+      expect(sqlOf("FROM site_visitor_hours")[1]).toEqual([
+        "all",
+        "2026-10-27T00:00:00.000Z",
+        "2026-10-29T00:00:00.000Z",
+      ]);
+      const visitors = overview.series.map((point) => point.visitors);
+      expect(visitors.slice(0, 3)).toEqual([4, 0, null]);
+      expect(visitors[24 + 2]).toBe(3);
+      // An hour of today nobody visited is zero.
+      expect(visitors[24 + 3]).toBe(0);
+    });
+
+    it("reads yesterday's hours from Redis until the snapshot has run, zero only where the day was counted", async () => {
+      pfcounts.set("site-analytics:uvh:2026102709:all", 6);
+      let overview = await service.overview({ days: 2, interval: "hour" }, NOW);
+      expect(overview.series[9].visitors).toBe(6);
+      // No key for the day: an hour without one is unknown, not zero.
+      expect(overview.series[10].visitors).toBeNull();
+
+      pfcounts.set("site-analytics:uv:2026-10-27:all", 1);
+      overview = await service.overview({ days: 2, interval: "hour" }, NOW);
+      expect(overview.series[9].visitors).toBe(6);
+      expect(overview.series[10].visitors).toBe(0);
+    });
+
+    it("leaves an hour of a day before the snapshot kept hours unknown", async () => {
+      const overview = await service.overview(
+        { from: "2026-10-20", to: "2026-10-21", interval: "hour" },
+        NOW,
+      );
+      expect(overview.series.every((point) => point.visitors === null)).toBe(
+        true,
+      );
     });
   });
 
