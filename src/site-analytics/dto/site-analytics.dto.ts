@@ -655,7 +655,10 @@ export class SiteLivePageDto {
 }
 
 export class SiteLiveCountryDto {
-  @ApiProperty({ example: "DE", description: "ISO code, `XX` unknown." })
+  @ApiProperty({
+    example: "DE",
+    description: "ISO code, upper case; `ZZ` unknown.",
+  })
   country: string;
   @ApiProperty() views: number;
 }

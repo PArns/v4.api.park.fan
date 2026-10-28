@@ -111,13 +111,16 @@ The `/v1/ml/*` routes (`dashboard`, `models/metrics-history`, `accuracy/system`,
 ## Site statistic (`admin/analytics`)
 
 The reports of park.fan's own statistic, on `AdminSiteAnalyticsController`; every one takes `days`
-(1–365), `locale` and repeatable `filter=<dim>:<value>`. Shapes, filters and the measured times:
+(1–365) or `from` and `to`, `interval`, `locale` and repeatable `filter=<dim>:<value>`; the live
+view takes `locale` only. Shapes, filters and the measured times:
 [site statistic](../frontend/site-analytics.md#reports). Its writes are audited too.
 
 | Method | Path | Role | Does |
 | --- | --- | --- | --- |
-| GET | `analytics/overview` | viewer | page views, visits, visitors, events, bounce rate, the window before (none past 180 days), series, realtime |
-| GET | `analytics/breakdown?dim=&limit=` | viewer | one dimension's values by views and visits |
+| GET | `analytics/overview` | viewer | page views, visits, visitors, events, bounce rate, average visit and time on page, the window before (none past 180 days), series by `interval`, realtime |
+| GET | `analytics/breakdown?dim=&limit=` | viewer | one dimension's values by views, visits or exits, with time on page or average visit |
+| GET | `analytics/crosstab?row=&col=&metric=` | viewer | page views or visits by two dimensions |
+| GET | `analytics/live?locale=` | viewer | the last half hour from Redis only, for polling |
 | GET | `analytics/events` | viewer | every event name seen, blocked ones included |
 | GET | `analytics/events/:name` | viewer | one event's props, values, combinations, entities and series |
 | GET | `analytics/events/:name/crosstab?row=&col=` | viewer | one event by two sides |

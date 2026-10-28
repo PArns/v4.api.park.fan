@@ -29,7 +29,7 @@ its `docs/architecture/caching-strategy.md`.
 | `search:index:v1:*`, `search:fuzzy:v1:{type}:{q}` | 2 h, 5 min | [Search](search.md) |
 | `weather:*` | per surface | [Weather](weather.md#call-cadence-per-surface) |
 | `popularity:parks`, `popularity:attractions` | sorted sets, decayed daily | `ZINCRBY` from `PopularityInterceptor` on successful GETs; feeds warmup priority |
-| `site-analytics:*` | buffers `buf:*` none (parked ones 7 days); visits 30 min after the last hit; caps to the end of the UTC day + 1 min; day visitors to its end + 1 h; guard sets and drop counts to the end of the next day; realtime 10–35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#privacy)'s counts until the flusher writes them, its visits, caps, guards and HyperLogLogs. Keys standing for a reader are HMACs under the UTC day's key |
+| `site-analytics:*` | buffers `buf:*` none (parked ones 7 days); a visit until the flush ends it, at most 40 min after its last hit, and its place in `visits:open` at most 2 h; caps to the end of the UTC day + 1 min; day visitors to its end + 1 h; guard sets and drop counts to the end of the next day; realtime and live view minutes 35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#privacy)'s counts until the flusher writes them, its visits, caps, guards, HyperLogLogs and the live view's minutes. Keys standing for a reader are HMACs under the UTC day's key |
 
 Everything park-scoped is evicted together by `invalidateParkCaches(redis, parkId, attractionIds)`
 (`src/common/cache/park-cache-invalidation.ts`), including the discovery geo structure, the `/nearby`
