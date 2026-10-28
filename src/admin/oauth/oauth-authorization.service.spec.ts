@@ -202,6 +202,21 @@ describe("OAuthAuthorizationService", () => {
         "/admin/oauth/consent",
       );
     });
+
+    it("refuses a long run of slashes in linear time", async () => {
+      const { service } = build();
+      const started = Date.now();
+      const outcome = await service.authorize({
+        ...validRequest,
+        resource: `https://api.park.fan/v1${"/".repeat(100_000)}x`,
+      });
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(
+        new URL((outcome as { location: string }).location).searchParams.get(
+          "error",
+        ),
+      ).toBe("invalid_target");
+    });
   });
 
   describe("consent", () => {

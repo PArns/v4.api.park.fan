@@ -114,9 +114,15 @@ function optionalField(params: Params, name: string): string | undefined {
   return value || undefined;
 }
 
-/** RFC 8707: the only resource tokens are issued for is the MCP endpoint. */
+/**
+ * RFC 8707: the only resource tokens are issued for is the MCP endpoint.
+ * Trailing slashes are trimmed by a scan rather than `/\/+$/`, which
+ * backtracks quadratically on a long run of slashes in a caller's parameter.
+ */
 function isMcpResource(value: string): boolean {
-  return value.replace(/\/+$/, "") === getMcpResourceUrl();
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end) === getMcpResourceUrl();
 }
 
 /**
