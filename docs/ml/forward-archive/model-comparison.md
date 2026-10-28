@@ -72,7 +72,7 @@ question at a lead shares one reference MAE. (Before, each model was paired on i
 TFT and CatBoost never level the same ride-day (the served daily read takes TFT where it has a row),
 so neither can be paired with the other. PEAK and D7 rows are split by the model behind the served
 level: the TFT-served questions compare with TFT's days, `cal_far_90` (d90, CatBoost-served beyond
-TFT's 60 days) with CatBoost's.
+TFT's last day, d59) with CatBoost's.
 
 ### The shadow levels
 
@@ -151,6 +151,13 @@ TiRex-2 (`fm`) have no archived curve, so their cells are offline only (`checks.
   the cell's longest lead + 14 (22.12.2026 for d60, 21.01.2027 for d90), or the model's own
   `MODEL_ARCHIVE_START`. The dates assume the 10th-best park is scored daily; parks closing for the
   season make them optimistic.
+- **A lead no row can reach is not a lead of the cell.** A lead without rows counts as 0 days, so
+  such a cell never meets the gate. TFT's last row is forecast day + 59 (`NF_HORIZON` = 60 counts
+  from the last observed day), so the archive's d60 ride-day is always CatBoost-levelled and
+  `cal_far` covers d30 and d45. CatBoost's daily forecast starts tomorrow (`range(1, …)` in
+  `ml-service/predict.py`), so `catboost_shadow` has no d0 row and `MODEL_MISSING_LEADS` takes d0
+  out of its cells' leads in `cellLeads`. Before adding a lead or a model, check that
+  `forecast_archive_paired` holds rows for that use case × model × lead.
 - **Fixed evaluation dates.** Decisions in the ML overview carry `evaluateOn` and are judged once
   on the window ending the day before (`getMatrix(…, until)`), then frozen in
   `ml_decision_reports` ([ml-overview.md §1a](../ml-overview.md#1a-frozen-decision-reports-par-1059)).

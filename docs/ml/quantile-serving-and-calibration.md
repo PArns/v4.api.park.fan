@@ -55,7 +55,7 @@ Three rules hold across them, and all three are about what a missing number mean
   batch, and `int(round(spread))` takes a per-row spread under half a minute to `0`. Such a row is
   forwarded as `0` rather than dropped: the model did report a spread, smaller than the unit.
 - **A near-term calendar day carries the TFT's measured band, or CatBoost's where CatBoost
-  answered.** `getServingDailyPredictions` merges TFT over CatBoost for days 1–60; CatBoost fills
+  answered.** `getServingDailyPredictions` merges TFT over CatBoost up to d59; CatBoost fills
   in wherever TFT does not reach — a ride TFT has no row for (`farCatboost`), a stalled nf-service
   caught by the 3-day staleness guard, an empty TFT result — so the two kinds of band sit side by
   side inside the same 60 days (see the seam below).

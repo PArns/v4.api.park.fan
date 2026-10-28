@@ -7,7 +7,8 @@ reads it, and the measurements behind its place in the stack. Its two nightly sh
 
 ## What it serves
 
-- **`predicted_peak`** per ride and park-local day, days 1–60 (`NF_HORIZON`): the median of the
+- **`predicted_peak`** per ride and park-local day up to forecast day + 59 (`NF_HORIZON` = 60 counts from the last
+  observed day): the median of the
   forecast distribution of the ride's daily P90 — E[daily-P90], not an upper quantile
   ([Quantile serving](quantile-serving-and-calibration.md#tft--the-served-peak-is-edaily-p90-not-an-upper-quantile)).
 - **Every ride in `tft_forecasts`** (3,581 rides against 1,237 headliners on 2026-09-03), not only
@@ -117,7 +118,7 @@ the forward record survives. A plain table created by nf-service; no index on `c
 `forecast_date`, pruned at 04:35 UTC with both shadows (PAR-1054,
 [schema](../database/schema.md)).
 
-## Why TFT serves days 1–60
+## Why TFT serves the first 60 days
 
 CatBoost reads a far-future day through its recent-level features (`rolling_avg_*`, occupancy:
 ~78 % of importance on 2026-05-23), so it predicts "a typical recent weekday" and its holiday flags

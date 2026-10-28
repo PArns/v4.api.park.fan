@@ -507,12 +507,13 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     group: "calendar",
     label: "Kalendertage 1 bis 2 Monate voraus vergleichen",
     sub: "„Samstag oder Sonntag?“ – Tagesspitze der Hauptattraktionen",
-    // TFT levels the calendar up to 60 days; d90 is CatBoost's (cal_far_90).
-    leadLabel:
-      "Prognose 30, 45 und 60 Tage vorher, morgens um 07:05 gespeichert",
+    // TFT's horizon ends on forecast day + 59, so the archive's d60 day is
+    // always CatBoost's and a d60 lead would hold this gate at 0 for good;
+    // d90 is CatBoost's question (cal_far_90).
+    leadLabel: "Prognose 30 und 45 Tage vorher, morgens um 07:05 gespeichert",
     servedModel: "tft",
     useCase: "PEAK",
-    leads: ["d30", "d45", "d60"],
+    leads: ["d30", "d45"],
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
     models: {
@@ -578,12 +579,28 @@ export const MATRIX_REFERENCES: string[] = [
 ];
 
 /**
+ * Leads a model is never scored at. CatBoost's daily forecast starts tomorrow
+ * (`range(1, …)` in ml-service/predict.py), so `catboost_shadow` has no d0
+ * row — and a lead without rows holds its cell's gate at 0 for good.
+ */
+const MODEL_MISSING_LEADS: Record<string, string[]> = {
+  [PAIRED_MODELS.catboostShadow]: ["d0"],
+};
+
+/**
  * The leads a cell must cover (PAR-1036): the question's leads at which one
  * of the column's paired models is a candidate — `chronos2_grid` stops at d7,
- * so the best-time Chronos cell answers for d0–d7 and says so.
+ * so the best-time Chronos cell answers for d0–d7 and says so — and not one
+ * all of whose models miss it by construction ({@link MODEL_MISSING_LEADS}).
  */
 export function cellLeads(q: QuestionDef, names: string[]): string[] {
   return q.leads.filter((lead) => {
+    if (
+      names.length > 0 &&
+      names.every((n) => MODEL_MISSING_LEADS[n]?.includes(lead))
+    ) {
+      return false;
+    }
     const candidates = PAIRED_QUESTION_MODELS[`${q.useCase}|${lead}`];
     return !candidates || names.some((n) => candidates.includes(n));
   });

@@ -8,7 +8,7 @@ day-curve band. Which compared slots count as an error at all is
 
 | Figure | Surface | Forecast it describes | Scored from |
 | --- | --- | --- | --- |
-| `leadTimeMae` | `/plan/day` | the **served** daily level: TFT for headliners over d1–60, CatBoost elsewhere | `prediction_lead_snapshots`, rows with `source` set |
+| `leadTimeMae` | `/plan/day` | the **served** daily level: TFT for headliners up to d59, CatBoost elsewhere | `prediction_lead_snapshots`, rows with `source` set |
 | accuracy badge (`badge`, `last30Days.mae`) | attraction detail | the **served** intraday wait: PCN + persistence blend when `SERVE_PCN_INTRADAY=true`, CatBoost otherwise; `chronos` where Chronos-2 served the scored slot (rare at the 2-hour scored lead — [chronos-serving.md](forward-archive/chronos-serving.md#where-it-applies)) | `prediction_accuracy.served_*` → `attraction_accuracy_stats.mae` |
 | `forecastError` | ride day curve (`/stats/day`) | **raw CatBoost** — the curve plots `wait_time_predictions` | `prediction_accuracy.absolute_error` → `attraction_accuracy_stats.raw_mae` |
 
@@ -18,7 +18,7 @@ they compare models, and a PCN-vs-CatBoost board must not see PCN on both sides.
 ## `leadTimeMae`
 
 Before PAR-854 it was the error of CatBoost's raw daily answer while the calendar and `/plan/day`
-serve `MLService.getServingDailyPredictions` (TFT over CatBoost for d1–60). Now `generate-daily`
+serve `MLService.getServingDailyPredictions` (TFT over CatBoost up to d59). Now `generate-daily`
 still stores raw CatBoost (other boards need it), then reads `getServingDailyPredictions(parkId)` —
 a cache hit on the response it just wrote plus one TFT query — and snapshots **that**. Each row
 records `source`: `tft` (from `getTftDailyPredictions`, `modelVersion: "tft"`) or `catboost` (TFT had
