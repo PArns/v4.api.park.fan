@@ -285,6 +285,11 @@ export class SearchConsolePageItemDto extends SearchConsoleTotalsDto {
 }
 
 class SearchConsoleWindowEchoDto {
+  @ApiPropertyOptional({
+    description:
+      "Present and true when a `country` or `device` filter is set: Google has no complete rows per page under it, so the listed items come from the visible queries and sum to less than `totals`. `totals`, `previous` and a series are complete unless both filters, a page or a language narrow them too.",
+  })
+  partialBreakdown?: true;
   @ApiProperty() from: string;
   @ApiProperty() to: string;
   @ApiProperty() days: number;
@@ -295,7 +300,7 @@ export class SearchConsoleQueriesDto extends SearchConsoleWindowEchoDto {
   @ApiProperty({
     type: SearchConsoleTotalsDto,
     description:
-      "Of every query Google lists in the window, not only the items. Google leaves queries it anonymises out of these, so the totals of the pages and the series are larger.",
+      "Of every query Google lists in the window, not only the items. Google leaves queries it anonymises out of these, so the totals of the pages and the series are larger, and so is any country or device total.",
   })
   totals: SearchConsoleTotalsDto;
   @ApiProperty({

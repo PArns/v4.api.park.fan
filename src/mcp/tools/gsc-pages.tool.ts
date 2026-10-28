@@ -23,7 +23,7 @@ export const gscPagesTool = defineMcpTool({
     "bounceRate, avgVisitSeconds; null without such a visit). Together they say which pages " +
     "Google shows often but rarely gets clicked (low ctr, decent position: a title or " +
     "description to rewrite) and which ones people leave at once. Pass query to see the pages " +
-    "one search query brings. The totals include queries Google anonymises, unlike gsc_queries'. " +
+    "one search query brings. The totals include queries Google anonymises, unlike gsc_queries', and are the property's, so the items (by page) add up to a little more. With a country or device filter the totals are complete but the pages come from the visible queries only and partialBreakdown: true says so. " +
     GSC_DATA_DESCRIPTION +
     " " +
     GSC_CAVEATS,
@@ -52,6 +52,7 @@ export const gscPagesTool = defineMcpTool({
         to: report.to,
         days: report.days,
         locale: report.locale,
+        ...(report.partialBreakdown && { partialBreakdown: true }),
         totals: rate(report.totals),
         previous: report.previous ? rate(report.previous) : null,
       },

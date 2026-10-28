@@ -21,6 +21,13 @@ export const GSC_REQUEST_TIMEOUT_MS = 60_000;
 /** Tries per request on a 429 or a 5xx, with a doubling pause between them. */
 export const GSC_MAX_ATTEMPTS = 4;
 
+/**
+ * The layout a batch was written in. 2 stores complete page, country and
+ * device rows beside the query rows; a batch below it holds totals that miss
+ * the anonymised queries, so its day counts as never fetched.
+ */
+export const BATCH_FORMAT = 2;
+
 /** Days re-imported on every run when `GSC_IMPORT_DAYS` is unset: Search Console finalises late. */
 export const DEFAULT_IMPORT_DAYS = 3;
 export const MAX_IMPORT_DAYS = 30;

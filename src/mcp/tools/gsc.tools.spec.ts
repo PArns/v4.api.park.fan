@@ -103,6 +103,7 @@ describe("Search Console tools", () => {
       to: "2026-10-28",
       days: 30,
       locale: "de",
+      partialBreakdown: true,
       totals: TOTALS,
       previous: TOTALS,
       items: [
@@ -127,7 +128,11 @@ describe("Search Console tools", () => {
       ],
     }));
     const answer = await run(gscPagesTool, { locale: "de" }, { pages });
-    expect(answer).toMatchObject({ locale: "de", previous: { ctr: 0.075 } });
+    expect(answer).toMatchObject({
+      locale: "de",
+      partialBreakdown: true,
+      previous: { ctr: 0.075 },
+    });
     const data = answer.visitorData as {
       items: Array<Record<string, unknown>>;
     };

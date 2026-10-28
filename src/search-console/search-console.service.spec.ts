@@ -1,5 +1,9 @@
 import { BadRequestException } from "@nestjs/common";
-import { SearchConsoleService, pageFilterOf } from "./search-console.service";
+import {
+  SearchConsoleService,
+  levelPlan,
+  pageFilterOf,
+} from "./search-console.service";
 
 const NOW = new Date("2026-10-28T12:00:00Z");
 
@@ -7,6 +11,7 @@ interface Batch {
   id: number;
   day: string;
   rows: number;
+  format?: number;
 }
 
 /** A service over a fake database that answers by the shape of the statement. */
@@ -31,6 +36,7 @@ function build(options: {
       ) {
         return (options.batches ?? []).map((b) => ({
           id: b.id,
+          format: b.format ?? 2,
           day: b.day,
           rows: b.rows,
           clicks: 0,
@@ -324,7 +330,7 @@ describe("SearchConsoleService.pages", () => {
     const report = await service.pages({ days: 7 }, NOW);
 
     const grouped = calls.find((c) => c.sql.includes("GROUP BY r.page"))!;
-    expect(grouped.sql).toContain("r.query IS NULL");
+    expect(grouped.sql).toContain("r.query IS NULL AND r.page <> ''");
     expect(report.items[0]).toMatchObject({
       path: "/de/parks",
       clicks: 8,
@@ -448,5 +454,111 @@ describe("SearchConsoleService.series", () => {
   it("answers an empty window as an empty series", async () => {
     const { service } = build({ batches: [] });
     expect((await service.series({ days: 7 }, NOW)).series).toEqual([]);
+  });
+});
+
+describe("levelPlan", () => {
+  it("answers everything from the property and page rows without a country or device", () => {
+    expect(levelPlan({}, "series")).toEqual({
+      list: "page",
+      totals: "property",
+      partialBreakdown: false,
+    });
+    expect(levelPlan({ page: "/de" }, "pages").totals).toBe("page");
+    expect(levelPlan({ locale: "de" }, "series").totals).toBe("page");
+    expect(levelPlan({}, "queries")).toMatchObject({
+      list: "query",
+      totals: "property",
+    });
+  });
+
+  it("takes complete totals from the country or device rows and the list from the queries", () => {
+    expect(levelPlan({ country: "deu" }, "pages")).toEqual({
+      list: "query",
+      totals: "country",
+      partialBreakdown: true,
+    });
+    expect(levelPlan({ device: "mobile" }, "series").totals).toBe("device");
+    expect(levelPlan({ device: "mobile" }, "queries").partialBreakdown).toBe(
+      false,
+    );
+  });
+
+  it("falls back to the query rows when nothing complete exists", () => {
+    for (const query of [
+      { country: "deu", device: "mobile" },
+      { country: "deu", page: "/de" },
+      { device: "mobile", locale: "de" },
+    ]) {
+      expect(levelPlan(query, "series")).toMatchObject({
+        totals: "query",
+        partialBreakdown: true,
+      });
+    }
+    expect(levelPlan({ query: "x", country: "deu" }, "pages")).toEqual({
+      list: "query",
+      totals: "query",
+      partialBreakdown: false,
+    });
+  });
+});
+
+describe("SearchConsoleService levels", () => {
+  const totalsSql = (calls: Array<{ sql: string }>) =>
+    calls
+      .filter(
+        (c) =>
+          c.sql.includes("FROM search_console_rows") &&
+          !c.sql.includes("GROUP BY"),
+      )
+      .pop()!.sql;
+
+  it("reads the property rows for the totals and the page rows for the items", async () => {
+    const { service, calls } = build({ batches: WEEK });
+    const report = await service.pages({ days: 7 }, NOW);
+    expect(report).not.toHaveProperty("partialBreakdown");
+    expect(totalsSql(calls)).toContain("r.page = '' AND r.country = ''");
+    expect(calls.find((c) => c.sql.includes("GROUP BY r.page"))!.sql).toContain(
+      "r.page <> ''",
+    );
+  });
+
+  it("reads the country rows for totals under a country filter, the query rows for the pages, and says so", async () => {
+    const { service, calls } = build({ batches: WEEK });
+    const report = await service.pages({ days: 7, country: "deu" }, NOW);
+    expect(report.partialBreakdown).toBe(true);
+    expect(totalsSql(calls)).toContain("r.country <> ''");
+    expect(calls.find((c) => c.sql.includes("GROUP BY r.page"))!.sql).toContain(
+      "r.query IS NOT NULL",
+    );
+  });
+
+  it("reads the device rows for a series under a device filter", async () => {
+    const { service, calls } = build({ batches: WEEK });
+    const report = await service.series({ days: 7, device: "mobile" }, NOW);
+    expect(report.partialBreakdown).toBe(true);
+    expect(calls.find((c) => c.sql.includes("GROUP BY r.day"))!.sql).toContain(
+      "r.device <> ''",
+    );
+  });
+
+  it("reads the query rows when both filters are given", async () => {
+    const { service, calls } = build({ batches: WEEK });
+    const report = await service.series(
+      { days: 7, country: "deu", device: "mobile" },
+      NOW,
+    );
+    expect(report.partialBreakdown).toBe(true);
+    expect(calls.find((c) => c.sql.includes("GROUP BY r.day"))!.sql).toContain(
+      "r.query IS NOT NULL",
+    );
+  });
+
+  it("ignores a day whose batch is in an older layout", async () => {
+    const { service } = build({
+      batches: WEEK.map((b) => ({ ...b, format: 1 })),
+    });
+    const report = await service.series({ days: 7 }, NOW);
+    expect(report.series).toEqual([]);
   });
 });

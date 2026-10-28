@@ -17,13 +17,13 @@ All on `AdminSearchConsoleController`: a session (`AdminAuthGuard`, any role unl
 (`days` 1–365, or `from` and `to`, at most 366 days, `to` today at the latest; both at once or one
 of them alone is a 400) and `locale`, and echo `from`, `to`, `days` and `locale`.
 
-| Method | Path | Answers |
-| --- | --- | --- |
-| GET | `status` | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows }` |
-| POST | `import` | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
-| GET | `queries?page=&country=&device=&limit=` | the queries, most clicks first |
-| GET | `pages?query=&country=&device=&limit=` | the pages, most clicks first, with the site's own numbers |
-| GET | `series?interval=&page=&query=&country=&device=` | per day, week or month |
+| Method | Path                                             | Answers                                                                                                  |
+| ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| GET    | `status`                                         | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows }`                 |
+| POST   | `import`                                         | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
+| GET    | `queries?page=&country=&device=&limit=`          | the queries, most clicks first                                                                           |
+| GET    | `pages?query=&country=&device=&limit=`           | the pages, most clicks first, with the site's own numbers                                                |
+| GET    | `series?interval=&page=&query=&country=&device=` | per day, week or month                                                                                   |
 
 `limit` is 1–200, default 50. `page` is a path or a URL (lower-cased, no trailing slash, query and
 fragment dropped); `query` is one search query, exactly, lower case; `country` is Search Console's
@@ -33,12 +33,31 @@ ISO alpha-3 (`deu`, `usa`, either case); `device` is `desktop`, `mobile` or `tab
 
 ```json
 {
-  "from": "2026-10-22", "to": "2026-10-28", "days": 7, "locale": null,
-  "totals":   { "clicks": 102, "impressions": 2100, "ctr": 0.0486, "position": 4.0 },
-  "previous": { "clicks": 17, "impressions": 350, "ctr": 0.0486, "position": 4.0 },
+  "from": "2026-10-22",
+  "to": "2026-10-28",
+  "days": 7,
+  "locale": null,
+  "totals": {
+    "clicks": 102,
+    "impressions": 2100,
+    "ctr": 0.0486,
+    "position": 4.0
+  },
+  "previous": {
+    "clicks": 17,
+    "impressions": 350,
+    "ctr": 0.0486,
+    "position": 4.0
+  },
   "items": [
-    { "query": "phantasialand wartezeiten", "clicks": 36, "impressions": 480, "ctr": 0.075,
-      "position": 2.0, "change": { "clicks": 30, "position": 0.0 } }
+    {
+      "query": "phantasialand wartezeiten",
+      "clicks": 36,
+      "impressions": 480,
+      "ctr": 0.075,
+      "position": 2.0,
+      "change": { "clicks": 30, "position": 0.0 }
+    }
   ]
 }
 ```
@@ -71,22 +90,43 @@ Search Console's own, imported as they are, with four things a reader of them mu
   change compares like with like. A window that ends today and a series that stops at `coverage.to`
   are normal.
 - **Google leaves out the queries it anonymises** (rare ones, often a third or more of the
-  impressions). The `queries` report therefore sums the queries Google lists, and its totals are lower
-  than those of `pages` and `series`, which come from rows without a query dimension and count
-  everything. Under a `query` filter, pages and series read the query rows.
+  impressions) as soon as a page is combined with a country or a device. The `queries` report therefore
+  sums the queries Google lists, and its totals are lower than those of `pages` and `series`.
+- **Which stored level answers what.** Measured for one day: no dimension 699 clicks and 49,366
+  impressions, `country` alone and `device` alone the same, `page` alone 704 and 51,217 (Google
+  aggregates by page there, so a page sum is a little above the property), while `page, country`,
+  `page, device` and `page, country, device` return 199 clicks and 17,159 impressions and `query` 198
+  and 16,743. Only the single-dimension requests are complete, so the import stores them as their own
+  levels (below) and the reports pick one:
+
+  | Request                                      | totals, `previous`, series                                                                             | the list                                                                                                                |
+  | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+  | no country or device filter                  | the property row (what the Search Console chart shows); with a `page` or `locale` filter the page rows | `pages`: page rows; `queries`: query rows                                                                               |
+  | `country` or `device` (one of them)          | the country or device rows, complete                                                                   | query rows: visible queries only, so the items sum to less than `totals`; the response carries `partialBreakdown: true` |
+  | both filters, or one with `page` or `locale` | the query rows, visible queries only, `partialBreakdown: true`                                         | query rows                                                                                                              |
+  | `query`                                      | the query rows                                                                                         | query rows                                                                                                              |
+
+  `partialBreakdown` is absent otherwise. The position differs by aggregation too: for the property it
+  is the site's topmost result, for a page that URL's. Google's BigQuery bulk export is the only source
+  of complete page by country by device data including anonymised rows; it is not used here.
+
 - **Google caps a day at about 50,000 rows** per kind, most clicks first; a day with more is cut.
 
 ## Storage: insert-only, a batch per import
 
-| Table | Row | Notes |
-| --- | --- | --- |
-| `search_console_rows` | the day, `batch_id`, `page` (path), `query` (null for the property's own sums), `locale`, `country`, `device`, `clicks`, `impressions`, `position_sum` | hypertable on `day`, 30-day chunks, compressed after 35 days, one segment per batch; `HYPERTABLES` |
-| `search_console_batches` | one import of one day: `day`, `imported_at`, `rows`, `clicks`, `impressions`, `position_sum` | plain, a few hundred rows |
-| `search_console_runs` | one run: when, trigger (`cron`, `manual`), ok, days checked, batches written, error | plain, pruned after 90 days |
+| Table                    | Row                                                                                                                                                                                                                          | Notes                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `search_console_rows`    | the day, `batch_id`, `page` (path, `''` on the property, country and device levels), `query` (null on the complete levels), `locale`, `country` and `device` (`''` where not asked), `clicks`, `impressions`, `position_sum` | hypertable on `day`, 30-day chunks, compressed after 35 days, one segment per batch; `HYPERTABLES` |
+| `search_console_batches` | one import of one day: `day`, `imported_at`, `format`, `rows`, `clicks`, `impressions`, `position_sum`                                                                                                                       | plain, a few hundred rows                                                                          |
+| `search_console_runs`    | one run: when, trigger (`cron`, `manual`), ok, days checked, batches written, error                                                                                                                                          | plain, pruned after 90 days                                                                        |
 
-Both kinds of row are stored per day: **rows with a query** (date × page × query × country ×
-device) and **rows without one** (page × country × device), which are the property's own totals and
-what `pages` and `series` sum. `ctr` is not stored.
+Five levels are stored per day. Complete rows without a query: **property** (one row, no dimension,
+the day's totals), **page** (`country` and `device` empty), **country** and **device** (`page`
+empty). And **query** rows (page × query × country × device), visible queries only. `ctr` is not
+stored. `format` is the layout of the batch (`BATCH_FORMAT`, now 2; the column defaults to 1, so
+adding it rewrites nothing). A day whose current batch has a lower format counts as never fetched: the
+next run imports it again and the reports ignore it until then. The first run after this layout
+arrived therefore re-imported the whole backfill, five requests a day.
 
 **A day imported again replaces the earlier import without an UPDATE or a DELETE.** Each import of a
 day is a new batch; the reports read only the newest batch of every day
@@ -106,7 +146,7 @@ decompressing them. Three alternatives were weighed:
 
 A day that did not change is not written at all: the next run compares the fresh download's row
 count, clicks, impressions and position sum with the current batch's, and skips it. So the cost of
-re-importing three days a night is two requests a day and, in the steady state, no write; storage
+re-importing three days a night is five requests a day and, in the steady state, no write; storage
 holds each day once plus the days Google revised. A day Google had nothing for gets a batch without
 rows, so it is asked about again only while it is among the recent days. Retention is
 `drop_chunks` past 500 days (16 months and the rest of a chunk) in the nightly job, under a 5 s
@@ -132,12 +172,13 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
 
 1. **Which days.** The last `GSC_IMPORT_DAYS` days (default 3, 1–30) ending yesterday, newest first,
    then every day of the last 480 days (16 months, a few days short of Google's limit) that has no
-   batch. The first run is therefore the backfill, newest days first; a run that stops resumes with
+   batch or whose batch is in an older format. The first run is therefore the backfill, newest days first; a run that stops resumes with
    the days still missing, because every day is its own transaction.
-2. **One day:** two sets of `searchAnalytics.query` requests, `[page, country, device]` and
+2. **One day:** five `searchAnalytics.query` requests: no dimension, `[page]`, `[country]`, `[device]` and
    `[page, query, country, device]`, `dataState: final`, 25,000 rows a request with `startRow` until
    a page is not full, four tries on a 429, a 5xx or a network failure with a doubling pause (or
-   Google's `Retry-After`). A 401 renews the token once.
+   Google's `Retry-After`); the requests run one after another, far below the per-minute quota, so a
+   re-import of 480 days needs no extra pacing. A 401 renews the token once.
 3. **Failure.** A refusal that every day would meet (403, 404, a rejected key) stops the run with a
    message that names the service account and the property; three failed days in a row stop it too;
    one failed day among good ones is listed and the run goes on. Any failure fails the job, so it
@@ -168,16 +209,16 @@ the key file.
 `src/mcp/tools/`, [listed with the others](../admin/mcp.md#tools). They wrap `SearchConsoleService`,
 and everything Google or a searcher wrote (queries, paths, Google's error message) comes back under
 `visitorData` beside a `visitorDataNotice`, as the site statistic's tools do. Their descriptions carry
-what a model must know: Pacific days, the lag, anonymised queries, that a lower position is better,
+what a model must know: Pacific days, the lag, anonymised queries, `partialBreakdown`, that a lower position is better,
 and what `previous` and `change` compare.
 
 ## Environment
 
-| Variable | Meaning |
-| --- | --- |
+| Variable                   | Meaning                                                                             |
+| -------------------------- | ----------------------------------------------------------------------------------- |
 | `GSC_SERVICE_ACCOUNT_JSON` | the service account's key file, raw JSON or base64 of it; empty ⇒ the module is off |
-| `GSC_SITE_URL` | the property: `sc-domain:park.fan` or a URL prefix such as `https://park.fan/` |
-| `GSC_IMPORT_DAYS` | days every run fetches again, 1–30, default 3 |
+| `GSC_SITE_URL`             | the property: `sc-domain:park.fan` or a URL prefix such as `https://park.fan/`      |
+| `GSC_IMPORT_DAYS`          | days every run fetches again, 1–30, default 3                                       |
 
 A key that does not parse, or a missing property, leaves the module off and puts the reason in
 `lastError`; nothing throws at boot.

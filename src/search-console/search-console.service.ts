@@ -19,6 +19,7 @@ import {
 } from "../site-analytics/site-analytics.query";
 import { getSearchConsoleSetup } from "../config/search-console.config";
 import {
+  BATCH_FORMAT,
   DEFAULT_REPORT_LIMIT,
   type GscInterval,
 } from "./search-console.constants";
@@ -53,6 +54,58 @@ interface Sums {
   clicks: number;
   impressions: number;
   positionSum: number;
+}
+
+/**
+ * Which stored rows answer. `property` (one row a day), `page`, `country` and
+ * `device` are the complete rows without a query; `query` are the rows with
+ * one (visible queries only).
+ */
+export type RowLevel = "property" | "page" | "country" | "device" | "query";
+
+/** What answers a request: the list's rows, the totals' rows, and whether the list misses traffic. */
+export interface LevelPlan {
+  list: RowLevel;
+  totals: RowLevel;
+  /** The items sum to less than the totals, or the totals miss anonymised queries. */
+  partialBreakdown: boolean;
+}
+
+/**
+ * Google aggregates by property without a page dimension and by page with
+ * one, and drops anonymised queries as soon as a page is combined with a
+ * country or device. So the property row gives the totals the Search Console
+ * chart shows, the page rows the per-page figures (their sum is a little
+ * above), and only the single-dimension country and device rows are complete
+ * under one of those filters. A page or language filter needs page rows. A
+ * list under a country or device filter, both filters together, or a query
+ * filter can only come from the query rows.
+ */
+export function levelPlan(
+  query: Pick<
+    SearchConsoleQuery,
+    "query" | "country" | "device" | "page" | "locale"
+  >,
+  report: "pages" | "queries" | "series",
+): LevelPlan {
+  if (query.query) {
+    return { list: "query", totals: "query", partialBreakdown: false };
+  }
+  const narrowed = Boolean(query.page || query.locale);
+  const slice = query.country || query.device;
+  if (!slice) {
+    return {
+      list: report === "queries" ? "query" : "page",
+      totals: narrowed ? "page" : "property",
+      partialBreakdown: false,
+    };
+  }
+  const complete = !(query.country && query.device) && !narrowed;
+  return {
+    list: "query",
+    totals: complete ? (query.country ? "country" : "device") : "query",
+    partialBreakdown: report !== "queries",
+  };
 }
 
 type Row = Record<string, Count | string>;
@@ -192,7 +245,8 @@ export class SearchConsoleService {
     now = new Date(),
   ): Promise<SearchConsoleQueriesDto> {
     const resolved = await this.resolve(query, now);
-    const echo = this.echo(resolved);
+    const plan = levelPlan(query, "queries");
+    const echo = this.echo(resolved, plan);
     if (!resolved.dataTo) {
       return { ...echo, totals: totalsOf(ZERO), previous: null, items: [] };
     }
@@ -200,7 +254,7 @@ export class SearchConsoleService {
     const { totals, previous, rows } = await this.grouped(
       resolved,
       "r.query",
-      "query",
+      plan,
       filters,
       query.limit ?? DEFAULT_REPORT_LIMIT,
     );
@@ -233,7 +287,8 @@ export class SearchConsoleService {
     now = new Date(),
   ): Promise<SearchConsolePagesDto> {
     const resolved = await this.resolve(query, now);
-    const echo = this.echo(resolved);
+    const plan = levelPlan(query, "pages");
+    const echo = this.echo(resolved, plan);
     if (!resolved.dataTo) {
       return { ...echo, totals: totalsOf(ZERO), previous: null, items: [] };
     }
@@ -241,7 +296,7 @@ export class SearchConsoleService {
     const { totals, previous, rows } = await this.grouped(
       resolved,
       "r.page",
-      query.query ? "query" : "page",
+      plan,
       filters,
       query.limit ?? DEFAULT_REPORT_LIMIT,
     );
@@ -284,14 +339,15 @@ export class SearchConsoleService {
     const fallback = defaultInterval(window.days);
     const interval: GscInterval =
       query.interval ?? (fallback === "hour" ? "day" : fallback);
-    const echo = { ...this.echo(resolved), interval };
+    const plan = levelPlan(query, "series");
+    const echo = { ...this.echo(resolved, plan), interval };
     if (!resolved.dataTo) return { ...echo, series: [] };
 
     const params = new SqlParams();
     const where = this.rowsWhere(
       params,
       resolved,
-      query.query ? "query" : "page",
+      plan.totals,
       this.filters(query),
       false,
     );
@@ -333,9 +389,10 @@ export class SearchConsoleService {
     };
   }
 
-  private echo(resolved: Resolved) {
+  private echo(resolved: Resolved, plan: LevelPlan) {
     const { window } = resolved;
     return {
+      ...(plan.partialBreakdown && { partialBreakdown: true as const }),
       from: window.from,
       to: window.to,
       days: window.days,
@@ -363,8 +420,9 @@ export class SearchConsoleService {
     );
     const lookFrom = window.previous?.from ?? window.from;
     const batches = await currentBatches(this.db, lookFrom, window.to);
+    // A batch of an older layout has no complete rows; its day waits for the re-import.
     const withRows = [...batches.entries()].filter(
-      ([, batch]) => batch.rows > 0,
+      ([, batch]) => batch.rows > 0 && batch.format >= BATCH_FORMAT,
     );
     const inWindow = withRows
       .map(([day]) => day)
@@ -407,13 +465,12 @@ export class SearchConsoleService {
   /**
    * The WHERE over `search_console_rows`: the current batches of the days of
    * the window (and the window before), the kind of row, the language and the
-   * filters. `level` `page` reads the rows without a query, the property's
-   * own sums; `query` the rows with one.
+   * filters. `level` is the kind of row, see `RowLevel`.
    */
   private rowsWhere(
     params: SqlParams,
     resolved: Resolved,
-    level: "page" | "query",
+    level: RowLevel,
     filters: Array<[string, string]>,
     withPrevious = true,
   ): string {
@@ -421,7 +478,7 @@ export class SearchConsoleService {
       `r.batch_id = ANY(${params.add(resolved.batchIds)}::int[])`,
       `r.day >= ${params.add(withPrevious ? resolved.min : resolved.from)}::date`,
       `r.day <= ${params.add(resolved.dataTo)}::date`,
-      level === "page" ? "r.query IS NULL" : "r.query IS NOT NULL",
+      LEVEL_CONDITION[level],
     ];
     if (resolved.window.locale) {
       conditions.push(`r.locale = ${params.add(resolved.window.locale)}`);
@@ -440,7 +497,7 @@ export class SearchConsoleService {
   private async grouped(
     resolved: Resolved,
     column: "r.query" | "r.page",
-    level: "page" | "query",
+    plan: LevelPlan,
     filters: Array<[string, string]>,
     limit: number,
   ): Promise<{
@@ -449,7 +506,7 @@ export class SearchConsoleService {
     rows: Row[];
   }> {
     const params = new SqlParams();
-    const where = this.rowsWhere(params, resolved, level, filters);
+    const where = this.rowsWhere(params, resolved, plan.list, filters);
     const current = `r.day >= ${params.add(resolved.from)}::date`;
     const currentTo = `r.day <= ${params.add(resolved.dataTo)}::date`;
     const cur = `${current} AND ${currentTo}`;
@@ -467,7 +524,7 @@ export class SearchConsoleService {
       params.values,
     );
     const sums = new SqlParams();
-    const totalsWhere = this.rowsWhere(sums, resolved, level, filters);
+    const totalsWhere = this.rowsWhere(sums, resolved, plan.totals, filters);
     const totalsCur = `r.day >= ${sums.add(resolved.from)}::date AND r.day <= ${sums.add(resolved.dataTo)}::date`;
     const totalsPrev = resolved.previous
       ? `r.day >= ${sums.add(resolved.previous.from)}::date AND r.day <= ${sums.add(resolved.previous.to)}::date`
@@ -536,6 +593,15 @@ export class SearchConsoleService {
     return found;
   }
 }
+
+const LEVEL_CONDITION: Record<RowLevel, string> = {
+  property:
+    "r.query IS NULL AND r.page = '' AND r.country = '' AND r.device = ''",
+  page: "r.query IS NULL AND r.page <> '' AND r.country = '' AND r.device = ''",
+  country: "r.query IS NULL AND r.page = '' AND r.country <> ''",
+  device: "r.query IS NULL AND r.page = '' AND r.device <> ''",
+  query: "r.query IS NOT NULL",
+};
 
 const ZERO: Sums = { clicks: 0, impressions: 0, positionSum: 0 };
 

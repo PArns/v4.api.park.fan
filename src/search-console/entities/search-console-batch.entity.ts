@@ -30,7 +30,14 @@ export class SearchConsoleBatch {
   @Column({ type: "integer", default: 0 })
   rows: number;
 
-  /** The property's clicks that day, from the rows without a query. */
+  /**
+   * The layout of the rows (`BATCH_FORMAT`); a lower one is re-imported. A
+   * default, so adding the column rewrites nothing.
+   */
+  @Column({ type: "integer", default: 1 })
+  format: number;
+
+  /** The property's clicks that day, from the complete page rows. */
   @Column({ type: "integer", default: 0 })
   clicks: number;
 

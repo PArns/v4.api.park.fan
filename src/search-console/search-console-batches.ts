@@ -3,6 +3,7 @@ import type { DataSource } from "typeorm";
 /** An import of one day, as `search_console_batches` holds it. */
 export interface CurrentBatch {
   id: number;
+  format: number;
   rows: number;
   clicks: number;
   impressions: number;
@@ -20,13 +21,14 @@ export async function currentBatches(
 ): Promise<Map<string, CurrentBatch>> {
   const rows: Array<{
     id: number;
+    format: number;
     day: string;
     rows: number;
     clicks: number;
     impressions: number;
     position_sum: number;
   }> = await db.query(
-    `SELECT DISTINCT ON (day) id, day::text AS day, rows, clicks, impressions, position_sum
+    `SELECT DISTINCT ON (day) id, format, day::text AS day, rows, clicks, impressions, position_sum
        FROM search_console_batches
       WHERE day BETWEEN $1::date AND $2::date
       ORDER BY day, id DESC`,
@@ -37,6 +39,7 @@ export async function currentBatches(
       row.day,
       {
         id: row.id,
+        format: row.format,
         rows: row.rows,
         clicks: row.clicks,
         impressions: row.impressions,
