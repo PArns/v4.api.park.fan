@@ -22,7 +22,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
  * place is given back when a report fails; a statement the timeout cancelled
  * is a 503 that says what to try, any other error passes through; the timeout
  * is set for the statement's own transaction; the days a cuboid has rolled
- * are read once a minute and a failed read means none.
+ * are read once a minute and a failed read fails the report.
  */
 describe("ReportGate", () => {
   it("runs the limit at once, queues the rest in order and hands each place on", async () => {
@@ -214,10 +214,10 @@ describe("SiteReportRunner", () => {
     }
   });
 
-  it("reads no day as rolled when the markers cannot be read, and tries again next time", async () => {
+  it("fails when the markers cannot be read, and tries again next time", async () => {
     rolledError = new Error("down");
     const runner = build();
-    expect((await runner.rolledDays("pageviews", 1)).size).toBe(0);
+    await expect(runner.rolledDays("pageviews", 1)).rejects.toThrow("down");
     rolledError = null;
     expect((await runner.rolledDays("pageviews", 1)).size).toBe(2);
   });

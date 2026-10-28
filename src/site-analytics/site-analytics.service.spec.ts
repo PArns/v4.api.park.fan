@@ -154,7 +154,7 @@ describe("SiteAnalyticsService", () => {
         previous: {
           pageviews: 5,
           visits: 5,
-          visitors: 0,
+          visitors: null,
           events: 1,
           viewsPerVisit: 1,
           bounceRate: 1,
@@ -212,6 +212,24 @@ describe("SiteAnalyticsService", () => {
       expect(sqlOf("site_visitor_days")[0]).toBe("");
     });
 
+    it("counts the visitors of the window before only once the window is longer than a week", async () => {
+      const week = await service.overview({ days: 7 }, NOW);
+      expect(week.previous?.visitors).toBeNull();
+      const longer = await service.overview({ days: 8 }, NOW);
+      expect(longer.previous?.visitors).toBe(0);
+    });
+
+    it("builds no events statement under a filter the events do not carry", async () => {
+      const overview = await service.overview(
+        { days: 7, filter: ["browser_language:de"] },
+        NOW,
+      );
+      expect(sqlOf("FROM site_events")[0]).toBe("");
+      expect(overview.totals.events).toBeNull();
+      expect(overview.series.every((p) => p.events === null)).toBe(true);
+      expect(sqlOf("FROM site_pageviews")[0]).toContain("browser_language");
+    });
+
     describe("visitors under one filter", () => {
       /** The snapshot's rows of one value, as the SQL returns them. */
       const dimRows = (value: string) => [
@@ -236,8 +254,8 @@ describe("SiteAnalyticsService", () => {
         ]);
         expect(sqlOf("FROM site_visitor_days")[0]).toBe("");
         expect(overview.totals.visitors).toBe(11);
-        // 2026-10-22 lies before the window before, which starts on the 25th.
-        expect(overview.previous?.visitors).toBe(0);
+        // A short window ending today has no comparable window before.
+        expect(overview.previous?.visitors).toBeNull();
         expect(overview.series.map((point) => point.visitors)).toEqual([8, 3]);
       });
 

@@ -193,7 +193,8 @@ export class SiteReportRunner implements ReportRunner {
   /**
    * The days of one cuboid with a marker, from a copy kept for a minute: a
    * day is rolled once and never taken back, so an old copy only reads a day
-   * hourly that could have been read daily. A failed read means none.
+   * hourly that could have been read daily. A failed read fails the report: an
+   * empty set would read old days as complete zeros.
    */
   rolledDays(
     source: RollupSource,
@@ -216,11 +217,9 @@ export class SiteReportRunner implements ReportRunner {
         (rows) => new Set(rows.map((row) => row.day)) as ReadonlySet<string>,
       )
       .catch((error: Error) => {
-        this.logger.warn(
-          `Rolled days of ${key} unreadable, reading hourly rows: ${error.message}`,
-        );
+        this.logger.warn(`Rolled days of ${key} unreadable: ${error.message}`);
         this.rolled.delete(key);
-        return new Set<string>() as ReadonlySet<string>;
+        throw error;
       });
     this.rolled.set(key, { at: Date.now(), days });
     return days;

@@ -125,7 +125,8 @@ export class SiteAnalyticsService {
    * filter they are null rather than a guess ({@link visitorBasisOf}); an
    * hourly series has none under a filter. Under a filter on a
    * visit dimension only the visit figures can follow it: page views,
-   * events, views per visit and time on page are null.
+   * events, views per visit and time on page are null; under the browser
+   * language events are null too.
    */
   async overview(
     query: SiteAnalyticsQuery,
@@ -135,6 +136,12 @@ export class SiteAnalyticsService {
       const window = siteAnalyticsWindow(query, now);
       const visitorBasis = visitorBasisOf(window.filters);
       const visitsOnly = visitFilters(window).length > 0;
+      // site_events has no column for the browser language either.
+      const eventsOn =
+        !visitsOnly &&
+        window.filters.every((filter) =>
+          (EVENT_DIMS as readonly string[]).includes(filter.dim),
+        );
       const period = periodOf(window.hourly);
       const traffic = new SqlParams();
       const events = new SqlParams();
@@ -146,7 +153,7 @@ export class SiteAnalyticsService {
         "both",
         [],
       );
-      const eventSource = visitsOnly
+      const eventSource = !eventsOn
         ? null
         : await rowsOf(this.rolled, "events", events, window, "both", []);
       const [trafficRows, eventRows, visitors, realtime] = await Promise.all([
@@ -207,7 +214,7 @@ export class SiteAnalyticsService {
         pageviews: visitsOnly ? null : sum.views,
         visits: sum.visits,
         visitors: visitorCount,
-        events: visitsOnly ? null : sum.events,
+        events: eventsOn ? sum.events : null,
         viewsPerVisit: visitsOnly
           ? null
           : sum.visits > 0
@@ -230,7 +237,9 @@ export class SiteAnalyticsService {
         previous: window.previous
           ? figures(
               sums(window.previous.from, window.previous.to),
-              visitors
+              // Its last day is whole and today is not: on a short window
+              // the comparison would read as a collapse.
+              visitors && !(window.to === utcDay(now) && window.days <= 7)
                 ? sumVisitors(
                     visitors.days,
                     window.previous.from,

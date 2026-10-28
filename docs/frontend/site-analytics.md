@@ -508,7 +508,8 @@ meaning: null past 180 days, a window otherwise, partial when `hourlyFrom` says 
 ends today it ends at the same hour of its last day as now: today is under way, so a change compares
 today so far with the same part of a day, not with a whole one (the hour itself is taken whole on
 both sides). A `from`–`to` window that ended before today compares with a whole window before.
-Visitors of the window before count its last day whole, since visitors are per day. Over 180 days
+Visitors of the window before count its last day whole, since visitors are per day, so when the window ends today and
+is 7 days or shorter `previous.visitors` is `null`: a whole day against today so far is no comparison. Over 180 days
 (`MAX_COMPARABLE_DAYS`) there is no window before, since most of it would lie past the daily rows'
 retention:
 `previous` and every change are `null`, and the trends report refuses the window.
