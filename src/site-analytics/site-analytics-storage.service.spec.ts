@@ -656,7 +656,7 @@ describe("SiteAnalyticsStorageService", () => {
     });
 
     it("counts only the cuboids it wrote, not one another instance wrote first", async () => {
-      rolledBefore.add("2026-10-27:1");
+      rolledBefore.add("2026-10-27:49");
       oldest = "2026-10-27";
       const rolled = await service.rollupDays(new Date("2026-10-28T03:00:00Z"));
       expect(rolled.cuboids).toBe(ALL_PAGEVIEW_CUBOIDS + ALL_EVENT_CUBOIDS - 1);

@@ -1022,7 +1022,9 @@ describe("Site analytics (e2e)", () => {
       day: `${yesterday}T10:00:00Z`,
       pageviews: 3,
       visits: 2,
-      visitors: null,
+      // Two readers, from the hour's HyperLogLog, which lives until the
+      // snapshot has written yesterday's hours.
+      visitors: 2,
       avgVisitSeconds: 30,
     });
     expect(overview.body.series[10]).not.toHaveProperty("partial");
@@ -1186,7 +1188,7 @@ describe("Site analytics (e2e)", () => {
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
       written: 2,
-      hoursWritten: 48,
+      hoursWritten: 168,
     });
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
@@ -1237,6 +1239,15 @@ describe("Site analytics (e2e)", () => {
     const WINDOWS =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0";
     const ENTITY = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const BYPASS = "daily-level-e2e";
+
+    // 1,700 requests from one address would meet the origin's rate limit.
+    beforeAll(() => {
+      process.env.THROTTLE_BYPASS_KEYS = BYPASS;
+    });
+    afterAll(() => {
+      delete process.env.THROTTLE_BYPASS_KEYS;
+    });
 
     /** Twelve past days of varied traffic, one of them empty, flushed. */
     const seedDays = async () => {
@@ -1369,15 +1380,27 @@ describe("Site analytics (e2e)", () => {
       return list;
     };
 
-    /** What a report answers, without the realtime minute that moves with the clock. */
-    const answers = async () =>
-      Promise.all(
-        urls().map(async (url) => {
-          const response = await admin(url);
-          const { realtime: _realtime, ...body } = response.body;
-          return [url, response.status, body] as const;
-        }),
-      );
+    /**
+     * What a report answers, without the realtime minute that moves with the
+     * clock. Sixteen at a time, as the Traffic page asks: the runner refuses
+     * what does not fit its four places and 32 more.
+     */
+    const answers = async () => {
+      const all = urls();
+      const out: Array<readonly [string, number, Record<string, unknown>]> = [];
+      for (let at = 0; at < all.length; at += 16) {
+        out.push(
+          ...(await Promise.all(
+            all.slice(at, at + 16).map(async (url) => {
+              const response = await admin(url).set("x-auth-key", BYPASS);
+              const { realtime: _realtime, ...body } = response.body;
+              return [url, response.status, body] as const;
+            }),
+          )),
+        );
+      }
+      return out;
+    };
 
     it("reads whole rolled days from the daily rows and answers exactly as the hourly rows do", async () => {
       await seedDays();
@@ -1542,11 +1565,18 @@ describe("Site analytics (e2e)", () => {
       );
       const filled = await storage.rollupDays(new Date());
       expect(filled.cuboids).toBeGreaterThan(0);
+      // Every day has its marker again; the empty day has no rows.
+      expect(
+        await dataSource.query(
+          `SELECT count(*)::int AS markers FROM site_rollup_days
+            WHERE source = 'pageviews' AND cuboid = 7`,
+        ),
+      ).toEqual([{ markers: filled.days }]);
       expect(
         await dataSource.query(
           `SELECT count(DISTINCT bucket)::int AS days FROM site_pageviews_daily WHERE cuboid = 7`,
         ),
-      ).toEqual([{ days: filled.days }]);
+      ).toEqual([{ days: filled.days - 1 }]);
     });
 
     it("refuses with 503 and a message when a statement runs past its timeout", async () => {
