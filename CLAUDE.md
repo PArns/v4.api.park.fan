@@ -49,6 +49,9 @@ One line per standing rule; each links its page in `docs/rules/` with the reason
 - **[Cast the parameter, never the uuid column](docs/rules/uuid-casts.md):** `col = $1::uuid`,
   never `col::text = $1`, in the API and every Python service; filter ids with `isCanonicalUuid` /
   `uuid_list` before binding.
+- **[No full address in any log line](docs/rules/no-address-in-logs.md):** the privacy policy says the
+  server logs no IP addresses; a log line carries none, an admin request line at most a /24 or /48
+  from `truncateIp`; `admin_audit_log.actor_ip` is the accounts' record and stays.
 - **Changelog:** one fragment per pull request in `docs/changelog.d/` (`PAR-<issue>.md`, first
   line `### <Type> — <title>`, links relative to `docs/`; [format](docs/changelog.d/README.md)),
   never `docs/changelog.md` directly. `pnpm changelog:check` reads the fragments,

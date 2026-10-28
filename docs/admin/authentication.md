@@ -104,6 +104,10 @@ password change; enrolling clears that on the sessions already open.
 
 `admin_audit_log` exists because the `curated_*` columns are claims about the world and a claim needs an
 author (`curated_minimum_height = 0` on Winni Splash means somebody read Phantasialand's conditions).
+It keeps the actor's whole address (`actor_ip`): the table is accounts' actions, not visitors'
+requests, and is not a log in the sense of
+[no address in logs](../rules/no-address-in-logs.md), whose lines carry none (an admin request line
+at most a /24 or /48).
 Mutating endpoints audit themselves through `AdminAuditInterceptor`; the ones that write a richer row are
 `@SelfAudited()`. `before` / `after` hold **only the changed fields**, which is what makes undo possible
 ([curation](curation.md#undo)).

@@ -130,8 +130,11 @@ export class AdminAuthController {
         // body from `message` and `error`. Now that it carries the rest of a
         // thrown body (PAR-146), a field withheld from a client has to be
         // withheld here, where the decision is.
+        // No address: this is the one line a stranger's request writes, and
+        // the policy says the server logs no IP addresses
+        // (docs/rules/no-address-in-logs.md).
         this.logger.warn(
-          `Turnstile refused an admin login from ${clientIp(request) ?? "an unknown address"}: ${verdict.reason ?? "no reason given"}`,
+          `Turnstile refused an admin login: ${verdict.reason ?? "no reason given"}`,
         );
         throw new ForbiddenException({
           error: "turnstile-failed",

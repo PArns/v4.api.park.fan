@@ -44,6 +44,10 @@ const REDACTED_PARAMS = new Set([
   "refresh_token",
   "client_secret",
   "state",
+  // `?ip=` on the location and favourites routes names the address to look up
+  // instead of the caller's own. It is still a visitor's address, and the
+  // privacy policy says no log line carries one.
+  "ip",
 ]);
 
 /**

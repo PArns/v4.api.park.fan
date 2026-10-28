@@ -10,8 +10,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, LessThan, Or, Repository } from "typeorm";
 import { randomBytes } from "crypto";
-import { isIP } from "net";
-import { expandIpv6 } from "../../common/utils/request.util";
+import { truncateIp } from "../../common/utils/request.util";
 import {
   ADMIN_ROLES,
   AdminRole,
@@ -58,26 +57,6 @@ export interface PublicAdminUser {
   totpEnabled: boolean;
   lastLoginAt: string | null;
   createdAt: string;
-}
-
-/**
- * Truncate an address before it is stored.
- *
- * The useful question an audit row answers is "did this session come from
- * somewhere new", not "where was this person". A /24 or /48 answers that and
- * stops the log from being a movement history of the three people who use it.
- */
-export function truncateIp(ip: string | null | undefined): string | null {
-  if (!ip) return null;
-  const clean = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-  if (isIP(clean) === 4) {
-    const parts = clean.split(".");
-    return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-  }
-  if (isIP(clean) === 6) {
-    return `${expandIpv6(clean).slice(0, 3).join(":")}::/48`;
-  }
-  return null;
 }
 
 export function toPublicUser(user: AdminUser): PublicAdminUser {
