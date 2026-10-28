@@ -9,7 +9,8 @@ jest.mock("./file-logger.util", () => ({ logToFile: jest.fn() }));
 
 /**
  * A statement's parameters reach two logs, the slow-query file and the error
- * line of a failed query, and the audit row's `actor_ip` is one of them.
+ * line of a failed query, so an address bound by any statement is cut to its
+ * network before either writes it.
  */
 describe("withoutAddresses", () => {
   it("cuts an address to its network and leaves other values alone", () => {

@@ -125,6 +125,10 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // and its retention. A few hundred requests on the first run, a handful a
   // night after.
   { name: "search-console" },
+  // The audit log's address retention: one nightly sweep over a table of a
+  // few thousand rows. Its own queue, as the trips sweep has, because it is
+  // maintenance on one table and shares nothing with the jobs around it.
+  { name: "admin-audit" },
   // Showtime patterns: the nightly rebuild that lets a planned day show a
   // projected programme, since no feed publishes showtimes ahead of today.
   { name: "show-patterns" },

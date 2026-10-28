@@ -16,8 +16,8 @@ import { truncateIp } from "../utils/request.util";
  * which only accounts reach. Every other route is a visitor's or a client's,
  * and the privacy policy says the server logs no IP addresses, so its lines
  * carry none. Even the admin's carry a /24 (IPv4) or /48 (IPv6), never the
- * address: `admin_audit_log.actor_ip` is where an account's full address is
- * kept (docs/rules/no-address-in-logs.md).
+ * address, which is also all `admin_audit_log.actor_ip` keeps
+ * (docs/rules/no-address-in-logs.md).
  */
 const OPERATOR_PATH = /^\/v1\/admin(?:[/?#]|$)/i;
 

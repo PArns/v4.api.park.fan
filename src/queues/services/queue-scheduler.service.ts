@@ -108,6 +108,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("site-analytics") private siteAnalyticsQueue: Queue,
     @InjectQueue("search-console") private searchConsoleQueue: Queue,
+    @InjectQueue("admin-audit") private adminAuditQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
     @InjectQueue("forecast-archive-score")
@@ -1192,6 +1193,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           jobId,
           removeOnComplete: 100,
           removeOnFail: 100,
+        },
+      );
+    }
+
+    // Audit log: the stored address leaves rows past its retention, and any
+    // full address still stored is cut to its network, nightly at 01:15. The
+    // sweep is a few indexed statements; the slot sits clear of the 01:00
+    // stats and the 01:30 driver-level jobs.
+    const hasAuditSweepCron = await this.hasRepeatableJob(
+      this.adminAuditQueue,
+      "admin-audit-sweep-cron",
+      "15 1 * * *",
+    );
+    if (!hasAuditSweepCron) {
+      await this.adminAuditQueue.add(
+        "sweep-addresses",
+        {},
+        {
+          repeat: { cron: "15 1 * * *" },
+          jobId: "admin-audit-sweep-cron",
         },
       );
     }
