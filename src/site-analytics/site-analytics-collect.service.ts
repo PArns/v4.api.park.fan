@@ -399,7 +399,8 @@ export class SiteAnalyticsCollectService
     const byAddress = remaining(results[0][1], MAX_HITS_PER_ADDRESS_PER_DAY);
     const byWindow = remaining(results[2][1], MAX_HITS_PER_WINDOW);
     // Hits the address cap drops must not use up everyone's window budget.
-    if (byAddress < count) await this.redis.decrby(windowKey, count - byAddress);
+    if (byAddress < count)
+      await this.redis.decrby(windowKey, count - byAddress);
     countDrop(drops, DROP_REASONS.address, count - byAddress);
     countDrop(
       drops,
@@ -526,13 +527,13 @@ export class SiteAnalyticsCollectService
           read || refusedNames.has(hit.name)
             ? null
             : guard(
-              "combinations",
-              this.staticHash("combo", hit.propsKey, hit.entity ?? "").slice(
-                0,
-                16,
+                "combinations",
+                this.staticHash("combo", hit.propsKey, hit.entity ?? "").slice(
+                  0,
+                  16,
+                ),
+                hit.name,
               ),
-              hit.name,
-            ),
       };
     });
 

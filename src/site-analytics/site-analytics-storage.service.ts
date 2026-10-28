@@ -302,6 +302,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       const windows = (await this.redis.smembers(KEYS.windows))
         .filter((window) => window < before)
         .sort();
+      const failures: Array<[string, Error]> = [];
       for (const window of windows) {
         try {
           const rows = await this.flushWindow(window);
@@ -312,8 +313,18 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
           }
         } catch (error) {
           written.failed += 1;
-          await this.failed(window, error as Error);
+          failures.push([window, error as Error]);
         }
+      }
+      // A run that wrote nothing says the database is away, not that a window
+      // is bad, so it counts no attempt and an outage parks nothing.
+      if (written.windows > 0) {
+        for (const [window, error] of failures)
+          await this.failed(window, error);
+      } else if (failures.length > 0) {
+        this.logger.warn(
+          `No window written, ${failures.length} waiting: ${failures[0][1].message}`,
+        );
       }
     } finally {
       if ((await this.redis.get(KEYS.flushLock)) === token) {
@@ -406,7 +417,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   }
 
   /**
-   * Counts one failed attempt at a window and sets the window aside after
+   * Counts one failed attempt at a window (only in a run that wrote another one) and sets the window aside after
    * {@link MAX_FLUSH_ATTEMPTS}: its claimed key is renamed to a parked one
    * that expires after a week, and its id leaves the set the flusher reads.
    */

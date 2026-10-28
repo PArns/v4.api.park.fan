@@ -266,7 +266,14 @@ describe("SiteAnalyticsStorageService", () => {
       expect(redis.hashes.has(KEYS.flushing("2026-10-28T09:50:00.000Z"))).toBe(
         true,
       );
-      for (let i = 1; i < MAX_FLUSH_ATTEMPTS; i++) await service.flush(NOW);
+      for (let i = 1; i < MAX_FLUSH_ATTEMPTS; i++) {
+        // Another window written in the run is what makes the failure count.
+        const other = new Date(
+          Date.parse("2026-10-28T08:00:00Z") + i * 300_000,
+        );
+        buffer(other.toISOString(), { [pageviewField("v", PAGE)]: 1 });
+        await service.flush(NOW);
+      }
       expect(await redis.smembers(KEYS.windows)).toEqual([]);
       expect(await redis.smembers(KEYS.parkedWindows)).toEqual([
         "2026-10-28T09:50:00.000Z",
@@ -277,6 +284,16 @@ describe("SiteAnalyticsStorageService", () => {
       expect(redis.ttls.get(KEYS.parked("2026-10-28T09:50:00.000Z"))).toBe(
         7 * 24 * 3600,
       );
+    });
+
+    it("counts no attempt against a window when nothing else was written", async () => {
+      buffer("2026-10-28T09:50:00.000Z", { [pageviewField("v", PAGE)]: 1 });
+      failOn = "2026-10-28T09:50:00.000Z";
+      for (let i = 0; i < MAX_FLUSH_ATTEMPTS + 2; i++) await service.flush(NOW);
+      expect(await redis.smembers(KEYS.parkedWindows)).toEqual([]);
+      expect(await redis.smembers(KEYS.windows)).toEqual([
+        "2026-10-28T09:50:00.000Z",
+      ]);
     });
 
     it("leaves the flush to the instance that holds the lock", async () => {
