@@ -218,6 +218,87 @@ describe("Admin MCP and OAuth (e2e)", () => {
     await client.get("/v1/.well-known/oauth-authorization-server").expect(404);
   });
 
+  it("offers the site statistic's tools and answers them as documented", async () => {
+    const client = from();
+    const viewer = await account("viewer-analytics@example.invalid", "viewer");
+    const created = await client
+      .post("/v1/admin/auth/tokens")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ name: "Analytics" })
+      .expect(201);
+    const pat = created.body.token as string;
+
+    const list = await mcp(client, pat, toolsList).expect(200);
+    const names = list.body.result.tools.map(
+      (tool: { name: string }) => tool.name,
+    );
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "analytics_overview",
+        "analytics_breakdown",
+        "analytics_events",
+        "analytics_event",
+        "analytics_crosstab",
+        "search_report",
+        "seo_landing_pages",
+        "seo_trends",
+        "seo_not_found",
+        "seo_uncovered",
+      ]),
+    );
+
+    // Two page views of one search visit and one direct bounce, written as
+    // the flusher writes them, this hour.
+    const bucket = new Date();
+    bucket.setUTCMinutes(0, 0, 0);
+    await dataSource.query(
+      `INSERT INTO site_pageviews (bucket, locale, path, page_type, viewport, browser, os,
+                                   country, entry, referrer, channel, views, visits, engaged)
+       VALUES ($1, 'de', '/de/parks/europe/germany/bruehl/phantasialand', 'park', 'mobile',
+               'safari', 'ios', 'de', '/de/parks/europe/germany/bruehl/phantasialand',
+               'google', 'search', 2, 1, 1),
+              ($1, 'en', '/en', 'home', 'desktop', 'chrome', 'windows', 'gb', '/en', '', 'direct',
+               1, 1, 0)`,
+      [bucket],
+    );
+
+    const overview = await mcp(client, pat, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "analytics_overview", arguments: { days: 7 } },
+    }).expect(200);
+    expect(overview.body.result.isError).toBeUndefined();
+    expect(JSON.parse(overview.body.result.content[0].text)).toMatchObject({
+      days: 7,
+      locale: null,
+      filters: [],
+      totals: { pageviews: 3, visits: 2, events: 0, bounceRate: 0.5 },
+      previous: { pageviews: 0, visits: 0 },
+      change: { pageviews: null },
+      realtime: { activeVisitors: expect.any(Number) },
+    });
+
+    const referrers = await mcp(client, pat, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "analytics_breakdown",
+        arguments: {
+          dim: "referrer",
+          days: 7,
+          filters: [{ dim: "channel", value: "search" }],
+        },
+      },
+    }).expect(200);
+    expect(JSON.parse(referrers.body.result.content[0].text)).toMatchObject({
+      dim: "referrer",
+      filters: ["channel:search"],
+      items: [{ value: "google", visits: 1, share: 1, bounceRate: 0 }],
+    });
+  });
+
   it("challenges an unauthenticated MCP request with the resource metadata", async () => {
     const response = await mcp(from(), null, toolsList).expect(401);
     expect(response.headers["www-authenticate"]).toContain(

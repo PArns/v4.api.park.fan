@@ -13,6 +13,16 @@ import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
 import { auditLogTool } from "./audit-log.tool";
 import { downtimeTool } from "./downtime.tool";
+import { analyticsOverviewTool } from "./analytics-overview.tool";
+import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
+import { analyticsEventsTool } from "./analytics-events.tool";
+import { analyticsEventTool } from "./analytics-event.tool";
+import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
+import { searchReportTool } from "./search-report.tool";
+import { seoLandingPagesTool } from "./seo-landing-pages.tool";
+import { seoTrendsTool } from "./seo-trends.tool";
+import { seoNotFoundTool } from "./seo-not-found.tool";
+import { seoUncoveredTool } from "./seo-uncovered.tool";
 
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
@@ -34,4 +44,14 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   retirementCandidatesTool,
   auditLogTool,
   downtimeTool,
+  analyticsOverviewTool,
+  analyticsBreakdownTool,
+  analyticsEventsTool,
+  analyticsEventTool,
+  analyticsCrosstabTool,
+  searchReportTool,
+  seoLandingPagesTool,
+  seoTrendsTool,
+  seoNotFoundTool,
+  seoUncoveredTool,
 ];

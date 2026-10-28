@@ -1,9 +1,9 @@
 # Admin MCP server
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
-client) read the admin's data directly: parks and rides with their live state, popularity, system
-and ML health, job queues, data-quality findings, duplicate and retirement candidates, outage
-statistics and the audit log. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
+client) read the admin's data directly: parks and rides with their live state, popularity, the
+site statistic and its SEO reports, system and ML health, job queues, data-quality findings,
+duplicate and retirement candidates, outage statistics and the audit log. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
 `/.well-known/oauth-*`. The admin login itself: [authentication](authentication.md).
@@ -117,12 +117,27 @@ against these rules.
 | `retirement_candidates` | rides whose source went quiet | `AttractionReviewService` |
 | `audit_log` | admin actions, filterable | `AdminAuditService.list` |
 | `downtime` | outage events per park and ride over a window | `DowntimeMeasurementService.measure` |
+| `analytics_overview` | page views, visits, visitors, events, views per visit, bounce; the window before and the change; realtime; optional series | `SiteAnalyticsService.overview` |
+| `analytics_breakdown` | views and visits per value of one dimension, share, bounce on visit dimensions | `SiteAnalyticsService.breakdown` |
+| `analytics_events` | every event name with count, previous, change, blocked | `SiteAnalyticsService.events` |
+| `analytics_event` | one event: props with top values, combinations, page types, viewports, entities | `SiteAnalyticsService.event` |
+| `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix | `SiteAnalyticsService.crosstab` |
+| `search_report` | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where | `SiteAnalyticsService.search` |
+| `seo_landing_pages` | the pages visits of one channel (search by default) entered on, with change, bounce, sources | `SiteAnalyticsSeoService.landingPages` |
+| `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
+| `seo_not_found` | paths that showed the not-found page, with their referrers | `SiteAnalyticsSeoService.notFound` |
+| `seo_uncovered` | parks or rides no search visit entered on | `SiteAnalyticsSeoService.uncovered` |
 
-Reads made through the tools do not count as popularity hits (`countHit = false`). The site
-analytics service (PAR-1151) is meant to add `analytics_overview`, `analytics_breakdown`,
-`analytics_events`, `analytics_event`, `analytics_crosstab`, `search_report` and the `seo_*` reads
-here, one file each. A tool that writes would set `minRole` and needs a scope above `admin:read`;
-v1 issues none.
+The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365), `locale`, and
+`filters` as `[{ dim, value }]`, which become the reports' `filter=<dim>:<value>`. Their
+descriptions carry what a model must know to read the numbers: visitors are daily uniques summed
+over the window and `null` under any filter but the language, bounce is `1 − engaged / visits`,
+reports lag the site by up to six minutes, and Do Not Track, GPC and opted-out readers are missing
+([site statistic](../frontend/site-analytics.md)). Rates are rounded to three places, lists cut to
+the `limit` each takes, series only on request.
+
+Reads made through the tools do not count as popularity hits (`countHit = false`). A tool that
+writes would set `minRole` and needs a scope above `admin:read`; v1 issues none.
 
 ## Endpoints
 
