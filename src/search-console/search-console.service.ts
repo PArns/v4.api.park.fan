@@ -23,7 +23,8 @@ import {
   DEFAULT_REPORT_LIMIT,
   type GscInterval,
 } from "./search-console.constants";
-import { currentBatches } from "./search-console-batches";
+import { currentBatches, lastDataDay } from "./search-console-batches";
+import { anchorRollingWindow } from "./search-console-window";
 import { pagePath } from "./search-console-url.util";
 import type {
   SearchConsolePagesDto,
@@ -401,21 +402,26 @@ export class SearchConsoleService {
   }
 
   /**
-   * The window, and which days of it Search Console has: its newest rows lag
-   * by days, so the window before is cut to the same number of days from its
-   * start, and a change compares like with like.
+   * The window, and which days of it Search Console has: a rolling window
+   * ends at the last day with data, so `days` counts as Search Console counts
+   * it; an explicit one is read up to that day, and the window before is cut
+   * to the same number of days from its start, so a change compares like
+   * with like.
    */
   private async resolve(
     query: SearchConsoleQuery,
     now: Date,
   ): Promise<Resolved> {
+    const request = {
+      days: query.days ?? null,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      locale: (query.locale ?? null) as SiteAnalyticsWindow["locale"],
+    };
+    // Validates the query as asked before it is moved.
+    siteAnalyticsWindow(request, now);
     const window = siteAnalyticsWindow(
-      {
-        days: query.days ?? null,
-        from: query.from ?? null,
-        to: query.to ?? null,
-        locale: (query.locale ?? null) as SiteAnalyticsWindow["locale"],
-      },
+      anchorRollingWindow(request, await lastDataDay(this.db, BATCH_FORMAT)),
       now,
     );
     const lookFrom = window.previous?.from ?? window.from;

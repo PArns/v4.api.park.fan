@@ -35,17 +35,21 @@ export function withGscData<M extends object, D>(
 /** Appended to the descriptions of the tools that report Search Console's numbers. */
 export const GSC_CAVEATS =
   "Numbers: Google Search Console, imported nightly (gsc_status says how fresh). Google's days are " +
-  "Pacific time and its newest two or three days are not final, so the last days of a window " +
-  "have no rows and the window is read up to the last day with data. ctr is a fraction " +
+  "Pacific time and its newest two or three days are not final, so a rolling window " +
+  "(days) ends at the last day with data and a fixed window (from, to) is read up to it. ctr is a fraction " +
   "(0.05 = 5 %), position the impression-weighted average rank with 1 at the top, so a lower " +
   "number is better, and null where there were no impressions. `previous` is the same number of " +
-  "days at the start of the window before (null for more than " +
+  "days right before the window (cut to the days the window has data for when it is fixed; null for more than " +
   `${MAX_COMPARABLE_DAYS} days or without data there); change.clicks is clicks minus the previous ` +
   "window's, change.position the position minus the previous one (negative = moved up). " +
   "Paths are lower case with the language first (/de/parks/…) as in the site's own traffic tools.";
 
 export const gscWindowInput = {
-  days: siteWindowInput.days,
+  days: siteWindowInput.days.describe(
+    "The last N days with data, as Search Console counts them: the window ends at the last day " +
+      "with data (gsc_status coverage.to), not today. from and to in the result show it. " +
+      "Not with from and to; default 30.",
+  ),
   from: z
     .string()
     .regex(DAY_PATTERN)

@@ -37,8 +37,9 @@ export class SearchConsoleWindowDto {
     maximum: MAX_ADMIN_WINDOW_DAYS,
     default: 30,
     description:
-      "The last UTC days, today included. Not with `from` and `to`; without either, 30. " +
-      "Search Console's last two or three days are not final yet and have no rows.",
+      "The last N days with data, as Search Console counts them: the window ends at the last day " +
+      "Search Console has rows for (two or three days before today) and the response echoes it as " +
+      "`from`/`to`. Not with `from` and `to`; without either, 30.",
   })
   @IsOptional()
   @Type(() => Number)
