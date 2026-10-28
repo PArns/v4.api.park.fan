@@ -49,6 +49,7 @@ describe("SiteAnalyticsSeoService", () => {
             visits: "10",
             previous: "4",
             engaged: "6",
+            visit_seconds: "1234",
           },
         ],
       ],
@@ -73,6 +74,7 @@ describe("SiteAnalyticsSeoService", () => {
         previous: 4,
         change: 6,
         bounceRate: 0.4,
+        avgVisitSeconds: 123,
         sources: [
           { value: "google", visits: 8 },
           { value: "bing", visits: 2 },
@@ -93,6 +95,7 @@ describe("SiteAnalyticsSeoService", () => {
             visits: "30",
             previous: "10",
             engaged: "0",
+            visit_seconds: "300",
           },
           {
             path: "/b",
@@ -128,6 +131,7 @@ describe("SiteAnalyticsSeoService", () => {
     const result = await service.trends({ days: 28 }, NOW);
     expect(result.channel).toBe("search");
     expect(result.rising.map((r) => [r.path, r.change])).toEqual([["/a", 20]]);
+    expect(result.rising[0].avgVisitSeconds).toBe(10);
     expect(result.falling.map((r) => [r.path, r.change])).toEqual([
       ["/b", -18],
     ]);

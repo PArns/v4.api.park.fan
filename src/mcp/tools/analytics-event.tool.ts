@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsService } from "../../site-analytics/site-analytics.service";
 import { EVENT_NAME_PATTERN } from "../../site-analytics/site-analytics.hits";
-import { siteQuery, pageWindowInput, windowOf } from "./site-analytics.inputs";
+import { siteQuery, eventWindowInput, windowOf } from "./site-analytics.inputs";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 export const analyticsEventTool = defineMcpTool({
@@ -12,7 +12,7 @@ export const analyticsEventTool = defineMcpTool({
     "One event in detail: its total, every property it carries with the most frequent values (the " +
     "rest summed in otherCount), the most frequent property combinations, the page types and " +
     "viewports it came from, the parks, rides, shows or restaurants it was about (name and park.fan " +
-    "path; kind null once the entity is gone) and optionally its count per day. Event names come " +
+    "path; kind null once the entity is gone) and optionally its count per period of the interval. Event names come " +
     "from analytics_events. Properties are choices the site defines (a surface, a tab, a position " +
     "bucket), never free text. Entities are resolved from park.fan's own tables, unresolvable ones " +
     "left out. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers " +
@@ -23,7 +23,7 @@ export const analyticsEventTool = defineMcpTool({
       .string()
       .regex(EVENT_NAME_PATTERN)
       .describe('Event name, e.g. "search_result_clicked"'),
-    ...pageWindowInput,
+    ...eventWindowInput,
     limit: z
       .number()
       .int()
@@ -33,7 +33,10 @@ export const analyticsEventTool = defineMcpTool({
       .describe(
         "Entries per list (values per property, combinations, entities)",
       ),
-    series: z.boolean().default(false).describe("Include the count per day"),
+    series: z
+      .boolean()
+      .default(false)
+      .describe("Include the count per period of the interval"),
   },
   async handler({ name, limit, series, ...input }, ctx) {
     const report = await ctx

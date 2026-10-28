@@ -7,7 +7,8 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
  * The site statistic's jobs (docs/frontend/site-analytics.md), all of them
  * insert-only or whole-chunk:
  *
- * - `flush`, every five minutes: the finished Redis windows into
+ * - `flush`, every five minutes: first the visits idle for 30 minutes are
+ *   ended with an exit each, then the finished Redis windows go into
  *   `site_pageviews` and `site_events`, each window on its own, so one that
  *   fails does not hold up the rest;
  * - `snapshot-visitors`, four times in the hour after midnight: yesterday's
@@ -26,7 +27,7 @@ export class SiteAnalyticsProcessor {
     const written = await this.storage.flush();
     if (written.windows > 0) {
       this.logger.debug(
-        `Flushed ${written.windows} window(s): ${written.pageviewRows} page-view and ${written.eventRows} event rows in ${Date.now() - started} ms`,
+        `Flushed ${written.windows} window(s): ${written.pageviewRows} page-view and ${written.eventRows} event rows, ${written.visitsClosed} visit(s) ended, in ${Date.now() - started} ms`,
       );
     }
     if (written.failed > 0) {

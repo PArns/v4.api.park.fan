@@ -372,6 +372,9 @@ describe("Site analytics (e2e)", () => {
       events: null,
       viewsPerVisit: null,
       bounceRate: 0.5,
+      // No engagement was sent: the visits were timed at nothing.
+      avgVisitSeconds: 0,
+      avgTimeOnPageSeconds: null,
     });
     expect(search.body.filters).toEqual(["channel:search"]);
 
@@ -440,6 +443,7 @@ describe("Site analytics (e2e)", () => {
         previous: 1,
         change: 1,
         bounceRate: 0.5,
+        avgVisitSeconds: 0,
         sources: [
           { value: "bing", visits: 1 },
           { value: "google", visits: 1 },
@@ -823,6 +827,311 @@ describe("Site analytics (e2e)", () => {
       { name: "known_event", props_key: "", props: {} },
       { name: "name_1", props_key: "_overflow=1", props: { _overflow: "1" } },
     ]);
+  });
+
+  it("times pages and visits, ends idle visits with an exit, and serves ranges, intervals, the traffic crosstab and the live view", async () => {
+    const collector = app.get(SiteAnalyticsCollectService);
+    const yesterday = addIsoDays(today, -1);
+    const at = new Date(`${yesterday}T10:00:00Z`);
+    const minutes = (n: number) => new Date(at.getTime() + n * 60_000);
+    const engagement = (seconds: number, path = PARK_PATH) => ({
+      t: "engagement",
+      locale: "de",
+      path,
+      pageType: path === PARK_PATH ? "park" : "news_index",
+      viewport: "mobile",
+      seconds,
+    });
+    const reader = {
+      ip: "203.0.113.70",
+      userAgent: UA,
+      acceptLanguage: "nl-BE,nl;q=0.9,en;q=0.5",
+    };
+    // A search visit of two pages, 30 and 20 seconds in the foreground.
+    await collector.collect(
+      { ...reader, hits: [pageview({ referrer: "www.google.de" })] },
+      at,
+    );
+    await collector.collect({ ...reader, hits: [engagement(30)] }, minutes(1));
+    await collector.collect(
+      {
+        ...reader,
+        hits: [pageview({ path: "/de/news", pageType: "news_index" })],
+      },
+      minutes(2),
+    );
+    await collector.collect(
+      { ...reader, hits: [engagement(20, "/de/news")] },
+      minutes(3),
+    );
+    // A direct bounce, 10 seconds, from a browser that sent no language.
+    await collector.collect(
+      { ip: "203.0.113.71", userAgent: UA, hits: [pageview()] },
+      at,
+    );
+    await collector.collect(
+      { ip: "203.0.113.71", userAgent: UA, hits: [engagement(10)] },
+      minutes(1),
+    );
+    expect(await redis.zcard(SITE_ANALYTICS_KEYS.openVisits)).toBe(2);
+
+    // Both visits are idle by now: the flush ends them first, then writes.
+    await expect(flush()).resolves.toMatchObject({
+      visitsClosed: 2,
+      failed: 0,
+    });
+    expect(await redis.zcard(SITE_ANALYTICS_KEYS.openVisits)).toBe(0);
+    expect(await redis.keys("site-analytics:visit:*")).toEqual([]);
+    // A page view's row has its seconds, a visit's row the visit's, an exit
+    // row the visit's span from first to last hit. A visit that ended where
+    // it began counts its exit on its own row.
+    expect(
+      await dataSource.query(
+        `SELECT path, entry, channel, browser_language,
+                to_char(MIN(bucket), 'HH24') AS hour,
+                SUM(views)::int AS views, SUM(seconds)::int AS seconds,
+                SUM(visits)::int AS visits,
+                SUM(visit_seconds)::int AS visit_seconds,
+                SUM(exits)::int AS exits,
+                SUM(visit_span_seconds)::int AS span
+           FROM site_pageviews
+          GROUP BY 1, 2, 3, 4 ORDER BY 1, 3`,
+      ),
+    ).toEqual([
+      {
+        path: "/de/news",
+        entry: "",
+        channel: "",
+        browser_language: "nl",
+        hour: "10",
+        views: 1,
+        seconds: 20,
+        visits: 0,
+        visit_seconds: 0,
+        exits: 0,
+        span: 0,
+      },
+      {
+        path: "/de/news",
+        entry: PARK_PATH,
+        channel: "search",
+        browser_language: "nl",
+        hour: "10",
+        views: 0,
+        seconds: 0,
+        visits: 0,
+        visit_seconds: 0,
+        exits: 1,
+        span: 180,
+      },
+      {
+        path: PARK_PATH,
+        entry: "",
+        channel: "",
+        browser_language: "nl",
+        hour: "10",
+        views: 1,
+        seconds: 30,
+        visits: 0,
+        visit_seconds: 0,
+        exits: 0,
+        span: 0,
+      },
+      {
+        path: PARK_PATH,
+        entry: "",
+        channel: "",
+        browser_language: "zz",
+        hour: "10",
+        views: 1,
+        seconds: 10,
+        visits: 0,
+        visit_seconds: 0,
+        exits: 0,
+        span: 0,
+      },
+      {
+        path: PARK_PATH,
+        entry: PARK_PATH,
+        channel: "direct",
+        browser_language: "zz",
+        hour: "10",
+        views: 0,
+        seconds: 0,
+        visits: 1,
+        visit_seconds: 10,
+        exits: 1,
+        span: 60,
+      },
+      {
+        path: PARK_PATH,
+        entry: PARK_PATH,
+        channel: "search",
+        browser_language: "nl",
+        hour: "10",
+        views: 0,
+        seconds: 0,
+        visits: 1,
+        visit_seconds: 50,
+        exits: 0,
+        span: 0,
+      },
+    ]);
+
+    const window = `from=${yesterday}&to=${yesterday}`;
+    const overview = await admin(
+      `/v1/admin/analytics/overview?${window}`,
+    ).expect(200);
+    expect(overview.body).toMatchObject({
+      from: yesterday,
+      to: yesterday,
+      days: 1,
+      interval: "hour",
+      totals: {
+        pageviews: 3,
+        visits: 2,
+        avgVisitSeconds: 30,
+        avgTimeOnPageSeconds: 20,
+      },
+    });
+    expect(overview.body.series).toHaveLength(24);
+    expect(overview.body.series[10]).toMatchObject({
+      day: `${yesterday}T10:00:00Z`,
+      pageviews: 3,
+      visits: 2,
+      visitors: null,
+      avgVisitSeconds: 30,
+    });
+    expect(overview.body.series[10]).not.toHaveProperty("partial");
+    await admin(`/v1/admin/analytics/overview?${window}&days=7`).expect(400);
+    await admin(`/v1/admin/analytics/overview?days=7&interval=hour`).expect(
+      400,
+    );
+    const weeks = await admin(
+      "/v1/admin/analytics/overview?days=28&interval=week",
+    ).expect(200);
+    expect(weeks.body.interval).toBe("week");
+    expect(weeks.body.series[weeks.body.series.length - 1].partial).toBe(true);
+
+    const pages = await admin(
+      `/v1/admin/analytics/breakdown?dim=path&${window}`,
+    ).expect(200);
+    expect(pages.body.items).toEqual([
+      {
+        value: PARK_PATH,
+        views: 2,
+        visits: 2,
+        share: 0.6667,
+        avgTimeOnPageSeconds: 20,
+        exits: 1,
+        exitRate: 0.5,
+      },
+      {
+        value: "/de/news",
+        views: 1,
+        visits: 0,
+        share: 0.3333,
+        avgTimeOnPageSeconds: 20,
+        exits: 1,
+        exitRate: 1,
+      },
+    ]);
+    const exits = await admin(
+      `/v1/admin/analytics/breakdown?dim=exit&${window}&filter=channel:search`,
+    ).expect(200);
+    expect(exits.body).toMatchObject({
+      measure: "exits",
+      total: { views: 1, visits: 1 },
+      items: [{ value: "/de/news", views: 1, visits: 1, share: 1 }],
+    });
+    const languages = await admin(
+      `/v1/admin/analytics/breakdown?dim=browser_language&${window}`,
+    ).expect(200);
+    expect(
+      languages.body.items.map((i: { value: string; views: number }) => [
+        i.value,
+        i.views,
+      ]),
+    ).toEqual([
+      ["nl", 2],
+      ["zz", 1],
+    ]);
+    const channels = await admin(
+      `/v1/admin/analytics/breakdown?dim=channel&${window}`,
+    ).expect(200);
+    expect(channels.body.items).toEqual([
+      expect.objectContaining({ value: "direct", avgVisitSeconds: 10 }),
+      expect.objectContaining({ value: "search", avgVisitSeconds: 50 }),
+    ]);
+
+    const ended = await admin(
+      `/v1/admin/analytics/crosstab?${window}&metric=visits&row=channel&col=exit`,
+    ).expect(200);
+    expect(ended.body).toMatchObject({
+      metric: "visits",
+      row: "channel",
+      col: "exit",
+      total: 2,
+    });
+    expect(ended.body.cells).toEqual(
+      expect.arrayContaining([
+        { row: "search", col: "/de/news", count: 1 },
+        { row: "direct", col: PARK_PATH, count: 1 },
+      ]),
+    );
+    const devices = await admin(
+      `/v1/admin/analytics/crosstab?${window}&row=browser_language&col=viewport`,
+    ).expect(200);
+    expect(devices.body.cells).toEqual(
+      expect.arrayContaining([
+        { row: "nl", col: "mobile", count: 2 },
+        { row: "zz", col: "mobile", count: 1 },
+      ]),
+    );
+    await admin(
+      `/v1/admin/analytics/crosstab?${window}&row=os&col=viewport&filter=channel:search`,
+    ).expect(400);
+
+    // The live view reads what came in just now, from Redis only.
+    await request(app.getHttpServer())
+      .post("/v1/analytics/collect")
+      .set("Content-Type", "text/plain;charset=UTF-8")
+      .set("User-Agent", UA)
+      .set("CF-Connecting-IP", "203.0.113.72")
+      .set("Accept-Language", "fr-FR")
+      .send(
+        JSON.stringify({
+          v: 1,
+          hits: [
+            pageview({ referrer: "www.bing.com" }),
+            event("search_opened", { surface: "hero" }),
+            engagement(5),
+          ],
+        }),
+      )
+      .expect(204);
+    const live = await admin("/v1/admin/analytics/live").expect(200);
+    expect(live.headers["cache-control"]).toContain("no-store");
+    expect(live.body).toMatchObject({
+      activeVisitors: 1,
+      pages: [{ path: PARK_PATH, pageType: "park", views: 1 }],
+      countries: [{ country: expect.any(String), views: 1 }],
+      channels: [{ channel: "search", visits: 1 }],
+      referrers: [{ referrer: "bing", visits: 1 }],
+      devices: [{ viewport: "mobile", views: 1 }],
+      events: [{ name: "search_opened", count: 1 }],
+    });
+    expect(live.body.perMinute).toHaveLength(31);
+    // The beacon's minute is the current one, or the one before if the
+    // minute turned in between.
+    const recent = live.body.perMinute.slice(-2) as Array<
+      Record<string, number>
+    >;
+    for (const field of ["pageviews", "events"]) {
+      expect(recent.reduce((sum, m) => sum + m[field], 0)).toBe(1);
+    }
+    const nl = await admin("/v1/admin/analytics/live?locale=nl").expect(200);
+    expect(nl.body).toMatchObject({ activeVisitors: 0, pages: [] });
   });
 
   it("shows the flush backlog and the day's drops in the health report", async () => {

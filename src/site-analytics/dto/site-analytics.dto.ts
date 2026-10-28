@@ -14,20 +14,39 @@ import {
   BREAKDOWN_DIMS,
   CHANNELS,
   FILTER_DIMS,
+  INTERVALS,
   MAX_ADMIN_WINDOW_DAYS,
   MAX_COMPARABLE_DAYS,
+  MAX_ENGAGEMENT_SECONDS,
+  MAX_HOURLY_DAYS,
+  MAX_RANGE_DAYS,
+  PAGE_DIMS,
   SITE_LOCALES,
   SITE_VIEWPORTS,
+  VISIT_DIMS,
   type BreakdownDim,
   type Channel,
+  type SiteInterval,
   type SiteLocale,
 } from "../site-analytics.constants";
-import { CROSSTAB_AXIS_PATTERN, FILTER_PATTERN } from "../site-analytics.query";
+import {
+  CROSSTAB_AXIS_PATTERN,
+  DAY_PATTERN,
+  FILTER_PATTERN,
+} from "../site-analytics.query";
+
+/** The sides a traffic crosstab takes, over both metrics. */
+export const TRAFFIC_CROSSTAB_SIDES = [
+  ...PAGE_DIMS,
+  ...VISIT_DIMS,
+  "exit",
+  "day",
+] as const;
 
 /** One hit of `POST /v1/analytics/collect`, for Swagger only. */
 export class CollectHitDto {
-  @ApiProperty({ enum: ["pageview", "event"] })
-  t: "pageview" | "event";
+  @ApiProperty({ enum: ["pageview", "event", "engagement"] })
+  t: "pageview" | "event" | "engagement";
 
   @ApiProperty({ enum: SITE_LOCALES })
   locale: SiteLocale;
@@ -81,6 +100,14 @@ export class CollectHitDto {
       "Events only: the lowercase UUID of the park, ride, show or restaurant the event is about.",
   })
   entity?: string;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: MAX_ENGAGEMENT_SECONDS,
+    description:
+      "Engagement only: whole seconds the page was in the foreground since the page view's last report; summed.",
+  })
+  seconds?: number;
 }
 
 export class CollectBodyDto {
@@ -91,20 +118,50 @@ export class CollectBodyDto {
   hits: CollectHitDto[];
 }
 
-/** `days`, `locale` and `filter`, shared by every admin report. */
+/**
+ * The window (`days`, or `from` and `to`), `interval`, `locale` and `filter`,
+ * shared by every admin report.
+ */
 export class SiteAnalyticsQueryDto {
   @ApiPropertyOptional({
     minimum: 1,
     maximum: MAX_ADMIN_WINDOW_DAYS,
     default: 30,
-    description: "UTC days, today included. 1 gives hourly series.",
+    description:
+      "The last UTC days, today included. Not with `from` and `to`; without either, 30.",
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(MAX_ADMIN_WINDOW_DAYS)
-  days: number = 30;
+  days?: number;
+
+  @ApiPropertyOptional({
+    example: "2026-09-01",
+    description: `First UTC day, with \`to\`: up to ${MAX_RANGE_DAYS} days, both included.`,
+  })
+  @IsOptional()
+  @Matches(DAY_PATTERN)
+  from?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-09-30",
+    description: "Last UTC day, with `from`: today at the latest.",
+  })
+  @IsOptional()
+  @Matches(DAY_PATTERN)
+  to?: string;
+
+  @ApiPropertyOptional({
+    enum: INTERVALS,
+    description:
+      `The series step. \`hour\` takes at most ${MAX_HOURLY_DAYS} days. Without it: hour for one ` +
+      "day, day up to 92 days, week (ISO, from Monday, UTC) up to 183, month beyond.",
+  })
+  @IsOptional()
+  @IsIn(INTERVALS)
+  interval?: SiteInterval;
 
   @ApiPropertyOptional({
     enum: SITE_LOCALES,
@@ -121,7 +178,8 @@ export class SiteAnalyticsQueryDto {
       `\`<dim>:<value>\`, repeatable, all must match. dim: ${FILTER_DIMS.join(", ")}. ` +
       "entry, referrer, channel and campaign select visits by how they began: visit figures " +
       "follow them, page views and events are null, and the reports that count page views or " +
-      "events (events, crosstab, search, not-found) answer 400.",
+      "events (events, event, crosstab, search, not-found, traffic crosstab with " +
+      "metric=pageviews) answer 400. Events carry no browser_language either.",
   })
   @IsOptional()
   @Transform(({ value }) =>
@@ -151,7 +209,8 @@ export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {
   @ApiProperty({
     example: "prop:surface",
     description:
-      "`page_type`, `viewport`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`.",
+      "`page_type`, `viewport`, `locale`, `day`, `path`, `country`, `browser`, `os` or " +
+      "`prop:<key>`. `day` steps by the window's interval.",
   })
   @Matches(CROSSTAB_AXIS_PATTERN)
   row: string;
@@ -159,6 +218,39 @@ export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {
   @ApiProperty({ example: "page_type" })
   @Matches(CROSSTAB_AXIS_PATTERN)
   col: string;
+}
+
+export class SiteTrafficCrosstabQueryDto extends SiteAnalyticsQueryDto {
+  @ApiProperty({
+    enum: TRAFFIC_CROSSTAB_SIDES,
+    example: "os",
+    description:
+      "metric=pageviews: a page dimension or `day`. metric=visits also entry, referrer, " +
+      "channel, campaign and exit; the page dimensions are then the first page's, or the " +
+      "last page's with `exit` on a side. `day` steps by the window's interval.",
+  })
+  @IsIn(TRAFFIC_CROSSTAB_SIDES)
+  row: string;
+
+  @ApiProperty({ enum: TRAFFIC_CROSSTAB_SIDES, example: "viewport" })
+  @IsIn(TRAFFIC_CROSSTAB_SIDES)
+  col: string;
+
+  @ApiPropertyOptional({ enum: ["pageviews", "visits"], default: "pageviews" })
+  @IsOptional()
+  @IsIn(["pageviews", "visits"])
+  metric: "pageviews" | "visits" = "pageviews";
+}
+
+/** The live view takes one language, or none for all six. */
+export class SiteLiveQueryDto {
+  @ApiPropertyOptional({
+    enum: SITE_LOCALES,
+    description: "One language; without it, all six.",
+  })
+  @IsOptional()
+  @IsIn(SITE_LOCALES)
+  locale?: SiteLocale;
 }
 
 export class SiteChannelQueryDto extends SiteAnalyticsQueryDto {
@@ -174,13 +266,14 @@ export class SiteTrendsQueryDto extends SiteChannelQueryDto {
     minimum: 1,
     maximum: MAX_COMPARABLE_DAYS,
     default: 30,
+    description: `As everywhere, but at most ${MAX_COMPARABLE_DAYS} days, also from \`from\` to \`to\`.`,
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(MAX_COMPARABLE_DAYS)
-  days: number = 30;
+  days?: number;
 }
 
 export class SiteLandingPagesQueryDto extends SiteChannelQueryDto {
@@ -222,11 +315,14 @@ class WindowDto {
   @ApiProperty({ example: "2026-09-29", description: "First UTC day." })
   from: string;
 
-  @ApiProperty({ example: "2026-10-28", description: "Last UTC day, today." })
+  @ApiProperty({ example: "2026-10-28", description: "Last UTC day." })
   to: string;
 
-  @ApiProperty({ example: 30 })
+  @ApiProperty({ example: 30, description: "UTC days from `from` to `to`." })
   days: number;
+
+  @ApiProperty({ enum: INTERVALS, description: "The series step." })
+  interval: SiteInterval;
 
   @ApiProperty({ enum: SITE_LOCALES, nullable: true, type: String })
   locale: SiteLocale | null;
@@ -265,19 +361,51 @@ export class SiteTotalsDto {
   viewsPerVisit: number | null;
   @ApiProperty({ description: "1 − visits with a second page view / visits." })
   bounceRate: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      "Measured foreground seconds per visit, whole; null without a visit.",
+  })
+  avgVisitSeconds: number | null;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      "Measured foreground seconds per page view, whole; null without a page view and under a filter on a visit dimension.",
+  })
+  avgTimeOnPageSeconds: number | null;
 }
 
-export class SiteSeriesPointDto {
+/** A series point's start, and whether the window holds all of it. */
+class SitePeriodDto {
   @ApiProperty({
     example: "2026-10-28",
     description:
-      "The UTC day, or the hour (`2026-10-28T07:00:00Z`) when days=1.",
+      "The period's start: the UTC day, the hour (`2026-10-28T07:00:00Z`), the Monday of the ISO week or the first of the month.",
   })
   day: string;
-  @ApiProperty({ nullable: true, type: Number }) pageviews: number | null;
-  @ApiProperty() visits: number;
-  @ApiProperty({ nullable: true, type: Number }) visitors: number | null;
-  @ApiProperty({ nullable: true, type: Number }) events: number | null;
+  @ApiPropertyOptional({
+    enum: [true],
+    description:
+      "Present on a period that reaches past the window or is still under way.",
+  })
+  partial?: true;
+}
+
+export class SiteSeriesPointDto extends SiteTotalsDto {
+  @ApiProperty({
+    example: "2026-10-28",
+    description:
+      "The period's start: the UTC day, the hour (`2026-10-28T07:00:00Z`), the Monday of the ISO week or the first of the month.",
+  })
+  day: string;
+  @ApiPropertyOptional({
+    enum: [true],
+    description:
+      "Present on a period that reaches past the window or is still under way.",
+  })
+  partial?: true;
 }
 
 export class SiteMinuteDto {
@@ -311,7 +439,7 @@ export class SiteOverviewDto extends WindowDto {
   @ApiProperty({
     type: [SiteSeriesPointDto],
     description:
-      "Every day (every hour so far today when days=1), zeros included.",
+      "Every period of the interval, zeros included; hours up to the current one. An earlier day's hour has null visitors.",
   })
   series: SiteSeriesPointDto[];
 
@@ -326,21 +454,39 @@ export class SiteViewsVisitsDto {
 export class SiteBreakdownItemDto extends SiteViewsVisitsDto {
   @ApiProperty({ example: "google" }) value: string;
   @ApiProperty({ description: "Of `total.views`, 0..1." }) share: number;
-  @ApiPropertyOptional({
-    description: "entry, referrer, channel and campaign only.",
-  })
+  @ApiPropertyOptional({ description: "measure=visits only." })
   bounceRate?: number;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: Number,
+    description: "measure=visits only: foreground seconds per visit.",
+  })
+  avgVisitSeconds?: number | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: Number,
+    description: "measure=views only: foreground seconds per page view.",
+  })
+  avgTimeOnPageSeconds?: number | null;
+  @ApiPropertyOptional({
+    description: "dim=path, measure=views: visits that ended on the page.",
+  })
+  exits?: number;
+  @ApiPropertyOptional({
+    description: "dim=path, measure=views: exits / views, at most 1.",
+  })
+  exitRate?: number;
 }
 
 export class SiteBreakdownDto extends WindowDto {
   @ApiProperty({ enum: BREAKDOWN_DIMS }) dim: BreakdownDim;
 
   @ApiProperty({
-    enum: ["views", "visits"],
+    enum: ["views", "visits", "exits"],
     description:
-      "What `views` count: page views, or visits started (for a visit dimension, and under a filter on one).",
+      "What `views` count: page views, visits started (for a visit dimension, and under a filter on one), or for dim=exit the visits that ended on the page.",
   })
-  measure: "views" | "visits";
+  measure: "views" | "visits" | "exits";
 
   @ApiProperty({
     type: SiteViewsVisitsDto,
@@ -355,8 +501,7 @@ export class SiteBreakdownDto extends WindowDto {
   items: SiteBreakdownItemDto[];
 }
 
-export class SiteDayCountDto {
-  @ApiProperty({ example: "2026-10-28" }) day: string;
+export class SiteDayCountDto extends SitePeriodDto {
   @ApiProperty() count: number;
 }
 
@@ -473,6 +618,115 @@ export class SiteCrosstabDto extends WindowDto {
   @ApiProperty() total: number;
 }
 
+export class SiteTrafficCrosstabDto extends WindowDto {
+  @ApiProperty({ enum: ["pageviews", "visits"] })
+  metric: "pageviews" | "visits";
+  @ApiProperty({ example: "os" }) row: string;
+  @ApiProperty({ example: "viewport" }) col: string;
+  @ApiProperty({
+    type: [String],
+    description:
+      "At most 30 by count, then `__rest__` for all the others; periods in order. `(none)` is an empty value.",
+  })
+  rows: string[];
+  @ApiProperty({ type: [String], description: "As `rows`." }) cols: string[];
+  @ApiProperty({
+    type: [SiteCrosstabCellDto],
+    description:
+      "Non-zero cells: page views, visits started, or with `exit` visits ended.",
+  })
+  cells: SiteCrosstabCellDto[];
+  @ApiProperty() total: number;
+}
+
+export class SiteLiveMinuteDto {
+  @ApiProperty({ example: "2026-10-28T12:05:00Z" }) minute: string;
+  @ApiProperty() pageviews: number;
+  @ApiProperty() events: number;
+  @ApiProperty({ description: "Distinct visitors with a hit in the minute." })
+  visitors: number;
+}
+
+export class SiteLivePageDto {
+  @ApiProperty({ example: "/de/parks/europe/germany/bruehl/phantasialand" })
+  path: string;
+  @ApiProperty({ example: "park" }) pageType: string;
+  @ApiProperty() views: number;
+}
+
+export class SiteLiveCountryDto {
+  @ApiProperty({ example: "DE", description: "ISO code, `XX` unknown." })
+  country: string;
+  @ApiProperty() views: number;
+}
+
+export class SiteLiveChannelDto {
+  @ApiProperty({ enum: CHANNELS }) channel: string;
+  @ApiProperty({ description: "Visits started." }) visits: number;
+}
+
+export class SiteLiveReferrerDto {
+  @ApiProperty({ example: "google" }) referrer: string;
+  @ApiProperty({ description: "Visits started." }) visits: number;
+}
+
+export class SiteLiveDeviceDto {
+  @ApiProperty({ enum: SITE_VIEWPORTS }) viewport: string;
+  @ApiProperty() views: number;
+}
+
+export class SiteLiveEventDto {
+  @ApiProperty({ example: "search_opened" }) name: string;
+  @ApiProperty() count: number;
+}
+
+export class SiteLiveDto {
+  @ApiProperty({
+    example: "2026-10-28T12:34:56Z",
+    description: "When the counts were read.",
+  })
+  at: string;
+  @ApiProperty({
+    description: "Distinct visitors with a hit in the last 5 minutes.",
+  })
+  activeVisitors: number;
+  @ApiProperty({
+    type: [SiteLiveMinuteDto],
+    description: "The last 30 whole minutes and the current one, oldest first.",
+  })
+  perMinute: SiteLiveMinuteDto[];
+  @ApiProperty({
+    type: [SiteLivePageDto],
+    description: "Page views of the last 5 minutes, top 10.",
+  })
+  pages: SiteLivePageDto[];
+  @ApiProperty({
+    type: [SiteLiveCountryDto],
+    description: "Page views of the last 5 minutes, every country.",
+  })
+  countries: SiteLiveCountryDto[];
+  @ApiProperty({
+    type: [SiteLiveChannelDto],
+    description: "Visits started in the last 30 minutes.",
+  })
+  channels: SiteLiveChannelDto[];
+  @ApiProperty({
+    type: [SiteLiveReferrerDto],
+    description: "Visits started in the last 30 minutes, top 10.",
+  })
+  referrers: SiteLiveReferrerDto[];
+  @ApiProperty({
+    type: [SiteLiveDeviceDto],
+    description: "Page views of the last 5 minutes.",
+  })
+  devices: SiteLiveDeviceDto[];
+  @ApiProperty({
+    type: [SiteLiveEventDto],
+    description: "Events of the last 30 minutes, top 15.",
+  })
+  events: SiteLiveEventDto[];
+}
+
 export class SiteSearchSurfaceDto {
   @ApiProperty({ example: "hero" }) surface: string;
   @ApiProperty() opened: number;
@@ -519,8 +773,7 @@ export class SiteSearchBrowseItemDto {
   @ApiProperty() clicks: number;
 }
 
-export class SiteSearchDayDto {
-  @ApiProperty() day: string;
+export class SiteSearchDayDto extends SitePeriodDto {
   @ApiProperty() surface: string;
   @ApiProperty() opened: number;
 }
@@ -546,7 +799,7 @@ export class SiteSearchDto extends WindowDto {
   browseItems: SiteSearchBrowseItemDto[];
   @ApiProperty({
     type: [SiteSearchDayDto],
-    description: "Every day × every surface.",
+    description: "Every period × every surface.",
   })
   series: SiteSearchDayDto[];
 }
@@ -583,6 +836,12 @@ export class SiteLandingPageDto {
   })
   change: number | null;
   @ApiProperty() bounceRate: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: "Foreground seconds per visit, whole.",
+  })
+  avgVisitSeconds: number | null;
   @ApiProperty({ type: [SiteSourceDto] }) sources: SiteSourceDto[];
 }
 
@@ -597,6 +856,12 @@ export class SiteTrendDto {
   @ApiProperty() visits: number;
   @ApiProperty() previous: number;
   @ApiProperty() change: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: "In the window: foreground seconds per visit, whole.",
+  })
+  avgVisitSeconds: number | null;
 }
 
 export class SiteTrendsDto extends WindowDto {

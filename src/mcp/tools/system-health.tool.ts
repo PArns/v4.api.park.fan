@@ -10,7 +10,8 @@ export const systemHealthTool = defineMcpTool({
     "Postgres (size, connections, slow queries), Redis, data freshness (minutes since the " +
     "newest wait-time row, rows in the last hour, newest weather day) and `siteAnalytics`: the site " +
     "statistic's flush backlog (windows waiting in Redis, the oldest one's age, windows set aside " +
-    "after failed writes, the last write) and today's and yesterday's dropped or overflowed hits by " +
+    "after failed writes, the last write, the visits not yet closed) and today's and yesterday's " +
+    "dropped or overflowed hits by " +
     "reason; `healthy` false means reports are falling behind. `ml`: CatBoost (ml-service) " +
     "and TFT (nf-service) training status and model quality, and the intraday PCN comparison " +
     "boards. A component that failed to answer shows an `error` field instead.",

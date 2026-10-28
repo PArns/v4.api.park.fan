@@ -11,14 +11,16 @@ import {
   MAX_COMPARABLE_DAYS,
   MIN_TREND_VISITS,
   NOT_FOUND_PAGE_TYPE,
+  PAGE_DIMS,
   TREND_ITEMS,
   type Channel,
 } from "./site-analytics.constants";
 import {
   SqlParams,
+  averageSeconds,
   bounceRate,
   num,
-  refuseVisitFilters,
+  refuseFiltersBeyond,
   siteAnalyticsWindow,
   whereOf,
   type Count,
@@ -42,6 +44,7 @@ interface EntryRow {
   visits: Count;
   previous: Count;
   engaged: Count;
+  visit_seconds: Count;
 }
 
 /**
@@ -63,8 +66,8 @@ export class SiteAnalyticsSeoService {
 
   /**
    * The pages visits from one channel (`search` unless asked) entered on, with
-   * the window before (null over `MAX_COMPARABLE_DAYS`), the bounce rate and
-   * the sites they came from.
+   * the window before (null over `MAX_COMPARABLE_DAYS`), the bounce rate, the
+   * average visit and the sites they came from.
    */
   async landingPages(
     query: SiteAnalyticsQuery & { channel?: Channel; limit: number },
@@ -92,6 +95,7 @@ export class SiteAnalyticsSeoService {
           previous,
           change: previous === null ? null : visits - previous,
           bounceRate: bounceRate(visits, num(row.engaged)),
+          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
           sources: sources.get(row.path) ?? [],
         };
       }),
@@ -126,6 +130,7 @@ export class SiteAnalyticsSeoService {
           visits,
           previous,
           change: visits - previous,
+          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
         };
       })
       .filter((row) => row.visits + row.previous >= MIN_TREND_VISITS);
@@ -156,7 +161,7 @@ export class SiteAnalyticsSeoService {
     now = new Date(),
   ): Promise<SiteNotFoundDto> {
     const window = siteAnalyticsWindow(query, now);
-    refuseVisitFilters(window, "The not-found report");
+    refuseFiltersBeyond(window, "The not-found report", PAGE_DIMS);
     const params = new SqlParams();
     const rows: Array<{ path: string; views: Count }> = await this.db.query(
       `SELECT path, SUM(views) AS views
@@ -248,7 +253,9 @@ export class SiteAnalyticsSeoService {
 
   /**
    * Visits that entered on each page from one channel, in the window and the
-   * one before. On the rows that record visits the path is the entry.
+   * one before. On the rows that record visits the path is the entry; an exit
+   * row carries the entry too, with the last page's type, so the page type
+   * is read from the start rows only.
    */
   private async entries(
     window: SiteAnalyticsWindow,
@@ -263,7 +270,8 @@ export class SiteAnalyticsSeoService {
               SUM(visits) FILTER (WHERE bucket >= ${start}::timestamptz) AS visits,
               SUM(visits) FILTER (WHERE bucket < ${start}::timestamptz) AS previous,
               SUM(engaged) FILTER (WHERE bucket >= ${start}::timestamptz) AS engaged,
-              MAX(page_type) AS page_type
+              SUM(visit_seconds) FILTER (WHERE bucket >= ${start}::timestamptz) AS visit_seconds,
+              MAX(page_type) FILTER (WHERE visits > 0) AS page_type
          FROM site_pageviews
         WHERE ${where} AND channel = ${params.add(channel)} AND entry <> ''
         GROUP BY entry

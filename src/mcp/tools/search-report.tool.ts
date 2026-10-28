@@ -4,7 +4,7 @@ import { SiteAnalyticsService } from "../../site-analytics/site-analytics.servic
 import {
   round3,
   siteQuery,
-  pageWindowInput,
+  eventWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
@@ -18,12 +18,12 @@ export const searchReportTool = defineMcpTool({
     'query typed, a result or a suggestion clicked, a dead end hit (no results) and "view all" ' +
     "used, with clickRate = (result + suggestion clicks) / openings, at most 1, and noResultRate = no results / " +
     "typed; openings by page type and viewport; which kinds of result were clicked and at which " +
-    "position; optionally the openings per day and surface. Search queries themselves are never " +
+    "position; optionally the openings per period and surface. Search queries themselves are never " +
     "recorded. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers " +
     "are missing. " +
     VISITOR_DATA_DESCRIPTION,
   input: {
-    ...pageWindowInput,
+    ...eventWindowInput,
     limit: z
       .number()
       .int()
@@ -34,7 +34,7 @@ export const searchReportTool = defineMcpTool({
     series: z
       .boolean()
       .default(false)
-      .describe("Include openings per day and surface"),
+      .describe("Include openings per period of the interval and surface"),
   },
   async handler({ limit, series, ...input }, ctx) {
     const report = await ctx.get(SiteAnalyticsService).search(siteQuery(input));

@@ -15,22 +15,27 @@ import { SITE_ANALYTICS_HYPERTABLES } from "../database/hypertables";
 import {
   ALL_LOCALES_SCOPE,
   CLAIM_FIELD,
+  DROP_REASONS,
   FLUSH_WINDOW_SECONDS,
   MAX_FLUSH_ATTEMPTS,
+  MAX_VISITS_CLOSED_PER_RUN,
   PAGE_READ_EVENT,
   PARKED_WINDOW_TTL_SECONDS,
   RETENTION_DAYS,
   SITE_ANALYTICS_KEYS as KEYS,
   SITE_LOCALES,
+  VISIT_IDLE_SECONDS,
   bucketOf,
   flushWindowOf,
 } from "./site-analytics.constants";
 import { propsOfKey } from "./site-analytics.hits";
+import { defineCloseVisitCommand } from "./site-analytics-scripts";
 
 /**
  * A buffered page-view field's dimensions. A page view's row leaves the last
- * four (the visit's) empty; a visit's row carries the first page view's and
- * the visit's, `entry` being the first page view's path.
+ * four (the visit's) empty; a visit's start row carries the first page view's
+ * and the visit's, `entry` being the first page view's path; its exit row the
+ * last page view's and the visit's.
  */
 export type PageviewDims = [
   locale: string,
@@ -40,6 +45,7 @@ export type PageviewDims = [
   browser: string,
   os: string,
   country: string,
+  browserLanguage: string,
   entry: string,
   referrer: string,
   channel: string,
@@ -61,20 +67,52 @@ export type EventDims = [
 ];
 
 /**
- * The measure a buffer field counts: page views, visits started, visits that
- * reached a second page view, events. The field is the letter followed by the
- * row's dimensions as JSON, so the flusher can rebuild the row from the field
- * alone.
+ * The measure a buffer field counts. On a page view's row: views and their
+ * foreground seconds. On a visit's start row: visits started, those that
+ * reached a second page view, and the visit's foreground seconds. On its exit
+ * row: visits ended, and the seconds from the first hit to the last. Events
+ * count on their own rows. The field is the letter followed by the row's
+ * dimensions as JSON, so the flusher can rebuild the row from the field alone.
  */
 export const BUFFER_MEASURES = {
   views: "v",
+  seconds: "d",
   visits: "s",
   engaged: "e",
+  visitSeconds: "t",
+  exits: "x",
+  visitSpanSeconds: "y",
   events: "n",
 } as const;
+type PageviewMeasure = Exclude<
+  (typeof BUFFER_MEASURES)[keyof typeof BUFFER_MEASURES],
+  "n"
+>;
+
+/** The column each page-view measure sums into. */
+const PAGEVIEW_COLUMNS: Record<PageviewMeasure, keyof PageviewCounts> = {
+  v: "views",
+  d: "seconds",
+  s: "visits",
+  e: "engaged",
+  t: "visitSeconds",
+  x: "exits",
+  y: "visitSpanSeconds",
+};
+
+/** The counts of one `site_pageviews` row. */
+export interface PageviewCounts {
+  views: number;
+  seconds: number;
+  visits: number;
+  engaged: number;
+  visitSeconds: number;
+  exits: number;
+  visitSpanSeconds: number;
+}
 
 export const pageviewField = (
-  measure: "v" | "s" | "e",
+  measure: PageviewMeasure,
   dims: PageviewDims,
 ): string => measure + JSON.stringify(dims);
 
@@ -112,6 +150,8 @@ export interface SiteAnalyticsBacklog {
   oldestPendingMinutes: number | null;
   /** Windows the flusher set aside after repeated failures. */
   parkedWindows: number;
+  /** Visits not yet closed: active ones and those idle until the next run. */
+  openVisits: number;
   /** The newest written window's write time. */
   lastFlushAt: string | null;
   /** Today's and yesterday's drop and overflow counts by reason. */
@@ -136,7 +176,9 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {}
+  ) {
+    defineCloseVisitCommand(this.redis);
+  }
 
   /** Starts the one-off import; never blocks or fails the boot. */
   onApplicationBootstrap(): void {
@@ -149,8 +191,9 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   }
 
   /**
-   * Writes every finished window from Redis to Postgres, oldest first. One
-   * instance at a time (a Redis lock). A window is renamed to a claimed key
+   * Ends the idle visits ({@link closeIdleVisits}), then writes every
+   * finished window from Redis to Postgres, oldest first. One instance at a
+   * time (a Redis lock). A window is renamed to a claimed key
    * that names its claim, read in `HSCAN` steps, written in one transaction
    * together with its claim's marker in `site_analytics_flushes`, and deleted
    * only after the commit. A crash leaves the claimed key, which the next run
@@ -164,6 +207,7 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
     pageviewRows: number;
     eventRows: number;
     failed: number;
+    visitsClosed: number;
     skipped?: "locked";
   }> {
     const token = randomUUID();
@@ -174,9 +218,18 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       FLUSH_LOCK_MS,
       "NX",
     );
-    const written = { windows: 0, pageviewRows: 0, eventRows: 0, failed: 0 };
+    const written = {
+      windows: 0,
+      pageviewRows: 0,
+      eventRows: 0,
+      failed: 0,
+      visitsClosed: 0,
+    };
     if (locked !== "OK") return { ...written, skipped: "locked" };
     try {
+      // Visits idle past their time first: their exits go into the windows of
+      // their last hits, which this same run then writes.
+      written.visitsClosed = await this.closeIdleVisits(now);
       const before = flushWindowOf(new Date(now.getTime() - FLUSH_GRACE_MS));
       const windows = (await this.redis.smembers(KEYS.windows))
         .filter((window) => window < before)
@@ -200,6 +253,66 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       }
     }
     return written;
+  }
+
+  /**
+   * Ends every visit idle for {@link VISIT_IDLE_SECONDS}: one exit, under its
+   * last page view and how the visit began, and the seconds from its first hit
+   * to its last, added to the window of its last hit, after which its key and
+   * its place among the open visits go. Each close is one script that checks
+   * the visit is still where it was read, so a hit arriving meanwhile keeps
+   * the visit open. A visit whose key is already gone (the flusher stopped
+   * past its lifetime) loses its exit, and is counted as dropped.
+   */
+  async closeIdleVisits(now = new Date()): Promise<number> {
+    const cutoff = Math.floor(now.getTime() / 1000) - VISIT_IDLE_SECONDS;
+    const members = await this.redis.zrangebyscore(
+      KEYS.openVisits,
+      "-inf",
+      cutoff,
+      "LIMIT",
+      0,
+      MAX_VISITS_CLOSED_PER_RUN,
+    );
+    if (members.length === 0) return 0;
+    const read = this.redis.pipeline();
+    for (const member of members) read.hmget(KEYS.visit(member), "l", "s", "x");
+    const visits = (await read.exec()) ?? [];
+
+    const close = this.redis.pipeline();
+    const closes: number[] = [];
+    let queued = 0;
+    let lost = 0;
+    members.forEach((member, i) => {
+      const [error, fields] = visits[i] ?? [];
+      const [last, start, exit] = (fields as Array<string | null>) ?? [];
+      if (error || !last || !exit) {
+        close.zrem(KEYS.openVisits, member);
+        queued += 1;
+        if (!error && !last) lost += 1;
+        return;
+      }
+      const window = flushWindowOf(new Date(Number(last) * 1000));
+      const span = Math.max(0, Number(last) - Number(start ?? last));
+      close.siteAnalyticsCloseVisit(
+        KEYS.visit(member),
+        KEYS.openVisits,
+        KEYS.buffer(window),
+        KEYS.windows,
+        last,
+        member,
+        window,
+        exit,
+        span,
+      );
+      closes.push(queued++);
+    });
+    if (lost > 0) {
+      close.hincrby(KEYS.drops(utcDay(now)), DROP_REASONS.exit, lost);
+    }
+    const results = (await close.exec()) ?? [];
+    return closes.filter((at) => !results[at]?.[0] && results[at]?.[1] === 1)
+      .length;
   }
 
   /** Claims, writes and releases one window; null when it held nothing. */
@@ -347,21 +460,30 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
     for (let at = 0; at < pageviews.length; at += INSERT_CHUNK_ROWS) {
       const chunk = pageviews.slice(at, at + INSERT_CHUNK_ROWS);
       const column = (i: number) => chunk.map((row) => row.dims[i]);
+      const count = (key: keyof PageviewCounts) =>
+        chunk.map((row) => row.counts[key]);
       await manager.query(
         `INSERT INTO site_pageviews
            (bucket, locale, path, page_type, viewport, browser, os, country,
-            entry, referrer, channel, campaign, views, visits, engaged)
+            browser_language, entry, referrer, channel, campaign, views,
+            seconds, visits, engaged, visit_seconds, exits,
+            visit_span_seconds)
          SELECT $1::timestamptz, *
            FROM unnest($2::text[], $3::text[], $4::text[], $5::text[],
                        $6::text[], $7::text[], $8::text[], $9::text[],
-                       $10::text[], $11::text[], $12::text[],
-                       $13::int[], $14::int[], $15::int[])`,
+                       $10::text[], $11::text[], $12::text[], $13::text[],
+                       $14::int[], $15::int[], $16::int[], $17::int[],
+                       $18::int[], $19::int[], $20::int[])`,
         [
           bucket,
-          ...Array.from({ length: 11 }, (_, i) => column(i)),
-          chunk.map((row) => row.views),
-          chunk.map((row) => row.visits),
-          chunk.map((row) => row.engaged),
+          ...Array.from({ length: 12 }, (_, i) => column(i)),
+          count("views"),
+          count("seconds"),
+          count("visits"),
+          count("engaged"),
+          count("visitSeconds"),
+          count("exits"),
+          count("visitSpanSeconds"),
         ],
       );
     }
@@ -540,10 +662,11 @@ export async function readSiteAnalyticsBacklog(
   now = new Date(),
 ): Promise<SiteAnalyticsBacklog> {
   const today = utcDay(now);
-  const [windows, parked, dropsToday, dropsYesterday, flushes] =
+  const [windows, parked, openVisits, dropsToday, dropsYesterday, flushes] =
     await Promise.all([
       redis.smembers(KEYS.windows),
       redis.scard(KEYS.parkedWindows),
+      redis.zcard(KEYS.openVisits),
       redis.hgetall(KEYS.drops(today)),
       redis.hgetall(KEYS.drops(addIsoDays(today, -1))),
       dataSource.query(
@@ -567,6 +690,7 @@ export async function readSiteAnalyticsBacklog(
     readyWindows,
     oldestPendingMinutes,
     parkedWindows: Number(parked),
+    openVisits: Number(openVisits),
     lastFlushAt: last ? new Date(last).toISOString() : null,
     dropsToday: counts(dropsToday),
     dropsYesterday: counts(dropsYesterday),
@@ -578,17 +702,12 @@ export async function readSiteAnalyticsBacklog(
 
 /** The page-view and event rows a window's fields stand for. */
 export function rowsOfFields(fields: Record<string, string>): {
-  pageviews: Array<{
-    dims: PageviewDims;
-    views: number;
-    visits: number;
-    engaged: number;
-  }>;
+  pageviews: Array<{ dims: PageviewDims; counts: PageviewCounts }>;
   events: Array<{ dims: EventDims; count: number }>;
 } {
   const pageviews = new Map<
     string,
-    { dims: PageviewDims; views: number; visits: number; engaged: number }
+    { dims: PageviewDims; counts: PageviewCounts }
   >();
   const events: Array<{ dims: EventDims; count: number }> = [];
   for (const [field, raw] of Object.entries(fields)) {
@@ -608,17 +727,21 @@ export function rowsOfFields(fields: Record<string, string>): {
       if (dims.length === 10) events.push({ dims: dims as EventDims, count });
       continue;
     }
-    if (dims.length !== 11) continue;
+    const column = PAGEVIEW_COLUMNS[measure as PageviewMeasure];
+    if (!column || dims.length !== 12) continue;
     const row = pageviews.get(json) ?? {
       dims: dims as PageviewDims,
-      views: 0,
-      visits: 0,
-      engaged: 0,
+      counts: {
+        views: 0,
+        seconds: 0,
+        visits: 0,
+        engaged: 0,
+        visitSeconds: 0,
+        exits: 0,
+        visitSpanSeconds: 0,
+      },
     };
-    if (measure === BUFFER_MEASURES.views) row.views += count;
-    else if (measure === BUFFER_MEASURES.visits) row.visits += count;
-    else if (measure === BUFFER_MEASURES.engaged) row.engaged += count;
-    else continue;
+    row.counts[column] += count;
     pageviews.set(json, row);
   }
   return { pageviews: [...pageviews.values()], events };

@@ -8,6 +8,7 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import {
   SiteAnalyticsStorageService,
   rowsOfFields,
+  type PageviewCounts,
 } from "./site-analytics-storage.service";
 import { SiteEntityNames } from "./site-entity-names.service";
 import {
@@ -18,7 +19,9 @@ import {
   OVERFLOW_VALUE,
   SITE_ANALYTICS_KEYS as KEYS,
   SITE_GUARDS,
-  VISIT_IDLE_SECONDS,
+  LIVE_KEY_TTL_SECONDS,
+  OPEN_VISIT_MAX_AGE_SECONDS,
+  VISIT_KEY_TTL_SECONDS,
 } from "./site-analytics.constants";
 
 const BROWSER =
@@ -41,6 +44,18 @@ const pageview = (overrides: Record<string, unknown> = {}) => ({
   viewport: "mobile",
   ...overrides,
 });
+const engagement = (
+  seconds: number,
+  overrides: Record<string, unknown> = {},
+) => ({
+  t: "engagement",
+  locale: "de",
+  path: PATH,
+  pageType: "park",
+  viewport: "mobile",
+  seconds,
+  ...overrides,
+});
 const event = (
   name: string,
   props: Record<string, unknown> = {},
@@ -54,6 +69,18 @@ const event = (
   name,
   props,
   ...overrides,
+});
+
+/** A row's counts: zero but for the given ones. */
+const counts = (given: Partial<PageviewCounts>): PageviewCounts => ({
+  views: 0,
+  seconds: 0,
+  visits: 0,
+  engaged: 0,
+  visitSeconds: 0,
+  exits: 0,
+  visitSpanSeconds: 0,
+  ...given,
 });
 
 /** A set of `n` made-up members, to stand for a full guard. */
@@ -108,15 +135,19 @@ describe("SiteAnalyticsCollectService", () => {
       Object.fromEntries(redis.hashes.get(KEYS.buffer(window)) ?? []),
     );
   const pageviewRows = () =>
-    buffered().pageviews.map(({ dims, views, visits, engaged }) => ({
+    buffered().pageviews.map(({ dims, counts }) => ({
       path: dims[1],
-      entry: dims[7],
-      referrer: dims[8],
-      channel: dims[9],
-      views,
-      visits,
-      engaged,
+      entry: dims[8],
+      referrer: dims[9],
+      channel: dims[10],
+      views: counts.views,
+      visits: counts.visits,
+      engaged: counts.engaged,
     }));
+  const visitKeys = () =>
+    [...redis.hashes.keys()].filter((k) =>
+      k.startsWith("site-analytics:visit:"),
+    );
   const drops = (day = DAY) =>
     Object.fromEntries(redis.hashes.get(KEYS.drops(day)) ?? []);
 
@@ -142,14 +173,12 @@ describe("SiteAnalyticsCollectService", () => {
       collect([pageview({ referrer: "www.google.de" })]),
     ).resolves.toBe(1);
     expect(await redis.smembers(KEYS.windows)).toEqual([WINDOW]);
-    const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl"];
+    const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
     expect(buffered().pageviews).toEqual([
-      { dims: [...page, "", "", "", ""], views: 1, visits: 0, engaged: 0 },
+      { dims: [...page, "", "", "", ""], counts: counts({ views: 1 }) },
       {
         dims: [...page, PATH, "google", "search", ""],
-        views: 0,
-        visits: 1,
-        engaged: 0,
+        counts: counts({ visits: 1 }),
       },
     ]);
     expect(writeDirect).not.toHaveBeenCalled();
@@ -200,12 +229,13 @@ describe("SiteAnalyticsCollectService", () => {
     ]);
   });
 
-  it("opens a new visit after the idle time, and keeps it open on every hit", async () => {
+  it("opens a new visit once the old one is closed, and keeps it open on every hit", async () => {
     await collect([pageview()]);
     const visitKey = [...redis.hashes.keys()].find((k) =>
       k.startsWith("site-analytics:visit:"),
     )!;
-    expect(redis.ttls.get(visitKey)).toBe(VISIT_IDLE_SECONDS);
+    expect(redis.ttls.get(visitKey)).toBe(VISIT_KEY_TTL_SECONDS);
+    // The flusher closed it, or it outlived its key.
     redis.expireKeys("site-analytics:visit:");
     await collect([pageview({ path: "/de/news", pageType: "news_index" })]);
     expect(pageviewRows()).toContainEqual(
@@ -231,7 +261,7 @@ describe("SiteAnalyticsCollectService", () => {
     await collect([pageview()], { userAgent: DESKTOP });
     expect(
       buffered()
-        .pageviews.filter((row) => row.visits > 0)
+        .pageviews.filter((row) => row.counts.visits > 0)
         .map((row) => row.dims[4])
         .sort(),
     ).toEqual(["chrome", "safari"]);
@@ -403,7 +433,7 @@ describe("SiteAnalyticsCollectService", () => {
         campaign: "summer",
       }),
     ]);
-    const visit = buffered().pageviews.find((row) => row.visits > 0)!;
+    const visit = buffered().pageviews.find((row) => row.counts.visits > 0)!;
     expect(visit.dims).toEqual([
       "de",
       OVERFLOW_VALUE,
@@ -412,6 +442,7 @@ describe("SiteAnalyticsCollectService", () => {
       "safari",
       "ios",
       "nl",
+      "zz",
       OVERFLOW_VALUE,
       OVERFLOW_VALUE,
       "campaign",
@@ -425,9 +456,9 @@ describe("SiteAnalyticsCollectService", () => {
       filled(SITE_GUARDS.referrers.limit),
     );
     await collect([pageview({ referrer: "google.com" })]);
-    expect(buffered().pageviews.find((row) => row.visits > 0)!.dims[8]).toBe(
-      "google",
-    );
+    expect(
+      buffered().pageviews.find((row) => row.counts.visits > 0)!.dims[9],
+    ).toBe("google");
   });
 
   it("counts three reads per reader and page, ten per address and page, whatever the User-Agent", async () => {
@@ -541,10 +572,6 @@ describe("SiteAnalyticsCollectService", () => {
 
   it("keys a visit on the secret: two instances holding it share it, the fallback secret works", async () => {
     await collect([pageview()]);
-    const visitKeys = () =>
-      [...redis.hashes.keys()].filter((k) =>
-        k.startsWith("site-analytics:visit:"),
-      );
     expect(visitKeys()).toHaveLength(1);
     await (
       await build()
@@ -572,9 +599,10 @@ describe("SiteAnalyticsCollectService", () => {
     expect(ttlOf("site-analytics:new:")).toBe(toMidnight + 60);
     expect(ttlOf("site-analytics:uv:2026-10-28:all")).toBe(toMidnight + 3600);
     expect(ttlOf("site-analytics:uvh:2026102821:all")).toBe(toMidnight + 60);
-    expect(ttlOf("site-analytics:rt:uv:202610282116:all")).toBe(600);
+    expect(ttlOf("site-analytics:rt:uv:202610282116:all")).toBe(2100);
     expect(ttlOf("site-analytics:rt:pv:202610282116:all")).toBe(2100);
-    expect(ttlOf("site-analytics:visit:")).toBe(VISIT_IDLE_SECONDS);
+    expect(ttlOf("site-analytics:live:pages:202610282116:all")).toBe(2100);
+    expect(ttlOf("site-analytics:visit:")).toBe(40 * 60);
     // A guard set lives through tomorrow, which admits its values as known.
     expect(ttlOf("site-analytics:guard:paths:")).toBe(toMidnight + 86400 + 60);
     // The buffer has none: volatile-lru never evicts a key without a TTL.
@@ -594,7 +622,7 @@ describe("SiteAnalyticsCollectService", () => {
     );
     // Without Redis there is no visit: two views, no visit, no channel.
     expect(rowsOfFields(fields).pageviews).toEqual([
-      expect.objectContaining({ views: 2, visits: 0, engaged: 0 }),
+      expect.objectContaining({ counts: counts({ views: 2 }) }),
     ]);
     await service.drainFallback();
     expect(writeDirect).toHaveBeenCalledTimes(1);
@@ -625,7 +653,10 @@ describe("SiteAnalyticsCollectService", () => {
       ),
     );
     expect(
-      rowsOfFields(fields).pageviews.map((row) => [row.views, row.visits]),
+      rowsOfFields(fields).pageviews.map((row) => [
+        row.counts.views,
+        row.counts.visits,
+      ]),
     ).toEqual([
       [1, 0],
       [0, 1],
@@ -636,13 +667,168 @@ describe("SiteAnalyticsCollectService", () => {
     await expect(collect([pageview()], { ip: null })).resolves.toBe(1);
     expect(lookupCountry).not.toHaveBeenCalled();
     expect(buffered().pageviews).toHaveLength(1);
-    expect(buffered().pageviews[0]).toMatchObject({ visits: 0 });
+    expect(buffered().pageviews[0].counts.visits).toBe(0);
     expect(buffered().pageviews[0].dims[6]).toBe("zz");
     expect(
       [...redis.counters.keys()].filter((k) =>
         k.startsWith("site-analytics:cap:"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps in the visit's key how it began, its first and last hit and its exit row, and lists it as open", async () => {
+    const seconds = (at: Date) => Math.floor(at.getTime() / 1000);
+    await collect([pageview({ referrer: "www.google.de" })]);
+    const key = visitKeys()[0];
+    const member = key.slice("site-analytics:visit:".length);
+    const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
+    const visitDims = [PATH, "google", "search", ""];
+    const hash = () => Object.fromEntries(redis.hashes.get(key) ?? []);
+    expect(hash()).toEqual({
+      c: JSON.stringify({
+        locale: "de",
+        path: PATH,
+        pageType: "park",
+        viewport: "mobile",
+        referrer: "google",
+        channel: "search",
+        campaign: "",
+      }),
+      n: "1",
+      s: String(seconds(NOW)),
+      l: String(seconds(NOW)),
+      x: JSON.stringify([...page, ...visitDims]),
+    });
+    expect(redis.zsets.get(KEYS.openVisits)?.get(member)).toBe(seconds(NOW));
+
+    // A later page moves the exit; an engagement or an event only the last hit.
+    const later = new Date(NOW.getTime() + 10 * 60_000);
+    await collect(
+      [pageview({ path: "/de/news", pageType: "news_index" })],
+      {},
+      later,
+    );
+    const news = ["de", "/de/news", "news_index", ...page.slice(3)];
+    expect(hash()).toMatchObject({
+      n: "2",
+      s: String(seconds(NOW)),
+      l: String(seconds(later)),
+      x: JSON.stringify([...news, ...visitDims]),
+    });
+    const last = new Date(later.getTime() + 60_000);
+    await collect([engagement(30, { path: "/de/news" })], {}, last);
+    expect(hash()).toMatchObject({
+      l: String(seconds(last)),
+      x: JSON.stringify([...news, ...visitDims]),
+    });
+    expect(redis.zsets.get(KEYS.openVisits)?.get(member)).toBe(seconds(last));
+  });
+
+  it("drops open visits older than any key from the list, flusher or not", async () => {
+    redis.zsets.set(
+      KEYS.openVisits,
+      new Map([
+        [
+          "forgotten",
+          Math.floor(NOW.getTime() / 1000) - OPEN_VISIT_MAX_AGE_SECONDS - 1,
+        ],
+        ["recent", Math.floor(NOW.getTime() / 1000) - 60],
+      ]),
+    );
+    await collect([pageview()]);
+    expect(
+      [...(redis.zsets.get(KEYS.openVisits)?.keys() ?? [])].sort(),
+    ).toEqual(
+      ["recent", visitKeys()[0].slice("site-analytics:visit:".length)].sort(),
+    );
+  });
+
+  it("adds an engagement's seconds to its page and, with a visit, to the visit's row", async () => {
+    await collect([pageview({ referrer: "bing.com" })]);
+    await collect([engagement(42)]);
+    const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
+    expect(buffered().pageviews).toEqual([
+      {
+        dims: [...page, "", "", "", ""],
+        counts: counts({ views: 1, seconds: 42 }),
+      },
+      {
+        dims: [...page, PATH, "bing", "search", ""],
+        counts: counts({ visits: 1, visitSeconds: 42 }),
+      },
+    ]);
+    // Without an address there is no visit: the page's time only.
+    redis = new SiteAnalyticsRedisMock();
+    service = await build();
+    await collect([engagement(7)], { ip: null });
+    expect(buffered().pageviews).toEqual([
+      {
+        dims: [
+          "de",
+          PATH,
+          "park",
+          "mobile",
+          "safari",
+          "ios",
+          "zz",
+          "zz",
+          "",
+          "",
+          "",
+          "",
+        ],
+        counts: counts({ seconds: 7 }),
+      },
+    ]);
+  });
+
+  it("drops an engagement outside 1 to 1800 whole seconds", async () => {
+    await expect(
+      collect([engagement(0), engagement(1801), engagement(2.5)]),
+    ).resolves.toBe(0);
+    expect(redis.hashes.get(KEYS.buffer(WINDOW))).toBeUndefined();
+  });
+
+  it("stores the browser's first language on page view rows, never on events", async () => {
+    await service.collect(
+      {
+        hits: [pageview(), event("tab_changed", { tab: "map" })],
+        ip: IP,
+        userAgent: BROWSER,
+        acceptLanguage: "fr-CH, fr;q=0.9, en;q=0.8",
+      },
+      NOW,
+    );
+    const rows = buffered();
+    expect(rows.pageviews.map((row) => row.dims[7])).toEqual(["fr", "fr"]);
+    expect(rows.events[0].dims).not.toContain("fr");
+  });
+
+  it("counts the live view's minute: pages, countries, devices, visits by channel and referrer, events", async () => {
+    await collect([
+      pageview({ referrer: "www.google.de" }),
+      event("search_opened", { surface: "hero" }),
+    ]);
+    const live = (list: string, scope = "all") =>
+      Object.fromEntries(
+        redis.hashes.get(`site-analytics:live:${list}:202610282116:${scope}`) ??
+          [],
+      );
+    expect(live("pages")).toEqual({ [JSON.stringify([PATH, "park"])]: "1" });
+    expect(live("pages", "de")).toEqual(live("pages"));
+    expect(live("countries")).toEqual({ nl: "1" });
+    expect(live("devices")).toEqual({ mobile: "1" });
+    expect(live("channels")).toEqual({ search: "1" });
+    expect(live("referrers")).toEqual({ google: "1" });
+    expect(live("events")).toEqual({ search_opened: "1" });
+    expect(redis.counters.get("site-analytics:rt:ev:202610282116:all")).toBe(1);
+    expect(redis.ttls.get("site-analytics:live:events:202610282116:de")).toBe(
+      LIVE_KEY_TTL_SECONDS,
+    );
+    // The second page view of the visit starts nothing.
+    await collect([pageview({ path: "/de/news", pageType: "news_index" })]);
+    expect(live("channels")).toEqual({ search: "1" });
+    expect(live("countries")).toEqual({ nl: "2" });
   });
 
   it("reads only the first 512 characters of a User-Agent", async () => {

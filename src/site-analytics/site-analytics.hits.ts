@@ -5,6 +5,7 @@ import {
   type PageViewKind,
 } from "../page-views/page-view.constants";
 import {
+  MAX_ENGAGEMENT_SECONDS,
   MAX_EVENT_PROPS,
   PAGE_READ_EVENT,
   SITE_LOCALES,
@@ -86,7 +87,17 @@ export interface ValidEventHit extends ValidHitBase {
   entity: string | null;
 }
 
-export type ValidHit = ValidPageviewHit | ValidEventHit;
+/**
+ * Foreground time on the current page view since the last report: whole
+ * seconds, 1 to {@link MAX_ENGAGEMENT_SECONDS}. No timestamp; the frontend
+ * pauses its clock while the page is hidden.
+ */
+export interface ValidEngagementHit extends ValidHitBase {
+  t: "engagement";
+  seconds: number;
+}
+
+export type ValidHit = ValidPageviewHit | ValidEventHit | ValidEngagementHit;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -188,6 +199,17 @@ export function validateHit(raw: unknown): ValidHit | null {
       referrer: validReferrer(raw.referrer),
       campaign: validCampaign(raw.campaign),
     };
+  }
+  if (t === "engagement") {
+    const { seconds } = raw;
+    if (
+      typeof seconds !== "number" ||
+      !Number.isInteger(seconds) ||
+      seconds < 1 ||
+      seconds > MAX_ENGAGEMENT_SECONDS
+    )
+      return null;
+    return { t, ...base, seconds };
   }
   if (t !== "event") return null;
   const { name } = raw;

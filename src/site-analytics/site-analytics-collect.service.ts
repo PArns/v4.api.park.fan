@@ -24,7 +24,7 @@ import {
   MAX_VIEWS_PER_READER_PER_DAY,
 } from "../page-views/page-view.constants";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
-import { defineAdmitCommand } from "./site-analytics-admit";
+import { defineAdmitCommand } from "./site-analytics-scripts";
 import { FallbackBuffer } from "./site-analytics-fallback-buffer";
 import {
   SiteAnalyticsStorageService,
@@ -37,6 +37,7 @@ import {
   ADDRESS_CAP_IPV6_PREFIX,
   ALL_LOCALES_SCOPE,
   DROP_REASONS,
+  LIVE_KEY_TTL_SECONDS,
   FALLBACK_DRAIN_MS,
   FALLBACK_MAX_FIELDS,
   KNOWN_MEMBER_HEADROOM,
@@ -46,27 +47,29 @@ import {
   OVERFLOW_PROPS,
   OVERFLOW_VALUE,
   PAGE_READ_EVENT,
-  REALTIME_ACTIVE_MINUTES,
-  REALTIME_SERIES_MINUTES,
   SITE_ANALYTICS_KEYS as KEYS,
   SITE_GUARDS,
   UNKNOWN_COUNTRY,
   VISITOR_KEY_GRACE_SECONDS,
-  VISIT_IDLE_SECONDS,
+  OPEN_VISIT_MAX_AGE_SECONDS,
+  VISIT_KEY_TTL_SECONDS,
   flushWindowOf,
   hourKey,
   minuteKey,
   type Channel,
   type DropReason,
+  type LiveList,
   type SiteGuard,
 } from "./site-analytics.constants";
 import {
   propsKeyOf,
   validateHit,
+  type ValidEngagementHit,
   type ValidEventHit,
   type ValidHit,
   type ValidPageviewHit,
 } from "./site-analytics.hits";
+import { browserLanguage } from "./browser-language.util";
 import { classifyReferrer } from "./referrer.util";
 import { MAX_USER_AGENT_LENGTH, parseUserAgent } from "./user-agent.util";
 
@@ -79,10 +82,6 @@ const GUARD_SET_GRACE_SECONDS = 24 * 3600 + DAY_GRACE_SECONDS;
 /** A window's hit counter outlives the window by the flusher's lag. */
 const WINDOW_HITS_TTL_SECONDS = 15 * 60;
 
-/** The realtime keys live a little longer than the window that reads them. */
-const ACTIVE_MINUTE_TTL_SECONDS = (REALTIME_ACTIVE_MINUTES + 5) * 60;
-const PAGEVIEWS_MINUTE_TTL_SECONDS = (REALTIME_SERIES_MINUTES + 5) * 60;
-
 /**
  * The address of a request without one: every such request shares one
  * budget, rather than none having a cap. Production always has an address.
@@ -94,6 +93,8 @@ export interface CollectRequest {
   hits: unknown[];
   ip: string | null;
   userAgent: string | null;
+  /** The request's `Accept-Language`, for the browser language only. */
+  acceptLanguage?: string | null;
 }
 
 /** What the server derives about the browser, never what it is. */
@@ -101,6 +102,7 @@ interface Reader {
   browser: string;
   os: string;
   country: string;
+  browserLanguage: string;
 }
 
 /**
@@ -126,7 +128,25 @@ export type ObservedHit =
       /** The visit whose second page view this is. */
       engaged: VisitStart | null;
     }
+  | {
+      hit: ValidEngagementHit;
+      /** The visit the seconds belong to; null where none is known. */
+      visit: VisitStart | null;
+    }
   | { hit: ValidEventHit };
+
+/**
+ * The visit a request belongs to, as the buffer write updates it: its key
+ * and pseudonym, how it began, whether this request opened it, and the exit
+ * row its last page view would make.
+ */
+interface VisitUpdate {
+  key: string;
+  member: string;
+  start: VisitStart;
+  opened: boolean;
+  exitDims: PageviewDims | null;
+}
 
 /** Counts of dropped and overflowed hits by reason. */
 type Drops = Map<DropReason, number>;
@@ -140,11 +160,13 @@ const countDrop = (drops: Drops, reason: DropReason, by = 1) => {
  *
  * Postgres is not touched on the way in. A request costs three Redis round
  * trips: the address's and the window's caps; the guards, the visit, the
- * visitors and the realtime minute in one pipeline; and the counts, added in
- * one `MULTI` with `HINCRBY` into the current five-minute window's hash, which
- * the flusher writes to the insert-only hypertables
- * (`SiteAnalyticsStorageService.flush`). With Redis away the counts wait in a
- * bounded buffer in this process and go to Postgres once a minute.
+ * visitors and the realtime minute in one pipeline; and one `MULTI` with the
+ * counts, added with `HINCRBY` into the current five-minute window's hash,
+ * the visit's key and its place among the open visits, and the live view's
+ * minute. The flusher writes the window to the insert-only hypertables and
+ * ends idle visits (`SiteAnalyticsStorageService.flush`). With Redis away the
+ * counts wait in a bounded buffer in this process and go to Postgres once a
+ * minute.
  *
  * Nothing about a reader is stored. The visit, visitor, cap and guard keys are
  * HMACs of address and User-Agent under the day's key, derived from
@@ -201,7 +223,13 @@ export class SiteAnalyticsCollectService
     const valid = request.hits
       .map(validateHit)
       .filter((hit): hit is ValidHit => hit !== null);
-    return this.record(valid, request.ip, request.userAgent, now);
+    return this.record(
+      valid,
+      request.ip,
+      request.userAgent,
+      now,
+      request.acceptLanguage,
+    );
   }
 
   /**
@@ -215,6 +243,7 @@ export class SiteAnalyticsCollectService
     ip: string | null,
     rawUserAgent: string | null,
     now = new Date(),
+    acceptLanguage: string | null = null,
   ): Promise<number> {
     const userAgent = rawUserAgent?.slice(0, MAX_USER_AGENT_LENGTH) ?? null;
     if (isBotUserAgent(userAgent)) return 0;
@@ -231,12 +260,14 @@ export class SiteAnalyticsCollectService
     const capBucket = addressBucket(ip, ADDRESS_CAP_IPV6_PREFIX) ?? NO_ADDRESS;
     const { browser, os } = parseUserAgent(userAgent);
     const country = (ip && this.geoip.lookupCountry(ip)) || UNKNOWN_COUNTRY;
-    const reader = { browser, os, country };
-
-    let observed: {
-      hits: ObservedHit[];
-      newVisit: { key: string; start: VisitStart } | null;
+    const reader = {
+      browser,
+      os,
+      country,
+      browserLanguage: browserLanguage(acceptLanguage),
     };
+
+    let observed: { hits: ObservedHit[]; visit: VisitUpdate | null };
     try {
       const allowed = await this.withinCaps(
         capBucket,
@@ -265,7 +296,14 @@ export class SiteAnalyticsCollectService
     if (observed.hits.length === 0) return this.noteDrops(drops, now);
 
     const increments = bufferIncrements(observed.hits, reader);
-    await this.buffer(window, day, increments, observed.newVisit, drops, now);
+    const visit = observed.visit && {
+      ...observed.visit,
+      exitDims: exitDimsOf(observed.hits, observed.visit.start, reader),
+    };
+    await this.buffer(window, day, increments, visit, drops, now, {
+      hits: observed.hits,
+      country,
+    });
     return observed.hits.length;
   }
 
@@ -352,9 +390,10 @@ export class SiteAnalyticsCollectService
   /**
    * One pipeline for the guards and the visit: the day's guards (each value
    * through {@link ADMIT_SCRIPT}), `page_read`'s per-reader, per-page and
-   * per-address counters, the visit key (its first page view and its
-   * page-view count), the day's and the hour's visitors and the realtime
-   * minute. Throws when Redis is away.
+   * per-address counters, the visit key (how the visit began and its
+   * page-view count), the day's and the hour's visitors and the minute's
+   * visitors and page views, which the realtime figure and the live view
+   * read. Throws when Redis is away.
    */
   private async observe(
     hits: ValidHit[],
@@ -363,10 +402,7 @@ export class SiteAnalyticsCollectService
     userAgent: string,
     drops: Drops,
     now: Date,
-  ): Promise<{
-    hits: ObservedHit[];
-    newVisit: { key: string; start: VisitStart } | null;
-  }> {
+  ): Promise<{ hits: ObservedHit[]; visit: VisitUpdate | null }> {
     const day = utcDay(now);
     const yesterday = addIsoDays(day, -1);
     const dayTtl = secondsUntilUtcDayEnds(now, DAY_GRACE_SECONDS);
@@ -416,6 +452,16 @@ export class SiteAnalyticsCollectService
           path,
           referrer: open ? guard("referrers", source.referrer) : null,
           campaign: hit.campaign ? guard("campaigns", hit.campaign) : null,
+          name: null,
+          combination: null,
+        };
+      }
+      if (hit.t === "engagement") {
+        return {
+          pageType,
+          path,
+          referrer: null,
+          campaign: null,
           name: null,
           combination: null,
         };
@@ -472,10 +518,12 @@ export class SiteAnalyticsCollectService
       (hit): hit is ValidPageviewHit => hit.t === "pageview",
     );
     let visitKey: string | null = null;
+    let visitMember: string | null = null;
     let startReply: number | null = null;
     const countReplies = new Map<ValidHit, number>();
     if (readerBucket) {
-      visitKey = KEYS.visit(this.hash(day, "visit", readerBucket, userAgent));
+      visitMember = this.hash(day, "visit", readerBucket, userAgent);
+      visitKey = KEYS.visit(visitMember);
       const visitor = this.hash(day, "visitor", readerBucket, userAgent);
       pipeline.hget(visitKey, "c");
       startReply = next();
@@ -484,7 +532,7 @@ export class SiteAnalyticsCollectService
         countReplies.set(hit, next());
       }
       // Every hit keeps the visit alive; only a page view can open one.
-      pipeline.expire(visitKey, VISIT_IDLE_SECONDS);
+      pipeline.expire(visitKey, VISIT_KEY_TTL_SECONDS);
       next();
 
       if (pageviews.length > 0) {
@@ -510,7 +558,7 @@ export class SiteAnalyticsCollectService
       const active = new Set(hits.map((hit) => hit.locale));
       for (const scope of [ALL_LOCALES_SCOPE, ...active]) {
         const key = KEYS.activeMinute(minute, scope);
-        pipeline.pfadd(key, visitor).expire(key, ACTIVE_MINUTE_TTL_SECONDS);
+        pipeline.pfadd(key, visitor).expire(key, LIVE_KEY_TTL_SECONDS);
         index += 2;
       }
       const perLocale = new Map<string, number>();
@@ -521,7 +569,7 @@ export class SiteAnalyticsCollectService
         perLocale.set(ALL_LOCALES_SCOPE, pageviews.length);
       for (const [scope, count] of perLocale) {
         const key = KEYS.pageviewsMinute(minute, scope);
-        pipeline.incrby(key, count).expire(key, PAGEVIEWS_MINUTE_TTL_SECONDS);
+        pipeline.incrby(key, count).expire(key, LIVE_KEY_TTL_SECONDS);
         index += 2;
       }
     }
@@ -542,7 +590,7 @@ export class SiteAnalyticsCollectService
     }
 
     let current = parseVisitStart(reply(startReply));
-    let newVisit: { key: string; start: VisitStart } | null = null;
+    let opened = false;
     const observed: ObservedHit[] = [];
     hits.forEach((raw, i) => {
       const checks = guards[i];
@@ -584,7 +632,7 @@ export class SiteAnalyticsCollectService
             channel: source.channel,
             campaign,
           };
-          newVisit = { key: visitKey, start: current };
+          opened = true;
           observed.push({ hit, start: current, engaged: null });
           return;
         }
@@ -593,6 +641,10 @@ export class SiteAnalyticsCollectService
           start: null,
           engaged: count === 2 ? current : null,
         });
+        return;
+      }
+      if (raw.t === "engagement") {
+        observed.push({ hit: { ...raw, pageType, path }, visit: current });
         return;
       }
 
@@ -626,22 +678,35 @@ export class SiteAnalyticsCollectService
       }
       observed.push({ hit });
     });
-    return { hits: observed, newVisit };
+    const visit =
+      visitKey && visitMember && current
+        ? {
+            key: visitKey,
+            member: visitMember,
+            start: current,
+            opened,
+            exitDims: null,
+          }
+        : null;
+    return { hits: observed, visit };
   }
 
   /**
-   * Adds the counts to the window's hash, remembers a new visit's first page
-   * view and adds the request's drop counts, in one `MULTI`: either all of it
-   * lands or none of it does. Counts Redis could not take go to the fallback
-   * buffer, only those, so nothing is counted twice.
+   * Adds the counts to the window's hash, brings the visit's key up to date
+   * (how it began, when it started and was last seen, the exit row its last
+   * page view makes) with its place among the open visits, counts the live
+   * view's minute and adds the request's drop counts, in one `MULTI`: either
+   * all of it lands or none of it does. Counts Redis could not take go to the
+   * fallback buffer, only those, so nothing is counted twice.
    */
   private async buffer(
     window: string,
     day: string,
     increments: Map<string, number>,
-    newVisit: { key: string; start: VisitStart } | null,
+    visit: VisitUpdate | null,
     drops: Drops,
     now: Date,
+    live: { hits: ObservedHit[]; country: string },
   ): Promise<void> {
     const key = KEYS.buffer(window);
     const fields = [...increments.keys()];
@@ -654,7 +719,8 @@ export class SiteAnalyticsCollectService
       for (const field of fields)
         tx.hincrby(key, field, increments.get(field) ?? 0);
       tx.sadd(KEYS.windows, window);
-      if (newVisit) tx.hset(newVisit.key, "c", JSON.stringify(newVisit.start));
+      if (visit) this.updateVisit(tx, visit, now);
+      this.addLive(tx, live.hits, live.country, now);
       this.addDrops(tx, day, drops, now);
       const results = await tx.exec();
       if (results) {
@@ -684,6 +750,85 @@ export class SiteAnalyticsCollectService
   }
 
   /**
+   * The visit's key: `c` how it began (on its first page view), `s` when it
+   * started and `l` when it was last seen (UTC seconds, the server's clock),
+   * `x` the exit row of its last page view, `n` its page views (counted in the
+   * guard pipeline). Its place among the open visits is scored by `l`, which
+   * is how the flusher finds it idle; places older than
+   * {@link OPEN_VISIT_MAX_AGE_SECONDS} go here, whether the flusher runs or not.
+   */
+  private updateVisit(
+    tx: ReturnType<Redis["multi"]>,
+    visit: VisitUpdate,
+    now: Date,
+  ): void {
+    const seconds = Math.floor(now.getTime() / 1000);
+    if (visit.opened) {
+      tx.hset(visit.key, "c", JSON.stringify(visit.start), "s", seconds);
+    }
+    tx.hset(visit.key, "l", seconds);
+    if (visit.exitDims) tx.hset(visit.key, "x", JSON.stringify(visit.exitDims));
+    tx.expire(visit.key, VISIT_KEY_TTL_SECONDS);
+    tx.zadd(KEYS.openVisits, seconds, visit.member);
+    tx.zremrangebyscore(
+      KEYS.openVisits,
+      "-inf",
+      seconds - OPEN_VISIT_MAX_AGE_SECONDS,
+    );
+  }
+
+  /**
+   * The live view's minute, all languages and each: page views by page,
+   * country and viewport, visits started by channel and referrer site, events
+   * by name, and the events counter. The values are the guarded ones.
+   */
+  private addLive(
+    tx: ReturnType<Redis["multi"]>,
+    hits: ObservedHit[],
+    country: string,
+    now: Date,
+  ): void {
+    const minute = minuteKey(now);
+    const counts = new Map<string, Map<string, number>>();
+    const events = new Map<string, number>();
+    const add = (list: LiveList, locale: string, field: string) => {
+      for (const scope of [ALL_LOCALES_SCOPE, locale]) {
+        const key = KEYS.live(list, minute, scope);
+        const fields = counts.get(key) ?? new Map<string, number>();
+        fields.set(field, (fields.get(field) ?? 0) + 1);
+        counts.set(key, fields);
+      }
+    };
+    for (const entry of hits) {
+      const { hit } = entry;
+      if (hit.t === "pageview" && "start" in entry) {
+        add("pages", hit.locale, JSON.stringify([hit.path, hit.pageType]));
+        add("countries", hit.locale, country);
+        add("devices", hit.locale, hit.viewport);
+        if (entry.start) {
+          add("channels", hit.locale, entry.start.channel);
+          if (entry.start.referrer)
+            add("referrers", hit.locale, entry.start.referrer);
+        }
+      } else if (hit.t === "event") {
+        add("events", hit.locale, hit.name);
+        for (const scope of [ALL_LOCALES_SCOPE, hit.locale]) {
+          const key = KEYS.eventsMinute(minute, scope);
+          events.set(key, (events.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    for (const [key, fields] of counts) {
+      for (const [field, count] of fields) tx.hincrby(key, field, count);
+      tx.expire(key, LIVE_KEY_TTL_SECONDS, "NX");
+    }
+    for (const [key, count] of events) {
+      tx.incrby(key, count);
+      tx.expire(key, LIVE_KEY_TTL_SECONDS, "NX");
+    }
+  }
+
+  /**
    * Redis is away: the hits count without guards, visits or visitors, in this
    * process's bounded buffer, which reaches Postgres within a minute.
    */
@@ -696,7 +841,11 @@ export class SiteAnalyticsCollectService
     for (const [reason, count] of drops)
       countDrop(this.pendingDrops, reason, count);
     const observed: ObservedHit[] = hits.map((hit) =>
-      hit.t === "pageview" ? { hit, start: null, engaged: null } : { hit },
+      hit.t === "pageview"
+        ? { hit, start: null, engaged: null }
+        : hit.t === "engagement"
+          ? { hit, visit: null }
+          : { hit },
     );
     return this.holdInMemory(window, bufferIncrements(observed, reader))
       ? hits.length
@@ -766,7 +915,28 @@ function parseVisitStart(raw: unknown): VisitStart | null {
   }
 }
 
-/** The dimensions of a visit row: the first page view's, and the visit's. */
+/** A page view's or an engagement's page dimensions, the visit's empty. */
+function pageDims(
+  hit: ValidPageviewHit | ValidEngagementHit,
+  reader: Reader,
+): PageviewDims {
+  return [
+    hit.locale,
+    hit.path,
+    hit.pageType,
+    hit.viewport,
+    reader.browser,
+    reader.os,
+    reader.country,
+    reader.browserLanguage,
+    "",
+    "",
+    "",
+    "",
+  ];
+}
+
+/** The dimensions of a visit's start row: the first page view's, and the visit's. */
 function visitDims(start: VisitStart, reader: Reader): PageviewDims {
   return [
     start.locale,
@@ -776,6 +946,7 @@ function visitDims(start: VisitStart, reader: Reader): PageviewDims {
     reader.browser,
     reader.os,
     reader.country,
+    reader.browserLanguage,
     start.path,
     start.referrer,
     start.channel,
@@ -784,25 +955,50 @@ function visitDims(start: VisitStart, reader: Reader): PageviewDims {
 }
 
 /**
+ * The exit row the request's last page view would make: that page's
+ * dimensions and how the visit began. Null without a page view in it, which
+ * leaves the visit's exit where its last page view put it.
+ */
+export function exitDimsOf(
+  observed: ObservedHit[],
+  start: VisitStart,
+  reader: Reader,
+): PageviewDims | null {
+  const last = [...observed]
+    .reverse()
+    .find((entry) => entry.hit.t === "pageview");
+  if (!last || last.hit.t !== "pageview") return null;
+  const dims = pageDims(last.hit, reader);
+  return [
+    ...dims.slice(0, 8),
+    start.path,
+    start.referrer,
+    start.channel,
+    start.campaign,
+  ] as PageviewDims;
+}
+
+/**
  * The buffer fields one request adds, summed. Pure, so the counting rules are
  * testable without Redis. A page view counts a view under its own page
  * dimensions, with the visit dimensions empty; the page view that opens a
  * visit also counts the visit, and the second one an `engaged`, both under
- * the visit's first page view and how the visit began. An event counts once,
- * under its page dimensions. So a row never joins a page beyond the first to
- * the visit's referrer.
+ * the visit's first page view and how the visit began. An engagement adds its
+ * seconds to the page's row and, with a visit known, to the visit's start
+ * row. An event counts once, under its page dimensions. So a row never joins
+ * a page in the middle of a visit to the visit's referrer.
  */
 export function bufferIncrements(
   observed: ObservedHit[],
   reader: Reader,
 ): Map<string, number> {
   const increments = new Map<string, number>();
-  const add = (field: string) =>
-    increments.set(field, (increments.get(field) ?? 0) + 1);
+  const add = (field: string, by = 1) =>
+    increments.set(field, (increments.get(field) ?? 0) + by);
 
   for (const entry of observed) {
-    if (entry.hit.t === "event") {
-      const hit = entry.hit;
+    const { hit } = entry;
+    if (hit.t === "event") {
       add(
         eventField([
           hit.name,
@@ -819,23 +1015,15 @@ export function bufferIncrements(
       );
       continue;
     }
+    if (hit.t === "engagement") {
+      add(pageviewField("d", pageDims(hit, reader)), hit.seconds);
+      if ("visit" in entry && entry.visit) {
+        add(pageviewField("t", visitDims(entry.visit, reader)), hit.seconds);
+      }
+      continue;
+    }
     if (!("start" in entry)) continue;
-    const { hit } = entry;
-    add(
-      pageviewField("v", [
-        hit.locale,
-        hit.path,
-        hit.pageType,
-        hit.viewport,
-        reader.browser,
-        reader.os,
-        reader.country,
-        "",
-        "",
-        "",
-        "",
-      ]),
-    );
+    add(pageviewField("v", pageDims(hit, reader)));
     if (entry.start) add(pageviewField("s", visitDims(entry.start, reader)));
     if (entry.engaged)
       add(pageviewField("e", visitDims(entry.engaged, reader)));

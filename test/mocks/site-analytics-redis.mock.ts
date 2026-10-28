@@ -1,8 +1,9 @@
 /**
  * A Redis good enough for the site statistic's unit tests: counters, hashes,
- * sets (a HyperLogLog is a set here, exact rather than estimated), RENAME,
- * HSCAN, the guard script (`siteAnalyticsAdmit`, the same rules as its Lua in
- * `site-analytics-admit.ts`) and the TTL each key was given. Pipelines and
+ * sets (a HyperLogLog is a set here, exact rather than estimated), sorted
+ * sets, RENAME, HSCAN, the guard and close-visit scripts
+ * (`siteAnalyticsAdmit` and `siteAnalyticsCloseVisit`, the same rules as
+ * their Lua in `site-analytics-scripts.ts`) and the TTL each key was given. Pipelines and
  * `MULTI` run their commands in order and answer like ioredis, `[error,
  * result]` per command. Expiry is not simulated; a test ends a visit with
  * `expireKeys(prefix)`.
@@ -12,6 +13,7 @@ export class SiteAnalyticsRedisMock {
   strings = new Map<string, string>();
   hashes = new Map<string, Map<string, string>>();
   sets = new Map<string, Set<string>>();
+  zsets = new Map<string, Map<string, number>>();
   ttls = new Map<string, number>();
   /** Every command a pipeline ran, as `[name, key, ...args]`. */
   commands: Array<[string, ...unknown[]]> = [];
@@ -38,7 +40,14 @@ export class SiteAnalyticsRedisMock {
     "pfadd",
     "pfcount",
     "exists",
+    "hmget",
+    "hgetall",
+    "mget",
+    "zadd",
+    "zrem",
+    "zremrangebyscore",
     "siteAnalyticsAdmit",
+    "siteAnalyticsCloseVisit",
   ];
 
   private has(key: string): boolean {
@@ -46,8 +55,17 @@ export class SiteAnalyticsRedisMock {
       this.counters.has(key) ||
       this.strings.has(key) ||
       this.hashes.has(key) ||
-      this.sets.has(key)
+      this.sets.has(key) ||
+      this.zsets.has(key)
     );
+  }
+
+  private increment(key: string, field: string, by: number): number {
+    const hash = this.hashes.get(key) ?? new Map<string, string>();
+    this.hashes.set(key, hash);
+    const next = Number(hash.get(field) ?? 0) + by;
+    hash.set(field, String(next));
+    return next;
   }
 
   private run(name: string, key: string, args: unknown[]): unknown {
@@ -76,6 +94,7 @@ export class SiteAnalyticsRedisMock {
           this.strings,
           this.hashes,
           this.sets,
+          this.zsets,
         ]) {
           if (map.delete(key)) removed++;
         }
@@ -87,9 +106,51 @@ export class SiteAnalyticsRedisMock {
       case "hset": {
         const hash = this.hashes.get(key) ?? new Map<string, string>();
         this.hashes.set(key, hash);
-        const added = hash.has(String(args[0])) ? 0 : 1;
-        hash.set(String(args[0]), String(args[1]));
+        let added = 0;
+        for (let i = 0; i + 1 < args.length; i += 2) {
+          if (!hash.has(String(args[i]))) added++;
+          hash.set(String(args[i]), String(args[i + 1]));
+        }
         return added;
+      }
+      case "hmget":
+        return args.map(
+          (field) => this.hashes.get(key)?.get(String(field)) ?? null,
+        );
+      case "hgetall":
+        return Object.fromEntries(this.hashes.get(key) ?? []);
+      case "mget":
+        return [key, ...(args as string[])].map((name) =>
+          this.counters.has(name) ? String(this.counters.get(name)) : null,
+        );
+      case "zadd": {
+        const zset = this.zsets.get(key) ?? new Map<string, number>();
+        this.zsets.set(key, zset);
+        const added = zset.has(String(args[1])) ? 0 : 1;
+        zset.set(String(args[1]), Number(args[0]));
+        return added;
+      }
+      case "zrem": {
+        const zset = this.zsets.get(key);
+        const removed = zset?.delete(String(args[0])) ? 1 : 0;
+        if (zset && zset.size === 0) this.zsets.delete(key);
+        return removed;
+      }
+      case "zremrangebyscore": {
+        const zset = this.zsets.get(key);
+        if (!zset) return 0;
+        const [min, max] = args.map((a) =>
+          a === "-inf" ? -Infinity : a === "+inf" ? Infinity : Number(a),
+        );
+        let removed = 0;
+        for (const [member, score] of [...zset]) {
+          if (score >= min && score <= max) {
+            zset.delete(member);
+            removed++;
+          }
+        }
+        if (zset.size === 0) this.zsets.delete(key);
+        return removed;
       }
       case "hsetnx": {
         const hash = this.hashes.get(key) ?? new Map<string, string>();
@@ -104,13 +165,8 @@ export class SiteAnalyticsRedisMock {
         if (hash && hash.size === 0) this.hashes.delete(key);
         return removed;
       }
-      case "hincrby": {
-        const hash = this.hashes.get(key) ?? new Map<string, string>();
-        this.hashes.set(key, hash);
-        const next = Number(hash.get(String(args[0])) ?? 0) + Number(args[1]);
-        hash.set(String(args[0]), String(next));
-        return next;
-      }
+      case "hincrby":
+        return this.increment(key, String(args[0]), Number(args[1]));
       case "sadd":
       case "pfadd": {
         const set = this.sets.get(key) ?? new Set<string>();
@@ -125,8 +181,13 @@ export class SiteAnalyticsRedisMock {
       case "sismember":
         return this.sets.get(key)?.has(String(args[0])) ? 1 : 0;
       case "scard":
-      case "pfcount":
         return this.sets.get(key)?.size ?? 0;
+      case "pfcount": {
+        const union = new Set<string>();
+        for (const name of [key, ...(args as string[])])
+          for (const m of this.sets.get(name) ?? []) union.add(m);
+        return union.size;
+      }
       case "srem": {
         const set = this.sets.get(key);
         const removed = set?.delete(String(args[0])) ? 1 : 0;
@@ -161,6 +222,20 @@ export class SiteAnalyticsRedisMock {
         today.add(value);
         this.sets.set(key, today);
         if (!this.ttls.has(key)) this.ttls.set(key, setTtl);
+        return 1;
+      }
+      case "siteAnalyticsCloseVisit": {
+        const [open, buffer, windows, last, member, window, exit, span] =
+          args as string[];
+        if (this.hashes.get(key)?.get("l") !== String(last)) return 0;
+        this.increment(buffer, `x${exit}`, 1);
+        if (Number(span) > 0) this.increment(buffer, `y${exit}`, Number(span));
+        const set = this.sets.get(windows) ?? new Set<string>();
+        set.add(window);
+        this.sets.set(windows, set);
+        this.hashes.delete(key);
+        this.ttls.delete(key);
+        this.zsets.get(open)?.delete(member);
         return 1;
       }
       default:
@@ -286,6 +361,32 @@ export class SiteAnalyticsRedisMock {
     return this.top("sadd", key, [member]) as number;
   }
 
+  async zcard(key: string): Promise<number> {
+    return this.zsets.get(key)?.size ?? 0;
+  }
+
+  /** `min max LIMIT offset count`, members by ascending score. */
+  async zrangebyscore(
+    key: string,
+    min: string | number,
+    max: string | number,
+    ...options: unknown[]
+  ): Promise<string[]> {
+    const bound = (a: string | number) =>
+      a === "-inf" ? -Infinity : a === "+inf" ? Infinity : Number(a);
+    const sorted = [...(this.zsets.get(key) ?? [])]
+      .filter(([, score]) => score >= bound(min) && score <= bound(max))
+      .sort(([a, x], [b, y]) => x - y || (a < b ? -1 : 1))
+      .map(([member]) => member);
+    const at = options.indexOf("LIMIT");
+    return at >= 0
+      ? sorted.slice(
+          Number(options[at + 1]),
+          Number(options[at + 1]) + Number(options[at + 2]),
+        )
+      : sorted;
+  }
+
   async scard(key: string): Promise<number> {
     return this.top("scard", key, []) as number;
   }
@@ -309,7 +410,13 @@ export class SiteAnalyticsRedisMock {
 
   /** Ends every key that starts with `prefix`, as its TTL would. */
   expireKeys(prefix: string): void {
-    for (const map of [this.counters, this.strings, this.hashes, this.sets]) {
+    for (const map of [
+      this.counters,
+      this.strings,
+      this.hashes,
+      this.sets,
+      this.zsets,
+    ]) {
       for (const key of [...map.keys()])
         if (key.startsWith(prefix)) map.delete(key);
     }

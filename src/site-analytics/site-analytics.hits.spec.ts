@@ -37,9 +37,9 @@ const event = (
  * the pattern of every field: only `{ v: 1, hits: 1..20 }` parses; a hit with
  * a malformed base field or name is dropped alone; a malformed property,
  * referrer, campaign or entity is dropped and the hit kept; properties are
- * kept in key order, at most eight, with an unambiguous canonical key; and
- * `page_read`, the one event the API knows, keeps the most-read counter's key
- * rules.
+ * kept in key order, at most eight, with an unambiguous canonical key; an
+ * engagement is whole seconds within a bound; and `page_read`, the one event
+ * the API knows, keeps the most-read counter's key rules.
  */
 describe("parseCollectBody", () => {
   it("reads the text body sendBeacon sends and the parsed JSON body alike", () => {
@@ -69,6 +69,21 @@ describe("parseCollectBody", () => {
 });
 
 describe("validateHit", () => {
+  it("accepts an engagement of 1 to 1800 whole seconds on a page, and nothing more", () => {
+    expect(
+      validateHit({ t: "engagement", ...base, seconds: 42, referrer: "x.com" }),
+    ).toEqual({ t: "engagement", ...base, seconds: 42 });
+    expect(
+      validateHit({ t: "engagement", ...base, seconds: 1800 }),
+    ).not.toBeNull();
+    for (const seconds of [0, -5, 1801, 2.5, "42", null, undefined]) {
+      expect(validateHit({ t: "engagement", ...base, seconds })).toBeNull();
+    }
+    expect(
+      validateHit({ t: "engagement", ...base, path: "nope", seconds: 5 }),
+    ).toBeNull();
+  });
+
   it("accepts a page view with its referrer and campaign, the campaign lowercased", () => {
     expect(
       validateHit(

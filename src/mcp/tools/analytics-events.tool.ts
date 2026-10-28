@@ -4,7 +4,7 @@ import { SiteAnalyticsService } from "../../site-analytics/site-analytics.servic
 import {
   changeRatio,
   siteQuery,
-  pageWindowInput,
+  eventWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
@@ -22,7 +22,7 @@ export const analyticsEventsTool = defineMcpTool({
     "Do Not Track, GPC and opted-out readers are missing. " +
     VISITOR_DATA_DESCRIPTION,
   input: {
-    ...pageWindowInput,
+    ...eventWindowInput,
     limit: z
       .number()
       .int()
@@ -33,7 +33,7 @@ export const analyticsEventsTool = defineMcpTool({
     series: z
       .boolean()
       .default(false)
-      .describe("Include each event's count per day"),
+      .describe("Include each event's count per period of the interval"),
   },
   async handler({ limit, series, ...input }, ctx) {
     const report = await ctx.get(SiteAnalyticsService).events(siteQuery(input));

@@ -15,7 +15,7 @@ export const seoTrendsTool = defineMcpTool({
   description:
     "Landing pages of one channel (search by default) that gained and lost the most visits against " +
     "the window of the same length right before: path, page type, visits, previous, change " +
-    "(absolute visits). Only pages with at least 10 visits over both windows, so noise does not " +
+    "(absolute visits) and the window's average visit in seconds. Only pages with at least 10 visits over both windows, so noise does not " +
     "rank. Use a window of 7 or 28 days to compare like weekdays; at most 180. The window before " +
     "ends at the current hour, like today. UTC days; up to six minutes " +
     "behind the site; Do Not Track, GPC and opted-out readers are missing. " +

@@ -14,8 +14,11 @@ export type SiteLocale = PageViewLocale;
 /** Below 768, 768–1023 and from 1024 CSS pixels of `window.innerWidth`. */
 export const SITE_VIEWPORTS = ["mobile", "tablet", "desktop"] as const;
 
-/** The dimensions of a page view: every row carries them, visit and event rows too. */
-export const PAGE_DIMS = [
+/**
+ * The dimensions of an event's row, which every other row carries too: the
+ * page and the device.
+ */
+export const EVENT_DIMS = [
   "path",
   "page_type",
   "country",
@@ -26,31 +29,59 @@ export const PAGE_DIMS = [
 ] as const;
 
 /**
+ * The dimensions of a page view: the event's and the browser's language,
+ * which only `site_pageviews` stores.
+ */
+export const PAGE_DIMS = [...EVENT_DIMS, "browser_language"] as const;
+
+/**
  * The dimensions that describe how a visit began rather than a page view.
- * They are stored only on the rows that count a visit start and its
- * `engaged`, never on a page view's or an event's row, so a page's path cannot
- * be joined to where its reader came from. A breakdown by one, or under a
- * filter on one, counts visits started; a report that counts page views or
- * events refuses a filter on one.
+ * They are stored only on the rows that record a visit (its start with its
+ * `engaged` and its seconds, and its exit), never on a page view's or an
+ * event's row, so a page in the middle of a visit cannot be joined to where
+ * its reader came from. A breakdown by one, or under a filter on one, counts
+ * visits; a report that counts page views or events refuses a filter on one.
  */
 export const VISIT_DIMS = ["entry", "referrer", "channel", "campaign"] as const;
 export type VisitDim = (typeof VISIT_DIMS)[number];
 
 /**
- * The dimensions a report can filter on (`filter=<dim>:<value>`) and break
- * down by: the page's and the visit's.
+ * The dimensions a report can filter on (`filter=<dim>:<value>`): the page's
+ * and the visit's.
  */
 export const FILTER_DIMS = [...PAGE_DIMS, ...VISIT_DIMS] as const;
 export type FilterDim = (typeof FILTER_DIMS)[number];
 
-/** The dimensions `breakdown` groups by: the filter dimensions. */
-export const BREAKDOWN_DIMS = FILTER_DIMS;
-export type BreakdownDim = FilterDim;
+/**
+ * The dimensions `breakdown` groups by: the filter dimensions, and `exit`,
+ * the last page of the visits that ended (from their exit rows).
+ */
+export const BREAKDOWN_DIMS = [...FILTER_DIMS, "exit"] as const;
+export type BreakdownDim = (typeof BREAKDOWN_DIMS)[number];
 
-/** Whether a dimension is the visit's ({@link VISIT_DIMS}). */
-export function isVisitDim(dim: FilterDim): dim is VisitDim {
-  return (VISIT_DIMS as readonly string[]).includes(dim);
+/** Whether a dimension is the visit's ({@link VISIT_DIMS}, and `exit`). */
+export function isVisitDim(dim: BreakdownDim): dim is VisitDim | "exit" {
+  return dim === "exit" || (VISIT_DIMS as readonly string[]).includes(dim);
 }
+
+/** A report's series step. */
+export const INTERVALS = ["hour", "day", "week", "month"] as const;
+export type SiteInterval = (typeof INTERVALS)[number];
+
+/** The longest window that may be drawn by the hour. */
+export const MAX_HOURLY_DAYS = 2;
+
+/** The longest `from`–`to` window. */
+export const MAX_RANGE_DAYS = 366;
+
+/** The browser language of a request whose `Accept-Language` names none. */
+export const UNKNOWN_BROWSER_LANGUAGE = "zz";
+
+/**
+ * The most foreground seconds one `engagement` hit may report: half an hour,
+ * the idle time after which the visit would have ended anyway.
+ */
+export const MAX_ENGAGEMENT_SECONDS = 1800;
 
 /** Where a visit came from, derived from its referrer (`referrer.util.ts`). */
 export const CHANNELS = [
@@ -176,6 +207,8 @@ export const DROP_REASONS = {
   entity: "dropped:entity",
   /** Redis was away and this instance's fallback buffer was full. */
   fallback: "dropped:fallback",
+  /** A visit whose key expired before a flush run could count its exit. */
+  exit: "dropped:exit",
   pageType: "overflow:page_type",
   path: "overflow:path",
   referrer: "overflow:referrer",
@@ -189,6 +222,50 @@ export const MAX_EVENT_PROPS = 8;
 
 /** A visit ends after this long without a hit. */
 export const VISIT_IDLE_SECONDS = 30 * 60;
+
+/**
+ * How long a visit's key outlives its last hit: the idle time and two flush
+ * runs, so the run that closes the visit and counts its exit still finds it.
+ */
+export const VISIT_KEY_TTL_SECONDS = 40 * 60;
+
+/**
+ * How long a visit's place among the open ones outlasts its last hit when no
+ * flush run took it: the collector drops older places, so with the flusher
+ * stopped no pseudonym waits there longer.
+ */
+export const OPEN_VISIT_MAX_AGE_SECONDS = 2 * 3600;
+
+/** How many idle visits one flush run closes at most; the rest wait. */
+export const MAX_VISITS_CLOSED_PER_RUN = 20000;
+
+/**
+ * The live view's lists: pages, countries and devices over the last few
+ * minutes, channels, referrers and events over the last half hour, the
+ * longest ones cut.
+ */
+export const LIVE_SHORT_MINUTES = 5;
+export const LIVE_LONG_MINUTES = 30;
+export const LIVE_TOP_PAGES = 10;
+export const LIVE_TOP_REFERRERS = 10;
+export const LIVE_TOP_EVENTS = 15;
+
+/**
+ * A live key, and a minute's visitors and page views, outlive the longest
+ * list that reads them by a few minutes.
+ */
+export const LIVE_KEY_TTL_SECONDS = (LIVE_LONG_MINUTES + 5) * 60;
+
+/** What a live hash counts, per minute and language. */
+export const LIVE_LISTS = [
+  "pages",
+  "countries",
+  "channels",
+  "referrers",
+  "devices",
+  "events",
+] as const;
+export type LiveList = (typeof LIVE_LISTS)[number];
 
 /** "Active now": a hit within this many minutes, the current one included. */
 export const REALTIME_ACTIVE_MINUTES = 5;
@@ -279,7 +356,11 @@ export const SITE_ANALYTICS_KEYS = {
   cap: (hash: string) => `site-analytics:cap:${hash}`,
   /** All hits of one five-minute window: `INCRBY`. */
   windowHits: (window: string) => `site-analytics:window-hits:${window}`,
-  /** One visit: its first page view's dimensions and its page-view count. */
+  /**
+   * One visit, a hash: how it began (`c`), its page views (`n`), its first
+   * and last hit (`s`, `l`, UTC seconds) and the exit row of its last page
+   * view (`x`). Lives {@link VISIT_KEY_TTL_SECONDS} past the last hit.
+   */
   visit: (hash: string) => `site-analytics:visit:${hash}`,
   /** One reader's counted reads of one page today (`page_read`). */
   read: (hash: string) => `site-analytics:read:${hash}`,
@@ -303,6 +384,14 @@ export const SITE_ANALYTICS_KEYS = {
   /** One minute's page views: a counter. */
   pageviewsMinute: (minute: string, scope: string) =>
     `site-analytics:rt:pv:${minute}:${scope}`,
+  /** One minute's events: a counter. */
+  eventsMinute: (minute: string, scope: string) =>
+    `site-analytics:rt:ev:${minute}:${scope}`,
+  /** One minute's counts of one live list: a hash of value → count. */
+  live: (list: LiveList, minute: string, scope: string) =>
+    `site-analytics:live:${list}:${minute}:${scope}`,
+  /** The open visits, by their key's hash, scored by their last hit. */
+  openVisits: "site-analytics:visits:open",
   /** Hits dropped or stored under an overflow value, per reason, per UTC day. */
   drops: (day: string) => `site-analytics:drops:${day}`,
   /**

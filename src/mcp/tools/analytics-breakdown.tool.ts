@@ -17,9 +17,12 @@ export const analyticsBreakdownTool = defineMcpTool({
   title: "Traffic by one dimension",
   description:
     "Page views and visits per value of one dimension, largest first, with each value's share of " +
-    "the total: which pages, page types, countries, devices, browsers, languages — or, for the " +
-    "visit dimensions entry, referrer, channel and campaign, where visits came from and landed, " +
-    "counted as visits started (measure: visits, a view is a visit) with a bounce rate each. A " +
+    "the total: which pages, page types, countries, devices, browsers, site languages, browser " +
+    "languages, each with the average time on the page in seconds (and for path the visits that " +
+    "ended there, exits, and exitRate = exits / views) — or, for the visit dimensions entry, " +
+    "referrer, channel and campaign, where visits came from and landed, counted as visits " +
+    "started (measure: visits, a view is a visit) with a bounce rate and the average visit in " +
+    "seconds each. dim=exit lists the pages visits ended on (measure: exits). A " +
     "filter on a visit dimension switches any breakdown to visits started: dim=path with " +
     "channel=search lists the pages search visits entered on (not every page they read later), " +
     "dim=referrer with channel=ai which AI assistants send readers. Direct visits have no " +
@@ -30,7 +33,9 @@ export const analyticsBreakdownTool = defineMcpTool({
   input: {
     dim: z
       .enum(BREAKDOWN_DIMS)
-      .describe(`The dimension to group by: ${FILTER_DIM_HELP}`),
+      .describe(
+        `The dimension to group by: ${FILTER_DIM_HELP}; or exit, the page a visit ended on`,
+      ),
     ...siteWindowInput,
     limit: z
       .number()
@@ -59,6 +64,16 @@ export const analyticsBreakdownTool = defineMcpTool({
           share: round3(item.share),
           ...(item.bounceRate !== undefined && {
             bounceRate: round3(item.bounceRate),
+          }),
+          ...(item.avgVisitSeconds !== undefined && {
+            avgVisitSeconds: item.avgVisitSeconds,
+          }),
+          ...(item.avgTimeOnPageSeconds !== undefined && {
+            avgTimeOnPageSeconds: item.avgTimeOnPageSeconds,
+          }),
+          ...(item.exits !== undefined && {
+            exits: item.exits,
+            exitRate: round3(item.exitRate),
           }),
         })),
       },

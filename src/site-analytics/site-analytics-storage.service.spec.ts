@@ -24,13 +24,14 @@ const PAGE: PageviewDims = [
   "safari",
   "ios",
   "de",
+  "en",
   "",
   "",
   "",
   "",
 ];
 const VISIT: PageviewDims = [
-  ...PAGE.slice(0, 7),
+  ...PAGE.slice(0, 8),
   "/de",
   "google",
   "search",
@@ -128,6 +129,7 @@ describe("SiteAnalyticsStorageService", () => {
         pageviewRows: 3,
         eventRows: 1,
         failed: 0,
+        visitsClosed: 0,
       });
       expect(await redis.smembers(KEYS.windows)).toEqual([
         "2026-10-28T10:05:00.000Z",
@@ -151,9 +153,14 @@ describe("SiteAnalyticsStorageService", () => {
       expect(pageviews[0]).toMatch(/^INSERT INTO site_pageviews/);
       // The rows carry the hour, not the five-minute window.
       expect(pageviews[1]?.[0]).toBe("2026-10-28T09:00:00.000Z");
-      expect(pageviews[1]?.slice(-3)).toEqual([
+      // views, seconds, visits, engaged, visit_seconds, exits, visit_span_seconds
+      expect(pageviews[1]?.slice(-7)).toEqual([
         [3, 0],
+        [0, 0],
         [0, 2],
+        [0, 0],
+        [0, 0],
+        [0, 0],
         [0, 0],
       ]);
       expect(events[0]).toMatch(/^INSERT INTO site_events/);
@@ -178,7 +185,7 @@ describe("SiteAnalyticsStorageService", () => {
       );
       buffer("2026-10-28T09:55:00.000Z", fields);
       await service.flush(NOW);
-      expect(statements[1][1]?.[12]).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(statements[1][1]?.[13]).toEqual([1, 2, 3, 4, 5, 6, 7]);
     });
 
     it("writes a claim with a marker no second time", async () => {
@@ -208,7 +215,15 @@ describe("SiteAnalyticsStorageService", () => {
       expect(statements[0][1]?.[1]).toBe(
         "0b3c6a9e-1111-4222-8333-444455556666",
       );
-      expect(statements[1][1]?.slice(-3)).toEqual([[5], [0], [0]]);
+      expect(statements[1][1]?.slice(-7)).toEqual([
+        [5],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+      ]);
     });
 
     it("flushes counts that reached a window after its claim on the next run, under a new claim", async () => {
@@ -232,7 +247,7 @@ describe("SiteAnalyticsStorageService", () => {
       expect(markers[0][1]?.[1]).not.toBe(markers[1][1]?.[1]);
       const views = statements
         .filter(([sql]) => sql.includes("INSERT INTO site_pageviews"))
-        .map(([, params]) => params?.[12]);
+        .map(([, params]) => params?.[13]);
       expect(views).toEqual([[3], [2]]);
       expect(await redis.smembers(KEYS.windows)).toEqual([]);
     });
@@ -280,6 +295,115 @@ describe("SiteAnalyticsStorageService", () => {
     });
   });
 
+  describe("closeIdleVisits", () => {
+    const seconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+    const EXIT: PageviewDims = [
+      "de",
+      "/de/news",
+      "news_index",
+      ...PAGE.slice(3, 8),
+      "/de",
+      "google",
+      "search",
+      "",
+    ] as PageviewDims;
+    const openVisit = (member: string, first: string, last: string) => {
+      redis.hashes.set(
+        KEYS.visit(member),
+        new Map([
+          ["c", "{}"],
+          ["n", "2"],
+          ["s", String(seconds(first))],
+          ["l", String(seconds(last))],
+          ["x", JSON.stringify(EXIT)],
+        ]),
+      );
+      const open = redis.zsets.get(KEYS.openVisits) ?? new Map();
+      open.set(member, seconds(last));
+      redis.zsets.set(KEYS.openVisits, open);
+    };
+
+    it("ends a visit idle for 30 minutes: one exit and its span in the window of its last hit, then its key goes", async () => {
+      openVisit("idle", "2026-10-28T09:20:00Z", "2026-10-28T09:31:10Z");
+      openVisit("active", "2026-10-28T09:50:00Z", "2026-10-28T09:58:00Z");
+      await expect(service.closeIdleVisits(NOW)).resolves.toBe(1);
+      expect(
+        Object.fromEntries(
+          redis.hashes.get(KEYS.buffer("2026-10-28T09:30:00.000Z")) ?? [],
+        ),
+      ).toEqual({
+        [pageviewField("x", EXIT)]: "1",
+        [pageviewField("y", EXIT)]: String(11 * 60 + 10),
+      });
+      expect(await redis.smembers(KEYS.windows)).toEqual([
+        "2026-10-28T09:30:00.000Z",
+      ]);
+      expect(redis.hashes.has(KEYS.visit("idle"))).toBe(false);
+      expect([...(redis.zsets.get(KEYS.openVisits)?.keys() ?? [])]).toEqual([
+        "active",
+      ]);
+      expect(redis.hashes.has(KEYS.visit("active"))).toBe(true);
+    });
+
+    it("leaves a visit that had a hit between the read and the close, and writes the exit with the window", async () => {
+      openVisit("busy", "2026-10-28T09:20:00Z", "2026-10-28T09:31:10Z");
+      const pipeline = redis.pipeline.bind(redis);
+      let runs = 0;
+      redis.pipeline = () => {
+        const chain = pipeline();
+        const exec = chain.exec;
+        chain.exec = async () => {
+          const results = await exec();
+          // The reader comes back right after the visit was read.
+          if (runs++ === 0)
+            redis.hashes
+              .get(KEYS.visit("busy"))
+              ?.set("l", String(seconds("2026-10-28T10:06:00Z")));
+          return results;
+        };
+        return chain;
+      };
+      await expect(service.closeIdleVisits(NOW)).resolves.toBe(0);
+      expect(redis.hashes.has(KEYS.visit("busy"))).toBe(true);
+      expect(redis.hashes.has(KEYS.buffer("2026-10-28T09:30:00.000Z"))).toBe(
+        false,
+      );
+    });
+
+    it("counts a visit whose key is gone as a lost exit, and forgets it", async () => {
+      redis.zsets.set(
+        KEYS.openVisits,
+        new Map([["gone", seconds("2026-10-28T09:00:00Z")]]),
+      );
+      await expect(service.closeIdleVisits(NOW)).resolves.toBe(0);
+      expect(redis.zsets.has(KEYS.openVisits)).toBe(false);
+      expect(
+        redis.hashes.get(KEYS.drops("2026-10-28"))?.get(DROP_REASONS.exit),
+      ).toBe("1");
+    });
+
+    it("runs first in every flush, so the exits it adds are written in the same run", async () => {
+      openVisit("idle", "2026-10-28T09:20:00Z", "2026-10-28T09:31:10Z");
+      await expect(service.flush(NOW)).resolves.toMatchObject({
+        windows: 1,
+        pageviewRows: 1,
+        visitsClosed: 1,
+      });
+      const [, pageviews] = statements;
+      expect(pageviews[1]?.[0]).toBe("2026-10-28T09:00:00.000Z");
+      // views, seconds, visits, engaged, visit_seconds, exits, visit_span_seconds
+      expect(pageviews[1]?.slice(-7)).toEqual([
+        [0],
+        [0],
+        [0],
+        [0],
+        [0],
+        [1],
+        [670],
+      ]);
+    });
+  });
+
   describe("writeDirect", () => {
     it("writes held counts under their hour, without a marker", async () => {
       await service.writeDirect(
@@ -298,7 +422,7 @@ describe("SiteAnalyticsStorageService", () => {
         [pageviewField("v", VISIT)]: "2",
         [pageviewField("s", VISIT)]: "1",
         [pageviewField("e", VISIT)]: "1",
-        ["x" + JSON.stringify(VISIT)]: "9",
+        ["q" + JSON.stringify(VISIT)]: "9",
         ["v{not json"]: "1",
         ["v" + JSON.stringify(["too", "short"])]: "1",
         [pageviewField("v", PAGE)]: "0",
@@ -307,7 +431,18 @@ describe("SiteAnalyticsStorageService", () => {
         ["n" + JSON.stringify([...EVENT, "an old field"])]: "1",
       });
       expect(rows.pageviews).toEqual([
-        { dims: VISIT, views: 2, visits: 1, engaged: 1 },
+        {
+          dims: VISIT,
+          counts: {
+            views: 2,
+            seconds: 0,
+            visits: 1,
+            engaged: 1,
+            visitSeconds: 0,
+            exits: 0,
+            visitSpanSeconds: 0,
+          },
+        },
       ]);
       expect(rows.events).toEqual([{ dims: EVENT, count: 3 }]);
     });
@@ -353,6 +488,13 @@ describe("SiteAnalyticsStorageService", () => {
         KEYS.drops("2026-10-28"),
         new Map([[DROP_REASONS.window, "12"]]),
       );
+      redis.zsets.set(
+        KEYS.openVisits,
+        new Map([
+          ["a", 1],
+          ["b", 2],
+        ]),
+      );
       const query = jest
         .fn()
         .mockResolvedValue([{ last: new Date("2026-10-28T10:01:02Z") }]);
@@ -363,6 +505,7 @@ describe("SiteAnalyticsStorageService", () => {
         readyWindows: 1,
         oldestPendingMinutes: 26,
         parkedWindows: 1,
+        openVisits: 2,
         lastFlushAt: "2026-10-28T10:01:02.000Z",
         dropsToday: { [DROP_REASONS.window]: 12 },
         dropsYesterday: {},
