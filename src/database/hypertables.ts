@@ -155,6 +155,16 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     segmentBy: "cuboid",
     orderBy: "bucket DESC",
   },
+  // Visitors by country, device, browser, OS and channel: insert-only, a
+  // finished day written once by `snapshot-visitors`. Week chunks, dropped
+  // with the daily tables' by the same nightly job.
+  {
+    table: "site_visitor_dim_days",
+    timeColumn: "day",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: visitors by dimension value and day",
+  },
   // Google Search Console (PAR-1160): insert-only, a batch per import of a
   // day, the reports read the newest batch of each day. Month chunks,
   // compressed 35 days after the day (a day is imported again for the first
@@ -180,6 +190,7 @@ export const SITE_ANALYTICS_HYPERTABLES = [
   "site_analytics_flushes",
   "site_pageviews_daily",
   "site_events_daily",
+  "site_visitor_dim_days",
 ] as const;
 
 /**

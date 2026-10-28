@@ -302,6 +302,33 @@ describe("site statistic tools", () => {
     ]);
   });
 
+  it("analytics_breakdown: carries the visitors of a value when the report counted them", async () => {
+    const service = {
+      breakdown: jest.fn(async () => ({
+        ...WINDOW,
+        dim: "country",
+        measure: "views",
+        total: { views: 10, visits: 4 },
+        items: [
+          { value: "de", views: 7, visits: 3, share: 0.7, visitors: 2 },
+          { value: "nl", views: 3, visits: 1, share: 0.3 },
+        ],
+      })),
+    };
+    const answer = await run(
+      analyticsBreakdownTool,
+      { dim: "country", limit: 5 },
+      service,
+    );
+    expect(visitorData(answer).items).toEqual([
+      { value: "de", views: 7, visits: 3, share: 0.7, visitors: 2 },
+      { value: "nl", views: 3, visits: 1, share: 0.3 },
+    ]);
+    expect(analyticsBreakdownTool.description).toContain(
+      "also gives each value's visitors",
+    );
+  });
+
   it("analytics_events: caps the list, adds the change, drops series by default", async () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       name: `event_${i}`,

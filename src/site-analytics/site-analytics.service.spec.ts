@@ -22,9 +22,11 @@ const row = (fields: Record<string, string | null>, count: number) => ({
 /**
  * The admin's reports, assembled from what the SQL returns. What is pinned:
  * every period of the interval is listed with zeros, a cut or unfinished one
- * marked partial; visitors are null under a filter rather than guessed, and
- * for an hour before today; time on page and visit divide by their own
- * counts; a visit dimension counts visits and carries a bounce rate and the
+ * marked partial; visitors are null under a filter that has no count rather
+ * than guessed (two filters, a page, a visit's entry or referrer), and given
+ * under one value of country, device, browser, OS or channel, per value in
+ * the breakdowns of those, never by the hour under a filter, and null for an
+ * hour before today; time on page and visit divide by their own counts; a visit dimension counts visits and carries a bounce rate and the
  * average visit, dim=exit the visits ended; events are what was seen plus
  * what is blocked; the
  * grouping-set rows are told apart by their NULLs; a property keeps fifty
@@ -210,6 +212,111 @@ describe("SiteAnalyticsService", () => {
       expect(sqlOf("site_visitor_days")[0]).toBe("");
     });
 
+    describe("visitors under one filter", () => {
+      /** The snapshot's rows of one value, as the SQL returns them. */
+      const dimRows = (value: string) => [
+        { day: "2026-10-27", value, visitors: 8 },
+        { day: "2026-10-22", value, visitors: 5 },
+      ];
+
+      it("counts the days of the window and the one before under one value, today from Redis", async () => {
+        routes = [["FROM site_visitor_dim_days", dimRows("de")]];
+        pfcounts.set("site-analytics:uvd:2026-10-28:all:country:de", 3);
+        pfcounts.set("site-analytics:uv:2026-10-28:all", 99);
+        const overview = await service.overview(
+          { days: 2, filter: ["country:de"] },
+          NOW,
+        );
+        expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
+          "all",
+          "country",
+          ["de"],
+          "2026-10-25",
+          "2026-10-28",
+        ]);
+        expect(sqlOf("FROM site_visitor_days")[0]).toBe("");
+        expect(overview.totals.visitors).toBe(11);
+        // 2026-10-22 lies before the window before, which starts on the 25th.
+        expect(overview.previous?.visitors).toBe(0);
+        expect(overview.series.map((point) => point.visitors)).toEqual([8, 3]);
+      });
+
+      it("counts per language under a language and a filter, and under a visit dimension", async () => {
+        routes = [["FROM site_visitor_dim_days", dimRows("search")]];
+        pfcounts.set("site-analytics:uvd:2026-10-28:de:channel:search", 2);
+        const overview = await service.overview(
+          { days: 2, locale: "de", filter: ["channel:search"] },
+          NOW,
+        );
+        expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
+          "de",
+          "channel",
+          ["search"],
+          "2026-10-25",
+          "2026-10-28",
+        ]);
+        expect(overview.totals.visitors).toBe(10);
+        // Visits follow the filter as before.
+        expect(overview.totals.pageviews).toBeNull();
+      });
+
+      it("leaves an hourly series without visitors, the totals with them", async () => {
+        routes = [["FROM site_visitor_dim_days", dimRows("mobile")]];
+        pfcounts.set("site-analytics:uvd:2026-10-28:all:device:mobile", 3);
+        const overview = await service.overview(
+          { days: 1, filter: ["device:mobile"] },
+          NOW,
+        );
+        expect(overview.interval).toBe("hour");
+        expect(overview.totals.visitors).toBe(3);
+        expect(overview.series).toHaveLength(8);
+        expect(overview.series.every((p) => p.visitors === null)).toBe(true);
+        expect(sqlOf("FROM site_visitor_hours")[0]).toBe("");
+      });
+
+      it.each([
+        ["two dimensions", ["country:de", "device:mobile"]],
+        ["two values of one dimension", ["country:de", "country:nl"]],
+        ["a page", ["path:/de"]],
+        ["a page type", ["page_type:park"]],
+        ["a visit dimension without visitors", ["entry:/de"]],
+        ["the language as a filter", ["locale:de"]],
+      ])("gives none for %s", async (_name, filter) => {
+        const overview = await service.overview({ days: 7, filter }, NOW);
+        expect(overview.totals.visitors).toBeNull();
+        expect(overview.previous?.visitors).toBeNull();
+        expect(overview.series.every((p) => p.visitors === null)).toBe(true);
+        expect(sqlOf("FROM site_visitor_dim_days")[0]).toBe("");
+      });
+
+      it("sums a week's and a month's days, as the totals count them", async () => {
+        routes = [
+          [
+            "FROM site_visitor_dim_days",
+            [
+              { day: "2026-10-05", value: "ios", visitors: 2 },
+              { day: "2026-10-06", value: "ios", visitors: 3 },
+              { day: "2026-10-12", value: "ios", visitors: 4 },
+            ],
+          ],
+        ];
+        const overview = await service.overview(
+          {
+            from: "2026-10-05",
+            to: "2026-10-14",
+            interval: "week",
+            filter: ["os:ios"],
+          },
+          NOW,
+        );
+        expect(overview.series.map((p) => [p.day, p.visitors])).toEqual([
+          ["2026-10-05", 5],
+          ["2026-10-12", 4],
+        ]);
+        expect(overview.totals.visitors).toBe(9);
+      });
+    });
+
     it("follows a visit filter with visits and bounce only: page views and events are null", async () => {
       routes = [
         [
@@ -226,7 +333,7 @@ describe("SiteAnalyticsService", () => {
         ],
       ];
       const overview = await service.overview(
-        { days: 7, filter: ["channel:search"] },
+        { days: 7, filter: ["referrer:google"] },
         NOW,
       );
       expect(overview.totals).toEqual({
@@ -397,7 +504,16 @@ describe("SiteAnalyticsService", () => {
             },
           ],
         ],
+        [
+          "FROM site_visitor_dim_days",
+          [
+            { day: "2026-10-27", value: "search", visitors: 5 },
+            { day: "2026-10-26", value: "search", visitors: 1 },
+            { day: "2026-10-27", value: "direct", visitors: 2 },
+          ],
+        ],
       ];
+      pfcounts.set("site-analytics:uvd:2026-10-28:all:channel:search", 3);
       const result = await service.breakdown(
         { dim: "channel", days: 30, limit: 2 },
         NOW,
@@ -412,6 +528,8 @@ describe("SiteAnalyticsService", () => {
           share: 0.6,
           bounceRate: 0.5,
           avgVisitSeconds: 100,
+          // The snapshot's two days and today's HyperLogLog.
+          visitors: 9,
         },
         {
           value: "direct",
@@ -420,12 +538,93 @@ describe("SiteAnalyticsService", () => {
           share: 0.4,
           bounceRate: 1,
           avgVisitSeconds: 10,
+          visitors: 2,
         },
       ]);
       const [sql] = sqlOf("WITH per_value");
       expect(sql).toContain("SELECT channel AS value");
       expect(sql).toContain("HAVING SUM(visits) > 0");
       expect(sql).toContain("ORDER BY visits DESC");
+    });
+
+    describe("visitors per value", () => {
+      const countries = [
+        {
+          value: "de",
+          views: "8",
+          seconds: "80",
+          visits: "2",
+          engaged: "1",
+          total: "10",
+          total_visits: "3",
+        },
+        {
+          value: "nl",
+          views: "2",
+          seconds: "20",
+          visits: "1",
+          engaged: "0",
+          total: "10",
+          total_visits: "3",
+        },
+      ];
+
+      it("lists each value's visitors of a visitor dimension, for the listed values only", async () => {
+        routes = [
+          ["WITH per_value", countries],
+          [
+            "FROM site_visitor_dim_days",
+            [
+              { day: "2026-10-27", value: "de", visitors: 6 },
+              { day: "2026-10-26", value: "de", visitors: 4 },
+            ],
+          ],
+        ];
+        pfcounts.set("site-analytics:uvd:2026-10-28:de:country:nl", 2);
+        const result = await service.breakdown(
+          { dim: "country", days: 7, limit: 2, locale: "de" },
+          NOW,
+        );
+        expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
+          "de",
+          "country",
+          ["de", "nl"],
+          "2026-10-22",
+          "2026-10-28",
+        ]);
+        expect(result.items.map((item) => [item.value, item.visitors])).toEqual(
+          [
+            ["de", 10],
+            ["nl", 2],
+          ],
+        );
+      });
+
+      it("gives the one value of a filter on the same dimension, and none under another filter or for another dimension", async () => {
+        routes = [["WITH per_value", [countries[0]]]];
+        const same = await service.breakdown(
+          { dim: "country", days: 7, limit: 5, filter: ["country:de"] },
+          NOW,
+        );
+        expect(same.items.map((item) => item.visitors)).toEqual([0]);
+        for (const query of [
+          { dim: "country" as const, filter: ["device:mobile"] },
+          { dim: "country" as const, filter: ["country:de", "device:mobile"] },
+          { dim: "path" as const },
+          { dim: "exit" as const },
+          { dim: "browser_language" as const },
+        ]) {
+          calls = [];
+          const result = await service.breakdown(
+            { days: 7, limit: 5, ...query },
+            NOW,
+          );
+          expect(
+            result.items.every((item) => item.visitors === undefined),
+          ).toBe(true);
+          expect(sqlOf("FROM site_visitor_dim_days")[0]).toBe("");
+        }
+      });
     });
 
     it("counts a page dimension in views, leaves direct out of the referrers", async () => {

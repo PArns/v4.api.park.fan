@@ -26,7 +26,8 @@ export const analyticsBreakdownTool = defineMcpTool({
     "filter on a visit dimension switches any breakdown to visits started: dim=path with " +
     "channel=search lists the pages search visits entered on (not every page they read later), " +
     "dim=referrer with channel=ai which AI assistants send readers. Direct visits have no " +
-    "referrer. " +
+    "referrer. A breakdown by country, device, browser, os or channel, without a filter or under " +
+    "a filter on that same dimension, also gives each value's visitors. " +
     VISITOR_DATA_DESCRIPTION +
     " " +
     SITE_ANALYTICS_CAVEATS,
@@ -62,6 +63,7 @@ export const analyticsBreakdownTool = defineMcpTool({
           views: item.views,
           visits: item.visits,
           share: round3(item.share),
+          ...(item.visitors !== undefined && { visitors: item.visitors }),
           ...(item.bounceRate !== undefined && {
             bounceRate: round3(item.bounceRate),
           }),

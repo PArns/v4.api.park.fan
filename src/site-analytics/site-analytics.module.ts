@@ -20,6 +20,7 @@ import { SitePageviewDay } from "./entities/site-pageview-day.entity";
 import { SiteEventDay } from "./entities/site-event-day.entity";
 import { SiteRollupDay } from "./entities/site-rollup-day.entity";
 import { SiteVisitorHour } from "./entities/site-visitor-hour.entity";
+import { SiteVisitorDimDay } from "./entities/site-visitor-dim-day.entity";
 import { SiteAnalyticsImport } from "./entities/site-analytics-import.entity";
 import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "./site-analytics-storage.service";
@@ -57,6 +58,7 @@ export const COLLECT_ROUTE = {
       SiteEventRow,
       SiteVisitorDay,
       SiteVisitorHour,
+      SiteVisitorDimDay,
       SitePageviewDay,
       SiteEventDay,
       SiteRollupDay,

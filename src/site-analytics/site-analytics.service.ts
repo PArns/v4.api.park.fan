@@ -27,6 +27,7 @@ import {
   type BreakdownDim,
   type FilterDim,
   type SiteLocale,
+  type VisitorDim,
 } from "./site-analytics.constants";
 import { propsOfKey } from "./site-analytics.hits";
 import { WIDE_COLUMNS, rowsOf } from "./site-analytics.rollup";
@@ -57,6 +58,7 @@ import {
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteReportRunner } from "./site-analytics-report-runner";
 import { SiteEntityNames } from "./site-entity-names.service";
+import { visitorBasisOf, type VisitorFilter } from "./visitor-dims.util";
 import type {
   SiteBreakdownDto,
   SiteCrosstabDto,
@@ -117,8 +119,11 @@ export class SiteAnalyticsService {
    * Page views, visits, visitors, events, views per visit, bounce rate and
    * the average visit and time on page over the window and the one before,
    * a point per period of the window's interval with all of them, and the
-   * realtime minute. Visitors are unique per UTC day and language only, so
-   * with a filter they are null rather than a guess. Under a filter on a
+   * realtime minute. Visitors are unique per UTC day and are counted per
+   * language and per value of country, device, browser, OS and channel, so
+   * under one filter on one of those they follow it, and under any other
+   * filter they are null rather than a guess ({@link visitorBasisOf}); an
+   * hourly series has none under a filter. Under a filter on a
    * visit dimension only the visit figures can follow it: page views,
    * events, views per visit and time on page are null.
    */
@@ -128,6 +133,7 @@ export class SiteAnalyticsService {
   ): Promise<SiteOverviewDto> {
     return this.runner.run(async () => {
       const window = siteAnalyticsWindow(query, now);
+      const visitorBasis = visitorBasisOf(window.filters);
       const visitsOnly = visitFilters(window).length > 0;
       const period = periodOf(window.hourly);
       const traffic = new SqlParams();
@@ -162,9 +168,11 @@ export class SiteAnalyticsService {
               events.values,
             ) as Promise<Array<{ period: string; events: Count }>>)
           : Promise.resolve([] as Array<{ period: string; events: Count }>),
-        window.filters.length > 0
+        !visitorBasis
           ? Promise.resolve(null)
-          : this.visitors(window, now),
+          : visitorBasis.filter
+            ? this.dimVisitors(window, visitorBasis.filter, now)
+            : this.visitors(window, now),
         this.realtime(window.locale, now),
       ]);
 
@@ -257,7 +265,9 @@ export class SiteAnalyticsService {
    * a bounce rate and the average visit: `dim=path` under `channel:search`
    * lists where search visits entered, `dim=country` where they came from.
    * `exit` counts the visits that ended on each page (`measure: "exits"`). A
-   * direct visit has no referrer and none is listed.
+   * direct visit has no referrer and none is listed. A breakdown by country,
+   * device, browser, OS or channel, unfiltered or under a filter on that
+   * dimension, also lists each value's `visitors`.
    */
   async breakdown(
     query: SiteAnalyticsQuery & { dim: BreakdownDim; limit: number },
@@ -321,6 +331,12 @@ export class SiteAnalyticsService {
         params.values,
       );
       const total = num(rows[0]?.total);
+      const visitors = await this.valueVisitors(
+        window,
+        query.dim,
+        rows.map((row) => row.value),
+        now,
+      );
       return {
         ...echo(window),
         dim: query.dim,
@@ -348,6 +364,7 @@ export class SiteAnalyticsService {
               share: rate(visits, total),
               bounceRate: bounceRate(visits, num(row.engaged)),
               avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
+              ...(visitors && { visitors: visitors.get(row.value) ?? 0 }),
             };
           }
           const views = num(row.views);
@@ -357,6 +374,7 @@ export class SiteAnalyticsService {
             visits,
             share: rate(views, total),
             avgTimeOnPageSeconds: averageSeconds(num(row.seconds), views),
+            ...(visitors && { visitors: visitors.get(row.value) ?? 0 }),
             ...(query.dim === "path" && {
               exits: num(row.exits),
               exitRate: Math.min(1, rate(num(row.exits), views)),
@@ -1047,6 +1065,121 @@ export class SiteAnalyticsService {
   }
 
   /**
+   * {@link visitors} under one value of country, device, browser, OS or
+   * channel: the days only, from `site_visitor_dim_days` and, for the days it
+   * has not written yet, the HyperLogLog still in Redis. The hours are not
+   * counted by dimension, so an hourly series has none.
+   */
+  private async dimVisitors(
+    window: SiteAnalyticsWindow,
+    filter: VisitorFilter,
+    now: Date,
+  ): Promise<Visitors> {
+    const byValue = await this.dimDays(
+      window.locale ?? ALL_LOCALES_SCOPE,
+      filter.dim,
+      [filter.value],
+      window.previous?.from ?? window.from,
+      window.to,
+      now,
+    );
+    return {
+      days: byValue.get(filter.value) ?? new Map(),
+      hours: null,
+      today: utcDay(now),
+    };
+  }
+
+  /**
+   * The window's visitors per value of a breakdown's dimension (the days
+   * summed, as the totals count them), for the listed values; null where the
+   * filters leave no count ({@link visitorBasisOf}).
+   */
+  private async valueVisitors(
+    window: SiteAnalyticsWindow,
+    dim: BreakdownDim,
+    values: string[],
+    now: Date,
+  ): Promise<Map<string, number> | null> {
+    const basis = visitorBasisOf(window.filters, dim);
+    if (!basis?.by) return null;
+    const days = await this.dimDays(
+      window.locale ?? ALL_LOCALES_SCOPE,
+      basis.by,
+      values,
+      window.from,
+      window.to,
+      now,
+    );
+    return new Map(
+      values.map((value) => [
+        value,
+        sumVisitors(days.get(value) ?? new Map(), window.from, window.to),
+      ]),
+    );
+  }
+
+  /**
+   * Unique visitors per day with each of `values` of one dimension: the
+   * snapshot's rows, and for the days it has not written yet (today, and
+   * yesterday until it has run) the HyperLogLog in Redis. With Redis down the
+   * live days read zero.
+   */
+  private async dimDays(
+    scope: string,
+    dim: VisitorDim,
+    values: string[],
+    from: string,
+    to: string,
+    now: Date,
+  ): Promise<Map<string, Map<string, number>>> {
+    const perValue = new Map(
+      values.map((value) => [value, new Map<string, number>()]),
+    );
+    if (values.length === 0) return perValue;
+    const rows: Array<{ day: string; value: string; visitors: Count }> =
+      await this.runner.query(
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, value, visitors
+           FROM site_visitor_dim_days
+          WHERE scope = $1 AND dim = $2 AND value = ANY($3::text[])
+            AND day BETWEEN $4::date AND $5::date`,
+        [scope, dim, values, from, to],
+      );
+    for (const row of rows) {
+      perValue.get(row.value)?.set(row.day, num(row.visitors));
+    }
+    const today = utcDay(now);
+    const liveFrom = addIsoDays(
+      today,
+      -Math.ceil(VISITOR_KEY_GRACE_SECONDS / 86_400),
+    );
+    const live = daysBetween(liveFrom, today)
+      .filter((day) => day >= from && day <= to)
+      .flatMap((day) =>
+        values
+          .filter((value) => !perValue.get(value)?.has(day))
+          .map((value) => ({ day, value })),
+      );
+    if (live.length === 0) return perValue;
+    try {
+      const pipeline = this.redis.pipeline();
+      for (const { day, value } of live) {
+        pipeline.pfcount(KEYS.visitorDim(day, scope, dim, value));
+      }
+      const results = (await pipeline.exec()) ?? [];
+      live.forEach(({ day, value }, i) => {
+        const count = num(results[i]?.[1] as Count);
+        if (count > 0) perValue.get(value)?.set(day, count);
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Live visitor counts unavailable: ${(error as Error).message}`,
+      );
+    }
+    return perValue;
+  }
+
+  /**
    * Distinct visitors over the last {@link REALTIME_ACTIVE_MINUTES} minutes
    * (one PFCOUNT over the minute keys counts their union) and page views per
    * minute over the last {@link REALTIME_SERIES_MINUTES}, for all languages or
@@ -1128,10 +1261,13 @@ const TRAFFIC_MEASURES = [
 ] as const;
 type TrafficMeasure = (typeof TRAFFIC_MEASURES)[number];
 
-/** Visitors per UTC day, and per hour of today when the series is hourly. */
+/**
+ * Visitors per UTC day, and per hour when the series is hourly; `hours` is
+ * null where hours are not counted (under a filter).
+ */
 interface Visitors {
   days: Map<string, number>;
-  hours: Map<string, number>;
+  hours: Map<string, number> | null;
   today: string;
 }
 
@@ -1154,6 +1290,7 @@ function periodVisitors(
   point: SeriesPeriod,
 ): number | null {
   if (window.hourly) {
+    if (!visitors.hours) return null;
     return (
       visitors.hours.get(point.day) ??
       (point.day.startsWith(visitors.today) ? 0 : null)

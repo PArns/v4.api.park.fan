@@ -600,6 +600,121 @@ describe("SiteAnalyticsCollectService", () => {
     expect(redis.ttls.has(KEYS.buffer(WINDOW))).toBe(false);
   });
 
+  describe("visitors by dimension", () => {
+    const day = (scope: string, dim: string, value: string) =>
+      KEYS.visitorDim(DAY, scope, dim, value);
+    const visitorsOf = (key: string) => [...(redis.sets.get(key) ?? [])];
+    const dimKeys = () =>
+      [...redis.sets.keys()].filter((key) =>
+        key.startsWith("site-analytics:uvd:"),
+      );
+
+    it("counts the reader's day pseudonym by country, device, browser and OS for all languages and each language read", async () => {
+      await collect([
+        pageview({ referrer: "www.google.de" }),
+        pageview({ locale: "en", path: "/en", pageType: "home" }),
+      ]);
+      const [visitor] = visitorsOf(KEYS.visitors(DAY, "all"));
+      expect(visitor).toMatch(/^[0-9a-f]{32}$/);
+      for (const scope of ["all", "de", "en"]) {
+        for (const [dim, value] of [
+          ["country", "nl"],
+          ["device", "mobile"],
+          ["browser", "safari"],
+          ["os", "ios"],
+        ]) {
+          expect(visitorsOf(day(scope, dim, value))).toEqual([visitor]);
+        }
+      }
+      expect(dimKeys()).toHaveLength(3 * 4 + 2);
+    });
+
+    it("counts the channel of a visit that opens in the request, in its own language only", async () => {
+      await collect([
+        pageview({ referrer: "www.google.de" }),
+        pageview({ locale: "en", path: "/en", pageType: "home" }),
+      ]);
+      const [visitor] = visitorsOf(KEYS.visitors(DAY, "all"));
+      expect(visitorsOf(day("all", "channel", "search"))).toEqual([visitor]);
+      expect(visitorsOf(day("de", "channel", "search"))).toEqual([visitor]);
+      expect(redis.sets.has(day("en", "channel", "search"))).toBe(false);
+    });
+
+    it("does not count a channel for a later request of the same visit, nor one for a request without a page view", async () => {
+      await collect([pageview({ referrer: "bing.com" })]);
+      await collect([pageview({ path: "/de/news", pageType: "news" })]);
+      await collect([event("search_opened", { surface: "hero" })]);
+      expect(dimKeys().filter((key) => key.includes(":channel:"))).toEqual([
+        day("all", "channel", "search"),
+        day("de", "channel", "search"),
+      ]);
+      expect(visitorsOf(day("all", "channel", "search"))).toHaveLength(1);
+
+      redis = new SiteAnalyticsRedisMock();
+      service = await build();
+      await collect([event("search_opened", { surface: "hero" })]);
+      expect(dimKeys()).toEqual([]);
+      expect(redis.sets.has(KEYS.visitorDimIndex(DAY))).toBe(false);
+    });
+
+    it("counts two readers once each, and the same reader once however often they read", async () => {
+      await collect([pageview()]);
+      await collect([pageview()]);
+      await collect([pageview()], { ip: "203.0.113.8", userAgent: DESKTOP });
+      expect(visitorsOf(day("all", "country", "nl"))).toHaveLength(2);
+      expect(visitorsOf(day("all", "device", "mobile"))).toHaveLength(1);
+      expect(visitorsOf(day("all", "device", "desktop"))).toHaveLength(1);
+      expect(visitorsOf(day("de", "browser", "chrome"))).toHaveLength(1);
+      expect(visitorsOf(KEYS.visitors(DAY, "all"))).toHaveLength(2);
+    });
+
+    it("counts a country GeoIP cannot place as zz", async () => {
+      lookupCountry.mockReturnValue(null);
+      await collect([pageview()]);
+      expect(visitorsOf(day("all", "country", "zz"))).toHaveLength(1);
+    });
+
+    it("lists every key written in the day's index, and lets keys and index end with the day's own", async () => {
+      await collect([pageview({ referrer: "www.google.de" })]);
+      const index = await redis.smembers(KEYS.visitorDimIndex(DAY));
+      expect(index.sort()).toEqual(
+        [
+          ...["all", "de"].flatMap((scope) => [
+            `${scope}|country|nl`,
+            `${scope}|device|mobile`,
+            `${scope}|browser|safari`,
+            `${scope}|os|ios`,
+            `${scope}|channel|search`,
+          ]),
+        ].sort(),
+      );
+      // The index names exactly the dimension keys there are.
+      expect(dimKeys().sort()).toEqual(
+        index
+          .map((member) => member.split("|"))
+          .map(([scope, dim, value]) => day(scope, dim, value))
+          .sort(),
+      );
+      // 21:16:30 → 2 h 43 min 30 s to midnight, and the hour the snapshot runs in.
+      const toMidnight = 2 * 3600 + 43 * 60 + 30;
+      for (const key of [...dimKeys(), KEYS.visitorDimIndex(DAY)]) {
+        expect(redis.ttls.get(key)).toBe(toMidnight + 3600);
+      }
+    });
+
+    it("keeps the keys of another day apart", async () => {
+      await collect([pageview()], {}, new Date("2026-10-27T10:00:00Z"));
+      await collect([pageview()], {}, NOW);
+      expect(
+        visitorsOf(KEYS.visitorDim("2026-10-27", "all", "country", "nl")),
+      ).toHaveLength(1);
+      expect(visitorsOf(day("all", "country", "nl"))).toHaveLength(1);
+      expect(
+        visitorsOf(KEYS.visitorDim("2026-10-27", "all", "country", "nl")),
+      ).not.toEqual(visitorsOf(day("all", "country", "nl")));
+    });
+  });
+
   it("holds the counts in memory when Redis is away, and writes them a window at a time", async () => {
     redis.failNext = ["cap down"];
     await expect(collect([pageview(), pageview()])).resolves.toBe(2);

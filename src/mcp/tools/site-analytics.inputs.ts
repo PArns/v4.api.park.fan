@@ -27,8 +27,9 @@ export const SITE_ANALYTICS_CAVEATS =
   "Numbers: park.fan's own cookieless statistic, counted per UTC hour, over UTC days: the last " +
   "`days`, today included, or from–to. " +
   "A visit ends after 30 minutes without a hit or at midnight UTC. Visitors are unique per UTC day " +
-  "and summed over the window (a reader back on another day counts again), and null under any " +
-  "filter but the language. Bounce rate = 1 − engaged / visits, engaged meaning a visit with a " +
+  "and summed over the window (a reader back on another day counts again). They exist without a " +
+  "filter and under exactly one filter on country, device, browser, os or channel (with or without " +
+  "the language), and are null under any other filter, two filters included, and in an hourly series under any filter. Bounce rate = 1 − engaged / visits, engaged meaning a visit with a " +
   "second page view. `previous` is the window of the same length right before, its last day cut " +
   `at the current hour so today so far compares with the same part of a day; null for more than ` +
   `${MAX_COMPARABLE_DAYS} days. A filter on entry, referrer or channel selects visits by ` +

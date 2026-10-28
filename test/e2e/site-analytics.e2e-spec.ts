@@ -8,6 +8,7 @@ import { Park } from "../../src/parks/entities/park.entity";
 import { AdminAuthService } from "../../src/admin/auth/admin-auth.service";
 import { AdminSessionStore } from "../../src/admin/auth/admin-session.store";
 import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
+import { GeoipService } from "../../src/geoip/geoip.service";
 import { SiteAnalyticsCollectService } from "../../src/site-analytics/site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "../../src/site-analytics/site-analytics-storage.service";
 import { SiteReportRunner } from "../../src/site-analytics/site-analytics-report-runner";
@@ -341,7 +342,7 @@ describe("Site analytics (e2e)", () => {
       pending.upQueries
         .map((q) => q.query)
         .filter((sql) =>
-          /site_(pageviews|events|analytics_flushes|rollup_days|visitor_hours)/.test(
+          /site_(pageviews|events|analytics_flushes|rollup_days|visitor_hours|visitor_dim_days)/.test(
             sql,
           ),
         ),
@@ -465,14 +466,16 @@ describe("Site analytics (e2e)", () => {
       visits: 0,
     });
 
-    // A visit filter: visits and bounce follow it, page views cannot.
+    // A visit filter: visits and bounce follow it, page views cannot. The two
+    // readers whose visits began on search are counted from the HyperLogLog
+    // of yesterday's channel.
     const search = await admin(
       "/v1/admin/analytics/overview?days=7&filter=channel:search",
     ).expect(200);
     expect(search.body.totals).toEqual({
       pageviews: null,
       visits: 2,
-      visitors: null,
+      visitors: 2,
       events: null,
       viewsPerVisit: null,
       bounceRate: 0.5,
@@ -1313,6 +1316,125 @@ describe("Site analytics (e2e)", () => {
     ).toBe(true);
   });
 
+  it("gives visitors under a country filter for a finished day, from the snapshot, and for today, from Redis", async () => {
+    // Two readers from Germany and one from France on each day; one German
+    // reader is the same on both days, and counts on both.
+    const countries = new Map([
+      ["203.0.113.1", "de"],
+      ["203.0.113.2", "de"],
+      ["203.0.113.3", "de"],
+      ["203.0.113.50", "fr"],
+    ]);
+    const lookup = jest
+      .spyOn(app.get(GeoipService, { strict: false }), "lookupCountry")
+      .mockImplementation((ip) => countries.get(ip) ?? null);
+    try {
+      const collector = app.get(SiteAnalyticsCollectService);
+      const yesterday = addIsoDays(today, -1);
+      const yesterdayNoon = new Date(`${yesterday}T12:00:00Z`);
+      for (const ip of ["203.0.113.1", "203.0.113.2", "203.0.113.2"]) {
+        await collector.collect(
+          { hits: [pageview()], ip, userAgent: UA },
+          yesterdayNoon,
+        );
+      }
+      await collector.collect(
+        { hits: [pageview()], ip: "203.0.113.50", userAgent: UA },
+        yesterdayNoon,
+      );
+      for (const ip of ["203.0.113.1", "203.0.113.3", "203.0.113.50"]) {
+        await collector.collect({ hits: [pageview()], ip, userAgent: UA });
+      }
+
+      const storage = app.get(SiteAnalyticsStorageService);
+      await storage.snapshotVisitors();
+      // Country, device, browser, OS and channel, each for all languages and German.
+      await expect(storage.snapshotVisitorDims()).resolves.toEqual({
+        found: 12,
+        written: 12,
+      });
+      await expect(storage.snapshotVisitorDims()).resolves.toEqual({
+        found: 12,
+        written: 0,
+      });
+      expect(
+        await dataSource.query(
+          `SELECT scope, dim, value, visitors FROM site_visitor_dim_days
+            WHERE dim = 'country' ORDER BY scope, value`,
+        ),
+      ).toEqual([
+        { scope: "all", dim: "country", value: "de", visitors: 2 },
+        { scope: "all", dim: "country", value: "fr", visitors: 1 },
+        { scope: "de", dim: "country", value: "de", visitors: 2 },
+        { scope: "de", dim: "country", value: "fr", visitors: 1 },
+      ]);
+      // Yesterday now comes from the table alone; today's keys stay.
+      await redis.del(
+        ...(await redis.keys(`site-analytics:uvd*${yesterday}*`)),
+      );
+
+      const visitorsOf = async (query: string) => {
+        const { body } = await admin(
+          `/v1/admin/analytics/overview?days=2&${query}`,
+        ).expect(200);
+        return [
+          body.totals.visitors,
+          body.previous?.visitors,
+          body.series.map((p: { visitors: number | null }) => p.visitors),
+        ];
+      };
+      expect(await visitorsOf("filter=country:de")).toEqual([4, 0, [2, 2]]);
+      expect(await visitorsOf("filter=country:fr")).toEqual([2, 0, [1, 1]]);
+      expect(await visitorsOf("filter=country:nl")).toEqual([0, 0, [0, 0]]);
+      expect(await visitorsOf("filter=device:mobile&locale=de")).toEqual([
+        6,
+        0,
+        [3, 3],
+      ]);
+      expect(await visitorsOf("filter=channel:direct")).toEqual([6, 0, [3, 3]]);
+      expect(await visitorsOf("")).toEqual([6, 0, [3, 3]]);
+      // No count for two filters, or for two values of one.
+      expect(
+        await visitorsOf("filter=country:de&filter=device:mobile"),
+      ).toEqual([null, null, [null, null]]);
+      expect(await visitorsOf("filter=country:de&filter=country:fr")).toEqual([
+        null,
+        null,
+        [null, null],
+      ]);
+
+      // The hours have no count under a filter, the day's total does.
+      const hourly = await admin(
+        `/v1/admin/analytics/overview?days=1&interval=hour&filter=country:de`,
+      ).expect(200);
+      expect(hourly.body.totals.visitors).toBe(2);
+      expect(
+        hourly.body.series.every(
+          (h: { visitors: number | null }) => h.visitors === null,
+        ),
+      ).toBe(true);
+
+      // A breakdown by country lists each country's visitors.
+      await flush();
+      const byCountry = await admin(
+        "/v1/admin/analytics/breakdown?dim=country&days=2",
+      ).expect(200);
+      expect(
+        byCountry.body.items.map((i: { value: string; visitors: number }) => [
+          i.value,
+          i.visitors,
+        ]),
+      ).toEqual(
+        expect.arrayContaining([
+          ["de", 4],
+          ["fr", 2],
+        ]),
+      );
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
   describe("the daily level", () => {
     const ANDROID =
       "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
@@ -1715,9 +1837,21 @@ describe("Site analytics (e2e)", () => {
          FROM unnest($1::timestamptz[]) b`,
       [[old, kept]],
     );
+    await dataSource.query(
+      `INSERT INTO site_visitor_dim_days (day, scope, dim, value, visitors)
+       SELECT d::date, 'all', 'country', 'de', 1
+         FROM unnest($1::timestamptz[]) d`,
+      [[old, kept]],
+    );
     const dropped = await app.get(SiteAnalyticsStorageService).dropOldChunks();
     expect(dropped.site_pageviews).toBe(1);
     expect(dropped.site_pageviews_daily).toBe(1);
+    expect(dropped.site_visitor_dim_days).toBe(1);
+    expect(
+      await dataSource.query(
+        `SELECT count(*)::int AS n FROM site_visitor_dim_days`,
+      ),
+    ).toEqual([{ n: 1 }]);
     expect(
       await dataSource.query(`SELECT count(*)::int AS n FROM site_pageviews`),
     ).toEqual([{ n: 1 }]);

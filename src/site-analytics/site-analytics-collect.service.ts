@@ -70,6 +70,11 @@ import {
   type ValidPageviewHit,
 } from "./site-analytics.hits";
 import { browserLanguage } from "./browser-language.util";
+import {
+  visitorDimKeys,
+  visitorDimMember,
+  type VisitorDimKey,
+} from "./visitor-dims.util";
 import { classifyReferrer } from "./referrer.util";
 import { MAX_USER_AGENT_LENGTH, parseUserAgent } from "./user-agent.util";
 
@@ -140,15 +145,18 @@ export type ObservedHit =
 
 /**
  * The visit a request belongs to, as the buffer write updates it: its key
- * and pseudonym, how it began, whether this request opened it, and the exit
- * row its last page view would make.
+ * and pseudonym, how it began, whether this request opened it, the exit
+ * row its last page view would make, and the reader's daily pseudonym with
+ * the visitor HyperLogLogs beside the language ones that it counts in.
  */
 interface VisitUpdate {
   key: string;
   member: string;
+  visitor: string;
   start: VisitStart;
   opened: boolean;
   exitDims: PageviewDims | null;
+  visitorKeys: VisitorDimKey[];
 }
 
 /** Counts of dropped and overflowed hits by reason. */
@@ -303,6 +311,13 @@ export class SiteAnalyticsCollectService
     const visit = observed.visit && {
       ...observed.visit,
       exitDims: exitDimsOf(observed.hits, observed.visit.start, reader),
+      visitorKeys: visitorDimKeys(
+        reader,
+        observed.hits.flatMap(({ hit }) =>
+          hit.t === "pageview" ? [hit.locale] : [],
+        ),
+        observed.visit.opened ? observed.visit.start : null,
+      ),
     };
     await this.buffer(window, day, increments, visit, drops, now, {
       hits: observed.hits,
@@ -519,12 +534,13 @@ export class SiteAnalyticsCollectService
     );
     let visitKey: string | null = null;
     let visitMember: string | null = null;
+    let visitor: string | null = null;
     let startReply: number | null = null;
     const countReplies = new Map<ValidHit, number>();
     if (readerBucket) {
       visitMember = this.hash(day, "visit", readerBucket, userAgent);
       visitKey = KEYS.visit(visitMember);
-      const visitor = this.hash(day, "visitor", readerBucket, userAgent);
+      visitor = this.hash(day, "visitor", readerBucket, userAgent);
       pipeline.hget(visitKey, "c");
       startReply = next();
       for (const hit of pageviews) {
@@ -672,13 +688,15 @@ export class SiteAnalyticsCollectService
       observed.push({ hit });
     });
     const visit =
-      visitKey && visitMember && current
+      visitKey && visitMember && visitor && current
         ? {
             key: visitKey,
             member: visitMember,
+            visitor,
             start: current,
             opened,
             exitDims: null,
+            visitorKeys: [],
           }
         : null;
     return { hits: observed, visit };
@@ -688,9 +706,10 @@ export class SiteAnalyticsCollectService
    * Adds the counts to the window's hash, brings the visit's key up to date
    * (how it began, when it started and was last seen, the exit row its last
    * page view makes) with its place among the open visits, counts the live
-   * view's minute and adds the request's drop counts, in one `MULTI`: either
-   * all of it lands or none of it does. Counts Redis could not take go to the
-   * fallback buffer, only those, so nothing is counted twice.
+   * view's minute and the reader's visitor keys by dimension and adds the
+   * request's drop counts, in one `MULTI`: either all of it lands or none of
+   * it does. Counts Redis could not take go to the fallback buffer, only
+   * those, so nothing is counted twice.
    */
   private async buffer(
     window: string,
@@ -712,7 +731,10 @@ export class SiteAnalyticsCollectService
       for (const field of fields)
         tx.hincrby(key, field, increments.get(field) ?? 0);
       tx.sadd(KEYS.windows, window);
-      if (visit) this.updateVisit(tx, visit, now);
+      if (visit) {
+        this.updateVisit(tx, visit, now);
+        this.countVisitorDims(tx, visit, day, now);
+      }
       this.addLive(tx, live.hits, live.country, live.device, now);
       this.addDrops(tx, day, drops, now);
       const results = await tx.exec();
@@ -767,6 +789,32 @@ export class SiteAnalyticsCollectService
       KEYS.openVisits,
       "-inf",
       seconds - OPEN_VISIT_MAX_AGE_SECONDS,
+    );
+  }
+
+  /**
+   * The reader's visitor HyperLogLogs beside the language ones (country,
+   * device, browser, OS, and the channel of a visit that opened in this
+   * request), with the day's index of the keys written, so the snapshot finds
+   * them without a scan. Every key lives as long as the day's own.
+   */
+  private countVisitorDims(
+    tx: ReturnType<Redis["multi"]>,
+    visit: VisitUpdate,
+    day: string,
+    now: Date,
+  ): void {
+    if (visit.visitorKeys.length === 0) return;
+    const ttl = secondsUntilUtcDayEnds(now, VISITOR_KEY_GRACE_SECONDS);
+    for (const key of visit.visitorKeys) {
+      const name = KEYS.visitorDim(day, key.scope, key.dim, key.value);
+      tx.pfadd(name, visit.visitor).expire(name, ttl, "NX");
+    }
+    const index = KEYS.visitorDimIndex(day);
+    tx.sadd(index, ...visit.visitorKeys.map(visitorDimMember)).expire(
+      index,
+      ttl,
+      "NX",
     );
   }
 

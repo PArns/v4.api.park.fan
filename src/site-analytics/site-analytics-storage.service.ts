@@ -40,6 +40,7 @@ import {
   type RollupSource,
 } from "./site-analytics.rollup";
 import { defineCloseVisitCommand } from "./site-analytics-scripts";
+import { parseVisitorDimMember } from "./visitor-dims.util";
 
 /**
  * A buffered page-view field's dimensions. A page view's row leaves the last
@@ -607,6 +608,47 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       written: inserted.length,
       hoursWritten: hoursInserted.length,
     };
+  }
+
+  /**
+   * Writes yesterday's visitors by country, device, browser, OS and channel
+   * (`site_visitor_dim_days`) from the HyperLogLogs the day's index lists,
+   * once: a row already written stays, and a key that is gone, or counted
+   * nobody, is skipped rather than written as zero. Runs with
+   * {@link snapshotVisitors}, four times in the hour after midnight. Returns
+   * the keys the index listed and the rows written.
+   */
+  async snapshotVisitorDims(
+    now = new Date(),
+  ): Promise<{ found: number; written: number }> {
+    const day = addIsoDays(utcDay(now), -1);
+    const keys = (await this.redis.smembers(KEYS.visitorDimIndex(day))).flatMap(
+      (member) => parseVisitorDimMember(member) ?? [],
+    );
+    if (keys.length === 0) return { found: 0, written: 0 };
+    const pipeline = this.redis.pipeline();
+    for (const { scope, dim, value } of keys) {
+      pipeline.pfcount(KEYS.visitorDim(day, scope, dim, value));
+    }
+    const results = (await pipeline.exec()) ?? [];
+    const rows = keys
+      .map((key, i) => ({ ...key, visitors: Number(results[i]?.[1] ?? 0) }))
+      .filter((row) => row.visitors > 0);
+    if (rows.length === 0) return { found: keys.length, written: 0 };
+    const inserted: unknown[] = await this.dataSource.query(
+      `INSERT INTO site_visitor_dim_days (day, scope, dim, value, visitors)
+       SELECT $1::date, * FROM unnest($2::text[], $3::text[], $4::text[], $5::int[])
+       ON CONFLICT (day, scope, dim, value) DO NOTHING
+       RETURNING day`,
+      [
+        day,
+        rows.map((row) => row.scope),
+        rows.map((row) => row.dim),
+        rows.map((row) => row.value),
+        rows.map((row) => row.visitors),
+      ],
+    );
+    return { found: keys.length, written: inserted.length };
   }
 
   /**

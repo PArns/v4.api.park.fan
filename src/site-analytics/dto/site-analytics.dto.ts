@@ -335,7 +335,7 @@ export class SiteTotalsDto {
     nullable: true,
     type: Number,
     description:
-      "Sum of the daily unique visitors: a reader who comes back on another day counts again. Null with a filter, which visitors cannot be split by.",
+      "Sum of the daily unique visitors: a reader who comes back on another day counts again. Given without a filter and under one filter on country, device, browser, os or channel; null under any other filter. An hourly series has none under a filter.",
   })
   visitors: number | null;
   @ApiProperty({
@@ -460,6 +460,11 @@ export class SiteBreakdownItemDto extends SiteViewsVisitsDto {
     description: "measure=views only: foreground seconds per page view.",
   })
   avgTimeOnPageSeconds?: number | null;
+  @ApiPropertyOptional({
+    description:
+      "dim=country, device, browser, os or channel, with no filter or a filter on that dimension: the sum of the daily unique visitors with this value, as `totals.visitors` counts them.",
+  })
+  visitors?: number;
   @ApiPropertyOptional({
     description: "dim=path, measure=views: visits that ended on the page.",
   })

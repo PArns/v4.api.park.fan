@@ -68,6 +68,23 @@ export function isVisitDim(dim: BreakdownDim): dim is VisitDim | "exit" {
   return dim === "exit" || (VISIT_DIMS as readonly string[]).includes(dim);
 }
 
+/**
+ * The dimensions whose visitors are counted on their own, one HyperLogLog per
+ * day, language and value: a reader's country, device, browser and OS never
+ * change within a day (the reader is the address and the User-Agent), and a
+ * visit's channel is the one it started with. Closed lists, bar the country's
+ * two letters, so the keys stay few. A report gives visitors under one value
+ * of one of these (`visitorBasisOf`).
+ */
+export const VISITOR_DIMS = [
+  "country",
+  "device",
+  "browser",
+  "os",
+  "channel",
+] as const satisfies readonly FilterDim[];
+export type VisitorDim = (typeof VISITOR_DIMS)[number];
+
 /** A report's series step. */
 export const INTERVALS = ["hour", "day", "week", "month"] as const;
 export type SiteInterval = (typeof INTERVALS)[number];
@@ -274,8 +291,8 @@ export const REALTIME_ACTIVE_MINUTES = 5;
 export const REALTIME_SERIES_MINUTES = 30;
 
 /**
- * How long a day's visitor HyperLogLog, and each of its hours', outlives the
- * day: the hour in which the snapshot runs four times, so no key outlives its
+ * How long a day's visitor HyperLogLog, and each of its hours' and
+ * dimension values', outlives the day: the hour in which the snapshot runs four times, so no key outlives its
  * day by more and none is older than 25 hours.
  */
 export const VISITOR_KEY_GRACE_SECONDS = 3600;
@@ -417,6 +434,18 @@ export const SITE_ANALYTICS_KEYS = {
   newMembers: (hash: string) => `site-analytics:new:${hash}`,
   /** One UTC day's visitors, all languages or one: a HyperLogLog. */
   visitors: (day: string, scope: string) => `site-analytics:uv:${day}:${scope}`,
+  /**
+   * One UTC day's visitors with one value of a {@link VISITOR_DIMS} dimension,
+   * all languages or one: a HyperLogLog. The value is the last part, so it
+   * needs no escaping.
+   */
+  visitorDim: (day: string, scope: string, dim: string, value: string) =>
+    `site-analytics:uvd:${day}:${scope}:${dim}:${value}`,
+  /**
+   * The members (`scope|dim|value`, split at the first two bars) of the
+   * dimension keys one day wrote, so the snapshot finds them without a scan.
+   */
+  visitorDimIndex: (day: string) => `site-analytics:uvd-index:${day}`,
   /** One UTC hour's visitors: a HyperLogLog, until the snapshot writes it. */
   hourVisitors: (hour: string, scope: string) =>
     `site-analytics:uvh:${hour}:${scope}`,

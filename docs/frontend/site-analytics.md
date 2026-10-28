@@ -182,6 +182,8 @@ request.
 | `site-analytics:cap:`, `read:`, `read-page:`, `read-addr:`, `new:<hmac>` | a reader's or an address's counts today | to the end of its UTC day + 1 min (≤ 24 h 1 min) |
 | `site-analytics:uv:<day>:<scope>` | the day's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h) |
 | `site-analytics:uvh:<hour>:<scope>` | the hour's visitor HyperLogLog | to the end of its day + 1 h (≤ 25 h), as the day's, so the snapshot can read it |
+| `site-analytics:uvd:<day>:<scope>:<dim>:<value>` | the day's visitor HyperLogLog of one country, device, browser, OS or channel (`dim`), all languages or one | to the end of its day + 1 h (≤ 25 h), as the day's |
+| `site-analytics:uvd-index:<day>` | the `scope\|dim\|value` of every `uvd` key the day wrote, so the snapshot finds them without a scan; no reader in it | the same |
 | `site-analytics:rt:uv:`, `rt:pv:`, `rt:ev:<minute>:<scope>` | the minute's visitor HyperLogLog, page views, events | 35 min |
 | `site-analytics:live:<list>:<minute>:<scope>` | the minute's page views by page, country and device, visits started by channel and referrer site, events by name; no reader in them | 35 min |
 | `site-analytics:guard:<guard>:<day>` | the day's admitted names, page types, paths, referrer sites, combination hashes | to the end of the next day + 1 min (≤ 48 h); no reader in them |
@@ -213,13 +215,35 @@ request.
 - **Visitors**: a HyperLogLog per UTC day, all languages and per language, and per hour (for an hourly
   series), of the reader's daily pseudonym. Four runs of `snapshot-visitors` in the hour after midnight
   insert yesterday's counts into `site_visitor_days`, and the 24 hours of each language into
-  `site_visitor_hours`, once (a row already written stays; a lost day key is skipped, not written as
+  `site_visitor_hours`, once, and those by dimension (below) into `site_visitor_dim_days` (a row already written stays; a lost day key is skipped, not written as
   zero, and then so are its hours; an hour or a language without a key on a day that was counted had
   no visitors and is written as zero); today and, until then, yesterday are read live. A reader who
   comes back on another day counts again, so a window's visitors are the sum of its days, and one who
   comes back in another hour counts in each, so the hours of a day do not add up to its visitors.
-  Visitors cannot be split by anything but the language: with a filter they are `null`. HyperLogLog's
-  standard error is 0.81 %.
+  HyperLogLog's standard error is 0.81 %.
+- **Visitors by dimension**: a HyperLogLog cannot be intersected with another, so a filter has
+  visitors only where its value was counted into a key of its own. Each page-view batch with a reader
+  also adds the reader's pseudonym to one day HyperLogLog per value of `country`, `device`,
+  `browser` and `os` (the reader's own, which the day does not change: the reader is the address and
+  the User-Agent), for all languages and for each language of the batch's page views, and, when the
+  batch opens the visit, to the one of the visit's `channel`, for all languages and for the visit's
+  language only (a visit is of its first page's language, so `locale=de` with `channel:search` counts
+  the readers of search visits that began in German). The keys are listed in the day's `uvd-index`
+  set. An overflow or empty value is not counted; the five lists are closed (the country's two
+  letters, `zz` unknown), so a day has a few hundred keys at most. The snapshot
+  (`snapshotVisitorDims`, in the same job) inserts yesterday's counts into `site_visitor_dim_days`
+  once, a key that is gone or counted nobody skipped. A reader counts once per value and day, so the
+  values of a dimension add up to the day's visitors within the estimate's error; under `channel` a
+  reader whose visits began from two channels counts under both.
+- **Which filters give visitors** (`visitorBasisOf`, the one place that decides): none, or exactly one
+  filter on `country`, `device`, `browser`, `os` or `channel`, with or without the language
+  (`locale=`). `visitors` is then a number in the totals, the window before and the day, week and
+  month series: the sum of the days, today and, until the snapshot has run, yesterday from the live
+  key. **No count**, `null`: two filters (two dimensions, or two values of one), a filter on the
+  path, page type, entry, referrer, browser language or `locale`, and an hourly series under any
+  filter (the hours are counted per language only). A breakdown by one of the five, with no filter
+  or a filter on that same dimension, lists each value's `visitors`; under any other filter, or by
+  any other dimension, its items carry none.
 - **Languages**: a visitor counts in every language they read a page in, a visit in the language of
   its first page. Under `locale=de` a reader who entered in English and read on in German is a visitor
   and no visit, so visitors can exceed visits there.
@@ -239,8 +263,8 @@ request.
 window's caps; one pipeline for the guards, the visit, the visitors and the realtime minute; and one
 `MULTI` with `HINCRBY` of the counts into the current five-minute window's hash,
 `site-analytics:buf:<window>`, the window's id in `site-analytics:buf:windows`, the visit's key and
-its place among the open visits, the live view's minute and the drop counts, so all of it lands or
-none. A field is a measure letter (`v` views, `d` seconds, `s` visits, `e` engaged, `t` visit
+its place among the open visits, the reader's visitor keys by dimension, the live view's minute and
+the drop counts, so all of it lands or none. A field is a measure letter (`v` views, `d` seconds, `s` visits, `e` engaged, `t` visit
 seconds, `x` exits, `y` visit span seconds, `n` events) followed by the row's dimensions as JSON, so
 the flusher rebuilds the row from the field alone. **The buffers have no TTL**: this Redis runs
 `volatile-lru`, which only evicts keys that have one.
@@ -284,12 +308,13 @@ also reaches the data-quality report's failing jobs.
 | `site_pageviews` | the UTC hour, `locale`, `path`, `page_type`, `device`, `browser`, `os`, `country`, `browser_language`, `entry`, `referrer`, `channel`; `views`, `seconds`, `visits`, `engaged`, `visit_seconds`, `exits`, `visit_span_seconds`. A page view's row has the three visit dimensions empty, `views` and `seconds`; a visit's start row has them and `visits`, `engaged`, `visit_seconds`; an exit row has them, its last page, `exits` and `visit_span_seconds` | 7-day chunks, compressed after 7 days, segment by `locale`, order by `bucket DESC` |
 | `site_events` | the UTC hour, `name`, the page dimensions (with `device`) without the browser language, `props_key` (`k=v` in key order, `&`-joined), `props` (`jsonb`), `entity`; `count` | the same, segment by `name` |
 | `site_analytics_flushes` | the written claims of each window | 30-day chunks |
+| `site_visitor_dim_days` | the UTC day, `scope` (`all` or a language), `dim` (`country`, `device`, `browser`, `os`, `channel`), `value`; `visitors`. Written once per finished day by `snapshot-visitors`; the primary key is `(day, scope, dim, value)` | 7-day chunks, compressed after 7 days |
 | `site_pageviews_daily` | `site_pageviews` summed per UTC day and [cuboid](#the-daily-level): the day's midnight as `bucket`, `cuboid`, `locale`, the dimensions the cuboid names (the others `''`), the seven sums as `bigint` | 7-day chunks, compressed after 7 days, segment by `cuboid`, order by `bucket DESC` |
 | `site_events_daily` | `site_events` the same way: `cuboid`, `locale`, `name` and the dimensions the cuboid names, the properties with their key, `count` as `bigint` | the same |
 
 A row's `bucket` is its hour (`bucketOf`); the flusher still writes every five minutes, so an hour
 holds up to twelve rows per combination, summed when read. The nightly `drop-old-chunks` drops chunks
-wholly older than 400 days (`RETENTION_DAYS`) with `drop_chunks` under a 5-second `lock_timeout`, one
+of the tables above, `site_visitor_dim_days` included, wholly older than 400 days (`RETENTION_DAYS`) with `drop_chunks` under a 5-second `lock_timeout`, one
 table at a time; a chunk it cannot lock waits for the next night rather than queueing the API behind it
 ([lock queues](../troubleshooting/timescaledb-lock-queues.md)). A dropped chunk is a dropped table:
 nothing for VACUUM. `site_visitor_days` (seven rows a day), `site_visitor_hours` (168 a day),
@@ -411,7 +436,7 @@ groups hours or days, and the code folds days into weeks and months. The visitor
 its HyperLogLog for today (and for yesterday until the snapshot has run), and from `site_visitor_hours`
 for every earlier day since the snapshot keeps hours; an hour of a day before that has
 `visitors: null`. A week's or a month's visitors are the sum of its days in the window, as the totals
-count them.
+count them. Under a filter (above) the hours have none.
 
 **The window before** (`previous`) is the same number of days right before `from`. When the window
 ends today it ends at the same hour of its last day as now: today is under way, so a change compares
@@ -534,7 +559,7 @@ which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any
 | --- | --- |
 | `POST /v1/analytics/collect` | the beacon (above) |
 | `GET /v1/admin/analytics/overview` | the figures above for the window and the one before; a series with all of them; realtime |
-| `GET /v1/admin/analytics/breakdown?dim=&limit=` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits; `dim=exit` the last pages |
+| `GET /v1/admin/analytics/breakdown?dim=&limit=` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages |
 | `GET /v1/admin/analytics/crosstab?row=&col=&metric=` | page views or visits by two dimensions (above) |
 | `GET /v1/admin/analytics/live?locale=` | the last half hour from Redis (above) |
 | `GET /v1/admin/analytics/events` | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series |
@@ -642,8 +667,9 @@ its window once, so a year's took about four times the 90-day figure.
 
 ## Limits
 
-- Visitors are per day and language only; with any other filter they are `null`, and so is an hour
-  before today.
+- Visitors are per day. They are given without a filter and under one filter on country, device,
+  browser, OS or channel, with or without the language; under any other filter they are `null`, and
+  so is an hourly series under any filter.
 - Time on page and visit are lower bounds: a page view that never reported counts zero seconds.
 - A visit ends 30 to 35 minutes after its last hit, as the flush runs, and its exit reaches the
   reports with that run.

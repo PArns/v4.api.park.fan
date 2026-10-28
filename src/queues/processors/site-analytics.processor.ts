@@ -12,8 +12,9 @@ import { SiteAnalyticsStorageService } from "../../site-analytics/site-analytics
  *   `site_pageviews` and `site_events`, each window on its own, so one that
  *   fails does not hold up the rest;
  * - `snapshot-visitors`, four times in the hour after midnight: yesterday's
- *   unique visitors, and each hour's, from their HyperLogLogs into
- *   `site_visitor_days` and `site_visitor_hours`, once;
+ *   unique visitors, each hour's, and those by country, device, browser, OS
+ *   and channel, from their HyperLogLogs into `site_visitor_days`,
+ *   `site_visitor_hours` and `site_visitor_dim_days`, once;
  * - `rollup-days`, four times a day: the finished days summed into the daily
  *   tables the long reports read, each cuboid of each day once;
  * - `drop-old-chunks`, nightly: chunks past 400 days, dropped whole.
@@ -44,12 +45,13 @@ export class SiteAnalyticsProcessor {
   async handleSnapshotVisitors(_job: Job): Promise<void> {
     const { found, written, hoursWritten } =
       await this.storage.snapshotVisitors();
+    const dims = await this.storage.snapshotVisitorDims();
     // A day of traffic leaves seven HyperLogLogs; none means Redis lost them.
     if (found === 0) {
       this.logger.warn("No visitor HyperLogLog found for yesterday");
-    } else if (written > 0 || hoursWritten > 0) {
+    } else if (written > 0 || hoursWritten > 0 || dims.written > 0) {
       this.logger.log(
-        `Wrote ${written} daily and ${hoursWritten} hourly visitor counts`,
+        `Wrote ${written} daily, ${hoursWritten} hourly and ${dims.written} by-dimension visitor counts`,
       );
     }
   }

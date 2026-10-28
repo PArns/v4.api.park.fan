@@ -502,6 +502,105 @@ describe("SiteAnalyticsStorageService", () => {
     });
   });
 
+  describe("snapshotVisitorDims", () => {
+    const hll = (
+      scope: string,
+      dim: string,
+      value: string,
+      ...members: string[]
+    ) => {
+      redis.sets.set(
+        KEYS.visitorDim("2026-10-27", scope, dim, value),
+        new Set(members),
+      );
+    };
+    const index = (...members: string[]) =>
+      redis.sets.set(KEYS.visitorDimIndex("2026-10-27"), new Set(members));
+
+    it("writes yesterday's visitors by dimension from the keys the index lists, once", async () => {
+      index("all|country|de", "de|country|de", "all|channel|search");
+      hll("all", "country", "de", "a", "b");
+      hll("de", "country", "de", "a");
+      hll("all", "channel", "search", "a", "b", "c");
+      // Another day's index and keys are not yesterday's.
+      redis.sets.set(
+        KEYS.visitorDimIndex("2026-10-26"),
+        new Set(["all|country|fr"]),
+      );
+      redis.sets.set(
+        KEYS.visitorDim("2026-10-26", "all", "country", "fr"),
+        new Set(["x"]),
+      );
+      manager.query.mockImplementation(async (sql, params) => {
+        statements.push([sql, params]);
+        return sql.includes("INSERT INTO site_visitor_dim_days")
+          ? (params?.[1] as unknown[]).map(() => ({}))
+          : [];
+      });
+      await expect(service.snapshotVisitorDims(NOW)).resolves.toEqual({
+        found: 3,
+        written: 3,
+      });
+      const [sql, params] = statements[0];
+      expect(sql).toContain("ON CONFLICT (day, scope, dim, value) DO NOTHING");
+      expect(params).toEqual([
+        "2026-10-27",
+        ["all", "de", "all"],
+        ["country", "country", "channel"],
+        ["de", "de", "search"],
+        [2, 1, 3],
+      ]);
+    });
+
+    it("skips a key that is gone or counted nobody, and a member that names no key", async () => {
+      index(
+        "all|country|de",
+        "all|country|nl",
+        "all|device|mobile",
+        "all|locale|de",
+        "garbage",
+      );
+      hll("all", "country", "de", "a");
+      hll("all", "device", "mobile");
+      manager.query.mockImplementation(async (sql, params) => {
+        statements.push([sql, params]);
+        return sql.includes("INSERT") ? [{}] : [];
+      });
+      await expect(service.snapshotVisitorDims(NOW)).resolves.toEqual({
+        found: 3,
+        written: 1,
+      });
+      expect(statements[0][1]).toEqual([
+        "2026-10-27",
+        ["all"],
+        ["country"],
+        ["de"],
+        [1],
+      ]);
+    });
+
+    it("writes nothing without an index, and nothing again for a day already written", async () => {
+      await expect(service.snapshotVisitorDims(NOW)).resolves.toEqual({
+        found: 0,
+        written: 0,
+      });
+      expect(statements).toEqual([]);
+
+      index("all|country|de");
+      hll("all", "country", "de", "a");
+      // The conflict clause leaves the row that is there, and returns none.
+      manager.query.mockImplementation(async (sql, params) => {
+        statements.push([sql, params]);
+        return [];
+      });
+      await expect(service.snapshotVisitorDims(NOW)).resolves.toEqual({
+        found: 1,
+        written: 0,
+      });
+      expect(statements[0][0]).toContain("DO NOTHING");
+    });
+  });
+
   describe("backlog", () => {
     it("reports the windows waiting, the oldest one's age, the parked ones and the day's drops", async () => {
       buffer("2026-10-28T09:40:00.000Z", { [pageviewField("v", PAGE)]: 1 });
@@ -732,6 +831,7 @@ describe("SiteAnalyticsStorageService", () => {
         site_analytics_flushes: 1,
         site_pageviews_daily: 1,
         site_events_daily: 1,
+        site_visitor_dim_days: 1,
       });
       expect(statements[0][0]).toContain(
         "set_config('lock_timeout', '5s', true)",
