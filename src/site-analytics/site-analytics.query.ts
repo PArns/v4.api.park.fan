@@ -1,8 +1,18 @@
+import { BadRequestException } from "@nestjs/common";
 import { addIsoDays } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
+  BUCKET_SECONDS,
   FILTER_DIMS,
+  INTERVALS,
+  MAX_ADMIN_WINDOW_DAYS,
+  MAX_COMPARABLE_DAYS,
+  MAX_HOURLY_DAYS,
+  MAX_RANGE_DAYS,
+  bucketOf,
+  isVisitDim,
   type FilterDim,
+  type SiteInterval,
   type SiteLocale,
 } from "./site-analytics.constants";
 
@@ -12,34 +22,70 @@ export const FILTER_PATTERN = new RegExp(
   "s",
 );
 
-/** A crosstab side: a dimension, the day, or one property (`prop:<key>`). */
+/**
+ * A crosstab side: one of an event's page dimensions, the day, or one
+ * property (`prop:<key>`). Events carry no visit dimension.
+ */
 export const CROSSTAB_AXIS_PATTERN =
-  /^(page_type|viewport|locale|day|path|entry|referrer|channel|campaign|country|browser|os|prop:[a-z_][a-z0-9_]{0,31})$/;
+  /^(page_type|viewport|locale|day|path|country|browser|os|prop:[a-z_][a-z0-9_]{0,31})$/;
 
 export interface SiteFilter {
   dim: FilterDim;
   value: string;
 }
 
-/** What every report takes: a window of UTC days, a language, filters. */
+/** `YYYY-MM-DD`. */
+export const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * What every report takes: a window of UTC days, either the last `days` or
+ * `from`–`to` (both included), a series step, a language, filters.
+ */
 export interface SiteAnalyticsQuery {
-  days: number;
+  days?: number | null;
+  from?: string | null;
+  to?: string | null;
+  interval?: SiteInterval | null;
   locale?: SiteLocale | null;
   /** `<dim>:<value>`, all of which a row must match. */
   filter?: string[] | null;
 }
 
-/** A report's window: `days` UTC days ending today, and the same before it. */
-export interface SiteAnalyticsWindow {
+/** A stretch of UTC days, and the instants that bound its rows: `[start, end)`. */
+export interface SiteAnalyticsRange {
   from: string;
   to: string;
+  start: string;
+  end: string;
+}
+
+/**
+ * A report's window: `days` UTC days ending today, and the same before it.
+ * Today is under way, so the window before ends at the same hour of its last
+ * day: a change compares like with like, not today so far with a whole day.
+ * Over {@link MAX_COMPARABLE_DAYS} there is no window before, since most of it
+ * would lie past the retention.
+ */
+export interface SiteAnalyticsWindow extends SiteAnalyticsRange {
   days: number;
   locale: SiteLocale | null;
   filters: SiteFilter[];
-  previousFrom: string;
-  previousTo: string;
-  /** Hourly points for a window of one day, daily ones otherwise. */
+  previous: SiteAnalyticsRange | null;
+  /** The series step. */
+  interval: SiteInterval;
+  /** Whether the SQL groups by the hour; otherwise by the day. */
   hourly: boolean;
+}
+
+/**
+ * The series step a window gets when none is asked for: the hour for one day,
+ * the day up to 92 days, the week up to 183, the month beyond.
+ */
+export function defaultInterval(days: number): SiteInterval {
+  if (days === 1) return "hour";
+  if (days <= 92) return "day";
+  if (days <= 183) return "week";
+  return "month";
 }
 
 /** The filters of a query, parsed; a malformed one is left out. */
@@ -55,23 +101,187 @@ export function parseFilters(raw: SiteAnalyticsQuery["filter"]): SiteFilter[] {
     });
 }
 
-/** The window of `days` UTC days ending today, and the one before it. */
+/**
+ * The window a query asks for, and the one before it. `days` (1–365) ends
+ * today; `from`–`to` is any stretch of up to {@link MAX_RANGE_DAYS} days that
+ * ends today at the latest. The window before has the same length; when the
+ * window ends today it ends at the same hour of its last day. A query the
+ * rules refuse is a 400.
+ */
 export function siteAnalyticsWindow(
   query: SiteAnalyticsQuery,
   now: Date,
 ): SiteAnalyticsWindow {
-  const to = utcDay(now);
-  const from = addIsoDays(to, -(query.days - 1));
+  const today = utcDay(now);
+  let from: string;
+  let to: string;
+  if (query.from || query.to) {
+    if (!query.from || !query.to) {
+      throw new BadRequestException("from and to go together");
+    }
+    if (query.days !== null && query.days !== undefined) {
+      throw new BadRequestException("days or from and to, not both");
+    }
+    if (!isDay(query.from) || !isDay(query.to)) {
+      throw new BadRequestException("from and to are YYYY-MM-DD");
+    }
+    ({ from, to } = query as { from: string; to: string });
+    if (from > to) throw new BadRequestException("from is after to");
+    if (to > today) throw new BadRequestException("to is after today");
+    if (daysBetween(from, to).length > MAX_RANGE_DAYS) {
+      throw new BadRequestException(
+        `from–to covers more than ${MAX_RANGE_DAYS} days`,
+      );
+    }
+  } else {
+    const days = query.days ?? 30;
+    if (!Number.isInteger(days) || days < 1 || days > MAX_ADMIN_WINDOW_DAYS) {
+      throw new BadRequestException(`days is 1 to ${MAX_ADMIN_WINDOW_DAYS}`);
+    }
+    to = today;
+    from = addIsoDays(to, -(days - 1));
+  }
+  const days = daysBetween(from, to).length;
+  const interval = query.interval ?? defaultInterval(days);
+  if (!INTERVALS.includes(interval)) {
+    throw new BadRequestException(`interval is ${INTERVALS.join(", ")}`);
+  }
+  if (interval === "hour" && days > MAX_HOURLY_DAYS) {
+    throw new BadRequestException(
+      `interval=hour takes at most ${MAX_HOURLY_DAYS} days`,
+    );
+  }
+  const shift = days * 86_400_000;
+  const startMs = Date.parse(`${from}T00:00:00Z`);
+  // A window that ends today compares with a window before that ends at the
+  // same hour, the current hour taken whole on both sides: rows are hours,
+  // and the current hour's row holds what came so far.
+  const hourEndMs = Date.parse(bucketOf(now)) + BUCKET_SECONDS * 1000;
+  const previousEndMs =
+    to === today ? Math.min(hourEndMs - shift, startMs) : startMs;
   return {
     from,
     to,
-    days: query.days,
+    start: new Date(startMs).toISOString(),
+    end: `${addIsoDays(to, 1)}T00:00:00.000Z`,
+    days,
     locale: query.locale ?? null,
     filters: parseFilters(query.filter),
-    previousFrom: addIsoDays(from, -query.days),
-    previousTo: addIsoDays(from, -1),
-    hourly: query.days === 1,
+    previous:
+      days > MAX_COMPARABLE_DAYS
+        ? null
+        : {
+            from: addIsoDays(from, -days),
+            to: addIsoDays(from, -1),
+            start: new Date(startMs - shift).toISOString(),
+            end: new Date(previousEndMs).toISOString(),
+          },
+    interval,
+    hourly: interval === "hour",
   };
+}
+
+function isDay(value: string): boolean {
+  return (
+    DAY_PATTERN.test(value) &&
+    new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+  );
+}
+
+/** One point of a report's series. */
+export interface SeriesPeriod {
+  /** The period's start: `YYYY-MM-DD`, or `…T07:00:00Z` for an hour. */
+  day: string;
+  /** The period reaches past the window, or is still under way. */
+  partial: boolean;
+}
+
+/**
+ * The period of a day or an hour at the window's interval: the hour or the
+ * day itself, the Monday of its ISO week, the first of its month.
+ */
+export function periodStartOf(point: string, interval: SiteInterval): string {
+  if (interval === "hour" || interval === "day") return point;
+  const day = point.slice(0, 10);
+  if (interval === "month") return `${day.slice(0, 8)}01`;
+  const weekday = (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
+  return addIsoDays(day, -weekday);
+}
+
+/**
+ * Every point of a window's series, in order: hours up to the current one,
+ * or days, ISO weeks (Monday, UTC) or months that touch the window. A point
+ * that reaches past the window, or is still under way, is `partial`.
+ */
+export function seriesPeriods(
+  window: Pick<SiteAnalyticsWindow, "from" | "to" | "interval">,
+  now: Date,
+): SeriesPeriod[] {
+  const today = utcDay(now);
+  if (window.interval === "hour") {
+    const periods: SeriesPeriod[] = [];
+    for (const day of daysBetween(window.from, window.to)) {
+      for (const hour of hoursOf(day, now)) {
+        periods.push({
+          day: hour,
+          partial:
+            hour ===
+            `${today}T${String(now.getUTCHours()).padStart(2, "0")}:00:00Z`,
+        });
+      }
+    }
+    return periods;
+  }
+  // The last day the window has whole: today is under way.
+  const lastWhole = window.to < today ? window.to : addIsoDays(today, -1);
+  const starts: string[] = [];
+  for (const day of daysBetween(window.from, window.to)) {
+    const start = periodStartOf(day, window.interval);
+    if (starts[starts.length - 1] !== start) starts.push(start);
+  }
+  return starts.map((start, i) => {
+    const next = starts[i + 1] ?? nextPeriodStart(start, window.interval);
+    const last = addIsoDays(next, -1);
+    return {
+      day: start,
+      partial: start < window.from || last > lastWhole,
+    };
+  });
+}
+
+function nextPeriodStart(start: string, interval: SiteInterval): string {
+  if (interval === "day") return addIsoDays(start, 1);
+  if (interval === "week") return addIsoDays(start, 7);
+  const [year, month] = start.split("-").map(Number);
+  return month === 12
+    ? `${year + 1}-01-01`
+    : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+}
+
+/** The window's filters on a visit dimension. */
+export function visitFilters(window: SiteAnalyticsWindow): SiteFilter[] {
+  return window.filters.filter((filter) => isVisitDim(filter.dim));
+}
+
+/**
+ * Refuses a filter on a dimension the report's rows do not carry: a visit
+ * dimension for a report over page views or events, the browser language for
+ * one over events.
+ */
+export function refuseFiltersBeyond(
+  window: SiteAnalyticsWindow,
+  report: string,
+  dims: readonly string[],
+): void {
+  const beyond = window.filters.filter((filter) => !dims.includes(filter.dim));
+  if (beyond.length === 0) return;
+  const names = [...new Set(beyond.map((f) => f.dim))].join(", ");
+  throw new BadRequestException(
+    `${report} counts rows that do not carry ${names}` +
+      (beyond.some((f) => isVisitDim(f.dim))
+        ? "; the visit dimensions can only filter visits"
+        : ""),
+  );
 }
 
 /** Every day from `from` to `to`, both included. */
@@ -95,6 +305,14 @@ export function hoursOf(day: string, now: Date): string[] {
 /** A rate rounded to four places; 0 when there is nothing to divide by. */
 export function rate(numerator: number, divisor: number): number {
   return divisor > 0 ? Math.round((numerator / divisor) * 10_000) / 10_000 : 0;
+}
+
+/** Seconds per page view or visit, whole; null with nothing to divide by. */
+export function averageSeconds(
+  seconds: number,
+  divisor: number,
+): number | null {
+  return divisor > 0 ? Math.round(seconds / divisor) : null;
 }
 
 /** `1 − engaged / visits`, rounded; 0 without a visit. */
@@ -123,23 +341,33 @@ export function columnOf(dim: FilterDim): string {
 }
 
 /**
- * The `WHERE` of a report over `site_pageviews` or `site_events`: the bucket
- * range from `from` to the end of `to`, the language and every filter. The
- * range is two timestamps, so chunk exclusion and the compressed batches'
- * min/max both apply.
+ * The `WHERE` of a report over `site_pageviews` or `site_events`: the window's
+ * rows, or with `both` the window's and the one before's, the language and
+ * every filter. The range is two timestamps, so chunk exclusion and the
+ * compressed batches' min/max both apply; the hours between the window before
+ * and the window are left out by a second condition.
  */
 export function whereOf(
   params: SqlParams,
-  window: Pick<SiteAnalyticsWindow, "locale" | "filters">,
-  from: string,
-  to: string,
+  window: Pick<
+    SiteAnalyticsWindow,
+    "locale" | "filters" | "start" | "end" | "previous"
+  >,
+  scope: "current" | "both",
   alias = "",
 ): string {
   const col = (name: string) => (alias ? `${alias}.${name}` : name);
+  const previous = scope === "both" ? window.previous : null;
   const conditions = [
-    `${col("bucket")} >= ${params.add(`${from}T00:00:00Z`)}::timestamptz`,
-    `${col("bucket")} < ${params.add(`${addIsoDays(to, 1)}T00:00:00Z`)}::timestamptz`,
+    `${col("bucket")} >= ${params.add(previous?.start ?? window.start)}::timestamptz`,
+    `${col("bucket")} < ${params.add(window.end)}::timestamptz`,
   ];
+  if (previous && previous.end < window.start) {
+    conditions.push(
+      `NOT (${col("bucket")} >= ${params.add(previous.end)}::timestamptz ` +
+        `AND ${col("bucket")} < ${params.add(window.start)}::timestamptz)`,
+    );
+  }
   if (window.locale) {
     conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
   }

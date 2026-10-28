@@ -19,6 +19,8 @@ function totals(t: SiteTotalsDto) {
     events: t.events,
     viewsPerVisit: round3(t.viewsPerVisit),
     bounceRate: round3(t.bounceRate),
+    avgVisitSeconds: t.avgVisitSeconds,
+    avgTimeOnPageSeconds: t.avgTimeOnPageSeconds,
   };
 }
 
@@ -26,17 +28,21 @@ export const analyticsOverviewTool = defineMcpTool({
   name: "analytics_overview",
   title: "Site traffic overview",
   description:
-    "park.fan's traffic over a window: page views, visits, visitors, events, views per visit and " +
-    "bounce rate, the same for the window before with the change as a ratio (0.25 = +25 %), the " +
+    "park.fan's traffic over a window: page views, visits, visitors, events, views per visit, " +
+    "bounce rate, average visit and average time on page in seconds, the same for the window " +
+    "before with the change as a ratio (0.25 = +25 %; both null beyond 180 days), the " +
     "active visitors of the last five minutes and page views of the last 30, and optionally a " +
-    "point per day (per hour when days is 1). Start here, then narrow with analytics_breakdown. " +
+    "point per period of the interval with every one of those figures. Start here, then narrow " +
+    "with analytics_breakdown; analytics_live shows the last half hour minute by minute. " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     ...siteWindowInput,
     series: z
       .boolean()
       .default(false)
-      .describe("Include a point per day (per hour for one day)"),
+      .describe(
+        "Include a point per period of the interval (an hour for one day, a day up to 92 days)",
+      ),
   },
   async handler({ series, ...input }, ctx) {
     const report = await ctx
@@ -45,15 +51,17 @@ export const analyticsOverviewTool = defineMcpTool({
     return {
       ...windowOf(report),
       totals: totals(report.totals),
-      previous: totals(report.previous),
-      change: {
-        pageviews: changeRatio(
-          report.totals.pageviews,
-          report.previous.pageviews,
-        ),
-        visits: changeRatio(report.totals.visits, report.previous.visits),
-        events: changeRatio(report.totals.events, report.previous.events),
-      },
+      previous: report.previous ? totals(report.previous) : null,
+      change: report.previous
+        ? {
+            pageviews: changeRatio(
+              report.totals.pageviews,
+              report.previous.pageviews,
+            ),
+            visits: changeRatio(report.totals.visits, report.previous.visits),
+            events: changeRatio(report.totals.events, report.previous.events),
+          }
+        : null,
       realtime: {
         activeVisitors: report.realtime.activeVisitors,
         pageviewsLast30Minutes: report.realtime.perMinute.reduce(
@@ -61,7 +69,13 @@ export const analyticsOverviewTool = defineMcpTool({
           0,
         ),
       },
-      ...(series && { series: report.series }),
+      ...(series && {
+        series: report.series.map((point) => ({
+          ...point,
+          viewsPerVisit: round3(point.viewsPerVisit),
+          bounceRate: round3(point.bounceRate),
+        })),
+      }),
     };
   },
 });

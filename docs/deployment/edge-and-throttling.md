@@ -124,7 +124,7 @@ Redis itself, on every request:
 | --- | --- | --- | --- |
 | `TripWriteRateLimitService` | `getRateLimitIp` | 20 creates and 600 updates or deletes an hour | [trips](../frontend/trips.md) |
 | `PushFollowWriteRateLimitService` (through `PushFollowAccessGuard.writeGuard`) | `getRateLimitIp` | 60 an hour each for `subscription`, `ride-alert`, `show-follow` | [push](../frontend/push.md) |
-| the caps in `SiteAnalyticsCollectService` | `addressBucket(getRateLimitIp)` (an IPv6 address counts as its /64) and the User-Agent | 3000 hits per address; for `page_read` also 3 per reader and page, 500 per address; per UTC day | [site statistic](../frontend/site-analytics.md#guards), [page views](../frontend/page-views.md) |
+| the caps in `SiteAnalyticsCollectService` | `addressBucket(getRateLimitIp, 56)` (an IPv6 address counts as its /56; a reader is the /64 and the User-Agent) | 3000 hits per address and UTC day, 5000 per five-minute window for everybody; for `page_read` also 3 per reader and page, 10 per address and page, 200 per address; new values per address in the day's guards | [site statistic](../frontend/site-analytics.md#guards), [page views](../frontend/page-views.md) |
 | `AdminLoginRateLimitService` | `clientIp` and the account | failures per 15 min: 25 per address, 10 per account, 10 per account and action | [admin authentication](../admin/authentication.md) |
 | `OAuthClientService.register` | `addressBucket(getRateLimitIp)` | 10 client registrations an hour |
 | `OAuthAuthorizationService.authorize` | `addressBucket(getRateLimitIp)`, and the client id | 30 pending authorization requests per 10 minutes each | [admin MCP](../admin/mcp.md#security) |

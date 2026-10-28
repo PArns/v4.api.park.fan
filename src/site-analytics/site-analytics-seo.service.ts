@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, IsNull, Repository } from "typeorm";
 import {
@@ -8,15 +8,19 @@ import {
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import {
+  MAX_COMPARABLE_DAYS,
   MIN_TREND_VISITS,
   NOT_FOUND_PAGE_TYPE,
+  PAGE_DIMS,
   TREND_ITEMS,
   type Channel,
 } from "./site-analytics.constants";
 import {
   SqlParams,
+  averageSeconds,
   bounceRate,
   num,
+  refuseFiltersBeyond,
   siteAnalyticsWindow,
   whereOf,
   type Count,
@@ -40,6 +44,7 @@ interface EntryRow {
   visits: Count;
   previous: Count;
   engaged: Count;
+  visit_seconds: Count;
 }
 
 /**
@@ -47,7 +52,8 @@ interface EntryRow {
  * send people, what grows and shrinks, which pages are missing and which
  * parks and rides no search brought anybody to. Public so the admin's MCP
  * server can offer the same answers as tools. Same window, language and
- * filters as every report. docs/frontend/site-analytics.md.
+ * filters as every report; all of it reads the rows that record visits,
+ * except the not-found page views. docs/frontend/site-analytics.md.
  */
 @Injectable()
 export class SiteAnalyticsSeoService {
@@ -60,7 +66,8 @@ export class SiteAnalyticsSeoService {
 
   /**
    * The pages visits from one channel (`search` unless asked) entered on, with
-   * the window before, the bounce rate and the sites they came from.
+   * the window before (null over `MAX_COMPARABLE_DAYS`), the bounce rate, the
+   * average visit and the sites they came from.
    */
   async landingPages(
     query: SiteAnalyticsQuery & { channel?: Channel; limit: number },
@@ -70,26 +77,25 @@ export class SiteAnalyticsSeoService {
     const channel = query.channel ?? "search";
     const rows = await this.entries(window, channel, query.limit);
     const sources = await this.split(
-      "visits",
       window,
       rows.map((row) => row.path),
-      `channel = $CHANNEL AND visits > 0`,
+      `channel = $CHANNEL`,
       channel,
-      "entry",
     );
     return {
       ...echo(window),
       channel,
       items: rows.map((row) => {
         const visits = num(row.visits);
-        const previous = num(row.previous);
+        const previous = window.previous ? num(row.previous) : null;
         return {
           path: row.path,
           pageType: row.page_type ?? "",
           visits,
           previous,
-          change: visits - previous,
+          change: previous === null ? null : visits - previous,
           bounceRate: bounceRate(visits, num(row.engaged)),
+          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
           sources: sources.get(row.path) ?? [],
         };
       }),
@@ -100,13 +106,19 @@ export class SiteAnalyticsSeoService {
    * The landing pages of one channel that gained and lost the most visits
    * against the window before, {@link TREND_ITEMS} each, among pages with at
    * least {@link MIN_TREND_VISITS} visits in the two windows together so that
-   * noise does not rank.
+   * noise does not rank. Needs a window before: at most
+   * {@link MAX_COMPARABLE_DAYS} days.
    */
   async trends(
     query: SiteAnalyticsQuery & { channel?: Channel },
     now = new Date(),
   ): Promise<SiteTrendsDto> {
     const window = siteAnalyticsWindow(query, now);
+    if (!window.previous) {
+      throw new BadRequestException(
+        `Trends compare with the window before, so at most ${MAX_COMPARABLE_DAYS} days`,
+      );
+    }
     const channel = query.channel ?? "search";
     const rows = (await this.entries(window, channel, null))
       .map((row) => {
@@ -118,6 +130,7 @@ export class SiteAnalyticsSeoService {
           visits,
           previous,
           change: visits - previous,
+          avgVisitSeconds: averageSeconds(num(row.visit_seconds), visits),
         };
       })
       .filter((row) => row.visits + row.previous >= MIN_TREND_VISITS);
@@ -139,42 +152,40 @@ export class SiteAnalyticsSeoService {
 
   /**
    * Paths that showed the not-found page, most viewed first, with the sites
-   * their visits came from. A broken link inside the site has no external
-   * referrer; it shows as views without one.
+   * of the visits that entered on them: a dead URL still indexed or linked
+   * from outside. A broken link inside the site brings views but no visit
+   * from outside, so no referrer.
    */
   async notFound(
     query: SiteAnalyticsQuery & { limit: number },
     now = new Date(),
   ): Promise<SiteNotFoundDto> {
     const window = siteAnalyticsWindow(query, now);
+    refuseFiltersBeyond(window, "The not-found report", PAGE_DIMS);
     const params = new SqlParams();
     const rows: Array<{ path: string; views: Count }> = await this.db.query(
       `SELECT path, SUM(views) AS views
          FROM site_pageviews
-        WHERE ${whereOf(params, window, window.from, window.to)}
+        WHERE ${whereOf(params, window, "current")}
           AND page_type = ${params.add(NOT_FOUND_PAGE_TYPE)}
         GROUP BY path
+        HAVING SUM(views) > 0
         ORDER BY 2 DESC, 1 ASC
         LIMIT ${params.add(query.limit)}`,
       params.values,
     );
     const referrers = await this.split(
-      "views",
       window,
       rows.map((row) => row.path),
       `page_type = $CHANNEL AND referrer <> ''`,
       NOT_FOUND_PAGE_TYPE,
-      "path",
     );
     return {
       ...echo(window),
       items: rows.map((row) => ({
         path: row.path,
         views: num(row.views),
-        referrers: (referrers.get(row.path) ?? []).map((source) => ({
-          value: source.value,
-          views: source.visits,
-        })),
+        referrers: referrers.get(row.path) ?? [],
       })),
     };
   }
@@ -193,7 +204,7 @@ export class SiteAnalyticsSeoService {
     const covered: Array<{ path: string }> = await this.db.query(
       `SELECT DISTINCT substring(entry from 4) AS path
          FROM site_pageviews
-        WHERE ${whereOf(params, window, window.from, window.to)}
+        WHERE ${whereOf(params, window, "current")}
           AND channel = 'search' AND visits > 0 AND entry <> ''`,
       params.values,
     );
@@ -240,25 +251,31 @@ export class SiteAnalyticsSeoService {
     };
   }
 
-  /** Visits that entered on each page from one channel, both windows. */
+  /**
+   * Visits that entered on each page from one channel, in the window and the
+   * one before. On the rows that record visits the path is the entry; an exit
+   * row carries the entry too, with the last page's type, so the page type
+   * is read from the start rows only.
+   */
   private async entries(
     window: SiteAnalyticsWindow,
     channel: string,
     limit: number | null,
   ): Promise<EntryRow[]> {
     const params = new SqlParams();
-    const where = whereOf(params, window, window.previousFrom, window.to);
-    const from = params.add(`${window.from}T00:00:00Z`);
+    const where = whereOf(params, window, "both");
+    const start = params.add(window.start);
     return this.db.query(
       `SELECT entry AS path,
-              SUM(visits) FILTER (WHERE bucket >= ${from}::timestamptz) AS visits,
-              SUM(visits) FILTER (WHERE bucket < ${from}::timestamptz) AS previous,
-              SUM(engaged) FILTER (WHERE bucket >= ${from}::timestamptz) AS engaged,
-              MAX(page_type) FILTER (WHERE visits > 0 AND path = entry) AS page_type
+              SUM(visits) FILTER (WHERE bucket >= ${start}::timestamptz) AS visits,
+              SUM(visits) FILTER (WHERE bucket < ${start}::timestamptz) AS previous,
+              SUM(engaged) FILTER (WHERE bucket >= ${start}::timestamptz) AS engaged,
+              SUM(visit_seconds) FILTER (WHERE bucket >= ${start}::timestamptz) AS visit_seconds,
+              MAX(page_type) FILTER (WHERE visits > 0) AS page_type
          FROM site_pageviews
         WHERE ${where} AND channel = ${params.add(channel)} AND entry <> ''
         GROUP BY entry
-        ${limit === null ? "" : `HAVING SUM(visits) FILTER (WHERE bucket >= ${from}::timestamptz) > 0`}
+        ${limit === null ? "" : `HAVING SUM(visits) FILTER (WHERE bucket >= ${start}::timestamptz) > 0`}
         ORDER BY 2 DESC NULLS LAST, 1 ASC
         ${limit === null ? "" : `LIMIT ${params.add(limit)}`}`,
       params.values,
@@ -266,28 +283,27 @@ export class SiteAnalyticsSeoService {
   }
 
   /**
-   * The referrers of a list of pages in the window, the largest
-   * {@link SOURCES_PER_ITEM} per page. `condition` names its one parameter
-   * `$CHANNEL`.
+   * The referrers of the visits that entered on a list of pages in the
+   * window, the largest {@link SOURCES_PER_ITEM} per page. `condition` names
+   * its one parameter `$CHANNEL`.
    */
   private async split(
-    measure: "visits" | "views",
     window: SiteAnalyticsWindow,
     pages: string[],
     condition: string,
     value: string,
-    pageColumn: "entry" | "path",
   ): Promise<Map<string, Array<{ value: string; visits: number }>>> {
     const split = new Map<string, Array<{ value: string; visits: number }>>();
     if (pages.length === 0) return split;
     const params = new SqlParams();
-    const where = whereOf(params, window, window.from, window.to);
+    const where = whereOf(params, window, "current");
     const rows: Array<{ page: string; referrer: string; count: Count }> =
       await this.db.query(
-        `SELECT ${pageColumn} AS page, referrer, SUM(${measure}) AS count
+        `SELECT entry AS page, referrer, SUM(visits) AS count
            FROM site_pageviews
-          WHERE ${where} AND ${condition.replace("$CHANNEL", params.add(value))}
-            AND ${pageColumn} = ANY(${params.add(pages)}::text[])
+          WHERE ${where} AND visits > 0
+            AND ${condition.replace("$CHANNEL", params.add(value))}
+            AND entry = ANY(${params.add(pages)}::text[])
           GROUP BY 1, 2
           ORDER BY 3 DESC, 2 ASC`,
         params.values,

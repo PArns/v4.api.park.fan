@@ -21,13 +21,14 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "./site-analytics-storage.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
+import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteEntityNames } from "./site-entity-names.service";
 import {
   AdminSiteAnalyticsController,
   SiteAnalyticsCollectController,
 } from "./site-analytics.controller";
-import { textBodyMiddleware } from "./text-body.middleware";
+import { collectBodyMiddleware } from "./collect-body.middleware";
 
 /** The route that reads a `text/plain` body, and the only one. */
 export const COLLECT_ROUTE = {
@@ -37,9 +38,10 @@ export const COLLECT_ROUTE = {
 
 /**
  * Our own cookieless, aggregate-only site statistic: page views, visits,
- * visitors and any event the site sends, counted per five-minute window, and
- * the admin's reports on them. `SiteAnalyticsService` and
- * `SiteAnalyticsSeoService` are exported for the admin's MCP tools,
+ * visitors and any event the site sends, counted per UTC hour, and
+ * the admin's reports on them. `SiteAnalyticsService`,
+ * `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` are exported for
+ * the admin's MCP tools,
  * `SiteAnalyticsCollectService` for the most-read counter's old endpoint.
  * See docs/frontend/site-analytics.md.
  */
@@ -66,6 +68,7 @@ export const COLLECT_ROUTE = {
     SiteAnalyticsStorageService,
     SiteAnalyticsService,
     SiteAnalyticsSeoService,
+    SiteAnalyticsLiveService,
     SiteAnalyticsBlocklist,
     SiteEntityNames,
   ],
@@ -74,10 +77,11 @@ export const COLLECT_ROUTE = {
     SiteAnalyticsStorageService,
     SiteAnalyticsService,
     SiteAnalyticsSeoService,
+    SiteAnalyticsLiveService,
   ],
 })
 export class SiteAnalyticsModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(textBodyMiddleware()).forRoutes(COLLECT_ROUTE);
+    consumer.apply(collectBodyMiddleware()).forRoutes(COLLECT_ROUTE);
   }
 }

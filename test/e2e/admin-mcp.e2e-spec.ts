@@ -239,6 +239,8 @@ describe("Admin MCP and OAuth (e2e)", () => {
         "analytics_events",
         "analytics_event",
         "analytics_crosstab",
+        "analytics_traffic_crosstab",
+        "analytics_live",
         "search_report",
         "seo_landing_pages",
         "seo_trends",
@@ -299,6 +301,21 @@ describe("Admin MCP and OAuth (e2e)", () => {
       visitorData: {
         items: [{ value: "google", visits: 1, share: 1, bounceRate: 0 }],
       },
+    });
+
+    const live = await mcp(client, pat, {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "analytics_live", arguments: {} },
+    }).expect(200);
+    expect(live.body.result.isError).toBeUndefined();
+    const answer = JSON.parse(live.body.result.content[0].text);
+    expect(answer.perMinute).toHaveLength(31);
+    expect(answer.visitorData).toEqual({
+      pages: [],
+      referrers: [],
+      events: [],
     });
   });
 

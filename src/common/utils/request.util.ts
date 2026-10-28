@@ -73,12 +73,20 @@ export function getRateLimitIp(req: RequestLike | undefined): string | null {
 /**
  * The part of an address one subscriber controls: an IPv4 address whole, an
  * IPv6 address as its /64. A host with a /64 can take a new address for every
- * request, so a limit keyed on the full IPv6 address limits nothing.
+ * request, so a limit keyed on the full IPv6 address limits nothing. With
+ * `ipv6Prefix` 56, the /56 a provider delegates to one customer, who can take
+ * a new /64 as easily.
  */
-export function addressBucket(ip: string | null): string | null {
+export function addressBucket(
+  ip: string | null,
+  ipv6Prefix: 56 | 64 = 64,
+): string | null {
   if (!ip) return null;
-  if (isIP(ip) === 6) return `${expandIpv6(ip).slice(0, 4).join(":")}::/64`;
-  return ip;
+  if (isIP(ip) !== 6) return ip;
+  const hextets = expandIpv6(ip).slice(0, 4);
+  if (ipv6Prefix === 64) return `${hextets.join(":")}::/64`;
+  const [a, b, c, d] = hextets.map((h) => parseInt(h || "0", 16));
+  return `${[a, b, c, d & 0xff00].map((n) => n.toString(16)).join(":")}::/56`;
 }
 
 /**

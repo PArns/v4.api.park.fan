@@ -113,7 +113,7 @@ against these rules.
 | `find_attractions` | rides by name, optionally in one park, with status and wait | `SearchService` |
 | `get_attraction` | one ride: queues, crowd level, outage, curated facts, typical waits, downtime, retirement, optional history | `AttractionIntegrationService` |
 | `page_views` | reads per kind, language and page | `PageViewsService.adminOverview` |
-| `system_health` | host, Postgres, Redis, data freshness; or the ML half | `SystemHealthService` |
+| `system_health` | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half | `SystemHealthService` |
 | `queue_status` | Bull counts per queue, recent failures of one | `AdminQueueStatusService` |
 | `ml_overview` | forecast components, decisions, comparison summary, drift | `MlOverviewService` |
 | `data_quality` | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates | `DataQualityMonitorService.report` |
@@ -121,22 +121,32 @@ against these rules.
 | `retirement_candidates` | rides whose source went quiet | `AttractionReviewService` |
 | `audit_log` | admin actions, filterable | `AdminAuditService.list` |
 | `downtime` | outage events per park and ride over a window | `DowntimeMeasurementService.measure` |
-| `analytics_overview` | page views, visits, visitors, events, views per visit, bounce; the window before and the change; realtime; optional series | `SiteAnalyticsService.overview` |
-| `analytics_breakdown` | views and visits per value of one dimension, share, bounce on visit dimensions | `SiteAnalyticsService.breakdown` |
+| `analytics_overview` | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview` |
+| `analytics_live` | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events | `SiteAnalyticsLiveService.live` |
+| `analytics_breakdown` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits | `SiteAnalyticsService.breakdown` |
+| `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix | `SiteAnalyticsService.trafficCrosstab` |
 | `analytics_events` | every event name with count, previous, change, blocked | `SiteAnalyticsService.events` |
 | `analytics_event` | one event: props with top values, combinations, page types, viewports, entities | `SiteAnalyticsService.event` |
 | `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix | `SiteAnalyticsService.crosstab` |
 | `search_report` | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where | `SiteAnalyticsService.search` |
 | `seo_landing_pages` | the pages visits of one channel (search by default) entered on, with change, bounce, sources | `SiteAnalyticsSeoService.landingPages` |
 | `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
-| `seo_not_found` | paths that showed the not-found page, with their referrers | `SiteAnalyticsSeoService.notFound` |
+| `seo_not_found` | paths that showed the not-found page, with the referrers of the visits that entered on them | `SiteAnalyticsSeoService.notFound` |
 | `seo_uncovered` | parks or rides no search visit entered on | `SiteAnalyticsSeoService.uncovered` |
 
-The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365), `locale`, and
-`filters` as `[{ dim, value }]`, which become the reports' `filter=<dim>:<value>`. Their
-descriptions carry what a model must know to read the numbers: visitors are daily uniques summed
-over the window and `null` under any filter but the language, bounce is `1 − engaged / visits`,
-reports lag the site by up to six minutes, and Do Not Track, GPC and opted-out readers are missing
+The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
+1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
+(`hour`, `day`, `week`, `month`), `locale`, and `filters` as `[{ dim, value }]`, which become the
+reports' `filter=<dim>:<value>`. The tools over events (`analytics_events`, `analytics_event`,
+`analytics_crosstab`, `search_report`) take only the event's dimensions (`eventWindowInput`), and
+`seo_not_found` only the page view's (`pageWindowInput`, with `browser_language`): their rows carry
+no visit dimension, so the schema does not offer one rather than the report refusing it. Their
+descriptions carry what a model must know to read the numbers: rows are UTC hours, visitors are
+daily uniques summed over the window and `null` under any filter but the language, bounce is
+`1 − engaged / visits`, the times are measured foreground seconds, a visit filter makes page views
+and events `null`, `previous` ends at the current hour and is `null` past 180 days, a series period
+the window cuts is `partial`, reports lag the site by up to six minutes, and Do Not Track, GPC and
+opted-out readers are missing
 ([site statistic](../frontend/site-analytics.md)). Rates are rounded to three places, lists cut to
 the `limit` each takes, series only on request. Strings the collector took from visitors' browsers come
 back under `visitorData` with a `visitorDataNotice` (`tools/visitor-data.ts`), parks and rides by

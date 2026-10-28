@@ -76,7 +76,7 @@ dates ISO strings or null. `redirectHost` is the redirect URI's host, with its p
 | --- | --- | --- | --- |
 | POST | `train-ml-model` | editor | job `ml-training` / `train-model` ([CatBoost training](../ml/catboost-training.md)) |
 | POST | `pcn/:action` | editor | job `pcn-shadow` / `train-pcn`, `forecast-pcn` or `score-pcn` for `train`, `forecast`, `score` ([PCN](../ml/pcn.md)) |
-| GET | `system-health` | viewer | host, Postgres, Redis and both model services, with training status |
+| GET | `system-health` | viewer | host, Postgres, Redis, the site statistic's flush backlog and drops ([site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples)) and both model services, with training status |
 | GET | `ml-overview` | viewer | open decisions, matrix summary, component status ([ML overview](../ml/ml-overview.md)) |
 | GET | `ml-comparison` | viewer | the PCN intraday comparison board |
 | GET | `forecast-archive` | viewer | forward-archive scores per lead ([forward archive](../ml/forward-archive/README.md)) |
@@ -111,18 +111,21 @@ The `/v1/ml/*` routes (`dashboard`, `models/metrics-history`, `accuracy/system`,
 ## Site statistic (`admin/analytics`)
 
 The reports of park.fan's own statistic, on `AdminSiteAnalyticsController`; every one takes `days`
-(1–365), `locale` and repeatable `filter=<dim>:<value>`. Shapes, filters and the measured times:
+(1–365) or `from` and `to`, `interval`, `locale` and repeatable `filter=<dim>:<value>`; the live
+view takes `locale` only. Shapes, filters and the measured times:
 [site statistic](../frontend/site-analytics.md#reports). Its writes are audited too.
 
 | Method | Path | Role | Does |
 | --- | --- | --- | --- |
-| GET | `analytics/overview` | viewer | page views, visits, visitors, events, bounce rate, the window before, series, realtime |
-| GET | `analytics/breakdown?dim=&limit=` | viewer | one dimension's values by views and visits |
+| GET | `analytics/overview` | viewer | page views, visits, visitors, events, bounce rate, average visit and time on page, the window before (none past 180 days), series by `interval`, realtime |
+| GET | `analytics/breakdown?dim=&limit=` | viewer | one dimension's values by views, visits or exits, with time on page or average visit |
+| GET | `analytics/crosstab?row=&col=&metric=` | viewer | page views or visits by two dimensions |
+| GET | `analytics/live?locale=` | viewer | the last half hour from Redis only, for polling |
 | GET | `analytics/events` | viewer | every event name seen, blocked ones included |
 | GET | `analytics/events/:name` | viewer | one event's props, values, combinations, entities and series |
 | GET | `analytics/events/:name/crosstab?row=&col=` | viewer | one event by two sides |
 | GET | `analytics/search` | viewer | the search funnel per surface |
-| GET | `analytics/seo/landing-pages?channel=&limit=`, `analytics/seo/trends?channel=`, `analytics/seo/not-found`, `analytics/seo/uncovered?kind=` | viewer | landing pages, rising and falling ones, broken paths, parks or rides no search visit entered on |
+| GET | `analytics/seo/landing-pages?channel=&limit=`, `analytics/seo/trends?channel=` (at most 180 days), `analytics/seo/not-found`, `analytics/seo/uncovered?kind=` | viewer | landing pages, rising and falling ones, broken paths, parks or rides no search visit entered on |
 | GET | `analytics/blocked-events` | viewer | the event block list |
 | PUT, DELETE | `analytics/blocked-events/:name` | editor | blocks or unblocks an event name; the collector drops it within a minute |
 

@@ -60,9 +60,11 @@ compressed rows were measuring plain tables. Adding a hypertable is one entry th
 
 Two consequences that are easy to miss:
 
-1. **`TimescaleInitService.enableCompression` is a silent no-op on a plain table**, and the first suite
-   to boot decides the compression state later ones inherit. A test that toggles compression reads the
-   current state and restores only what it changed (`park-merge.e2e-spec.ts` does); a hard
+1. **`TimescaleInitService.enableCompression` is a silent no-op on a plain table.** `global-setup.ts`
+   runs the service's setup once after the hypertables exist, so compression and its policies are on
+   before the first suite boots; left to that boot, its `ALTER TABLE … SET (timescaledb.compress)` ran
+   beside the first test's `TRUNCATE … CASCADE` and deadlocked it. A test that toggles compression
+   reads the current state and restores only what it changed (`park-merge.e2e-spec.ts` does); a hard
    `SET (timescaledb.compress = false)` disables it for every later file and orphans the policy.
 2. **`create_hypertable` failures only warn**, so a table can quietly stay plain.
    `park-merge.e2e-spec.ts` asserts every `HYPERTABLES` entry against

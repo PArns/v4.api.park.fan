@@ -5,10 +5,12 @@ import {
   type PageViewKind,
 } from "../page-views/page-view.constants";
 import {
+  MAX_ENGAGEMENT_SECONDS,
   MAX_EVENT_PROPS,
   PAGE_READ_EVENT,
   SITE_LOCALES,
   SITE_VIEWPORTS,
+  isLocationDerivedEvent,
   type SiteLocale,
 } from "./site-analytics.constants";
 
@@ -85,7 +87,17 @@ export interface ValidEventHit extends ValidHitBase {
   entity: string | null;
 }
 
-export type ValidHit = ValidPageviewHit | ValidEventHit;
+/**
+ * Foreground time on the current page view since the last report: whole
+ * seconds, 1 to {@link MAX_ENGAGEMENT_SECONDS}. No timestamp; the frontend
+ * pauses its clock while the page is hidden.
+ */
+export interface ValidEngagementHit extends ValidHitBase {
+  t: "engagement";
+  seconds: number;
+}
+
+export type ValidHit = ValidPageviewHit | ValidEventHit | ValidEngagementHit;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -188,12 +200,28 @@ export function validateHit(raw: unknown): ValidHit | null {
       campaign: validCampaign(raw.campaign),
     };
   }
+  if (t === "engagement") {
+    const { seconds } = raw;
+    if (
+      typeof seconds !== "number" ||
+      !Number.isInteger(seconds) ||
+      seconds < 1 ||
+      seconds > MAX_ENGAGEMENT_SECONDS
+    )
+      return null;
+    return { t, ...base, seconds };
+  }
   if (t !== "event") return null;
   const { name } = raw;
   if (typeof name !== "string" || !EVENT_NAME_PATTERN.test(name)) return null;
 
   let props = sanitizeProps(raw.props);
-  let entity = isCanonicalUuid(raw.entity) ? raw.entity : null;
+  // An event about where the reader is keeps no entity, whatever a client
+  // sends: the park near them would be their location.
+  let entity =
+    isCanonicalUuid(raw.entity) && !isLocationDerivedEvent(name)
+      ? raw.entity
+      : null;
   if (name === PAGE_READ_EVENT) {
     const read = pageRead(props, entity);
     if (!read) return null;

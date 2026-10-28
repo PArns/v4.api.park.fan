@@ -1,3 +1,4 @@
+import helmet from "helmet";
 import {
   Body,
   CallHandler,
@@ -23,8 +24,9 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
+import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
 import { COLLECT_ROUTE } from "./site-analytics.module";
-import { textBodyMiddleware } from "./text-body.middleware";
+import { collectBodyMiddleware } from "./collect-body.middleware";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
@@ -53,8 +55,10 @@ const reports = {
   events: jest.fn().mockResolvedValue({ ok: "events" }),
   event: jest.fn().mockResolvedValue({ ok: "event" }),
   crosstab: jest.fn().mockResolvedValue({ ok: "crosstab" }),
+  trafficCrosstab: jest.fn().mockResolvedValue({ ok: "traffic-crosstab" }),
   search: jest.fn().mockResolvedValue({ ok: "search" }),
 };
+const liveView = { live: jest.fn().mockResolvedValue({ ok: "live" }) };
 const seo = {
   landingPages: jest.fn().mockResolvedValue({ ok: "landing" }),
   trends: jest.fn().mockResolvedValue({ ok: "trends" }),
@@ -78,11 +82,12 @@ const blocklist = {
     { provide: SiteAnalyticsService, useValue: reports },
     { provide: SiteAnalyticsSeoService, useValue: seo },
     { provide: SiteAnalyticsBlocklist, useValue: blocklist },
+    { provide: SiteAnalyticsLiveService, useValue: liveView },
   ],
 })
 class TestModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(textBodyMiddleware()).forRoutes(COLLECT_ROUTE);
+    consumer.apply(collectBodyMiddleware()).forRoutes(COLLECT_ROUTE);
   }
 }
 
@@ -118,6 +123,13 @@ describe("SiteAnalyticsController", () => {
       })
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
+    // As in main.ts, so the beacon's own resource policy is seen to win.
+    app.use(
+      helmet({
+        contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: false,
+      }),
+    );
     app.setGlobalPrefix("v1");
     app.useGlobalPipes(
       new ValidationPipe({
@@ -160,13 +172,19 @@ describe("SiteAnalyticsController", () => {
     it("reads the text/plain body sendBeacon sends and answers 204, uncacheable", async () => {
       const response = await post()
         .set("Content-Type", "text/plain;charset=UTF-8")
+        .set("Accept-Language", "de-DE,de;q=0.9,en;q=0.8")
         .send(body)
         .expect(204);
       expect(response.headers["cache-control"]).toContain("no-store");
+      // A no-cors beacon from park.fan may read the empty answer.
+      expect(response.headers["cross-origin-resource-policy"]).toBe(
+        "cross-origin",
+      );
       expect(collect).toHaveBeenCalledWith({
         hits: [hit],
         ip: "203.0.113.7",
         userAgent: UA,
+        acceptLanguage: "de-DE,de;q=0.9,en;q=0.8",
       });
     });
 
@@ -203,11 +221,15 @@ describe("SiteAnalyticsController", () => {
       expect(collect).not.toHaveBeenCalled();
     });
 
-    it("refuses a body over 16 KiB", async () => {
-      await post()
-        .set("Content-Type", "text/plain")
-        .send(JSON.stringify({ v: 1, hits: [hit], pad: "x".repeat(17000) }))
-        .expect(413);
+    it("refuses a body over 16 KiB, as text and as JSON", async () => {
+      const oversized = JSON.stringify({
+        v: 1,
+        hits: [hit],
+        pad: "x".repeat(17000),
+      });
+      for (const type of ["text/plain", "application/json"]) {
+        await post().set("Content-Type", type).send(oversized).expect(413);
+      }
       expect(collect).not.toHaveBeenCalled();
     });
 
@@ -270,12 +292,11 @@ describe("SiteAnalyticsController", () => {
       await get("/v1/admin/analytics/overview").expect(200, {
         ok: "overview",
       });
-      expect(reports.overview).toHaveBeenCalledWith(
-        expect.objectContaining({ days: 30 }),
-      );
+      // No window asked: the service makes it the last 30 days.
+      expect(reports.overview.mock.calls[0][0]).not.toHaveProperty("days");
       await get("/v1/admin/analytics/breakdown?dim=referrer").expect(200);
       expect(reports.breakdown).toHaveBeenCalledWith(
-        expect.objectContaining({ dim: "referrer", days: 30, limit: 50 }),
+        expect.objectContaining({ dim: "referrer", limit: 50 }),
       );
       await get("/v1/admin/analytics/events?days=365&locale=nl").expect(200);
       expect(reports.events).toHaveBeenCalledWith(
@@ -299,6 +320,12 @@ describe("SiteAnalyticsController", () => {
         "/v1/admin/analytics/overview?locale=pt",
         "/v1/admin/analytics/overview?filter=user:42",
         "/v1/admin/analytics/overview?filter=channel:",
+        "/v1/admin/analytics/overview?from=2026-1-1&to=2026-01-31",
+        "/v1/admin/analytics/overview?interval=year",
+        "/v1/admin/analytics/crosstab?row=os",
+        "/v1/admin/analytics/crosstab?row=prop:surface&col=os",
+        "/v1/admin/analytics/crosstab?row=os&col=viewport&metric=events",
+        "/v1/admin/analytics/live?locale=pt",
         "/v1/admin/analytics/breakdown",
         "/v1/admin/analytics/breakdown?dim=user",
         "/v1/admin/analytics/breakdown?dim=path&limit=201",
@@ -306,13 +333,21 @@ describe("SiteAnalyticsController", () => {
         "/v1/admin/analytics/events/Bad-Name",
         "/v1/admin/analytics/events/search_opened/crosstab?row=prop:surface",
         "/v1/admin/analytics/events/search_opened/crosstab?row=id&col=day",
+        // Events carry no visit dimension to cross with.
+        "/v1/admin/analytics/events/search_opened/crosstab?row=channel&col=day",
+        // Trends need a window before, which longer windows lack.
+        "/v1/admin/analytics/seo/trends?days=181",
         "/v1/admin/analytics/seo/landing-pages?channel=email",
         "/v1/admin/analytics/seo/uncovered",
         "/v1/admin/analytics/seo/uncovered?kind=show",
       ]) {
         await get(url).expect(400);
       }
-      for (const fn of [...Object.values(reports), ...Object.values(seo)]) {
+      for (const fn of [
+        ...Object.values(reports),
+        ...Object.values(seo),
+        liveView.live,
+      ]) {
         expect(fn).not.toHaveBeenCalled();
       }
     });
@@ -345,7 +380,7 @@ describe("SiteAnalyticsController", () => {
       );
       await get("/v1/admin/analytics/seo/landing-pages").expect(200);
       expect(seo.landingPages).toHaveBeenCalledWith(
-        expect.objectContaining({ days: 30, limit: 50 }),
+        expect.objectContaining({ limit: 50 }),
       );
       await get("/v1/admin/analytics/seo/trends?channel=ai").expect(200);
       expect(seo.trends).toHaveBeenCalledWith(
@@ -358,6 +393,50 @@ describe("SiteAnalyticsController", () => {
       expect(seo.uncovered).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "attraction", limit: 200 }),
       );
+    });
+
+    it("passes a from–to window and an interval through to the report", async () => {
+      await get(
+        "/v1/admin/analytics/events?from=2026-09-01&to=2026-09-30&interval=week",
+      ).expect(200);
+      expect(reports.events).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          from: "2026-09-01",
+          to: "2026-09-30",
+          interval: "week",
+        }),
+      );
+    });
+
+    it("serves the traffic crosstab, page views unless asked, and the live view", async () => {
+      await get("/v1/admin/analytics/crosstab?row=os&col=viewport").expect(
+        200,
+        { ok: "traffic-crosstab" },
+      );
+      expect(reports.trafficCrosstab).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          row: "os",
+          col: "viewport",
+          metric: "pageviews",
+        }),
+      );
+      await get(
+        "/v1/admin/analytics/crosstab?row=channel&col=exit&metric=visits",
+      ).expect(200);
+      expect(reports.trafficCrosstab).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          row: "channel",
+          col: "exit",
+          metric: "visits",
+        }),
+      );
+      const live = await get("/v1/admin/analytics/live?locale=de").expect(200, {
+        ok: "live",
+      });
+      expect(live.headers["cache-control"]).toContain("no-store");
+      expect(liveView.live).toHaveBeenLastCalledWith("de");
+      await get("/v1/admin/analytics/live").expect(200);
+      expect(liveView.live).toHaveBeenLastCalledWith(null);
     });
 
     it("blocks and unblocks an event name in the admin's name", async () => {

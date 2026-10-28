@@ -1130,20 +1130,37 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Site statistic (PAR-1151): the finished five-minute windows from Redis
     // into the hypertables a minute after each window ends, yesterday's
-    // unique visitors at 00:13 once the UTC day is over, and the chunks past
-    // 400 days at 01:47. A HyperLogLog lives three days past its own, so a
-    // missed snapshot is caught up the next night.
-    for (const [name, jobId, cron] of [
-      ["flush", "site-analytics-flush-cron", "1-56/5 * * * *"],
-      ["snapshot-visitors", "site-analytics-visitors-cron", "13 0 * * *"],
-      ["drop-old-chunks", "site-analytics-chunks-cron", "47 1 * * *"],
+    // unique visitors four times in the hour after midnight (a day's
+    // HyperLogLog outlives its day by that hour and no more, so one run may
+    // fail), and the chunks past 400 days at 01:47. A failing flush keeps
+    // its last hundred failures, eight hours of them, rather than the
+    // queue's 500: the failing-jobs sweep needs only the newest.
+    for (const [name, jobId, cron, removeOnFail] of [
+      ["flush", "site-analytics-flush-cron", "1-56/5 * * * *", 100],
+      [
+        "snapshot-visitors",
+        "site-analytics-visitors-cron",
+        "5-50/15 0 * * *",
+        undefined,
+      ],
+      [
+        "drop-old-chunks",
+        "site-analytics-chunks-cron",
+        "47 1 * * *",
+        undefined,
+      ],
     ] as const) {
       if (await this.hasRepeatableJob(this.siteAnalyticsQueue, jobId, cron))
         continue;
       await this.siteAnalyticsQueue.add(
         name,
         {},
-        { repeat: { cron }, jobId, removeOnComplete: 100 },
+        {
+          repeat: { cron },
+          jobId,
+          removeOnComplete: 100,
+          ...(removeOnFail && { removeOnFail }),
+        },
       );
     }
 

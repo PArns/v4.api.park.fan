@@ -3,10 +3,10 @@ import type { Logger } from "@nestjs/common";
 import { addIsoDays } from "./date.util";
 
 /**
- * Helpers for the two reader counters (`src/page-views/`, `src/site-analytics/`),
- * which count readers without storing who they are: a day is a UTC day, and
- * every Redis key that stands for a reader is an HMAC under a secret that lives
- * in the environment, never in Redis.
+ * Helpers for the site statistic (`src/site-analytics/`), which counts readers
+ * without storing who they are: a day is a UTC day, and every Redis key that
+ * stands for a reader is an HMAC under a key derived per day from a secret
+ * that lives in the environment, never in Redis.
  */
 
 /**
@@ -56,4 +56,15 @@ export function readerHash(secret: string, ...parts: string[]): string {
     .update(parts.join("|"))
     .digest("hex")
     .slice(0, 32);
+}
+
+/**
+ * The key one UTC day's reader hashes are made under: HMAC(secret, day). The
+ * values are pseudonyms for that day only: the same reader's keys of two days
+ * have nothing in common, so nothing in Redis links one day to the next.
+ * Whoever holds the secret can still test a given address against a key of a
+ * day that has not expired yet.
+ */
+export function dailyHashKey(secret: string, day: string): string {
+  return createHmac("sha256", secret).update(`day|${day}`).digest("hex");
 }

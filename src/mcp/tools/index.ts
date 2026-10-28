@@ -18,6 +18,8 @@ import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
 import { analyticsEventsTool } from "./analytics-events.tool";
 import { analyticsEventTool } from "./analytics-event.tool";
 import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
+import { analyticsTrafficCrosstabTool } from "./analytics-traffic-crosstab.tool";
+import { analyticsLiveTool } from "./analytics-live.tool";
 import { searchReportTool } from "./search-report.tool";
 import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
@@ -45,7 +47,9 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   auditLogTool,
   downtimeTool,
   analyticsOverviewTool,
+  analyticsLiveTool,
   analyticsBreakdownTool,
+  analyticsTrafficCrosstabTool,
   analyticsEventsTool,
   analyticsEventTool,
   analyticsCrosstabTool,

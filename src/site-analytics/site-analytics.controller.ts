@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -32,10 +33,6 @@ import {
   CurrentAdmin,
 } from "../admin/auth/admin-auth.decorators";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import {
-  DEFAULT_PRODUCTION_CORS_ORIGINS,
-  isAllowedCorsOrigin,
-} from "../common/cors/cors.config";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { getRateLimitIp } from "../common/utils/request.util";
 import { EVENT_NAME_PATTERN, parseCollectBody } from "./site-analytics.hits";
@@ -43,45 +40,34 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
-import { TEXT_BODY_TOO_LARGE } from "./text-body.middleware";
+import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
+import { BODY_TOO_LARGE } from "./collect-body.middleware";
+import { BEACON_RESOURCE_POLICY, isFromSite } from "./from-site.util";
 import {
   CollectBodyDto,
   SiteAnalyticsBreakdownQueryDto,
   SiteAnalyticsQueryDto,
   SiteBlockedEventsDto,
   SiteBreakdownDto,
-  SiteChannelQueryDto,
   SiteCrosstabDto,
   SiteCrosstabQueryDto,
   SiteEventDetailDto,
   SiteEventsDto,
   SiteLandingPagesDto,
   SiteLandingPagesQueryDto,
+  SiteLiveDto,
+  SiteLiveQueryDto,
   SiteNotFoundDto,
   SiteNotFoundQueryDto,
   SiteOverviewDto,
   SiteSearchDto,
+  SiteTrafficCrosstabDto,
+  SiteTrafficCrosstabQueryDto,
   SiteTrendsDto,
+  SiteTrendsQueryDto,
   SiteUncoveredDto,
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
-
-/**
- * Whether a hit comes from the site itself. In production that is a request
- * whose `Origin` (or, should a browser leave it out, whose `Referer`) is
- * park.fan: a preview, a local build or a script without one is not counted.
- * Every browser sends `Origin` on a POST, `sendBeacon` included.
- */
-export function isFromSite(request: Request, isProduction: boolean): boolean {
-  if (!isProduction) return true;
-  const origin = request.get("origin");
-  if (origin)
-    return isAllowedCorsOrigin(origin, DEFAULT_PRODUCTION_CORS_ORIGINS);
-  const referer = request.get("referer") ?? "";
-  return DEFAULT_PRODUCTION_CORS_ORIGINS.some((site) =>
-    referer.startsWith(`${site}/`),
-  );
-}
 
 /** An event name from the path, or 400. */
 function eventName(name: string): string {
@@ -107,6 +93,7 @@ export class SiteAnalyticsCollectController {
 
   @Post("collect")
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Header("Cross-Origin-Resource-Policy", BEACON_RESOURCE_POLICY)
   @UseInterceptors(new NoCdnCacheInterceptor())
   @ApiConsumes("text/plain", "application/json")
   @ApiBody({ type: CollectBodyDto })
@@ -114,7 +101,8 @@ export class SiteAnalyticsCollectController {
     summary: "Count page views and events of the site statistic",
     description:
       "JSON as `text/plain` (what `navigator.sendBeacon` sends, so no preflight) " +
-      "or `application/json`: `{ v: 1, hits: [...] }` with 1–20 hits. Each hit is " +
+      "or `application/json`: `{ v: 1, hits: [...] }` with 1–20 page views, " +
+      "events and engagements (foreground seconds of a page view). Each hit is " +
       "checked field by field and dropped alone if it does not fit. Bots, " +
       "`DNT: 1` and `Sec-GPC: 1` are not counted; one address counts at most " +
       "3000 hits a UTC day. Always 204 once the body parsed.",
@@ -126,11 +114,7 @@ export class SiteAnalyticsCollectController {
   })
   @ApiResponse({ status: 413, description: "A body over 16 KiB." })
   async collect(@Body() body: unknown, @Req() request: Request): Promise<void> {
-    if (
-      (request as Request & { [TEXT_BODY_TOO_LARGE]?: true })[
-        TEXT_BODY_TOO_LARGE
-      ]
-    ) {
+    if ((request as Request & { [BODY_TOO_LARGE]?: true })[BODY_TOO_LARGE]) {
       throw new PayloadTooLargeException();
     }
     const hits = parseCollectBody(body);
@@ -145,14 +129,16 @@ export class SiteAnalyticsCollectController {
       hits,
       ip: getRateLimitIp(request),
       userAgent: request.get("user-agent") ?? null,
+      acceptLanguage: request.get("accept-language") ?? null,
     });
   }
 }
 
 /**
  * The admin's site statistic: traffic and its dimensions, events, the search
- * report, the SEO view and the event block list. UTC days, today included;
- * every report takes `locale` and `filter=<dim>:<value>`.
+ * report, the SEO view, the live view and the event block list. Every report
+ * takes a window of UTC days (`days`, or `from` and `to`), `interval`,
+ * `locale` and `filter=<dim>:<value>`.
  */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
@@ -164,12 +150,13 @@ export class AdminSiteAnalyticsController {
     private readonly analytics: SiteAnalyticsService,
     private readonly seo: SiteAnalyticsSeoService,
     private readonly blocklist: SiteAnalyticsBlocklist,
+    private readonly liveView: SiteAnalyticsLiveService,
   ) {}
 
   @Get("overview")
   @ApiOperation({
     summary:
-      "Page views, visits, visitors, events and bounce rate, the window before and realtime",
+      "Page views, visits, visitors, events, bounce rate and time on site, the window before, a series and realtime",
   })
   @ApiResponse({ status: 200, type: SiteOverviewDto })
   overview(@Query() query: SiteAnalyticsQueryDto): Promise<SiteOverviewDto> {
@@ -181,7 +168,9 @@ export class AdminSiteAnalyticsController {
     summary: "Views and visits per value of one dimension",
     description:
       "For entry, referrer, channel and campaign a view is a visit started, " +
-      "with a bounce rate.",
+      "with a bounce rate and the average visit; for exit a visit that ended " +
+      "on the page. A page dimension has the average time on the page, path " +
+      "also exits and exit rate.",
   })
   @ApiResponse({ status: 200, type: SiteBreakdownDto })
   breakdown(
@@ -219,8 +208,9 @@ export class AdminSiteAnalyticsController {
   @ApiOperation({
     summary: "One event counted by two sides at once",
     description:
-      "`row` and `col`: page_type, viewport, locale, day, a filter dimension " +
-      "or prop:<key>. 30 values per side by count, the rest folded into other.",
+      "`row` and `col`: page_type, viewport, locale, day, path, country, " +
+      "browser, os or prop:<key>. 30 values per side by count, the rest " +
+      "folded into `__rest__`.",
   })
   @ApiResponse({ status: 200, type: SiteCrosstabDto })
   crosstab(
@@ -228,6 +218,37 @@ export class AdminSiteAnalyticsController {
     @Query() query: SiteCrosstabQueryDto,
   ): Promise<SiteCrosstabDto> {
     return this.analytics.crosstab(eventName(name), query);
+  }
+
+  @Get("crosstab")
+  @ApiOperation({
+    summary: "Page views or visits counted by two dimensions at once",
+    description:
+      "metric=pageviews over the page dimensions and the day; metric=visits " +
+      "also over entry, referrer, channel, campaign and exit. 30 values per " +
+      "side by count, the rest folded into `__rest__`.",
+  })
+  @ApiResponse({ status: 200, type: SiteTrafficCrosstabDto })
+  trafficCrosstab(
+    @Query() query: SiteTrafficCrosstabQueryDto,
+  ): Promise<SiteTrafficCrosstabDto> {
+    return this.analytics.trafficCrosstab(query);
+  }
+
+  @Get("live")
+  @UseInterceptors(new NoCdnCacheInterceptor())
+  @ApiOperation({
+    summary: "Who is on the site now, minute by minute",
+    description:
+      "From Redis only, for polling every few seconds, never cached: " +
+      "active visitors, the " +
+      "last 30 minutes per minute, and the pages, countries, channels, " +
+      "referrers, devices and events of the last 5 or 30 minutes.",
+  })
+  @ApiResponse({ status: 200, type: SiteLiveDto })
+  @ApiResponse({ status: 503, description: "Redis did not answer." })
+  live(@Query() query: SiteLiveQueryDto): Promise<SiteLiveDto> {
+    return this.liveView.live(query.locale ?? null);
   }
 
   @Get("search")
@@ -257,7 +278,7 @@ export class AdminSiteAnalyticsController {
       "Landing pages of one channel rising and falling against the window before",
   })
   @ApiResponse({ status: 200, type: SiteTrendsDto })
-  trends(@Query() query: SiteChannelQueryDto): Promise<SiteTrendsDto> {
+  trends(@Query() query: SiteTrendsQueryDto): Promise<SiteTrendsDto> {
     return this.seo.trends(query);
   }
 
