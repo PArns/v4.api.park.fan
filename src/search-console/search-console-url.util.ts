@@ -1,3 +1,4 @@
+import { withoutTrailingSlashes } from "../common/utils/url.util";
 import { SITE_LOCALES } from "../site-analytics/site-analytics.constants";
 import { MAX_PATH_LENGTH, MAX_QUERY_LENGTH } from "./search-console.constants";
 
@@ -16,7 +17,7 @@ export function pagePath(url: string, hosts: readonly string[]): string | null {
     return null;
   }
   if (!hosts.includes(parsed.host.toLowerCase())) return null;
-  const path = parsed.pathname.toLowerCase().replace(/\/+$/, "") || "/";
+  const path = withoutTrailingSlashes(parsed.pathname.toLowerCase()) || "/";
   return path.length <= MAX_PATH_LENGTH ? path : null;
 }
 

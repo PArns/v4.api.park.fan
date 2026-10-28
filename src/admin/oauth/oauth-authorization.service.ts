@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { withoutTrailingSlashes } from "../../common/utils/url.util";
 import {
   checkRateLimit,
   hashRateLimitKey,
@@ -135,15 +136,9 @@ function optionalField(params: Params, name: string): string | undefined {
   return value || undefined;
 }
 
-/**
- * RFC 8707: the only resource tokens are issued for is the MCP endpoint.
- * Trailing slashes are trimmed by a scan rather than `/\/+$/`, which
- * backtracks quadratically on a long run of slashes in a caller's parameter.
- */
+/** RFC 8707: the only resource tokens are issued for is the MCP endpoint. */
 function isMcpResource(value: string): boolean {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
-  return value.slice(0, end) === getMcpResourceUrl();
+  return withoutTrailingSlashes(value) === getMcpResourceUrl();
 }
 
 /**

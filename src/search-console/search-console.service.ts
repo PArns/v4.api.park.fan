@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { addIsoDays } from "../common/utils/date.util";
+import { withoutTrailingSlashes } from "../common/utils/url.util";
 import {
   SqlParams,
   averageSeconds,
@@ -133,7 +134,7 @@ export function pageFilterOf(value: string): string {
       return trimmed.toLowerCase();
     }
   }
-  const path = trimmed.split(/[?#]/)[0].toLowerCase().replace(/\/+$/, "");
+  const path = withoutTrailingSlashes(trimmed.split(/[?#]/)[0].toLowerCase());
   return path.startsWith("/") ? path || "/" : `/${path}`;
 }
 
