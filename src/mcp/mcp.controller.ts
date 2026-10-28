@@ -28,8 +28,12 @@ import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.inter
 import { McpAuthChallengeFilter } from "./mcp-auth-challenge.filter";
 import { McpServerFactory } from "./mcp-server.factory";
 
-/** Tool calls one token may have running at once, per API instance. */
-export const MAX_CONCURRENT_REQUESTS_PER_TOKEN = 4;
+/**
+ * Tool calls one token may have running at once, per API instance. A client
+ * such as Claude Code fires several calls in parallel; the report runner
+ * bounds the expensive ones on its own.
+ */
+export const MAX_CONCURRENT_REQUESTS_PER_TOKEN = 10;
 
 /** Counts requests in flight per holder; a holder at its limit is refused. */
 export class InFlightCounter {

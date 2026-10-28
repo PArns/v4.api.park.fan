@@ -278,7 +278,7 @@ What was checked when this was built, and where it is enforced:
   no longer resolve are left out. OAuth client names are self-chosen too: `whoami` and `audit_log`
   say so.
 - **Amplification:** JSON-RPC batches are refused (one tool call per request, which the throttler
-  counts), and one token runs at most 4 requests at once per API instance.
+  counts), and one token runs at most 10 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
   consent endpoints above; the tools a role may not use are not even listed, and are refused again
   at call time.
