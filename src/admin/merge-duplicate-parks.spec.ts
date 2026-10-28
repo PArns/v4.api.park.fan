@@ -1,5 +1,8 @@
 import { AdminController } from "./admin.controller";
-import { DuplicatePair } from "../parks/services/park-validator.service";
+import {
+  DuplicatePair,
+  ParkValidatorService,
+} from "../parks/services/park-validator.service";
 import { Park } from "../parks/entities/park.entity";
 
 /**
@@ -137,11 +140,14 @@ describe("AdminController.mergeDuplicateParks", () => {
     };
 
     controller = Object.create(AdminController.prototype) as AdminController;
+    // The real service around the two things it reads, so the read route's
+    // winner comes from the same `findDuplicatesWithWinners` production runs.
+    const parkValidatorService = Object.assign(
+      Object.create(ParkValidatorService.prototype) as ParkValidatorService,
+      { findDuplicates, parkRepository },
+    );
     Object.assign(controller, {
-      parkValidatorService: {
-        findDuplicates,
-        getParkRepository: () => parkRepository,
-      },
+      parkValidatorService,
       parkRepairService: { repairDuplicates },
       parkMergeService: { mergeParks },
     });
