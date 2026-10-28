@@ -1,502 +1,650 @@
-import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import { InjectDataSource } from "@nestjs/typeorm";
+import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { addIsoDays } from "../common/utils/date.util";
-import { utcDay } from "../common/utils/reader-hash.util";
-import {
-  frontendAttractionPath,
-  frontendParkPath,
-  frontendShowsPath,
-} from "../common/utils/frontend-url.util";
-import { isCanonicalUuid } from "../common/utils/uuid-param.util";
-import { Park } from "../parks/entities/park.entity";
-import { Attraction } from "../attractions/entities/attraction.entity";
-import { Show } from "../shows/entities/show.entity";
-import { SiteTrafficDay } from "./entities/site-traffic-day.entity";
 import {
   ALL_LOCALES_SCOPE,
-  MAX_EVENT_ENTITIES,
-  MAX_OPEN_PROP_VALUES,
+  MAX_CROSSTAB_SIDE,
+  MAX_EVENT_DETAIL_ITEMS,
   REALTIME_ACTIVE_MINUTES,
   REALTIME_SERIES_MINUTES,
   SITE_ANALYTICS_KEYS as KEYS,
-  VISITOR_KEY_GRACE_SECONDS,
-  minuteKey,
-  type TrafficDim,
-} from "./site-analytics.constants";
-import {
-  SEARCH_EVENTS,
-  SEARCH_POSITIONS,
-  SEARCH_SURFACES,
-  SITE_EVENT_NAMES,
-  SITE_PAGE_TYPES,
   SITE_VIEWPORTS,
-  isSiteEventName,
-  propValues,
-  siteEventSpec,
-  type SiteEntityKind,
+  VISITOR_KEY_GRACE_SECONDS,
+  VISIT_DIMS,
+  hourKey,
+  minuteKey,
+  type BreakdownDim,
   type SiteLocale,
-} from "./site-analytics.schema";
+} from "./site-analytics.constants";
+import { propsOfKey } from "./site-analytics.hits";
+import {
+  CROSSTAB_AXIS_PATTERN,
+  SqlParams,
+  bounceRate,
+  byCountDesc,
+  columnOf,
+  daysBetween,
+  hoursOf,
+  num,
+  periodOf,
+  rate,
+  siteAnalyticsWindow,
+  whereOf,
+  type Count,
+  type SiteAnalyticsQuery,
+  type SiteAnalyticsWindow,
+} from "./site-analytics.query";
+import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
+import { SiteEntityNames } from "./site-entity-names.service";
 import type {
   SiteBreakdownDto,
+  SiteCrosstabDto,
   SiteEventDetailDto,
-  SiteEventEntityDto,
   SiteEventsDto,
   SiteOverviewDto,
   SiteSearchDto,
   SiteTotalsDto,
-  SiteValueCountDto,
 } from "./dto/site-analytics.dto";
 
-/** A report's window: `days` UTC days ending today, and the same before it. */
-export interface SiteAnalyticsWindow {
-  from: string;
-  to: string;
-  days: number;
-  locale: SiteLocale | null;
-  previousFrom: string;
-  previousTo: string;
-}
+/** The search events and what the search report calls each. */
+export const SEARCH_EVENTS = {
+  opened: "search_opened",
+  typed: "search_typed",
+  resultClicks: "search_result_clicked",
+  browseClicks: "search_browse_clicked",
+  noResults: "search_no_results",
+  viewAll: "search_view_all",
+} as const;
 
-/** What every report takes. */
-export interface SiteAnalyticsQuery {
-  days: number;
-  locale?: SiteLocale | null;
-}
+/** The position buckets the frontend sends, in their order. */
+const SEARCH_POSITIONS = ["1", "2", "3", "4-5", "6-10", "11+"];
 
-type Count = string | number | null;
-const num = (value: Count | undefined): number => Number(value ?? 0) || 0;
-
-/** A rate rounded to four places; 0 when there is nothing to divide by. */
-export function rate(numerator: number, divisor: number): number {
-  return divisor > 0 ? Math.round((numerator / divisor) * 10_000) / 10_000 : 0;
-}
-
-/** Every day from `from` to `to`, both included. */
-export function daysBetween(from: string, to: string): string[] {
-  const days: string[] = [];
-  for (let day = from; day <= to; day = addIsoDays(day, 1)) days.push(day);
-  return days;
-}
-
-/** The window of `days` UTC days ending today, and the one before it. */
-export function siteAnalyticsWindow(
-  query: SiteAnalyticsQuery,
-  now: Date,
-): SiteAnalyticsWindow {
-  const to = utcDay(now);
-  const from = addIsoDays(to, -(query.days - 1));
-  return {
-    from,
-    to,
-    days: query.days,
-    locale: query.locale ?? null,
-    previousFrom: addIsoDays(from, -query.days),
-    previousTo: addIsoDays(from, -1),
-  };
-}
-
-/** Most counted first, ties in the given order. */
-function byCountDesc<T extends { count: number }>(items: T[]): T[] {
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((a, b) => b.item.count - a.item.count || a.index - b.index)
-    .map(({ item }) => item);
-}
+/** The label of an empty value in a crosstab or a property list. */
+const NONE = "(none)";
 
 /**
- * The read side of the site statistic: the five admin reports. Public so the
- * admin's MCP server can offer the same answers as tools; every method returns
- * exactly the shape its endpoint serves. See docs/frontend/site-analytics.md.
+ * The read side of the site statistic: the admin's reports. Public so the
+ * admin's MCP server can offer the same answers as tools; every method
+ * returns exactly the shape its endpoint serves. Every report takes a window
+ * of UTC days, a language and `filter=<dim>:<value>` pairs, and is a GROUP BY
+ * over `site_pageviews` or `site_events`. docs/frontend/site-analytics.md.
  */
 @Injectable()
 export class SiteAnalyticsService {
   private readonly logger = new Logger(SiteAnalyticsService.name);
 
   constructor(
-    @InjectRepository(SiteTrafficDay)
-    private readonly traffic: Repository<SiteTrafficDay>,
-    @InjectRepository(Park) private readonly parks: Repository<Park>,
-    @InjectRepository(Attraction)
-    private readonly attractions: Repository<Attraction>,
-    @InjectRepository(Show) private readonly shows: Repository<Show>,
+    @InjectDataSource() private readonly db: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly blocklist: SiteAnalyticsBlocklist,
+    private readonly entityNames: SiteEntityNames,
   ) {}
 
   /**
-   * Page views, visits, visitors and events over the window and the one
-   * before, per day, and the realtime minute. Without a language, visits are
-   * the visits started; with one, the visits that viewed a page in it, so a
-   * visit that switched language counts in both.
+   * Page views, visits, visitors, events and the bounce rate over the window
+   * and the one before, per day (per hour for a one-day window), and the
+   * realtime minute. Visitors are unique per UTC day and language only, so
+   * with a filter they are null rather than a guess.
    */
   async overview(
     query: SiteAnalyticsQuery,
     now = new Date(),
   ): Promise<SiteOverviewDto> {
     const window = siteAnalyticsWindow(query, now);
-    const [traffic, events, visitors, realtime] = await Promise.all([
-      this.traffic.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day,
-                SUM(views) FILTER (WHERE dim = 'locale') AS pageviews,
-                CASE WHEN $3::text IS NULL
-                     THEN SUM(views) FILTER (WHERE dim = 'entry')
-                     ELSE SUM(visits) FILTER (WHERE dim = 'locale')
-                END AS visits
-           FROM site_traffic_days
-          WHERE dim IN ('locale', 'entry')
-            AND day BETWEEN $1::date AND $2::date
-            AND ($3::text IS NULL OR locale = $3)
-          GROUP BY day`,
-        [window.previousFrom, window.to, window.locale],
-      ) as Promise<Array<{ day: string; pageviews: Count; visits: Count }>>,
-      this.eventsPerDay(window),
-      this.visitorsPerDay(window),
+    const period = periodOf(window.hourly);
+    const traffic = new SqlParams();
+    const events = new SqlParams();
+    const [trafficRows, eventRows, visitors, realtime] = await Promise.all([
+      this.db.query(
+        `SELECT ${period} AS period, SUM(views) AS pageviews,
+                SUM(visits) AS visits, SUM(engaged) AS engaged
+           FROM site_pageviews
+          WHERE ${whereOf(traffic, window, window.previousFrom, window.to)}
+          GROUP BY 1`,
+        traffic.values,
+      ) as Promise<
+        Array<{
+          period: string;
+          pageviews: Count;
+          visits: Count;
+          engaged: Count;
+        }>
+      >,
+      this.db.query(
+        `SELECT ${period} AS period, SUM(count) AS events
+           FROM site_events
+          WHERE ${whereOf(events, window, window.previousFrom, window.to)}
+          GROUP BY 1`,
+        events.values,
+      ) as Promise<Array<{ period: string; events: Count }>>,
+      window.filters.length > 0
+        ? Promise.resolve(null)
+        : this.visitors(window, now),
       this.realtime(window.locale, now),
     ]);
 
-    const byDay = new Map(traffic.map((row) => [row.day, row]));
-    const eventsByDay = new Map<string, number>();
-    for (const row of events) {
-      eventsByDay.set(row.day, (eventsByDay.get(row.day) ?? 0) + row.count);
-    }
-    const dayFigures = (day: string) => ({
-      day,
-      pageviews: num(byDay.get(day)?.pageviews),
-      visits: num(byDay.get(day)?.visits),
-      visitors: visitors.get(day) ?? 0,
-      events: eventsByDay.get(day) ?? 0,
-    });
+    const byPeriod = new Map(trafficRows.map((row) => [row.period, row]));
+    const eventsByPeriod = new Map(
+      eventRows.map((row) => [row.period, num(row.events)]),
+    );
     const totals = (from: string, to: string): SiteTotalsDto => {
-      const sum = { pageviews: 0, visits: 0, visitors: 0, events: 0 };
-      for (const day of daysBetween(from, to)) {
-        const figures = dayFigures(day);
-        sum.pageviews += figures.pageviews;
-        sum.visits += figures.visits;
-        sum.visitors += figures.visitors;
-        sum.events += figures.events;
+      const sum = { pageviews: 0, visits: 0, engaged: 0, events: 0 };
+      for (const row of trafficRows) {
+        const day = row.period.slice(0, 10);
+        if (day < from || day > to) continue;
+        sum.pageviews += num(row.pageviews);
+        sum.visits += num(row.visits);
+        sum.engaged += num(row.engaged);
+      }
+      for (const row of eventRows) {
+        const day = row.period.slice(0, 10);
+        if (day >= from && day <= to) sum.events += num(row.events);
       }
       return {
-        ...sum,
+        pageviews: sum.pageviews,
+        visits: sum.visits,
+        visitors: visitors ? sumVisitors(visitors.days, from, to) : null,
+        events: sum.events,
         viewsPerVisit:
           sum.visits > 0
             ? Math.round((sum.pageviews / sum.visits) * 100) / 100
             : 0,
+        bounceRate: bounceRate(sum.visits, sum.engaged),
       };
     };
+    const points = window.hourly
+      ? hoursOf(window.to, now)
+      : daysBetween(window.from, window.to);
 
     return {
       ...echo(window),
       totals: totals(window.from, window.to),
       previous: totals(window.previousFrom, window.previousTo),
-      series: daysBetween(window.from, window.to).map((day) => {
-        const { events: _events, ...figures } = dayFigures(day);
-        return figures;
-      }),
+      series: points.map((point) => ({
+        day: point,
+        pageviews: num(byPeriod.get(point)?.pageviews),
+        visits: num(byPeriod.get(point)?.visits),
+        visitors: visitors
+          ? ((window.hourly ? visitors.hours : visitors.days).get(point) ?? 0)
+          : null,
+        events: eventsByPeriod.get(point) ?? 0,
+      })),
       realtime,
     };
   }
 
   /**
    * The values of one dimension, most viewed first, with the total over all
-   * values. For `entry` and `referrer` a view is a visit started.
+   * values. A visit dimension (`entry`, `referrer`, `channel`, `campaign`)
+   * counts visits started, a view being a visit, and carries a bounce rate;
+   * a direct visit has no referrer and none is listed.
    */
   async breakdown(
-    query: SiteAnalyticsQuery & { dim: TrafficDim; limit: number },
+    query: SiteAnalyticsQuery & { dim: BreakdownDim; limit: number },
     now = new Date(),
   ): Promise<SiteBreakdownDto> {
     const window = siteAnalyticsWindow(query, now);
+    const column = columnOf(query.dim);
+    const visitDim = VISIT_DIMS.includes(query.dim);
+    const params = new SqlParams();
+    const where = whereOf(params, window, window.from, window.to);
+    const nonEmpty = ["entry", "referrer", "campaign"].includes(query.dim)
+      ? `AND ${column} <> ''`
+      : "";
     const rows: Array<{
       value: string;
       views: Count;
       visits: Count;
+      engaged: Count;
       total_views: Count;
       total_visits: Count;
-    }> = await this.traffic.query(
+    }> = await this.db.query(
       `WITH per_value AS (
-         SELECT value, SUM(views) AS views, SUM(visits) AS visits
-           FROM site_traffic_days
-          WHERE dim = $1 AND day BETWEEN $2::date AND $3::date
-            AND ($4::text IS NULL OR locale = $4)
-          GROUP BY value
+         SELECT ${column} AS value, SUM(views) AS views,
+                SUM(visits) AS visits, SUM(engaged) AS engaged
+           FROM site_pageviews
+          WHERE ${where} ${nonEmpty}
+          GROUP BY 1
+          ${visitDim ? "HAVING SUM(visits) > 0" : ""}
        )
-       SELECT value, views, visits,
+       SELECT value, views, visits, engaged,
               SUM(views) OVER () AS total_views,
               SUM(visits) OVER () AS total_visits
          FROM per_value
-        ORDER BY views DESC, value ASC
-        LIMIT $5`,
-      [query.dim, window.from, window.to, window.locale, query.limit],
+        ORDER BY ${visitDim ? "visits" : "views"} DESC, value ASC
+        LIMIT ${params.add(query.limit)}`,
+      params.values,
     );
-    const total = {
-      views: num(rows[0]?.total_views),
-      visits: num(rows[0]?.total_visits),
-    };
+    const totalVisits = num(rows[0]?.total_visits);
+    const totalViews = visitDim ? totalVisits : num(rows[0]?.total_views);
     return {
       ...echo(window),
       dim: query.dim,
-      total,
-      items: rows.map((row) => ({
-        value: row.value,
-        views: num(row.views),
-        visits: num(row.visits),
-        share: rate(num(row.views), total.views),
-      })),
+      total: { views: totalViews, visits: totalVisits },
+      items: rows.map((row) => {
+        const visits = num(row.visits);
+        const views = visitDim ? visits : num(row.views);
+        return {
+          value: row.value,
+          views,
+          visits,
+          share: rate(views, totalViews),
+          ...(visitDim && { bounceRate: bounceRate(visits, num(row.engaged)) }),
+        };
+      }),
     };
   }
 
-  /** Every event of the schema with its count, the previous window's and a series. */
+  /**
+   * Every event name seen in the window or the one before, and every blocked
+   * name, with its count, the previous window's and a series; most counted
+   * first.
+   */
   async events(
     query: SiteAnalyticsQuery,
     now = new Date(),
   ): Promise<SiteEventsDto> {
     const window = siteAnalyticsWindow(query, now);
-    const rows = await this.eventsPerDay(window);
+    const params = new SqlParams();
+    const [rows, blocked] = await Promise.all([
+      this.db.query(
+        `SELECT name, ${periodOf(window.hourly)} AS period, SUM(count) AS count
+           FROM site_events
+          WHERE ${whereOf(params, window, window.previousFrom, window.to)}
+          GROUP BY 1, 2`,
+        params.values,
+      ) as Promise<Array<{ name: string; period: string; count: Count }>>,
+      this.blocklist.names(),
+    ]);
     const perName = new Map<string, Map<string, number>>();
+    for (const name of blocked) perName.set(name, new Map());
     for (const row of rows) {
-      const days = perName.get(row.name) ?? new Map<string, number>();
-      days.set(row.day, row.count);
-      perName.set(row.name, days);
+      const periods = perName.get(row.name) ?? new Map<string, number>();
+      periods.set(row.period, num(row.count));
+      perName.set(row.name, periods);
     }
-    const windowDays = daysBetween(window.from, window.to);
-    const items = SITE_EVENT_NAMES.map((name) => {
-      const days = perName.get(name) ?? new Map<string, number>();
+    const points = seriesPoints(window, now);
+    const items = [...perName.entries()].map(([name, periods]) => {
       let count = 0;
       let previous = 0;
-      for (const [day, value] of days) {
-        if (day >= window.from) count += value;
+      for (const [period, value] of periods) {
+        if (period.slice(0, 10) >= window.from) count += value;
         else previous += value;
       }
       return {
         name,
         count,
         previous,
-        series: windowDays.map((day) => ({ day, count: days.get(day) ?? 0 })),
+        blocked: blocked.has(name),
+        series: points.map((point) => ({
+          day: point,
+          count: periods.get(point) ?? 0,
+        })),
       };
     });
-    return { ...echo(window), items: byCountDesc(items) };
+    items.sort(
+      (a, b) =>
+        b.count - a.count ||
+        b.previous - a.previous ||
+        (a.name < b.name ? -1 : 1),
+    );
+    return { ...echo(window), items };
   }
 
   /**
-   * One event: its total, each property's values, the kinds of page and the
-   * viewports it came from, the entities it was about and its series. One
-   * scan with grouping sets for all but the entities. 404 for a name the
-   * schema does not have.
+   * One event: its total, every property key seen with its top values, the
+   * most frequent property combinations, the kinds of page and viewports it
+   * came from, the entities it was about (a merged-away one under its
+   * survivor) and its series. Three statements in parallel.
    */
   async event(
     name: string,
     query: SiteAnalyticsQuery,
     now = new Date(),
   ): Promise<SiteEventDetailDto> {
-    if (!isSiteEventName(name)) {
-      throw new NotFoundException(`No event "${name}" in the schema`);
-    }
     const window = siteAnalyticsWindow(query, now);
-    const spec = siteEventSpec(name);
-    const [grouped, entityRows]: [
-      Array<{
-        p1: string | null;
-        p2: string | null;
-        p3: string | null;
-        page_type: string | null;
-        viewport: string | null;
-        day: string | null;
-        count: Count;
-      }>,
-      Array<{ entity: string; kind: SiteEntityKind; count: Count }>,
-    ] = await Promise.all([
-      this.traffic.query(
-        // Every column is NOT NULL, so a NULL in a row says which grouping
-        // set produced it, and the empty set gives the total.
-        `SELECT p1, p2, p3, page_type, viewport,
-                to_char(day, 'YYYY-MM-DD') AS day, SUM(count) AS count
-           FROM site_event_days
-          WHERE name = $1 AND day BETWEEN $2::date AND $3::date
-            AND ($4::text IS NULL OR locale = $4)
-          GROUP BY GROUPING SETS ((p1), (p2), (p3), (page_type), (viewport), (day), ())`,
-        [name, window.from, window.to, window.locale],
-      ),
-      spec.entity
-        ? this.traffic.query(
-            `SELECT entity::text AS entity, MIN(kind) AS kind, SUM(count) AS count
-               FROM site_event_entity_days
-              WHERE name = $1 AND day BETWEEN $2::date AND $3::date
-                AND ($4::text IS NULL OR locale = $4)
-              GROUP BY entity
-              ORDER BY SUM(count) DESC, entity ASC
-              LIMIT $5`,
-            [name, window.from, window.to, window.locale, MAX_EVENT_ENTITIES],
-          )
-        : Promise.resolve([]),
+    const scan = new SqlParams();
+    const nameParam = scan.add(name);
+    const props = new SqlParams();
+    const propsName = props.add(name);
+    const entities = new SqlParams();
+    const entityName = entities.add(name);
+    const [grouped, propRows, entityRows, blocked] = await Promise.all([
+      this.db.query(
+        // Every grouped column is NOT NULL, so a NULL says which grouping
+        // set produced the row, and the empty set gives the total.
+        `SELECT page_type, viewport, props_key, period, SUM(count) AS count
+           FROM (SELECT page_type, viewport, props_key, count,
+                        ${periodOf(window.hourly)} AS period
+                   FROM site_events
+                  WHERE name = ${nameParam}
+                    AND ${whereOf(scan, window, window.from, window.to)}) s
+          GROUP BY GROUPING SETS ((page_type), (viewport), (props_key),
+                                  (period), ())`,
+        scan.values,
+      ) as Promise<
+        Array<{
+          page_type: string | null;
+          viewport: string | null;
+          props_key: string | null;
+          period: string | null;
+          count: Count;
+        }>
+      >,
+      this.db.query(
+        `SELECT kv.key, kv.value, SUM(e.count) AS count
+           FROM site_events e
+          CROSS JOIN LATERAL jsonb_each_text(e.props) AS kv
+          WHERE e.name = ${propsName} AND ${whereOf(props, window, window.from, window.to, "e")}
+          GROUP BY 1, 2`,
+        props.values,
+      ) as Promise<Array<{ key: string; value: string; count: Count }>>,
+      this.db.query(
+        `SELECT COALESCE(m.winner_id, e.entity)::text AS entity,
+                SUM(e.count) AS count
+           FROM site_events e
+           LEFT JOIN site_entity_merges m ON m.loser_id = e.entity
+          WHERE e.name = ${entityName} AND e.entity IS NOT NULL
+            AND ${whereOf(entities, window, window.from, window.to, "e")}
+          GROUP BY 1
+          ORDER BY 2 DESC, 1 ASC
+          LIMIT ${entities.add(MAX_EVENT_DETAIL_ITEMS)}`,
+        entities.values,
+      ) as Promise<Array<{ entity: string; count: Count }>>,
+      this.blocklist.names(),
     ]);
 
-    const column = (key: "p1" | "p2" | "p3" | "page_type" | "viewport") =>
+    const set = (key: "page_type" | "viewport" | "props_key" | "period") =>
       grouped.filter(
-        (row): row is typeof row & Record<typeof key, string> =>
-          row[key] !== null,
+        (row) =>
+          row[key] !== null &&
+          (["page_type", "viewport", "props_key", "period"] as const).every(
+            (other) => other === key || row[other] === null,
+          ),
       );
-    const counted = (
-      key: "p1" | "p2" | "p3" | "page_type" | "viewport",
-      known: readonly string[] | null,
-      max = Infinity,
-    ): SiteValueCountDto[] => {
+    const valueCounts = (
+      key: "page_type" | "viewport",
+      known: readonly string[] = [],
+    ) => {
       const found = new Map(
-        column(key).map((row) => [row[key] as string, num(row.count)]),
+        set(key).map((row) => [row[key] as string, num(row.count)]),
       );
-      const values = known
-        ? [...known, ...[...found.keys()].filter((v) => !known.includes(v))]
-        : [...found.keys()];
+      const values = [
+        ...known,
+        ...[...found.keys()].filter((v) => !known.includes(v)),
+      ];
       return byCountDesc(
         values.map((value) => ({ value, count: found.get(value) ?? 0 })),
-      ).slice(0, max);
+        (item) => item.count,
+      );
     };
-    const days = new Map(
-      grouped
-        .filter((row) => row.day !== null)
-        .map((row) => [row.day as string, num(row.count)]),
+    const total = grouped.find((row) =>
+      (["page_type", "viewport", "props_key", "period"] as const).every(
+        (key) => row[key] === null,
+      ),
     );
-    const total = grouped.find(
-      (row) =>
-        row.p1 === null &&
-        row.p2 === null &&
-        row.p3 === null &&
-        row.page_type === null &&
-        row.viewport === null &&
-        row.day === null,
+    const periods = new Map(
+      set("period").map((row) => [row.period as string, num(row.count)]),
+    );
+    const named = await this.entityNames.resolve(
+      entityRows.map((row) => row.entity),
     );
 
     return {
       ...echo(window),
       name,
+      blocked: blocked.has(name),
       total: num(total?.count),
-      props: spec.props.map((prop, index) => ({
-        prop: prop.name,
-        values: counted(
-          (["p1", "p2", "p3"] as const)[index],
-          propValues(prop),
-          propValues(prop) ? Infinity : MAX_OPEN_PROP_VALUES,
-        ),
+      props: propsSummary(propRows),
+      combinations: byCountDesc(set("props_key"), (row) => num(row.count))
+        .slice(0, MAX_EVENT_DETAIL_ITEMS)
+        .map((row) => ({
+          props: propsOfKey(row.props_key as string),
+          count: num(row.count),
+        })),
+      byPageType: valueCounts("page_type"),
+      byViewport: valueCounts("viewport", SITE_VIEWPORTS),
+      entities: entityRows.map((row) => ({
+        id: row.entity,
+        kind: named.get(row.entity)?.kind ?? null,
+        name: named.get(row.entity)?.name ?? null,
+        url: named.get(row.entity)?.url ?? null,
+        count: num(row.count),
       })),
-      byPageType: counted("page_type", SITE_PAGE_TYPES),
-      byViewport: counted("viewport", SITE_VIEWPORTS),
-      entities: await this.namedEntities(entityRows),
-      series: daysBetween(window.from, window.to).map((day) => ({
-        day,
-        count: days.get(day) ?? 0,
+      series: seriesPoints(window, now).map((point) => ({
+        day: point,
+        count: periods.get(point) ?? 0,
       })),
     };
   }
 
   /**
-   * Which search is used, where and how well: per surface the openings,
-   * typed queries, clicks and dead ends with their rates; openings by kind
-   * of page and viewport; what was clicked and at which position; and the
-   * openings per day. One scan of the six search events with grouping sets.
+   * One event counted by two sides at once: any dimension, the day or one
+   * property. "Which search, from which page" is `row=prop:surface` and
+   * `col=page_type` over `search_opened`. Each side keeps its
+   * {@link MAX_CROSSTAB_SIDE} largest values and folds the rest into
+   * `other`; the day keeps every day, in order.
+   */
+  async crosstab(
+    name: string,
+    query: SiteAnalyticsQuery & { row: string; col: string },
+    now = new Date(),
+  ): Promise<SiteCrosstabDto> {
+    const window = siteAnalyticsWindow(query, now);
+    const params = new SqlParams();
+    const nameParam = params.add(name);
+    const axis = (side: string) => {
+      if (side === "day") return periodOf(window.hourly);
+      if (side.startsWith("prop:"))
+        return `COALESCE(props->>${params.add(side.slice(5))}, '')`;
+      if (!CROSSTAB_AXIS_PATTERN.test(side))
+        throw new Error(`Unknown crosstab side ${side}`);
+      return side;
+    };
+    const rowExpr = axis(query.row);
+    const colExpr = axis(query.col);
+    const cells: Array<{ r: string; c: string; count: Count }> =
+      await this.db.query(
+        `SELECT ${rowExpr} AS r, ${colExpr} AS c, SUM(count) AS count
+           FROM site_events
+          WHERE name = ${nameParam} AND ${whereOf(params, window, window.from, window.to)}
+          GROUP BY 1, 2`,
+        params.values,
+      );
+    const label = (value: string) => (value === "" ? NONE : value);
+    const sideOf = (
+      pick: (cell: { r: string; c: string }) => string,
+      side: string,
+    ) => {
+      const totals = new Map<string, number>();
+      for (const cell of cells) {
+        const key = label(pick(cell));
+        totals.set(key, (totals.get(key) ?? 0) + num(cell.count));
+      }
+      if (side === "day") {
+        const kept = [...totals.keys()].sort();
+        return { kept, fold: (value: string) => value };
+      }
+      const ranked = byCountDesc(
+        [...totals.keys()],
+        (key) => totals.get(key) ?? 0,
+      );
+      const kept = ranked.slice(0, MAX_CROSSTAB_SIDE);
+      const keep = new Set(kept);
+      if (ranked.length > kept.length) kept.push("other");
+      return {
+        kept,
+        fold: (value: string) => (keep.has(value) ? value : "other"),
+      };
+    };
+    const rows = sideOf((cell) => cell.r, query.row);
+    const cols = sideOf((cell) => cell.c, query.col);
+    const folded = new Map<
+      string,
+      { row: string; col: string; count: number }
+    >();
+    let total = 0;
+    for (const cell of cells) {
+      const row = rows.fold(label(cell.r));
+      const col = cols.fold(label(cell.c));
+      const key = `${row}\u0000${col}`;
+      const entry = folded.get(key) ?? { row, col, count: 0 };
+      entry.count += num(cell.count);
+      total += num(cell.count);
+      folded.set(key, entry);
+    }
+    return {
+      ...echo(window),
+      name,
+      row: query.row,
+      col: query.col,
+      rows: rows.kept,
+      cols: cols.kept,
+      cells: [...folded.values()],
+      total,
+    };
+  }
+
+  /**
+   * Which search is used, where and how well, over the `search_*` events:
+   * per surface seen the openings, typed queries, clicks and dead ends with
+   * their rates; openings by kind of page and viewport; what was clicked and
+   * at which position; the openings per day. Three statements, each over only
+   * the events its figures need.
    */
   async search(
     query: SiteAnalyticsQuery,
     now = new Date(),
   ): Promise<SiteSearchDto> {
     const window = siteAnalyticsWindow(query, now);
-    const rows: Array<{
+    const scope = (names: readonly string[]) => {
+      const params = new SqlParams();
+      const sql = `SELECT name, COALESCE(props->>'surface', '') AS surface,
+                          COALESCE(props->>'result', '') AS result,
+                          COALESCE(props->>'item', '') AS item,
+                          COALESCE(props->>'position', '') AS position,
+                          page_type, viewport,
+                          ${periodOf(window.hourly)} AS period, count
+                     FROM site_events
+                    WHERE name = ANY(${params.add(names)}::text[])
+                      AND ${whereOf(params, window, window.from, window.to)}`;
+      return { sql, params };
+    };
+    type Row = {
       name: string;
-      p1: string | null;
-      p2: string | null;
-      p3: string | null;
+      surface: string | null;
+      result: string | null;
+      item: string | null;
+      position: string | null;
       page_type: string | null;
       viewport: string | null;
-      day: string | null;
+      period: string | null;
       count: Count;
-    }> = await this.traffic.query(
-      `SELECT name, p1, p2, p3, page_type, viewport,
-              to_char(day, 'YYYY-MM-DD') AS day, SUM(count) AS count
-         FROM site_event_days
-        WHERE name = ANY($1::text[]) AND day BETWEEN $2::date AND $3::date
-          AND ($4::text IS NULL OR locale = $4)
-        GROUP BY GROUPING SETS (
-          (name, p1), (name, p1, page_type), (name, p1, viewport),
-          (name, p1, p2), (name, p3), (name, p1, day)
-        )`,
-      [Object.values(SEARCH_EVENTS), window.from, window.to, window.locale],
-    );
-
-    const only = (shape: {
-      p1?: boolean;
-      p2?: boolean;
-      p3?: boolean;
-      page_type?: boolean;
-      viewport?: boolean;
-      day?: boolean;
-    }) =>
-      rows.filter(
-        (row) =>
-          (row.p1 !== null) === !!shape.p1 &&
-          (row.p2 !== null) === !!shape.p2 &&
-          (row.p3 !== null) === !!shape.p3 &&
-          (row.page_type !== null) === !!shape.page_type &&
-          (row.viewport !== null) === !!shape.viewport &&
-          (row.day !== null) === !!shape.day,
-      );
+    };
+    const all = scope(Object.values(SEARCH_EVENTS));
+    const opened = scope([SEARCH_EVENTS.opened]);
+    const clicks = scope([
+      SEARCH_EVENTS.resultClicks,
+      SEARCH_EVENTS.browseClicks,
+    ]);
+    const [surfaceRows, openedRows, clickRows]: Row[][] = await Promise.all([
+      this.db.query(
+        `SELECT name, surface, SUM(count) AS count FROM (${all.sql}) s
+          GROUP BY 1, 2`,
+        all.params.values,
+      ),
+      this.db.query(
+        `SELECT name, surface, page_type, viewport, period, SUM(count) AS count
+           FROM (${opened.sql}) s
+          GROUP BY GROUPING SETS ((name, surface, page_type),
+                                  (name, surface, viewport),
+                                  (name, surface, period))`,
+        opened.params.values,
+      ),
+      this.db.query(
+        `SELECT name, surface, result, item, position, SUM(count) AS count
+           FROM (${clicks.sql}) s
+          GROUP BY GROUPING SETS ((name, surface, result), (name, surface, item),
+                                  (name, position))`,
+        clicks.params.values,
+      ),
+    ]);
 
     const perSurface = new Map<string, number>();
-    for (const row of only({ p1: true })) {
-      perSurface.set(`${row.name}|${row.p1}`, num(row.count));
+    for (const row of surfaceRows) {
+      perSurface.set(`${row.name}|${row.surface}`, num(row.count));
     }
     const of = (event: string, surface: string) =>
       perSurface.get(`${event}|${surface}`) ?? 0;
-    const surfaces = SEARCH_SURFACES.map((surface) => {
-      const opened = of(SEARCH_EVENTS.opened, surface);
+    const surfaceNames = byCountDesc(
+      [...new Set(surfaceRows.map((row) => row.surface ?? ""))].filter(Boolean),
+      (surface) => of(SEARCH_EVENTS.opened, surface),
+    );
+    const surfaces = surfaceNames.map((surface) => {
+      const openedCount = of(SEARCH_EVENTS.opened, surface);
       const typed = of(SEARCH_EVENTS.typed, surface);
       const resultClicks = of(SEARCH_EVENTS.resultClicks, surface);
       const browseClicks = of(SEARCH_EVENTS.browseClicks, surface);
       const noResults = of(SEARCH_EVENTS.noResults, surface);
       return {
         surface,
-        opened,
+        opened: openedCount,
         typed,
         resultClicks,
         browseClicks,
         noResults,
         viewAll: of(SEARCH_EVENTS.viewAll, surface),
-        clickRate: rate(resultClicks + browseClicks, opened),
+        clickRate: rate(resultClicks + browseClicks, openedCount),
         noResultRate: rate(noResults, typed),
       };
     });
 
-    const opened = (row: { name: string }) => row.name === SEARCH_EVENTS.opened;
     const viewports = new Map(
-      only({ p1: true, viewport: true })
-        .filter(opened)
-        .map((row) => [`${row.p1}|${row.viewport}`, num(row.count)]),
-    );
-    const positions = new Map(
-      only({ p3: true })
-        .filter((row) => row.name === SEARCH_EVENTS.resultClicks)
-        .map((row) => [row.p3 as string, num(row.count)]),
+      openedRows
+        .filter((row) => row.viewport !== null)
+        .map((row) => [`${row.surface}|${row.viewport}`, num(row.count)]),
     );
     const series = new Map(
-      only({ p1: true, day: true })
-        .filter(opened)
-        .map((row) => [`${row.day}|${row.p1}`, num(row.count)]),
+      openedRows
+        .filter((row) => row.period !== null)
+        .map((row) => [`${row.period}|${row.surface}`, num(row.count)]),
     );
+    const positions = new Map(
+      clickRows
+        .filter(
+          (row) =>
+            row.position !== null &&
+            row.surface === null &&
+            row.name === SEARCH_EVENTS.resultClicks,
+        )
+        .map((row) => [row.position as string, num(row.count)]),
+    );
+    const positionNames = [
+      ...SEARCH_POSITIONS,
+      ...[...positions.keys()].filter(
+        (p) => p !== "" && !SEARCH_POSITIONS.includes(p),
+      ),
+    ];
     const desc = <T>(items: T[], count: (item: T) => number) =>
-      items.sort((a, b) => count(b) - count(a));
+      byCountDesc(items, count);
 
     return {
       ...echo(window),
       surfaces,
       bySurfaceAndPageType: desc(
-        only({ p1: true, page_type: true })
-          .filter(opened)
+        openedRows
+          .filter((row) => row.page_type !== null && row.surface)
           .map((row) => ({
-            surface: row.p1 as string,
+            surface: row.surface as string,
             pageType: row.page_type as string,
             opened: num(row.count),
           })),
         (item) => item.opened,
       ),
-      bySurfaceAndViewport: SEARCH_SURFACES.flatMap((surface) =>
+      bySurfaceAndViewport: surfaceNames.flatMap((surface) =>
         SITE_VIEWPORTS.map((viewport) => ({
           surface,
           viewport,
@@ -504,101 +652,102 @@ export class SiteAnalyticsService {
         })),
       ),
       resultTypes: desc(
-        only({ p1: true, p2: true })
-          .filter((row) => row.name === SEARCH_EVENTS.resultClicks)
+        clickRows
+          .filter(
+            (row) =>
+              row.name === SEARCH_EVENTS.resultClicks &&
+              row.result !== null &&
+              row.surface,
+          )
           .map((row) => ({
-            surface: row.p1 as string,
-            result: row.p2 as string,
+            surface: row.surface as string,
+            result: row.result || NONE,
             clicks: num(row.count),
           })),
         (item) => item.clicks,
       ),
-      positions: SEARCH_POSITIONS.map((position) => ({
+      positions: positionNames.map((position) => ({
         position,
         clicks: positions.get(position) ?? 0,
       })),
       browseItems: desc(
-        only({ p1: true, p2: true })
-          .filter((row) => row.name === SEARCH_EVENTS.browseClicks)
+        clickRows
+          .filter(
+            (row) =>
+              row.name === SEARCH_EVENTS.browseClicks &&
+              row.item !== null &&
+              row.surface,
+          )
           .map((row) => ({
-            surface: row.p1 as string,
-            item: row.p2 as string,
+            surface: row.surface as string,
+            item: row.item || NONE,
             clicks: num(row.count),
           })),
         (item) => item.clicks,
       ),
-      series: daysBetween(window.from, window.to).flatMap((day) =>
-        SEARCH_SURFACES.map((surface) => ({
-          day,
+      series: seriesPoints(window, now).flatMap((point) =>
+        surfaceNames.map((surface) => ({
+          day: point,
           surface,
-          opened: series.get(`${day}|${surface}`) ?? 0,
+          opened: series.get(`${point}|${surface}`) ?? 0,
         })),
       ),
     };
   }
 
-  /** Events per name and day over the window and the one before it. */
-  private async eventsPerDay(
-    window: SiteAnalyticsWindow,
-  ): Promise<Array<{ name: string; day: string; count: number }>> {
-    const rows: Array<{ name: string; day: string; count: Count }> =
-      await this.traffic.query(
-        `SELECT name, to_char(day, 'YYYY-MM-DD') AS day, SUM(count) AS count
-           FROM site_event_days
-          WHERE day BETWEEN $1::date AND $2::date
-            AND ($3::text IS NULL OR locale = $3)
-          GROUP BY name, day`,
-        [window.previousFrom, window.to, window.locale],
-      );
-    return rows.map((row) => ({ ...row, count: num(row.count) }));
-  }
-
   /**
-   * Unique visitors per day over both windows: the nightly snapshot's rows,
-   * and for the days it has not written yet (today, and yesterday until the
-   * snapshot ran) the HyperLogLog that is still in Redis. With Redis down
-   * those days read zero.
+   * Unique visitors per day over both windows (the nightly snapshot's rows,
+   * and for the days it has not written yet the HyperLogLog still in Redis),
+   * and per hour of today for the one-day view. With Redis down those read
+   * zero.
    */
-  private async visitorsPerDay(
+  private async visitors(
     window: SiteAnalyticsWindow,
-  ): Promise<Map<string, number>> {
+    now: Date,
+  ): Promise<{ days: Map<string, number>; hours: Map<string, number> }> {
     const scope = window.locale ?? ALL_LOCALES_SCOPE;
-    const rows: Array<{ day: string; visitors: Count }> =
-      await this.traffic.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day, visitors
-           FROM site_visitor_days
-          WHERE scope = $1 AND day BETWEEN $2::date AND $3::date`,
-        [scope, window.previousFrom, window.to],
-      );
-    const visitors = new Map(rows.map((row) => [row.day, num(row.visitors)]));
+    const rows: Array<{ day: string; visitors: Count }> = await this.db.query(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, visitors
+         FROM site_visitor_days
+        WHERE scope = $1 AND day BETWEEN $2::date AND $3::date`,
+      [scope, window.previousFrom, window.to],
+    );
+    const days = new Map(rows.map((row) => [row.day, num(row.visitors)]));
+    const hours = new Map<string, number>();
 
     const graceDays = Math.ceil(VISITOR_KEY_GRACE_SECONDS / 86_400);
     const live = daysBetween(
       addIsoDays(window.to, -graceDays),
       window.to,
-    ).filter((day) => day >= window.previousFrom && !visitors.has(day));
-    if (live.length === 0) return visitors;
+    ).filter((day) => day >= window.previousFrom && !days.has(day));
+    const hourPoints = window.hourly ? hoursOf(window.to, now) : [];
     try {
       const pipeline = this.redis.pipeline();
       for (const day of live) pipeline.pfcount(KEYS.visitors(day, scope));
+      for (const hour of hourPoints) {
+        pipeline.pfcount(KEYS.hourVisitors(hourKey(new Date(hour)), scope));
+      }
       const results = (await pipeline.exec()) ?? [];
       live.forEach((day, i) => {
         const count = num(results[i]?.[1] as Count);
-        if (count > 0) visitors.set(day, count);
+        if (count > 0) days.set(day, count);
+      });
+      hourPoints.forEach((hour, i) => {
+        hours.set(hour, num(results[live.length + i]?.[1] as Count));
       });
     } catch (error) {
       this.logger.warn(
         `Live visitor counts unavailable: ${(error as Error).message}`,
       );
     }
-    return visitors;
+    return { days, hours };
   }
 
   /**
    * Distinct visitors over the last {@link REALTIME_ACTIVE_MINUTES} minutes
    * (one PFCOUNT over the minute keys counts their union) and page views per
-   * minute over the last {@link REALTIME_SERIES_MINUTES}. Zero with Redis
-   * down.
+   * minute over the last {@link REALTIME_SERIES_MINUTES}, for all languages or
+   * one; filters do not apply. Zero with Redis down.
    */
   private async realtime(
     locale: SiteLocale | null,
@@ -643,73 +792,65 @@ export class SiteAnalyticsService {
       return empty;
     }
   }
-
-  /**
-   * Names and frontend paths for the entities of an event, one query per
-   * kind. An id that no longer resolves keeps its kind and count, with no
-   * name and no path.
-   */
-  private async namedEntities(
-    rows: Array<{ entity: string; kind: SiteEntityKind; count: Count }>,
-  ): Promise<SiteEventEntityDto[]> {
-    const idsOf = (kind: SiteEntityKind) =>
-      rows
-        .filter((row) => row.kind === kind && isCanonicalUuid(row.entity))
-        .map((row) => row.entity);
-    const parkIds = idsOf("park");
-    const attractionIds = idsOf("attraction");
-    const showIds = idsOf("show");
-    const [parks, attractions, shows] = await Promise.all([
-      parkIds.length ? this.parks.findBy({ id: In(parkIds) }) : [],
-      attractionIds.length
-        ? this.attractions.find({
-            where: { id: In(attractionIds) },
-            relations: { park: true },
-          })
-        : [],
-      showIds.length
-        ? this.shows.find({
-            where: { id: In(showIds) },
-            relations: { park: true },
-          })
-        : [],
-    ]);
-    const named = new Map<string, { name: string; url: string | null }>();
-    for (const park of parks) {
-      named.set(park.id, { name: park.name, url: frontendParkPath(park) });
-    }
-    for (const attraction of attractions) {
-      named.set(attraction.id, {
-        name: attraction.name,
-        url: attraction.park
-          ? frontendAttractionPath(attraction.park, attraction)
-          : null,
-      });
-    }
-    for (const show of shows) {
-      named.set(show.id, {
-        name: show.name,
-        url: show.park ? frontendShowsPath(show.park) : null,
-      });
-    }
-    return rows.map((row) => ({
-      id: row.entity,
-      kind: row.kind,
-      name: named.get(row.entity)?.name ?? null,
-      url: named.get(row.entity)?.url ?? null,
-      count: num(row.count),
-    }));
-  }
 }
 
 /** The fields every report echoes. */
-function echo(window: SiteAnalyticsWindow) {
+export function echo(window: SiteAnalyticsWindow) {
   return {
     from: window.from,
     to: window.to,
     days: window.days,
     locale: window.locale,
+    filters: window.filters.map((f) => `${f.dim}:${f.value}`),
   };
+}
+
+/** Every point of a report's series: days, or today's hours. */
+function seriesPoints(window: SiteAnalyticsWindow, now: Date): string[] {
+  return window.hourly
+    ? hoursOf(window.to, now)
+    : daysBetween(window.from, window.to);
+}
+
+function sumVisitors(days: Map<string, number>, from: string, to: string) {
+  let sum = 0;
+  for (const [day, count] of days) if (day >= from && day <= to) sum += count;
+  return sum;
+}
+
+/**
+ * Every property key with its {@link MAX_EVENT_DETAIL_ITEMS} most frequent
+ * values and the count of the rest, keys with the most events first.
+ */
+export function propsSummary(
+  rows: Array<{ key: string; value: string; count: Count }>,
+): SiteEventDetailDto["props"] {
+  const perKey = new Map<string, Array<{ value: string; count: number }>>();
+  for (const row of rows) {
+    const values = perKey.get(row.key) ?? [];
+    values.push({ value: row.value || NONE, count: num(row.count) });
+    perKey.set(row.key, values);
+  }
+  const summaries = [...perKey.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([prop, values]) => {
+      const sorted = byCountDesc(
+        values.sort((a, b) => (a.value < b.value ? -1 : 1)),
+        (v) => v.count,
+      );
+      const kept = sorted.slice(0, MAX_EVENT_DETAIL_ITEMS);
+      return {
+        prop,
+        values: kept,
+        otherCount: sorted
+          .slice(MAX_EVENT_DETAIL_ITEMS)
+          .reduce((sum, v) => sum + v.count, 0),
+        total: sorted.reduce((sum, v) => sum + v.count, 0),
+      };
+    });
+  return byCountDesc(summaries, (s) => s.total).map(
+    ({ total: _total, ...summary }) => summary,
+  );
 }
 
 /** `2026-10-28T07:12:00Z`. */

@@ -1128,36 +1128,22 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Site statistic: yesterday's unique visitors from Redis into Postgres
-    // at 00:13, once the UTC day is over, and the 400-day retention at 01:47.
-    // A HyperLogLog lives three days past its own, so a missed snapshot is
-    // caught up the next night.
-    const hasVisitorSnapshotCron = await this.hasRepeatableJob(
-      this.siteAnalyticsQueue,
-      "site-analytics-visitors-cron",
-    );
-    if (!hasVisitorSnapshotCron) {
+    // Site statistic (PAR-1151): the finished five-minute windows from Redis
+    // into the hypertables a minute after each window ends, yesterday's
+    // unique visitors at 00:13 once the UTC day is over, and the chunks past
+    // 400 days at 01:47. A HyperLogLog lives three days past its own, so a
+    // missed snapshot is caught up the next night.
+    for (const [name, jobId, cron] of [
+      ["flush", "site-analytics-flush-cron", "1-56/5 * * * *"],
+      ["snapshot-visitors", "site-analytics-visitors-cron", "13 0 * * *"],
+      ["drop-old-chunks", "site-analytics-chunks-cron", "47 1 * * *"],
+    ] as const) {
+      if (await this.hasRepeatableJob(this.siteAnalyticsQueue, jobId, cron))
+        continue;
       await this.siteAnalyticsQueue.add(
-        "snapshot-visitors",
+        name,
         {},
-        {
-          repeat: { cron: "13 0 * * *" },
-          jobId: "site-analytics-visitors-cron",
-        },
-      );
-    }
-    const hasSiteAnalyticsPruneCron = await this.hasRepeatableJob(
-      this.siteAnalyticsQueue,
-      "site-analytics-prune-cron",
-    );
-    if (!hasSiteAnalyticsPruneCron) {
-      await this.siteAnalyticsQueue.add(
-        "prune-old-days",
-        {},
-        {
-          repeat: { cron: "47 1 * * *" },
-          jobId: "site-analytics-prune-cron",
-        },
+        { repeat: { cron }, jobId, removeOnComplete: 100 },
       );
     }
 

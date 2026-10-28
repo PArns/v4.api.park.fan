@@ -40,11 +40,12 @@ export interface HypertableSpec {
   /** What the table holds — shown in the boot log. */
   readonly description: string;
   /**
-   * `timescaledb.compress_segmentby`. Only `wait_time_predictions` has one in
-   * production, and the absence elsewhere is load-bearing rather than a gap:
-   * segmenting by a column a merge REWRITES lets TimescaleDB decompress that
-   * one segment instead of every batch the rows sit in, which is an easier case
-   * than the one production runs.
+   * `timescaledb.compress_segmentby`. Among the tables a merge writes, only
+   * `wait_time_predictions` has one, and the absence on the others is
+   * load-bearing rather than a gap: segmenting by a column a merge REWRITES
+   * lets TimescaleDB decompress that one segment instead of every batch the
+   * rows sit in, which is an easier case than the one production runs. The
+   * site statistic's tables have one because no merge writes them.
    */
   readonly segmentBy?: string;
   /** `timescaledb.compress_orderby`, column plus direction. */
@@ -103,7 +104,43 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     segmentBy: "attractionId",
     orderBy: "predictedTime ASC",
   },
+  // The site statistic (PAR-1151): insert-only, one row per dimension
+  // combination and five-minute window. Week chunks, so a chunk is compressed
+  // a week after it closes and dropped whole after 400 days by the nightly
+  // `site-analytics` / `drop-old-chunks` job, never deleted from.
+  {
+    table: "site_pageviews",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: page views",
+    segmentBy: "locale",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_events",
+    timeColumn: "bucket",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Site statistic: events",
+    segmentBy: "name",
+    orderBy: "bucket DESC",
+  },
+  {
+    table: "site_analytics_flushes",
+    timeColumn: "bucket",
+    chunkInterval: "30 days",
+    compressAfterDays: 30,
+    description: "Site statistic: written flush windows",
+  },
 ];
+
+/** The site statistic's hypertables, whose chunks its nightly job drops. */
+export const SITE_ANALYTICS_HYPERTABLES = [
+  "site_pageviews",
+  "site_events",
+  "site_analytics_flushes",
+] as const;
 
 /**
  * `wait_time_predictions` chunks whose whole range is older than this many days

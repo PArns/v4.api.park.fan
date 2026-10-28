@@ -1,6 +1,8 @@
 import {
   Body,
+  CallHandler,
   Controller,
+  ExecutionContext,
   INestApplication,
   MiddlewareConsumer,
   Module,
@@ -11,6 +13,7 @@ import {
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
+import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
 import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
 import {
   AdminSiteAnalyticsController,
@@ -18,6 +21,8 @@ import {
 } from "./site-analytics.controller";
 import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
+import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
+import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { COLLECT_ROUTE } from "./site-analytics.module";
 import { textBodyMiddleware } from "./text-body.middleware";
 
@@ -47,7 +52,19 @@ const reports = {
   breakdown: jest.fn().mockResolvedValue({ ok: "breakdown" }),
   events: jest.fn().mockResolvedValue({ ok: "events" }),
   event: jest.fn().mockResolvedValue({ ok: "event" }),
+  crosstab: jest.fn().mockResolvedValue({ ok: "crosstab" }),
   search: jest.fn().mockResolvedValue({ ok: "search" }),
+};
+const seo = {
+  landingPages: jest.fn().mockResolvedValue({ ok: "landing" }),
+  trends: jest.fn().mockResolvedValue({ ok: "trends" }),
+  notFound: jest.fn().mockResolvedValue({ ok: "not-found" }),
+  uncovered: jest.fn().mockResolvedValue({ ok: "uncovered" }),
+};
+const blocklist = {
+  list: jest.fn().mockResolvedValue([]),
+  block: jest.fn().mockResolvedValue(undefined),
+  unblock: jest.fn().mockResolvedValue(undefined),
 };
 
 @Module({
@@ -59,6 +76,8 @@ const reports = {
   providers: [
     { provide: SiteAnalyticsCollectService, useValue: { collect } },
     { provide: SiteAnalyticsService, useValue: reports },
+    { provide: SiteAnalyticsSeoService, useValue: seo },
+    { provide: SiteAnalyticsBlocklist, useValue: blocklist },
   ],
 })
 class TestModule implements NestModule {
@@ -84,7 +103,19 @@ describe("SiteAnalyticsController", () => {
       imports: [TestModule],
     })
       .overrideGuard(AdminAuthGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({
+        canActivate: (context: ExecutionContext) => {
+          context.switchToHttp().getRequest().admin = {
+            email: "editor@example.invalid",
+          };
+          return true;
+        },
+      })
+      .overrideInterceptor(AdminAuditInterceptor)
+      .useValue({
+        intercept: (_context: ExecutionContext, next: CallHandler) =>
+          next.handle(),
+      })
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     app.setGlobalPrefix("v1");
@@ -106,7 +137,12 @@ describe("SiteAnalyticsController", () => {
 
   beforeEach(() => {
     collect.mockClear();
-    for (const fn of Object.values(reports)) fn.mockClear();
+    for (const fn of [
+      ...Object.values(reports),
+      ...Object.values(seo),
+      ...Object.values(blocklist),
+    ])
+      fn.mockClear();
     process.env.NODE_ENV = previousEnv;
   });
 
@@ -256,21 +292,92 @@ describe("SiteAnalyticsController", () => {
       );
     });
 
-    it("refuses a window, a language, a dimension or a limit outside the lists", async () => {
+    it("refuses a window, a language, a dimension, a filter or a limit outside the lists", async () => {
       for (const url of [
         "/v1/admin/analytics/overview?days=0",
         "/v1/admin/analytics/overview?days=366",
         "/v1/admin/analytics/overview?locale=pt",
+        "/v1/admin/analytics/overview?filter=user:42",
+        "/v1/admin/analytics/overview?filter=channel:",
         "/v1/admin/analytics/breakdown",
         "/v1/admin/analytics/breakdown?dim=user",
         "/v1/admin/analytics/breakdown?dim=path&limit=201",
         "/v1/admin/analytics/search?days=abc",
+        "/v1/admin/analytics/events/Bad-Name",
+        "/v1/admin/analytics/events/search_opened/crosstab?row=prop:surface",
+        "/v1/admin/analytics/events/search_opened/crosstab?row=id&col=day",
+        "/v1/admin/analytics/seo/landing-pages?channel=email",
+        "/v1/admin/analytics/seo/uncovered",
+        "/v1/admin/analytics/seo/uncovered?kind=show",
       ]) {
         await get(url).expect(400);
       }
-      expect(reports.overview).not.toHaveBeenCalled();
-      expect(reports.breakdown).not.toHaveBeenCalled();
-      expect(reports.search).not.toHaveBeenCalled();
+      for (const fn of [...Object.values(reports), ...Object.values(seo)]) {
+        expect(fn).not.toHaveBeenCalled();
+      }
+    });
+
+    it("takes one filter or several, each <dim>:<value>", async () => {
+      await get("/v1/admin/analytics/overview?filter=channel:search").expect(
+        200,
+      );
+      expect(reports.overview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ filter: ["channel:search"] }),
+      );
+      await get(
+        "/v1/admin/analytics/breakdown?dim=path&filter=channel:search&filter=" +
+          encodeURIComponent("entry:/de/parks/x"),
+      ).expect(200);
+      expect(reports.breakdown).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          filter: ["channel:search", "entry:/de/parks/x"],
+        }),
+      );
+    });
+
+    it("serves the crosstab and the SEO views with their defaults", async () => {
+      await get(
+        "/v1/admin/analytics/events/search_opened/crosstab?row=prop:surface&col=page_type",
+      ).expect(200, { ok: "crosstab" });
+      expect(reports.crosstab).toHaveBeenCalledWith(
+        "search_opened",
+        expect.objectContaining({ row: "prop:surface", col: "page_type" }),
+      );
+      await get("/v1/admin/analytics/seo/landing-pages").expect(200);
+      expect(seo.landingPages).toHaveBeenCalledWith(
+        expect.objectContaining({ days: 30, limit: 50 }),
+      );
+      await get("/v1/admin/analytics/seo/trends?channel=ai").expect(200);
+      expect(seo.trends).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "ai" }),
+      );
+      await get("/v1/admin/analytics/seo/not-found?days=7").expect(200);
+      await get("/v1/admin/analytics/seo/uncovered?kind=attraction").expect(
+        200,
+      );
+      expect(seo.uncovered).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "attraction", limit: 200 }),
+      );
+    });
+
+    it("blocks and unblocks an event name in the admin's name", async () => {
+      await request(app.getHttpServer())
+        .put("/v1/admin/analytics/blocked-events/noisy_event")
+        .expect(204);
+      expect(blocklist.block).toHaveBeenCalledWith(
+        "noisy_event",
+        "editor@example.invalid",
+      );
+      await request(app.getHttpServer())
+        .delete("/v1/admin/analytics/blocked-events/noisy_event")
+        .expect(204);
+      expect(blocklist.unblock).toHaveBeenCalledWith("noisy_event");
+      await get("/v1/admin/analytics/blocked-events").expect(200, {
+        items: [],
+      });
+      await request(app.getHttpServer())
+        .put("/v1/admin/analytics/blocked-events/Bad Name")
+        .expect(400);
     });
   });
 });
