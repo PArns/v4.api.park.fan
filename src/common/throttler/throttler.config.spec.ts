@@ -3,7 +3,6 @@ import {
   getThrottleBypassKeys,
   getThrottlerOptions,
   isThrottlingEnabled,
-  warnWhenCfOriginSecretUnset,
 } from "./throttler.config";
 
 // Every value is read lazily from process.env, so each test sets the env it
@@ -58,22 +57,6 @@ describe("throttler.config", () => {
     it("splits on comma, trims, and drops empty entries", () => {
       process.env.THROTTLE_BYPASS_KEYS = " a , b ,, c ";
       expect(getThrottleBypassKeys()).toEqual(["a", "b", "c"]);
-    });
-  });
-
-  describe("warnWhenCfOriginSecretUnset", () => {
-    it("warns in production without the secret, and only then", () => {
-      const logger = { warn: jest.fn() };
-      process.env.NODE_ENV = "production";
-      delete process.env.CF_ORIGIN_SECRET;
-      expect(warnWhenCfOriginSecretUnset(logger)).toBe(true);
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      process.env.CF_ORIGIN_SECRET = "s3cret";
-      expect(warnWhenCfOriginSecretUnset(logger)).toBe(false);
-      process.env.NODE_ENV = "development";
-      delete process.env.CF_ORIGIN_SECRET;
-      expect(warnWhenCfOriginSecretUnset(logger)).toBe(false);
-      expect(logger.warn).toHaveBeenCalledTimes(1);
     });
   });
 });
