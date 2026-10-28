@@ -16,12 +16,12 @@ undecorated endpoints need any valid session. An endpoint marked `@AdminTokenOnl
 `/v1/mcp`) takes an API token instead and nothing else; every other endpoint refuses API tokens
 ([below](#api-tokens-and-oauth-grants)).
 
-| Role | May |
-| --- | --- |
-| `owner` | everything, including accounts and destructive maintenance (merges, retirements, repair, a full cache reset); keep at least two |
-| `editor` | curated content (names, seasons, heights, ride profiles), job triggers |
-| `author` | blog posts and media metadata, not park data |
-| `viewer` | dashboards; writes nothing |
+| Role     | May                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`  | everything, including accounts and destructive maintenance (merges, retirements, repair, a full cache reset); keep at least two |
+| `editor` | curated content (names, seasons, heights, ride profiles), job triggers                                                          |
+| `author` | blog posts and media metadata, not park data                                                                                    |
+| `viewer` | dashboards; writes nothing                                                                                                      |
 
 Roles are ranked (`owner > editor > author > viewer`), so "editor or above" keeps meaning that when a
 role is added between them.
@@ -152,7 +152,7 @@ SELECT count(*) FILTER (WHERE created_at < now() - interval '90 days') AS to_cle
 `to_cut` also holds any value that is no address (the job clears those and counts them as unreadable).
 Afterwards the same query returns 0 and 0 and no `actor_ip` older than the retention remains.
 
-### Notice for admin accounts
+### What the audit log keeps about an account
 
 For everyone who holds an admin account. The audit log records every sign-in and every change you make
 in the admin (reading pages is not recorded): your account's email address, what you did and to what, the
@@ -161,9 +161,6 @@ first three groups of an IPv6 address and never the whole address.
 
 The network is deleted after 90 days. The rest of the entry stays, so that a change can still be traced
 and, where possible, undone.
-
-We keep this because we have a legitimate interest in tracing changes and in the security of the accounts
-and of the data they can change (Art. 6(1)(f) GDPR).
 
 ## The bootstrap account
 
@@ -218,19 +215,19 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
 
 ## Environment
 
-| Variable | Meaning |
-| --- | --- |
-| `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` | first owner, first boot only |
-| `ADMIN_LEGACY_PASS` | the deprecated shared secret; empty ⇒ unavailable |
-| `ADMIN_LEGACY_PASS_ENABLED` | `false` closes that path while the secret is still set |
-| `ADMIN_LEGACY_PASS_ROLE` | what the shared secret may do; default `owner`, never account management |
-| `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES` | per-account lockout, default 8 / 15 |
-| `ADMIN_REQUIRE_TOTP` | `true` makes two-factor mandatory and un-removable |
-| `TURNSTILE_SECRET_KEY` | Turnstile secret, shared with the frontend |
-| `ADMIN_TURNSTILE_TIMEOUT_MS` | siteverify timeout, default 5000 |
-| `ADMIN_LOGIN_TURNSTILE` | `false` switches the check off |
-| `THROTTLE_BYPASS_KEYS` | the frontend's key; exempts it from the throttler and Turnstile |
-| `API_PUBLIC_URL`, `FRONTEND_URL`, `OAUTH_REDIRECT_HOSTS` | the admin MCP's OAuth server ([admin MCP](mcp.md#environment)) |
+| Variable                                                 | Meaning                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD`     | first owner, first boot only                                             |
+| `ADMIN_LEGACY_PASS`                                      | the deprecated shared secret; empty ⇒ unavailable                        |
+| `ADMIN_LEGACY_PASS_ENABLED`                              | `false` closes that path while the secret is still set                   |
+| `ADMIN_LEGACY_PASS_ROLE`                                 | what the shared secret may do; default `owner`, never account management |
+| `ADMIN_LOGIN_LOCKOUT_THRESHOLD` / `_MINUTES`             | per-account lockout, default 8 / 15                                      |
+| `ADMIN_REQUIRE_TOTP`                                     | `true` makes two-factor mandatory and un-removable                       |
+| `TURNSTILE_SECRET_KEY`                                   | Turnstile secret, shared with the frontend                               |
+| `ADMIN_TURNSTILE_TIMEOUT_MS`                             | siteverify timeout, default 5000                                         |
+| `ADMIN_LOGIN_TURNSTILE`                                  | `false` switches the check off                                           |
+| `THROTTLE_BYPASS_KEYS`                                   | the frontend's key; exempts it from the throttler and Turnstile          |
+| `API_PUBLIC_URL`, `FRONTEND_URL`, `OAUTH_REDIRECT_HOSTS` | the admin MCP's OAuth server ([admin MCP](mcp.md#environment))           |
 
 `admin_users`, `admin_audit_log`, `admin_api_tokens`, `admin_api_token_secrets` and `admin_oauth_clients`
 come from `synchronize`; every column is nullable or defaulted
