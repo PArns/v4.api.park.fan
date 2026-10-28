@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 import {
   IsBoolean,
   IsEmail,
@@ -189,3 +189,12 @@ export class AdminCreateApiTokenDto {
   @Matches(/^\d{6}$/, { message: "A TOTP code is six digits" })
   totpCode?: string;
 }
+
+/**
+ * The identity proof the consent page sends with an approval: the password
+ * and, with two-factor on, a code, as when a personal access token is made.
+ */
+export class AdminOAuthApproveDto extends PickType(AdminCreateApiTokenDto, [
+  "password",
+  "totpCode",
+] as const) {}

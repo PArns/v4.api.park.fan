@@ -16,12 +16,12 @@ page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oaut
 claude mcp add --transport http parkfan-admin https://api.park.fan/v1/mcp
 ```
 
-Then `/mcp` in Claude Code, pick `parkfan-admin`, *Authenticate*. The browser opens park.fan's
-consent page (behind the admin login), shows the client and where it will be sent, and *Approve*
+Then `/mcp` in Claude Code, pick `parkfan-admin`, _Authenticate_. The browser opens park.fan's
+consent page (behind the admin login), shows the client and where it will be sent, and _Approve_
 hands Claude Code its tokens. It refreshes them itself; a grant unused for 30 days expires.
 
-**claude.ai** — Settings → Connectors → *Add custom connector*, URL
-`https://api.park.fan/v1/mcp`, no client id or secret. *Connect* runs the same consent.
+**claude.ai** — Settings → Connectors → _Add custom connector_, URL
+`https://api.park.fan/v1/mcp`, no client id or secret. _Connect_ runs the same consent.
 
 **A personal access token instead of OAuth** — create one on the admin account page ("API access /
 MCP", shown once; it asks for your password, and your two-factor code if you use one), then:
@@ -31,7 +31,7 @@ claude mcp add --transport http parkfan-admin https://api.park.fan/v1/mcp \
   --header "Authorization: Bearer pfa_…"
 ```
 
-**MCP Inspector** — `npx @modelcontextprotocol/inspector`, transport *Streamable HTTP*, the same
+**MCP Inspector** — `npx @modelcontextprotocol/inspector`, transport _Streamable HTTP_, the same
 URL; its OAuth flow works from the browser (see [CORS](#edge-cors-caching-and-throttling)).
 
 ## How a login works
@@ -69,7 +69,7 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   capped at `viewer`; an owner's token is a viewer.
 - **A deactivated account is refused at its next request**, revoked or not.
 - **Whatever ends an account's sessions ends its tokens:** deactivation, a password change or reset,
-  a second-factor reset, *sign out everywhere* (`AdminAuthService.signOutEverywhere`). It first sets
+  a second-factor reset, _sign out everywhere_ (`AdminAuthService.signOutEverywhere`). It first sets
   `admin_users.tokens_revoked_at`; a token created before that instant is refused at every request
   even if its row escaped the sweep, and a code approved before it is refused at the exchange.
   Tokens are issued under a lock on the account's row, so issuing and signing out never interleave.
@@ -77,11 +77,11 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   marked `@AdminTokenOnly()`, and such an endpoint accepts neither a session nor the shared pass.
   So a token cannot list, mint or extend tokens, approve a consent or call an admin REST route.
 
-| | PAT `pfa_…` | OAuth access `pfo_…` | OAuth refresh `pfr_…` |
-| --- | --- | --- | --- |
-| Lifetime | 30, 90, 365 days or none | 1 hour | 30 days, renewed with each refresh |
-| Made by | `POST /v1/admin/auth/tokens` (session and password) | the code or refresh exchange | the same |
-| Revoked by | `DELETE /v1/admin/auth/tokens/:id`, an owner, the account's sign-out | revoking the grant | revoking the grant; reuse |
+|            | PAT `pfa_…`                                                          | OAuth access `pfo_…`         | OAuth refresh `pfr_…`              |
+| ---------- | -------------------------------------------------------------------- | ---------------------------- | ---------------------------------- |
+| Lifetime   | 30, 90, 365 days or none                                             | 1 hour                       | 30 days, renewed with each refresh |
+| Made by    | `POST /v1/admin/auth/tokens` (session and password)                  | the code or refresh exchange | the same                           |
+| Revoked by | `DELETE /v1/admin/auth/tokens/:id`, an owner, the account's sign-out | revoking the grant           | revoking the grant; reuse          |
 
 - **Codes** are single-use, live 60 s, are stored hashed in Redis and bound to the client, the
   redirect URI and the PKCE challenge. A code presented twice revokes the grant it bought.
@@ -105,38 +105,38 @@ A handler throws `McpToolError` for a failure the model should read; any other e
 model as a generic failure and its message only goes to the log. `index.spec.ts` checks every tool
 against these rules.
 
-| Tool | Answers | Wraps |
-| --- | --- | --- |
-| `whoami` | account, effective role, credential kind and client | the principal |
-| `find_parks` | parks by name, city or country, with status, crowd level, today's hours | `SearchService` |
-| `get_park` | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), not run today | `ParkIntegrationService` |
-| `find_attractions` | rides by name, optionally in one park, with status and wait | `SearchService` |
-| `get_attraction` | one ride: queues, crowd level, outage, curated facts, typical waits, downtime, retirement, optional history | `AttractionIntegrationService` |
-| `page_views` | reads per kind, language and page | `PageViewsService.adminOverview` |
-| `system_health` | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half | `SystemHealthService` |
-| `queue_status` | Bull counts per queue, recent failures of one | `AdminQueueStatusService` |
-| `ml_overview` | forecast components, decisions, comparison summary, drift | `MlOverviewService` |
-| `data_quality` | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates | `DataQualityMonitorService.report` |
-| `duplicates` | duplicate attraction and park pairs with the merge winner | `AttractionMergeService`, `ParkValidatorService` |
-| `retirement_candidates` | rides whose source went quiet | `AttractionReviewService` |
-| `audit_log` | admin actions, filterable | `AdminAuditService.list` |
-| `downtime` | outage events per park and ride over a window | `DowntimeMeasurementService.measure` |
-| `analytics_overview` | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview` |
-| `analytics_live` | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events | `SiteAnalyticsLiveService.live` |
-| `analytics_breakdown` | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits | `SiteAnalyticsService.breakdown` |
-| `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix, small values folded | `SiteAnalyticsService.trafficCrosstab` |
-| `analytics_events` | every event name with count, previous, change, blocked | `SiteAnalyticsService.events` |
-| `analytics_event` | one event: props with top values, combinations, page types, devices, entities | `SiteAnalyticsService.event` |
-| `analytics_crosstab` | one event by two sides, as a `counts[row][col]` matrix, small values folded | `SiteAnalyticsService.crosstab` |
-| `search_report` | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where | `SiteAnalyticsService.search` |
-| `seo_landing_pages` | the pages visits of one channel (search by default) entered on, with change, bounce, sources | `SiteAnalyticsSeoService.landingPages` |
-| `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
-| `seo_not_found` | paths that showed the not-found page, with the referrers of the visits that entered on them | `SiteAnalyticsSeoService.notFound` |
-| `seo_uncovered` | parks or rides no search visit entered on | `SiteAnalyticsSeoService.uncovered` |
-| `gsc_status` | whether Google Search Console is connected, when it last imported, the days covered | `SearchConsoleService.status` |
-| `gsc_queries` | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device | `SearchConsoleService.queries` |
-| `gsc_pages` | the pages found in Google, with the site's own visits, bounce and visit length from search | `SearchConsoleService.pages` |
-| `gsc_series` | clicks, impressions, ctr and position per day, week or month | `SearchConsoleService.series` |
+| Tool                         | Answers                                                                                                                                                                                 | Wraps                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `whoami`                     | account, effective role, credential kind and client                                                                                                                                     | the principal                                    |
+| `find_parks`                 | parks by name, city or country, with status, crowd level, today's hours                                                                                                                 | `SearchService`                                  |
+| `get_park`                   | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), not run today                                                                  | `ParkIntegrationService`                         |
+| `find_attractions`           | rides by name, optionally in one park, with status and wait                                                                                                                             | `SearchService`                                  |
+| `get_attraction`             | one ride: queues, crowd level, outage, curated facts, typical waits, downtime, retirement, optional history                                                                             | `AttractionIntegrationService`                   |
+| `page_views`                 | reads per kind, language and page                                                                                                                                                       | `PageViewsService.adminOverview`                 |
+| `system_health`              | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half                                                                                     | `SystemHealthService`                            |
+| `queue_status`               | Bull counts per queue, recent failures of one                                                                                                                                           | `AdminQueueStatusService`                        |
+| `ml_overview`                | forecast components, decisions, comparison summary, drift                                                                                                                               | `MlOverviewService`                              |
+| `data_quality`               | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates                                                                                                    | `DataQualityMonitorService.report`               |
+| `duplicates`                 | duplicate attraction and park pairs with the merge winner                                                                                                                               | `AttractionMergeService`, `ParkValidatorService` |
+| `retirement_candidates`      | rides whose source went quiet                                                                                                                                                           | `AttractionReviewService`                        |
+| `audit_log`                  | admin actions, filterable                                                                                                                                                               | `AdminAuditService.list`                         |
+| `downtime`                   | outage events per park and ride over a window                                                                                                                                           | `DowntimeMeasurementService.measure`             |
+| `analytics_overview`         | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview`                  |
+| `analytics_live`             | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events                                                                            | `SiteAnalyticsLiveService.live`                  |
+| `analytics_breakdown`        | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits                                      | `SiteAnalyticsService.breakdown`                 |
+| `analytics_traffic_crosstab` | page views or visits by two dimensions, as a `counts[row][col]` matrix, small values folded                                                                                             | `SiteAnalyticsService.trafficCrosstab`           |
+| `analytics_events`           | every event name with count, previous, change, blocked                                                                                                                                  | `SiteAnalyticsService.events`                    |
+| `analytics_event`            | one event: props with top values, combinations, page types, devices, entities                                                                                                           | `SiteAnalyticsService.event`                     |
+| `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
+| `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where                                                                                          | `SiteAnalyticsService.search`                    |
+| `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
+| `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
+| `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
+| `seo_uncovered`              | parks or rides no search visit entered on                                                                                                                                               | `SiteAnalyticsSeoService.uncovered`              |
+| `gsc_status`                 | whether Google Search Console is connected, when it last imported, the days covered                                                                                                     | `SearchConsoleService.status`                    |
+| `gsc_queries`                | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device                                                                 | `SearchConsoleService.queries`                   |
+| `gsc_pages`                  | the pages found in Google, with the site's own visits, bounce and visit length from search                                                                                              | `SearchConsoleService.pages`                     |
+| `gsc_series`                 | clicks, impressions, ctr and position per day, week or month                                                                                                                            | `SearchConsoleService.series`                    |
 
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
@@ -203,22 +203,22 @@ The answer also carries `hourlyFrom`, the day from which a figure that needed th
 
 ## Endpoints
 
-| Method | Path | Who | Does |
-| --- | --- | --- | --- |
-| POST | `/v1/mcp` | PAT or OAuth access token | MCP JSON-RPC, Streamable HTTP, stateless, JSON answers |
-| GET, DELETE | `/v1/mcp` | the same | 405: no server stream, no session |
-| GET | `/.well-known/oauth-protected-resource[/v1/mcp]` | public | RFC 9728 metadata |
-| GET | `/.well-known/oauth-authorization-server` | public | RFC 8414 metadata |
-| POST | `/v1/oauth/register` | public | RFC 7591 registration, public clients only |
-| GET | `/v1/oauth/authorize` | public (browser) | validates, parks the request, 302 to the consent page |
-| POST | `/v1/oauth/token` | public client | `authorization_code` (PKCE S256), `refresh_token` |
-| POST | `/v1/oauth/revoke` | public client | RFC 7009; revokes the whole grant |
-| GET | `/v1/admin/oauth/requests/:id` | session, any role | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes) and `expiresAt` |
-| POST | `/v1/admin/oauth/requests/:id/approve` | session, any role | `{ redirectTo }` with the code |
-| POST | `/v1/admin/oauth/requests/:id/deny` | session, any role | `{ redirectTo }` with `access_denied` |
-| GET | `/v1/admin/auth/tokens[?userId=]` | session; `userId` owner only | active PATs and grants |
-| POST | `/v1/admin/auth/tokens` | session + password (+ `totpCode`) | `{ token, item }`, the token shown once |
-| DELETE | `/v1/admin/auth/tokens/:id` | session; others' owner only | revokes a PAT or a grant |
+| Method      | Path                                             | Who                                      | Does                                                                                                                                         |
+| ----------- | ------------------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST        | `/v1/mcp`                                        | PAT or OAuth access token                | MCP JSON-RPC, Streamable HTTP, stateless, JSON answers                                                                                       |
+| GET, DELETE | `/v1/mcp`                                        | the same                                 | 405: no server stream, no session                                                                                                            |
+| GET         | `/.well-known/oauth-protected-resource[/v1/mcp]` | public                                   | RFC 9728 metadata                                                                                                                            |
+| GET         | `/.well-known/oauth-authorization-server`        | public                                   | RFC 8414 metadata                                                                                                                            |
+| POST        | `/v1/oauth/register`                             | public                                   | RFC 7591 registration, public clients only                                                                                                   |
+| GET         | `/v1/oauth/authorize`                            | public (browser)                         | validates, parks the request, 302 to the consent page                                                                                        |
+| POST        | `/v1/oauth/token`                                | public client                            | `authorization_code` (PKCE S256), `refresh_token`                                                                                            |
+| POST        | `/v1/oauth/revoke`                               | public client                            | RFC 7009; revokes the whole grant                                                                                                            |
+| GET         | `/v1/admin/oauth/requests/:id`                   | session, any role                        | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes) and `expiresAt`                 |
+| POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode? }` | `{ redirectTo }` with the code; 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending |
+| POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                        |
+| GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                       |
+| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once                                                                                                      |
+| DELETE      | `/v1/admin/auth/tokens/:id`                      | session; others' owner only              | revokes a PAT or a grant                                                                                                                     |
 
 The shared pass is refused on every row. The response shapes the frontend reads are in
 [endpoints](endpoints.md#api-tokens-and-the-admin-mcp).
@@ -253,7 +253,9 @@ What was checked when this was built, and where it is enforced:
 - **Consent CSRF:** the approve call reaches the API only through park.fan's admin proxy with the
   session as a bearer header, which no other site can attach; the proxy's cookie is `SameSite=Strict`
   ([the frontend's admin docs](https://github.com/PArns/park.fan/blob/main/docs/features/admin.md)).
-  The pending request id is 256 random bits, stored hashed, and answered once.
+  The pending request id is 256 random bits, stored hashed, and answered once. An approval also asks
+  for the account password (and the two-factor code, when on) again, like creating a token, so a
+  stolen session cannot mint a refreshable grant.
 - **Consent phishing:** anyone may register a client called "Claude", so the consent page shows the
   redirect host, and https redirects are limited to `OAUTH_REDIRECT_HOSTS`. A grant obtained through
   a phished approval lands in the approving admin's own claude.ai session or on their own machine.
@@ -300,11 +302,11 @@ What was checked when this was built, and where it is enforced:
 
 ## Environment
 
-| Variable | Meaning |
-| --- | --- |
-| `API_PUBLIC_URL` | this API's public origin: issuer and resource base; default `https://api.park.fan` |
-| `FRONTEND_URL` | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL` |
-| `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com` |
+| Variable               | Meaning                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `API_PUBLIC_URL`       | this API's public origin: issuer and resource base; default `https://api.park.fan`                 |
+| `FRONTEND_URL`         | where `/admin/oauth/consent` is; default the origin of `REVALIDATE_URL`                            |
+| `OAUTH_REDIRECT_HOSTS` | https redirect hosts, comma-separated, `*` for any; default `claude.ai,claude.com`                 |
 | `OAUTH_REDIRECT_PATHS` | the paths an https redirect may have on those hosts, `*` for any; default `/api/mcp/auth_callback` |
 
 ## Known limits
