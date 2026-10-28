@@ -8,6 +8,8 @@ import { pageViewsTool } from "./page-views.tool";
 import { systemHealthTool } from "./system-health.tool";
 import { queueStatusTool } from "./queue-status.tool";
 import { mlOverviewTool } from "./ml-overview.tool";
+import { mlAccuracyTool } from "./ml-accuracy.tool";
+import { parkForecastTool } from "./park-forecast.tool";
 import { dataQualityTool } from "./data-quality.tool";
 import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
@@ -39,12 +41,14 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   whoamiTool,
   findParksTool,
   getParkTool,
+  parkForecastTool,
   findAttractionsTool,
   getAttractionTool,
   pageViewsTool,
   systemHealthTool,
   queueStatusTool,
   mlOverviewTool,
+  mlAccuracyTool,
   dataQualityTool,
   duplicatesTool,
   retirementCandidatesTool,
