@@ -30,7 +30,8 @@ import {
 } from "./dto/page-view.dto";
 
 /**
- * The public half: the beacon's write and the rankings the frontend renders.
+ * The public half: the rankings the frontend renders, and the old beacon's
+ * write, now an alias that records a `page_read` in the site statistic.
  *
  * The browser sends the write straight here, never through the frontend's
  * relay, so its own address and User-Agent are the request's. The write
@@ -49,12 +50,14 @@ export class PageViewsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseInterceptors(new NoCdnCacheInterceptor())
   @ApiOperation({
-    summary: "Count one page view",
+    deprecated: true,
+    summary:
+      "Count one page view (deprecated: send `page_read` to /v1/analytics/collect)",
     description:
-      "Sent by the frontend once a reader has stayed on a post, park or ride " +
-      "page for a few seconds. Bots, `DNT: 1` and `Sec-GPC: 1` are not " +
-      "counted; one reader counts a page at most three times a day, one " +
-      "address 500 views a day. Always 204.",
+      "Kept for one release while the frontend moves its beacon to the " +
+      "site statistic; records the same `page_read` event. Bots, `DNT: 1` " +
+      "and `Sec-GPC: 1` are not counted; one reader counts a page at most " +
+      "three times a day, one address 500 reads a day. Always 204.",
   })
   @ApiResponse({ status: 204 })
   @ApiResponse({

@@ -29,6 +29,7 @@ import {
   AGGREGATE_CARRIED_COLUMNS,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
+  recordEntityMerge,
   rideProfileRichness,
   restaurantTablesMissingFrom,
   showTablesMissingFrom,
@@ -106,6 +107,7 @@ describe("merge dependency tables", () => {
     "queue_data_aggregates",
     "ride_alerts",
     "schedule_entries",
+    "site_entity_merges",
     "tft_forecasts",
     "tft_forecasts_shadow",
     "tft_forecasts_shadow_drivers",
@@ -174,6 +176,7 @@ describe("merge dependency tables", () => {
     "schedule_day_versions",
     "schedule_entries",
     "shows",
+    "site_entity_merges",
     "weather_data",
     "weather_forecast_issues",
     "weather_warnings",
@@ -363,6 +366,36 @@ describe("merge dependency tables", () => {
     }
   });
 
+  it("records a merged park's, ride's, show's or restaurant's survivor for the site statistic", async () => {
+    for (const list of [
+      ATTRACTION_DEPENDENCIES,
+      PARK_DEPENDENCIES,
+      SHOW_DEPENDENCIES,
+      RESTAURANT_DEPENDENCIES,
+    ]) {
+      const entry = list.find((d) => d.table === "site_entity_merges");
+      expect(entry?.strategy).toBe("custom");
+      expect(entry?.apply).toBe(recordEntityMerge);
+    }
+    const calls: Array<[string, unknown[] | undefined]> = [];
+    await recordEntityMerge(
+      { query: async (sql, params) => calls.push([sql, params]) },
+      "winner",
+      "loser",
+    );
+    // The winner is alive again, earlier losers follow the loser, then the pair.
+    expect(calls[0]).toEqual([
+      "DELETE FROM site_entity_merges WHERE loser_id = $1::uuid",
+      ["winner"],
+    ]);
+    expect(calls[1][0]).toContain(
+      "SET winner_id = $1::uuid WHERE winner_id = $2::uuid",
+    );
+    expect(calls[1][1]).toEqual(["winner", "loser"]);
+    expect(calls[2][0]).toMatch(/^INSERT INTO site_entity_merges/);
+    expect(calls[2][1]).toEqual(["winner", "loser"]);
+  });
+
   it("hands attraction_review_marks to a function of its own", () => {
     // One of five `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
@@ -399,7 +432,21 @@ describe("merge dependency tables", () => {
     const parkViews = PARK_DEPENDENCIES.find(
       (d) => d.table === "page_view_days",
     );
-    expect(custom).toEqual([aggregates, marks, seasons, rideViews, parkViews]);
+    // The site statistic's merge record, one entry shared by all four kinds.
+    const siteEvents = PARK_DEPENDENCIES.find(
+      (d) => d.table === "site_entity_merges",
+    );
+    expect(custom).toEqual([
+      aggregates,
+      marks,
+      seasons,
+      rideViews,
+      siteEvents,
+      parkViews,
+      siteEvents,
+      siteEvents,
+      siteEvents,
+    ]);
   });
 
   it("names the two attraction columns review marks really has", () => {
@@ -601,11 +648,13 @@ describe("merge dependency tables", () => {
     "show_follows",
     "show_live_data",
     "show_schedule_patterns",
+    "site_entity_merges",
   ];
 
   const RESTAURANT_REFERENCING_TABLES = [
     "external_entity_mapping",
     "restaurant_live_data",
+    "site_entity_merges",
   ];
 
   it("declares a strategy for every table that references a show or a restaurant", () => {
@@ -656,12 +705,14 @@ describe("merge dependency tables", () => {
   });
 
   it("moves a losing restaurant's live data rather than cascading it", () => {
-    expect(RESTAURANT_DEPENDENCIES).toEqual([
-      {
-        table: "restaurant_live_data",
-        column: "restaurantId",
-        strategy: "move",
-      },
+    expect(RESTAURANT_DEPENDENCIES[0]).toEqual({
+      table: "restaurant_live_data",
+      column: "restaurantId",
+      strategy: "move",
+    });
+    expect(RESTAURANT_DEPENDENCIES.map((d) => d.table)).toEqual([
+      "restaurant_live_data",
+      "site_entity_merges",
     ]);
   });
 

@@ -47,6 +47,7 @@ One line each in [CLAUDE.md](../CLAUDE.md#applies-to-every-change); every rule h
 - [smart-gaps](analytics/smart-gaps.md) — Opening hours and open/closed inferred from ride activity for parks without a schedule; isEstimated flags
 - [data-recalculation](analytics/data-recalculation.md) — What to rerun after a calculation change: backfill-stats, baseline recompute, cache flush, in order
 - [ride-downtime/](analytics/ride-downtime/README.md) — Ride downtime index: what is answered vs refused, what is built and where, links to the five sub-pages
+- [site statistic](frontend/site-analytics.md) — park.fan's own cookieless page views, visits and events: the collect endpoint, guards, insert-only storage, admin and SEO reports, measurements
 
 ## Machine learning
 

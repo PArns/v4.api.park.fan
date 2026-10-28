@@ -29,6 +29,7 @@ its `docs/architecture/caching-strategy.md`.
 | `search:index:v1:*`, `search:fuzzy:v1:{type}:{q}` | 2 h, 5 min | [Search](search.md) |
 | `weather:*` | per surface | [Weather](weather.md#call-cadence-per-surface) |
 | `popularity:parks`, `popularity:attractions` | sorted sets, decayed daily | `ZINCRBY` from `PopularityInterceptor` on successful GETs; feeds warmup priority |
+| `site-analytics:*` | buffers `buf:*` none; visits 30 min after the last hit; caps and guards to the end of the UTC day + 1 min; visitors 3 days; realtime 10–35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples)'s counts until the flusher writes them, its visits, caps and HyperLogLogs. Keys standing for a reader are HMACs |
 
 Everything park-scoped is evicted together by `invalidateParkCaches(redis, parkId, attractionIds)`
 (`src/common/cache/park-cache-invalidation.ts`), including the discovery geo structure, the `/nearby`

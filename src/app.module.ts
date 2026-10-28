@@ -33,6 +33,7 @@ import { McpModule } from "./mcp/mcp.module";
 import { StatsModule } from "./stats/stats.module";
 import { PopularityModule } from "./popularity/popularity.module";
 import { PageViewsModule } from "./page-views/page-views.module";
+import { SiteAnalyticsModule } from "./site-analytics/site-analytics.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
@@ -90,6 +91,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     StatsModule,
     PopularityModule,
     PageViewsModule,
+    SiteAnalyticsModule,
     // Phase 6.3: Search & Filtering
     SearchModule,
 

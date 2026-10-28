@@ -1,8 +1,8 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { RedisModule } from "../common/redis/redis.module";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
+import { SiteAnalyticsModule } from "../site-analytics/site-analytics.module";
 import { PageViewDay } from "./entities/page-view-day.entity";
 import { PageViewsService } from "./page-views.service";
 import {
@@ -11,13 +11,15 @@ import {
 } from "./page-views.controller";
 
 /**
- * Page views per kind, page, language and day — the "most read" lists and the
- * admin's popularity overview. See docs/frontend/page-views.md.
+ * The "most read" lists and the admin's popularity overview, read from the
+ * site statistic's `page_read` events. `PageViewDay` stays registered: its
+ * table is kept (and still moved by merges) until a later release drops it.
+ * See docs/frontend/page-views.md.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([PageViewDay, Park, Attraction]),
-    RedisModule,
+    SiteAnalyticsModule,
   ],
   controllers: [PageViewsController, AdminPageViewsController],
   providers: [PageViewsService],

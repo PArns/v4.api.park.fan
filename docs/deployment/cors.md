@@ -31,7 +31,12 @@ and nothing outside `vercel.app`.
 
 A write with a JSON body — park.fan's trip and push calls — is preceded by an
 `OPTIONS` preflight. `maxAge: 7200` lets the browser keep that answer for two
-hours, which is Chrome's cap, so one visit pays for it once.
+hours, which is Chrome's cap, so one visit pays for it once. The site
+statistic's beacon (`POST /v1/analytics/collect`) sends its JSON as
+`text/plain` through `navigator.sendBeacon`, a simple request without a
+preflight; it reads no answer, so it needs no CORS header either. The origin
+check that keeps previews and scripts out of its counts is the collector's own
+([site statistic](../frontend/site-analytics.md#privacy)), not CORS.
 
 ## An origin that is not on the list gets a normal answer
 

@@ -111,6 +111,15 @@ describe("GeoipService", () => {
       expect(service.lookupCoordinates("5.6.7.8")).toBeNull();
       expect(service.lookupCoordinates("9.9.9.9")).toBeNull();
     });
+
+    it("gives the country lowercase, and null where there is none", async () => {
+      const service = await loadedService();
+      expect(service.lookupCountry("1.2.3.4")).toBe("xx");
+      expect(service.lookupCountry("8.8.8.8")).toBeNull();
+      expect(service.lookupCountry("10.0.0.1")).toBeNull();
+      expect(service.lookupCountry("not an ip")).toBeNull();
+      expect(makeService().lookupCountry("1.2.3.4")).toBeNull();
+    });
   });
 
   describe("onModuleInit", () => {

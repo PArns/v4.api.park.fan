@@ -21,3 +21,7 @@ a time into a date; the full guide with the traps is
 - **Python:** one pandas column carries one timezone, so park-local time is stored naive in
   `local_timestamp` and never compared against a `TIMESTAMPTZ`
   ([§8 of the guide](../development/datetime-handling.md)).
+- **Not a park's day: a reader's.** The [site statistic](../frontend/site-analytics.md) and the
+  [page-view rankings](../frontend/page-views.md) count per UTC day (`utcDay` in
+  `src/common/utils/reader-hash.util.ts`): a page view belongs to a reader, and readers sit in
+  every zone.

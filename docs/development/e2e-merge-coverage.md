@@ -46,9 +46,13 @@ flag; an entity table never gets it (a missing one is a bug, and skipping it wou
 
 ## Hypertables come from one list
 
-Production has seven compressed hypertables, and the merge writes to all of them: `queue_data`,
+Production has ten compressed hypertables. The merge writes to seven of them: `queue_data`,
 `forecast_data`, `weather_data`, `show_live_data`, `restaurant_live_data`, `queue_data_aggregates`,
-`wait_time_predictions`. `synchronize` makes none of them a hypertable. They are `HYPERTABLES` in
+`wait_time_predictions`. The site statistic's three (`site_pageviews`, `site_events`,
+`site_analytics_flushes`) are insert-only: a merge records `loser → winner` in the plain table
+`site_entity_merges` and the reports resolve it when they read
+([site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples)).
+`synchronize` makes none of them a hypertable. They are `HYPERTABLES` in
 `src/database/hypertables.ts` (table, partitioning column, `chunk_time_interval`, compression settings),
 which `TimescaleInitService.initializeHypertables` applies in production and `global-setup.ts` imports.
 Before that list existed the test setup converted one, then three, tables by hand, so cases about
