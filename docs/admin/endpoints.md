@@ -40,9 +40,9 @@ The MCP server, the OAuth endpoints and how a client connects: [admin MCP](mcp.m
 | Method | Path | Role | Does |
 | --- | --- | --- | --- |
 | GET | `auth/tokens` | viewer | `{ items }`: the account's active PATs (`kind: "pat"`) and OAuth grants (`kind: "oauth"`, `name` null, `clientName` set); `?userId=` lists another account's, owner only |
-| POST | `auth/tokens` | viewer | `{ name, expiresInDays: 30 \| 90 \| 365 \| null }` → `201 { token, item }`; the `pfa_…` token appears in this answer and nowhere else; audited `auth.token.create` |
+| POST | `auth/tokens` | viewer | `{ name, expiresInDays: 30 \| 90 \| 365 \| null, password, totpCode? }` → `201 { token, item }`; the `pfa_…` token appears in this answer and nowhere else; audited `auth.token.create`. `401` `{ error: "invalid-password" \| "totp-required" \| "invalid-totp" }`, `429` `{ error: "rate-limited", retryAfterSeconds }` ([authentication](authentication.md#api-tokens-and-oauth-grants)) |
 | DELETE | `auth/tokens/:id` | viewer | `204`, revokes a PAT or a whole grant; another account's, owner only (`404` for anybody else); audited `auth.token.revoke` |
-| GET | `oauth/requests/:id` | viewer | `{ id, clientId, clientName, redirectHost, scope, expiresAt }` for the consent page; `404` when unknown, expired or answered |
+| GET | `oauth/requests/:id` | viewer | `{ id, clientId, clientName, redirectHost, scope, createdAt, expiresAt }` for the consent page (`createdAt` is when the client started the request, for its age); `404` when unknown, expired or answered |
 | POST | `oauth/requests/:id/approve` | viewer | `{ redirectTo }`: the client's registered redirect URI with `code`, `state` and `iss`; audited `auth.oauth.grant`; `404` without side effects when used or expired |
 | POST | `oauth/requests/:id/deny` | viewer | `{ redirectTo }` with `error=access_denied`; `404` the same way |
 

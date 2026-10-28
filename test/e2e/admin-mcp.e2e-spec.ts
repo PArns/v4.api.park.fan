@@ -8,6 +8,11 @@ import { AdminSessionStore } from "../../src/admin/auth/admin-session.store";
 import type { AdminRole } from "../../src/admin/auth/entities/admin-user.entity";
 import { s256Challenge } from "../../src/admin/oauth/pkce.util";
 import {
+  generateTotpSecret,
+  totpCodeForStep,
+  totpStep,
+} from "../../src/admin/auth/totp.util";
+import {
   GLOBAL_PREFIX,
   GLOBAL_PREFIX_OPTIONS,
 } from "../../src/common/swagger/swagger-config";
@@ -29,6 +34,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
   let dataSource: DataSource;
   let address = 0;
 
+  const PASSWORD = "a-long-enough-password";
   const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   const REDIRECT = "http://127.0.0.1:53682/callback";
 
@@ -77,7 +83,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await app.get(AdminAuthService).create({
       email,
       role,
-      password: "a-long-enough-password",
+      password: PASSWORD,
     });
     await dataSource.query(
       `UPDATE admin_users SET must_change_password = false WHERE id = $1::uuid`,
@@ -142,6 +148,11 @@ describe("Admin MCP and OAuth (e2e)", () => {
       redirectHost: "127.0.0.1:53682",
       scope: "admin:read",
     });
+    // The consent page shows the request's age from this.
+    expect(Date.parse(shown.body.createdAt)).toBeLessThanOrEqual(Date.now());
+    expect(Date.parse(shown.body.expiresAt)).toBeGreaterThan(
+      Date.parse(shown.body.createdAt),
+    );
 
     const approved = await client
       .post(`/v1/admin/oauth/requests/${id}/approve`)
@@ -224,7 +235,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${viewer.session}`)
-      .send({ name: "Analytics" })
+      .send({ name: "Analytics", password: PASSWORD })
       .expect(201);
     const pat = created.body.token as string;
 
@@ -325,7 +336,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${viewer.session}`)
-      .send({ name: "Batch" })
+      .send({ name: "Batch", password: PASSWORD })
       .expect(201);
     const batch = await mcp(client, created.body.token, [
       toolsList,
@@ -356,7 +367,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${viewer.session}`)
-      .send({ name: "Raced" })
+      .send({ name: "Raced", password: PASSWORD })
       .expect(201);
     await mcp(client, created.body.token, toolsList).expect(200);
     // As if the token's insert had committed after the revocation's sweep.
@@ -551,7 +562,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${editor.session}`)
-      .send({ name: "Laptop", expiresInDays: 30 })
+      .send({ name: "Laptop", expiresInDays: 30, password: PASSWORD })
       .expect(201);
     expect(created.body.token).toMatch(/^pfa_[\w-]{43}$/);
     expect(created.body.item).toMatchObject({
@@ -597,13 +608,147 @@ describe("Admin MCP and OAuth (e2e)", () => {
     ]);
   });
 
+  describe("creating a token asks for the password again", () => {
+    function create(
+      client: Client,
+      session: string,
+      body: Record<string, unknown>,
+    ) {
+      return client
+        .post("/v1/admin/auth/tokens")
+        .set("Authorization", `Bearer ${session}`)
+        .send({ name: "Laptop", ...body });
+    }
+
+    async function tokenRows(): Promise<number> {
+      const rows = await dataSource.query(
+        `SELECT count(*)::int AS n FROM admin_api_tokens`,
+      );
+      return rows[0].n;
+    }
+
+    it("refuses a missing, empty or wrong password without minting anything", async () => {
+      const client = from();
+      const viewer = await account("viewer-nopass@example.invalid", "viewer");
+
+      await create(client, viewer.session, {}).expect(400);
+      const empty = await create(client, viewer.session, { password: "" });
+      expect(empty.status).toBe(401);
+      expect(empty.body.error).toBe("invalid-password");
+      const wrong = await create(client, viewer.session, {
+        password: "not-the-password",
+      });
+      expect(wrong.status).toBe(401);
+      expect(wrong.body.error).toBe("invalid-password");
+      expect(await tokenRows()).toBe(0);
+      const audit = await dataSource.query(
+        `SELECT 1 FROM admin_audit_log WHERE action = 'auth.token.create'`,
+      );
+      expect(audit).toHaveLength(0);
+    });
+
+    it("needs a code when the account has two-factor, and spends each step once", async () => {
+      const client = from();
+      const owner = await account("owner-totp-pat@example.invalid", "owner");
+      const secret = generateTotpSecret();
+      await dataSource.query(
+        `UPDATE admin_users SET totp_enabled = true, totp_secret = $2 WHERE id = $1::uuid`,
+        [owner.id, secret],
+      );
+
+      const missing = await create(client, owner.session, {
+        password: PASSWORD,
+      });
+      expect(missing.status).toBe(401);
+      expect(missing.body.error).toBe("totp-required");
+
+      const wrong = await create(client, owner.session, {
+        password: PASSWORD,
+        totpCode: totpCodeForStep(secret, totpStep() + 50),
+      });
+      expect(wrong.status).toBe(401);
+      expect(wrong.body.error).toBe("invalid-totp");
+      expect(await tokenRows()).toBe(0);
+
+      // A wrong password is still told first, whatever the code.
+      const noPassword = await create(client, owner.session, {
+        password: "nope",
+        totpCode: totpCodeForStep(secret, totpStep()),
+      });
+      expect(noPassword.body.error).toBe("invalid-password");
+
+      const code = totpCodeForStep(secret, totpStep());
+      const created = await create(client, owner.session, {
+        password: PASSWORD,
+        totpCode: code,
+      });
+      expect(created.status).toBe(201);
+      expect(created.body.token).toMatch(/^pfa_/);
+
+      // The same code, or an older one, is spent.
+      const replay = await create(client, owner.session, {
+        password: PASSWORD,
+        totpCode: code,
+      });
+      expect(replay.status).toBe(401);
+      expect(replay.body.error).toBe("invalid-totp");
+      expect(await tokenRows()).toBe(1);
+    });
+
+    it("lets one of two parallel requests with the same code mint a token", async () => {
+      const client = from();
+      const owner = await account("owner-race-pat@example.invalid", "owner");
+      const secret = generateTotpSecret();
+      await dataSource.query(
+        `UPDATE admin_users SET totp_enabled = true, totp_secret = $2 WHERE id = $1::uuid`,
+        [owner.id, secret],
+      );
+      const code = totpCodeForStep(secret, totpStep());
+      const answers = await Promise.all(
+        [1, 2].map(() =>
+          create(client, owner.session, { password: PASSWORD, totpCode: code }),
+        ),
+      );
+      expect(answers.map((a) => a.status).sort()).toEqual([201, 401]);
+      expect(await tokenRows()).toBe(1);
+    });
+
+    it("answers 429 with the wait after ten wrong passwords, and the right one no longer works", async () => {
+      const viewer = await account("viewer-limit@example.invalid", "viewer");
+      // Another address each time: the per-address throttler would answer a
+      // 429 of its own, and this counts per account.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await create(from(), viewer.session, { password: "guess" }).expect(401);
+      }
+      const limited = await create(from(), viewer.session, {
+        password: PASSWORD,
+      });
+      expect(limited.status).toBe(429);
+      expect(limited.body.error).toBe("rate-limited");
+      expect(limited.body.retryAfterSeconds).toBeGreaterThan(0);
+      expect(await tokenRows()).toBe(0);
+    });
+
+    it("does not need the password to revoke", async () => {
+      const client = from();
+      const viewer = await account("viewer-revoke@example.invalid", "viewer");
+      const created = await create(client, viewer.session, {
+        password: PASSWORD,
+      }).expect(201);
+      await client
+        .delete(`/v1/admin/auth/tokens/${created.body.item.id}`)
+        .set("Authorization", `Bearer ${viewer.session}`)
+        .expect(204);
+    });
+  });
+
   it("refuses an expired token", async () => {
     const client = from();
     const viewer = await account("viewer-expired@example.invalid", "viewer");
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${viewer.session}`)
-      .send({ name: "Short", expiresInDays: 30 })
+      .send({ name: "Short", expiresInDays: 30, password: PASSWORD })
       .expect(201);
     await mcp(client, created.body.token, toolsList).expect(200);
     await dataSource.query(
@@ -619,7 +764,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     const created = await client
       .post("/v1/admin/auth/tokens")
       .set("Authorization", `Bearer ${viewer.session}`)
-      .send({ name: "Script" })
+      .send({ name: "Script", password: PASSWORD })
       .expect(201);
     await mcp(client, created.body.token, toolsList).expect(200);
 

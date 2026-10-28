@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -802,6 +804,94 @@ export class AdminAuthService implements OnModuleInit {
       { id: userId },
       { totpEnabled: false, totpSecret: null, totpLastStep: null },
     );
+  }
+
+  /**
+   * Ask a signed-in account to prove itself again before something that
+   * outlives the session: the password, and with two-factor on a code too.
+   *
+   * Used for a personal access token, which a stolen session could otherwise
+   * mint and keep for a year after the session ended. The refusals are three
+   * answers a form can act on (`invalid-password`, `totp-required`,
+   * `invalid-totp`, all 401) and a 429 from the action limiter, which counts
+   * only attempts that were wrong: a missing code is the form asking again,
+   * not a guess. The code is single-use like at the login, claimed with a
+   * conditional write so two parallel requests cannot spend one step twice;
+   * so a code already used to sign in is refused until the next step.
+   */
+  async confirmIdentity(
+    userId: string,
+    password: string,
+    totpCode: string | undefined,
+    action: string,
+  ): Promise<void> {
+    const limit = await this.loginLimiter.checkAction(action, userId);
+    if (!limit.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          error: "rate-limited",
+          message: `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+          retryAfterSeconds: limit.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        passwordHash: true,
+        totpEnabled: true,
+        totpSecret: true,
+        totpLastStep: true,
+      },
+    });
+    if (!user) throw new NotFoundException("No such account");
+
+    if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure(action, userId);
+      throw new UnauthorizedException({
+        error: "invalid-password",
+        message: "Password is incorrect",
+      });
+    }
+
+    if (user.totpEnabled) {
+      if (!totpCode) {
+        throw new UnauthorizedException({
+          error: "totp-required",
+          message: "Enter a current two-factor code",
+        });
+      }
+      const check = verifyTotp(
+        user.totpSecret ?? "",
+        totpCode,
+        user.totpLastStep ? Number(user.totpLastStep) : null,
+      );
+      const claimed =
+        check.valid &&
+        ((
+          await this.users.update(
+            {
+              id: user.id,
+              totpLastStep: Or(IsNull(), LessThan(String(check.step))),
+            },
+            { totpLastStep: String(check.step) },
+          )
+        ).affected ?? 0) > 0;
+      if (!claimed) {
+        await this.loginLimiter.recordActionFailure(action, userId);
+        throw new UnauthorizedException({
+          error: "invalid-totp",
+          message:
+            "That code did not match or was already used; wait for the next one",
+        });
+      }
+    }
+
+    await this.loginLimiter.recordActionSuccess(action, userId);
   }
 }
 

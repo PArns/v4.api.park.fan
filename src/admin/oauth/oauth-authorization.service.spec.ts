@@ -1,6 +1,9 @@
 import { NotFoundException } from "@nestjs/common";
 import { RedisMock } from "../../../test/mocks/redis.mock";
-import { OAuthAuthorizationService } from "./oauth-authorization.service";
+import {
+  OAuthAuthorizationService,
+  PENDING_REQUEST_TTL_SECONDS,
+} from "./oauth-authorization.service";
 import { OAuthError } from "./oauth-error";
 import { GrantRefusedError } from "../auth/admin-api-token.store";
 import { s256Challenge } from "./pkce.util";
@@ -124,6 +127,45 @@ describe("OAuthAuthorizationService", () => {
         redirectHost: "localhost:33418",
         scope: "admin:read",
       });
+    });
+
+    it("says when the request was started, for the consent page's age and warning", async () => {
+      const { service } = build();
+      const before = Date.now();
+      const outcome = await service.authorize(validRequest, null);
+      const id = new URL(
+        (outcome as { location: string }).location,
+      ).searchParams.get("request")!;
+      const summary = await service.describe(id);
+      const created = Date.parse(summary.createdAt);
+      expect(created).toBeGreaterThanOrEqual(before);
+      expect(created).toBeLessThanOrEqual(Date.now());
+      expect(Date.parse(summary.expiresAt) - created).toBe(
+        PENDING_REQUEST_TTL_SECONDS * 1000,
+      );
+    });
+
+    it("derives the start of a request parked before it was stored", async () => {
+      const { service, redis } = build();
+      const outcome = await service.authorize(validRequest, null);
+      const id = new URL(
+        (outcome as { location: string }).location,
+      ).searchParams.get("request")!;
+      const strings = (
+        redis as unknown as {
+          strings: Map<string, { value: string; expiresAt: number | null }>;
+        }
+      ).strings;
+      for (const entry of strings.values()) {
+        if (!entry.value.includes('"codeChallenge"')) continue;
+        const parked = JSON.parse(entry.value) as Record<string, unknown>;
+        delete parked.createdAt;
+        entry.value = JSON.stringify(parked);
+      }
+      const summary = await service.describe(id);
+      expect(
+        Date.parse(summary.expiresAt) - Date.parse(summary.createdAt),
+      ).toBe(PENDING_REQUEST_TTL_SECONDS * 1000);
     });
 
     it("shows a page, never a redirect, for an unknown client", async () => {

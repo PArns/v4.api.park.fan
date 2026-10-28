@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   NotFoundException,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { AdminApiTokensController } from "./admin-api-tokens.controller";
 import type { AdminPrincipal } from "./admin-principal";
@@ -45,11 +46,13 @@ function build() {
     revoke: jest.fn(async (): Promise<unknown> => null),
   };
   const audit = { record: jest.fn(async () => null) };
+  const auth = { confirmIdentity: jest.fn(async (): Promise<void> => {}) };
   const controller = new AdminApiTokensController(
     tokens as never,
     audit as never,
+    auth as never,
   );
-  return { controller, tokens, audit };
+  return { controller, tokens, audit, auth };
 }
 
 describe("AdminApiTokensController", () => {
@@ -81,6 +84,7 @@ describe("AdminApiTokensController", () => {
     const created = await controller.create(admin("viewer"), {
       name: `  Laptop${String.fromCodePoint(0x202e)} `,
       expiresInDays: 90,
+      password: "a-long-enough-password",
     });
     expect(tokens.createPersonalToken).toHaveBeenCalledWith(SELF, "Laptop", 90);
     expect(created.token).toBe("pfa_secret");
@@ -89,13 +93,45 @@ describe("AdminApiTokensController", () => {
     expect(JSON.stringify(row)).not.toContain("pfa_secret");
   });
 
-  it("refuses a name that is only invisible characters", async () => {
-    const { controller } = build();
+  it("refuses a name that is only invisible characters, without spending an attempt", async () => {
+    const { controller, auth } = build();
     await expect(
       controller.create(admin("viewer"), {
         name: String.fromCodePoint(0x200b, 0x200b),
+        password: "a-long-enough-password",
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+    expect(auth.confirmIdentity).not.toHaveBeenCalled();
+  });
+
+  it("asks the account for its password and code under the token-create action", async () => {
+    const { controller, auth } = build();
+    await controller.create(admin("viewer"), {
+      name: "Laptop",
+      password: "a-long-enough-password",
+      totpCode: "492013",
+    });
+    expect(auth.confirmIdentity).toHaveBeenCalledWith(
+      SELF,
+      "a-long-enough-password",
+      "492013",
+      "token-create",
+    );
+  });
+
+  it("mints and audits nothing when the account does not prove itself", async () => {
+    const { controller, tokens, audit, auth } = build();
+    auth.confirmIdentity.mockRejectedValueOnce(
+      new UnauthorizedException({ error: "invalid-password" }),
+    );
+    await expect(
+      controller.create(admin("viewer"), {
+        name: "Laptop",
+        password: "wrong",
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(tokens.createPersonalToken).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it("revokes the caller's own token first", async () => {

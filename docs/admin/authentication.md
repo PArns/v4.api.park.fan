@@ -153,9 +153,15 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
   account's sessions end: deactivation, password change or reset, second-factor reset, sign out
   everywhere. It sets `admin_users.tokens_revoked_at` first, and every lookup refuses a token created
   before it, so one issued while the sweep ran does not survive it.
-- **Created only with a session.** `GET/POST/DELETE /v1/admin/auth/tokens` and the consent endpoints
-  are `@AdminLegacyAccess(false)` and reachable by sessions only; creating, revoking and granting
-  write audit rows.
+- **Created only with a session, and only with the password.** `GET/POST/DELETE /v1/admin/auth/tokens`
+  and the consent endpoints are `@AdminLegacyAccess(false)` and reachable by sessions only; creating,
+  revoking and granting write audit rows. `POST` asks the account for its password again and, with
+  two-factor on, for a current `totpCode` (`AdminAuthService.confirmIdentity`): a stolen session
+  must not mint a read-only credential that outlives it. The refusals are 401 `invalid-password`,
+  `totp-required` (a missing code, not counted as a failure) and `invalid-totp` (wrong, or its step
+  already spent, e.g. by the login a minute ago), and a 429 `rate-limited` with `retryAfterSeconds`
+  from the action limiter (action `token-create`, 10 failures per account per 15 min). The password
+  is checked before anything is said about the second factor. Revoking needs neither.
 
 ## Environment
 
