@@ -37,7 +37,10 @@ describe("SiteEntityNames.knownIds", () => {
   it("keeps the last copy while the database is away, and has none before the first", async () => {
     parks.mockRejectedValueOnce(new Error("down"));
     await expect(names.knownIds()).resolves.toBeNull();
-    const ids = await names.knownIds();
+    expect(parks).toHaveBeenCalledTimes(1);
+    await names.knownIds();
+    expect(parks).toHaveBeenCalledTimes(1); // a failure backs off for the TTL
+    const ids = await names.knownIds(Date.now() + 11 * 60_000);
     parks.mockRejectedValueOnce(new Error("down again"));
     await expect(names.knownIds(Date.now() + 11 * 60_000)).resolves.toBe(ids);
   });

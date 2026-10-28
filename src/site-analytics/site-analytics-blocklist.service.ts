@@ -40,6 +40,8 @@ export class SiteAnalyticsBlocklist {
       })
       .catch((error: Error) => {
         this.logger.warn(`Block list unavailable: ${error.message}`);
+        // Back off for the TTL; a down database must not stall every request.
+        this.loadedAt = Date.now();
         return this.cached;
       })
       .finally(() => {

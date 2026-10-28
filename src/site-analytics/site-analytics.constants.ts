@@ -195,6 +195,8 @@ export const MAX_HITS_PER_WINDOW = 5000;
  * - `paths`: the site has some 40,000 pages in six languages.
  * - `referrers`: referring sites outside the known search engines, AI
  *   assistants and social networks.
+ * - `pageKeys`: the keys of read posts and news items, which are only
+ *   pattern-checked.
  */
 export const SITE_GUARDS = {
   names: { limit: 300, perAddress: 20 },
@@ -202,6 +204,7 @@ export const SITE_GUARDS = {
   combinations: { limit: 2000, perAddress: 100 },
   paths: { limit: 20000, perAddress: 200 },
   referrers: { limit: 1000, perAddress: 10 },
+  pageKeys: { limit: 5000, perAddress: 200 },
 } as const;
 export type SiteGuard = keyof typeof SITE_GUARDS;
 

@@ -297,6 +297,10 @@ export class SiteAnalyticsRedisMock {
     return this.top("get", key, []) as string | null;
   }
 
+  async decrby(key: string, by: number): Promise<number> {
+    return this.top("incrby", key, [-by]) as number;
+  }
+
   async del(...keys: string[]): Promise<number> {
     let removed = 0;
     for (const key of keys) removed += this.top("del", key, []) as number;

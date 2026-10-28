@@ -5,7 +5,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { Redis } from "ioredis";
+import { ChainableCommander, Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { addIsoDays } from "../common/utils/date.util";
 import { addressBucket } from "../common/utils/request.util";
@@ -398,6 +398,8 @@ export class SiteAnalyticsCollectService
       Math.max(0, Math.min(count, limit - (Number(total) - count)));
     const byAddress = remaining(results[0][1], MAX_HITS_PER_ADDRESS_PER_DAY);
     const byWindow = remaining(results[2][1], MAX_HITS_PER_WINDOW);
+    // Hits the address cap drops must not use up everyone's window budget.
+    if (byAddress < count) await this.redis.decrby(windowKey, count - byAddress);
     countDrop(drops, DROP_REASONS.address, count - byAddress);
     countDrop(
       drops,
@@ -431,13 +433,14 @@ export class SiteAnalyticsCollectService
     let index = 0;
     const next = () => index++;
 
-    /** One admit call per distinct value of a guard. */
-    const admits = new Map<string, number>();
-    const guard = (name: SiteGuard, value: string, scope = "") => {
-      const id = `${name}\u0000${scope}\u0000${value}`;
-      if (admits.has(id)) return id;
+    const queueAdmit = (
+      target: ChainableCommander,
+      name: SiteGuard,
+      value: string,
+      scope = "",
+    ) => {
       const { limit, perAddress } = SITE_GUARDS[name];
-      pipeline.siteAnalyticsAdmit(
+      target.siteAnalyticsAdmit(
         KEYS.guard(name, day, scope),
         KEYS.guard(name, yesterday, scope),
         KEYS.newMembers(this.hash(day, "new", name, capBucket)),
@@ -448,6 +451,35 @@ export class SiteAnalyticsCollectService
         setTtl,
         dayTtl,
       );
+    };
+
+    // The names guard runs first: a combination is only admitted for a name
+    // that passed it, so invented names create no combination keys.
+    const refusedNames = new Set<string>();
+    const eventNames = [
+      ...new Set(
+        hits.flatMap((hit) =>
+          hit.t === "event" && hit.name !== PAGE_READ_EVENT ? [hit.name] : [],
+        ),
+      ),
+    ];
+    if (eventNames.length > 0) {
+      const namePipeline = this.redis.pipeline();
+      for (const name of eventNames) queueAdmit(namePipeline, "names", name);
+      const replies = await namePipeline.exec();
+      eventNames.forEach((name, at) => {
+        // A guard Redis could not answer lets the value through.
+        if (!replies?.[at]?.[0] && replies?.[at]?.[1] === 0)
+          refusedNames.add(name);
+      });
+    }
+
+    /** One admit call per distinct value of a guard. */
+    const admits = new Map<string, number>();
+    const guard = (name: SiteGuard, value: string, scope = "") => {
+      const id = `${name}\u0000${scope}\u0000${value}`;
+      if (admits.has(id)) return id;
+      queueAdmit(pipeline, name, value, scope);
       admits.set(id, next());
       return id;
     };
@@ -483,14 +515,17 @@ export class SiteAnalyticsCollectService
         };
       }
       const read = hit.name === PAGE_READ_EVENT;
+      // A post's or news item's key is open-ended like an event name.
+      const pageKey = read && !hit.entity ? hit.props.key : undefined;
       return {
         pageType,
         path,
         referrer: null,
-        name: read ? null : guard("names", hit.name),
-        combination: read
-          ? null
-          : guard(
+        name: pageKey ? guard("pageKeys", pageKey) : null,
+        combination:
+          read || refusedNames.has(hit.name)
+            ? null
+            : guard(
               "combinations",
               this.staticHash("combo", hit.propsKey, hit.entity ?? "").slice(
                 0,
@@ -657,8 +692,12 @@ export class SiteAnalyticsCollectService
         return;
       }
 
-      if (!passed(checks.name)) {
+      if (refusedNames.has(raw.name)) {
         countDrop(drops, DROP_REASONS.name);
+        return;
+      }
+      if (!passed(checks.name)) {
+        countDrop(drops, DROP_REASONS.read);
         return;
       }
       const read = reads[i];

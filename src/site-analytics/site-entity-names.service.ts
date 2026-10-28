@@ -104,7 +104,7 @@ export class SiteEntityNames {
    * last copy while the database is away, and null before the first one.
    */
   async knownIds(now = Date.now()): Promise<KnownEntityIds | null> {
-    if (this.known && now - this.knownAt < KNOWN_IDS_TTL_MS) return this.known;
+    if (now - this.knownAt < KNOWN_IDS_TTL_MS) return this.known;
     this.loadingKnown ??= Promise.all([
       this.parks.query(`SELECT id FROM parks`),
       this.attractions.query(`SELECT id FROM attractions`),
@@ -119,6 +119,8 @@ export class SiteEntityNames {
       })
       .catch((error: Error) => {
         this.logger.warn(`Park and ride ids unavailable: ${error.message}`);
+        // Back off for the TTL; a down database must not stall every request.
+        this.knownAt = Date.now();
         return this.known;
       })
       .finally(() => {

@@ -339,6 +339,17 @@ describe("SiteAnalyticsCollectService", () => {
     ).resolves.toBe(1);
   });
 
+  it("leaves the window's budget alone for hits the address cap drops", async () => {
+    await collect([pageview()]);
+    const capKey = [...redis.counters.keys()].find((k) =>
+      k.startsWith("site-analytics:cap:"),
+    )!;
+    redis.counters.set(capKey, MAX_HITS_PER_ADDRESS_PER_DAY);
+    const before = redis.counters.get(KEYS.windowHits(WINDOW));
+    await collect([pageview(), pageview()]);
+    expect(redis.counters.get(KEYS.windowHits(WINDOW))).toBe(before);
+  });
+
   it("sheds hits past the window's budget, whoever sends them", async () => {
     redis.counters.set(KEYS.windowHits(WINDOW), MAX_HITS_PER_WINDOW - 1);
     await expect(collect([pageview(), pageview()])).resolves.toBe(1);
@@ -394,6 +405,25 @@ describe("SiteAnalyticsCollectService", () => {
         .events.map((row) => row.dims[0])
         .sort(),
     ).toEqual(["page_read", "search_opened"]);
+  });
+
+  it("admits a combination only for a name the names guard let through", async () => {
+    redis.sets.set(KEYS.guard("names", DAY), filled(SITE_GUARDS.names.limit));
+    await collect([event("invented_name", { type: "park" })]);
+    expect(
+      redis.sets.has(KEYS.guard("combinations", DAY, "invented_name")),
+    ).toBe(false);
+  });
+
+  it("holds the keys of read posts to a per-day guard", async () => {
+    redis.sets.set(
+      KEYS.guard("pageKeys", DAY),
+      filled(SITE_GUARDS.pageKeys.limit),
+    );
+    await expect(
+      collect([event("page_read", { kind: "news", key: "one-too-many" })]),
+    ).resolves.toBe(0);
+    expect(drops()[DROP_REASONS.read]).toBe("1");
   });
 
   it("counts a combination past the day's guard as _overflow, without its entity", async () => {

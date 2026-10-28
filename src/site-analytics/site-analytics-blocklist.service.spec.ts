@@ -45,4 +45,13 @@ describe("SiteAnalyticsBlocklist", () => {
     ).resolves.toBeUndefined();
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it("does not retry a failed load before the TTL", async () => {
+    query.mockRejectedValueOnce(new Error("down"));
+    await blocklist.names();
+    await blocklist.names();
+    expect(query).toHaveBeenCalledTimes(1);
+    await blocklist.names(Date.now() + 61_000);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
 });
