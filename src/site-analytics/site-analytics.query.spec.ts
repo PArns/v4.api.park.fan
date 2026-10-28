@@ -229,12 +229,21 @@ describe("site-analytics.query", () => {
         "user:42",
         "country:",
         "nonsense",
+        "path:/de\u0000x",
       ]),
     ).toEqual([
       { dim: "channel", value: "search" },
       { dim: "path", value: "/de/parks:odd" },
     ]);
     expect(parseFilters(undefined)).toEqual([]);
+  });
+
+  it("refuses a window of year 0000 to today at once, without listing its days", () => {
+    const started = Date.now();
+    expect(() =>
+      siteAnalyticsWindow({ from: "0000-01-01", to: "2026-10-28" }, NOW),
+    ).toThrow(/covers more than/);
+    expect(Date.now() - started).toBeLessThan(100);
   });
 
   it("puts every value into a parameter and only known columns into the SQL", () => {

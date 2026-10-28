@@ -87,6 +87,20 @@ const SEARCH_POSITIONS = ["1", "2", "3", "4-5", "6-10", "11+"];
 const NONE = "(none)";
 
 /**
+ * Refuses a crosstab whose two sides both have more values than a matrix can
+ * hold: every cell would be fetched into Node to be folded there.
+ */
+function refuseTwoWideSides(columns: readonly string[]): void {
+  const wide = (column: string) =>
+    WIDE_COLUMNS.includes(column) || column === "referrer";
+  if (columns.every(wide)) {
+    throw new BadRequestException(
+      "A crosstab needs one side with few values: path, entry, referrer and exit have thousands, so not two of them",
+    );
+  }
+}
+
+/**
  * The read side of the site statistic: the admin's reports. Public so the
  * admin's MCP server can offer the same answers as tools; every method
  * returns exactly the shape its endpoint serves. Every report takes a window
@@ -658,6 +672,7 @@ export class SiteAnalyticsService {
           throw new Error(`Unknown crosstab side ${side}`);
         return side;
       };
+      refuseTwoWideSides([query.row, query.col]);
       const rowExpr = axis(query.row);
       const colExpr = axis(query.col);
       // The day is a bucket, not a column: only a crosstab without one can
@@ -736,6 +751,7 @@ export class SiteAnalyticsService {
           : side === "exit"
             ? "path"
             : columnOf(side as FilterDim);
+      refuseTwoWideSides([query.row, query.col].map(axis));
       const source = await rowsOf(
         this.rolled,
         "pageviews",

@@ -132,7 +132,7 @@ describe("AdminAuditRetentionService.sweepAddresses", () => {
       "203.0.113.0/24",
       "198.51.100.0/24",
       "2001:db8:1::/48",
-      "2001:0db8:85a3::/48",
+      "2001:db8:85a3::/48",
     ]);
   });
 

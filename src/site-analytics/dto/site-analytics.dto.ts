@@ -203,7 +203,7 @@ export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {
     example: "prop:surface",
     description:
       "`page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or " +
-      "`prop:<key>`. `day` steps by the window's interval.",
+      "`prop:<key>`. `day` steps by the window's interval. `path` may not be on both sides.",
   })
   @Matches(CROSSTAB_AXIS_PATTERN)
   row: string;
@@ -220,7 +220,8 @@ export class SiteTrafficCrosstabQueryDto extends SiteAnalyticsQueryDto {
     description:
       "metric=pageviews: a page dimension or `day`. metric=visits also entry, referrer, " +
       "channel and exit; the page dimensions are then the first page's, or the " +
-      "last page's with `exit` on a side. `day` steps by the window's interval.",
+      "last page's with `exit` on a side. `day` steps by the window's interval. Two of path, entry, " +
+      "referrer and exit (thousands of values each) on both sides are refused with 400.",
   })
   @IsIn(TRAFFIC_CROSSTAB_SIDES)
   row: string;

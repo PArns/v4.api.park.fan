@@ -1198,6 +1198,31 @@ describe("SiteAnalyticsService", () => {
   });
 
   describe("trafficCrosstab", () => {
+    it("refuses a crosstab with two wide sides before fetching any cell", async () => {
+      await expect(
+        service.trafficCrosstab(
+          { days: 7, row: "path", col: "referrer", metric: "visits" },
+          NOW,
+        ),
+      ).rejects.toThrow(/not two of them/);
+      await expect(
+        service.trafficCrosstab(
+          { days: 7, row: "entry", col: "exit", metric: "visits" },
+          NOW,
+        ),
+      ).rejects.toThrow(/not two of them/);
+      await expect(
+        service.crosstab(
+          "tab_changed",
+          { days: 7, row: "path", col: "path" },
+          NOW,
+        ),
+      ).rejects.toThrow(/not two of them/);
+      expect(calls.filter(([sql]) => sql.includes("GROUP BY 1, 2"))).toEqual(
+        [],
+      );
+    });
+
     it("counts page views by two page dimensions, and folds days into weeks", async () => {
       routes = [
         [

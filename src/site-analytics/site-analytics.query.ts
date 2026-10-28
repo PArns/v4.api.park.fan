@@ -17,10 +17,12 @@ import {
 } from "./site-analytics.constants";
 import { HourlyReach, hourlyHorizon } from "./site-analytics.retention";
 
-/** `filter=<dim>:<value>`, as the admin sends it. */
+/**
+ * `filter=<dim>:<value>`, as the admin sends it. A NUL byte is refused: the
+ * database cannot store it, and the statement would fail as a 500.
+ */
 export const FILTER_PATTERN = new RegExp(
-  `^(${FILTER_DIMS.join("|")}):.{1,820}$`,
-  "s",
+  `^(${FILTER_DIMS.join("|")}):[^\\u0000]{1,820}$`,
 );
 
 /**
@@ -137,7 +139,8 @@ export function siteAnalyticsWindow(
     ({ from, to } = query as { from: string; to: string });
     if (from > to) throw new BadRequestException("from is after to");
     if (to > today) throw new BadRequestException("to is after today");
-    if (daysBetween(from, to).length > MAX_RANGE_DAYS) {
+    // Arithmetic first: building the list for year 0000 blocks the event loop.
+    if (dayCount(from, to) > MAX_RANGE_DAYS) {
       throw new BadRequestException(
         `from–to covers more than ${MAX_RANGE_DAYS} days`,
       );
@@ -294,6 +297,11 @@ export function refuseFiltersBeyond(
         ? "; the visit dimensions can only filter visits"
         : ""),
   );
+}
+
+/** How many days lie from `from` to `to`, both included. */
+function dayCount(from: string, to: string): number {
+  return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
 }
 
 /** Every day from `from` to `to`, both included. */

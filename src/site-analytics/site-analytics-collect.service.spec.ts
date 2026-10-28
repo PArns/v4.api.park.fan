@@ -607,7 +607,7 @@ describe("SiteAnalyticsCollectService", () => {
     expect(visitKeys()).toHaveLength(2);
   });
 
-  it("lets every reader key end within about a day: the visitors an hour after their day", async () => {
+  it("lets every reader key end within about a day: the visitors a day and an hour after their day", async () => {
     await collect([pageview(), event("page_read", { kind: "news", key: "p" })]);
     const ttlOf = (prefix: string) =>
       [...redis.ttls.entries()].find(([key]) => key.startsWith(prefix))?.[1];
@@ -618,8 +618,12 @@ describe("SiteAnalyticsCollectService", () => {
     expect(ttlOf("site-analytics:read-page:")).toBe(toMidnight + 60);
     expect(ttlOf("site-analytics:read-addr:")).toBe(toMidnight + 60);
     expect(ttlOf("site-analytics:new:")).toBe(toMidnight + 60);
-    expect(ttlOf("site-analytics:uv:2026-10-28:all")).toBe(toMidnight + 3600);
-    expect(ttlOf("site-analytics:uvh:2026102821:all")).toBe(toMidnight + 3600);
+    expect(ttlOf("site-analytics:uv:2026-10-28:all")).toBe(
+      toMidnight + 25 * 3600,
+    );
+    expect(ttlOf("site-analytics:uvh:2026102821:all")).toBe(
+      toMidnight + 25 * 3600,
+    );
     expect(ttlOf("site-analytics:rt:uv:202610282116:all")).toBe(2100);
     expect(ttlOf("site-analytics:rt:pv:202610282116:all")).toBe(2100);
     expect(ttlOf("site-analytics:live:pages:202610282116:all")).toBe(2100);
@@ -728,7 +732,7 @@ describe("SiteAnalyticsCollectService", () => {
       // 21:16:30 → 2 h 43 min 30 s to midnight, and the hour the snapshot runs in.
       const toMidnight = 2 * 3600 + 43 * 60 + 30;
       for (const key of [...dimKeys(), KEYS.visitorDimIndex(DAY)]) {
-        expect(redis.ttls.get(key)).toBe(toMidnight + 3600);
+        expect(redis.ttls.get(key)).toBe(toMidnight + 25 * 3600);
       }
     });
 
