@@ -11,7 +11,6 @@ import {
   Param,
   Post,
   Query,
-  UnauthorizedException,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -24,7 +23,7 @@ import {
 import { Throttle } from "@nestjs/throttler";
 import { AdminAuthGuard } from "./admin-auth.guard";
 import { AdminLegacyAccess, CurrentAdmin } from "./admin-auth.decorators";
-import type { AdminPrincipal } from "./admin-principal";
+import { requireAccount, type AdminPrincipal } from "./admin-principal";
 import { AdminApiTokenStore } from "./admin-api-token.store";
 import { AdminAuditService } from "./admin-audit.service";
 import { AdminAuthService } from "./admin-auth.service";
@@ -175,12 +174,4 @@ export class AdminApiTokensController {
       },
     });
   }
-}
-
-/** The account behind a session; the guard has already refused the shared pass. */
-function requireAccount(admin: AdminPrincipal): string {
-  if (!admin.userId) {
-    throw new UnauthorizedException("No account behind this session");
-  }
-  return admin.userId;
 }

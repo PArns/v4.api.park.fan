@@ -1,3 +1,4 @@
+import { UnauthorizedException } from "@nestjs/common";
 import type { AdminRole } from "./entities/admin-user.entity";
 import type { AdminApiTokenKind } from "./admin-api-token.constants";
 
@@ -44,4 +45,12 @@ export interface RequestWithAdmin {
   method: string;
   originalUrl?: string;
   url?: string;
+}
+
+/** The account behind a session; the guard has already refused the shared pass. */
+export function requireAccount(admin: AdminPrincipal): string {
+  if (!admin.userId) {
+    throw new UnauthorizedException("No account behind this session");
+  }
+  return admin.userId;
 }

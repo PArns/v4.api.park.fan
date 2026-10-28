@@ -1,11 +1,11 @@
 import {
-  MAX_ADMIN_WINDOW_DAYS,
   MAX_COMPARABLE_DAYS,
   MAX_RANGE_DAYS,
   SITE_LOCALES,
 } from "../../site-analytics/site-analytics.constants";
 import { DAY_PATTERN } from "../../site-analytics/site-analytics.query";
 import { z } from "zod";
+import { siteWindowInput } from "./site-analytics.inputs";
 import { GSC_DEVICES } from "../../search-console/search-console.constants";
 
 /**
@@ -45,15 +45,7 @@ export const GSC_CAVEATS =
   "Paths are lower case with the language first (/de/parks/…) as in the site's own traffic tools.";
 
 export const gscWindowInput = {
-  days: z
-    .number()
-    .int()
-    .min(1)
-    .max(MAX_ADMIN_WINDOW_DAYS)
-    .optional()
-    .describe(
-      "UTC days back from today, today included; 30 when neither days nor from/to is given. Not with from/to",
-    ),
+  days: siteWindowInput.days,
   from: z
     .string()
     .regex(DAY_PATTERN)

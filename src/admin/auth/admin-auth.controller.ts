@@ -30,7 +30,11 @@ import {
   AdminPublic,
   CurrentAdmin,
 } from "./admin-auth.decorators";
-import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
+import {
+  requireAccount,
+  type AdminPrincipal,
+  type RequestWithAdmin,
+} from "./admin-principal";
 import {
   AdminChangePasswordDto,
   AdminCreateUserDto,
@@ -352,9 +356,7 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpBeginDto,
   ) {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    return this.auth.beginTotpEnrolment(admin.userId, body.password);
+    return this.auth.beginTotpEnrolment(requireAccount(admin), body.password);
   }
 
   @Post("totp/confirm")
@@ -365,9 +367,8 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpConfirmDto,
   ): Promise<void> {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    await this.auth.confirmTotpEnrolment(admin.userId, body.code);
+    const userId = requireAccount(admin);
+    await this.auth.confirmTotpEnrolment(userId, body.code);
     await this.audit.record({
       actor: admin,
       action: "auth.totp.enable",
@@ -388,9 +389,8 @@ export class AdminAuthController {
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() body: AdminTotpDisableDto,
   ): Promise<void> {
-    if (!admin.userId)
-      throw new UnauthorizedException("No account behind this session");
-    await this.auth.disableTotp(admin.userId, body.password, body.code);
+    const userId = requireAccount(admin);
+    await this.auth.disableTotp(userId, body.password, body.code);
     await this.audit.record({
       actor: admin,
       action: "auth.totp.disable",
