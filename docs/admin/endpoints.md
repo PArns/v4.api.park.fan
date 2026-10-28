@@ -129,6 +129,20 @@ view takes `locale` only. Shapes, filters and the measured times:
 | GET | `analytics/blocked-events` | viewer | the event block list |
 | PUT, DELETE | `analytics/blocked-events/:name` | editor | blocks or unblocks an event name; the collector drops it within a minute |
 
+## Search Console (`admin/search-console`)
+
+Google Search Console's numbers, imported nightly: every report takes the site statistic's window
+(`days`, or `from` and `to`) and `locale`. Shapes, the import and the setup:
+[Search Console](../frontend/search-console.md), [setup](search-console-setup.md).
+
+| Method | Path | Role | Does |
+| --- | --- | --- | --- |
+| GET | `search-console/status` | viewer | `{ configured, siteUrl, lastImportAt, lastError, coverage, rows }` |
+| POST | `search-console/import` | editor | job `search-console` / `import`, `202 { queued: true }`, audited; `409` when not configured |
+| GET | `search-console/queries?page=&country=&device=&limit=` | viewer | the queries the site was found with, most clicks first, with the change against the window before |
+| GET | `search-console/pages?query=&country=&device=&limit=` | viewer | the pages, with the site statistic's own visits from search (`site`) |
+| GET | `search-console/series?interval=&page=&query=&country=&device=` | viewer | clicks, impressions, ctr and position per day, week or month |
+
 ## Merges and retirement
 
 | Method | Path | Role | Does |

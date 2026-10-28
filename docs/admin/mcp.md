@@ -2,7 +2,7 @@
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
-site statistic and its SEO reports, system and ML health, job queues, data-quality findings,
+site statistic and its SEO reports, Google Search Console, system and ML health, job queues, data-quality findings,
 duplicate and retirement candidates, outage statistics and the audit log. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
@@ -133,6 +133,10 @@ against these rules.
 | `seo_trends` | landing pages rising and falling against the window before | `SiteAnalyticsSeoService.trends` |
 | `seo_not_found` | paths that showed the not-found page, with the referrers of the visits that entered on them | `SiteAnalyticsSeoService.notFound` |
 | `seo_uncovered` | parks or rides no search visit entered on | `SiteAnalyticsSeoService.uncovered` |
+| `gsc_status` | whether Google Search Console is connected, when it last imported, the days covered | `SearchConsoleService.status` |
+| `gsc_queries` | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device | `SearchConsoleService.queries` |
+| `gsc_pages` | the pages found in Google, with the site's own visits, bounce and visit length from search | `SearchConsoleService.pages` |
+| `gsc_series` | clicks, impressions, ctr and position per day, week or month | `SearchConsoleService.series` |
 
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`

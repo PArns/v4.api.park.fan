@@ -48,6 +48,7 @@ One line each in [CLAUDE.md](../CLAUDE.md#applies-to-every-change); every rule h
 - [data-recalculation](analytics/data-recalculation.md) — What to rerun after a calculation change: backfill-stats, baseline recompute, cache flush, in order
 - [ride-downtime/](analytics/ride-downtime/README.md) — Ride downtime index: what is answered vs refused, what is built and where, links to the five sub-pages
 - [site statistic](frontend/site-analytics.md) — park.fan's own cookieless page views, visits and events: the collect endpoint, guards, insert-only storage, admin and SEO reports, measurements
+- [Search Console](frontend/search-console.md) — Google Search Console in the admin: the nightly import, insert-only batches, the queries/pages/series reports joined with the site statistic, MCP tools
 
 ## Machine learning
 
@@ -82,6 +83,7 @@ Start at the first page: which model serves which surface today.
 - [authentication](admin/authentication.md) — Admin accounts, Redis sessions, scrypt, TOTP, roles, login limits, Turnstile, legacy pass
 - [curation](admin/curation.md) — Curated columns on parks and attractions, resolvers, editor descriptors, publish, undo, merges
 - [mcp](admin/mcp.md) — The admin MCP server: connecting Claude, OAuth 2.1 flow, API tokens, tools, security, edge rules
+- [search-console-setup](admin/search-console-setup.md) — Connecting Google Search Console: service account, property access, the GSC_ variables, first import, error table
 
 ## Development
 
