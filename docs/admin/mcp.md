@@ -176,8 +176,9 @@ What was checked when this was built, and where it is enforced:
   redirect host, and https redirects are limited to `OAUTH_REDIRECT_HOSTS`. A grant obtained through
   a phished approval lands in the approving admin's own claude.ai session or on their own machine.
 - **DCR abuse:** 10 registrations per address and hour (Redis) plus 10 a minute (throttler), names
-  stripped of control and bidi characters and cut at 100, at most 10 redirect URIs, unused
-  registrations deleted after a day, new ones refused while 500 sit unused.
+  stripped of control and bidi characters and cut at 100, at most 10 redirect URIs. Registrations
+  never used for a grant are deleted after a week, and beyond 1000 of them the oldest give way;
+  refusing new ones instead would let a few dozen addresses close registration for everybody.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
   consent endpoints above; the tools a role may not use are not even listed, and are refused again
   at call time.

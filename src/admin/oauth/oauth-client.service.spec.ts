@@ -14,6 +14,7 @@ function build(unused = 0) {
       return stored;
     }),
     findOne: jest.fn(async () => null),
+    find: jest.fn(async () => [{ clientId: "pfc_oldest" }]),
     update: jest.fn(async () => ({ affected: 1 })),
   };
   const service = new OAuthClientService(
@@ -135,18 +136,18 @@ describe("OAuthClientService.register", () => {
     await expect(service.register(body, "203.0.113.9")).resolves.toBeDefined();
   });
 
-  it("pauses when too many registrations sit unused", async () => {
-    const { service } = build(500);
-    const error = await rejection(
+  it("makes room by deleting the oldest unused registrations, never by refusing", async () => {
+    const { service, repository } = build(1000);
+    await expect(
       service.register({ redirect_uris: ["http://localhost/cb"] }, null),
+    ).resolves.toBeDefined();
+    expect(repository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ order: { createdAt: "ASC" }, take: 1 }),
     );
-    expect(error).toMatchObject({
-      code: "temporarily_unavailable",
-      status: 429,
-    });
+    expect(repository.delete).toHaveBeenCalledTimes(2);
   });
 
-  it("deletes day-old registrations nobody used before counting", async () => {
+  it("deletes stale registrations nobody used before counting", async () => {
     const { service, repository } = build();
     await service.register({ redirect_uris: ["http://localhost/cb"] }, null);
     expect(repository.delete).toHaveBeenCalledTimes(1);

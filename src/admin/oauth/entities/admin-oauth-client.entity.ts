@@ -7,7 +7,7 @@ import { Column, CreateDateColumn, Entity, PrimaryColumn } from "typeorm";
  *
  * Registration is anonymous by design, so a row proves nothing about who made
  * it; the consent page is where a person decides. Rows never used for a grant
- * are deleted after a day.
+ * are deleted after a week, the oldest earlier when more than 1000 wait.
  */
 @Entity("admin_oauth_clients")
 export class AdminOAuthClient {

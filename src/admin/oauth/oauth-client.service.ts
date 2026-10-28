@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Redis } from "ioredis";
-import { IsNull, LessThan, Repository } from "typeorm";
+import { In, IsNull, LessThan, Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
@@ -18,11 +18,19 @@ import { stripInvisibleCharacters } from "../../common/utils/visible-text.util";
 /** Registrations one address may make per hour. Claude Code makes one per login. */
 const REGISTRATIONS_PER_HOUR = 10;
 
-/** Registrations nobody has used yet, across all callers, before new ones wait. */
-const MAX_UNUSED_CLIENTS = 500;
+/**
+ * Registrations nobody has used for a grant yet, across all callers. Beyond
+ * this the oldest give way: refusing new ones instead would let anybody with
+ * a few dozen addresses close registration for everybody.
+ */
+export const MAX_UNUSED_CLIENTS = 1000;
 
-/** A registration never used for a grant is deleted after this long. */
-const UNUSED_CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * A registration never used for a grant is deleted after this long. Generous,
+ * because a client keeps its id: one deleted too early meets an "unknown
+ * client" page until it registers again.
+ */
+const UNUSED_CLIENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const MAX_REDIRECT_URIS = 10;
 const MAX_CLIENT_NAME_LENGTH = 100;
@@ -95,20 +103,7 @@ export class OAuthClientService {
       lastUsedAt: IsNull(),
       createdAt: LessThan(new Date(Date.now() - UNUSED_CLIENT_TTL_MS)),
     });
-    const unused = await this.clients.count({
-      where: { lastUsedAt: IsNull() },
-    });
-    if (unused >= MAX_UNUSED_CLIENTS) {
-      this.logger.warn(
-        `OAuth registration refused: ${unused} registrations are still unused`,
-      );
-      throw new OAuthError(
-        "temporarily_unavailable",
-        "Registration is paused; try again later",
-        429,
-        60 * 60,
-      );
-    }
+    await this.makeRoom();
 
     const saved = await this.clients.save(
       this.clients.create({
@@ -131,6 +126,24 @@ export class OAuthClientService {
       token_endpoint_auth_method: "none",
       scope: DEFAULT_ADMIN_TOKEN_SCOPE,
     };
+  }
+
+  /** Deletes the oldest unused registrations beyond `MAX_UNUSED_CLIENTS - 1`. */
+  private async makeRoom(): Promise<void> {
+    const unused = await this.clients.count({
+      where: { lastUsedAt: IsNull() },
+    });
+    if (unused < MAX_UNUSED_CLIENTS) return;
+    const oldest = await this.clients.find({
+      where: { lastUsedAt: IsNull() },
+      order: { createdAt: "ASC" },
+      take: unused - MAX_UNUSED_CLIENTS + 1,
+      select: { clientId: true },
+    });
+    await this.clients.delete({ clientId: In(oldest.map((c) => c.clientId)) });
+    this.logger.warn(
+      `${oldest.length} unused OAuth registrations deleted to make room`,
+    );
   }
 
   async find(clientId: unknown): Promise<AdminOAuthClient | null> {
