@@ -40,9 +40,9 @@ The MCP server, the OAuth endpoints and how a client connects: [admin MCP](mcp.m
 | Method | Path | Role | Does |
 | --- | --- | --- | --- |
 | GET | `auth/tokens` | viewer | `{ items }`: the account's active PATs (`kind: "pat"`) and OAuth grants (`kind: "oauth"`, `name` null, `clientName` set); `?userId=` lists another account's, owner only |
-| POST | `auth/tokens` | viewer | `{ name, expiresInDays: 30 \| 90 \| 365 \| null }` → `201 { token, item }`; the `pfa_…` token appears in this answer and nowhere else; audited `auth.token.create` |
+| POST | `auth/tokens` | viewer | `{ name, expiresInDays: 30 \| 90 \| 365 \| null, password, totpCode? }` → `201 { token, item }`; the `pfa_…` token appears in this answer and nowhere else; audited `auth.token.create`. `401` `{ error: "invalid-password" \| "totp-required" \| "invalid-totp" }`, `429` `{ error: "rate-limited", retryAfterSeconds }` ([authentication](authentication.md#api-tokens-and-oauth-grants)) |
 | DELETE | `auth/tokens/:id` | viewer | `204`, revokes a PAT or a whole grant; another account's, owner only (`404` for anybody else); audited `auth.token.revoke` |
-| GET | `oauth/requests/:id` | viewer | `{ id, clientId, clientName, redirectHost, scope, expiresAt }` for the consent page; `404` when unknown, expired or answered |
+| GET | `oauth/requests/:id` | viewer | `{ id, clientId, clientName, redirectHost, scope, createdAt, expiresAt }` for the consent page (`createdAt` is when the client started the request, for its age); `404` when unknown, expired or answered |
 | POST | `oauth/requests/:id/approve` | viewer | `{ redirectTo }`: the client's registered redirect URI with `code`, `state` and `iss`; audited `auth.oauth.grant`; `404` without side effects when used or expired |
 | POST | `oauth/requests/:id/deny` | viewer | `{ redirectTo }` with `error=access_denied`; `404` the same way |
 
@@ -128,6 +128,20 @@ view takes `locale` only. Shapes, filters and the measured times:
 | GET | `analytics/seo/landing-pages?channel=&limit=`, `analytics/seo/trends?channel=` (at most 180 days), `analytics/seo/not-found`, `analytics/seo/uncovered?kind=` | viewer | landing pages, rising and falling ones, broken paths, parks or rides no search visit entered on |
 | GET | `analytics/blocked-events` | viewer | the event block list |
 | PUT, DELETE | `analytics/blocked-events/:name` | editor | blocks or unblocks an event name; the collector drops it within a minute |
+
+## Search Console (`admin/search-console`)
+
+Google Search Console's numbers, imported nightly: every report takes the site statistic's window
+(`days`, or `from` and `to`) and `locale`. Shapes, the import and the setup:
+[Search Console](../frontend/search-console.md), [setup](search-console-setup.md).
+
+| Method | Path | Role | Does |
+| --- | --- | --- | --- |
+| GET | `search-console/status` | viewer | `{ configured, siteUrl, lastImportAt, lastError, coverage, rows }` |
+| POST | `search-console/import` | editor | job `search-console` / `import`, `202 { queued: true }`, audited; `409` when not configured |
+| GET | `search-console/queries?page=&country=&device=&limit=` | viewer | the queries the site was found with, most clicks first, with the change against the window before |
+| GET | `search-console/pages?query=&country=&device=&limit=` | viewer | the pages, with the site statistic's own visits from search (`site`) |
+| GET | `search-console/series?interval=&page=&query=&country=&device=` | viewer | clicks, impressions, ctr and position per day, week or month |
 
 ## Merges and retirement
 

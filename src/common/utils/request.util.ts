@@ -90,6 +90,29 @@ export function addressBucket(
 }
 
 /**
+ * An address cut to its network: an IPv4 address to its /24, an IPv6 address to
+ * its /48 (what a provider delegates to one customer), null for nothing or for
+ * text that is no address.
+ *
+ * The only form of a visitor's or an operator's address that may reach a log
+ * line or a stored column (docs/rules/no-address-in-logs.md). The question it
+ * still answers is "did this come from somewhere new", not "where was this
+ * person"; a /24 stops a log from being a movement history.
+ */
+export function truncateIp(ip: string | null | undefined): string | null {
+  if (!ip) return null;
+  const clean = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  if (isIP(clean) === 4) {
+    const parts = clean.split(".");
+    return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+  }
+  if (isIP(clean) === 6) {
+    return `${expandIpv6(clean).slice(0, 3).join(":")}::/48`;
+  }
+  return null;
+}
+
+/**
  * The eight hextets of an IPv6 address, with `::` written out.
  *
  * Needed because almost every real address is compressed, and slicing the

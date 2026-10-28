@@ -78,4 +78,13 @@ describe("redactUrl", () => {
       "/V1/ADMIN/OAUTH/REQUESTS/***/deny?pass=***",
     );
   });
+
+  it("hides an address named in the query string", () => {
+    expect(redactUrl("/v1/location/nearby?ip=203.0.113.47&radius=50")).toBe(
+      "/v1/location/nearby?ip=***&radius=50",
+    );
+    expect(redactUrl("/v1/favorites?IP=2001:db8::1")).toBe(
+      "/v1/favorites?IP=***",
+    );
+  });
 });

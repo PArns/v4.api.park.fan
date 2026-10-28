@@ -25,6 +25,10 @@ import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
 import { seoNotFoundTool } from "./seo-not-found.tool";
 import { seoUncoveredTool } from "./seo-uncovered.tool";
+import { gscStatusTool } from "./gsc-status.tool";
+import { gscQueriesTool } from "./gsc-queries.tool";
+import { gscPagesTool } from "./gsc-pages.tool";
+import { gscSeriesTool } from "./gsc-series.tool";
 
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
@@ -58,4 +62,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   seoTrendsTool,
   seoNotFoundTool,
   seoUncoveredTool,
+  gscStatusTool,
+  gscQueriesTool,
+  gscPagesTool,
+  gscSeriesTool,
 ];

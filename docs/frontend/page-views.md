@@ -104,8 +104,8 @@ minute after its UTC day ends. The counters go out in the statistic's one guard 
 process makes a random secret at start-up (and logs a warning): addresses stay out of Redis all the
 same, only a restart or a second instance counts a reader again. With Redis down the caps are off and
 the reads wait in the instance's memory, which reaches Postgres within a minute
-([Redis away](site-analytics.md#storage-insert-only-no-dead-tuples)). `LoggingInterceptor` leaves the
-address out of its line for `/v1/page-views` and `/v1/analytics/collect`.
+([Redis away](site-analytics.md#storage-insert-only-no-dead-tuples)). No log line of this API
+carries an address ([the rule](../rules/no-address-in-logs.md)).
 
 The browser sends the read straight to api.park.fan, never through the frontend's relay, so the
 address and the User-Agent are the reader's own. The frontend's beacon sends each page once per tab,
