@@ -216,8 +216,8 @@ The all-park population reads ~0.9 higher (8.11 vs 7.04 at d1) because it adds U
 with longer queues. The query is `results/20261009-baselines-v2/sanity_33parks.sql` (33 park ids
 inlined, container command in its header); its output CSV is not committed, so re-run it to check.
 
-## Open questions
+## Open work
 
-- The non-autumn origin-constant pass (above) and a second autumn for the seasonal TFT gate.
-- A `mae_by_weekday` split ([harness.md](harness.md#confounds-every-reader-needs)).
-- A re-run on the heartbeat-free target, to replace the conservative bands.
+PAR-1142: the non-autumn origin-constant pass for the seasonal TFT gate, a `mae_by_weekday` split,
+and a re-run on the heartbeat-free target. Until then every band on this page is the conservative
+end of the old target.

@@ -1,7 +1,7 @@
 # Granite PatchTST-FM-r2, Granite TTM-r2 and TabPFN-TS in ml-bench (PAR-1067)
 
-Three more candidates, implemented and tested but **not run yet** — they wait for the combined run
-in [running.md](../ml-bench/running.md#queued-the-combined-par-1063--1064--1067-run) (image extra
+Three more candidates, implemented and tested but **not run yet** — they wait for the combined run,
+PAR-1141 (arms in [running.md](../ml-bench/running.md#the-foundation-model-arms-par-1063--1064--1067); image extra
 `requirements-par1067.txt`, which includes `requirements-par1063.txt`, so they pair with
 `chronos2`, `chronos2_ft`, `chronos2_lora` and `timesfm25` inside one run). Open it before running
 them or quoting their licences. Shared adapter: [README.md](README.md).

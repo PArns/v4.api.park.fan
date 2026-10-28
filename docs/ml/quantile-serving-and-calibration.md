@@ -259,14 +259,10 @@ the typical-day-peak baseline, the P50 baseline when that is missing, and answer
 baseline, only when it is > 0. Rules: [Unified crowd levels](../rules/crowd-levels.md),
 [Crowd Levels](../analytics/crowd-levels.md).
 
-## Open
+## Known limits
 
-- The `h2-6` bucket never gets a factor, and the long buckets stay raw: `prediction_accuracy`
-  keeps only the last writer per slot. A lead-preserving source (`prediction_lead_snapshots`, the
-  forward archive's `park_hourly` origins) would fix both; not built.
-- The median's own bias at long lead — at ≥ 12 h it runs −37.5 min on mid and −63.4 min on busy
-  slots (PAR-1083) — is a level fix, not a band one.
-- The daily band seam at day 60 (PAR-167), above.
-- The TFT's StudentT head could produce a model band; persisting it is not built.
-- Monotonicity was verified by unit tests only: on a sample of real `/predict` rows, check that
-  q0.8 is never below the shown wait and `q0.95 − q0.5` is never negative.
+- **Known limit:** the `h2-6` bucket never gets a factor and the longer buckets stay raw, because
+  `prediction_accuracy` keeps only the last writer per slot; the lead-preserving source is PAR-658.
+- **Known limit:** at ≥ 12 h lead the median itself runs −37.5 min on mid and −63.4 min on busy
+  slots, a level error the clamped factor no longer hides (PAR-1140).
+- The daily band seam at day 60 is PAR-167, above.

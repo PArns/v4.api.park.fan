@@ -17,8 +17,8 @@ All adapters live in `ml-bench/mlbench/models/foundation.py` (`VARIANTS`), tests
 | TiRex-2, Toto 2.0 (PAR-853) | `tirex2`, `tirex2_grid`, `toto2`, `toto2_nocov`, `toto2_grid` | Apache-2.0 | Measured: drop for serving, keep TiRex-2 as a plug-in | [tirex-toto.md](tirex-toto.md) |
 | Granite PatchTST-FM-r2, TTM-r2, TabPFN-TS (PAR-1067) | `patchtst_fm`, `ttm_r2`, `ttm_r2_ft`, `tabpfn_ts` | Granite servable; TabPFN-TS benchmark-only | Implemented and tested, not run | [granite-tabpfn.md](granite-tabpfn.md) |
 
-The queued combined run (PAR-1063 / 1064 / 1067) is in
-[running.md](../ml-bench/running.md#queued-the-combined-par-1063--1064--1067-run).
+The combined run of the PAR-1063 / 1064 / 1067 arms is PAR-1141; what those arms need is in
+[running.md](../ml-bench/running.md#the-foundation-model-arms-par-1063--1064--1067).
 
 ## Shared adapter
 

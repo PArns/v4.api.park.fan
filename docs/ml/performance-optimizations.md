@@ -55,7 +55,7 @@ more often. The holidays, schedules and weather caches check the TTL on read but
 their keys carry date ranges and park sets; when no cache evicted, the 2 gunicorn workers grew to
 ~15 GiB over ~25 h. `gunicorn.conf.py` recycles a
 worker after `ML_MAX_REQUESTS` (1000, jitter 200) requests, which caps that growth; bounding the
-remaining caches is the real fix.
+remaining caches is the real fix (PAR-1149).
 
 ## Connection pool
 

@@ -233,11 +233,7 @@ previous model before reading the gate's verdict.
   rare flags; not tried.
 - Learning rate 0.03 and caps of 1000 / 2000 trees: under-fitting, table above.
 
-## Open
+## Open work
 
-- `TRAIN_MAX_ROWS` A/B never run.
-- The gate reads validation MAE only; whether it should read `holdoutMetrics.origin_leads` is an
-  owner decision.
-- `CATBOOST_CURATED_RIDE_TYPE` waits for curated coverage of the headliners
-  ([CatBoost](catboost.md#ride-type-flags-par-1045)).
-- Whether PAR-1051 moved the holiday importances has not been recorded here yet.
+PAR-1117: the `TRAIN_MAX_ROWS` A/B, whether the gate reads `holdoutMetrics.origin_leads`, the
+`CATBOOST_CURATED_RIDE_TYPE` flip, and the holiday importances after PAR-1051.

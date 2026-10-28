@@ -22,7 +22,7 @@ The service never asks about a ride the caller already resolved to `OPERATING` (
 badge it sits under), nor inside a curated works period (`isCuratedOutOfService()`). It is a clock time,
 never an elapsed counter, and the frontend marks it `data-nosnippet`.
 
-Proposed in the plan and **not built**: `outage.minutesToday` and a park-level `ridesDownNow`.
+Open work: `outage.minutesToday` and a park-level `ridesDownNow`, PAR-1144.
 
 ## Park regimes
 

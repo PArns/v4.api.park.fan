@@ -159,47 +159,17 @@ reaches the window (`--block-estimate` before the first block). The cache's `met
 cheap runtime check: score `example_level_h5` alongside and compare its slot count per lead with
 the built-in `lvlh5_naive`.
 
-## Queued: the combined PAR-1063 / 1064 / 1067 run
+## The foundation-model arms (PAR-1063 / 1064 / 1067)
 
-Not run yet. One run with every new arm next to `chronos2` and `driver_level`, so every margin is
-paired inside the run; `driver_level` is a `--model` (not only `--pair-with`) because the
-daily-level cells compare every `lvl_*` source of the run. `tabpfn_ts` is benchmark-only and needs
-`HF_TOKEN` and `TABPFN_TOKEN` exported in the shell (`read -s`), never written to a file.
+- `tabpfn_ts` is benchmark-only and needs `HF_TOKEN` and `TABPFN_TOKEN` exported in the shell
+  (`read -s`), never written to a file.
+- `driver_level` goes in as a `--model`, not only `--pair-with`, when a run reports daily-level
+  cells: they compare every `lvl_*` source of the run.
+- The fine-tunes (`chronos2_ft`, `chronos2_lora`, `ttm_r2_ft`) refit once per 28 days of origin
+  date; a per-origin refit is a subclass with `finetune_every_days = 1`, not the default, because
+  it would no longer pair on cadence with the others.
+- Every run records `licences` per arm in `run-*.json`; a step that turns a run into an offline
+  verdict must call `mlbench.licences.refuse_benchmark_only` on the model names it writes.
 
-```bash
-cd ~/claude-worktrees/par-1067
-export MLBENCH_REPO=$PWD MLBENCH_CODE=$PWD MLBENCH_IMAGE=ml-bench:par-1067
-export HF_TOKEN=... TABPFN_TOKEN=...
-docker build -t ml-bench:par-1067 --build-arg GIT_SHA=$(git rev-parse HEAD) \
-  --build-arg EXTRA_REQUIREMENTS=requirements-par1067.txt \
-  --build-context mlsvc=ml-service ml-bench
-docker run --rm --gpus all ml-bench:par-1067 gpu-check   # sm_120 and torch 2.11.0+cu128
-
-ARMS="--model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm25 \
-  --model patchtst_fm --model ttm_r2 --model ttm_r2_ft --model tabpfn_ts --model driver_level"
-# 1. probe: one October origin; read finetune_seconds, slot/daily seconds,
-#    gpu_peak_reserved_gb <= 10, host_peak_rss_gb well under 8 GB
-ml-bench/scripts-par828/run.sh 20261025-par1067-probe --parks @/app/subsets/par828-30parks.txt \
-  --from 2026-10-01 --probe $ARMS
-# 2. the run: 30 parks, --shard 0/5 = 47 origins on all seven weekdays
-ml-bench/scripts-par828/run.sh 20261025-par1067-shard5 --parks @/app/subsets/par828-30parks.txt \
-  --shard 0/5 --reference $ARMS \
-  --pair-with chronos2,chronos2_x_h5,h5,lvlh5_tft,persistence,driver_level
-# 3. both report passes (CPU)
-RUN=/app/results/20261025-par1067-shard5; VS=chronos2,chronos2_x_h5,h5,lvlh5_tft,persistence,driver_level
-R="docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
-   -v $PWD/ml-bench/results:/app/results ml-bench:par-1067 report --run $RUN --vs $VS"
-$R --target-from 2026-08-15 --target-to 2026-10-07
-$R
-```
-
-Expected cost before the probe: `ttm_r2` is cheap (1,536 steps); `patchtst_fm` is 385 M
-parameters on an 8,192-step window (`MLBENCH_PATCHTSTFM_BATCH`, 16); `tabpfn_ts` fits one
-in-context regression per ride per daily origin (~1,500 series on 30 parks) and is the arm most
-likely to dominate the night — if so, give it its own `--shard` set with the same `--pair-with`
-rather than a shorter context. The fine-tunes (`chronos2_ft`, `chronos2_lora`, `ttm_r2_ft`) refit
-once per 28 days of origin date (~9 fits); a per-origin refit is a subclass with
-`finetune_every_days = 1`, not the default, because it would no longer pair on cadence with the
-others. `timesfm25_grid` is left out to keep the night. Every run records `licences` per arm in
-`run-*.json`; a step that turns a run into an offline verdict must call
-`mlbench.licences.refuse_benchmark_only` on the model names it writes.
+Open work: the combined run of these arms next to `chronos2` and `driver_level` has not run; its
+commands and expected cost are in PAR-1141.

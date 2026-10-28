@@ -274,19 +274,12 @@ adjacency, which the literature had already worked out); a full transformer per 
 history than ~6 months); the park-mean occupancy as the only crowd input (measured on the TFT: it
 regressed); a residual hybrid on top of CatBoost (two systems, the skew only half addressed).
 
-## Open
+## Known limits and open work
 
-- **PAR-453** — no validation split or early stopping: a fixed 500 steps for a 10-ride and a
-  100-ride park alike; hold out the last day, early-stop, log the per-park final loss. A per-ride
-  scale (headliner and walk-on share one today) is an ablation for the same ticket.
-- **PAR-455 / PAR-456 / PAR-457** — weather, schedule-relative time (minutes since open / to close,
-  a `park_open` channel) and school-break channels, each through the bake-off on busy MAE/bias.
-  The worst-MAE rides (Cheetah Hunt, Wolfpack Raft Slide, Manta) are water and outdoor rides.
-  Measure PAR-456 on top of `in_force`: `wait_ffill` carries the last value through closures,
-  which the in-force target no longer does.
-- The `in_force` flip and `PCN_RESIDUAL`, as described above.
-- A regime head (P(busy)) or the Tweedie loss on the board — after the channels, because a
-  missing signal is not repaired by a head.
-- Skipped parks and their reason are visible only in the log.
-- TouringPlans' public Walt Disney World dataset (posted and actual waits since 2012) as a
-  pretraining seed against the short history — untested.
+- **Known limit:** every park trains a fixed 500 steps with no validation split or early stop
+  (PAR-453).
+- **Known limit:** which parks a forecast tick skipped, and why, is only in the pcn-service log
+  (PAR-1120).
+- Open work: weather, schedule-relative and school-break channels (PAR-455 / PAR-456 / PAR-457),
+  the `in_force` flip then `PCN_RESIDUAL` (PAR-1044), a regime head or Tweedie loss and a
+  TouringPlans pretraining seed (PAR-1121); all under PAR-454.

@@ -32,8 +32,8 @@ Start here, then open the page for the part you are changing.
 | Erasure measurement                                     | `GET /v1/admin/downtime-erasure` (`src/admin/downtime-measurement.service.ts`); measured 2026-10-22, see [refused.md](refused.md#the-erasure-measured)                                   |
 | Event census                                            | `GET /v1/admin/downtime-measurement`                                                                                                                                                     |
 
-The plan required a hand check of twenty publishable rides against the parks' own channels before
-historical figures went out. The figures are now served; no record of that check exists in either repo.
+**Known limit:** historical figures are served as soon as a ride passes the gates, without the hand
+check against the parks' own channels the plan required first (PAR-1095).
 
 ## Wording
 

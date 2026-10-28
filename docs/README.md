@@ -32,7 +32,7 @@ One line each in [CLAUDE.md](../CLAUDE.md#applies-to-every-change); every rule h
 - [holiday-sources-outside-europe](architecture/holiday-sources-outside-europe.md) — KR/SG/AU/US/GB/JP/CN holiday sources, curated files, yearly upkeep table, district choices
 - [location-resolution](architecture/location-resolution.md) — User coordinates for nearby/favorites: lat/lng, client IP, GeoLite2, no CDN caching
 - [search](architecture/search.md) — /v1/search: in-process vs Postgres matching, ranking tiers, typo tolerance, literal-hit rule
-- [covariate-source](architecture/covariate-source.md) — Design for as-of covariates (PAR-1061); two write-only logs built, the rest proposed
+- [covariate-source](architecture/covariate-source.md) — Where each model's covariates come from today, and the two write-only as-of logs (plan: PAR-1147)
 - [attraction-status/](architecture/attraction-status/README.md) — Index of attraction status, seasonality, identity and duplicate pages; old § numbers mapped
 
 ## API contracts for clients

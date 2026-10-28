@@ -74,7 +74,7 @@ missing baseline row means "wait for the next run".
 | `wait_time_predictions` | CatBoost's hourly (15-min slots) and daily predictions; write path below |
 | `tft_forecasts`, `tft_forecasts_shadow`, `tft_forecasts_shadow_drivers` | nf-service's daily peak per (attraction, target_date, forecast_date), every origin. Plain tables; retention 120 days by `forecast_date` (`db-maintenance/prune-tft-forecasts`, 04:35 UTC, 200 k-row batches; the oldest origin a reader asks for is 107 days, readers listed in `src/database/maintenance/vacuum-plan.ts`) |
 | `pcn_forecasts` | pcn-service's 15-min intraday forecast; retention 4 days by `created_at` in pcn-service (PAR-873); primary key rebuilt weekly ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md)) |
-| `weather_forecast_issues`, `schedule_day_versions` | append-only as-of logs, write-only for now ([covariate source](../architecture/covariate-source.md) §3.2). No FK, no hypertable; a park merge moves them (`PARK_DEPENDENCIES`) |
+| `weather_forecast_issues`, `schedule_day_versions` | append-only as-of logs, write-only for now ([covariate source](../architecture/covariate-source.md) §3). No FK, no hypertable; a park merge moves them (`PARK_DEPENDENCIES`) |
 
 ### `wait_time_predictions`
 

@@ -111,9 +111,9 @@ At short lead "the wait now" predicts the wait an hour from now better than the 
   model on the lead-curve board scores what is served. Check live: `live_h0_1` persistence vs
   served in `forecast_archive_paired` (definition 2) should move toward 0.
 
-## Open
+## Known limits
 
-- A CatBoost head-to-head at PCN's longer leads needs CatBoost's forward forecasts stored per
-  origin (CatBoost keeps only the newest row per slot); not built.
-- Which parks the forecast tick skipped, and why, is only in the pcn-service log; neither
-  `/health` nor `/v1/admin/system-health` shows it.
+- **Known limit:** CatBoost keeps only the newest hourly row per slot, so it cannot be compared
+  with PCN at longer leads; a forward-written per-origin record is PAR-658.
+- **Known limit:** which parks the forecast tick skipped, and why, is only in the pcn-service log
+  (PAR-1120).

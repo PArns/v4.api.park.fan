@@ -168,17 +168,10 @@ CatBoost at lead 1 17.3 / 27.7 / 45.4). Error by lead now: [long-range-forecasti
 - **A horizon of a year** is not possible from under a year of history: a sequence model has to
   have seen the cycle.
 
-## Open
+## Known limits and open work
 
-- **Capacity and early stopping on the daily model were never measured:** hidden 128, windows
-  batch 512, batch 64, `n_head` 8 (not exposed as a setting), 2000 steps with a validation set and
-  early stopping (`nf.fit` gets no `val_size`). The current values are CPU-era memory caps. On the
-  intraday surface more steps and capacity made it worse, so run `backtest_headliners.py` before
-  changing anything.
-- **Structured promotion / event data** — the biggest lever left for both models.
-- **The grid and driver shadows** await their verdict from the forward archive
-  ([TFT grid shadows](tft-grid-shadows.md)); the time-weighted target travels with the drivers
-  shadow.
-- Chunking by region or timezone instead of country would give each chunk's TFT a coherent
-  calendar.
-- A longer horizon as history grows; a full year of history arrives around 2026-12.
+- **Known limit:** the training values are memory caps, not measured for accuracy; capacity,
+  early stopping, chunking by region and a longer horizon are PAR-1118. Run
+  `backtest_headliners.py` before changing any of them.
+- **Known limit:** no event or promotion covariate exists (PAR-1116).
+- Open work: the verdict on the grid and driver shadows, PAR-1119.

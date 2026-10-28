@@ -115,20 +115,11 @@ no window known → 30 min (a missing schedule is not a closed park). Only the p
 park; the client's per-coordinate key (`weather:nowcast:{lat}:{lon}:{steps}`) stays at 30 min so an
 open park sharing coordinates with a closed one is never served stale.
 
-## Hourly observed weather — designed, not built (PAR-1045)
+## Hourly observed weather is not stored
 
-CatBoost trains on the **daily** rows while serving has an **hourly** forecast; PAR-1031/1032 collapse the
-forecast to daily units, so a 15:00 shower and a dry morning read the same in training. The design:
-
-| | |
-| --- | --- |
-| Table | `weather_hourly_observed`: `parkId`, `ts` (UTC hour), `temperature`, `apparentTemperature`, `precipitation`, `rain`, `snowfall`, `weatherCode`, `windSpeed`, `windGusts`, `cloudCover`; PK `(parkId, ts)`; a hypertable compressed after 7 days, registered in `HYPERTABLES`. Observed values only; a missing hour stays absent |
-| Source | Open-Meteo archive, `hourly=` those variables, `timezone=GMT`; the archive runs ~5 days behind, so the last training days keep the daily row |
-| Size | ~211 parks × 8,760 h ≈ 1.85 M rows/yr, ≈ 230 MB uncompressed, ~25 MB compressed; two years (`TRAIN_LOOKBACK_YEARS`) ≈ 50 MB |
-| Calls | backfill of 730 days for ~185 locations ≈ 8,700 units (spread over 3–4 days); then ~85 a day |
-| Consumers | `ml-service/db.fetch_training_data` joins it per (park, UTC hour); serving keeps the hourly forecast; normals stay walled off |
-
-Not built: it needs a table, a backfill, a sync job and a measured retrain.
+**Known limit:** CatBoost trains on the **daily** rows while serving has an **hourly** forecast;
+PAR-1031/1032 collapse the forecast to daily units, so a 15:00 shower and a dry morning read the same
+in training. Storing hourly observations and retraining on them is PAR-1146, which holds the design.
 
 ## Key files
 

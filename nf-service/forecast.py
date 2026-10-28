@@ -246,7 +246,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     except Exception:
         _mem0 = None
 
-    # Hyperparameters (the levers tuned for GPU — see docs/ml/tft.md#open)
+    # Hyperparameters (the levers tuned for GPU — see docs/ml/tft.md#known-limits-and-open-work)
     logger.info("🤖 Model config:")
     logger.info("   Loss:               %s", settings.NF_LOSS)
     logger.info("   Horizon:            %d days", settings.NF_HORIZON)

@@ -88,14 +88,13 @@ lead × source × segment over the last `days` scored dates, the last 24 h of ar
 surface (`surfaceName`) and origin kind, the first origin, and the `chronos` section
 ([chronos-shadow.md](chronos-shadow.md#paired-scoring-and-the-board)).
 
-## Not built yet
+## Known limits
 
-- **D4 optimiser regret**: needs the frontend's optimiser re-run on archived vs true curves (the
-  dayPeak ordering half is scored).
-- **UC4** (the calendar month view): the park-day rows do not cover its per-day levels; daily
-  levels out to d365 stay with `prediction_lead_snapshots`. D7 is built in the paired table
-  (`cal_rank`).
-- D1 assumes walk = 0; a walk distribution would shift "later" by up to an hour for distant rides.
-- D6 is not split by level source (`predictedCrowdLevel` mixes both models within a park-day).
-- Per-park-day bootstrap CIs for the unpaired scores — the raw curves (14 days past target) let the
-  bench recompute them when needed.
+- **Known limit:** UC4 (the calendar month view) is not scored here; its daily levels out to d365
+  are scored from `prediction_lead_snapshots`. D7 is in the paired table (`cal_rank`).
+- **Known limit:** D1 assumes walk = 0, which can put "later" up to an hour early for distant
+  rides.
+- **Known limit:** the unpaired scores carry no confidence interval; the raw curves (kept 14 days
+  past target) let the bench compute one.
+- Open work: D4 optimiser regret, and D6 split by level source (`predictedCrowdLevel` mixes both
+  models within a park-day), PAR-1143.

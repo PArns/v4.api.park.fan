@@ -68,7 +68,7 @@ Reason 3 is measured, not argued. **The refusal stands.**
     not failures.
 14. **A change to `compress_segmentby`** as part of this work: that is its own measurement.
 
-## Open decisions
+## Open work
 
-- **Who answers a press office** that disputes a number, in what time, and is the park's figure switched
-  off meanwhile? Unanswered; it belongs before a dispute arrives.
+Who answers a park that disputes a published figure, and whether its figures go offline meanwhile, is
+undecided: PAR-1145.

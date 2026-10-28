@@ -227,7 +227,7 @@ window. Both are needed to read a horizon curve honestly (see "Confounds" below)
   and **refuses** such an origin set (n multiple of 7, or > 7 origins on ≤ 2 weekdays) unless
   `--allow-weekday-alias` states that the shards' union is complete
   (`test_weekday_aliasing_is_refused_and_the_census_is_recorded`). A `mae_by_weekday` split is
-  an open follow-up.
+  PAR-1142.
 
 ## Known defects
 

@@ -1,12 +1,12 @@
 # One covariate source, read as of an origin (PAR-1061)
 
-A design for recording **when** each schedule, holiday and weather fact became known, and for deriving
-every model's covariates from those facts in one place. Open this before adding a covariate to any model,
-or before reading `schedule_day_versions` / `weather_forecast_issues`.
+Where each model's schedule, holiday, weather and event inputs come from today, and the two
+append-only logs that record **when** a schedule or weather fact became known. Open this before adding
+a covariate to any model, or before reading `schedule_day_versions` / `weather_forecast_issues`.
 
-**Status (2026-10-27): PRs 1 and 2 of §4 are built** — the two write-only logs
-`weather_forecast_issues` and `schedule_day_versions`. Nothing reads them yet. PR 3 (holiday fact
-columns) and everything after it are not built; the code still has the duplicated readers §2 describes.
+The two logs are written and **nothing reads them yet**; every service still has its own reader (§2).
+The plan built on them — holiday fact columns, one shared `covariates/` derivation read "as of an
+origin", the migration one service at a time and its owner decisions — is PAR-1147.
 
 ## 1. Why
 
@@ -53,23 +53,12 @@ covariates nobody reads** (`MLService.enrichForecastWithHolidays` adds holiday f
 `weatherForecast[]` item, 3 queries per day per park; ml-service derives its own); and **no reader can be
 right about the past** while the data is overwritten.
 
-## 3. Proposed model
+## 3. The two logs
 
-### 3.1 Principles
+Facts are recorded once, where they arrive (NestJS), append-only with `known_from`: a change closes the
+open version and writes a new one, and a retraction is a version too.
 
-1. Facts are recorded once, where they arrive (NestJS), **append-only with `known_from`**; a change closes
-   the open version and writes a new one; a retraction is a version too.
-2. **One derivation** turns facts into covariate semantics (holiday sets, coverage, bridge days,
-   distances, windows, weather basis).
-3. **Each service keeps its own encoding** (NaN for CatBoost, a `*_known` flag for TFT, channels for PCN).
-   What a value *means* is not the service's decision.
-4. **Unknown is a value:** `NULL` in the source, never 0 ([absent facts](../rules/absent-facts.md)).
-5. **Every read names its origin**, or asks for `final` (latest facts, today's behaviour), labelled as an
-   oracle in its output.
-
-### 3.2 Layer 1: fact tables (Postgres, written by NestJS)
-
-**`schedule_day_versions`** — built (PR 2). The park-level day as published, one row per version;
+**`schedule_day_versions`.** The park-level day as published, one row per version;
 entity `src/parks/entities/schedule-day-version.entity.ts`, writer
 `recordScheduleDayVersions` (`src/parks/utils/schedule-version-log.ts`) via
 `ParksService.recordScheduleVersions(parkId, source)`.
@@ -87,122 +76,27 @@ It is called **after** the last writer of a sync has finished with a park, deriv
 `schedule_entries` (park-level rows), and writes only changed days, under a per-park advisory lock. No FK
 (a park merge re-points it through `PARK_DEPENDENCIES`), no hypertable.
 
-**`weather_forecast_issues`** — built (PR 1). Every daily forecast `weather-full-cron` already fetches,
-kept: PK `(park_id, target_date, issued_at)`, `lead_days` (`target_date` − park-local date of
-`issued_at`), `temp_max`, `temp_min`, `precip_sum`, `rain_sum`, `snow_sum`, `wind_max` (real),
-`weather_code`. Written by `WeatherService.saveForecastIssue` from the same response, insert-or-ignore
-(a re-run inside the client's 2 h cache adds nothing). Hourly forecasts are not archived (D5).
+**`weather_forecast_issues`.** Every daily forecast `weather-full-cron` already fetches, kept:
+PK `(park_id, target_date, issued_at)`, `lead_days` (`target_date` − park-local date of `issued_at`),
+`temp_max`, `temp_min`, `precip_sum`, `rain_sum`, `snow_sum`, `wind_max` (real), `weather_code`. Written
+by `WeatherService.saveForecastIssue` from the same response, insert-or-ignore (a re-run inside the
+client's 2 h cache adds nothing), so it costs no extra Open-Meteo call. Hourly forecasts are not
+archived.
 
-**`holidays`, three columns** — not built (PR 3): `first_seen_at` (backfill `createdAt`),
-`withdrawn_at` (set when a source answer **with entries** for that country, year and type no longer
-contains the row — the schedule-retraction rule), `source` (`nager` / `nager_long_weekend` /
-`openholidays` / `synth_summer`).
+Rules for both logs:
 
-**`holiday_coverage_versions`** — not built: `country`, `region` (`''` = national), `holiday_type`,
-`covered_through` (what the source has answered for), `known_from`, `known_to`. Makes the PAR-1049
-coverage as-of.
+- Record after the last writer of a sync, never an interim state, or the log fills with versions no
+  reader saw.
+- Never delete from a log or update it in place, beyond closing `known_to`.
+- A backfill is not exact: `updatedAt` is the last change, not the first publication (`asof_exact`).
+- Unknown is `NULL` in the source, never 0 ([absent facts](../rules/absent-facts.md)).
+- Never fetch Open-Meteo more often to fill the archive ([limits](weather.md#open-meteo-limits)).
+- Backfills and size checks go through `scripts/prod-psql.sh`
+  ([DB health §0](../troubleshooting/db-health-runbook.md)).
 
-**Events** stay columns of `schedule_day_versions` until a second event source exists. **Park geography**
-is read current and stated as timeless; `influencingRegions` corrections are meant to rewrite the past.
-
-### 3.3 Layer 2: one derivation
-
-A Python package `covariates/` (where it lives: D1) replacing `holiday_features.py`, `holiday_utils.py`,
-nf-service's covariate code, `chronos_shadow.day_covariates`, `fetch_windows` /
-`fetch_operating_windows` and the SQL of `add_park_schedule_features`:
-
-```python
-park_day_covariates(conn, park_ids, d0, d1, *, origin: datetime | None, final: bool = False) -> DataFrame
-park_hour_covariates(conn, park_ids, t0_utc, t1_utc, *, origin, final=False) -> DataFrame
-schedule_windows(conn, park_id, d0, d1, *, origin, final=False) -> DataFrame   # PCN, Chronos
-```
-
-It reads Postgres only (with each service's bounded-session settings), no HTTP hop. Output: one row per
-`(park_id, local_date)`, `NULL` = unknown, in groups — own holidays (`public_holiday`, `school_holiday`,
-`bridge_day`, `easter_sunday`; unknown past `covered_through` as of origin), neighbours (counts plus
-`neighbor_public_1..3` for CatBoost, and `neighbor_unknown_count`), distances (capped at 30), schedule
-(`sched_state` NULL = no version known, distinct from `UNKNOWN`; hours; events), weather (basis always
-stated), and provenance (`sched_known_from`, `sched_asof_exact`, coverage dates, `weather_basis` =
-`observed` / `forecast` / `climatology` / `oracle_observed`, issue time, lead, `origin`, `final`).
-Calendar encodings (dow, doy, peak season) stay in the services.
-
-### 3.4 As-of semantics
-
-`origin` is a UTC instant; its local date is the park-local date of that instant.
-
-| Covariate | At `origin` | Before the log existed |
-| --- | --- | --- |
-| Schedule | the version with `known_from ≤ origin < coalesce(known_to, ∞)` — a past day reads what was **published**, not what happened | the backfilled version, `asof_exact = false`: it can hide a window that was known, never show one that was not |
-| Public holidays | `first_seen_at ≤ origin`, not withdrawn by then, dates ≤ `covered_through`; `synth_summer` excluded unless asked | `first_seen_at = createdAt`; `final` is a mild, documented oracle (laws fix them years ahead) |
-| School holidays | the same per region; past coverage → `NULL` | coverage backfilled from today's rows |
-| Bridge day | derived from the neighbouring days' public flags (D4) | — |
-| Weather, past target | observed row with `updatedAt ≤ origin`, else the latest issue | `oracle_observed` |
-| Weather, lead 0–15 | latest issue with `issued_at ≤ origin` → `forecast` | `oracle_observed` only with `allow_oracle=True`, else climatology |
-| Weather, lead > 15 | climatology per park and month from observed rows before origin (PAR-1031); ERA5 normals stay out ([weather](weather.md#climate-normals-beyond-the-forecast)) | — |
-
-`final=True` reads the latest facts for every date (today's behaviour); parity tests run in it.
-
-### 3.5 How each service reads it
-
-CatBoost serving: `origin = now` (daily weather from the latest issue, hourly unchanged until D5).
-CatBoost training: `final=True` (as-of training is D2). TFT training: history `final`, future frame
-`origin = now`; TFT serving `origin = now`. Chronos-2 shadow: the capture origin — the first reader whose
-"as of the origin" claim becomes true. PCN: `schedule_windows(origin = tick)`. ml-bench: exports the fact
-tables and builds per origin; `published_final` / `ORACLE` remain only before the logs start.
-
-### 3.6 Size and cost
-
-| Table | Rows | Per year |
-| --- | --- | --- |
-| `weather_forecast_issues` | ~150 parks × 16 days × 2 issues ≈ 4,800/day | ≈ 230 MB (≈ 80 B heap + 50 B PK per row) |
-| `schedule_day_versions` | backfill ≈ 83 k; churn **assumed** ≤ 5 % of 365 future days per park per day ≈ 1 M/yr | ≈ 160 MB at the assumed churn — measure before relying on it (lower bound: `SELECT date_trunc('day', "updatedAt"), count(*) FROM schedule_entries WHERE "attractionId" IS NULL GROUP BY 1`) |
-| `holiday_coverage_versions` | ~40 countries × regions × a few changes | < 1 MB |
-
-The read side gets cheaper (~150 × 548 park-days for a full training window). Plain tables, no hypertable:
-below a gigabyte they are not worth a TimescaleDB job queueing for an ACCESS EXCLUSIVE lock
-([TimescaleDB lock queues](../troubleshooting/timescaledb-lock-queues.md)).
-
-## 4. Migration, one small PR at a time
-
-Start the clocks first — an unlogged day cannot be recovered (the same reason the
-[forward archive](../ml/forward-archive/README.md) shipped before anything scored it). Each reader PR changes one
-service, in `final` mode first, behind a parity test that fails if the output moves.
-
-| # | PR | Moves a served number? | Parity / test |
-| --- | --- | --- | --- |
-| 1 | **built:** `weather_forecast_issues` from `weather-full-cron` | no | one issue per park per run, `lead_days` from the park-local date, no extra call |
-| 2 | **built:** `schedule_day_versions` + backfill on a park's first call | no | unchanged → no row; change → close + insert; retraction → `NONE`; one open version per day |
-| 3 | holiday facts: `first_seen_at`, `withdrawn_at`, `source`, `holiday_coverage_versions` | no | withdrawn only inside an answered (country, year, type) |
-| 4 | `covariates/` in `final` mode, holidays only; ml-service, Chronos and ml-bench import it | no | `assign_holiday_features` before == after for every park × 548 days, dtype-exact; vendored copies byte-identical |
-| 5 | `schedule_windows` replaces `fetch_windows`, `fetch_operating_windows`, `fetch_park_schedules` SQL | no | windows identical for all parks × 90 days; `is_park_open` per training row identical |
-| 6 | origin mode; Chronos switches to it | shadow only | as-of at `origin = now` equals `final` for future dates; a two-version fixture returns the older one |
-| 7 | ml-bench exports versions / issues / coverage | offline | a published bench cell reproduces in `final`; the as-of cell is reported beside it |
-| 8 | weather reader: CatBoost serving daily fields and the TFT future frame from the latest issue | no | latest issue == the `weather_data` forecast row on deploy day |
-| 9 | TFT semantics onto the package | **yes** | through the `tft_grid` shadow under the model switch rule; every renamed column's diff listed |
-| 10 | as-of training (D2) | **yes** | shadow, once the issue archive is ≥ 60 days old |
-| 11 | delete the old paths, including `MLService.enrichForecastWithHolidays` | no | grep proves no caller |
-
-## 5. What not to do
-
-- Do not materialise a wide feature table per origin (≈ 20 M rows/yr of near-identical values).
-- Do not log interim states: record after the last writer, or the log fills with versions no reader saw.
-- Do not delete from a fact log or update it in place (beyond closing `known_to`).
-- Do not call a backfill exact: `updatedAt` is the last change, not the first publication.
-- Do not encode unknown as 0 in the source; NaN, a `*_known` flag or a mask is each service's encoding.
-- Do not change a model's inputs inside a parity PR; semantic changes go through a shadow.
-- Do not add a covariate microservice, and do not reimplement the derivation in SQL or TypeScript (the
-  NestJS calendar keeps its own `schoolCoverageThrough`, with a shared fixture test against the package).
-- Do not fetch Open-Meteo more often to fill the archive ([limits](weather.md#open-meteo-limits)).
-- Do not version park geography.
-- Run backfills and size checks through `scripts/prod-psql.sh` ([DB health §0](../troubleshooting/db-health-runbook.md)).
-
-## 6. Owner decisions
-
-| # | Question | Recommendation |
-| --- | --- | --- |
-| D1 | Where does the derivation live? | (a) a `covariates/` package vendored into each service's build context with a byte-identical CI test, as `holiday_features.py` travels today; building from the repo root could follow; not SQL functions |
-| D2 | What do the trainings learn from? | `final` facts now; as-of at the served lead as PR 10 behind a shadow once the archive covers d60 — observed-weather training vs forecast serving is the largest remaining gap |
-| D3 | Weather past 16 days | climatology from our observed rows before the origin; ERA5 normals stay walled off |
-| D4 | One bridge-day definition | Mon before a Tue / Fri after a Thu holiday (Chronos): derived from public flags, narrowest claim; CatBoost moves only through a retrain |
-| D5 | Archive hourly weather? | no, until an intraday model shows it needs it (Chronos measured weather at < 0.12 min) |
-| D6 | Retention of `weather_forecast_issues` | none for now; revisit at 1 GB |
+**Size.** Estimated, not yet measured: `weather_forecast_issues` ~150 parks × 16 days × 2 issues ≈
+4,800 rows a day, ≈ 230 MB a year; `schedule_day_versions` a backfill of ≈ 83 k rows, then ≈ 160 MB a
+year if ≤ 5 % of the 365 future days per park change daily (lower bound:
+`SELECT date_trunc('day', "updatedAt"), count(*) FROM schedule_entries WHERE "attractionId" IS NULL GROUP BY 1`).
+Both are plain tables, no hypertable: below a gigabyte they are not worth a TimescaleDB job queueing for
+an ACCESS EXCLUSIVE lock ([TimescaleDB lock queues](../troubleshooting/timescaledb-lock-queues.md)).

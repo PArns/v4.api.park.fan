@@ -63,7 +63,7 @@ re-scorable with `report`) and `work/` are git-ignored. Everything under `result
 | Chronos-2 (PAR-828, PAR-869) | `20261010-par828-subset-chronos-v2`, `20261012-tide-vs-chronos` | Live candidate at 30–120 min and on the planner's d0–d1; runs in the forward archive's shadow, serving prepared behind `SERVE_CHRONOS_INTRADAY` (default off) | [chronos-2.md](../foundation-models/chronos-2.md) |
 | TiRex-2, Toto 2.0 (PAR-853) | `20261011-par853-toto-tirex-shard5` | Drop for serving; TiRex-2 kept as a plug-in | [tirex-toto.md](../foundation-models/tirex-toto.md) |
 | TiDE, NHITS (PAR-829) | `20261011-par829-stageA`, `20261011-par829-xseason` | Beat the incumbents on live / intraday leads, lose every head to head against Chronos-2; not pursued | [results-neuralforecast.md](results-neuralforecast.md) |
-| Chronos-2 LoRA, TimesFM 2.5, PatchTST-FM-r2, TTM-r2, TabPFN-TS | not run yet | Implemented and tested; one combined run queued | [running.md](running.md#queued-the-combined-par-1063--1064--1067-run) |
+| Chronos-2 LoRA, TimesFM 2.5, PatchTST-FM-r2, TTM-r2, TabPFN-TS | not run yet | Implemented and tested; the combined run is PAR-1141 | [running.md](running.md#the-foundation-model-arms-par-1063--1064--1067) |
 | TimesFM 3.0 | never scored | Ruled out: no q95 head, weights licence excludes production | [timesfm.md](../foundation-models/timesfm.md) |
 
 Offline verdicts reach the product through `src/ml/data/offline-model-verdicts.json`, read by

@@ -28,8 +28,8 @@ deploy. Open it before changing the compose file, an environment variable or the
 | `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB (the Dockerfile's `--max-old-space-size=6144` overrides the compose `NODE_OPTIONS` 4096); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
 | `bull-board`  | `venatum/bull-board:latest`         | Reads Bull keys under `BULL_PREFIX` (default `parkfan`)                                                                                                    | `3001:3000`             |
 
-Whether those memory limits fit the host is an open decision:
-[container memory limits](container-memory-limits.md).
+Those limits only fit the host because the nightly peaks are spaced in time
+([container memory limits](container-memory-limits.md)); new limits are PAR-1148.
 
 Two settings that look removable and are not:
 

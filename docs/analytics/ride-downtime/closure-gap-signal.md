@@ -67,13 +67,14 @@ recovery curve built on it could only err towards "back soon".
 The nightly statement still requires the start inside a window, so pre-opening closures are shown live
 but not stored for the curve (the conservative direction).
 
-## Open question
+## Rides whose feed always reports 0 (measured, not filtered)
 
-A broader rule — no closure line for any ride whose feed always reports a wait of 0 — was measured and
-rejected for now: in the blind parks 1,105 such rides read `OPERATING` on ≥ 80 % of open days and
-produced 777 of 4,140 stored closures in 60 days, and those parks publish status and nothing else.
-Rides reading `OPERATING` on under 40 % of open days (Die 3 Mausketiere's shape) produced 74. A
-track-record gate on that share is the candidate if those prove wrong; it needs a ground truth this
-table does not have.
+No closure line for any ride whose feed always reports a wait of 0 was measured and not applied: in
+the blind parks 1,105 such rides read `OPERATING` on ≥ 80 % of open days and produced 777 of 4,140
+stored closures in 60 days, and those parks publish status and nothing else. Rides reading
+`OPERATING` on under 40 % of open days (Die 3 Mausketiere's shape) produced 74.
+
+**Known limit:** whether those closures are real has no ground truth yet; the closed_gap hand check
+(PAR-1095) decides whether a track-record gate on that share is needed.
 
 Cases are pinned in `test/e2e/closure-standing.e2e-spec.ts` and `closure-gap-operating-day.e2e-spec.ts`.

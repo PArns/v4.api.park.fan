@@ -1,8 +1,7 @@
-# Container memory limits (open owner decision, PAR-1054)
+# Container memory limits
 
-Whether the production containers' memory limits fit the 29 GB host, what to measure first and the
-recommended values. **Recommendation only: `docker-compose.production.yml` is unchanged.** Open it before
-changing a `mem_limit` or moving a nightly job's time.
+The production containers' memory limits against the 29 GB host, and how to read a container's peak.
+Open it before changing a `mem_limit` or moving a nightly job's time.
 
 ## What the host has and what is promised
 
@@ -25,7 +24,7 @@ runner) exceed the host, and the kernel kills the largest process, which on 2026
 ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#the-linear-runner-shares-the-hosts-memory)).
 Today's limits bound nothing that matters: each is above what fits next to the rest.
 
-## Measure first
+## Reading a container's peak
 
 On the host, the morning after a night with no deploy and one runner run:
 
@@ -38,26 +37,7 @@ done
 
 `memory.peak` is the high-water mark since the container started.
 
-## Recommended limits
-
-Each is the measured peak plus ~25 %, so a runaway container dies inside its own cgroup instead of
-taking the host.
-
-| Container     | Recommended                                                              | Why                                                                                                                                                                            |
-| ------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ml-service`  | `mem_limit: 18g`                                                         | 13 GB training + 4 GB serving; 20 g leaves nothing for anything else at 06:00                                                                                                  |
-| `nf-service`  | `8g` once `memory.peak` shows the chunked fit under ~6 GB, else keep 14 g | 14 g was sized for full-panel training, which no longer runs                                                                                                                  |
-| `pcn-service` | `6g` if `memory.peak` < 4.5 GB, else keep 8 g                            | not measured yet                                                                                                                                                               |
-| `postgres`    | **no hard limit**; `mem_reservation: 6g` (cgroup v2 `memory.low`)       | a cgroup OOM kills a backend and the postmaster restarts every connection; protect it from reclaim and bound it by its own settings (`shared_buffers`, `work_mem`, `autovacuum_work_mem` 256 MB × 4 workers) |
-| `api`         | `mem_limit: 6g`                                                          | sized for a 4 GB heap; the effective heap limit is 6 GB, so read `memory.peak` first. A leak should restart the API, not trigger a host OOM |
-| `redis`       | `mem_limit: 3g`                                                          | `maxmemory 2gb` + fragmentation                                                                                                                                                |
-
-With these the ceilings at 06:00 add up to ~47 GB, and realistic concurrent use is ~29 GB, still at the
-host's edge. **The time separation stays the real protection; the limits only decide who dies.**
-
-## Options
-
-1. Keep today's limits: a coincident peak OOMs the largest process, as on 2026-10-12.
-2. Apply the table above after one night of `memory.peak` readings (recommended).
-3. Option 2, plus moving nf-service's training off the CPU-RAM path (GPU-only data loading) before
-   lowering it further.
+Open work: new limits from one night of `memory.peak` readings (measured peak + ~25 %, Postgres
+reserved rather than capped, the API's two heap settings reconciled) are PAR-1148, which holds the
+recommended values and the options. Even with them, the time separation stays the real protection;
+limits only decide which container dies.

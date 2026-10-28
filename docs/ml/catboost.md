@@ -248,11 +248,10 @@ current behaviour in short:
 - **A uuid filter compares uuid to uuid** — the cast goes on the parameter
   ([uuid casts](../rules/uuid-casts.md)).
 
-## Open
+## Known limits
 
-- Rides curated as `SHOW` / `WALKTHROUGH` (`attraction_kind`) and series whose wait is flat even
-  at P90 (296 of 2,456 rides had P90 ≤ 5 min, 2026-05-30) are predicted and scored like rides;
-  `storePredictions` only drops the Queue-Times exclusion list (`isQueueTimesExcluded`).
-- No per-park event calendar: Wintertraum, Halloween and similar seasons are the biggest
-  Phantasialand crowd drivers and no feature carries them (`has_special_event` covers only
-  ticketed/private schedule entries).
+- **Known limit:** shows, walkthroughs and flat series are predicted and scored like rides;
+  `storePredictions` drops only `isQueueTimesExcluded` rows (PAR-1115).
+- **Known limit:** no feature carries an event season (Halloween, Wintertraum); `has_special_event`
+  covers ticketed/private schedule entries only, and the curated `park_seasons` is read by no ML
+  service (PAR-1116).
