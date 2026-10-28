@@ -81,9 +81,21 @@
       "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
       "evaluateOn": "2027-01-21",
       "cells": [
-        { "questionId": "cal_rank", "modelId": "catboost", "expect": "not_better" },
-        { "questionId": "cal_busier", "modelId": "catboost", "expect": "not_better" },
-        { "questionId": "cal_far", "modelId": "catboost", "expect": "not_better" },
+        {
+          "questionId": "cal_rank",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
+        {
+          "questionId": "cal_busier",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
+        {
+          "questionId": "cal_far",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
         { "questionId": "cal_far_90", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "wkd" }
       ]

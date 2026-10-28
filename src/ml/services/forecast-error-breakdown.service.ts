@@ -5,13 +5,15 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
-import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 import {
   StatementLimits,
   queryWithLimits,
 } from "../../common/utils/statement-limits.util";
-import { scoredSlotSql } from "../entities/prediction-accuracy.entity";
-import { DriftWindowSums, driftWindow } from "../utils/ml-drift-watch.util";
+import {
+  DriftWindowSums,
+  driftSql,
+  driftWindow,
+} from "../utils/ml-drift-watch.util";
 
 /** The served models whose hourly forecasts `prediction_accuracy` scores. */
 export const SCORED_MODELS = ["catboost", "pcn", "chronos"] as const;
@@ -156,15 +158,18 @@ export class ForecastErrorBreakdownService {
     const dayMs = 86_400_000;
     const recentFrom = new Date(until.getTime() - days * dayMs);
     const previousFrom = new Date(until.getTime() - 2 * days * dayMs);
-    const fetchFrom = new Date(previousFrom.getTime() - BASELINE_DAYS * dayMs);
     const rows = await queryWithLimits<SqlRow[]>(
       this.dataSource,
-      this.sql(opts.parkId !== undefined, opts.model !== undefined),
+      driftSql({
+        recentDays: days,
+        judgedDays: 2 * days,
+        fetchDays: 2 * days + BASELINE_DAYS,
+        group: opts.parkId !== undefined ? "ride" : "park",
+        parkFilter: opts.parkId !== undefined,
+        modelFilter: opts.model !== undefined,
+      }),
       [
         until.toISOString(),
-        recentFrom.toISOString(),
-        previousFrom.toISOString(),
-        fetchFrom.toISOString(),
         ...(opts.parkId !== undefined ? [opts.parkId] : []),
         ...(opts.model !== undefined ? [opts.model] : []),
       ],
@@ -235,71 +240,5 @@ export class ForecastErrorBreakdownService {
       .set(key, JSON.stringify(result), "EX", CACHE_TTL_SECONDS)
       .catch(() => undefined);
     return result;
-  }
-
-  /**
-   * The drift watch's statement with a grouping key. $1 until, $2 recent
-   * start, $3 previous start, $4 first row read (previous start − 28 days),
-   * then the park and the model when given. The park is compared as a uuid
-   * parameter so `uq_pa_attraction_target` stays usable.
-   */
-  private sql(byPark: boolean, byModel: boolean): string {
-    const key = byPark
-      ? "att.id::text AS k, att.name AS nm"
-      : "p.id::text AS k, p.name AS nm";
-    const parkIdx = 5;
-    const modelIdx = byPark ? 6 : 5;
-    return `WITH r AS (
-         SELECT pa.attraction_id AS a, ${key},
-                date_trunc('hour', pa.target_time AT TIME ZONE p.timezone) AS lt,
-                pa.target_time >= $2::timestamptz AS recent,
-                pa.target_time >= $3::timestamptz AS judged,
-                pa.actual_wait_time AS actual,
-                pa.predicted_wait_time - pa.actual_wait_time AS bias, pa.absolute_error AS err,
-                pa.served_source AS src, pa.served_absolute_error AS serr,
-                pa.served_wait_time - pa.actual_wait_time AS sbias
-           FROM prediction_accuracy pa
-           JOIN attractions att ON att.id = pa.attraction_id
-           JOIN parks p ON p.id = att."parkId"
-          WHERE pa.comparison_status = 'COMPLETED'
-            AND pa.target_time >= $4::timestamptz
-            AND pa.target_time < $1::timestamptz
-            AND pa."predictionType" = 'hourly'
-            ${byPark ? `AND att."parkId" = $${parkIdx}::uuid` : ""}
-            AND ${scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)}
-       ),
-       h AS (
-         SELECT a, lt, avg(actual) AS actual, bool_or(judged) AS judged
-           FROM r
-          GROUP BY a, lt
-       ),
-       base AS (
-         SELECT s.a, s.lt,
-                percentile_cont(0.5) WITHIN GROUP (ORDER BY h.actual) AS b
-           FROM h s
-          CROSS JOIN generate_series(1, 4) w
-           JOIN h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'
-          WHERE s.judged
-          GROUP BY s.a, s.lt
-         HAVING count(*) >= 2
-       ),
-       e AS (
-         SELECT r.k, r.nm, r.recent, m.model, m.err, m.bias, r.actual, b.b
-           FROM r
-           LEFT JOIN base b ON b.a = r.a AND b.lt = r.lt
-          CROSS JOIN LATERAL (VALUES
-                ('catboost', r.err, r.bias),
-                (CASE WHEN r.src IN ('pcn', 'chronos') THEN r.src END, r.serr, r.sbias)
-          ) m(model, err, bias)
-          WHERE r.judged AND m.model IS NOT NULL AND m.err IS NOT NULL
-            ${byModel ? `AND m.model = $${modelIdx}` : ""}
-       )
-       SELECT k AS id, nm AS name, model, recent,
-              count(*) AS n, sum(err) AS sae, sum(bias) AS sbias,
-              count(b) AS "nBase",
-              sum(err) FILTER (WHERE b IS NOT NULL) AS "saeOnBase",
-              sum(abs(actual - b)) AS "saeBase"
-         FROM e
-        GROUP BY k, nm, model, recent`;
   }
 }

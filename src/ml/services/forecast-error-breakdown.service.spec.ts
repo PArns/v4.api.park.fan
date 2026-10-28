@@ -55,7 +55,7 @@ describe("ForecastErrorBreakdownService", () => {
     expect(out.window.until).toBe("2026-10-29T10:00:00.000Z");
   });
 
-  it("binds the park as a uuid and the window bounds as parameters", async () => {
+  it("binds the park as a uuid and the model as parameters", async () => {
     const { service, query } = build([]);
     const out = await service.breakdown(
       { days: 7, parkId: PARK, model: "pcn" },
@@ -65,11 +65,11 @@ describe("ForecastErrorBreakdownService", () => {
     const call = query.mock.calls.find(
       ([sql]) => !sql.startsWith("SET LOCAL"),
     )!;
-    expect(call[0]).toContain('att."parkId" = $5::uuid');
-    expect(call[0]).toContain("m.model = $6");
+    expect(call[0]).toContain('att."parkId" = $2::uuid');
+    expect(call[0]).toContain("m.model = $3");
     expect(call[0]).not.toContain("::text =");
-    expect(call[1]!).toHaveLength(6);
-    expect(call[1]![4]).toBe(PARK);
+    expect(call[1]!).toHaveLength(3);
+    expect(call[1]![1]).toBe(PARK);
   });
 
   it("refuses an id that is not a uuid before it reaches SQL", async () => {
