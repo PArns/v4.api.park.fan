@@ -16,11 +16,19 @@ interface ReferrerRule {
   pattern?: RegExp;
 }
 
-/** Any number of subdomains, then the name, then a country or generic suffix. */
+/** A country or generic suffix: `de`, `com`, `co.uk`, `com.br`. */
+const TLD = "(?:[a-z]{2,6}|co\\.[a-z]{2}|com\\.[a-z]{2})";
+
+/** Any number of subdomains, then the name, then a suffix. */
 const anyTld = (name: string) =>
-  new RegExp(
-    `^(?:[a-z0-9-]+\\.)*${name}\\.(?:[a-z]{2,6}|co\\.[a-z]{2}|com\\.[a-z]{2})$`,
-  );
+  new RegExp(`^(?:[a-z0-9-]+\\.)*${name}\\.${TLD}$`);
+
+/**
+ * The name and a suffix, nothing in front (`www.` is stripped before): the
+ * search engine itself, not its mail, maps, docs or sites, which send
+ * readers as any other site does.
+ */
+const bareTld = (name: string) => new RegExp(`^${name}\\.${TLD}$`);
 
 /**
  * First match wins, so an assistant on a search engine's domain
@@ -48,12 +56,16 @@ export const REFERRER_RULES: readonly ReferrerRule[] = [
   { site: "you", channel: "ai", hosts: ["you.com"] },
   { site: "phind", channel: "ai", hosts: ["phind.com"] },
   // Search engines
-  { site: "google", channel: "search", pattern: anyTld("google") },
+  { site: "google", channel: "search", pattern: bareTld("google") },
   { site: "bing", channel: "search", hosts: ["bing.com"] },
   { site: "duckduckgo", channel: "search", hosts: ["duckduckgo.com"] },
   { site: "ecosia", channel: "search", hosts: ["ecosia.org"] },
-  { site: "yahoo", channel: "search", pattern: anyTld("yahoo") },
-  { site: "yandex", channel: "search", pattern: anyTld("yandex") },
+  {
+    site: "yahoo",
+    channel: "search",
+    pattern: new RegExp(`^(?:[a-z]{2}\\.)?search\\.yahoo\\.${TLD}$`),
+  },
+  { site: "yandex", channel: "search", pattern: bareTld("yandex") },
   { site: "yandex", channel: "search", hosts: ["ya.ru"] },
   { site: "baidu", channel: "search", hosts: ["baidu.com"] },
   { site: "qwant", channel: "search", hosts: ["qwant.com"] },

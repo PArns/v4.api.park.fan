@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import {
@@ -22,13 +22,27 @@ export interface SiteEntityName {
   url: string | null;
 }
 
+/** How long an instance trusts its copy of the park and ride ids. */
+const KNOWN_IDS_TTL_MS = 10 * 60 * 1000;
+
+/** Every park's and ride's id, retired ones included. */
+export interface KnownEntityIds {
+  parks: ReadonlySet<string>;
+  attractions: ReadonlySet<string>;
+}
+
 /**
- * Names and frontend paths for the ids an event was about. An event says only
- * the id, so each id is looked up in all four tables, one query per table;
- * ids are unique across them.
+ * Names and frontend paths for the ids an event was about, and the ids that
+ * exist at all. An event says only the id, so each id is looked up in all
+ * four tables, one query per table; ids are unique across them.
  */
 @Injectable()
 export class SiteEntityNames {
+  private readonly logger = new Logger(SiteEntityNames.name);
+  private known: KnownEntityIds | null = null;
+  private knownAt = 0;
+  private loadingKnown: Promise<KnownEntityIds | null> | null = null;
+
   constructor(
     @InjectRepository(Park) private readonly parks: Repository<Park>,
     @InjectRepository(Attraction)
@@ -81,5 +95,35 @@ export class SiteEntityNames {
       });
     }
     return named;
+  }
+
+  /**
+   * The ids of every park and ride, retired ones included, so a `page_read`
+   * can be checked against them before it counts: a made-up id would
+   * otherwise be a row in the rankings' table. Ten minutes old at most; the
+   * last copy while the database is away, and null before the first one.
+   */
+  async knownIds(now = Date.now()): Promise<KnownEntityIds | null> {
+    if (this.known && now - this.knownAt < KNOWN_IDS_TTL_MS) return this.known;
+    this.loadingKnown ??= Promise.all([
+      this.parks.query(`SELECT id FROM parks`),
+      this.attractions.query(`SELECT id FROM attractions`),
+    ])
+      .then(([parks, attractions]: Array<Array<{ id: string }>>) => {
+        this.known = {
+          parks: new Set(parks.map((row) => row.id)),
+          attractions: new Set(attractions.map((row) => row.id)),
+        };
+        this.knownAt = Date.now();
+        return this.known;
+      })
+      .catch((error: Error) => {
+        this.logger.warn(`Park and ride ids unavailable: ${error.message}`);
+        return this.known;
+      })
+      .finally(() => {
+        this.loadingKnown = null;
+      });
+    return this.loadingKnown;
   }
 }

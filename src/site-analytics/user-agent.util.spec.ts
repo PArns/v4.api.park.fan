@@ -1,4 +1,4 @@
-import { parseUserAgent } from "./user-agent.util";
+import { MAX_USER_AGENT_LENGTH, parseUserAgent } from "./user-agent.util";
 
 /**
  * Real User-Agents of the browsers park.fan sees. What is pinned: the order
@@ -111,5 +111,17 @@ describe("parseUserAgent", () => {
     });
     expect(parseUserAgent(null)).toEqual({ browser: "other", os: "other" });
     expect(parseUserAgent("")).toEqual({ browser: "other", os: "other" });
+  });
+
+  it("reads only the first 512 characters, in linear time", () => {
+    // Many engine tokens and no Safari one: the old `AppleWebKit\/.*\bSafari\/`
+    // backtracked over every pair of them.
+    const hostile = "AppleWebKit/".repeat(50_000);
+    const started = performance.now();
+    expect(parseUserAgent(hostile).browser).toBe("other");
+    expect(performance.now() - started).toBeLessThan(50);
+
+    const padded = `${"x".repeat(MAX_USER_AGENT_LENGTH)} Firefox/131.0`;
+    expect(parseUserAgent(padded).browser).toBe("other");
   });
 });

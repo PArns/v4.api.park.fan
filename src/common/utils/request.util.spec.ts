@@ -1,4 +1,8 @@
-import { getRateLimitIp, type RequestLike } from "./request.util";
+import {
+  addressBucket,
+  getRateLimitIp,
+  type RequestLike,
+} from "./request.util";
 
 describe("getRateLimitIp", () => {
   const ORIGINAL_ENV = process.env;
@@ -46,5 +50,27 @@ describe("getRateLimitIp", () => {
     expect(getRateLimitIp(req({ "cf-connecting-ip": "garbage" }))).toBe(
       "172.16.0.1",
     );
+  });
+});
+
+describe("addressBucket", () => {
+  it("keeps an IPv4 address whole and cuts IPv6 to its /64", () => {
+    expect(addressBucket("198.51.100.7")).toBe("198.51.100.7");
+    expect(addressBucket("2001:db8:1:2:3:4:5:6")).toBe("2001:db8:1:2::/64");
+    expect(addressBucket(null)).toBeNull();
+  });
+
+  it("cuts IPv6 to the /56 a provider delegates when asked", () => {
+    expect(addressBucket("2001:db8:1:2a7f::1", 56)).toBe(
+      "2001:db8:1:2a00::/56",
+    );
+    expect(addressBucket("2001:0db8:0001:2aff:9::1", 56)).toBe(
+      "2001:db8:1:2a00::/56",
+    );
+    // Every /64 of one /56 is one bucket.
+    expect(addressBucket("2001:db8::ff:1", 56)).toBe(
+      addressBucket("2001:db8::1", 56),
+    );
+    expect(addressBucket("198.51.100.7", 56)).toBe("198.51.100.7");
   });
 });

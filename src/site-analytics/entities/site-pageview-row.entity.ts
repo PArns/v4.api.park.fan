@@ -1,28 +1,39 @@
-import { Column, Entity, PrimaryColumn, PrimaryGeneratedColumn } from "typeorm";
+import {
+  Column,
+  Entity,
+  Index,
+  PrimaryColumn,
+  PrimaryGeneratedColumn,
+} from "typeorm";
 
 /**
- * Page views of one flush window (five minutes, UTC) with all their
- * dimensions together, so any dimension can filter any other and every
- * breakdown is a GROUP BY. A count, not a log: no row carries an address, a
- * User-Agent or a visit id, and two page views with the same dimensions in one
- * window are one row.
+ * Page views and visits of one UTC hour, as one flush window wrote them. A
+ * count, not a log: no row carries an address, a User-Agent or a visit id,
+ * and two hits with the same dimensions in one window are one row. Two kinds
+ * of row:
  *
- * `entry`, `referrer`, `channel` and `campaign` are the visit's, copied onto
- * each of its rows. `visits` is 1 on the row of a visit's first page view;
- * `engaged` is added to that same row's dimensions (in the window of the
- * second page view) when the visit sees a second one, so the bounce rate of
- * anything a filter selects is `1 − engaged / visits`.
+ * - a page view's: its page dimensions and `views`; `entry`, `referrer`,
+ *   `channel` and `campaign` empty, so no page past a visit's first is tied
+ *   to where its reader came from;
+ * - a visit's: the first page view's dimensions, `entry` (that page's path),
+ *   `referrer`, `channel`, `campaign`, `visits` = visits started and
+ *   `engaged` = those that reached a second page view (added in the hour of
+ *   the second one), so the bounce rate of anything a filter selects is
+ *   `1 − engaged / visits`.
  *
  * Insert-only: the flusher writes each window once and nothing updates a row.
  * A TimescaleDB hypertable (`HYPERTABLES`), compressed after a week, its
- * chunks dropped after `RETENTION_DAYS`. docs/frontend/site-analytics.md.
+ * chunks dropped after `RETENTION_DAYS`; the bucket index is the one
+ * `create_hypertable` makes, declared so that `synchronize` keeps it.
+ * docs/frontend/site-analytics.md.
  */
 @Entity("site_pageviews")
+@Index("site_pageviews_bucket_idx", ["bucket"])
 export class SitePageviewRow {
   @PrimaryGeneratedColumn({ type: "bigint" })
   id: string;
 
-  /** The flush window's start. */
+  /** The UTC hour. */
   @PrimaryColumn({ type: "timestamptz" })
   bucket: Date;
 
@@ -48,18 +59,18 @@ export class SitePageviewRow {
   @Column({ type: "varchar", length: 2 })
   country: string;
 
-  /** The visit's first path; `''` where the visit is not known. */
+  /** A visit's row: its first page view's path; `''` on a page view's row. */
   @Column({ type: "varchar", length: 820, default: "" })
   entry: string;
 
-  /** The visit's referrer site (`google`, a host, a `utm_source`); `''` direct. */
+  /** A visit's referrer site (`google`, a host, a `utm_source`); `''` direct, and on a page view's row. */
   @Column({ type: "varchar", length: 100, default: "" })
   referrer: string;
 
   @Column({ type: "varchar", length: 10, default: "" })
   channel: string;
 
-  /** The visit's `utm_campaign`; `''` without one. */
+  /** A visit's `utm_campaign`; `''` without one, and on a page view's row. */
   @Column({ type: "varchar", length: 100, default: "" })
   campaign: string;
 

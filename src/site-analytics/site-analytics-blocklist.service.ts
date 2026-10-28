@@ -1,7 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { utcDay } from "../common/utils/reader-hash.util";
 import { SiteBlockedEvent } from "./entities/site-blocked-event.entity";
+import { SITE_ANALYTICS_KEYS as KEYS } from "./site-analytics.constants";
 
 /** How long an instance trusts its copy of the block list. */
 const BLOCKLIST_TTL_MS = 60 * 1000;
@@ -21,6 +25,7 @@ export class SiteAnalyticsBlocklist {
   constructor(
     @InjectRepository(SiteBlockedEvent)
     private readonly blocked: Repository<SiteBlockedEvent>,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   /** The blocked names; the last known list when the database is away. */
@@ -55,14 +60,31 @@ export class SiteAnalyticsBlocklist {
     }));
   }
 
-  /** Blocks a name; blocking it twice keeps the first entry. */
-  async block(name: string, by: string): Promise<void> {
+  /**
+   * Blocks a name; blocking it twice keeps the first entry. The name also
+   * leaves the day's names guard and its combinations go, so the place it
+   * took is free for a real event at once: a script's names, blocked, stop
+   * crowding out the site's own.
+   */
+  async block(name: string, by: string, now = new Date()): Promise<void> {
     await this.blocked.query(
       `INSERT INTO site_blocked_events (name, blocked_by) VALUES ($1, $2)
        ON CONFLICT (name) DO NOTHING`,
       [name, by],
     );
     this.loadedAt = 0;
+    const day = utcDay(now);
+    try {
+      await this.redis
+        .pipeline()
+        .srem(KEYS.guard("names", day), name)
+        .del(KEYS.guard("combinations", day, name))
+        .exec();
+    } catch (error) {
+      this.logger.warn(
+        `Blocked ${name}, but its guard entries stay: ${(error as Error).message}`,
+      );
+    }
   }
 
   async unblock(name: string): Promise<void> {

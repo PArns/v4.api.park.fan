@@ -15,6 +15,7 @@ import {
   CHANNELS,
   FILTER_DIMS,
   MAX_ADMIN_WINDOW_DAYS,
+  MAX_COMPARABLE_DAYS,
   SITE_LOCALES,
   SITE_VIEWPORTS,
   type BreakdownDim,
@@ -116,7 +117,11 @@ export class SiteAnalyticsQueryDto {
   @ApiPropertyOptional({
     type: [String],
     example: ["channel:search", "country:nl"],
-    description: `\`<dim>:<value>\`, repeatable, all must match. dim: ${FILTER_DIMS.join(", ")}.`,
+    description:
+      `\`<dim>:<value>\`, repeatable, all must match. dim: ${FILTER_DIMS.join(", ")}. ` +
+      "entry, referrer, channel and campaign select visits by how they began: visit figures " +
+      "follow them, page views and events are null, and the reports that count page views or " +
+      "events (events, crosstab, search, not-found) answer 400.",
   })
   @IsOptional()
   @Transform(({ value }) =>
@@ -146,7 +151,7 @@ export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {
   @ApiProperty({
     example: "prop:surface",
     description:
-      "`page_type`, `viewport`, `locale`, `day`, a filter dimension or `prop:<key>`.",
+      "`page_type`, `viewport`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`.",
   })
   @Matches(CROSSTAB_AXIS_PATTERN)
   row: string;
@@ -161,6 +166,21 @@ export class SiteChannelQueryDto extends SiteAnalyticsQueryDto {
   @IsOptional()
   @IsIn(CHANNELS)
   channel?: Channel;
+}
+
+/** Trends compare with the window before, which longer windows lack. */
+export class SiteTrendsQueryDto extends SiteChannelQueryDto {
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: MAX_COMPARABLE_DAYS,
+    default: 30,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_COMPARABLE_DAYS)
+  days: number = 30;
 }
 
 export class SiteLandingPagesQueryDto extends SiteChannelQueryDto {
@@ -216,7 +236,12 @@ class WindowDto {
 }
 
 export class SiteTotalsDto {
-  @ApiProperty() pageviews: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: "Null under a filter on a visit dimension.",
+  })
+  pageviews: number | null;
   @ApiProperty({ description: "Visits started." }) visits: number;
   @ApiProperty({
     nullable: true,
@@ -225,9 +250,19 @@ export class SiteTotalsDto {
       "Sum of the daily unique visitors: a reader who comes back on another day counts again. Null with a filter, which visitors cannot be split by.",
   })
   visitors: number | null;
-  @ApiProperty() events: number;
-  @ApiProperty({ description: "Page views per visit, a float." })
-  viewsPerVisit: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: "Null under a filter on a visit dimension.",
+  })
+  events: number | null;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      "Page views per visit, a float. Null under a filter on a visit dimension.",
+  })
+  viewsPerVisit: number | null;
   @ApiProperty({ description: "1 − visits with a second page view / visits." })
   bounceRate: number;
 }
@@ -239,10 +274,10 @@ export class SiteSeriesPointDto {
       "The UTC day, or the hour (`2026-10-28T07:00:00Z`) when days=1.",
   })
   day: string;
-  @ApiProperty() pageviews: number;
+  @ApiProperty({ nullable: true, type: Number }) pageviews: number | null;
   @ApiProperty() visits: number;
   @ApiProperty({ nullable: true, type: Number }) visitors: number | null;
-  @ApiProperty() events: number;
+  @ApiProperty({ nullable: true, type: Number }) events: number | null;
 }
 
 export class SiteMinuteDto {
@@ -268,9 +303,10 @@ export class SiteOverviewDto extends WindowDto {
 
   @ApiProperty({
     type: SiteTotalsDto,
-    description: "The same number of days right before `from`.",
+    nullable: true,
+    description: `The same number of days right before \`from\`, its last day up to the current hour. Null when \`days\` is over ${MAX_COMPARABLE_DAYS}.`,
   })
-  previous: SiteTotalsDto;
+  previous: SiteTotalsDto | null;
 
   @ApiProperty({
     type: [SiteSeriesPointDto],
@@ -300,6 +336,13 @@ export class SiteBreakdownDto extends WindowDto {
   @ApiProperty({ enum: BREAKDOWN_DIMS }) dim: BreakdownDim;
 
   @ApiProperty({
+    enum: ["views", "visits"],
+    description:
+      "What `views` count: page views, or visits started (for a visit dimension, and under a filter on one).",
+  })
+  measure: "views" | "visits";
+
+  @ApiProperty({
     type: SiteViewsVisitsDto,
     description: "Over every value of the dimension, not only the listed ones.",
   })
@@ -320,8 +363,12 @@ export class SiteDayCountDto {
 export class SiteEventSummaryDto {
   @ApiProperty({ example: "search_opened" }) name: string;
   @ApiProperty() count: number;
-  @ApiProperty({ description: "The same number of days right before `from`." })
-  previous: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: `The same number of days right before \`from\`; null when \`days\` is over ${MAX_COMPARABLE_DAYS}.`,
+  })
+  previous: number | null;
   @ApiProperty() blocked: boolean;
   @ApiProperty({ type: [SiteDayCountDto] }) series: SiteDayCountDto[];
 }
@@ -416,10 +463,11 @@ export class SiteCrosstabDto extends WindowDto {
   @ApiProperty({ example: "page_type" }) col: string;
   @ApiProperty({
     type: [String],
-    description: "At most 30 by count, then `other`; days in order.",
+    description:
+      "At most 30 by count, then `__rest__` for all the others; days in order. `(none)` is an empty value.",
   })
   rows: string[];
-  @ApiProperty({ type: [String] }) cols: string[];
+  @ApiProperty({ type: [String], description: "As `rows`." }) cols: string[];
   @ApiProperty({ type: [SiteCrosstabCellDto], description: "Non-zero cells." })
   cells: SiteCrosstabCellDto[];
   @ApiProperty() total: number;
@@ -435,7 +483,7 @@ export class SiteSearchSurfaceDto {
   @ApiProperty() viewAll: number;
   @ApiProperty({
     description:
-      "(resultClicks + browseClicks) / opened; 0 without an opening.",
+      "(resultClicks + browseClicks) / opened, at most 1; 0 without an opening.",
   })
   clickRate: number;
   @ApiProperty({ description: "noResults / typed; 0 without a typed query." })
@@ -522,8 +570,18 @@ export class SiteLandingPageDto {
   @ApiProperty() path: string;
   @ApiProperty() pageType: string;
   @ApiProperty() visits: number;
-  @ApiProperty() previous: number;
-  @ApiProperty({ description: "visits − previous." }) change: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: `Null when \`days\` is over ${MAX_COMPARABLE_DAYS}.`,
+  })
+  previous: number | null;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: "visits − previous; null without previous.",
+  })
+  change: number | null;
   @ApiProperty() bounceRate: number;
   @ApiProperty({ type: [SiteSourceDto] }) sources: SiteSourceDto[];
 }
@@ -548,8 +606,9 @@ export class SiteTrendsDto extends WindowDto {
 }
 
 export class SiteNotFoundReferrerDto {
-  @ApiProperty() value: string;
-  @ApiProperty() views: number;
+  @ApiProperty({ example: "google" }) value: string;
+  @ApiProperty({ description: "Visits that entered on the path from there." })
+  visits: number;
 }
 
 export class SiteNotFoundItemDto {

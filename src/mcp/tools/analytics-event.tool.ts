@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsService } from "../../site-analytics/site-analytics.service";
 import { EVENT_NAME_PATTERN } from "../../site-analytics/site-analytics.hits";
-import { siteQuery, siteWindowInput, windowOf } from "./site-analytics.inputs";
+import { siteQuery, pageWindowInput, windowOf } from "./site-analytics.inputs";
 
 export const analyticsEventTool = defineMcpTool({
   name: "analytics_event",
@@ -20,7 +20,7 @@ export const analyticsEventTool = defineMcpTool({
       .string()
       .regex(EVENT_NAME_PATTERN)
       .describe('Event name, e.g. "search_result_clicked"'),
-    ...siteWindowInput,
+    ...pageWindowInput,
     limit: z
       .number()
       .int()

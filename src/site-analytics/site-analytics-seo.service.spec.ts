@@ -193,7 +193,7 @@ describe("SiteAnalyticsSeoService", () => {
     ]);
   });
 
-  it("lists the not-found paths with the sites their visits came from", async () => {
+  it("lists the not-found paths with the sites of the visits that entered on them", async () => {
     routes = [
       ["GROUP BY path", [{ path: "/de/gone", views: "5" }]],
       [
@@ -206,9 +206,49 @@ describe("SiteAnalyticsSeoService", () => {
       {
         path: "/de/gone",
         views: 5,
-        referrers: [{ value: "google", views: 2 }],
+        referrers: [{ value: "google", visits: 2 }],
       },
     ]);
     expect(calls[0][1]).toContain("not_found");
+    // Only a visit that entered on the dead address names a referrer: a
+    // broken link inside the site leaves no visit row there.
+    expect(calls[1][0]).toContain("SUM(visits)");
+    expect(calls[1][0]).toContain("AND visits > 0");
+    expect(calls[1][0]).toMatch(/AND entry = ANY\(\$\d+::text\[\]\)/);
+    await expect(
+      service.notFound(
+        { days: 7, limit: 10, filter: ["referrer:google"] },
+        NOW,
+      ),
+    ).rejects.toThrow(/can only filter visits/);
+  });
+
+  it("compares trends only where a window before exists", async () => {
+    await expect(service.trends({ days: 181 }, NOW)).rejects.toThrow(
+      /at most 180 days/,
+    );
+  });
+
+  it("has no previous visits or change on landing pages past 180 days", async () => {
+    routes = [
+      [
+        "GROUP BY entry",
+        [
+          {
+            path: "/de",
+            page_type: "home",
+            visits: "9",
+            previous: null,
+            engaged: "3",
+          },
+        ],
+      ],
+    ];
+    const result = await service.landingPages({ days: 365, limit: 10 }, NOW);
+    expect(result.items[0]).toMatchObject({
+      visits: 9,
+      previous: null,
+      change: null,
+    });
   });
 });

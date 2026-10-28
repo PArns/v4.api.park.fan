@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -32,10 +33,6 @@ import {
   CurrentAdmin,
 } from "../admin/auth/admin-auth.decorators";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import {
-  DEFAULT_PRODUCTION_CORS_ORIGINS,
-  isAllowedCorsOrigin,
-} from "../common/cors/cors.config";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { getRateLimitIp } from "../common/utils/request.util";
 import { EVENT_NAME_PATTERN, parseCollectBody } from "./site-analytics.hits";
@@ -43,14 +40,14 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
-import { TEXT_BODY_TOO_LARGE } from "./text-body.middleware";
+import { BODY_TOO_LARGE } from "./collect-body.middleware";
+import { BEACON_RESOURCE_POLICY, isFromSite } from "./from-site.util";
 import {
   CollectBodyDto,
   SiteAnalyticsBreakdownQueryDto,
   SiteAnalyticsQueryDto,
   SiteBlockedEventsDto,
   SiteBreakdownDto,
-  SiteChannelQueryDto,
   SiteCrosstabDto,
   SiteCrosstabQueryDto,
   SiteEventDetailDto,
@@ -62,26 +59,10 @@ import {
   SiteOverviewDto,
   SiteSearchDto,
   SiteTrendsDto,
+  SiteTrendsQueryDto,
   SiteUncoveredDto,
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
-
-/**
- * Whether a hit comes from the site itself. In production that is a request
- * whose `Origin` (or, should a browser leave it out, whose `Referer`) is
- * park.fan: a preview, a local build or a script without one is not counted.
- * Every browser sends `Origin` on a POST, `sendBeacon` included.
- */
-export function isFromSite(request: Request, isProduction: boolean): boolean {
-  if (!isProduction) return true;
-  const origin = request.get("origin");
-  if (origin)
-    return isAllowedCorsOrigin(origin, DEFAULT_PRODUCTION_CORS_ORIGINS);
-  const referer = request.get("referer") ?? "";
-  return DEFAULT_PRODUCTION_CORS_ORIGINS.some((site) =>
-    referer.startsWith(`${site}/`),
-  );
-}
 
 /** An event name from the path, or 400. */
 function eventName(name: string): string {
@@ -107,6 +88,7 @@ export class SiteAnalyticsCollectController {
 
   @Post("collect")
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Header("Cross-Origin-Resource-Policy", BEACON_RESOURCE_POLICY)
   @UseInterceptors(new NoCdnCacheInterceptor())
   @ApiConsumes("text/plain", "application/json")
   @ApiBody({ type: CollectBodyDto })
@@ -126,11 +108,7 @@ export class SiteAnalyticsCollectController {
   })
   @ApiResponse({ status: 413, description: "A body over 16 KiB." })
   async collect(@Body() body: unknown, @Req() request: Request): Promise<void> {
-    if (
-      (request as Request & { [TEXT_BODY_TOO_LARGE]?: true })[
-        TEXT_BODY_TOO_LARGE
-      ]
-    ) {
+    if ((request as Request & { [BODY_TOO_LARGE]?: true })[BODY_TOO_LARGE]) {
       throw new PayloadTooLargeException();
     }
     const hits = parseCollectBody(body);
@@ -257,7 +235,7 @@ export class AdminSiteAnalyticsController {
       "Landing pages of one channel rising and falling against the window before",
   })
   @ApiResponse({ status: 200, type: SiteTrendsDto })
-  trends(@Query() query: SiteChannelQueryDto): Promise<SiteTrendsDto> {
+  trends(@Query() query: SiteTrendsQueryDto): Promise<SiteTrendsDto> {
     return this.seo.trends(query);
   }
 

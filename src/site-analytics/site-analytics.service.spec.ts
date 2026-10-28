@@ -26,7 +26,7 @@ const row = (fields: Record<string, string | null>, count: number) => ({
  * carries a bounce rate; events are what was seen plus what is blocked; the
  * grouping-set rows are told apart by their NULLs; a property keeps fifty
  * values and counts the rest; a crosstab folds what is past thirty into
- * `other`; the search report lists the surfaces seen with their rates.
+ * `__rest__`; the search report lists the surfaces seen with their rates.
  */
 describe("SiteAnalyticsService", () => {
   let service: SiteAnalyticsService;
@@ -158,18 +158,66 @@ describe("SiteAnalyticsService", () => {
 
     it("gives no visitor count under a filter, and passes the filter to both tables", async () => {
       const overview = await service.overview(
-        { days: 7, filter: ["channel:search", "country:nl"] },
+        { days: 7, filter: ["country:nl", "browser:safari"] },
         NOW,
       );
       expect(overview.totals.visitors).toBeNull();
       expect(overview.series.every((p) => p.visitors === null)).toBe(true);
-      expect(overview.filters).toEqual(["channel:search", "country:nl"]);
+      expect(overview.filters).toEqual(["country:nl", "browser:safari"]);
       for (const table of ["FROM site_pageviews", "FROM site_events"]) {
         const [sql, params] = sqlOf(table);
-        expect(sql).toContain("channel = $3 AND country = $4");
-        expect(params.slice(2)).toEqual(["search", "nl"]);
+        expect(sql).toContain("country = $5 AND browser = $6");
+        expect(params.slice(4)).toEqual(["nl", "safari"]);
       }
       expect(sqlOf("site_visitor_days")[0]).toBe("");
+    });
+
+    it("follows a visit filter with visits and bounce only: page views and events are null", async () => {
+      routes = [
+        [
+          "SUM(engaged) AS engaged",
+          [{ period: "2026-10-28", pageviews: "0", visits: "4", engaged: "1" }],
+        ],
+      ];
+      const overview = await service.overview(
+        { days: 7, filter: ["channel:search"] },
+        NOW,
+      );
+      expect(overview.totals).toEqual({
+        pageviews: null,
+        visits: 4,
+        visitors: null,
+        events: null,
+        viewsPerVisit: null,
+        bounceRate: 0.75,
+      });
+      expect(overview.series[overview.series.length - 1]).toMatchObject({
+        pageviews: null,
+        visits: 4,
+        events: null,
+      });
+      // The events table carries no visit dimension, so it is not asked.
+      expect(sqlOf("FROM site_events")[0]).toBe("");
+    });
+
+    it("ends the window before at the current hour, and has none past 180 days", async () => {
+      await service.overview({ days: 7 }, NOW);
+      const [sql, params] = sqlOf("FROM site_pageviews");
+      expect(sql).toContain(
+        "NOT (bucket >= $3::timestamptz AND bucket < $4::timestamptz)",
+      );
+      expect(params.slice(0, 4)).toEqual([
+        "2026-10-15T00:00:00.000Z",
+        "2026-10-29T00:00:00.000Z",
+        "2026-10-21T08:00:00.000Z",
+        "2026-10-22T00:00:00.000Z",
+      ]);
+      calls = [];
+      const long = await service.overview({ days: 365 }, NOW);
+      expect(long.previous).toBeNull();
+      expect(sqlOf("FROM site_pageviews")[1][0]).toBe(
+        "2025-10-29T00:00:00.000Z",
+      );
     });
 
     it("draws today by the hour for a one-day window", async () => {
@@ -229,6 +277,7 @@ describe("SiteAnalyticsService", () => {
         { dim: "channel", days: 30, limit: 2 },
         NOW,
       );
+      expect(result.measure).toBe("visits");
       expect(result.total).toEqual({ views: 10, visits: 10 });
       expect(result.items).toEqual([
         { value: "search", views: 6, visits: 6, share: 0.6, bounceRate: 0.5 },
@@ -260,11 +309,39 @@ describe("SiteAnalyticsService", () => {
         { dim: "path", days: 7, limit: 50, locale: "de" },
         NOW,
       );
+      expect(pages.measure).toBe("views");
       expect(pages.items).toEqual([
         { value: "/de", views: 8, visits: 2, share: 0.8 },
       ]);
       await service.breakdown({ dim: "referrer", days: 7, limit: 50 }, NOW);
       expect(calls[1][0]).toContain("AND referrer <> ''");
+    });
+
+    it("switches a page dimension to visits started under a visit filter: the landing pages", async () => {
+      routes = [
+        [
+          "WITH per_value",
+          [
+            {
+              value: "/de",
+              views: "0",
+              visits: "5",
+              engaged: "2",
+              total_views: "0",
+              total_visits: "5",
+            },
+          ],
+        ],
+      ];
+      const result = await service.breakdown(
+        { dim: "path", days: 7, limit: 50, filter: ["channel:search"] },
+        NOW,
+      );
+      expect(result.measure).toBe("visits");
+      expect(result.items).toEqual([
+        { value: "/de", views: 5, visits: 5, share: 1, bounceRate: 0.6 },
+      ]);
+      expect(sqlOf("WITH per_value")[0]).toContain("HAVING SUM(visits) > 0");
     });
 
     it("answers an empty window with a zero total", async () => {
@@ -306,6 +383,36 @@ describe("SiteAnalyticsService", () => {
         ],
       });
       expect(result.items[3].blocked).toBe(true);
+    });
+
+    it("has no previous counts past 180 days, and refuses a visit filter", async () => {
+      routes = [
+        [
+          "SELECT name,",
+          [{ name: "search_opened", period: "2026-10-28", count: "5" }],
+        ],
+      ];
+      const long = await service.events({ days: 365 }, NOW);
+      expect(long.items[0]).toMatchObject({ count: 5, previous: null });
+      for (const report of [
+        () => service.events({ days: 7, filter: ["channel:search"] }, NOW),
+        () =>
+          service.event("tab_changed", { days: 7, filter: ["entry:/de"] }, NOW),
+        () =>
+          service.crosstab(
+            "tab_changed",
+            {
+              days: 7,
+              filter: ["campaign:x"],
+              row: "prop:tab",
+              col: "viewport",
+            },
+            NOW,
+          ),
+        () => service.search({ days: 7, filter: ["referrer:google"] }, NOW),
+      ]) {
+        await expect(report()).rejects.toThrow(/can only filter visits/);
+      }
     });
   });
 
@@ -404,16 +511,18 @@ describe("SiteAnalyticsService", () => {
   });
 
   describe("crosstab", () => {
-    it("folds what is past thirty into other, labels the empty value, and keeps every day", async () => {
+    it("folds what is past thirty into __rest__, apart from a real value other, labels the empty value, and keeps every day", async () => {
       routes = [
         [
           "AS r,",
           [
-            ...Array.from({ length: 32 }, (_, i) => ({
+            ...Array.from({ length: 31 }, (_, i) => ({
               r: `v${String(i).padStart(2, "0")}`,
               c: "home",
               count: String(100 - i),
             })),
+            // A real value "other" (a page type of that name) ranks too.
+            { r: "other", c: "home", count: "69" },
             { r: "", c: "park", count: "1" },
           ],
         ],
@@ -424,15 +533,16 @@ describe("SiteAnalyticsService", () => {
         NOW,
       );
       expect(result.rows).toHaveLength(31);
-      expect(result.rows[30]).toBe("other");
+      expect(result.rows[30]).toBe("__rest__");
+      expect(result.rows).not.toContain("other");
       expect(result.cols).toEqual(["home", "park"]);
       expect(result.cells).toContainEqual({
-        row: "other",
+        row: "__rest__",
         col: "home",
         count: 69 + 70,
       });
       expect(result.cells).toContainEqual({
-        row: "other",
+        row: "__rest__",
         col: "park",
         count: 1,
       });
@@ -472,6 +582,14 @@ describe("SiteAnalyticsService", () => {
           [
             { name: "search_opened", surface: "header", count: "10" },
             { name: "search_opened", surface: "hero", count: "40" },
+            // Clicks past the openings: the search page counts one opening
+            // per visit to it, its results are clicked many times.
+            { name: "search_opened", surface: "search_page", count: "2" },
+            {
+              name: "search_result_clicked",
+              surface: "search_page",
+              count: "5",
+            },
             { name: "search_typed", surface: "hero", count: "20" },
             { name: "search_result_clicked", surface: "hero", count: "9" },
             { name: "search_browse_clicked", surface: "hero", count: "1" },
@@ -528,7 +646,12 @@ describe("SiteAnalyticsService", () => {
       ];
       const result = await service.search({ days: 2 }, NOW);
 
-      expect(result.surfaces.map((s) => s.surface)).toEqual(["hero", "header"]);
+      expect(result.surfaces.map((s) => s.surface)).toEqual([
+        "hero",
+        "header",
+        "search_page",
+      ]);
+      expect(result.surfaces[2].clickRate).toBe(1);
       expect(result.surfaces[0]).toEqual({
         surface: "hero",
         opened: 40,
@@ -550,7 +673,7 @@ describe("SiteAnalyticsService", () => {
         { surface: "hero", pageType: "home", opened: 40 },
         { surface: "header", pageType: "park", opened: 6 },
       ]);
-      expect(result.bySurfaceAndViewport).toHaveLength(6);
+      expect(result.bySurfaceAndViewport).toHaveLength(9);
       expect(result.bySurfaceAndViewport[0]).toEqual({
         surface: "hero",
         viewport: "mobile",
@@ -571,7 +694,7 @@ describe("SiteAnalyticsService", () => {
         ["11+", 0],
         ["99", 2],
       ]);
-      expect(result.series).toHaveLength(4);
+      expect(result.series).toHaveLength(6);
       expect(result.series).toContainEqual({
         day: "2026-10-28",
         surface: "hero",

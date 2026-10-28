@@ -13,7 +13,6 @@ describe("classifyReferrer", () => {
     ["www.google.com", "google", "search"],
     ["google.co.uk", "google", "search"],
     ["google.com.au", "google", "search"],
-    ["news.google.com", "google", "search"],
     ["bing.com", "bing", "search"],
     ["duckduckgo.com", "duckduckgo", "search"],
     ["ecosia.org", "ecosia", "search"],
@@ -40,6 +39,14 @@ describe("classifyReferrer", () => {
     ["www.forum.example.org", "forum.example.org", "referral"],
     // Not a search engine because the name contains one.
     ["notgoogle.com", "notgoogle.com", "referral"],
+    // Google's other services send readers like any site, not as a search.
+    ["mail.google.com", "mail.google.com", "referral"],
+    ["docs.google.com", "docs.google.com", "referral"],
+    ["sites.google.com", "sites.google.com", "referral"],
+    ["maps.google.de", "maps.google.de", "referral"],
+    ["news.google.com", "news.google.com", "referral"],
+    ["mail.yahoo.com", "mail.yahoo.com", "referral"],
+    ["mail.yandex.ru", "mail.yandex.ru", "referral"],
   ])("%s → %s (%s)", (host, referrer, channel) => {
     expect(classifyReferrer(host, null)).toEqual({ referrer, channel });
   });

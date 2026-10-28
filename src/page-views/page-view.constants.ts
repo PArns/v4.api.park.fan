@@ -71,9 +71,19 @@ export const MAX_ADMIN_WINDOW_DAYS = 90;
 export const MAX_VIEWS_PER_READER_PER_DAY = 3;
 
 /**
- * How many views one address (an IPv6 /64) may count per UTC day across all
- * pages. A carrier gateway shares one address among many readers, so this is
- * generous; it is what keeps one machine from writing a row for every key it
- * can make up.
+ * How often one address (an IPv6 /56) may count the same page per UTC day,
+ * whatever its User-Agents: rotating the User-Agent passes the per-reader cap,
+ * not this one, so one machine adds at most this many reads to a ranking a
+ * day. A household or an office reading one page more often than this is
+ * rare; a carrier gateway is many addresses' worth of readers, and loses a
+ * few.
  */
-export const MAX_VIEWS_PER_ADDRESS_PER_DAY = 500;
+export const MAX_VIEWS_PER_ADDRESS_AND_PAGE_PER_DAY = 10;
+
+/**
+ * How many reads one address (an IPv6 /56) may count per UTC day across all
+ * pages: what keeps one machine from spreading reads over every key it can
+ * make up. The whole site counts about 1,600 page views a day, so 200 reads
+ * from one address is far past any person and still room for a gateway.
+ */
+export const MAX_VIEWS_PER_ADDRESS_PER_DAY = 200;

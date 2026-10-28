@@ -18,9 +18,11 @@ export const analyticsBreakdownTool = defineMcpTool({
     "Page views and visits per value of one dimension, largest first, with each value's share of " +
     "the total: which pages, page types, countries, devices, browsers, languages — or, for the " +
     "visit dimensions entry, referrer, channel and campaign, where visits came from and landed, " +
-    "counted as visits started (a view is a visit) with a bounce rate each. Combine with filters, " +
-    "e.g. dim=path with channel=search for the pages search visitors read, or dim=referrer with " +
-    "channel=ai for which AI assistants send readers. Direct visits have no referrer. " +
+    "counted as visits started (measure: visits, a view is a visit) with a bounce rate each. A " +
+    "filter on a visit dimension switches any breakdown to visits started: dim=path with " +
+    "channel=search lists the pages search visits entered on (not every page they read later), " +
+    "dim=referrer with channel=ai which AI assistants send readers. Direct visits have no " +
+    "referrer. " +
     SITE_ANALYTICS_CAVEATS,
   input: {
     dim: z
@@ -42,6 +44,7 @@ export const analyticsBreakdownTool = defineMcpTool({
     return {
       ...windowOf(report),
       dim: report.dim,
+      measure: report.measure,
       total: report.total,
       items: report.items.map((item) => ({
         value: item.value,

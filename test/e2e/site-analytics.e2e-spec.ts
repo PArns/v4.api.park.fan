@@ -47,12 +47,13 @@ const event = (
 
 /**
  * The site statistic against a real TimescaleDB and Redis: the hot path into
- * Redis, the flush into the hypertables and its idempotency, the reports'
- * SQL with filters, empty days and the window before, the most-read rankings
- * served from `page_read`, the one-off import of `page_view_days`, merges
- * resolved when read, the guards, the snapshot and the chunk drop. A unit
- * test with a mocked repository proves a statement is issued; only a database
- * proves it runs.
+ * Redis (the guard script included), the flush into hourly rows and its
+ * idempotency, rows that never tie a later page to a visit's referrer, the
+ * reports' SQL with filters, empty days and the window before, the most-read
+ * rankings served from `page_read`, the one-off import of `page_view_days`,
+ * merges resolved when read, the guards, the snapshot, the chunk drop, and a
+ * schema `synchronize` leaves alone. A unit test with a mocked repository
+ * proves a statement is issued; only a database proves it runs.
  */
 describe("Site analytics (e2e)", () => {
   let app: INestApplication;
@@ -151,79 +152,123 @@ describe("Site analytics (e2e)", () => {
     expect(await dataSource.query(`SELECT 1 FROM site_pageviews`)).toEqual([]);
     expect(await redis.smembers(SITE_ANALYTICS_KEYS.windows)).toHaveLength(1);
 
-    await expect(flush()).resolves.toMatchObject({ windows: 1 });
+    await expect(flush()).resolves.toMatchObject({ windows: 1, failed: 0 });
     await expect(flush()).resolves.toMatchObject({ windows: 0 });
     expect(await redis.smembers(SITE_ANALYTICS_KEYS.windows)).toEqual([]);
 
-    const common = {
+    const device = {
       viewport: "mobile",
       browser: "safari",
       os: "ios",
       country: "zz",
-      entry: PARK_PATH,
       campaign: "",
     };
+    const page = { ...device, entry: "", referrer: "", channel: "" };
     expect(
       await dataSource.query(
         `SELECT path, page_type, viewport, browser, os, country, entry,
                 referrer, channel, campaign, views, visits, engaged
-           FROM site_pageviews ORDER BY path, engaged, visits`,
+           FROM site_pageviews ORDER BY path, entry, channel`,
       ),
     ).toEqual([
+      // A page view's row knows nothing of the visit it belongs to.
       {
-        ...common,
+        ...page,
         path: "/de/news",
         page_type: "news_index",
-        referrer: "google",
-        channel: "search",
         views: 1,
         visits: 0,
         engaged: 0,
       },
       {
-        ...common,
+        ...page,
         path: PARK_PATH,
         page_type: "park",
+        views: 2,
+        visits: 0,
+        engaged: 0,
+      },
+      // A visit's row: its first page, where it came from, its engaged.
+      {
+        ...device,
+        path: PARK_PATH,
+        page_type: "park",
+        entry: PARK_PATH,
         referrer: "",
         channel: "direct",
-        views: 1,
+        views: 0,
         visits: 1,
         engaged: 0,
       },
-      // The first visit's start, with its "engaged" from the second page view.
       {
-        ...common,
+        ...device,
         path: PARK_PATH,
         page_type: "park",
+        entry: PARK_PATH,
         referrer: "google",
         channel: "search",
-        views: 1,
+        views: 0,
         visits: 1,
         engaged: 1,
       },
     ]);
+    // Every row is one UTC hour.
     expect(
       await dataSource.query(
-        `SELECT name, path, entry, channel, props_key, props, entity, count
-           FROM site_events`,
+        `SELECT count(*)::int AS off FROM site_pageviews
+          WHERE bucket <> date_trunc('hour', bucket)`,
+      ),
+    ).toEqual([{ off: 0 }]);
+    expect(
+      await dataSource.query(
+        `SELECT name, path, props_key, props, entity, count FROM site_events`,
       ),
     ).toEqual([
       {
         name: "search_opened",
         path: "/de",
-        entry: PARK_PATH,
-        channel: "search",
         props_key: "surface=hero",
         props: { surface: "hero" },
         entity: null,
         count: 1,
       },
     ]);
+    // An event's row has no column for the visit at all.
+    const columns = await dataSource.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'site_events'`,
+    );
+    expect(
+      columns.map((c: { column_name: string }) => c.column_name),
+    ).not.toEqual(expect.arrayContaining(["entry"]));
     expect(
       await dataSource.query(
-        `SELECT pageview_rows, event_rows FROM site_analytics_flushes`,
+        `SELECT pageview_rows, event_rows, claim IS NOT NULL AS claimed
+           FROM site_analytics_flushes`,
       ),
-    ).toEqual([{ pageview_rows: 3, event_rows: 1 }]);
+    ).toEqual([{ pageview_rows: 4, event_rows: 1, claimed: true }]);
+  });
+
+  it("leaves the statistic's tables as synchronize finds them after the hypertables are made", async () => {
+    // Every start runs synchronize; a difference here would be an ALTER or a
+    // dropped index on a large hypertable at every deploy.
+    const pending = await dataSource.driver.createSchemaBuilder().log();
+    expect(
+      pending.upQueries
+        .map((q) => q.query)
+        .filter((sql) => /site_(pageviews|events|analytics_flushes)/.test(sql)),
+    ).toEqual([]);
+    // And the bucket indexes create_hypertable made are still there.
+    const indexes = await dataSource.query(
+      `SELECT indexname FROM pg_indexes
+        WHERE tablename IN ('site_pageviews', 'site_events')`,
+    );
+    expect(indexes.map((i: { indexname: string }) => i.indexname)).toEqual(
+      expect.arrayContaining([
+        "site_pageviews_bucket_idx",
+        "site_events_bucket_idx",
+      ]),
+    );
   });
 
   it("answers 400 for a malformed body and records nothing for a bot", async () => {
@@ -243,8 +288,10 @@ describe("Site analytics (e2e)", () => {
 
   it("reports traffic with filters, bounce, empty days and the window before", async () => {
     const collector = app.get(SiteAnalyticsCollectService);
-    const yesterday = new Date(`${addIsoDays(today, -1)}T10:00:00Z`);
-    const lastWeek = new Date(`${addIsoDays(today, -9)}T10:00:00Z`);
+    // Just after midnight, so the window before a one-day window, which ends
+    // at the current hour, holds these hits whenever the test runs.
+    const yesterday = new Date(`${addIsoDays(today, -1)}T00:10:00Z`);
+    const lastWeek = new Date(`${addIsoDays(today, -9)}T00:10:00Z`);
     const visit = async (ip: string, hits: unknown[][], at: Date) => {
       for (const [i, batch] of hits.entries()) {
         await collector.collect(
@@ -314,14 +361,17 @@ describe("Site analytics (e2e)", () => {
       visits: 0,
     });
 
+    // A visit filter: visits and bounce follow it, page views cannot.
     const search = await admin(
       "/v1/admin/analytics/overview?days=7&filter=channel:search",
     ).expect(200);
-    expect(search.body.totals).toMatchObject({
-      pageviews: 3,
+    expect(search.body.totals).toEqual({
+      pageviews: null,
       visits: 2,
-      bounceRate: 0.5,
       visitors: null,
+      events: null,
+      viewsPerVisit: null,
+      bounceRate: 0.5,
     });
     expect(search.body.filters).toEqual(["channel:search"]);
 
@@ -330,6 +380,7 @@ describe("Site analytics (e2e)", () => {
     ).expect(200);
     expect(channels.body).toMatchObject({
       dim: "channel",
+      measure: "visits",
       total: { views: 3, visits: 3 },
       items: [
         {
@@ -356,13 +407,27 @@ describe("Site analytics (e2e)", () => {
     );
 
     const pages = await admin(
-      "/v1/admin/analytics/breakdown?dim=path&days=7&filter=entry:" +
-        encodeURIComponent(PARK_PATH),
+      "/v1/admin/analytics/breakdown?dim=path&days=7",
     ).expect(200);
-    expect(pages.body.items).toEqual([
-      { value: PARK_PATH, views: 2, visits: 2, share: 0.6667 },
-      { value: "/de/news", views: 1, visits: 0, share: 0.3333 },
-    ]);
+    expect(pages.body).toMatchObject({
+      measure: "views",
+      items: [
+        { value: PARK_PATH, views: 2, visits: 2, share: 0.5 },
+        { value: "/de/news", views: 1, visits: 0, share: 0.25 },
+        { value: "/nl/gone", views: 1, visits: 1, share: 0.25 },
+      ],
+    });
+    // Under a visit filter the pages are where those visits entered: the
+    // news page the search visit read next is not tied to Google.
+    const entries = await admin(
+      "/v1/admin/analytics/breakdown?dim=path&days=7&filter=channel:search",
+    ).expect(200);
+    expect(entries.body).toMatchObject({
+      measure: "visits",
+      items: [
+        { value: PARK_PATH, views: 2, visits: 2, share: 1, bounceRate: 0.5 },
+      ],
+    });
 
     const landing = await admin(
       "/v1/admin/analytics/seo/landing-pages?days=7",
@@ -388,12 +453,90 @@ describe("Site analytics (e2e)", () => {
     expect(missing.body.items).toEqual([
       { path: "/nl/gone", views: 1, referrers: [] },
     ]);
+    await admin(
+      "/v1/admin/analytics/seo/not-found?days=7&filter=channel:search",
+    ).expect(400);
+    await admin("/v1/admin/analytics/events?days=7&filter=entry:/de").expect(
+      400,
+    );
 
     const hourly = await admin("/v1/admin/analytics/overview?days=1").expect(
       200,
     );
     expect(hourly.body.series[0].day).toBe(`${today}T00:00:00Z`);
     expect(hourly.body.previous).toMatchObject({ pageviews: 4, visits: 3 });
+
+    // A year has no window before: most of it would lie past the retention.
+    const year = await admin("/v1/admin/analytics/overview?days=365").expect(
+      200,
+    );
+    expect(year.body.previous).toBeNull();
+    expect(year.body.totals).toMatchObject({ pageviews: 5, visits: 4 });
+    const yearLanding = await admin(
+      "/v1/admin/analytics/seo/landing-pages?days=365",
+    ).expect(200);
+    expect(yearLanding.body.items[0]).toMatchObject({
+      visits: 3,
+      previous: null,
+      change: null,
+    });
+    await admin("/v1/admin/analytics/seo/trends?days=181").expect(400);
+  });
+
+  it("names a referrer for a 404 only when a visit entered on it, never for a broken link inside the site", async () => {
+    const collector = app.get(SiteAnalyticsCollectService);
+    const at = new Date(`${addIsoDays(today, -1)}T00:20:00Z`);
+    const gone = (path: string) => pageview({ path, pageType: "not_found" });
+    // A newsletter visit that then follows a broken link inside the site.
+    await collector.collect(
+      {
+        hits: [pageview({ referrer: "newsletter", campaign: "october" })],
+        ip: "203.0.113.50",
+        userAgent: UA,
+      },
+      at,
+    );
+    await collector.collect(
+      { hits: [gone("/de/broken-inside")], ip: "203.0.113.50", userAgent: UA },
+      new Date(at.getTime() + 60_000),
+    );
+    // A Google result that points at a page that is gone.
+    await collector.collect(
+      {
+        hits: [gone("/de/gone-from-google")],
+        ip: "203.0.113.51",
+        userAgent: UA,
+      },
+      at,
+    );
+    await flush();
+    const missing = await admin(
+      "/v1/admin/analytics/seo/not-found?days=7",
+    ).expect(200);
+    expect(missing.body.items).toEqual([
+      { path: "/de/broken-inside", views: 1, referrers: [] },
+      { path: "/de/gone-from-google", views: 1, referrers: [] },
+    ]);
+    await collector.collect(
+      {
+        hits: [{ ...gone("/de/gone-from-google"), referrer: "www.google.de" }],
+        ip: "203.0.113.52",
+        userAgent: UA,
+      },
+      at,
+    );
+    await flush();
+    const again = await admin(
+      "/v1/admin/analytics/seo/not-found?days=7",
+    ).expect(200);
+    expect(again.body.items).toEqual([
+      {
+        path: "/de/gone-from-google",
+        views: 2,
+        referrers: [{ value: "google", visits: 1 }],
+      },
+      { path: "/de/broken-inside", views: 1, referrers: [] },
+    ]);
   });
 
   it("reports events generically: names seen, props discovered, crosstab, search, block list", async () => {
@@ -550,16 +693,18 @@ describe("Site analytics (e2e)", () => {
   it("serves the most-read rankings from page_read, with the old table copied once and merges resolved", async () => {
     const park = await savePark();
     const ghost = "22222222-2222-4222-8222-222222222222";
+    const gone = "33333333-3333-4333-8333-333333333333";
     const day = addIsoDays(today, -2);
     await dataSource.query(
       `INSERT INTO page_view_days (kind, key, locale, day, views) VALUES
          ('news', 'old-news', 'de', $1, 7),
          ('park', $2, 'de', $1, 3),
+         ('park', $3, 'de', $1, 50),
          ('park', 'junk', 'de', $1, 99)`,
-      [day, ghost],
+      [day, ghost, gone],
     );
     const storage = app.get(SiteAnalyticsStorageService);
-    await expect(storage.importPageViewDays()).resolves.toBe(2);
+    await expect(storage.importPageViewDays()).resolves.toBe(3);
     await expect(storage.importPageViewDays()).resolves.toBe(0);
 
     // A read through the old endpoint and two through the beacon.
@@ -572,6 +717,8 @@ describe("Site analytics (e2e)", () => {
     await beacon([
       event("page_read", { kind: "park" }, { entity: park.id }),
       event("page_read", { kind: "news", key: "fresh-news" }),
+      // A park that does not exist is not counted at all.
+      event("page_read", { kind: "park" }, { entity: gone }),
     ]).expect(204);
     // Three reads per reader, page and day, as before.
     for (let i = 0; i < 4; i++) {
@@ -608,46 +755,85 @@ describe("Site analytics (e2e)", () => {
     const parks = await request(app.getHttpServer())
       .get("/v1/page-views/top?kind=park&locale=de&days=7")
       .expect(200);
+    // The deleted park's copied reads stay off the public list.
     expect(parks.body.items).toEqual([{ key: park.id, views: 4 }]);
+    expect(
+      await dataSource.query(
+        `SELECT SUM(count)::int AS reads FROM site_events WHERE entity = $1::uuid`,
+        [gone],
+      ),
+    ).toEqual([{ reads: 50 }]);
 
     const overview = await admin("/v1/admin/page-views?days=7").expect(200);
     const parkKind = overview.body.kinds.find(
       (k: { kind: string }) => k.kind === "park",
     );
-    expect(parkKind).toMatchObject({ total: 4, byLocale: { de: 4 } });
-    expect(parkKind.top[0]).toMatchObject({
+    // The admin sees every counted read, the deleted park's unnamed.
+    expect(parkKind).toMatchObject({ total: 54, byLocale: { de: 54 } });
+    expect(parkKind.top[0]).toMatchObject({ key: gone, total: 50 });
+    expect(parkKind.top[0].name).toBeUndefined();
+    expect(parkKind.top[1]).toMatchObject({
       key: park.id,
       name: "Phantasialand",
     });
   });
 
-  it("caps distinct names per day and folds a flood of property combinations into _overflow", async () => {
+  it("caps distinct names per day, admits yesterday's, and folds a flood of property combinations into _overflow", async () => {
     const collector = app.get(SiteAnalyticsCollectService);
     const day = utcDay(new Date());
     await redis.sadd(
-      SITE_ANALYTICS_KEYS.names(day),
+      SITE_ANALYTICS_KEYS.guard("names", day),
       ...Array.from({ length: 300 }, (_, i) => `name_${i}`),
     );
     await redis.sadd(
-      SITE_ANALYTICS_KEYS.combinations(day, "name_1"),
+      SITE_ANALYTICS_KEYS.guard("names", addIsoDays(day, -1)),
+      "known_event",
+    );
+    await redis.sadd(
+      SITE_ANALYTICS_KEYS.guard("combinations", day, "name_1"),
       ...Array.from({ length: 2000 }, (_, i) => `combo-${i}`),
     );
     await expect(
       collector.collect({
-        hits: [event("one_too_many"), event("name_1", { value: "new" })],
+        hits: [
+          event("one_too_many"),
+          event("name_1", { value: "new" }),
+          event("known_event"),
+        ],
         ip: "203.0.113.40",
         userAgent: UA,
       }),
-    ).resolves.toBe(1);
+    ).resolves.toBe(2);
     expect(
-      await redis.sismember(SITE_ANALYTICS_KEYS.names(day), "one_too_many"),
+      await redis.sismember(
+        SITE_ANALYTICS_KEYS.guard("names", day),
+        "one_too_many",
+      ),
     ).toBe(0);
+    expect(await redis.hgetall(SITE_ANALYTICS_KEYS.drops(day))).toMatchObject({
+      "dropped:name": "1",
+      "overflow:combination": "1",
+    });
     await flush();
     expect(
-      await dataSource.query(`SELECT name, props_key, props FROM site_events`),
+      await dataSource.query(
+        `SELECT name, props_key, props FROM site_events ORDER BY name`,
+      ),
     ).toEqual([
+      { name: "known_event", props_key: "", props: {} },
       { name: "name_1", props_key: "_overflow=1", props: { _overflow: "1" } },
     ]);
+  });
+
+  it("shows the flush backlog and the day's drops in the health report", async () => {
+    await beacon([pageview()]).expect(204);
+    const backlog = await app.get(SiteAnalyticsStorageService).backlog();
+    expect(backlog).toMatchObject({
+      pendingWindows: 1,
+      readyWindows: 0,
+      parkedWindows: 0,
+      healthy: true,
+    });
   });
 
   it("writes yesterday's visitors from Redis once, and reads today's live", async () => {

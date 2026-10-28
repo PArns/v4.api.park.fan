@@ -4,7 +4,7 @@ import { SiteAnalyticsService } from "../../site-analytics/site-analytics.servic
 import {
   changeRatio,
   siteQuery,
-  siteWindowInput,
+  pageWindowInput,
   windowOf,
 } from "./site-analytics.inputs";
 
@@ -14,12 +14,13 @@ export const analyticsEventsTool = defineMcpTool({
   description:
     "Every event name the site sent in the window or the one before (search_opened, " +
     "search_result_clicked, tab_changed, favorite_add, page_read …), most frequent first, with the " +
-    "count, the previous window's count, the change as a ratio, and whether an admin blocked it " +
+    "count, the previous window's count and the change as a ratio (null beyond 180 days), and " +
+    "whether an admin blocked it " +
     "(a blocked name is no longer recorded). Use analytics_event for one event's properties and " +
     "analytics_crosstab to cut it by two sides. UTC days; up to six minutes behind the site; " +
     "Do Not Track, GPC and opted-out readers are missing.",
   input: {
-    ...siteWindowInput,
+    ...pageWindowInput,
     limit: z
       .number()
       .int()

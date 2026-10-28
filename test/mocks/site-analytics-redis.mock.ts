@@ -1,9 +1,11 @@
 /**
  * A Redis good enough for the site statistic's unit tests: counters, hashes,
- * sets (a HyperLogLog is a set here, exact rather than estimated), RENAME, and
- * the TTL each key was given. Pipelines run their commands in order and
- * answer like ioredis, `[error, result]` per command. Expiry is not
- * simulated; a test ends a visit with `expireKeys(prefix)`.
+ * sets (a HyperLogLog is a set here, exact rather than estimated), RENAME,
+ * HSCAN, the guard script (`siteAnalyticsAdmit`, the same rules as its Lua in
+ * `site-analytics-admit.ts`) and the TTL each key was given. Pipelines and
+ * `MULTI` run their commands in order and answer like ioredis, `[error,
+ * result]` per command. Expiry is not simulated; a test ends a visit with
+ * `expireKeys(prefix)`.
  */
 export class SiteAnalyticsRedisMock {
   counters = new Map<string, number>();
@@ -15,6 +17,29 @@ export class SiteAnalyticsRedisMock {
   commands: Array<[string, ...unknown[]]> = [];
   /** Throw on the next `exec` (one per entry). */
   failNext: string[] = [];
+  /** Commands that answer an error inside a `MULTI`'s `exec` rather than run. */
+  failCommands = new Set<string>();
+  /** Called after each top-level command, to interleave a test's own writes. */
+  onCommand: ((name: string, key: string) => void) | null = null;
+
+  private static readonly COMMANDS = [
+    "incr",
+    "incrby",
+    "expire",
+    "get",
+    "del",
+    "hget",
+    "hset",
+    "hincrby",
+    "sadd",
+    "scard",
+    "srem",
+    "sismember",
+    "pfadd",
+    "pfcount",
+    "exists",
+    "siteAnalyticsAdmit",
+  ];
 
   private has(key: string): boolean {
     return (
@@ -40,6 +65,23 @@ export class SiteAnalyticsRedisMock {
         this.ttls.set(key, ttl);
         return 1;
       }
+      case "get":
+        return this.counters.has(key)
+          ? String(this.counters.get(key))
+          : (this.strings.get(key) ?? null);
+      case "del": {
+        let removed = 0;
+        for (const map of [
+          this.counters,
+          this.strings,
+          this.hashes,
+          this.sets,
+        ]) {
+          if (map.delete(key)) removed++;
+        }
+        this.ttls.delete(key);
+        return removed;
+      }
       case "hget":
         return this.hashes.get(key)?.get(String(args[0])) ?? null;
       case "hset": {
@@ -48,6 +90,19 @@ export class SiteAnalyticsRedisMock {
         const added = hash.has(String(args[0])) ? 0 : 1;
         hash.set(String(args[0]), String(args[1]));
         return added;
+      }
+      case "hsetnx": {
+        const hash = this.hashes.get(key) ?? new Map<string, string>();
+        this.hashes.set(key, hash);
+        if (hash.has(String(args[0]))) return 0;
+        hash.set(String(args[0]), String(args[1]));
+        return 1;
+      }
+      case "hdel": {
+        const hash = this.hashes.get(key);
+        const removed = hash?.delete(String(args[0])) ? 1 : 0;
+        if (hash && hash.size === 0) this.hashes.delete(key);
+        return removed;
       }
       case "hincrby": {
         const hash = this.hashes.get(key) ?? new Map<string, string>();
@@ -67,37 +122,56 @@ export class SiteAnalyticsRedisMock {
         }
         return added > 0 ? 1 : 0;
       }
+      case "sismember":
+        return this.sets.get(key)?.has(String(args[0])) ? 1 : 0;
       case "scard":
       case "pfcount":
         return this.sets.get(key)?.size ?? 0;
       case "srem": {
-        const removed = this.sets.get(key)?.delete(String(args[0])) ? 1 : 0;
+        const set = this.sets.get(key);
+        const removed = set?.delete(String(args[0])) ? 1 : 0;
+        if (set && set.size === 0) this.sets.delete(key);
         return removed;
       }
       case "exists":
         return this.has(key) ? 1 : 0;
+      case "siteAnalyticsAdmit": {
+        const [yesterday, counter, value, limit, hard, budget, setTtl, ttl] =
+          args as [
+            string,
+            string,
+            string,
+            number,
+            number,
+            number,
+            number,
+            number,
+          ];
+        const today = this.sets.get(key) ?? new Set<string>();
+        if (today.has(value)) return 1;
+        if (this.sets.get(yesterday)?.has(value)) {
+          if (today.size >= hard) return 0;
+        } else {
+          if (today.size >= limit) return 0;
+          const used = this.counters.get(counter) ?? 0;
+          if (used >= budget) return 0;
+          this.counters.set(counter, used + 1);
+          if (!this.ttls.has(counter)) this.ttls.set(counter, ttl);
+        }
+        today.add(value);
+        this.sets.set(key, today);
+        if (!this.ttls.has(key)) this.ttls.set(key, setTtl);
+        return 1;
+      }
       default:
         throw new Error(`Unmocked command ${name}`);
     }
   }
 
-  pipeline() {
+  private chain(transaction: boolean) {
     const queued: Array<[string, string, unknown[]]> = [];
     const chain: Record<string, (...args: unknown[]) => unknown> = {};
-    for (const name of [
-      "incr",
-      "incrby",
-      "expire",
-      "hget",
-      "hset",
-      "hincrby",
-      "sadd",
-      "scard",
-      "srem",
-      "pfadd",
-      "pfcount",
-      "exists",
-    ]) {
+    for (const name of SiteAnalyticsRedisMock.COMMANDS) {
       chain[name] = (key: unknown, ...args: unknown[]) => {
         queued.push([name, String(key), args]);
         return chain;
@@ -106,14 +180,32 @@ export class SiteAnalyticsRedisMock {
     chain.exec = async () => {
       const failure = this.failNext.shift();
       if (failure) throw new Error(failure);
-      return queued.map(([name, key, args]) => [
-        null,
-        this.run(name, key, args),
-      ]);
+      return queued.map(([name, key, args]) =>
+        transaction && this.failCommands.has(name)
+          ? [new Error(`${name} refused`), null]
+          : [null, this.run(name, key, args)],
+      );
     };
     return chain as unknown as {
       exec(): Promise<Array<[Error | null, unknown]>>;
     } & Record<string, (...args: unknown[]) => unknown>;
+  }
+
+  pipeline() {
+    return this.chain(false);
+  }
+
+  multi() {
+    return this.chain(true);
+  }
+
+  /** The guard script is answered in JavaScript; nothing to register. */
+  defineCommand(): void {}
+
+  private top(name: string, key: string, args: unknown[]): unknown {
+    const result = this.run(name, key, args);
+    this.onCommand?.(name, key);
+    return result;
   }
 
   async set(
@@ -127,21 +219,21 @@ export class SiteAnalyticsRedisMock {
   }
 
   async get(key: string): Promise<string | null> {
-    return this.strings.get(key) ?? null;
+    return this.top("get", key, []) as string | null;
   }
 
   async del(...keys: string[]): Promise<number> {
     let removed = 0;
-    for (const key of keys) {
-      for (const map of [this.counters, this.strings, this.hashes, this.sets]) {
-        if (map.delete(key)) removed++;
-      }
-    }
+    for (const key of keys) removed += this.top("del", key, []) as number;
     return removed;
   }
 
   async exists(key: string): Promise<number> {
-    return this.has(key) ? 1 : 0;
+    return this.top("exists", key, []) as number;
+  }
+
+  async expire(key: string, ttl: number, mode?: string): Promise<number> {
+    return this.top("expire", key, [ttl, mode]) as number;
   }
 
   async rename(from: string, to: string): Promise<"OK"> {
@@ -149,6 +241,10 @@ export class SiteAnalyticsRedisMock {
     if (!hash) throw new Error("ERR no such key");
     this.hashes.delete(from);
     this.hashes.set(to, hash);
+    const ttl = this.ttls.get(from);
+    this.ttls.delete(from);
+    if (ttl !== undefined) this.ttls.set(to, ttl);
+    this.onCommand?.("rename", from);
     return "OK";
   }
 
@@ -156,12 +252,46 @@ export class SiteAnalyticsRedisMock {
     return Object.fromEntries(this.hashes.get(key) ?? []);
   }
 
+  async hincrby(key: string, field: string, by: number): Promise<number> {
+    return this.top("hincrby", key, [field, by]) as number;
+  }
+
+  async hsetnx(key: string, field: string, value: string): Promise<number> {
+    return this.top("hsetnx", key, [field, value]) as number;
+  }
+
+  async hdel(key: string, field: string): Promise<number> {
+    return this.top("hdel", key, [field]) as number;
+  }
+
+  /** Two fields per step, so a test sees more than one round. */
+  async hscan(
+    key: string,
+    cursor: string,
+    ..._options: unknown[]
+  ): Promise<[string, string[]]> {
+    const entries = [...(this.hashes.get(key) ?? [])];
+    const at = Number(cursor);
+    const step = entries.slice(at, at + 2).flat();
+    const next = at + 2 >= entries.length ? "0" : String(at + 2);
+    this.onCommand?.("hscan", key);
+    return [next, step];
+  }
+
   async smembers(key: string): Promise<string[]> {
     return [...(this.sets.get(key) ?? [])];
   }
 
+  async sadd(key: string, member: string): Promise<number> {
+    return this.top("sadd", key, [member]) as number;
+  }
+
+  async scard(key: string): Promise<number> {
+    return this.top("scard", key, []) as number;
+  }
+
   async srem(key: string, member: string): Promise<number> {
-    return this.sets.get(key)?.delete(member) ? 1 : 0;
+    return this.top("srem", key, [member]) as number;
   }
 
   async pfcount(...keys: string[]): Promise<number> {

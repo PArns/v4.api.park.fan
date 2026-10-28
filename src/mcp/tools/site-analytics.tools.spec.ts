@@ -149,6 +149,59 @@ describe("site statistic tools", () => {
       service,
     );
     expect(withSeries.series).toHaveLength(1);
+
+    // Past 180 days there is no window before, so no change either; under
+    // a visit filter page views and events are null and stay null.
+    service.overview.mockResolvedValueOnce({
+      ...WINDOW,
+      totals: { ...totals, pageviews: null, events: null, viewsPerVisit: null },
+      previous: null,
+      series: [],
+      realtime: { activeVisitors: 0, perMinute: [] },
+    } as never);
+    const long = await run(analyticsOverviewTool, { days: 365 }, service);
+    expect(long.previous).toBeNull();
+    expect(long.change).toBeNull();
+    expect(long.totals).toMatchObject({ pageviews: null, events: null });
+  });
+
+  it("offers the event and page-view tools no visit dimension to filter by", () => {
+    const visit = { filters: [{ dim: "channel", value: "search" }] };
+    const page = { filters: [{ dim: "page_type", value: "park" }] };
+    for (const tool of [
+      analyticsEventsTool,
+      analyticsEventTool,
+      searchReportTool,
+      seoNotFoundTool,
+    ]) {
+      const schema = z.object(tool.input);
+      expect(schema.safeParse({ ...visit, name: "tab_changed" }).success).toBe(
+        false,
+      );
+      expect(schema.safeParse({ ...page, name: "tab_changed" }).success).toBe(
+        true,
+      );
+    }
+    expect(
+      z
+        .object(analyticsCrosstabTool.input)
+        .safeParse({
+          ...visit,
+          name: "tab_changed",
+          row: "day",
+          col: "viewport",
+        }).success,
+    ).toBe(false);
+    // Traffic tools take them: they select visits.
+    expect(z.object(analyticsOverviewTool.input).safeParse(visit).success).toBe(
+      true,
+    );
+  });
+
+  it("seo_trends: takes at most 180 days, the window before being needed", () => {
+    const schema = z.object(seoTrendsTool.input);
+    expect(schema.safeParse({ days: 180 }).success).toBe(true);
+    expect(schema.safeParse({ days: 181 }).success).toBe(false);
   });
 
   it("analytics_breakdown: passes dim and limit, rounds share and bounce", async () => {
@@ -156,6 +209,7 @@ describe("site statistic tools", () => {
       breakdown: jest.fn(async () => ({
         ...WINDOW,
         dim: "referrer",
+        measure: "visits",
         total: { views: 10, visits: 10 },
         items: [
           {
@@ -176,6 +230,7 @@ describe("site statistic tools", () => {
     expect(service.breakdown).toHaveBeenCalledWith(
       expect.objectContaining({ dim: "referrer", limit: 5, days: 30 }),
     );
+    expect(answer.measure).toBe("visits");
     expect(answer.items).toEqual([
       { value: "google", views: 7, visits: 7, share: 0.7, bounceRate: 0.333 },
     ]);
@@ -373,7 +428,7 @@ describe("site statistic tools", () => {
             views: 4,
             referrers: Array.from({ length: 8 }, (_, i) => ({
               value: `site${i}`,
-              views: 1,
+              visits: 1,
             })),
           },
         ],

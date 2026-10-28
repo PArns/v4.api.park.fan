@@ -42,8 +42,13 @@ const PAGE_KEY_SQL = `CASE WHEN e.props->>'kind' IN ('park', 'attraction')
        THEN COALESCE(m.winner_id, e.entity)::text
        ELSE e.props->>'key' END`;
 
-/** The reads of a window, with their page key. `$1` is the window's start. */
+/**
+ * The reads of a window, with their page key and, for a park or ride, its
+ * surviving id. `$1` is the window's start.
+ */
 const READS_SQL = `SELECT e.props->>'kind' AS kind, ${PAGE_KEY_SQL} AS key,
+            CASE WHEN e.props->>'kind' IN ('park', 'attraction')
+                 THEN COALESCE(m.winner_id, e.entity) END AS entity,
             e.locale, e.count, e.bucket
        FROM site_events e
        LEFT JOIN site_entity_merges m ON m.loser_id = e.entity
@@ -53,7 +58,8 @@ const READS_SQL = `SELECT e.props->>'kind' AS kind, ${PAGE_KEY_SQL} AS key,
  * The "most read" rankings and the admin's popularity overview, served from
  * the site statistic: a counted read is the event `page_read`
  * (`src/site-analytics/`), which keeps this counter's guards (three reads per
- * reader and page and 500 per address a UTC day, the key rules per kind).
+ * reader and page, ten per address and page and 200 per address a UTC day,
+ * the key rules per kind, and parks and rides that exist).
  * `page_view_days` is no longer written; its rows were copied into
  * `site_events` once. See docs/frontend/page-views.md.
  */
@@ -102,7 +108,11 @@ export class PageViewsService {
     return addIsoDays(utcDay(now), -(days - 1));
   }
 
-  /** The most viewed pages of one kind in one language, most viewed first. */
+  /**
+   * The most viewed pages of one kind in one language, most viewed first. A
+   * park or ride ranks only while it exists: the collector already refuses a
+   * read of an unknown id, and this keeps a deleted one off the public list.
+   */
   async top(
     kind: PageViewKind,
     locale: PageViewLocale,
@@ -112,11 +122,17 @@ export class PageViewsService {
   ): Promise<TopPageViewDto[]> {
     const rows: Array<{ key: string; views: string | number }> =
       await this.db.query(
-        `SELECT key, SUM(count) AS views
-           FROM (${READS_SQL} AND e.props->>'kind' = $2 AND e.locale = $3) r
-          WHERE key IS NOT NULL
-          GROUP BY key
-          ORDER BY SUM(count) DESC, key ASC
+        `SELECT key, views
+           FROM (SELECT key, entity, SUM(count) AS views
+                   FROM (${READS_SQL} AND e.props->>'kind' = $2 AND e.locale = $3) r
+                  WHERE key IS NOT NULL
+                  GROUP BY key, entity) g
+          WHERE g.entity IS NULL
+             OR ($2 = 'park'
+                 AND EXISTS (SELECT 1 FROM parks p WHERE p.id = g.entity))
+             OR ($2 = 'attraction'
+                 AND EXISTS (SELECT 1 FROM attractions a WHERE a.id = g.entity))
+          ORDER BY views DESC, key ASC
           LIMIT $4`,
         [`${this.windowStart(days, now)}T00:00:00Z`, kind, locale, limit],
       );

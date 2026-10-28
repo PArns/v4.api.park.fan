@@ -105,9 +105,10 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     orderBy: "predictedTime ASC",
   },
   // The site statistic (PAR-1151): insert-only, one row per dimension
-  // combination and five-minute window. Week chunks, so a chunk is compressed
-  // a week after it closes and dropped whole after 400 days by the nightly
-  // `site-analytics` / `drop-old-chunks` job, never deleted from.
+  // combination and flush window, bucketed by the UTC hour. Week chunks, so a
+  // chunk is compressed a week after it closes and dropped whole after 400
+  // days by the nightly `site-analytics` / `drop-old-chunks` job, never
+  // deleted from.
   {
     table: "site_pageviews",
     timeColumn: "bucket",

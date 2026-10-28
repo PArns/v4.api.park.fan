@@ -222,6 +222,22 @@ describe("validateHit", () => {
     ).toMatchObject({ entity: null });
   });
 
+  it("drops the entity of an event that would say where the reader is", () => {
+    for (const name of [
+      "nearby_parks_loaded",
+      "compass_viewed",
+      "compass_ride_opened",
+      "compass_anything_new",
+    ]) {
+      expect(
+        validateHit(event(name, { type: "in_park" }, { entity: PARK_ID })),
+      ).toMatchObject({ name, props: { type: "in_park" }, entity: null });
+    }
+    expect(
+      validateHit(event("nearby_permission", {}, { entity: PARK_ID })),
+    ).toMatchObject({ entity: PARK_ID });
+  });
+
   describe("page_read", () => {
     it("names a post by its translationKey and carries no entity", () => {
       expect(

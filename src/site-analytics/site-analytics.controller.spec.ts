@@ -1,3 +1,4 @@
+import helmet from "helmet";
 import {
   Body,
   CallHandler,
@@ -24,7 +25,7 @@ import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { COLLECT_ROUTE } from "./site-analytics.module";
-import { textBodyMiddleware } from "./text-body.middleware";
+import { collectBodyMiddleware } from "./collect-body.middleware";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
@@ -82,7 +83,7 @@ const blocklist = {
 })
 class TestModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(textBodyMiddleware()).forRoutes(COLLECT_ROUTE);
+    consumer.apply(collectBodyMiddleware()).forRoutes(COLLECT_ROUTE);
   }
 }
 
@@ -118,6 +119,13 @@ describe("SiteAnalyticsController", () => {
       })
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
+    // As in main.ts, so the beacon's own resource policy is seen to win.
+    app.use(
+      helmet({
+        contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: false,
+      }),
+    );
     app.setGlobalPrefix("v1");
     app.useGlobalPipes(
       new ValidationPipe({
@@ -163,6 +171,10 @@ describe("SiteAnalyticsController", () => {
         .send(body)
         .expect(204);
       expect(response.headers["cache-control"]).toContain("no-store");
+      // A no-cors beacon from park.fan may read the empty answer.
+      expect(response.headers["cross-origin-resource-policy"]).toBe(
+        "cross-origin",
+      );
       expect(collect).toHaveBeenCalledWith({
         hits: [hit],
         ip: "203.0.113.7",
@@ -203,11 +215,15 @@ describe("SiteAnalyticsController", () => {
       expect(collect).not.toHaveBeenCalled();
     });
 
-    it("refuses a body over 16 KiB", async () => {
-      await post()
-        .set("Content-Type", "text/plain")
-        .send(JSON.stringify({ v: 1, hits: [hit], pad: "x".repeat(17000) }))
-        .expect(413);
+    it("refuses a body over 16 KiB, as text and as JSON", async () => {
+      const oversized = JSON.stringify({
+        v: 1,
+        hits: [hit],
+        pad: "x".repeat(17000),
+      });
+      for (const type of ["text/plain", "application/json"]) {
+        await post().set("Content-Type", type).send(oversized).expect(413);
+      }
       expect(collect).not.toHaveBeenCalled();
     });
 
@@ -306,6 +322,10 @@ describe("SiteAnalyticsController", () => {
         "/v1/admin/analytics/events/Bad-Name",
         "/v1/admin/analytics/events/search_opened/crosstab?row=prop:surface",
         "/v1/admin/analytics/events/search_opened/crosstab?row=id&col=day",
+        // Events carry no visit dimension to cross with.
+        "/v1/admin/analytics/events/search_opened/crosstab?row=channel&col=day",
+        // Trends need a window before, which longer windows lack.
+        "/v1/admin/analytics/seo/trends?days=181",
         "/v1/admin/analytics/seo/landing-pages?channel=email",
         "/v1/admin/analytics/seo/uncovered",
         "/v1/admin/analytics/seo/uncovered?kind=show",

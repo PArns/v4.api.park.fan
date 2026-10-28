@@ -27,7 +27,8 @@ export const analyticsOverviewTool = defineMcpTool({
   title: "Site traffic overview",
   description:
     "park.fan's traffic over a window: page views, visits, visitors, events, views per visit and " +
-    "bounce rate, the same for the window before with the change as a ratio (0.25 = +25 %), the " +
+    "bounce rate, the same for the window before with the change as a ratio (0.25 = +25 %; both " +
+    "null beyond 180 days), the " +
     "active visitors of the last five minutes and page views of the last 30, and optionally a " +
     "point per day (per hour when days is 1). Start here, then narrow with analytics_breakdown. " +
     SITE_ANALYTICS_CAVEATS,
@@ -45,15 +46,17 @@ export const analyticsOverviewTool = defineMcpTool({
     return {
       ...windowOf(report),
       totals: totals(report.totals),
-      previous: totals(report.previous),
-      change: {
-        pageviews: changeRatio(
-          report.totals.pageviews,
-          report.previous.pageviews,
-        ),
-        visits: changeRatio(report.totals.visits, report.previous.visits),
-        events: changeRatio(report.totals.events, report.previous.events),
-      },
+      previous: report.previous ? totals(report.previous) : null,
+      change: report.previous
+        ? {
+            pageviews: changeRatio(
+              report.totals.pageviews,
+              report.previous.pageviews,
+            ),
+            visits: changeRatio(report.totals.visits, report.previous.visits),
+            events: changeRatio(report.totals.events, report.previous.events),
+          }
+        : null,
       realtime: {
         activeVisitors: report.realtime.activeVisitors,
         pageviewsLast30Minutes: report.realtime.perMinute.reduce(

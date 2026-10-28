@@ -129,6 +129,13 @@ describe("PageViewsService", () => {
       expect(sql).toContain("e.name = 'page_read'");
       expect(sql).toContain("LEFT JOIN site_entity_merges m");
       expect(sql).toContain("e.props->>'kind' = $2 AND e.locale = $3");
+      // A park or ride ranks only while it exists, compared as uuids.
+      expect(sql).toContain(
+        "EXISTS (SELECT 1 FROM parks p WHERE p.id = g.entity)",
+      );
+      expect(sql).toContain(
+        "EXISTS (SELECT 1 FROM attractions a WHERE a.id = g.entity)",
+      );
       expect(params).toEqual(["2026-09-28T00:00:00Z", "article", "nl", 5]);
     });
 

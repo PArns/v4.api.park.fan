@@ -9,6 +9,7 @@ import {
   PAGE_READ_EVENT,
   SITE_LOCALES,
   SITE_VIEWPORTS,
+  isLocationDerivedEvent,
   type SiteLocale,
 } from "./site-analytics.constants";
 
@@ -193,7 +194,12 @@ export function validateHit(raw: unknown): ValidHit | null {
   if (typeof name !== "string" || !EVENT_NAME_PATTERN.test(name)) return null;
 
   let props = sanitizeProps(raw.props);
-  let entity = isCanonicalUuid(raw.entity) ? raw.entity : null;
+  // An event about where the reader is keeps no entity, whatever a client
+  // sends: the park near them would be their location.
+  let entity =
+    isCanonicalUuid(raw.entity) && !isLocationDerivedEvent(name)
+      ? raw.entity
+      : null;
   if (name === PAGE_READ_EVENT) {
     const read = pageRead(props, entity);
     if (!read) return null;
