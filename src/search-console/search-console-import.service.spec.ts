@@ -6,7 +6,7 @@ import {
   planDays,
 } from "./search-console-import.service";
 import { SearchConsoleApiError, type GscApiRow } from "./search-console.client";
-import { BACKFILL_DAYS } from "./search-console.constants";
+import { BACKFILL_DAYS, BATCH_FORMAT } from "./search-console.constants";
 
 const HOSTS = ["park.fan", "www.park.fan"];
 
@@ -18,67 +18,118 @@ const apiRow = (
 ): GscApiRow => ({ keys, clicks, impressions, ctr: 0, position });
 
 describe("buildBatch", () => {
-  const pageRows = [
-    apiRow(["https://park.fan/de/parks/", "deu", "MOBILE"], 4, 100, 3),
-    apiRow(["https://www.park.fan/de/parks", "deu", "MOBILE"], 6, 300, 5),
-    apiRow(["https://park.fan/en/news", "usa", "DESKTOP"], 1, 10, 8),
-    apiRow(["https://api.park.fan/v1/x", "deu", "MOBILE"], 9, 9, 1),
-  ];
-  const queryRows = [
-    apiRow(
-      ["https://park.fan/de/parks", "Phantasialand ", "deu", "MOBILE"],
-      3,
-      40,
-      2,
+  const fetched = {
+    // Without dimensions Google sends no keys.
+    property: [{ clicks: 11, impressions: 400, ctr: 0, position: 4 }].map(
+      (row) => row as GscApiRow,
     ),
-    apiRow(
-      ["https://park.fan/en/news", "park news", "usa", "DESKTOP"],
-      1,
-      5,
-      7,
-    ),
-  ];
+    pages: [
+      apiRow(["https://park.fan/de/parks/"], 4, 100, 3),
+      apiRow(["https://www.park.fan/de/parks"], 6, 300, 5),
+      apiRow(["https://park.fan/en/news"], 1, 10, 8),
+      apiRow(["https://api.park.fan/v1/x"], 9, 9, 1),
+    ],
+    countries: [apiRow(["deu"], 10, 380, 4), apiRow(["usa"], 1, 20, 8)],
+    devices: [apiRow(["MOBILE"], 11, 400, 4)],
+    queries: [
+      apiRow(
+        ["https://park.fan/de/parks", "Phantasialand ", "deu", "MOBILE"],
+        3,
+        40,
+        2,
+      ),
+      apiRow(
+        ["https://park.fan/en/news", "park news", "usa", "DESKTOP"],
+        1,
+        5,
+        7,
+      ),
+    ],
+  };
+
+  it("stores the property, page, country, device and query levels", () => {
+    const { rows } = buildBatch(fetched, HOSTS);
+    const level = (row: (typeof rows)[number]) =>
+      row.query !== null
+        ? "query"
+        : row.page !== ""
+          ? "page"
+          : row.country !== ""
+            ? "country"
+            : row.device !== ""
+              ? "device"
+              : "property";
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[level(row)] = (counts[level(row)] ?? 0) + 1;
+    expect(counts).toEqual({
+      property: 1,
+      page: 2,
+      country: 2,
+      device: 1,
+      query: 2,
+    });
+  });
 
   it("merges the URLs of one page and weights the position by impressions", () => {
-    const batch = buildBatch(pageRows, [], HOSTS);
-    const parks = batch.rows.find((row) => row.page === "/de/parks");
+    const parks = buildBatch(fetched, HOSTS).rows.find(
+      (row) => row.page === "/de/parks" && row.query === null,
+    );
     expect(parks).toEqual({
       page: "/de/parks",
       query: null,
       locale: "de",
-      country: "deu",
-      device: "mobile",
+      country: "",
+      device: "",
       clicks: 10,
       impressions: 400,
       positionSum: 3 * 100 + 5 * 300,
     });
   });
 
-  it("totals the rows without a query and skips pages off the site", () => {
-    const batch = buildBatch(pageRows, queryRows, HOSTS);
+  it("lowers country and device and leaves the page empty on their rows", () => {
+    const { rows } = buildBatch(fetched, HOSTS);
+    expect(rows.find((row) => row.device === "mobile" && !row.query)).toEqual({
+      page: "",
+      query: null,
+      locale: "",
+      country: "",
+      device: "mobile",
+      clicks: 11,
+      impressions: 400,
+      positionSum: 1600,
+    });
+    expect(rows.find((row) => row.country === "usa" && !row.query)?.page).toBe(
+      "",
+    );
+  });
+
+  it("takes the day's totals from the property row and skips pages off the site", () => {
+    const batch = buildBatch(fetched, HOSTS);
     expect(batch.skipped).toBe(1);
     expect(batch.totals).toEqual({
-      rows: 4,
+      rows: 8,
       clicks: 11,
-      impressions: 410,
-      positionSum: 1800 + 80,
+      impressions: 400,
+      positionSum: 1600,
     });
   });
 
-  it("stores the query rows with a normalised query beside the page rows", () => {
-    const batch = buildBatch(pageRows, queryRows, HOSTS);
-    const withQuery = batch.rows.filter((row) => row.query !== null);
+  it("stores the query rows with a normalised query", () => {
+    const withQuery = buildBatch(fetched, HOSTS).rows.filter(
+      (row) => row.query !== null,
+    );
     expect(withQuery.map((row) => row.query).sort()).toEqual([
       "park news",
       "phantasialand",
     ]);
-    expect(batch.rows.filter((row) => row.query === null)).toHaveLength(2);
+    expect(withQuery[0].country).toMatch(/^[a-z]{3}$/);
   });
 });
 
 describe("isUnchanged", () => {
   const current = {
     id: 1,
+    format: BATCH_FORMAT,
     rows: 4,
     clicks: 11,
     impressions: 410,
@@ -104,6 +155,10 @@ describe("isUnchanged", () => {
     expect(isUnchanged(current, { ...current, positionSum: 1900 })).toBe(false);
   });
 
+  it("is false for a day in an older layout, even with the same figures", () => {
+    expect(isUnchanged({ ...current, format: 1 }, { ...current })).toBe(false);
+  });
+
   it("does not let an empty download erase a day that had data", () => {
     expect(
       isUnchanged(current, {
@@ -118,14 +173,20 @@ describe("isUnchanged", () => {
 
 describe("planDays", () => {
   const now = new Date("2026-10-28T09:20:00Z");
+  const fetched = (days: string[], format = BATCH_FORMAT) =>
+    new Map(days.map((day) => [day, { format }]));
+  const older = planDays(now, 3, new Map()).slice(3);
 
   it("re-imports the last days, newest first, ending yesterday", () => {
-    const days = planDays(now, 3, new Set(planDaysAll()));
-    expect(days).toEqual(["2026-10-27", "2026-10-26", "2026-10-25"]);
+    expect(planDays(now, 3, fetched(older))).toEqual([
+      "2026-10-27",
+      "2026-10-26",
+      "2026-10-25",
+    ]);
   });
 
   it("adds the days never fetched back to the backfill limit, newest first", () => {
-    const days = planDays(now, 3, new Set());
+    const days = planDays(now, 3, new Map());
     expect(days).toHaveLength(BACKFILL_DAYS);
     expect(days[0]).toBe("2026-10-27");
     expect(days[3]).toBe("2026-10-24");
@@ -133,24 +194,30 @@ describe("planDays", () => {
   });
 
   it("leaves out an old day that was fetched, even one that came back empty", () => {
-    const days = planDays(now, 3, new Set(["2026-10-24", "2026-10-23"]));
+    const days = planDays(now, 3, fetched(["2026-10-24", "2026-10-23"]));
     expect(days).toHaveLength(BACKFILL_DAYS - 2);
     expect(days).not.toContain("2026-10-24");
   });
 
-  function planDaysAll(): string[] {
-    return planDays(now, 3, new Set()).slice(3);
-  }
+  it("fetches again every day whose current batch is in an older layout", () => {
+    expect(planDays(now, 3, fetched(older, 1))).toHaveLength(BACKFILL_DAYS);
+  });
 });
 
 /** A service over fakes: the API's rows by day, the batches table, a lock. */
 function build(
   options: {
-    days?: Record<string, { page: GscApiRow[]; query: GscApiRow[] }>;
+    days?: Record<string, Record<string, GscApiRow[]>>;
     fail?: (day: string) => Error | null;
     fetched?: Record<
       string,
-      { rows: number; clicks: number; impressions: number; positionSum: number }
+      {
+        rows: number;
+        clicks: number;
+        impressions: number;
+        positionSum: number;
+        format?: number;
+      }
     >;
     lock?: boolean;
   } = {},
@@ -186,6 +253,7 @@ function build(
         if (sql.includes("FROM search_console_batches")) {
           return Object.entries(options.fetched ?? {}).map(([day, b], i) => ({
             id: i + 1,
+            format: b.format ?? BATCH_FORMAT,
             day,
             rows: b.rows,
             clicks: b.clicks,
@@ -211,7 +279,7 @@ function build(
       if (failure) throw failure;
       const rows = options.days?.[day];
       if (!rows) return [];
-      return dimensions.includes("query") ? rows.query : rows.page;
+      return rows[dimensions.join(",")] ?? [];
     },
   );
   const client = {
@@ -249,7 +317,7 @@ describe("SearchConsoleImportService.run", () => {
 
   /** Every older day already fetched, so only the recent three are in play. */
   const olderFetched = Object.fromEntries(
-    planDays(now, 3, new Set())
+    planDays(now, 3, new Map())
       .slice(3)
       .map((day) => [
         day,
@@ -257,11 +325,13 @@ describe("SearchConsoleImportService.run", () => {
       ]),
   );
 
+  /** One row at every level; the property row's position is 4, so its sum is 200 at 50 impressions. */
   const day = (clicks: number) => ({
-    page: [
-      apiRow(["https://park.fan/de/parks", "deu", "MOBILE"], clicks, 50, 4),
-    ],
-    query: [
+    "": [{ clicks, impressions: 50, ctr: 0, position: 4 } as GscApiRow],
+    page: [apiRow(["https://park.fan/de/parks"], clicks, 55, 4)],
+    country: [apiRow(["deu"], clicks, 50, 4)],
+    device: [apiRow(["MOBILE"], clicks, 50, 4)],
+    "page,query,country,device": [
       apiRow(
         ["https://park.fan/de/parks", "q", "deu", "MOBILE"],
         clicks,
@@ -292,9 +362,9 @@ describe("SearchConsoleImportService.run", () => {
     expect(summary).toMatchObject({
       daysChecked: 3,
       batchesWritten: 1,
-      rowsWritten: 2,
+      rowsWritten: 5,
     });
-    expect(written).toEqual([{ day: "2026-10-27", rows: 2 }]);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
     expect(db.transaction).toHaveBeenCalledTimes(1);
     const insert = manager.query.mock.calls.find(([sql]) =>
       String(sql).includes("INSERT INTO search_console_rows"),
@@ -313,7 +383,7 @@ describe("SearchConsoleImportService.run", () => {
     const { service, written } = build({
       fetched: {
         ...olderFetched,
-        "2026-10-27": { rows: 2, clicks: 5, impressions: 50, positionSum: 200 },
+        "2026-10-27": { rows: 5, clicks: 5, impressions: 50, positionSum: 200 },
         "2026-10-26": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
         "2026-10-25": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
       },
@@ -328,14 +398,44 @@ describe("SearchConsoleImportService.run", () => {
     const { service, written } = build({
       fetched: {
         ...olderFetched,
-        "2026-10-27": { rows: 2, clicks: 5, impressions: 50, positionSum: 200 },
+        "2026-10-27": { rows: 5, clicks: 5, impressions: 50, positionSum: 200 },
         "2026-10-26": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
         "2026-10-25": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
       },
       days: { "2026-10-27": day(9) },
     });
     await service.run("cron", now);
-    expect(written).toEqual([{ day: "2026-10-27", rows: 2 }]);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
+  });
+
+  it("writes a new batch for a day stored in an older layout, whatever its figures", async () => {
+    const { service, written } = build({
+      fetched: {
+        ...olderFetched,
+        "2026-10-27": {
+          rows: 5,
+          clicks: 5,
+          impressions: 50,
+          positionSum: 200,
+          format: 1,
+        },
+        "2026-10-26": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
+        "2026-10-25": { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
+      },
+      days: { "2026-10-27": day(5) },
+    });
+    await service.run("cron", now);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
+  });
+
+  it("asks Google five times a day: property, page, country, device, query", async () => {
+    const { service, fetchDay } = build({ fetched: olderFetched });
+    await service.run("cron", now);
+    expect(
+      fetchDay.mock.calls
+        .filter(([d]) => d === "2026-10-27")
+        .map(([, dims]) => dims.join(",")),
+    ).toEqual(["", "page", "country", "device", "page,query,country,device"]);
   });
 
   it("records the run and releases the lock", async () => {

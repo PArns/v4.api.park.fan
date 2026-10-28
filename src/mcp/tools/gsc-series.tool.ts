@@ -20,7 +20,7 @@ export const gscSeriesTool = defineMcpTool({
     "Clicks, impressions, ctr and average position of park.fan in Google per day, week or " +
     "month, from the window's first day to the last day with data; a period the window or the " +
     "data cuts is partial: true. Reach for it to see a trend or a drop after a change; filter " +
-    "by page or query to follow one of them. The figures include queries Google anonymises. " +
+    "by page or query to follow one of them. The figures include queries Google anonymises; under a country or device filter they stay complete, but with both filters, a page or a language as well they are visible queries only and partialBreakdown: true says so. " +
     GSC_CAVEATS,
   input: {
     ...gscWindowInput,
@@ -44,6 +44,7 @@ export const gscSeriesTool = defineMcpTool({
       to: report.to,
       days: report.days,
       locale: report.locale,
+      ...(report.partialBreakdown && { partialBreakdown: true }),
       interval: report.interval,
       series: report.series.map((point) => ({
         ...point,

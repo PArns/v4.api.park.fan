@@ -7,11 +7,14 @@ import {
 } from "typeorm";
 
 /**
- * Search Console's numbers for one day, as one import batch wrote them: a row
- * per page, query, country and device, or, with `query` null, per page,
- * country and device. The second kind is the property's own totals: Google
- * leaves queries it anonymises out of the query rows, but counts them here, so
- * pages and series read these and the queries report reads the others.
+ * Search Console's numbers for one day, as one import batch wrote them, at
+ * four levels: with a `query`, a row per page, query, country and device;
+ * without one, complete rows per page (`country` and `device` empty), per
+ * country (`page` and `device` empty) or per device (`page` and `country`
+ * empty). Google drops the queries it anonymises as soon as a page is combined
+ * with a country or device, so only the single-dimension requests are
+ * complete: the page rows answer pages and series, the country and device rows
+ * the totals under that filter, the query rows the queries.
  *
  * Insert-only. A day imported again is a new batch (`search_console_batches`
  * names the current one per day) and the reports read only that batch; the
@@ -35,11 +38,11 @@ export class SearchConsoleRow {
   @Column({ name: "batch_id", type: "integer" })
   batchId: number;
 
-  /** The page's path on the site: lower case, no origin, query or trailing slash. */
+  /** The page's path on the site: lower case, no origin, query or trailing slash; `''` on a country or device row. */
   @Column({ type: "varchar", length: 820 })
   page: string;
 
-  /** The search query; null on a row that has none (the property's totals). */
+  /** The search query; null on a complete page, country or device row. */
   @Column({ type: "text", nullable: true })
   query: string | null;
 
@@ -47,10 +50,11 @@ export class SearchConsoleRow {
   @Column({ type: "varchar", length: 2, default: "" })
   locale: string;
 
-  /** ISO 3166-1 alpha-3, lower case, as Search Console reports it (`deu`). */
+  /** ISO 3166-1 alpha-3, lower case, as Search Console reports it (`deu`); `''` on a page or device row. */
   @Column({ type: "varchar", length: 3 })
   country: string;
 
+  /** `''` on a page or country row. */
   @Column({ type: "varchar", length: 8 })
   device: string;
 

@@ -40,27 +40,34 @@ const apiRow = (
 ): ApiRow => ({ keys, clicks, impressions, ctr: 0, position });
 
 /**
- * What the mocked Search Console answers for a day: the property's own rows
- * (page, country, device) and the rows with a query, of which Google leaves
- * out the anonymised ones, so the clicks of the second kind are fewer. `scale`
- * multiplies the figures, so a day can come back different.
+ * What the mocked Search Console answers for a day, by the dimensions asked
+ * for (joined with a comma). The property, country and device rows are
+ * complete and agree (16 clicks at scale 1); the page rows add up to a little
+ * more (17, Google aggregates them by page); the query rows leave out the
+ * anonymised queries (10 clicks). `scale` multiplies the figures, so a day
+ * can come back different.
  */
-function googleDay(scale: number) {
+function googleDay(scale: number): Record<string, ApiRow[]> {
   const n = (value: number) => value * scale;
   return {
+    // Without dimensions Google sends no keys.
+    "": [{ clicks: n(16), impressions: n(340), ctr: 0, position: 3 } as ApiRow],
     page: [
-      apiRow([PARK_URL, "deu", "MOBILE"], n(10), n(200), 3),
-      apiRow(
-        ["https://www.park.fan" + PARK_PATH, "deu", "DESKTOP"],
-        n(5),
-        n(100),
-        4,
-      ),
-      apiRow(["https://park.fan/en/news", "usa", "DESKTOP"], n(2), n(50), 8),
+      apiRow([PARK_URL], n(10), n(200), 3),
+      apiRow(["https://www.park.fan" + PARK_PATH], n(5), n(100), 4),
+      apiRow(["https://park.fan/en/news"], n(2), n(50), 8),
       // A subdomain of the domain property: not a page of the site.
-      apiRow(["https://api.park.fan/v1/parks", "deu", "MOBILE"], 99, 99, 1),
+      apiRow(["https://api.park.fan/v1/parks"], 99, 99, 1),
     ],
-    query: [
+    country: [
+      apiRow(["deu"], n(15), n(300), 3),
+      apiRow(["usa"], n(1), n(40), 8),
+    ],
+    device: [
+      apiRow(["MOBILE"], n(10), n(200), 3),
+      apiRow(["DESKTOP"], n(6), n(140), 4),
+    ],
+    "page,query,country,device": [
       apiRow(
         [PARK_URL, "phantasialand wartezeiten", "deu", "MOBILE"],
         n(6),
@@ -156,7 +163,7 @@ describe("Search Console (e2e)", () => {
             if (scale === undefined) return Response.json({});
             const rows = googleDay(scale);
             return Response.json({
-              rows: body.dimensions.includes("query") ? rows.query : rows.page,
+              rows: rows[(body.dimensions as string[]).join(",")] ?? [],
             });
           }
           return real(input, init);
@@ -262,25 +269,35 @@ describe("Search Console (e2e)", () => {
         ORDER BY query NULLS FIRST, page, device`,
       [d(2)],
     );
-    expect(stored).toHaveLength(6);
-    expect(stored[0]).toEqual({
+    // Property 1, page 2, country 2, device 2 and the query rows 3.
+    expect(stored).toHaveLength(10);
+    expect(
+      stored.filter((row: { query: string | null }) => row.query === null),
+    ).toHaveLength(7);
+    expect(
+      stored.find(
+        (row: { page: string; query: string | null }) =>
+          row.page === PARK_PATH && row.query === null,
+      ),
+    ).toEqual({
       page: PARK_PATH,
       query: null,
       locale: "de",
-      country: "deu",
-      device: "desktop",
-      clicks: 5,
-      impressions: 100,
-      position_sum: 400,
+      country: "",
+      device: "",
+      clicks: 15,
+      impressions: 300,
+      position_sum: 1000,
     });
-    expect(stored.map((row: { query: string | null }) => row.query)).toEqual([
-      null,
-      null,
-      null,
-      "park news",
-      "phantasialand",
-      "phantasialand wartezeiten",
-    ]);
+    expect(
+      stored.find(
+        (row: { page: string; country: string; query: string | null }) =>
+          row.page === "" && row.country === "usa" && row.query === null,
+      ),
+    ).toMatchObject({ device: "", clicks: 1, impressions: 40 });
+    expect(
+      stored.map((row: { query: string | null }) => row.query).filter(Boolean),
+    ).toEqual(["park news", "phantasialand", "phantasialand wartezeiten"]);
 
     // A second run asks Google for the recent days again and nothing else.
     apiCalls.length = 0;
@@ -290,8 +307,9 @@ describe("Search Console (e2e)", () => {
       batchesWritten: 0,
       unchanged: 3,
     });
+    // Five requests a day: property, page, country, device, query.
     expect(apiCalls.map((c) => c.day).sort()).toEqual(
-      [d(1), d(1), d(2), d(2), d(3), d(3)].sort(),
+      [d(1), d(2), d(3)].flatMap((day) => Array(5).fill(day)).sort(),
     );
 
     // A day Google revised is a newer batch; the older batch's rows stay.
@@ -299,12 +317,12 @@ describe("Search Console (e2e)", () => {
     const third = await importService.run("cron");
     expect(third).toMatchObject({ batchesWritten: 1, unchanged: 2 });
     const perBatch = await dataSource.query(
-      `SELECT batch_id, count(*)::int AS rows, sum(clicks) FILTER (WHERE query IS NULL)::int AS clicks
+      `SELECT batch_id, count(*)::int AS rows, sum(clicks) FILTER (WHERE query IS NULL AND page = '' AND country = '' AND device = '')::int AS clicks
          FROM search_console_rows WHERE day = $1::date GROUP BY batch_id ORDER BY batch_id`,
       [d(2)],
     );
     expect(perBatch).toHaveLength(2);
-    expect(perBatch.map((b: { clicks: number }) => b.clicks)).toEqual([17, 51]);
+    expect(perBatch.map((b: { clicks: number }) => b.clicks)).toEqual([16, 48]);
   });
 
   it("reports the newest batch of each day: queries, pages, series, with filters and the window before", async () => {
@@ -327,7 +345,7 @@ describe("Search Console (e2e)", () => {
       days: 7,
       locale: null,
       // Query rows only: 10 clicks on d(4), 20 on d(3), 30 on d(2) (the
-      // revised day), against the property's own 17 + 34 + 51 on the pages.
+      // revised day), against the property's own 16 + 32 + 48.
       totals: { clicks: 60, impressions: 960 },
       previous: { clicks: 10, impressions: 160 },
     });
@@ -352,8 +370,10 @@ describe("Search Console (e2e)", () => {
       "/v1/admin/search-console/pages?days=7",
       viewer.session,
     ).expect(200);
-    expect(pages.body.totals).toMatchObject({ clicks: 17 + 34 + 51 });
-    expect(pages.body.previous).toMatchObject({ clicks: 17 });
+    // Totals are the property's; the items are by page and add up to more.
+    expect(pages.body.totals).toMatchObject({ clicks: 16 + 32 + 48 });
+    expect(pages.body.previous).toMatchObject({ clicks: 16 });
+    expect(pages.body).not.toHaveProperty("partialBreakdown");
     expect(pages.body.items[0]).toMatchObject({
       path: PARK_PATH,
       clicks: 15 + 30 + 45,
@@ -404,7 +424,7 @@ describe("Search Console (e2e)", () => {
       ctr: 0,
       position: null,
     });
-    expect(series.body.series[4]).toMatchObject({ day: d(2), clicks: 51 });
+    expect(series.body.series[4]).toMatchObject({ day: d(2), clicks: 48 });
 
     const long = await get(
       "/v1/admin/search-console/series?days=365",
@@ -415,7 +435,77 @@ describe("Search Console (e2e)", () => {
       (sum: number, p: { clicks: number }) => sum + p.clicks,
       0,
     );
-    expect(total).toBe(17 + 17 + 34 + 51);
+    expect(total).toBe(16 + 16 + 32 + 48);
+  });
+
+  it("answers a country or device filter from the complete country and device rows, and marks the page list", async () => {
+    seedGoogle();
+    await importService.run("cron");
+    const viewer = await account("gsc-slice@example.invalid", "viewer");
+
+    const series = await get(
+      "/v1/admin/search-console/series?days=7&interval=day&country=deu",
+      viewer.session,
+    ).expect(200);
+    expect(series.body.partialBreakdown).toBe(true);
+    expect(series.body.series.slice(-1)[0]).toMatchObject({
+      day: d(2),
+      clicks: 15,
+    });
+
+    const pages = await get(
+      "/v1/admin/search-console/pages?days=7&device=mobile",
+      viewer.session,
+    ).expect(200);
+    expect(pages.body.partialBreakdown).toBe(true);
+    expect(pages.body.totals).toMatchObject({ clicks: 10 + 20 + 10 });
+    // The list is the visible queries' pages: 6 clicks a scale unit.
+    expect(pages.body.items).toEqual([
+      expect.objectContaining({ path: PARK_PATH, clicks: 6 + 12 + 6 }),
+    ]);
+
+    const both = await get(
+      "/v1/admin/search-console/series?days=7&interval=day&country=deu&device=mobile",
+      viewer.session,
+    ).expect(200);
+    expect(both.body.partialBreakdown).toBe(true);
+    expect(both.body.series.slice(-1)[0]).toMatchObject({
+      day: d(2),
+      clicks: 6,
+    });
+
+    const queries = await get(
+      "/v1/admin/search-console/queries?days=7&country=deu",
+      viewer.session,
+    ).expect(200);
+    expect(queries.body).not.toHaveProperty("partialBreakdown");
+  });
+
+  it("fetches every day again once when its batch is in the older layout", async () => {
+    seedGoogle();
+    await importService.run("cron");
+    await dataSource.query(`UPDATE search_console_batches SET format = 1`);
+    const viewer = await account("gsc-legacy@example.invalid", "viewer");
+    const empty = await get(
+      "/v1/admin/search-console/series?days=7",
+      viewer.session,
+    ).expect(200);
+    expect(empty.body.series).toEqual([]);
+
+    apiCalls.length = 0;
+    const rerun = await importService.run("cron");
+    expect(rerun).toMatchObject({
+      daysChecked: BACKFILL_DAYS,
+      batchesWritten: BACKFILL_DAYS,
+    });
+    const formats = await dataSource.query(
+      `SELECT DISTINCT ON (day) format FROM search_console_batches ORDER BY day, id DESC`,
+    );
+    expect(formats.every((row: { format: number }) => row.format === 2)).toBe(
+      true,
+    );
+    const next = await importService.run("cron");
+    expect(next).toMatchObject({ daysChecked: 3, batchesWritten: 0 });
   });
 
   it("joins the pages with the site statistic's own visits from search", async () => {
@@ -543,7 +633,7 @@ describe("Search Console (e2e)", () => {
       old_rows: 0,
       old_batches: 0,
       old_runs: 0,
-      recent_rows: 6,
+      recent_rows: 10,
     });
   });
 

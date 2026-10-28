@@ -12,9 +12,9 @@ import {
   GSC_SCOPE,
 } from "./search-console.constants";
 
-/** One row of `searchAnalytics.query`, its `keys` in the order of the dimensions asked for. */
+/** One row of `searchAnalytics.query`, its `keys` in the order of the dimensions asked for; absent when none was. */
 export interface GscApiRow {
-  keys: string[];
+  keys?: string[];
   clicks: number;
   impressions: number;
   ctr: number;

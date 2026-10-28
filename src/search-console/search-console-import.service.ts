@@ -18,6 +18,7 @@ import {
 } from "./search-console.client";
 import {
   BACKFILL_DAYS,
+  BATCH_FORMAT,
   DROP_LOCK_TIMEOUT,
   IMPORT_LOCK_KEY,
   IMPORT_LOCK_TTL_MS,
@@ -80,34 +81,45 @@ const emptySummary = (): ImportSummary => ({
   failedDays: [],
 });
 
+/** One day's API rows by the dimensions asked for. */
+export interface DayFetch {
+  /** No dimensions: the property's own figures, what the Search Console chart shows. */
+  property: readonly GscApiRow[];
+  /** `page`: complete per page, aggregated by page (their sum is a little above the property's). */
+  pages: readonly GscApiRow[];
+  /** `country`: complete per country. */
+  countries: readonly GscApiRow[];
+  /** `device`: complete per device. */
+  devices: readonly GscApiRow[];
+  /** `page, query, country, device`: visible queries only. */
+  queries: readonly GscApiRow[];
+}
+
 /**
- * One day's API rows as stored ones. `pageRows` have the dimensions page,
- * country, device and become the rows without a query, whose sums are the
- * property's own; `queryRows` add the query. Pages are mapped to paths
- * (several URLs of one page, `http`, `www` and a trailing slash, merge), the
- * country and device lowered, the position weighted by the impressions.
+ * One day's API rows as stored ones, at the four levels of
+ * `SearchConsoleRow`. Pages are mapped to paths (several URLs of one page,
+ * `http`, `www` and a trailing slash, merge), the country and device lowered,
+ * the position weighted by the impressions. The day's totals are the property
+ * row's, which is how Google counts the chart.
  */
 export function buildBatch(
-  pageRows: readonly GscApiRow[],
-  queryRows: readonly GscApiRow[],
+  fetched: DayFetch,
   hosts: readonly string[],
 ): DayBatch {
   const merged = new Map<string, StoredRow>();
   let skipped = 0;
-  const add = (row: GscApiRow, withQuery: boolean): StoredRow | null => {
-    const [url, ...rest] = row.keys;
-    const path = pagePath(url ?? "", hosts);
-    if (!path) {
-      skipped++;
-      return null;
-    }
-    const query = withQuery ? normalizeQuery(rest.shift() ?? "") : null;
-    const [country = "zzz", device = ""] = rest;
-    const key = [path, query ?? "\u0000", country, device].join("\u0001");
+  const add = (
+    row: GscApiRow,
+    page: string,
+    query: string | null,
+    country: string,
+    device: string,
+  ): StoredRow => {
+    const key = [page, query ?? "\u0000", country, device].join("\u0001");
     const stored = merged.get(key) ?? {
-      page: path,
+      page,
       query,
-      locale: localeOfPath(path),
+      locale: localeOfPath(page),
       country: country.toLowerCase().slice(0, 3),
       device: device.toLowerCase().slice(0, 8),
       clicks: 0,
@@ -120,20 +132,39 @@ export function buildBatch(
     merged.set(key, stored);
     return stored;
   };
+  /** The path of an API page, or null (counted) when the property does not own it. */
+  const pathOf = (url: string | undefined): string | null => {
+    const path = pagePath(url ?? "", hosts);
+    if (!path) skipped++;
+    return path;
+  };
   const totals: DayTotals = {
     rows: 0,
     clicks: 0,
     impressions: 0,
     positionSum: 0,
   };
-  for (const row of pageRows) {
-    const stored = add(row, false);
-    if (!stored) continue;
+  for (const row of fetched.property) {
+    add(row, "", null, "", "");
     totals.clicks += Math.round(row.clicks);
     totals.impressions += Math.round(row.impressions);
     totals.positionSum += row.position * row.impressions;
   }
-  for (const row of queryRows) add(row, true);
+  for (const row of fetched.pages) {
+    const path = pathOf(row.keys?.[0]);
+    if (path) add(row, path, null, "", "");
+  }
+  for (const row of fetched.countries) {
+    add(row, "", null, row.keys?.[0] ?? "zzz", "");
+  }
+  for (const row of fetched.devices) {
+    add(row, "", null, "", row.keys?.[0] ?? "");
+  }
+  for (const row of fetched.queries) {
+    const [url, query, country = "zzz", device = ""] = row.keys ?? [];
+    const path = pathOf(url);
+    if (path) add(row, path, normalizeQuery(query ?? ""), country, device);
+  }
   const rows = [...merged.values()];
   totals.rows = rows.length;
   return { rows, totals, skipped };
@@ -148,6 +179,8 @@ export function isUnchanged(
   // A download that came back empty changes nothing: either the day was asked
   // before and was empty, or it must not erase a day that had data.
   if (fresh.rows === 0) return true;
+  // An older layout holds totals without the anonymised queries.
+  if (current.format < BATCH_FORMAT) return false;
   return (
     current.rows === fresh.rows &&
     current.clicks === fresh.clicks &&
@@ -156,11 +189,15 @@ export function isUnchanged(
   );
 }
 
-/** The days a run looks at, newest first: the recent ones again, then those never fetched. */
+/**
+ * The days a run looks at, newest first: the recent ones again, then those
+ * never fetched, which includes those whose current batch is in an older
+ * layout.
+ */
 export function planDays(
   now: Date,
   recentDays: number,
-  fetched: ReadonlySet<string>,
+  current: ReadonlyMap<string, Pick<CurrentBatch, "format">>,
 ): string[] {
   const end = addIsoDays(utcDay(now), -1);
   const recent = daysBetween(addIsoDays(end, -(recentDays - 1)), end).reverse();
@@ -168,7 +205,7 @@ export function planDays(
     addIsoDays(end, -(BACKFILL_DAYS - 1)),
     addIsoDays(end, -recentDays),
   )
-    .filter((day) => !fetched.has(day))
+    .filter((day) => (current.get(day)?.format ?? 0) < BATCH_FORMAT)
     .reverse();
   return [...recent, ...older];
 }
@@ -242,11 +279,7 @@ export class SearchConsoleImportService {
       addIsoDays(end, -(BACKFILL_DAYS - 1)),
       end,
     );
-    const days = planDays(
-      now,
-      getSearchConsoleImportDays(),
-      new Set(current.keys()),
-    );
+    const days = planDays(now, getSearchConsoleImportDays(), current);
     let consecutive = 0;
     let lastMessage = "";
     for (const day of days) {
@@ -282,18 +315,19 @@ export class SearchConsoleImportService {
     current: CurrentBatch | undefined,
     summary: ImportSummary,
   ): Promise<void> {
-    const pageRows = await this.client.fetchDay(day, [
-      "page",
-      "country",
-      "device",
-    ]);
-    const queryRows = await this.client.fetchDay(day, [
-      "page",
-      "query",
-      "country",
-      "device",
-    ]);
-    const batch = buildBatch(pageRows, queryRows, setup.hosts);
+    const fetched: DayFetch = {
+      property: await this.client.fetchDay(day, []),
+      pages: await this.client.fetchDay(day, ["page"]),
+      countries: await this.client.fetchDay(day, ["country"]),
+      devices: await this.client.fetchDay(day, ["device"]),
+      queries: await this.client.fetchDay(day, [
+        "page",
+        "query",
+        "country",
+        "device",
+      ]),
+    };
+    const batch = buildBatch(fetched, setup.hosts);
     summary.skippedRows += batch.skipped;
     if (isUnchanged(current, batch.totals)) {
       summary.unchanged++;
@@ -311,14 +345,15 @@ export class SearchConsoleImportService {
   private async writeBatch(day: string, batch: DayBatch): Promise<void> {
     await this.db.transaction(async (manager) => {
       const [{ id }] = (await manager.query(
-        `INSERT INTO search_console_batches (day, rows, clicks, impressions, position_sum)
-         VALUES ($1::date, $2, $3, $4, $5) RETURNING id`,
+        `INSERT INTO search_console_batches (day, rows, clicks, impressions, position_sum, format)
+         VALUES ($1::date, $2, $3, $4, $5, $6) RETURNING id`,
         [
           day,
           batch.rows.length,
           batch.totals.clicks,
           batch.totals.impressions,
           batch.totals.positionSum,
+          BATCH_FORMAT,
         ],
       )) as Array<{ id: number }>;
       for (let i = 0; i < batch.rows.length; i += INSERT_CHUNK_ROWS) {
