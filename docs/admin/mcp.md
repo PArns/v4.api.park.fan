@@ -131,7 +131,7 @@ against these rules.
 | `analytics_events`           | every event name with count, previous, change, blocked                                                                                                                                  | `SiteAnalyticsService.events`                    |
 | `analytics_event`            | one event: props with top values, combinations, page types, devices, entities                                                                                                           | `SiteAnalyticsService.event`                     |
 | `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
-| `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where                                                                                          | `SiteAnalyticsService.search`                    |
+| `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
@@ -189,7 +189,8 @@ the count that decides, and the measures that add up.
 - **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
   page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,
   events), `search_report` (surfaces, openings by page type and device, result types, positions, browse
-  items), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
+  items, the parks and rides opened most, an id no table knows left out and counted in
+  `unresolvedEntities`), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
   device, the parks and rides planned most, an id no table knows any more left out and counted in
   `unresolvedEntities`), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
   referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per

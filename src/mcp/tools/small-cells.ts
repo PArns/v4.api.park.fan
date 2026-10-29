@@ -107,6 +107,26 @@ export function foldSmallRows<R extends object>(
   return [...kept, other] as Array<Foldable<R>>;
 }
 
+/**
+ * A report's ranking of parks or rides as a tool answers it: the first
+ * `limit` that a table still knows, the small ones folded. An id no table
+ * knows any more is left out; the tool says how many.
+ */
+export function foldRankedEntities(
+  items: ReadonlyArray<{
+    id: string;
+    name: string | null;
+    url: string | null;
+    count: number;
+  }>,
+  limit: number,
+) {
+  return foldSmallRows(
+    items.filter((item) => item.name !== null).slice(0, limit),
+    { dims: ["id", "name", "url"], count: "count", sum: ["count"] },
+  );
+}
+
 /** A map of value → count, folded like a list: a page's reads per language. */
 export function foldSmallCounts(
   counts: Readonly<Record<string, number>>,

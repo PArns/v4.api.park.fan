@@ -11,6 +11,7 @@ import {
 import {
   SMALL_CELLS_DESCRIPTION,
   SMALL_SERIES_DESCRIPTION,
+  foldRankedEntities,
   foldSmallRows,
   hideSmallInSeries,
   isNarrowed,
@@ -43,22 +44,6 @@ const DERIVED = {
   optimizedPerStarted: ["started", "optimized"],
   sharedPerStarted: ["started", "shared"],
 };
-
-/** A ranked park or ride list: the ones still known, folded. */
-const ranked = (
-  items: Array<{
-    id: string;
-    name: string | null;
-    url: string | null;
-    count: number;
-  }>,
-  limit: number,
-) =>
-  foldSmallRows(items.filter((item) => item.name !== null).slice(0, limit), {
-    dims: ["id", "name", "url"],
-    count: "count",
-    sum: ["count"],
-  });
 
 export const plannerReportTool = defineMcpTool({
   name: "planner_report",
@@ -134,7 +119,6 @@ export const plannerReportTool = defineMcpTool({
       pushOn,
       ...shownFunnel
     } = totals.series[0];
-    const known = [...report.topParks, ...report.topRides];
     return withVisitorData(
       {
         ...windowOf(report),
@@ -144,7 +128,9 @@ export const plannerReportTool = defineMcpTool({
         dayCleared,
         sharedAdopted,
         pushOn,
-        unresolvedEntities: known.filter((item) => item.name === null).length,
+        unresolvedEntities: [...report.topParks, ...report.topRides].filter(
+          (item) => item.name === null,
+        ).length,
         ...((series || narrowed) && {
           smallValuesHidden: (series && hide.hidden) || totals.hidden,
         }),
@@ -173,8 +159,8 @@ export const plannerReportTool = defineMcpTool({
           report.byPageTypeAndDevice.slice(0, limit),
           { dims: ["pageType", "device"], count: "opened", sum: ["opened"] },
         ),
-        topParks: ranked(report.topParks, limit),
-        topRides: ranked(report.topRides, limit),
+        topParks: foldRankedEntities(report.topParks, limit),
+        topRides: foldRankedEntities(report.topRides, limit),
         ...(series && { series: hide.series }),
       },
     );

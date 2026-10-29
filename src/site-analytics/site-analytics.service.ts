@@ -59,7 +59,10 @@ import {
 } from "./site-analytics.query";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteReportRunner } from "./site-analytics-report-runner";
-import { SiteEntityNames } from "./site-entity-names.service";
+import {
+  SiteEntityNames,
+  type SiteEntityKind,
+} from "./site-entity-names.service";
 import { visitorBasisOf, type VisitorFilter } from "./visitor-dims.util";
 import type {
   SiteBreakdownDto,
@@ -68,6 +71,7 @@ import type {
   SiteEventsDto,
   SiteOverviewDto,
   SitePlannerDto,
+  SiteRankedEntityDto,
   SiteSearchDto,
   SiteTotalsDto,
   SiteTrafficCrosstabDto,
@@ -110,15 +114,15 @@ export const PLANNER_EVENTS = {
   share: "share_clicked",
 } as const;
 
-/** How many parks and rides the planner report ranks. */
-const PLANNER_TOP_ENTITIES = 20;
+/** How many parks and rides a report's ranking holds. */
+const TOP_ENTITIES = 20;
 
 /**
- * How many entities per event the planner report reads before it names
- * them: enough that the shows among the added items and the parks among
- * the started days leave twenty of the kind ranked.
+ * How many entities per event a ranking reads before it names them: enough
+ * that the entities of another kind among them still leave twenty of the
+ * kind ranked.
  */
-const PLANNER_ENTITY_CANDIDATES = PLANNER_TOP_ENTITIES * 5;
+const ENTITY_CANDIDATES = TOP_ENTITIES * 5;
 
 /** `plan_day_started`'s source for a day begun with the panel shut. */
 const PANEL_SHUT = "none";
@@ -820,6 +824,77 @@ export class SiteAnalyticsService {
   }
 
   /**
+   * The parks and rides events named in the window, one ranking per list:
+   * each list names the events that feed it and the kind it keeps. A merged
+   * entity counts for its winner, as on the event page, and each event's
+   * entities are cut at {@link ENTITY_CANDIDATES} before they are named. An
+   * id no table knows any more has no kind; it stays in a list only when no
+   * other list reads its event, so it is never counted twice.
+   */
+  private async rankedEntities<K extends string>(
+    window: SiteAnalyticsWindow,
+    lists: Record<K, { events: readonly string[]; kind: SiteEntityKind }>,
+  ): Promise<Record<K, SiteRankedEntityDto[]>> {
+    const specs = Object.entries(lists) as Array<
+      [K, { events: readonly string[]; kind: SiteEntityKind }]
+    >;
+    const events = [...new Set(specs.flatMap(([, list]) => list.events))];
+    const params = new SqlParams();
+    const namesParam = params.add(events);
+    const source = await rowsOf(
+      this.rolled,
+      "events",
+      params,
+      window,
+      "current",
+      ["name", "entity"],
+      { alias: "e", collapse: true },
+    );
+    const rows: Array<{ name: string; entity: string; count: Count }> =
+      await this.runner.query(
+        `SELECT name, entity, count FROM (
+           SELECT name, entity, SUM(count) AS count,
+                  ROW_NUMBER() OVER (PARTITION BY name
+                                     ORDER BY SUM(count) DESC, entity) AS rank
+             FROM (SELECT e.name,
+                          COALESCE(m.winner_id, e.entity)::text AS entity,
+                          e.count
+                     FROM ${source.from}
+                     LEFT JOIN site_entity_merges m ON m.loser_id = e.entity
+                    WHERE e.name = ANY(${namesParam}::text[])
+                      AND ${source.where}) s
+            WHERE entity IS NOT NULL
+            GROUP BY name, entity) ranked
+          WHERE rank <= ${params.add(ENTITY_CANDIDATES)}`,
+        params.values,
+      );
+    const named = await this.entityNames.resolve(rows.map((row) => row.entity));
+    const readers = (event: string) =>
+      specs.filter(([, list]) => list.events.includes(event)).length;
+    const result = {} as Record<K, SiteRankedEntityDto[]>;
+    for (const [key, list] of specs) {
+      const counts = new Map<string, number>();
+      for (const row of rows) {
+        if (!list.events.includes(row.name)) continue;
+        const kind = named.get(row.entity)?.kind;
+        if (kind ? kind !== list.kind : readers(row.name) > 1) continue;
+        addTo(counts, row.entity, num(row.count));
+      }
+      result[key] = byCountDesc(
+        [...counts].map(([id, count]) => ({
+          id,
+          name: named.get(id)?.name ?? null,
+          url: named.get(id)?.url ?? null,
+          count,
+        })),
+        (item) => item.count,
+        (item) => item.id,
+      ).slice(0, TOP_ENTITIES);
+    }
+    return result;
+  }
+
+  /**
    * How the trip planner is used, over its events: the funnel from an
    * opening to a started, optimised and shared day with its rates; every way
    * in with the days it led to; the wizard's steps; blocks added and removed
@@ -841,13 +916,11 @@ export class SiteAnalyticsService {
         PLANNER_EVENTS.started,
         PLANNER_EVENTS.optimized,
       ];
-      const ranked = [PLANNER_EVENTS.started, PLANNER_EVENTS.itemAdded];
       const read = async (
         events: readonly string[],
         needed: string[],
         collapse: boolean,
         select: string,
-        join = "",
       ) => {
         const params = new SqlParams();
         const namesParam = params.add(events);
@@ -861,12 +934,12 @@ export class SiteAnalyticsService {
           { alias: "e", collapse },
         );
         return {
-          sql: `${select} FROM ${source.from} ${join}
+          sql: `${select} FROM ${source.from}
                  WHERE e.name = ANY(${namesParam}::text[]) AND ${source.where}`,
           params,
         };
       };
-      const [props, opened, entities] = await Promise.all([
+      const [props, opened] = await Promise.all([
         read(
           names,
           ["name", "props_key"],
@@ -880,17 +953,8 @@ export class SiteAnalyticsService {
           `SELECT e.name, e.page_type, e.device,
                   ${periodOf(window.hourly, "e")} AS period, e.count`,
         ),
-        read(
-          ranked,
-          ["name", "entity"],
-          true,
-          `SELECT e.name, COALESCE(m.winner_id, e.entity)::text AS entity,
-                  e.count`,
-          "LEFT JOIN site_entity_merges m ON m.loser_id = e.entity",
-        ),
       ]);
-      const candidates = entities.params.add(PLANNER_ENTITY_CANDIDATES);
-      const [propRows, openedRows, entityRows]: [
+      const [propRows, openedRows, ranked]: [
         Array<{ name: string; props: Record<string, string>; count: Count }>,
         Array<{
           name: string;
@@ -899,7 +963,7 @@ export class SiteAnalyticsService {
           period: string | null;
           count: Count;
         }>,
-        Array<{ name: string; entity: string | null; count: Count }>,
+        Record<"parks" | "rides", SiteRankedEntityDto[]>,
       ] = await Promise.all([
         this.runner.query(
           `SELECT name, props, SUM(count) AS count FROM (${props.sql}) s
@@ -912,17 +976,10 @@ export class SiteAnalyticsService {
             GROUP BY GROUPING SETS ((name, page_type, device), (name, period))`,
           opened.params.values,
         ),
-        this.runner.query(
-          `SELECT name, entity, count FROM (
-             SELECT name, entity, SUM(count) AS count,
-                    ROW_NUMBER() OVER (PARTITION BY name
-                                       ORDER BY SUM(count) DESC, entity) AS rank
-               FROM (${entities.sql}) s
-              WHERE entity IS NOT NULL
-              GROUP BY name, entity) ranked
-            WHERE rank <= ${candidates}`,
-          entities.params.values,
-        ),
+        this.rankedEntities(window, {
+          parks: { events: [PLANNER_EVENTS.started], kind: "park" },
+          rides: { events: [PLANNER_EVENTS.itemAdded], kind: "attraction" },
+        }),
       ]);
 
       // Each event's count by one property's value; `total` over all values.
@@ -1005,31 +1062,6 @@ export class SiteAnalyticsService {
         }
       }
 
-      const named = await this.entityNames.resolve(
-        entityRows.flatMap((row) => (row.entity ? [row.entity] : [])),
-      );
-      const top = (event: string, kind: "park" | "attraction") =>
-        byCountDesc(
-          entityRows
-            .filter(
-              (row) =>
-                row.name === event &&
-                row.entity &&
-                (named.get(row.entity)?.kind ?? kind) === kind,
-            )
-            .map((row) => {
-              const entity = named.get(row.entity as string);
-              return {
-                id: row.entity as string,
-                name: entity?.name ?? null,
-                url: entity?.url ?? null,
-                count: num(row.count),
-              };
-            }),
-          (item) => item.count,
-          (item) => item.id,
-        ).slice(0, PLANNER_TOP_ENTITIES);
-
       return {
         ...echo(window),
         funnel: {
@@ -1088,8 +1120,8 @@ export class SiteAnalyticsService {
           optimized:
             series.get(`${point.day}|${PLANNER_EVENTS.optimized}`) ?? 0,
         })),
-        topParks: top(PLANNER_EVENTS.started, "park"),
-        topRides: top(PLANNER_EVENTS.itemAdded, "attraction"),
+        topParks: ranked.parks,
+        topRides: ranked.rides,
       };
     });
   }
@@ -1144,32 +1176,39 @@ export class SiteAnalyticsService {
         period: string | null;
         count: Count;
       };
+      const clicked = [SEARCH_EVENTS.resultClicks, SEARCH_EVENTS.browseClicks];
       const [all, opened, clicks] = await Promise.all([
         scope(Object.values(SEARCH_EVENTS), false),
         scope([SEARCH_EVENTS.opened], true),
-        scope([SEARCH_EVENTS.resultClicks, SEARCH_EVENTS.browseClicks], false),
+        scope(clicked, false),
       ]);
-      const [surfaceRows, openedRows, clickRows]: Row[][] = await Promise.all([
-        this.runner.query(
-          `SELECT name, surface, SUM(count) AS count FROM (${all.sql}) s
+      const [[surfaceRows, openedRows, clickRows], ranked] = await Promise.all([
+        Promise.all([
+          this.runner.query(
+            `SELECT name, surface, SUM(count) AS count FROM (${all.sql}) s
           GROUP BY 1, 2`,
-          all.params.values,
-        ),
-        this.runner.query(
-          `SELECT name, surface, page_type, device, period, SUM(count) AS count
+            all.params.values,
+          ),
+          this.runner.query(
+            `SELECT name, surface, page_type, device, period, SUM(count) AS count
            FROM (${opened.sql}) s
           GROUP BY GROUPING SETS ((name, surface, page_type),
                                   (name, surface, device),
                                   (name, surface, period))`,
-          opened.params.values,
-        ),
-        this.runner.query(
-          `SELECT name, surface, result, item, position, SUM(count) AS count
+            opened.params.values,
+          ),
+          this.runner.query(
+            `SELECT name, surface, result, item, position, SUM(count) AS count
            FROM (${clicks.sql}) s
           GROUP BY GROUPING SETS ((name, surface, result), (name, surface, item),
                                   (name, position))`,
-          clicks.params.values,
-        ),
+            clicks.params.values,
+          ),
+        ]) as Promise<Row[][]>,
+        this.rankedEntities(window, {
+          parks: { events: clicked, kind: "park" },
+          rides: { events: clicked, kind: "attraction" },
+        }),
       ]);
 
       const perSurface = new Map<string, number>();
@@ -1310,6 +1349,8 @@ export class SiteAnalyticsService {
             opened: series.get(`${point.day}|${surface}`) ?? 0,
           })),
         ),
+        topParks: ranked.parks,
+        topRides: ranked.rides,
       };
     });
   }

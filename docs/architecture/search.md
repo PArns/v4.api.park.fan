@@ -25,18 +25,28 @@ Redis never matches anything: it caches the per-query result (`search:fuzzy:v1:{
 
 Both paths share one tier ladder; lower is better, ties broken by trigram similarity:
 
-| tier | signal |
-| --- | --- |
-| 0 | exact name |
-| 1 | normalised exact (`F.L.Y.` ↔ `fly`) |
-| 2 | name or word prefix |
-| 3 | substring |
-| 4 | normalised substring |
-| 5 | secondary field substring (an attraction's land; a park's city, country or continent) |
-| 6 | whole-string trigram similarity ≥ 0.3 (`trgmSim` reimplements pg_trgm so both paths agree) |
-| 7 | word-level typo tolerance |
+| tier | signal                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------ |
+| 0    | exact name                                                                                 |
+| 1    | normalised exact (`F.L.Y.` ↔ `fly`)                                                        |
+| 2    | name or word prefix                                                                        |
+| 3    | substring                                                                                  |
+| 4    | normalised substring                                                                       |
+| 5    | secondary field substring (an attraction's land; a park's city, country or continent)      |
+| 6    | whole-string trigram similarity ≥ 0.3 (`trgmSim` reimplements pg_trgm so both paths agree) |
+| 7    | word-level typo tolerance                                                                  |
 
 A popularity boost (top parks and attractions from `PopularityService`) can lift a match.
+
+## A park's abbreviation is its name
+
+The curated abbreviations (`curated_abbreviations`, „EP", „PHL", „SFGA"; [curation](../admin/curation.md))
+are in the park index as `abbreviations`, folded to lower-case letters and digits. A query that is
+one of them, the same way folded, ranks that park above every tier (`searchParksInProcess`), counts
+as a literal hit, and counts as verbatim in `search()`'s OPERATING-first sort, so „EP" is Europa-Park
+even on a day it is closed and Thorpe Park, which holds the letters, is open. Only the in-process
+path knows them: the Postgres path serves the minutes before the index has loaded, and an index read
+from Redis before the abbreviations were indexed has none until the next refresh, five minutes on.
 
 ## Typo tolerance
 

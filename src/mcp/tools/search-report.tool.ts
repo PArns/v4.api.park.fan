@@ -11,6 +11,7 @@ import {
 import {
   SMALL_CELLS_DESCRIPTION,
   SMALL_SERIES_DESCRIPTION,
+  foldRankedEntities,
   foldSmallRows,
   hideSmallInSeries,
 } from "./small-cells";
@@ -25,7 +26,10 @@ export const searchReportTool = defineMcpTool({
     'query typed, a result or a suggestion clicked, a dead end hit (no results) and "view all" ' +
     "used, with clickRate = (result + suggestion clicks) / openings, at most 1, and noResultRate = no results / " +
     "typed; openings by page type and device; which kinds of result were clicked and at which " +
-    "position; optionally the openings per period and surface. Search queries themselves are never " +
+    "position; the parks and rides opened most from a search (results and suggestions, at most 20 " +
+    "each, a merged one counted for the one it was merged into, one no longer known left out and " +
+    "counted in unresolvedEntities); optionally the openings per period and surface. Search " +
+    "queries themselves are never " +
     "recorded. UTC days; up to six minutes behind the site; Do Not Track, GPC and opted-out readers " +
     "are missing. " +
     VISITOR_DATA_DESCRIPTION +
@@ -55,6 +59,9 @@ export const searchReportTool = defineMcpTool({
     return withVisitorData(
       {
         ...windowOf(report),
+        unresolvedEntities: [...report.topParks, ...report.topRides].filter(
+          (item) => item.name === null,
+        ).length,
         ...(series && { smallValuesHidden: hide.hidden }),
       },
       {
@@ -97,6 +104,8 @@ export const searchReportTool = defineMcpTool({
           count: "clicks",
           sum: ["clicks"],
         }),
+        topParks: foldRankedEntities(report.topParks, limit),
+        topRides: foldRankedEntities(report.topRides, limit),
         ...(series && { series: hide.series }),
       },
     );

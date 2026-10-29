@@ -571,6 +571,12 @@ describe("site statistic tools", () => {
   it("search_report: rounds the rates and caps the lists", async () => {
     const service = {
       search: jest.fn(async () => ({
+        topParks: [
+          { id: "gone", name: null, url: null, count: 40 },
+          { id: "p1", name: "Efteling", url: "/parks/e", count: 12 },
+          { id: "p2", name: "Toverland", url: "/parks/t", count: 9 },
+        ],
+        topRides: [],
         ...WINDOW,
         surfaces: [
           {
@@ -606,6 +612,11 @@ describe("site statistic tools", () => {
     ]);
     expect(visitorData(answer).bySurfaceAndPageType).toHaveLength(1);
     expect(visitorData(answer)).not.toHaveProperty("series");
+    // The parks opened from a search: the known ones, cut at the limit.
+    expect(visitorData(answer).topParks).toEqual([
+      { id: "p1", name: "Efteling", url: "/parks/e", count: 12 },
+    ]);
+    expect(answer).toMatchObject({ unresolvedEntities: 1 });
   });
 
   const plannerFunnel = {
@@ -1383,6 +1394,8 @@ describe("site statistic tools", () => {
     it("search_report: folds each list by its count, empties the rates of (other), and hides small series values", async () => {
       const service = {
         search: jest.fn(async () => ({
+          topParks: [],
+          topRides: [],
           ...WINDOW,
           surfaces: [
             {

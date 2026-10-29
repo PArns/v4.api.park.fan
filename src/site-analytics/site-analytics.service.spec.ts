@@ -1455,6 +1455,45 @@ describe("SiteAnalyticsService", () => {
         ],
         ["search_opened"],
         ["search_result_clicked", "search_browse_clicked"],
+        // The parks and rides opened, through the merges.
+        ["search_result_clicked", "search_browse_clicked"],
+      ]);
+      expect(sqlOf("ROW_NUMBER() OVER (PARTITION BY name")[0]).toContain(
+        "LEFT JOIN site_entity_merges m ON m.loser_id = e.entity",
+      );
+    });
+
+    it("ranks the parks and rides opened from a search, and leaves out an id no table knows", async () => {
+      const PARK = "44444444-4444-4444-8444-444444444444";
+      const RIDE = "55555555-5555-4555-8555-555555555555";
+      const GONE = "66666666-6666-4666-8666-666666666666";
+      routes = [
+        [
+          "ROW_NUMBER() OVER (PARTITION BY name",
+          [
+            { name: "search_result_clicked", entity: PARK, count: "4" },
+            { name: "search_browse_clicked", entity: PARK, count: "3" },
+            { name: "search_result_clicked", entity: RIDE, count: "2" },
+            { name: "search_result_clicked", entity: GONE, count: "9" },
+          ],
+        ],
+      ];
+      resolve.mockResolvedValue(
+        new Map([
+          [PARK, { kind: "park", name: "Efteling", url: "/parks/e" }],
+          [RIDE, { kind: "attraction", name: "Baron", url: "/parks/e/b" }],
+        ]),
+      );
+
+      const result = await service.search({ days: 2 }, NOW);
+
+      // A result and a suggestion of the same park add up.
+      expect(result.topParks).toEqual([
+        { id: PARK, name: "Efteling", url: "/parks/e", count: 7 },
+      ]);
+      // Both lists read both events, so an unknown id would count twice.
+      expect(result.topRides).toEqual([
+        { id: RIDE, name: "Baron", url: "/parks/e/b", count: 2 },
       ]);
     });
   });

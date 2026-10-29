@@ -670,11 +670,11 @@ describe("Site analytics (e2e)", () => {
           event("search_opened", { surface: "hero" }),
           event("search_opened", { surface: "header" }, { pageType: "park" }),
           event("search_typed", { surface: "hero" }),
-          event("search_result_clicked", {
-            surface: "hero",
-            result: "park",
-            position: "1",
-          }),
+          event(
+            "search_result_clicked",
+            { surface: "hero", result: "park", position: "1" },
+            { entity: park.id },
+          ),
           event("tab_changed", { tab: "map" }, { entity: park.id }),
           event("brand_new_event", { flag: true, size: 3 }),
         ],
@@ -776,6 +776,16 @@ describe("Site analytics (e2e)", () => {
     });
     expect(search.body.positions[0]).toEqual({ position: "1", clicks: 1 });
     expect(search.body.series).toHaveLength(7 * 2);
+    // The park the click opened, named, from the real rows.
+    expect(search.body.topParks).toEqual([
+      {
+        id: park.id,
+        name: "Phantasialand",
+        url: "/parks/europe/germany/bruehl/phantasialand",
+        count: 1,
+      },
+    ]);
+    expect(search.body.topRides).toEqual([]);
 
     await request(app.getHttpServer())
       .put("/v1/admin/analytics/blocked-events/brand_new_event")
