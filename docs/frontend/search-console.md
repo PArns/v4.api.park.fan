@@ -90,8 +90,12 @@ cannot split its visits by Google's type), and a type nothing was imported for a
 
 - **Discover has no queries.** `queries`, a `query` filter and a `country` or `device` filter on a
   `pages` list need query rows, so they answer **400** (`type=discover has no search queries …`);
-  `pages` without filters and `series` (also with one `country` or `device`) work. The `gsc_queries`
-  tool says the same.
+  `pages` without filters and `series` (also with a `country`) work. The `gsc_queries` tool says the
+  same.
+- **Discover has no devices.** Google answers a `device` request for it with a 400,
+  `Requests for Discover cannot be grouped by device`, so the import stores no device rows for
+  Discover and a `device` filter on it answers **400** (`type=discover has no devices …`) rather
+  than zeros.
 - **Discover has no `byProperty` aggregation** (Google's API reference), so the import does not ask
   for the property level there. It stores the property row as the sum of the page rows, the position
   weighted by the impressions; Discover lists every page once a day, so that sum is the total. (A
@@ -215,9 +219,9 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
    missing, because every unit is its own transaction.
 2. **One unit:** `searchAnalytics.query` requests with the unit's `type`: no dimension, `[page]`,
    `[country]`, `[device]` and `[page, query, country, device]` for `web`, `image` and `news` (5), and
-   `[page]`, `[country]`, `[device]` for `discover` (3, no property request, no queries). That is up to
-   18 requests per day (5 + 5 + 5 + 3); a nightly run of three days is about 54 requests, and the
-   one-off backfill of the three new types over 480 days is 480 × 13 = **6,240 requests**
+   `[page]` and `[country]` for `discover` (2: no property request, no device, no queries). That is up
+   to 17 requests per day (5 + 5 + 5 + 2); a nightly run of three days is about 51 requests, and the
+   one-off backfill of the three new types over 480 days is 480 × 12 = **5,760 requests**
    (more where a day has over 25,000 rows). `dataState: final`, 25,000 rows a request with
    `startRow` until a page is not full, four tries on a 429, a 5xx or a network failure with a
    doubling pause (or Google's `Retry-After`). **The client spaces requests at least 100 ms apart**

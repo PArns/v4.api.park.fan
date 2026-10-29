@@ -91,6 +91,12 @@ export const DEFAULT_SEARCH_TYPE: GscSearchType = "web";
  */
 export const GSC_TYPES_WITHOUT_QUERIES: readonly GscSearchType[] = ["discover"];
 
+/**
+ * Types Google cannot group by device (a 400 for Discover): the import asks
+ * no device level for them, and a device filter on one is refused.
+ */
+export const GSC_TYPES_WITHOUT_DEVICES: readonly GscSearchType[] = ["discover"];
+
 /** Requests are spaced at least this far apart: at most 10 a second, 600 a minute. */
 export const GSC_MIN_REQUEST_INTERVAL_MS = 100;
 

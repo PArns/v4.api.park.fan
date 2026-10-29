@@ -169,13 +169,21 @@ describe("Search Console (e2e)", () => {
               type,
             });
             const dimensions = (body.dimensions as string[]).join(",");
-            // Discover has neither queries nor the property aggregation.
+            // Discover has neither queries, devices nor the property aggregation.
             if (
               type === "discover" &&
-              (dimensions === "" || dimensions.includes("query"))
+              (dimensions === "" ||
+                dimensions.includes("query") ||
+                dimensions.includes("device"))
             ) {
               return Response.json(
-                { error: { message: "Unsupported for discover" } },
+                {
+                  error: {
+                    message: dimensions.includes("device")
+                      ? "Requests for Discover cannot be grouped by device"
+                      : "Unsupported for discover",
+                  },
+                },
                 { status: 400 },
               );
             }
@@ -361,7 +369,7 @@ describe("Search Console (e2e)", () => {
       unchanged: 12,
     });
     // Five requests a day for web, image and news: property, page, country,
-    // device, query; three for discover: page, country, device.
+    // device, query; two for discover: page, country.
     const requests = (type: string) =>
       apiCalls.filter((c) => c.type === type).map((c) => c.day);
     for (const type of ["web", "image", "news"]) {
@@ -370,7 +378,7 @@ describe("Search Console (e2e)", () => {
       );
     }
     expect(requests("discover").sort()).toEqual(
-      [d(1), d(2), d(3)].flatMap((day) => Array(3).fill(day)).sort(),
+      [d(1), d(2), d(3)].flatMap((day) => Array(2).fill(day)).sort(),
     );
 
     // A day Google revised is a newer batch; the older batch's rows stay.
@@ -813,17 +821,19 @@ describe("Search Console (e2e)", () => {
       { search_type: "news", batches: BACKFILL_DAYS, with_rows: 1 },
       { search_type: "web", batches: BACKFILL_DAYS, with_rows: 4 },
     ]);
-    // Discover: property row summed from the pages, and no query rows.
+    // Discover: property row summed from the pages, and no query or device rows.
     const discover = await dataSource.query(
       `SELECT count(*)::int AS rows,
               count(*) FILTER (WHERE query IS NOT NULL)::int AS with_query,
+              count(*) FILTER (WHERE device <> '')::int AS with_device,
               max(clicks) FILTER (WHERE page = '' AND country = '' AND device = '')::int AS property_clicks
          FROM search_console_rows WHERE day = $1::date AND search_type = 'discover'`,
       [d(3)],
     );
     expect(discover[0]).toEqual({
-      rows: 7,
+      rows: 5,
       with_query: 0,
+      with_device: 0,
       // 10 + 5 + 2 clicks of the three pages, summed into the property row.
       property_clicks: 17,
     });
@@ -832,12 +842,14 @@ describe("Search Console (e2e)", () => {
       apiCalls.filter(
         (c) =>
           c.type === "discover" &&
-          (c.dimensions.length === 0 || c.dimensions.includes("query")),
+          (c.dimensions.length === 0 ||
+            c.dimensions.includes("query") ||
+            c.dimensions.includes("device")),
       ),
     ).toEqual([]);
   });
 
-  it("answers every report per type, web by default, and refuses queries for discover", async () => {
+  it("answers every report per type, web by default, and refuses queries and devices for discover", async () => {
     seedGoogle();
     googleTypes.set(`image:${d(2)}`, 1);
     googleTypes.set(`discover:${d(2)}`, 1);
@@ -872,6 +884,10 @@ describe("Search Console (e2e)", () => {
       "/v1/admin/search-console/queries?days=7&type=discover",
     ).expect(400);
     expect(JSON.stringify(refused.body)).toContain("no search queries");
+    const byDevice = await read(
+      "/v1/admin/search-console/series?days=7&type=discover&device=mobile",
+    ).expect(400);
+    expect(JSON.stringify(byDevice.body)).toContain("no devices");
     await read("/v1/admin/search-console/pages?type=video").expect(400);
 
     const status = await read("/v1/admin/search-console/status").expect(200);

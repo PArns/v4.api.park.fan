@@ -48,7 +48,7 @@ export const GSC_CAVEATS =
   "days right before the window (cut to the days the window has data for when it is fixed; null for more than " +
   `${MAX_COMPARABLE_DAYS} days or without data there); change.clicks is clicks minus the previous ` +
   "window's, change.position the position minus the previous one (negative = moved up). " +
-  "type picks the Search Console search type (web by default; image, news and discover are imported too, discover without queries). " +
+  "type picks the Search Console search type (web by default; image, news and discover are imported too, discover without queries or devices). " +
   "Paths are lower case with the language first (/de/parks/…) as in the site's own traffic tools.";
 
 export const gscTypeInput = z
@@ -56,7 +56,7 @@ export const gscTypeInput = z
   .default("web")
   .describe(
     "Search type: web (default), image (Google Images), news (the News tab) or discover. " +
-      "discover has no queries: gsc_queries and a query filter are refused for it",
+      "discover has no queries and no devices: gsc_queries, a query filter and a device filter are refused for it",
   );
 
 export const gscWindowInput = {

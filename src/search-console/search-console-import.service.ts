@@ -21,6 +21,7 @@ import {
   BATCH_FORMAT,
   DROP_LOCK_TIMEOUT,
   GSC_SEARCH_TYPES,
+  GSC_TYPES_WITHOUT_DEVICES,
   GSC_TYPES_WITHOUT_QUERIES,
   IMPORT_LOCK_KEY,
   IMPORT_LOCK_TTL_MS,
@@ -117,7 +118,7 @@ export interface DayFetch {
   pages: readonly GscApiRow[];
   /** `country`: complete per country. */
   countries: readonly GscApiRow[];
-  /** `device`: complete per device. */
+  /** `device`: complete per device; empty for a type without devices. */
   devices: readonly GscApiRow[];
   /** `page, query, country, device`: visible queries only; empty for a type without queries. */
   queries: readonly GscApiRow[];
@@ -359,6 +360,7 @@ export class SearchConsoleImportService {
     summary: ImportSummary,
   ): Promise<void> {
     const queryless = GSC_TYPES_WITHOUT_QUERIES.includes(type);
+    const deviceless = GSC_TYPES_WITHOUT_DEVICES.includes(type);
     const fetch = (
       dimensions: Parameters<SearchConsoleClient["fetchDay"]>[1],
     ) => this.client.fetchDay(day, dimensions, type);
@@ -368,7 +370,7 @@ export class SearchConsoleImportService {
       property: property ?? propertyFromPages(pages),
       pages,
       countries: await fetch(["country"]),
-      devices: await fetch(["device"]),
+      devices: deviceless ? [] : await fetch(["device"]),
       queries: queryless
         ? []
         : await fetch(["page", "query", "country", "device"]),

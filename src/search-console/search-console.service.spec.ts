@@ -644,6 +644,16 @@ describe("SearchConsoleService search types", () => {
     ).rejects.toThrow(/no search queries/);
   });
 
+  it("refuses a device filter for discover, which Google does not split by device", async () => {
+    const { service } = build({ batches: DISCOVER });
+    await expect(
+      service.series({ days: 7, type: "discover", device: "mobile" }, NOW),
+    ).rejects.toThrow(/discover has no devices/);
+    await expect(
+      service.pages({ days: 7, type: "discover", device: "mobile" }, NOW),
+    ).rejects.toThrow(BadRequestException);
+  });
+
   it("answers pages and series for discover from the page and property rows", async () => {
     const { service, calls } = build({ batches: DISCOVER });
     await service.pages({ days: 7, type: "discover" }, NOW);

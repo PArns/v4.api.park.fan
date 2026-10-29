@@ -502,14 +502,10 @@ describe("SearchConsoleImportService.run", () => {
     }
   });
 
-  it("asks three times a day for discover: no queries, and no property level it cannot aggregate", async () => {
+  it("asks twice a day for discover: no queries, no devices, and no property level it cannot aggregate", async () => {
     const { service, fetchDay } = build({ fetched: olderFetched });
     await service.run("cron", now);
-    expect(levelsOf(fetchDay, "discover")).toEqual([
-      "page",
-      "country",
-      "device",
-    ]);
+    expect(levelsOf(fetchDay, "discover")).toEqual(["page", "country"]);
   });
 
   it("stores a discover day with the property row summed from its pages, and no query rows", async () => {
@@ -528,16 +524,15 @@ describe("SearchConsoleImportService.run", () => {
               apiRow(["https://park.fan/en/news"], 3, 300, 1),
             ],
             country: [apiRow(["deu"], 5, 400, 1)],
-            device: [apiRow(["MOBILE"], 5, 400, 1)],
           },
         },
       },
     });
     await service.run("cron", now);
     const discover = written.filter((w) => w.type === "discover");
-    // property + 2 pages + country + device
+    // property + 2 pages + country
     expect(discover).toEqual([
-      { day: "2026-10-27", rows: 5, type: "discover" },
+      { day: "2026-10-27", rows: 4, type: "discover" },
     ]);
     const insert = manager.query.mock.calls.find(
       ([sql, params]) =>
@@ -545,9 +540,9 @@ describe("SearchConsoleImportService.run", () => {
         (params as unknown[])[10] === "discover",
     );
     const params = insert?.[1] as unknown[];
-    expect(params[3]).toEqual([null, null, null, null, null]);
+    expect(params[3]).toEqual([null, null, null, null]);
     // The property row leads: 2 + 3 clicks over 100 + 300 impressions.
-    expect(params[7]).toEqual([5, 2, 3, 5, 5]);
+    expect(params[7]).toEqual([5, 2, 3, 5]);
     expect((params[8] as number[])[0]).toBe(400);
   });
 
