@@ -23,6 +23,7 @@ import {
   DEFAULT_REPORT_LIMIT,
   DEFAULT_SEARCH_TYPE,
   GSC_SEARCH_TYPES,
+  GSC_TYPES_WITHOUT_DEVICES,
   GSC_TYPES_WITHOUT_QUERIES,
   type GscInterval,
   type GscSearchType,
@@ -116,9 +117,10 @@ export function levelPlan(
 }
 
 /**
- * Discover has no queries, so a report that needs the query rows (the
- * queries list, a query filter, a country or device slice of a list) cannot
- * be answered for it. `levels` are the rows the report would read.
+ * Discover has no queries and no devices, so a report that needs the query
+ * rows (the queries list, a query filter, a country or device slice of a
+ * list) or the device rows (a series under a device filter) cannot be
+ * answered for it. `levels` are the rows the report would read.
  */
 export function assertAnswerable(
   type: GscSearchType,
@@ -128,6 +130,11 @@ export function assertAnswerable(
     throw new BadRequestException(
       `type=${type} has no search queries: use it without a query filter, and without a country or device filter on a page list; ` +
         "gsc_queries is not available for it",
+    );
+  }
+  if (GSC_TYPES_WITHOUT_DEVICES.includes(type) && levels.includes("device")) {
+    throw new BadRequestException(
+      `type=${type} has no devices: Google does not split it by device, so use it without a device filter`,
     );
   }
 }

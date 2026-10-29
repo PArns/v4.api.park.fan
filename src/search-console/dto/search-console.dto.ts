@@ -87,7 +87,7 @@ const TYPE_FILTER = {
   default: "web",
   description:
     "The Search Console search type: `web` (default), `image`, `news` (the News tab) or `discover`. " +
-    "`discover` has no queries: `queries`, a `query` filter and a country or device filter on `pages` answer 400.",
+    "`discover` has no queries and no devices: `queries`, a `query` or `device` filter and a `country` filter on `pages` answer 400.",
 };
 const PAGE_FILTER = {
   description:
