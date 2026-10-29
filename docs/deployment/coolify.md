@@ -62,6 +62,26 @@ redeploy keeps it:
 `api` also mounts `/sys` read-only at `/host/sys` so `system-health` can read the CPU temperature.
 What is backed up: [backup](backup.md).
 
+## Container logs
+
+Every service in `docker-compose.production.yml` sets `logging: json-file` with `max-size: 10m` and
+`max-file: 5`, so a container keeps at most 50 MB of stdout, and a container a deploy replaces starts
+an empty log. Without the block the host's Docker default applies, which may not rotate at all. A
+new service copies the block. Rotation is by size, not by age, so these logs have no fixed
+retention in days; the API's own file logs under `/data/parkfan/logs` do (seven days,
+`src/common/utils/file-logger.util.ts`).
+
+What the API writes there carries no address ([no address in any log line](../rules/no-address-in-logs.md)).
+Requests reach the API through a Cloudflare Tunnel ([edge and throttling](edge-and-throttling.md)).
+Outside this repo and still to check for the privacy policy (PAR-1163): whether anything on that path
+writes an access log with the visitor's address (the tunnel's `cloudflared` and, if the tunnel points
+at it, the Coolify proxy), and whether Cloudflare Logpush is on. On the host:
+
+```bash
+docker inspect -f '{{.HostConfig.LogConfig}}' <api-container>
+docker ps --format '{{.Names}}\t{{.Command}}' | grep -iE 'cloudflared|proxy|traefik'
+```
+
 ## Environment
 
 Coolify holds one `.env`; `.env.production.example` is the template and the list of every variable
