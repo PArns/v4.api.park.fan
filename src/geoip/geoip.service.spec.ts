@@ -122,6 +122,35 @@ describe("GeoipService", () => {
     });
   });
 
+  describe("lookupAsn", () => {
+    it("reads the network's number once the ASN database is open, and null before", async () => {
+      mockedFs.access.mockResolvedValue(undefined);
+      mockedMaxmind.open.mockImplementation(async (file: string) =>
+        file.endsWith("GeoLite2-ASN.mmdb")
+          ? readerFor({
+              "3.5.140.2": { autonomous_system_number: 16509 },
+              "10.0.0.1": null,
+              "1.1.1.1": { autonomous_system_number: "13335" },
+            })
+          : readerFor({}),
+      );
+      const service = makeService({ GEOIP_DATABASE_PATH: "/data/geo.mmdb" });
+      expect(service.isAsnAvailable()).toBe(false);
+      expect(service.lookupAsn("3.5.140.2")).toBeNull();
+
+      await service.onModuleInit();
+
+      expect(mockedMaxmind.open).toHaveBeenCalledWith(
+        "/data/GeoLite2-ASN.mmdb",
+      );
+      expect(service.isAsnAvailable()).toBe(true);
+      expect(service.lookupAsn("3.5.140.2")).toBe(16509);
+      expect(service.lookupAsn("10.0.0.1")).toBeNull();
+      expect(service.lookupAsn("1.1.1.1")).toBeNull();
+      expect(service.lookupAsn("not an ip")).toBeNull();
+    });
+  });
+
   describe("onModuleInit", () => {
     it("opens the database from GEOIP_DATABASE_PATH with update watching", async () => {
       mockedFs.access.mockResolvedValue(undefined);

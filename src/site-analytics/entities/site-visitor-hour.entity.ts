@@ -7,7 +7,7 @@ import { Column, Entity, PrimaryColumn } from "typeorm";
  * an hourly series of a past day has `visitors`. The hours of today are read
  * from Redis live. An estimate, like the day's; a reader who comes back in
  * another hour counts again in it, so the hours of a day do not add up to its
- * visitors. 168 rows a day, kept.
+ * visitors. 336 rows a day, the data centres' readers apart, kept.
  */
 @Entity("site_visitor_hours")
 export class SiteVisitorHour {
@@ -15,7 +15,10 @@ export class SiteVisitorHour {
   @PrimaryColumn({ type: "timestamptz" })
   hour: Date;
 
-  /** `all`, or one of the six languages. */
+  /**
+   * `all` or one of the six languages; for readers from a data centre `dca`,
+   * or `d` and the language.
+   */
   @PrimaryColumn({ type: "varchar", length: 3 })
   scope: string;
 

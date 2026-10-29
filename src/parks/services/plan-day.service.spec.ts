@@ -1877,6 +1877,7 @@ describe("PlanDayService", () => {
       expect(plan.shows).toEqual([
         {
           showSlug: "big-moments",
+          showId: "s-1",
           showName: "Big Moments",
           latitude: null,
           longitude: null,
@@ -3685,8 +3686,9 @@ describe("PlanDayService", () => {
     it("serves exactly what it served before with the flag off", async () => {
       // Byte for byte against the response the code BEFORE this change gave
       // for the same fixture (recorded from origin/main 1cb2792c with
-      // WRITE_PLAN_DAY_GOLDEN=1), minus the one documented addition,
-      // `composer`. A composed day and a measured day, on a fixed clock.
+      // WRITE_PLAN_DAY_GOLDEN=1), minus the documented additions: `composer`,
+      // and the ids the planner's events name the park, rides and shows by.
+      // A composed day and a measured day, on a fixed clock.
       delete process.env.PLAN_DAY_H5_COMPOSER;
       jest.useFakeTimers().setSystemTime(new Date("2026-09-14T06:00:00.000Z"));
       try {
@@ -3703,9 +3705,15 @@ describe("PlanDayService", () => {
                   uncertaintyMinutes: 7,
                 }))
               : [];
-          const plan = await service.buildPlanDay(park, date);
+          const { parkId, ...plan } = await service.buildPlanDay(park, date);
+          expect(parkId).toBe(park.id);
           for (const ride of plan.rides) {
             if (ride.composer === "peak_scaled") delete ride.composer;
+            expect(ride.attractionId).toEqual(expect.any(String));
+            delete (ride as { attractionId?: string }).attractionId;
+          }
+          for (const show of plan.shows) {
+            delete (show as { showId?: string }).showId;
           }
           out[date] = plan;
         }

@@ -17,7 +17,10 @@ export class SiteVisitorDimDay {
   @PrimaryColumn({ type: "date" })
   day: string;
 
-  /** `all`, or one of the six languages. */
+  /**
+   * `all` or one of the six languages; for readers from a data centre `dca`,
+   * or `d` and the language.
+   */
   @PrimaryColumn({ type: "varchar", length: 3 })
   scope: string;
 

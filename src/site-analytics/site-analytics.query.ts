@@ -3,6 +3,7 @@ import { addIsoDays } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
   BUCKET_SECONDS,
+  DATACENTER_SCOPES,
   DAY_MS,
   FILTER_DIMS,
   INTERVALS,
@@ -12,6 +13,7 @@ import {
   MAX_RANGE_DAYS,
   bucketOf,
   isVisitDim,
+  type DatacenterScope,
   type FilterDim,
   type SiteInterval,
   type SiteLocale,
@@ -53,6 +55,8 @@ export interface SiteAnalyticsQuery {
   locale?: SiteLocale | null;
   /** `<dim>:<value>`, all of which a row must match. */
   filter?: string[] | null;
+  /** Which rows count by network; `exclude` when absent. */
+  datacenter?: DatacenterScope | null;
 }
 
 /** A stretch of UTC days, and the instants that bound its rows: `[start, end)`. */
@@ -74,6 +78,8 @@ export interface SiteAnalyticsWindow extends SiteAnalyticsRange {
   days: number;
   locale: SiteLocale | null;
   filters: SiteFilter[];
+  /** Which rows count by network: `exclude` leaves the data centres' out. */
+  datacenter: DatacenterScope;
   previous: SiteAnalyticsRange | null;
   /** The series step. */
   interval: SiteInterval;
@@ -158,6 +164,12 @@ export function siteAnalyticsWindow(
     from = addIsoDays(to, -(days - 1));
   }
   const days = daysBetween(from, to).length;
+  const datacenter = query.datacenter ?? "exclude";
+  if (!DATACENTER_SCOPES.includes(datacenter)) {
+    throw new BadRequestException(
+      `datacenter is ${DATACENTER_SCOPES.join(", ")}`,
+    );
+  }
   const interval = query.interval ?? defaultInterval(days);
   if (!INTERVALS.includes(interval)) {
     throw new BadRequestException(`interval is ${INTERVALS.join(", ")}`);
@@ -184,6 +196,7 @@ export function siteAnalyticsWindow(
     days,
     locale: query.locale ?? null,
     filters: parseFilters(query.filter),
+    datacenter,
     previous:
       days > MAX_COMPARABLE_DAYS
         ? null
@@ -391,18 +404,29 @@ export function bucketRanges(
 }
 
 /**
- * The window's language and filters as conditions on the dimension columns,
- * values as parameters; the same on every table a report reads.
+ * The window's language, network and filters as conditions on the dimension
+ * columns, values as parameters; the same on every table a report reads. A
+ * window without `datacenter` leaves the data centres' rows out, as a query
+ * without one does.
  */
 export function dimConditionsOf(
   params: SqlParams,
-  window: Pick<SiteAnalyticsWindow, "locale" | "filters">,
+  window: Pick<SiteAnalyticsWindow, "locale" | "filters"> &
+    Partial<Pick<SiteAnalyticsWindow, "datacenter">>,
   alias = "",
 ): string[] {
   const col = (name: string) => (alias ? `${alias}.${name}` : name);
   const conditions: string[] = [];
   if (window.locale) {
     conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
+  }
+  const datacenter = window.datacenter ?? "exclude";
+  // IS DISTINCT FROM keeps a row whose network reads NULL, which `<>` would
+  // drop without a word.
+  if (datacenter !== "include") {
+    conditions.push(
+      `${col("network")} ${datacenter === "only" ? "=" : "IS DISTINCT FROM"} 'datacenter'`,
+    );
   }
   for (const filter of window.filters) {
     conditions.push(
@@ -424,7 +448,8 @@ export function whereOf(
   window: Pick<
     SiteAnalyticsWindow,
     "locale" | "filters" | "start" | "end" | "previous"
-  >,
+  > &
+    Partial<Pick<SiteAnalyticsWindow, "datacenter">>,
   scope: "current" | "both",
   alias = "",
 ): string {

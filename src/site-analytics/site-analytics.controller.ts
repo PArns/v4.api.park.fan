@@ -60,6 +60,7 @@ import {
   SiteNotFoundDto,
   SiteNotFoundQueryDto,
   SiteOverviewDto,
+  SitePlannerDto,
   SiteSearchDto,
   SiteTrafficCrosstabDto,
   SiteTrafficCrosstabQueryDto,
@@ -258,7 +259,11 @@ export class AdminSiteAnalyticsController {
   @ApiResponse({ status: 200, type: SiteLiveDto })
   @ApiResponse({ status: 503, description: "Redis did not answer." })
   live(@Query() query: SiteLiveQueryDto): Promise<SiteLiveDto> {
-    return this.liveView.live(query.locale ?? null);
+    return this.liveView.live(
+      query.locale ?? null,
+      new Date(),
+      query.datacenter ?? "exclude",
+    );
   }
 
   @Get("search")
@@ -269,6 +274,17 @@ export class AdminSiteAnalyticsController {
   @ApiResponse({ status: 503, description: REPORT_BUSY })
   search(@Query() query: SiteAnalyticsQueryDto): Promise<SiteSearchDto> {
     return this.analytics.search(query);
+  }
+
+  @Get("planner")
+  @ApiOperation({
+    summary:
+      "How the trip planner is used: funnel, ways in, steps, tools, sharing",
+  })
+  @ApiResponse({ status: 200, type: SitePlannerDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
+  planner(@Query() query: SiteAnalyticsQueryDto): Promise<SitePlannerDto> {
+    return this.analytics.planner(query);
   }
 
   @Get("seo/landing-pages")

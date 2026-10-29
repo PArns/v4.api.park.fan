@@ -64,6 +64,13 @@ export class SitePageviewRow {
   @Column({ type: "varchar", length: 2 })
   country: string;
 
+  /**
+   * `datacenter`, `other` or `unknown` (`SITE_NETWORKS`), from the address's
+   * autonomous system; `unknown` on rows from before the column.
+   */
+  @Column({ type: "varchar", length: 10, default: "unknown" })
+  network: string;
+
   /** The first `Accept-Language` tag's primary subtag; `zz` without one. */
   @Column({
     name: "browser_language",

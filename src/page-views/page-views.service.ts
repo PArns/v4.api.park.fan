@@ -44,7 +44,8 @@ const PAGE_KEY_SQL = `CASE WHEN e.props->>'kind' IN ('park', 'attraction')
 
 /**
  * The reads of a window, with their page key and, for a park or ride, its
- * surviving id. `$1` is the window's start.
+ * surviving id. `$1` is the window's start. A data centre's reads stay out of
+ * the rankings: a scraper would otherwise decide what the site calls most read.
  */
 const READS_SQL = `SELECT e.props->>'kind' AS kind, ${PAGE_KEY_SQL} AS key,
             CASE WHEN e.props->>'kind' IN ('park', 'attraction')
@@ -52,7 +53,8 @@ const READS_SQL = `SELECT e.props->>'kind' AS kind, ${PAGE_KEY_SQL} AS key,
             e.locale, e.count, e.bucket
        FROM site_events e
        LEFT JOIN site_entity_merges m ON m.loser_id = e.entity
-      WHERE e.name = '${PAGE_READ_EVENT}' AND e.bucket >= $1::timestamptz`;
+      WHERE e.name = '${PAGE_READ_EVENT}' AND e.bucket >= $1::timestamptz
+        AND e.network IS DISTINCT FROM 'datacenter'`;
 
 /**
  * The "most read" rankings and the admin's popularity overview, served from

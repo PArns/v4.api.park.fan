@@ -91,10 +91,11 @@ describe("site-analytics.rollup", () => {
       }
     });
 
-    it("hold the properties with their key and always the bucket, the language and the measures", () => {
+    it("hold the properties with their key and always the bucket, the language, the network and the measures", () => {
       expect(cuboidColumns("events", EVENT_CUBOIDS[1])).toEqual([
         "bucket",
         "locale",
+        "network",
         "name",
         "props_key",
         "props",
@@ -103,6 +104,7 @@ describe("site-analytics.rollup", () => {
       expect(cuboidColumns("pageviews", PAGEVIEW_CUBOIDS[0])).toEqual([
         "bucket",
         "locale",
+        "network",
         "views",
         "seconds",
         "visits",
@@ -274,12 +276,14 @@ describe("site-analytics.rollup", () => {
       expect(source.endsWith(") AS site_pageviews")).toBe(true);
       // Only the cuboid's columns, so a statement that reads another fails.
       expect(source).toContain(
-        "SELECT bucket, locale, page_type, country, views, seconds",
+        "SELECT bucket, locale, network, page_type, country, views, seconds",
       );
       expect(source).not.toContain("browser_language");
-      expect(source.match(/locale = \$\d+ AND country = \$\d+/g)).toHaveLength(
-        2,
-      );
+      expect(
+        source.match(
+          /locale = \$\d+ AND network IS DISTINCT FROM 'datacenter' AND country = \$\d+/g,
+        ),
+      ).toHaveLength(2);
       // The window's language and filter once, however many tables read them.
       expect(params.values.slice(0, 3)).toEqual(["de", "de", 16]);
       expect(params.values).toHaveLength(7);
@@ -582,9 +586,10 @@ describe("site-analytics.rollup", () => {
     it("groups a page-view cuboid by its dimensions and fills the others with empty values", () => {
       const sql = rollupSql("pageviews", PAGEVIEW_CUBOIDS[15]);
       expect(sql).toContain("INSERT INTO site_pageviews_daily");
-      expect(sql).toContain("GROUP BY locale, page_type, country");
+      expect(sql).toContain("GROUP BY locale, network, page_type, country");
+      expect(sql).toContain("(bucket, cuboid, locale, network, path,");
       expect(sql).toMatch(
-        /locale, '', page_type, '', '', '', country, '', '', '', '', SUM\(views\)::bigint/,
+        /locale, network, '', page_type, '', '', '', country, '', '', '', '', SUM\(views\)::bigint/,
       );
       expect(sql).toContain("FROM site_pageviews, open");
       expect(sql).toContain("SUM(visit_span_seconds)::bigint");
@@ -596,15 +601,17 @@ describe("site-analytics.rollup", () => {
       expect(sql).toContain("source = 'pageviews' AND cuboid = $3::smallint");
       expect(sql).toContain("INSERT INTO site_rollup_days");
       expect(sql).toContain("ON CONFLICT (source, cuboid, day) DO NOTHING");
-      expect(sql).toContain("GROUP BY locale\n");
+      expect(sql).toContain("GROUP BY locale, network\n");
     });
 
     it("keeps an event's properties with their key, and the entity as NULL outside its cuboid", () => {
       const withProps = rollupSql("events", EVENT_CUBOIDS[1]);
-      expect(withProps).toContain("GROUP BY locale, name, props_key, props");
+      expect(withProps).toContain(
+        "GROUP BY locale, network, name, props_key, props",
+      );
       expect(withProps).toMatch(/NULL::uuid, SUM\(count\)::bigint/);
       const withEntity = rollupSql("events", EVENT_CUBOIDS[3]);
-      expect(withEntity).toContain("GROUP BY locale, name, entity");
+      expect(withEntity).toContain("GROUP BY locale, network, name, entity");
       expect(withEntity).toContain("'', '{}'::jsonb, entity");
     });
   });

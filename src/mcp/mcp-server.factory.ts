@@ -14,7 +14,8 @@ export const MAX_TOOL_RESULT_CHARS = 100_000;
 const INSTRUCTIONS =
   "Read-only view of park.fan's admin data: parks and rides with live status, waits and " +
   "outages, page-view popularity, the site statistic and its SEO reports (analytics_*, " +
-  "search_report, seo_*), system and ML health, job queues, data-quality findings, " +
+  "search_report, planner_report, seo_*), system and ML health, job queues, data-quality " +
+  "findings, " +
   "duplicate and retirement candidates, outage statistics and the admin audit log. Ids are " +
   "UUIDs; find_parks and find_attractions turn names into ids. Timestamps are ISO 8601 and " +
   "park-local times carry their offset. Nothing here changes data.";

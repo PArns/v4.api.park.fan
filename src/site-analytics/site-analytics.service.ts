@@ -24,7 +24,9 @@ import {
   isVisitDim,
   hourKey,
   minuteKey,
+  visitorScopesOf,
   type BreakdownDim,
+  type DatacenterScope,
   type FilterDim,
   type SiteLocale,
   type VisitorDim,
@@ -65,6 +67,7 @@ import type {
   SiteEventDetailDto,
   SiteEventsDto,
   SiteOverviewDto,
+  SitePlannerDto,
   SiteSearchDto,
   SiteTotalsDto,
   SiteTrafficCrosstabDto,
@@ -82,6 +85,43 @@ export const SEARCH_EVENTS = {
 
 /** The position buckets the frontend sends, in their order. */
 const SEARCH_POSITIONS = ["1", "2", "3", "4-5", "6-10", "11+"];
+
+/**
+ * The trip planner's events, as the frontend's funnel sends them
+ * (`lib/analytics/planner-funnel.ts`); `share_clicked` with
+ * `target=trip_plan` is its sharing.
+ */
+export const PLANNER_EVENTS = {
+  opened: "planner_opened",
+  started: "plan_day_started",
+  optimized: "plan_optimized",
+  closedEmpty: "planner_closed_empty",
+  wizardStep: "planner_wizard_step",
+  wizardFinished: "planner_wizard_finished",
+  itemAdded: "plan_item_added",
+  itemRemoved: "plan_item_removed",
+  fitOpened: "planner_fit_opened",
+  fitLever: "planner_fit_lever",
+  undo: "planner_undo",
+  dayCleared: "planner_day_cleared",
+  sharedOpened: "planner_shared_opened",
+  sharedAdopted: "planner_shared_adopted",
+  pushOn: "planner_push_on",
+  share: "share_clicked",
+} as const;
+
+/** How many parks and rides the planner report ranks. */
+const PLANNER_TOP_ENTITIES = 20;
+
+/**
+ * How many entities per event the planner report reads before it names
+ * them: enough that the shows among the added items and the parks among
+ * the started days leave twenty of the kind ranked.
+ */
+const PLANNER_ENTITY_CANDIDATES = PLANNER_TOP_ENTITIES * 5;
+
+/** `plan_day_started`'s source for a day begun with the panel shut. */
+const PANEL_SHUT = "none";
 
 /** The label of an empty value in a crosstab or a property list. */
 const NONE = "(none)";
@@ -194,7 +234,7 @@ export class SiteAnalyticsService {
           : visitorBasis.filter
             ? this.dimVisitors(window, visitorBasis.filter, now)
             : this.visitors(window, now),
-        this.realtime(window.locale, now),
+        this.realtime(window.locale, window.datacenter, now),
       ]);
 
       for (const row of [...trafficRows, ...eventRows]) {
@@ -780,6 +820,281 @@ export class SiteAnalyticsService {
   }
 
   /**
+   * How the trip planner is used, over its events: the funnel from an
+   * opening to a started, optimised and shared day with its rates; every way
+   * in with the days it led to; the wizard's steps; blocks added and removed
+   * by kind and source; the tools; sharing and push; openings by kind of
+   * page and device and per period; the parks and rides planned most, a
+   * merged entity counted for its winner. Three statements: the properties
+   * summed over the window, the openings drawn, and the entities.
+   */
+  async planner(
+    query: SiteAnalyticsQuery,
+    now = new Date(),
+  ): Promise<SitePlannerDto> {
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      refuseFiltersBeyond(window, "The planner report", EVENT_DIMS);
+      const names = Object.values(PLANNER_EVENTS);
+      const drawn = [
+        PLANNER_EVENTS.opened,
+        PLANNER_EVENTS.started,
+        PLANNER_EVENTS.optimized,
+      ];
+      const ranked = [PLANNER_EVENTS.started, PLANNER_EVENTS.itemAdded];
+      const read = async (
+        events: readonly string[],
+        needed: string[],
+        collapse: boolean,
+        select: string,
+        join = "",
+      ) => {
+        const params = new SqlParams();
+        const namesParam = params.add(events);
+        const source = await rowsOf(
+          this.rolled,
+          "events",
+          params,
+          window,
+          "current",
+          needed,
+          { alias: "e", collapse },
+        );
+        return {
+          sql: `${select} FROM ${source.from} ${join}
+                 WHERE e.name = ANY(${namesParam}::text[]) AND ${source.where}`,
+          params,
+        };
+      };
+      const [props, opened, entities] = await Promise.all([
+        read(
+          names,
+          ["name", "props_key"],
+          true,
+          `SELECT e.name, e.props, e.count`,
+        ),
+        read(
+          drawn,
+          ["name", "page_type", "device"],
+          false,
+          `SELECT e.name, e.page_type, e.device,
+                  ${periodOf(window.hourly, "e")} AS period, e.count`,
+        ),
+        read(
+          ranked,
+          ["name", "entity"],
+          true,
+          `SELECT e.name, COALESCE(m.winner_id, e.entity)::text AS entity,
+                  e.count`,
+          "LEFT JOIN site_entity_merges m ON m.loser_id = e.entity",
+        ),
+      ]);
+      const candidates = entities.params.add(PLANNER_ENTITY_CANDIDATES);
+      const [propRows, openedRows, entityRows]: [
+        Array<{ name: string; props: Record<string, string>; count: Count }>,
+        Array<{
+          name: string;
+          page_type: string | null;
+          device: string | null;
+          period: string | null;
+          count: Count;
+        }>,
+        Array<{ name: string; entity: string | null; count: Count }>,
+      ] = await Promise.all([
+        this.runner.query(
+          `SELECT name, props, SUM(count) AS count FROM (${props.sql}) s
+            GROUP BY name, props`,
+          props.params.values,
+        ),
+        this.runner.query(
+          `SELECT name, page_type, device, period, SUM(count) AS count
+             FROM (${opened.sql}) s
+            GROUP BY GROUPING SETS ((name, page_type, device), (name, period))`,
+          opened.params.values,
+        ),
+        this.runner.query(
+          `SELECT name, entity, count FROM (
+             SELECT name, entity, SUM(count) AS count,
+                    ROW_NUMBER() OVER (PARTITION BY name
+                                       ORDER BY SUM(count) DESC, entity) AS rank
+               FROM (${entities.sql}) s
+              WHERE entity IS NOT NULL
+              GROUP BY name, entity) ranked
+            WHERE rank <= ${candidates}`,
+          entities.params.values,
+        ),
+      ]);
+
+      // Each event's count by one property's value; `total` over all values.
+      const byProp = (name: string, prop: string) => {
+        const counts = new Map<string, number>();
+        for (const row of propRows) {
+          if (row.name !== name) continue;
+          addTo(counts, row.props?.[prop] ?? "", num(row.count));
+        }
+        return counts;
+      };
+      const total = (name: string) =>
+        propRows
+          .filter((row) => row.name === name)
+          .reduce((sum, row) => sum + num(row.count), 0);
+      const list = (name: string, prop: string) =>
+        byCountDesc(
+          [...byProp(name, prop)].map(([value, count]) => ({
+            value: value || NONE,
+            count,
+          })),
+          (item) => item.count,
+          (item) => item.value,
+        );
+
+      const openedTotal = total(PLANNER_EVENTS.opened);
+      const startedTotal = total(PLANNER_EVENTS.started);
+      const optimizedTotal = total(PLANNER_EVENTS.optimized);
+      const shared =
+        byProp(PLANNER_EVENTS.share, "target").get("trip_plan") ?? 0;
+      const openedBySource = byProp(PLANNER_EVENTS.opened, "source");
+      const startedBySource = byProp(PLANNER_EVENTS.started, "source");
+      const startedPanelShut = startedBySource.get(PANEL_SHUT) ?? 0;
+      // A day sent before the frontend named the way in has no source and
+      // belongs to neither an opening nor the shut panel.
+      const startedInOpening = [...startedBySource]
+        .filter(([source]) => source !== "" && source !== PANEL_SHUT)
+        .reduce((sum, [, count]) => sum + count, 0);
+      const items = (["added", "removed"] as const).flatMap((action) => {
+        const counts = new Map<string, number>();
+        const name =
+          action === "added"
+            ? PLANNER_EVENTS.itemAdded
+            : PLANNER_EVENTS.itemRemoved;
+        for (const row of propRows) {
+          if (row.name !== name) continue;
+          const key = `${row.props?.kind ?? ""}|${row.props?.source ?? ""}`;
+          addTo(counts, key, num(row.count));
+        }
+        return [...counts].map(([key, count]) => {
+          const [kind, source] = key.split("|");
+          return { action, kind: kind || NONE, source: source || NONE, count };
+        });
+      });
+      const headliners = byProp(PLANNER_EVENTS.wizardFinished, "headliners");
+
+      const series = new Map<string, number>();
+      const pageTypes: Array<{
+        pageType: string;
+        device: string;
+        opened: number;
+      }> = [];
+      for (const row of openedRows) {
+        if (row.period !== null) {
+          const start = periodStartOf(
+            periodText(row.period, window.hourly) as string,
+            window.interval,
+          );
+          addTo(series, `${start}|${row.name}`, num(row.count));
+        } else if (
+          row.name === PLANNER_EVENTS.opened &&
+          row.page_type !== null &&
+          row.device !== null
+        ) {
+          pageTypes.push({
+            pageType: row.page_type,
+            device: row.device,
+            opened: num(row.count),
+          });
+        }
+      }
+
+      const named = await this.entityNames.resolve(
+        entityRows.flatMap((row) => (row.entity ? [row.entity] : [])),
+      );
+      const top = (event: string, kind: "park" | "attraction") =>
+        byCountDesc(
+          entityRows
+            .filter(
+              (row) =>
+                row.name === event &&
+                row.entity &&
+                (named.get(row.entity)?.kind ?? kind) === kind,
+            )
+            .map((row) => {
+              const entity = named.get(row.entity as string);
+              return {
+                id: row.entity as string,
+                name: entity?.name ?? null,
+                url: entity?.url ?? null,
+                count: num(row.count),
+              };
+            }),
+          (item) => item.count,
+          (item) => item.id,
+        ).slice(0, PLANNER_TOP_ENTITIES);
+
+      return {
+        ...echo(window),
+        funnel: {
+          opened: openedTotal,
+          started: startedTotal,
+          optimized: optimizedTotal,
+          shared,
+          closedEmpty: total(PLANNER_EVENTS.closedEmpty),
+          startedInOpening,
+          startedPanelShut,
+          // One opening can begin a second park or day: the share stops at 1.
+          startRate: Math.min(1, rate(startedInOpening, openedTotal)),
+          // A day is optimised and shared as often as anyone likes, so these
+          // are counts per started day and not shares.
+          optimizedPerStarted: rate(optimizedTotal, startedTotal),
+          sharedPerStarted: rate(shared, startedTotal),
+        },
+        sources: byCountDesc(
+          [...openedBySource].map(([source, count]) => {
+            const started = startedBySource.get(source) ?? 0;
+            return {
+              source: source || NONE,
+              opened: count,
+              started,
+              startRate: Math.min(1, rate(started, count)),
+            };
+          }),
+          (item) => item.opened,
+          (item) => item.source,
+        ),
+        wizardSteps: list(PLANNER_EVENTS.wizardStep, "step"),
+        wizardFinished: total(PLANNER_EVENTS.wizardFinished),
+        wizardWithHeadliners: headliners.get("true") ?? 0,
+        items: byCountDesc(
+          items,
+          (item) => item.count,
+          (item) => `${item.action}|${item.kind}|${item.source}`,
+        ),
+        optimized: list(PLANNER_EVENTS.optimized, "mode"),
+        fitOpened: list(PLANNER_EVENTS.fitOpened, "source"),
+        fitLevers: list(PLANNER_EVENTS.fitLever, "lever"),
+        undo: list(PLANNER_EVENTS.undo, "source"),
+        dayCleared: total(PLANNER_EVENTS.dayCleared),
+        sharedOpened: list(PLANNER_EVENTS.sharedOpened, "outcome"),
+        sharedAdopted: total(PLANNER_EVENTS.sharedAdopted),
+        pushOn: total(PLANNER_EVENTS.pushOn),
+        byPageTypeAndDevice: byCountDesc(
+          pageTypes,
+          (item) => item.opened,
+          (item) => `${item.pageType}|${item.device}`,
+        ),
+        series: seriesPeriods(window, now).map((point) => ({
+          ...pointOf(point),
+          opened: series.get(`${point.day}|${PLANNER_EVENTS.opened}`) ?? 0,
+          started: series.get(`${point.day}|${PLANNER_EVENTS.started}`) ?? 0,
+          optimized:
+            series.get(`${point.day}|${PLANNER_EVENTS.optimized}`) ?? 0,
+        })),
+        topParks: top(PLANNER_EVENTS.started, "park"),
+        topRides: top(PLANNER_EVENTS.itemAdded, "attraction"),
+      };
+    });
+  }
+
+  /**
    * Which search is used, where and how well, over the `search_*` events:
    * per surface seen the openings, typed queries, clicks and dead ends with
    * their rates; openings by kind of page and device; what was clicked and
@@ -1012,6 +1327,10 @@ export class SiteAnalyticsService {
     now: Date,
   ): Promise<Visitors> {
     const scope = window.locale ?? ALL_LOCALES_SCOPE;
+    const scopes = visitorScopesOf(scope, window.datacenter);
+    // Whether the site counted a day is whether any reader was counted in
+    // it, whichever kind of network the asked-for ones came from.
+    const countedScopes = visitorScopesOf(scope, "include");
     const today = utcDay(now);
     const first = window.previous?.from ?? window.from;
     const hourPoints = window.hourly
@@ -1022,20 +1341,23 @@ export class SiteAnalyticsService {
       Array<{ hour: string; visitors: Count }>,
     ] = await Promise.all([
       this.runner.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day, visitors
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, SUM(visitors) AS visitors
            FROM site_visitor_days
-          WHERE scope = $1 AND day BETWEEN $2::date AND $3::date`,
-        [scope, first, window.to],
+          WHERE scope = ANY($1::text[]) AND day BETWEEN $2::date AND $3::date
+          GROUP BY day`,
+        [scopes, first, window.to],
       ),
       hourPoints.length === 0
         ? Promise.resolve([])
         : this.runner.query(
             `SELECT to_char(hour AT TIME ZONE 'UTC',
-                            'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour, visitors
+                            'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour,
+                    SUM(visitors) AS visitors
                FROM site_visitor_hours
-              WHERE scope = $1 AND hour >= $2::timestamptz
-                AND hour < $3::timestamptz`,
-            [scope, window.start, window.end],
+              WHERE scope = ANY($1::text[]) AND hour >= $2::timestamptz
+                AND hour < $3::timestamptz
+              GROUP BY hour`,
+            [scopes, window.start, window.end],
           ),
     ]);
     const days = new Map(rows.map((row) => [row.day, num(row.visitors)]));
@@ -1056,11 +1378,21 @@ export class SiteAnalyticsService {
     ].filter((day) => day < today);
     try {
       const pipeline = this.redis.pipeline();
-      for (const day of live) pipeline.pfcount(KEYS.visitors(day, scope));
-      for (const day of liveHourDays)
-        pipeline.exists(KEYS.visitors(day, scope));
+      // One PFCOUNT over the scopes' keys counts their union, which for
+      // disjoint readers is the sum.
+      for (const day of live) {
+        pipeline.pfcount(...scopes.map((scope) => KEYS.visitors(day, scope)));
+      }
+      for (const day of liveHourDays) {
+        pipeline.exists(
+          ...countedScopes.map((counted) => KEYS.visitors(day, counted)),
+        );
+      }
       for (const hour of liveHours) {
-        pipeline.pfcount(KEYS.hourVisitors(hourKey(new Date(hour)), scope));
+        const key = hourKey(new Date(hour));
+        pipeline.pfcount(
+          ...scopes.map((scope) => KEYS.hourVisitors(key, scope)),
+        );
       }
       const results = (await pipeline.exec()) ?? [];
       live.forEach((day, i) => {
@@ -1069,7 +1401,7 @@ export class SiteAnalyticsService {
       });
       const counted = new Set(
         liveHourDays.filter(
-          (_, i) => num(results[live.length + i]?.[1] as Count) === 1,
+          (_, i) => num(results[live.length + i]?.[1] as Count) > 0,
         ),
       );
       liveHours.forEach((hour, i) => {
@@ -1101,7 +1433,7 @@ export class SiteAnalyticsService {
     now: Date,
   ): Promise<Visitors> {
     const byValue = await this.dimDays(
-      window.locale ?? ALL_LOCALES_SCOPE,
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
       filter.dim,
       [filter.value],
       window.previous?.from ?? window.from,
@@ -1129,7 +1461,7 @@ export class SiteAnalyticsService {
     const basis = visitorBasisOf(window.filters, dim);
     if (!basis?.by) return null;
     const days = await this.dimDays(
-      window.locale ?? ALL_LOCALES_SCOPE,
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
       basis.by,
       values,
       window.from,
@@ -1147,11 +1479,11 @@ export class SiteAnalyticsService {
   /**
    * Unique visitors per day with each of `values` of one dimension: the
    * snapshot's rows, and for the days it has not written yet (today, and
-   * yesterday until it has run) the HyperLogLog in Redis. With Redis down the
-   * live days read zero.
+   * yesterday until it has run) the HyperLogLog in Redis, summed over the
+   * scopes (disjoint readers). With Redis down the live days read zero.
    */
   private async dimDays(
-    scope: string,
+    scopes: string[],
     dim: VisitorDim,
     values: string[],
     from: string,
@@ -1164,11 +1496,13 @@ export class SiteAnalyticsService {
     if (values.length === 0) return perValue;
     const rows: Array<{ day: string; value: string; visitors: Count }> =
       await this.runner.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day, value, visitors
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, value,
+                SUM(visitors) AS visitors
            FROM site_visitor_dim_days
-          WHERE scope = $1 AND dim = $2 AND value = ANY($3::text[])
-            AND day BETWEEN $4::date AND $5::date`,
-        [scope, dim, values, from, to],
+          WHERE scope = ANY($1::text[]) AND dim = $2 AND value = ANY($3::text[])
+            AND day BETWEEN $4::date AND $5::date
+          GROUP BY day, value`,
+        [scopes, dim, values, from, to],
       );
     for (const row of rows) {
       perValue.get(row.value)?.set(row.day, num(row.visitors));
@@ -1189,7 +1523,9 @@ export class SiteAnalyticsService {
     try {
       const pipeline = this.redis.pipeline();
       for (const { day, value } of live) {
-        pipeline.pfcount(KEYS.visitorDim(day, scope, dim, value));
+        pipeline.pfcount(
+          ...scopes.map((scope) => KEYS.visitorDim(day, scope, dim, value)),
+        );
       }
       const results = (await pipeline.exec()) ?? [];
       live.forEach(({ day, value }, i) => {
@@ -1208,13 +1544,14 @@ export class SiteAnalyticsService {
    * Distinct visitors over the last {@link REALTIME_ACTIVE_MINUTES} minutes
    * (one PFCOUNT over the minute keys counts their union) and page views per
    * minute over the last {@link REALTIME_SERIES_MINUTES}, for all languages or
-   * one; filters do not apply. Zero with Redis down.
+   * one and the report's network; filters do not apply. Zero with Redis down.
    */
   private async realtime(
     locale: SiteLocale | null,
+    datacenter: DatacenterScope,
     now: Date,
   ): Promise<SiteOverviewDto["realtime"]> {
-    const scope = locale ?? ALL_LOCALES_SCOPE;
+    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, datacenter);
     const start = Math.floor(now.getTime() / 60_000) * 60_000;
     const minutes = Array.from(
       { length: REALTIME_SERIES_MINUTES },
@@ -1230,12 +1567,16 @@ export class SiteAnalyticsService {
     try {
       const active = minutes
         .slice(-REALTIME_ACTIVE_MINUTES)
-        .map((minute) => KEYS.activeMinute(minuteKey(minute), scope));
+        .flatMap((minute) =>
+          scopes.map((scope) => KEYS.activeMinute(minuteKey(minute), scope)),
+        );
       const [activeVisitors, counts] = await Promise.all([
         this.redis.pfcount(...active),
         this.redis.mget(
-          ...minutes.map((minute) =>
-            KEYS.pageviewsMinute(minuteKey(minute), scope),
+          ...minutes.flatMap((minute) =>
+            scopes.map((scope) =>
+              KEYS.pageviewsMinute(minuteKey(minute), scope),
+            ),
           ),
         ),
       ]);
@@ -1243,7 +1584,10 @@ export class SiteAnalyticsService {
         activeVisitors: num(activeVisitors),
         perMinute: minutes.map((minute, i) => ({
           minute: isoMinute(minute),
-          pageviews: num(counts[i]),
+          pageviews: scopes.reduce(
+            (sum, _, s) => sum + num(counts[i * scopes.length + s]),
+            0,
+          ),
         })),
       };
     } catch (error) {
@@ -1268,6 +1612,7 @@ export function echo(window: SiteAnalyticsWindow) {
     interval: window.interval,
     locale: window.locale,
     filters: window.filters.map((f) => `${f.dim}:${f.value}`),
+    datacenter: window.datacenter,
     hourlyFrom: window.reach.hourlyFrom,
   };
 }

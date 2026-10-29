@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  DATACENTER_SCOPES,
   EVENT_DIMS,
   FILTER_DIMS,
   HOURLY_RETENTION_DAYS,
@@ -51,7 +52,19 @@ export const SITE_ANALYTICS_CAVEATS =
   HOURLY_FROM_DESCRIPTION +
   " Reports lag the " +
   "site by up to about six minutes. Readers with Do Not Track, Global Privacy Control or the " +
-  "privacy page's opt-out, and bots, are not counted.";
+  "privacy page's opt-out, and bots, are not counted. Hits from data-centre networks (clouds and " +
+  "hosters, by the address's ASN: headless browsers that pass as readers) are kept but left out " +
+  "unless datacenter is include or only; the window echoes which.";
+
+/** The `datacenter` input every report takes. */
+export const datacenterInput = z
+  .enum(DATACENTER_SCOPES)
+  .optional()
+  .describe(
+    "Rows from data-centre networks: exclude (default) leaves them out, include counts them with " +
+      "the rest, only shows them alone. Rows from before the network was recorded count as " +
+      "not from a data centre",
+  );
 
 export const FILTER_DIM_HELP =
   "path (e.g. /de/parks/europe/germany/bruehl/phantasialand), page_type (home, park, attraction, " +
@@ -108,6 +121,7 @@ export const siteWindowInput = {
         "(entry, referrer, channel) select visits by how they began; the event, " +
         "crosstab, search and not-found tools refuse them",
     ),
+  datacenter: datacenterInput,
 };
 
 /** The `filters` input of a tool that offers only some of the dimensions. */
@@ -175,6 +189,7 @@ export type SiteWindowInput = {
   interval?: SiteInterval;
   locale?: (typeof SITE_LOCALES)[number];
   filters?: Array<{ dim: (typeof FILTER_DIMS)[number]; value: string }>;
+  datacenter?: (typeof DATACENTER_SCOPES)[number];
 };
 
 /** The service's query: `filter` as the `<dim>:<value>` strings the HTTP route takes. */
@@ -186,6 +201,7 @@ export function siteQuery(input: SiteWindowInput): SiteAnalyticsQuery {
     interval: input.interval ?? null,
     locale: input.locale ?? null,
     filter: (input.filters ?? []).map(({ dim, value }) => `${dim}:${value}`),
+    datacenter: input.datacenter ?? null,
   };
 }
 
@@ -197,6 +213,7 @@ export function windowOf(report: {
   interval: SiteInterval;
   locale: string | null;
   filters: string[];
+  datacenter?: string;
   hourlyFrom?: string | null;
 }) {
   return {
@@ -206,6 +223,7 @@ export function windowOf(report: {
     interval: report.interval,
     locale: report.locale,
     filters: report.filters,
+    datacenter: report.datacenter ?? "exclude",
     hourlyFrom: report.hourlyFrom ?? null,
   };
 }

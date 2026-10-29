@@ -143,7 +143,7 @@ request.
   sends nothing under Do Not Track, GPC, the privacy page's opt-out, or off the production hosts.
 - **No address and no User-Agent is stored**, in Postgres, in Redis or in a log line
   (no log line of this API carries an address, [the rule](../rules/no-address-in-logs.md)). The address becomes the bucket for the
-  caps, the country, and a pseudonym; the User-Agent becomes two families, a device class and a pseudonym.
+  caps, the country, the network class ([data centres](#data-centres)) and a pseudonym; the User-Agent becomes two families, a device class and a pseudonym.
 - **Every Redis key that stands for a reader or an address is pseudonymous for one UTC day**: an
   HMAC-SHA256 under that day's key, `HMAC(secret, day)` (`dailyHashKey`), where the secret is
   `ANALYTICS_HASH_SECRET` (falling back to `PAGE_VIEWS_HASH_SECRET`, then to a random per-process
@@ -165,7 +165,7 @@ request.
   the flusher stopped no pseudonym stays there longer.
 - **What a row holds**: an hour, never a moment, and counts. A page view's row carries the page and
   its reader's classes (language, path, page type, device class, browser, OS, country, browser
-  language), `views` and `seconds`, and **nothing of the visit**; a visit's start row carries the
+  language, network), `views` and `seconds`, and **nothing of the visit**; a visit's start row carries the
   first page and the classes plus the entry, referrer site and channel, with `visits`, `engaged` and
   `visit_seconds`; an exit row carries the last page and the classes plus how the visit began, with
   `exits` and `visit_span_seconds` (last hit minus first, summed); an event's row carries the page,
@@ -191,6 +191,44 @@ request.
 | `site-analytics:drops:<day>`                                             | drop and overflow counts by reason                                                                                                  | to the end of the next day + 1 min                                                        |
 | `site-analytics:buf:<window>`, `…:flushing`                              | a window's counts until written                                                                                                     | no TTL; written within about six minutes                                                  |
 | `site-analytics:buf:<window>:parked`                                     | a window the flusher gave up on                                                                                                     | 7 days                                                                                    |
+
+## Data centres
+
+A headless browser with an ordinary User-Agent passes `isBotUserAgent`, and its address still says
+where it runs. Every row carries `network`: `datacenter` when the address's autonomous system is on
+`DATACENTER_ASNS` (`src/site-analytics/datacenter-networks.ts`, clouds and hosters, each with its holder
+as RIPEstat names it), `other` for any other, `unknown` without the ASN database and on the rows
+written before the column. The ASN comes from MaxMind GeoLite2-ASN, read in memory beside the country
+([GeoIP database](../architecture/location-resolution.md#geoip-database)); neither the ASN nor the address
+is kept.
+
+- **Marked, never dropped.** Every report and the live view leave the data centres' rows out unless
+  the query says `datacenter=include` (all rows) or `datacenter=only`; the window echoes `datacenter`.
+  The condition is in `dimConditionsOf`, so it applies to the hourly and the daily rows alike, and
+  `network` is in every cuboid as `locale` is, so the default report is still served from the daily
+  rows. A row of `unknown` counts as not from a data centre; the condition is
+  `network IS DISTINCT FROM 'datacenter'`, so a row that read NULL would too.
+- **Visitors** of a data centre's reader are counted under scopes of their own: `dca` for all
+  languages and `d` with the language (`dde`) for one, three characters like the scope columns, in the
+  day, hour, dimension and minute keys and in `site_visitor_days`, `site_visitor_hours` and
+  `site_visitor_dim_days`. The default report reads the scopes it always read; `include` adds both,
+  which are disjoint readers, so their counts add up (one PFCOUNT over both keys counts their union).
+  They are disjoint once a day is counted under one ASN database: on the day of the first deploy,
+  while the ASN file is still downloading, and on a day a refresh moves a network, one reader can sit
+  in both, and the stored days under `include` count them twice where today's live union does not. A
+  counted day (its `all` or `dca` key exists) has every hour of every scope, zeros included, so
+  `only` reads an hour without a data centre as 0 and not as unknown.
+- **The most-read rankings** (`/v1/page-views/top`) never count a data centre's read: a scraper would
+  otherwise decide what the site calls most read.
+- **Never on the list** (`NEVER_DATACENTER`, pinned by a test): the networks iCloud Private Relay and
+  Cloudflare WARP leave through (Akamai, Cloudflare, Fastly) and those VPN providers rent (M247,
+  Datacamp). Their readers are people.
+- **Where the mark is wrong.** People do reach the site from listed networks: a self-hosted or
+  commercial VPN on a hoster (OVH, Hetzner, DigitalOcean, Vultr), a cloud desktop (Windows 365,
+  Amazon WorkSpaces), an office whose traffic leaves through a cloud security gateway. That is why
+  the hits are marked and not dropped: `include` puts them back, `only` shows how many there are.
+- **Adding a network** is a line in `DATACENTER_ASNS` with its holder, in a pull request; a deploy
+  applies it to new hits, not to rows already written.
 
 ## Visits, visitors, bounce, realtime
 
@@ -318,9 +356,9 @@ holds up to twelve rows per combination, summed when read. The nightly `drop-old
 chunk with `drop_chunks` under a 5-second `lock_timeout` once all of it is older than its table's
 retention ([retention](#retention)); a chunk it cannot lock waits for the next night rather than
 queueing the API behind it ([lock queues](../troubleshooting/timescaledb-lock-queues.md)). A dropped
-chunk is a dropped table: nothing for VACUUM. `site_visitor_days` (seven rows a day),
-`site_visitor_hours` (168 a day), `site_visitor_dim_days` (the visitors of each country, device,
-browser, OS and channel by language and day: the UTC day, `scope` (`all` or a language), `dim`, `value`
+chunk is a dropped table: nothing for VACUUM. `site_visitor_days` (up to 14 rows a day),
+`site_visitor_hours` (336 a day), `site_visitor_dim_days` (the visitors of each country, device,
+browser, OS and channel by language and day: the UTC day, `scope` (`all` or a language, or their data-centre scopes), `dim`, `value`
 and `visitors`, primary key `(day, scope, dim, value)`, a few hundred rows a day, written once per
 finished day by `snapshot-visitors`) and `site_rollup_days` (a marker per cuboid and day) are small
 plain tables whose old rows the same job deletes, a few hundred a night; `site_blocked_events`,
@@ -469,7 +507,9 @@ Days are UTC days, not a park's: a reader belongs to no park
 ([park timezone](../rules/park-timezone.md)). Every admin report takes a window, `locale`,
 `interval`, and `filter=<dim>:<value>` (repeatable, AND; dim ∈ `path`, `page_type`, `country`,
 `device`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
-`referrer`, `channel`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters` and `hourlyFrom`.
+`referrer`, `channel`), `datacenter` (`exclude`, the default, `include` or `only`,
+[data centres](#data-centres)), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`,
+`datacenter` and `hourlyFrom`.
 
 **The window** is `days` (1–365, the last days with today; 30 without one) or `from` and `to`
 (`YYYY-MM-DD`, both included, `to` today at the latest, at most 366 days). Both at once, one of
@@ -623,22 +663,23 @@ and runs at most 15 s a statement (up to four statements of one report run in pa
 which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any failed call
 ("failed on the server; try again or narrow the call").
 
-| Endpoint                                                          | Answers                                                                                                                                                                                                                                                                                                |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /v1/analytics/collect`                                      | the beacon (above)                                                                                                                                                                                                                                                                                     |
-| `GET /v1/admin/analytics/overview`                                | the figures above for the window and the one before; a series with all of them; realtime                                                                                                                                                                                                               |
-| `GET /v1/admin/analytics/breakdown?dim=&limit=`                   | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages                                 |
-| `GET /v1/admin/analytics/crosstab?row=&col=&metric=`              | page views or visits by two dimensions (above)                                                                                                                                                                                                                                                         |
-| `GET /v1/admin/analytics/live?locale=`                            | the last half hour from Redis (above)                                                                                                                                                                                                                                                                  |
-| `GET /v1/admin/analytics/events`                                  | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series                                                                                                                                                                                 |
-| `GET /v1/admin/analytics/events/:name`                            | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and device, the 50 top entities (name and frontend path; `kind` null once gone), series                                                                                                      |
-| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=`         | one event by two sides: `page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval |
-| `GET /v1/admin/analytics/search`                                  | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and device; result kinds, positions, browse items; series          |
-| `GET /v1/admin/analytics/seo/landing-pages?channel=search&limit=` | the pages visits from one channel entered on: visits, previous, change, bounce rate, average visit, top 5 sources                                                                                                                                                                                      |
-| `GET /v1/admin/analytics/seo/trends?channel=search`               | rising and falling landing pages, 25 each, at least 10 visits over both windows, with the window's average visit; at most 180 days                                                                                                                                                                     |
-| `GET /v1/admin/analytics/seo/not-found`                           | paths that showed `pageType: not_found`, with the referrers of the visits that **entered** on them (`visits` each): a Google result pointing at a dead page shows `google`; a broken link inside the site brings views and no referrer, whatever the visit came from                                   |
-| `GET /v1/admin/analytics/seo/uncovered?kind=park\|attraction`     | parks or rides no search visit entered on: matched on the frontend path in any language, so a ride renamed since shows as uncovered                                                                                                                                                                    |
-| `GET`, `PUT`, `DELETE /v1/admin/analytics/blocked-events[/:name]` | the block list; writes need `editor` and are audited                                                                                                                                                                                                                                                   |
+| Endpoint                                                          | Answers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/analytics/collect`                                      | the beacon (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `GET /v1/admin/analytics/overview`                                | the figures above for the window and the one before; a series with all of them; realtime                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `GET /v1/admin/analytics/breakdown?dim=&limit=`                   | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages                                                                                                                                                                                                                                                                                                                         |
+| `GET /v1/admin/analytics/crosstab?row=&col=&metric=`              | page views or visits by two dimensions (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `GET /v1/admin/analytics/live?locale=`                            | the last half hour from Redis (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `GET /v1/admin/analytics/events`                                  | every name seen in the window or the one before, and every blocked one (`blocked: true`), with count, previous, series                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `GET /v1/admin/analytics/events/:name`                            | total, every prop key seen with its 50 top values and `otherCount`, the 50 top combinations, by page type and device, the 50 top entities (name and frontend path; `kind` null once gone), series                                                                                                                                                                                                                                                                                                                                                                                              |
+| `GET /v1/admin/analytics/events/:name/crosstab?row=&col=`         | one event by two sides: `page_type`, `device`, `locale`, `day`, `path`, `country`, `browser`, `os` or `prop:<key>`; 30 values per side by count, the rest `__rest__` (a value nothing real can be: a page type may well be `other`), an empty value `(none)`; `day` keeps every period of the interval                                                                                                                                                                                                                                                                                         |
+| `GET /v1/admin/analytics/search`                                  | the `search_*` events by the `surface` values seen: opened, typed, clicks, dead ends, `clickRate` (at most 1: the search page counts one opening per visit to it, its results are clicked many times), `noResultRate`; by page type and device; result kinds, positions, browse items; series                                                                                                                                                                                                                                                                                                  |
+| `GET /v1/admin/analytics/planner`                                 | the trip planner's events: the funnel (opened, started, optimised, shared, closed empty, days started in an opening and with the panel shut) with `startRate` (days started in an opening per opening, at most 1) and optimisations and shares per started day; each way in (`planner_opened`'s `source`) with the days started in such an opening (`plan_day_started`'s `source`); wizard steps; blocks added and removed by kind and source; tools; sharing and push; openings by page type and device; series; the parks and rides planned most, named, a merged one counted for its winner |
+| `GET /v1/admin/analytics/seo/landing-pages?channel=search&limit=` | the pages visits from one channel entered on: visits, previous, change, bounce rate, average visit, top 5 sources                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `GET /v1/admin/analytics/seo/trends?channel=search`               | rising and falling landing pages, 25 each, at least 10 visits over both windows, with the window's average visit; at most 180 days                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `GET /v1/admin/analytics/seo/not-found`                           | paths that showed `pageType: not_found`, with the referrers of the visits that **entered** on them (`visits` each): a Google result pointing at a dead page shows `google`; a broken link inside the site brings views and no referrer, whatever the visit came from                                                                                                                                                                                                                                                                                                                           |
+| `GET /v1/admin/analytics/seo/uncovered?kind=park\|attraction`     | parks or rides no search visit entered on: matched on the frontend path in any language, so a ride renamed since shows as uncovered                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GET`, `PUT`, `DELETE /v1/admin/analytics/blocked-events[/:name]` | the block list; writes need `editor` and are audited                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 All admin routes need a session (`AdminAuthGuard`, any role) and answer `private, no-store`.
 `SiteAnalyticsService`, `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` return exactly these

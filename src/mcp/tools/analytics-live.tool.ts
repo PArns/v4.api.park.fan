@@ -7,8 +7,10 @@ import {
   SMALL_CELLS_DESCRIPTION,
   foldSmallRows,
   hideSmallInSeries,
+  isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
+import { datacenterInput } from "./site-analytics.inputs";
 
 export const analyticsLiveTool = defineMcpTool({
   name: "analytics_live",
@@ -23,18 +25,22 @@ export const analyticsLiveTool = defineMcpTool({
     VISITOR_DATA_DESCRIPTION +
     " " +
     SMALL_CELLS_DESCRIPTION +
-    ` With locale, a minute's values from 1 to ${MCP_MIN_CELL - 1} are null and ` +
+    ` With locale or datacenter=only, a minute's values from 1 to ${MCP_MIN_CELL - 1} are null and ` +
     "smallValuesHidden says whether any were; the minutes of the whole site are as counted.",
   input: {
     locale: z
       .enum(SITE_LOCALES)
       .optional()
       .describe("Only this language of the site; all six when absent"),
+    datacenter: datacenterInput,
   },
-  async handler({ locale }, ctx) {
-    const live = await ctx.get(SiteAnalyticsLiveService).live(locale ?? null);
+  async handler({ locale, datacenter }, ctx) {
+    const live = await ctx
+      .get(SiteAnalyticsLiveService)
+      .live(locale ?? null, new Date(), datacenter ?? "exclude");
     // A minute of the whole site is a total; one language's is a slice.
-    const minutes = locale
+    const narrowed = isNarrowed({ locale, datacenter });
+    const minutes = narrowed
       ? hideSmallInSeries(live.perMinute, ["pageviews", "events", "visitors"])
       : { series: live.perMinute, hidden: false };
     const fold = (count: string) => ({ count, sum: [count] });
@@ -43,7 +49,7 @@ export const analyticsLiveTool = defineMcpTool({
         at: live.at,
         activeVisitors: live.activeVisitors,
         perMinute: minutes.series,
-        ...(locale && { smallValuesHidden: minutes.hidden }),
+        ...(narrowed && { smallValuesHidden: minutes.hidden }),
         countries: foldSmallRows(live.countries, {
           dims: ["country"],
           ...fold("views"),

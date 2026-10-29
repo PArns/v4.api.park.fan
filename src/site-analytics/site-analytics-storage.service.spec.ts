@@ -29,12 +29,14 @@ const PAGE: PageviewDims = [
   "",
   "",
   "",
+  "other",
 ];
 const VISIT: PageviewDims = [
   ...PAGE.slice(0, 8),
   "/de",
   "google",
   "search",
+  "other",
 ] as PageviewDims;
 const EVENT: EventDims = [
   "search_opened",
@@ -47,6 +49,7 @@ const EVENT: EventDims = [
   "de",
   "surface=hero",
   "",
+  "other",
 ];
 
 /**
@@ -60,6 +63,26 @@ const EVENT: EventDims = [
  * flushes at a time; the snapshot never writes a lost day as zero; a chunk
  * drop that cannot get its lock waits for the next night.
  */
+describe("rowsOfFields", () => {
+  it("writes a field from before the network as unknown, and skips any other length", () => {
+    const old = PAGE.slice(0, 11) as unknown as PageviewDims;
+    const oldEvent = EVENT.slice(0, 10) as unknown as EventDims;
+    const { pageviews, events } = rowsOfFields({
+      [pageviewField("v", old)]: "2",
+      [pageviewField("v", PAGE)]: "3",
+      [eventField(oldEvent)]: "1",
+      [`v${JSON.stringify(PAGE.slice(0, 9))}`]: "5",
+    });
+    expect(
+      pageviews.map(({ dims, counts }) => [dims[11], counts.views]),
+    ).toEqual([
+      ["unknown", 2],
+      ["other", 3],
+    ]);
+    expect(events.map(({ dims }) => dims[10])).toEqual(["unknown"]);
+  });
+});
+
 describe("SiteAnalyticsStorageService", () => {
   let redis: SiteAnalyticsRedisMock;
   let statements: Array<[string, unknown[] | undefined]>;
@@ -184,7 +207,8 @@ describe("SiteAnalyticsStorageService", () => {
       );
       buffer("2026-10-28T09:55:00.000Z", fields);
       await service.flush(NOW);
-      expect(statements[1][1]?.[12]).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(statements[1][1]?.[12]).toEqual(Array(7).fill("other"));
+      expect(statements[1][1]?.[13]).toEqual([1, 2, 3, 4, 5, 6, 7]);
     });
 
     it("writes a claim with a marker no second time", async () => {
@@ -246,7 +270,7 @@ describe("SiteAnalyticsStorageService", () => {
       expect(markers[0][1]?.[1]).not.toBe(markers[1][1]?.[1]);
       const views = statements
         .filter(([sql]) => sql.includes("INSERT INTO site_pageviews"))
-        .map(([, params]) => params?.[12]);
+        .map(([, params]) => params?.[13]);
       expect(views).toEqual([[3], [2]]);
       expect(await redis.smembers(KEYS.windows)).toEqual([]);
     });
@@ -482,7 +506,7 @@ describe("SiteAnalyticsStorageService", () => {
       await expect(service.snapshotVisitors(NOW)).resolves.toEqual({
         found: 2,
         written: 2,
-        hoursWritten: 168,
+        hoursWritten: 336,
       });
       const [sql, params] = statements[0];
       expect(sql).toContain("ON CONFLICT (day, scope) DO NOTHING");
@@ -491,10 +515,12 @@ describe("SiteAnalyticsStorageService", () => {
         ["all", "de"],
         [2, 1],
       ]);
-      // Every hour of a counted day, with zeros, for every language.
+      // Every hour of a counted day, with zeros, for every language, and
+      // for the data centres' scopes too though none of them came.
       const [hoursSql, hours] = statements[1] as [string, unknown[][]];
       expect(hoursSql).toContain("ON CONFLICT (hour, scope) DO NOTHING");
-      expect(hours[0]).toHaveLength(7 * 24);
+      expect(hours[0]).toHaveLength(14 * 24);
+      expect(hours[1].filter((scope) => scope === "dca")).toHaveLength(24);
       expect(hours[0].slice(0, 2)).toEqual([
         "2026-10-27T00:00:00.000Z",
         "2026-10-27T01:00:00.000Z",

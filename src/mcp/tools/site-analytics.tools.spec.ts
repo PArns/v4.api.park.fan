@@ -8,6 +8,7 @@ import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
 import { analyticsTrafficCrosstabTool } from "./analytics-traffic-crosstab.tool";
 import { analyticsLiveTool } from "./analytics-live.tool";
 import { searchReportTool } from "./search-report.tool";
+import { plannerReportTool } from "./planner-report.tool";
 import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
 import { seoNotFoundTool } from "./seo-not-found.tool";
@@ -25,7 +26,13 @@ const WINDOW = {
 };
 
 /** The service query of a tool given no window: every field null. */
-const NO_WINDOW = { days: null, from: null, to: null, interval: null };
+const NO_WINDOW = {
+  days: null,
+  from: null,
+  to: null,
+  interval: null,
+  datacenter: null,
+};
 
 /** Runs a tool the way the server does: the input parsed by its schema first. */
 async function run(
@@ -74,6 +81,7 @@ describe("site statistic tools", () => {
       siteQuery({ from: "2026-09-01", to: "2026-09-30", interval: "week" }),
     ).toEqual({
       days: null,
+      datacenter: null,
       from: "2026-09-01",
       to: "2026-09-30",
       interval: "week",
@@ -525,7 +533,17 @@ describe("site statistic tools", () => {
     };
     const service = { live: jest.fn(async () => live) };
     const answer = await run(analyticsLiveTool, { locale: "de" }, service);
-    expect(service.live).toHaveBeenCalledWith("de");
+    expect(service.live).toHaveBeenCalledWith(
+      "de",
+      expect.any(Date),
+      "exclude",
+    );
+    await run(analyticsLiveTool, { datacenter: "only" }, service);
+    expect(service.live).toHaveBeenLastCalledWith(
+      null,
+      expect.any(Date),
+      "only",
+    );
     expect(answer).toMatchObject({
       at: live.at,
       activeVisitors: 3,
@@ -588,6 +606,135 @@ describe("site statistic tools", () => {
     ]);
     expect(visitorData(answer).bySurfaceAndPageType).toHaveLength(1);
     expect(visitorData(answer)).not.toHaveProperty("series");
+  });
+
+  const plannerFunnel = {
+    opened: 40,
+    started: 12,
+    optimized: 4,
+    shared: 2,
+    closedEmpty: 28,
+    startedInOpening: 10,
+    startedPanelShut: 2,
+    startRate: 0.25001,
+    optimizedPerStarted: 0.33333,
+    sharedPerStarted: 0.16667,
+  };
+
+  it("planner_report: rounds the rates, folds small lists, names the planned parks and caps them", async () => {
+    const count = (value: string, n: number) => ({ value, count: n });
+    const service = {
+      planner: jest.fn(async () => ({
+        ...WINDOW,
+        funnel: plannerFunnel,
+        sources: [
+          { source: "header", opened: 30, started: 6, startRate: 0.2 },
+          { source: "kids-page", opened: 2, started: 1, startRate: 0.5 },
+        ],
+        wizardSteps: [count("park", 12), count("date", 8)],
+        wizardFinished: 5,
+        wizardWithHeadliners: 3,
+        items: [
+          { action: "added", kind: "ride", source: "search", count: 7 },
+          { action: "added", kind: "show", source: "show_picker", count: 6 },
+        ],
+        optimized: [count("day", 30)],
+        fitOpened: [],
+        fitLevers: [],
+        undo: [],
+        dayCleared: 1,
+        sharedOpened: [count("ready", 9)],
+        sharedAdopted: 3,
+        pushOn: 2,
+        byPageTypeAndDevice: [],
+        series: [{ day: "2026-10-28", opened: 40, started: 12, optimized: 4 }],
+        topParks: [
+          { id: "gone", name: null, url: null, count: 12 },
+          { id: "p1", name: "Phantasialand", url: "/parks/p", count: 10 },
+          { id: "p2", name: "Efteling", url: "/parks/e", count: 8 },
+        ],
+        topRides: [],
+      })),
+    };
+    const answer = await run(
+      plannerReportTool,
+      { limit: 1, datacenter: "include" },
+      service,
+    );
+    expect(service.planner).toHaveBeenCalledWith(
+      expect.objectContaining({ datacenter: "include" }),
+    );
+    expect(answer).toMatchObject({
+      datacenter: "exclude",
+      funnel: {
+        startRate: 0.25,
+        optimizedPerStarted: 0.333,
+        sharedPerStarted: 0.167,
+        startedPanelShut: 2,
+      },
+      wizardFinished: 5,
+      pushOn: 2,
+      unresolvedEntities: 1,
+    });
+    // The whole site's totals are as counted.
+    expect(answer).not.toHaveProperty("smallValuesHidden");
+    // A way in opened twice is folded: too few to tell anyone apart.
+    expect(visitorData(answer).sources).toEqual([
+      expect.objectContaining({ source: "header", startRate: 0.2 }),
+      expect.objectContaining({ source: "(other)" }),
+    ]);
+    expect(visitorData(answer).topParks).toEqual([
+      { id: "p1", name: "Phantasialand", url: "/parks/p", count: 10 },
+    ]);
+    expect(visitorData(answer).items).toHaveLength(1);
+    expect(visitorData(answer)).not.toHaveProperty("series");
+  });
+
+  it("planner_report: hides small totals and the rates worked out from them when narrowed", async () => {
+    const report = {
+      ...WINDOW,
+      funnel: plannerFunnel,
+      sources: [],
+      wizardSteps: [],
+      wizardFinished: 3,
+      wizardWithHeadliners: 0,
+      items: [],
+      optimized: [],
+      fitOpened: [],
+      fitLevers: [],
+      undo: [],
+      dayCleared: 9,
+      sharedOpened: [],
+      sharedAdopted: 1,
+      pushOn: 0,
+      byPageTypeAndDevice: [],
+      series: [],
+      topParks: [],
+      topRides: [],
+    };
+    for (const narrowing of [
+      { filters: [{ dim: "country", value: "lu" }] },
+      { datacenter: "only" },
+    ]) {
+      const service = { planner: jest.fn(async () => report) };
+      const answer = await run(plannerReportTool, narrowing, service);
+      expect(answer).toMatchObject({
+        funnel: {
+          opened: 40,
+          shared: null,
+          startedPanelShut: null,
+          startRate: 0.25,
+          optimizedPerStarted: null,
+          sharedPerStarted: null,
+        },
+        wizardFinished: null,
+        wizardWithHeadliners: 0,
+        dayCleared: 9,
+        sharedAdopted: null,
+        pushOn: 0,
+        smallValuesHidden: true,
+      });
+    }
   });
 
   it("seo tools pass channel, kind and limit, and default to search and parks", async () => {

@@ -170,6 +170,14 @@ export class PlanDayRideDto {
   @ApiProperty({ example: "taron" })
   attractionSlug: string;
 
+  @ApiProperty({
+    format: "uuid",
+    description:
+      "The ride's id, which the planner's own events name it by; the slug " +
+      "stays the plan's key.",
+  })
+  attractionId: string;
+
   @ApiProperty({ example: "Taron" })
   attractionName: string;
 
@@ -436,6 +444,12 @@ export class PlanDayRideDto {
 export class PlanDayShowDto {
   @ApiProperty({ example: "big-moments-the-celebration-show" })
   showSlug: string;
+
+  @ApiProperty({
+    format: "uuid",
+    description: "The show's id, for the planner's events, like a ride's.",
+  })
+  showId: string;
 
   @ApiProperty({ example: "Big Moments – The Celebration-Show" })
   showName: string;
@@ -802,6 +816,12 @@ export class PlanDayClimatologyDto {
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
+
+  @ApiProperty({
+    format: "uuid",
+    description: "The park's id, for the planner's events, like a ride's.",
+  })
+  parkId: string;
 
   @ApiProperty({ example: "Europe/Berlin" })
   timezone: string;
