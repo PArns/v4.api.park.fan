@@ -145,6 +145,37 @@ describe("OAuthAuthorizationService", () => {
       );
     });
 
+    it("hands the consent page where the request was started and who reads it", async () => {
+      const { service } = build();
+      const outcome = await service.authorize(validRequest, null, {
+        country: "us",
+        browser: "firefox",
+      });
+      const id = new URL(
+        (outcome as { location: string }).location,
+      ).searchParams.get("request")!;
+      const summary = await service.describe(id, {
+        country: "de",
+        browser: "chrome",
+      });
+      expect(summary.startedFrom).toEqual({
+        country: "us",
+        browser: "firefox",
+      });
+      expect(summary.viewer).toEqual({ country: "de", browser: "chrome" });
+    });
+
+    it("knows no start for a request parked before the origin was stored", async () => {
+      const { service } = build();
+      const outcome = await service.authorize(validRequest, null);
+      const id = new URL(
+        (outcome as { location: string }).location,
+      ).searchParams.get("request")!;
+      const summary = await service.describe(id);
+      expect(summary.startedFrom).toBeNull();
+      expect(summary.viewer).toBeNull();
+    });
+
     it("derives the start of a request parked before it was stored", async () => {
       const { service, redis } = build();
       const outcome = await service.authorize(validRequest, null);

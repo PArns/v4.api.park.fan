@@ -30,6 +30,7 @@ import { OAuthError } from "./oauth-error";
 import type { AuthorizeErrorMessage } from "./oauth-error-page";
 import { isValidCodeChallenge, verifyPkceS256 } from "./pkce.util";
 import { checkRedirectUri, isRegisteredRedirect } from "./redirect-uri.util";
+import type { RequestOrigin } from "./request-origin";
 
 /** How long the consent page has before the request is gone. */
 export const PENDING_REQUEST_TTL_SECONDS = 10 * 60;
@@ -67,6 +68,8 @@ interface PendingRequest {
   /** Epoch ms the request was parked; absent on one parked before it was stored. */
   createdAt?: number;
   expiresAt: number;
+  /** The browser that started it; absent on one parked before it was stored. */
+  startedFrom?: RequestOrigin | null;
 }
 
 interface StoredCode {
@@ -95,6 +98,12 @@ export interface PendingRequestSummary {
   /** When the client started the request: the consent page shows its age and warns on an old one. */
   createdAt: string;
   expiresAt: string;
+  /**
+   * The country and browser the request was started from, and the ones of the admin reading it:
+   * the consent page warns when they differ. Null where it is not known.
+   */
+  startedFrom: RequestOrigin | null;
+  viewer: RequestOrigin | null;
 }
 
 /** The RFC 6749 §5.1 token response. */
@@ -172,6 +181,7 @@ export class OAuthAuthorizationService {
   async authorize(
     params: Params,
     addressBucket: string | null = null,
+    startedFrom: RequestOrigin | null = null,
   ): Promise<AuthorizeOutcome> {
     if (
       addressBucket &&
@@ -272,6 +282,7 @@ export class OAuthAuthorizationService {
       scope: DEFAULT_ADMIN_TOKEN_SCOPE,
       createdAt: now,
       expiresAt: now + PENDING_REQUEST_TTL_SECONDS * 1000,
+      startedFrom,
     };
     await this.redis.set(
       REQUEST_PREFIX + hashToken(id),
@@ -285,7 +296,10 @@ export class OAuthAuthorizationService {
     return { kind: "redirect", location: consent.toString() };
   }
 
-  async describe(id: string): Promise<PendingRequestSummary> {
+  async describe(
+    id: string,
+    viewer: RequestOrigin | null = null,
+  ): Promise<PendingRequestSummary> {
     const pending = await this.readPending(id, false);
     return {
       id: pending.id,
@@ -300,6 +314,8 @@ export class OAuthAuthorizationService {
           pending.expiresAt - PENDING_REQUEST_TTL_SECONDS * 1000,
       ).toISOString(),
       expiresAt: new Date(pending.expiresAt).toISOString(),
+      startedFrom: pending.startedFrom ?? null,
+      viewer,
     };
   }
 
@@ -341,6 +357,7 @@ export class OAuthAuthorizationService {
       after: {
         redirectHost: new URL(pending.redirectUri).host,
         scope: pending.scope,
+        startedFrom: pending.startedFrom ?? null,
       },
     });
 

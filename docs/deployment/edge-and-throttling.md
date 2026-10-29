@@ -83,7 +83,8 @@ and Cloudflare absorbs most reads before they reach the origin.
 address. While `CF_ORIGIN_SECRET` is empty (the default) every request may. Once it is set, only a
 request whose `CF_ORIGIN_SECRET_HEADER` (default `x-cf-origin-secret`) carries that value may; the
 header is meant to be added by a Cloudflare Transform Rule or cloudflared. Both `.env` examples list
-the two variables; nothing in this repository records whether production sets them. Cloudflare
+the two variables. Production does not set them: the API is reached only through a Cloudflare Tunnel
+(Argo), and its published port is not reachable from outside. Cloudflare
 refuses to set a header whose name starts with `x-cf-`, so a Transform Rule needs another name
 (`x-origin-secret`) in `CF_ORIGIN_SECRET_HEADER`. Behind a Cloudflare Tunnel with no published port the
 secret is not needed: every request comes through Cloudflare, which writes `CF-Connecting-IP` itself.

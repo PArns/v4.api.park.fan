@@ -218,7 +218,7 @@ The answer also carries `hourlyFrom`, the day from which a figure that needed th
 | GET         | `/v1/oauth/authorize`                            | public (browser)                         | validates, parks the request, 302 to the consent page                                                                                        |
 | POST        | `/v1/oauth/token`                                | public client                            | `authorization_code` (PKCE S256), `refresh_token`                                                                                            |
 | POST        | `/v1/oauth/revoke`                               | public client                            | RFC 7009; revokes the whole grant                                                                                                            |
-| GET         | `/v1/admin/oauth/requests/:id`                   | session, any role                        | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes) and `expiresAt`                 |
+| GET         | `/v1/admin/oauth/requests/:id`                   | session, any role                        | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes), `expiresAt`, `startedFrom` and `viewer` |
 | POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode? }` | `{ redirectTo }` with the code; 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending |
 | POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                        |
 | GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                       |
@@ -264,6 +264,10 @@ What was checked when this was built, and where it is enforced:
 - **Consent phishing:** anyone may register a client called "Claude", so the consent page shows the
   redirect host, and https redirects are limited to `OAUTH_REDIRECT_HOSTS`. A grant obtained through
   a phished approval lands in the approving admin's own claude.ai session or on their own machine.
+  The page also warns when the request was started from another country or browser family than the
+  admin's: `/v1/oauth/authorize` parks the GeoIP country and the browser family of the browser that
+  started it (`request-origin.ts`, never the address or the User-Agent), and the consent read
+  compares them with the admin's address and the User-Agent the session signed in with.
 - **DCR abuse:** 10 registrations per address bucket (IPv4, IPv6 /64) and hour (Redis) plus 10 a
   minute (throttler), names stripped of control, bidi, zero-width, separator, filler and tag
   characters (`stripInvisibleCharacters`) and cut at 100, at most 10 redirect URIs. Registrations

@@ -18,6 +18,11 @@ export interface AdminPrincipal {
   role: AdminRole;
   /** The opaque session token, when this request came in on one. */
   sessionToken: string | null;
+  /**
+   * The User-Agent the session signed in with. Requests reach the API through
+   * the admin proxy, whose own User-Agent says nothing about the browser.
+   */
+  sessionUserAgent?: string | null;
   /** True when authenticated by the deprecated shared `pass=` secret. */
   legacy: boolean;
   ip: string | null;
