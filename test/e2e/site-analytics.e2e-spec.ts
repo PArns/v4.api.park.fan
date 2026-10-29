@@ -961,10 +961,18 @@ describe("Site analytics (e2e)", () => {
 
   it("reports the planner's funnel, ways in, blocks and planned parks from its events", async () => {
     const park = await savePark();
+    // A park merged into this one is counted for it.
+    const merged = "4d9c2b1a-7e6f-4a3b-8c2d-1e0f9a8b7c6d";
+    await dataSource.query(
+      `INSERT INTO site_entity_merges (loser_id, winner_id) VALUES ($1, $2)`,
+      [merged, park.id],
+    );
     await beacon([
       event("planner_opened", { source: "park-header" }),
       event("planner_wizard_step", { step: "park" }, { entity: park.id }),
       event("plan_day_started", { source: "park-header" }, { entity: park.id }),
+      // A ride page's button, with the panel shut.
+      event("plan_day_started", { source: "none" }, { entity: merged }),
       event("plan_item_added", { kind: "ride", source: "search" }),
       event("plan_optimized", { mode: "headliners" }, { entity: park.id }),
       event("share_clicked", { target: "trip_plan" }),
@@ -983,13 +991,15 @@ describe("Site analytics (e2e)", () => {
     );
     expect(report.body.funnel).toEqual({
       opened: 2,
-      started: 1,
+      started: 2,
       optimized: 1,
       shared: 1,
       closedEmpty: 1,
+      startedInOpening: 1,
+      startedPanelShut: 1,
       startRate: 0.5,
-      optimizeRate: 1,
-      shareRate: 1,
+      optimizedPerStarted: 0.5,
+      sharedPerStarted: 0.5,
     });
     expect(report.body.sources).toEqual([
       { source: "header", opened: 1, started: 0, startRate: 0 },
@@ -1000,7 +1010,7 @@ describe("Site analytics (e2e)", () => {
     ]);
     expect(report.body.optimized).toEqual([{ value: "headliners", count: 1 }]);
     expect(report.body.topParks).toEqual([
-      expect.objectContaining({ id: park.id, name: "Phantasialand", count: 1 }),
+      expect.objectContaining({ id: park.id, name: "Phantasialand", count: 2 }),
     ]);
     expect(report.body.byPageTypeAndDevice).toEqual([
       expect.objectContaining({ pageType: "home", opened: 2 }),
@@ -1392,7 +1402,7 @@ describe("Site analytics (e2e)", () => {
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
       written: 2,
-      hoursWritten: 168,
+      hoursWritten: 336,
     });
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,

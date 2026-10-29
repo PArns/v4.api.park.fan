@@ -54,7 +54,7 @@ const READS_SQL = `SELECT e.props->>'kind' AS kind, ${PAGE_KEY_SQL} AS key,
        FROM site_events e
        LEFT JOIN site_entity_merges m ON m.loser_id = e.entity
       WHERE e.name = '${PAGE_READ_EVENT}' AND e.bucket >= $1::timestamptz
-        AND e.network <> 'datacenter'`;
+        AND e.network IS DISTINCT FROM 'datacenter'`;
 
 /**
  * The "most read" rankings and the admin's popularity overview, served from

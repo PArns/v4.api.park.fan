@@ -142,7 +142,6 @@ describe("GeoipService", () => {
 
       expect(mockedMaxmind.open).toHaveBeenCalledWith(
         "/data/GeoLite2-ASN.mmdb",
-        { watchForUpdates: true },
       );
       expect(service.isAsnAvailable()).toBe(true);
       expect(service.lookupAsn("3.5.140.2")).toBe(16509);

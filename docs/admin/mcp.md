@@ -184,13 +184,14 @@ the count that decides, and the measures that add up.
   series). Nothing is added to `(other)` that a tool did not list as additive, so a new field never
   carries one row's value onto the others'. A list without a small row comes back as it is. Totals are
   not folded and still count every value: `total`, a report's `totals`, `previous`; but under a
-  filter or a language a total or previous count of 1 to 4 is null (with the rates computed from it,
+  filter, a language or `datacenter=only` a total or previous count of 1 to 4 is null (with the rates computed from it,
   and the `change` that needs it) and `smallValuesHidden` says so.
 - **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
   page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,
   events), `search_report` (surfaces, openings by page type and device, result types, positions, browse
   items), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
-  device, the parks and rides planned most), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
+  device, the parks and rides planned most, an id no table knows any more left out and counted in
+  `unresolvedEntities`), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
   referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per
   language). `seo_uncovered` lists our own parks and rides that had no search visit at all, so there is no
   count in it to fold; `gsc_*` (Google drops rare queries itself) and `audit_log` are as they were.

@@ -608,21 +608,25 @@ describe("site statistic tools", () => {
     expect(visitorData(answer)).not.toHaveProperty("series");
   });
 
+  const plannerFunnel = {
+    opened: 40,
+    started: 12,
+    optimized: 4,
+    shared: 2,
+    closedEmpty: 28,
+    startedInOpening: 10,
+    startedPanelShut: 2,
+    startRate: 0.25001,
+    optimizedPerStarted: 0.33333,
+    sharedPerStarted: 0.16667,
+  };
+
   it("planner_report: rounds the rates, folds small lists, names the planned parks and caps them", async () => {
     const count = (value: string, n: number) => ({ value, count: n });
     const service = {
       planner: jest.fn(async () => ({
         ...WINDOW,
-        funnel: {
-          opened: 40,
-          started: 12,
-          optimized: 4,
-          shared: 2,
-          closedEmpty: 28,
-          startRate: 0.30001,
-          optimizeRate: 0.33333,
-          shareRate: 0.16667,
-        },
+        funnel: plannerFunnel,
         sources: [
           { source: "header", opened: 30, started: 6, startRate: 0.2 },
           { source: "kids-page", opened: 2, started: 1, startRate: 0.5 },
@@ -645,6 +649,7 @@ describe("site statistic tools", () => {
         byPageTypeAndDevice: [],
         series: [{ day: "2026-10-28", opened: 40, started: 12, optimized: 4 }],
         topParks: [
+          { id: "gone", name: null, url: null, count: 12 },
           { id: "p1", name: "Phantasialand", url: "/parks/p", count: 10 },
           { id: "p2", name: "Efteling", url: "/parks/e", count: 8 },
         ],
@@ -661,10 +666,18 @@ describe("site statistic tools", () => {
     );
     expect(answer).toMatchObject({
       datacenter: "exclude",
-      funnel: { startRate: 0.3, optimizeRate: 0.333, shareRate: 0.167 },
+      funnel: {
+        startRate: 0.25,
+        optimizedPerStarted: 0.333,
+        sharedPerStarted: 0.167,
+        startedPanelShut: 2,
+      },
       wizardFinished: 5,
       pushOn: 2,
+      unresolvedEntities: 1,
     });
+    // The whole site's totals are as counted.
+    expect(answer).not.toHaveProperty("smallValuesHidden");
     // A way in opened twice is folded: too few to tell anyone apart.
     expect(visitorData(answer).sources).toEqual([
       expect.objectContaining({ source: "header", startRate: 0.2 }),
@@ -675,6 +688,53 @@ describe("site statistic tools", () => {
     ]);
     expect(visitorData(answer).items).toHaveLength(1);
     expect(visitorData(answer)).not.toHaveProperty("series");
+  });
+
+  it("planner_report: hides small totals and the rates worked out from them when narrowed", async () => {
+    const report = {
+      ...WINDOW,
+      funnel: plannerFunnel,
+      sources: [],
+      wizardSteps: [],
+      wizardFinished: 3,
+      wizardWithHeadliners: 0,
+      items: [],
+      optimized: [],
+      fitOpened: [],
+      fitLevers: [],
+      undo: [],
+      dayCleared: 9,
+      sharedOpened: [],
+      sharedAdopted: 1,
+      pushOn: 0,
+      byPageTypeAndDevice: [],
+      series: [],
+      topParks: [],
+      topRides: [],
+    };
+    for (const narrowing of [
+      { filters: [{ dim: "country", value: "lu" }] },
+      { datacenter: "only" },
+    ]) {
+      const service = { planner: jest.fn(async () => report) };
+      const answer = await run(plannerReportTool, narrowing, service);
+      expect(answer).toMatchObject({
+        funnel: {
+          opened: 40,
+          shared: null,
+          startedPanelShut: null,
+          startRate: 0.25,
+          optimizedPerStarted: null,
+          sharedPerStarted: null,
+        },
+        wizardFinished: null,
+        wizardWithHeadliners: 0,
+        dayCleared: 9,
+        sharedAdopted: null,
+        pushOn: 0,
+        smallValuesHidden: true,
+      });
+    }
   });
 
   it("seo tools pass channel, kind and limit, and default to search and parks", async () => {

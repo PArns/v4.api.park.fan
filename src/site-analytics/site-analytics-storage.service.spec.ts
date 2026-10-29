@@ -506,7 +506,7 @@ describe("SiteAnalyticsStorageService", () => {
       await expect(service.snapshotVisitors(NOW)).resolves.toEqual({
         found: 2,
         written: 2,
-        hoursWritten: 168,
+        hoursWritten: 336,
       });
       const [sql, params] = statements[0];
       expect(sql).toContain("ON CONFLICT (day, scope) DO NOTHING");
@@ -515,10 +515,12 @@ describe("SiteAnalyticsStorageService", () => {
         ["all", "de"],
         [2, 1],
       ]);
-      // Every hour of a counted day, with zeros, for every language.
+      // Every hour of a counted day, with zeros, for every language, and
+      // for the data centres' scopes too though none of them came.
       const [hoursSql, hours] = statements[1] as [string, unknown[][]];
       expect(hoursSql).toContain("ON CONFLICT (hour, scope) DO NOTHING");
-      expect(hours[0]).toHaveLength(7 * 24);
+      expect(hours[0]).toHaveLength(14 * 24);
+      expect(hours[1].filter((scope) => scope === "dca")).toHaveLength(24);
       expect(hours[0].slice(0, 2)).toEqual([
         "2026-10-27T00:00:00.000Z",
         "2026-10-27T01:00:00.000Z",

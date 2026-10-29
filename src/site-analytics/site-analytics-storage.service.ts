@@ -654,33 +654,25 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       ],
     );
 
-    // Without the all-languages key nothing says the day was counted; the
-    // data centres' scopes have their own, so a day without one writes no
-    // zeros for them.
+    // The all-languages keys say the day was counted, for readers from any
+    // network: then an hour without a reader of a scope is a zero, also for
+    // the data centres alone on a day none of them came.
     const datacenterAll = datacenterVisitorScope(ALL_LOCALES_SCOPE);
-    const counted = new Set(
-      rows
-        .filter(
-          (row) =>
-            row.scope === ALL_LOCALES_SCOPE || row.scope === datacenterAll,
-        )
-        .map((row) => row.scope),
+    const counted = rows.some(
+      (row) => row.scope === ALL_LOCALES_SCOPE || row.scope === datacenterAll,
     );
-    const ownScopes = new Set(own);
     const base = 2 * keys.length;
-    const wanted = keys
-      .flatMap((entry, s) =>
-        counted.has(
-          ownScopes.has(entry.scope) ? ALL_LOCALES_SCOPE : datacenterAll,
-        )
-          ? hours.map((hour, h) => ({
+    const wanted = counted
+      ? keys
+          .flatMap((entry, s) =>
+            hours.map((hour, h) => ({
               hour: hour.start.toISOString(),
               scope: entry.scope,
               visitors: Number(results[base + s * hours.length + h]?.[1] ?? 0),
-            }))
-          : [],
-      )
-      .filter((row) => Number.isFinite(row.visitors));
+            })),
+          )
+          .filter((row) => Number.isFinite(row.visitors))
+      : [];
     const hoursInserted: unknown[] = await this.dataSource.query(
       `INSERT INTO site_visitor_hours (hour, scope, visitors)
        SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::int[])

@@ -391,12 +391,15 @@ describe("small-cells", () => {
   });
 
   describe("isNarrowed", () => {
-    it("is true under a filter or a language only", () => {
+    it("is true under a filter, a language or the data centres alone", () => {
       expect(isNarrowed({})).toBe(false);
       expect(isNarrowed({ filters: [] })).toBe(false);
       expect(isNarrowed({ filters: [{}] })).toBe(true);
       expect(isNarrowed({ locale: "de" })).toBe(true);
       expect(isNarrowed({ locale: undefined, filters: undefined })).toBe(false);
+      // The data centres alone can be as few readers as a filter.
+      expect(isNarrowed({ datacenter: "only" })).toBe(true);
+      expect(isNarrowed({ datacenter: "include" })).toBe(false);
     });
   });
 

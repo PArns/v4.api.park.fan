@@ -259,7 +259,7 @@ describe("site-analytics.query", () => {
     );
     const params = new SqlParams();
     expect(whereOf(params, window, "current", "e")).toBe(
-      "e.bucket >= $1::timestamptz AND e.bucket < $2::timestamptz AND e.locale = $3 AND e.network <> 'datacenter' AND e.channel = $4 AND e.entry = $5",
+      "e.bucket >= $1::timestamptz AND e.bucket < $2::timestamptz AND e.locale = $3 AND e.network IS DISTINCT FROM 'datacenter' AND e.channel = $4 AND e.entry = $5",
     );
     expect(params.values).toEqual([
       "2026-10-22T00:00:00.000Z",
@@ -285,7 +285,7 @@ describe("site-analytics.query", () => {
     const window = siteAnalyticsWindow({ days: 7 }, NOW);
     const params = new SqlParams();
     expect(whereOf(params, window, "both")).toBe(
-      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND NOT (bucket >= $3::timestamptz AND bucket < $4::timestamptz) AND network <> 'datacenter'",
+      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND NOT (bucket >= $3::timestamptz AND bucket < $4::timestamptz) AND network IS DISTINCT FROM 'datacenter'",
     );
     expect(params.values).toEqual([
       "2026-10-15T00:00:00.000Z",
@@ -296,7 +296,7 @@ describe("site-analytics.query", () => {
     // Without a window before, both is the window alone.
     const long = new SqlParams();
     expect(whereOf(long, siteAnalyticsWindow({ days: 365 }, NOW), "both")).toBe(
-      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND network <> 'datacenter'",
+      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND network IS DISTINCT FROM 'datacenter'",
     );
   });
 
@@ -306,12 +306,12 @@ describe("site-analytics.query", () => {
         new SqlParams(),
         siteAnalyticsWindow({ days: 7, datacenter }, NOW),
       );
-    expect(of("exclude")).toEqual(["network <> 'datacenter'"]);
+    expect(of("exclude")).toEqual(["network IS DISTINCT FROM 'datacenter'"]);
     expect(of("include")).toEqual([]);
     expect(of("only")).toEqual(["network = 'datacenter'"]);
     expect(
       dimConditionsOf(new SqlParams(), { locale: null, filters: [] }),
-    ).toEqual(["network <> 'datacenter'"]);
+    ).toEqual(["network IS DISTINCT FROM 'datacenter'"]);
     expect(() =>
       siteAnalyticsWindow({ days: 7, datacenter: "all" as never }, NOW),
     ).toThrow(/datacenter is exclude, include, only/);

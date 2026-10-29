@@ -876,13 +876,30 @@ export class SitePlannerFunnelDto {
   })
   closedEmpty: number;
   @ApiProperty({
-    description: "started / opened, at most 1; 0 without an opening.",
+    description:
+      "Days started in an opening: plan_day_started with a way in as its source.",
+  })
+  startedInOpening: number;
+  @ApiProperty({
+    description:
+      "Days started with the panel shut (a ride page's button): source none. " +
+      "Days sent before the source existed are in neither.",
+  })
+  startedPanelShut: number;
+  @ApiProperty({
+    description: "startedInOpening / opened, at most 1; 0 without an opening.",
   })
   startRate: number;
-  @ApiProperty({ description: "optimized / started, at most 1." })
-  optimizeRate: number;
-  @ApiProperty({ description: "shared / started, at most 1." })
-  shareRate: number;
+  @ApiProperty({
+    description:
+      "optimized / started: optimisations per started day, not a share; can exceed 1.",
+  })
+  optimizedPerStarted: number;
+  @ApiProperty({
+    description:
+      "shared / started: shares per started day, not a share; can exceed 1.",
+  })
+  sharedPerStarted: number;
 }
 
 export class SitePlannerSourceDto {

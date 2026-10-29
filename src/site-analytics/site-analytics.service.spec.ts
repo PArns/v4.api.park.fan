@@ -1473,7 +1473,7 @@ describe("SiteAnalyticsService", () => {
       count: String(count),
     });
 
-    it("draws the funnel with capped rates, each way in with the days it led to, the steps, blocks, tools and the planned parks and rides", async () => {
+    it("draws the funnel with its rates, each way in with the days it led to, the steps, blocks, tools and the planned parks and rides", async () => {
       routes = [
         [
           "SELECT name, props, SUM(count)",
@@ -1484,6 +1484,8 @@ describe("SiteAnalyticsService", () => {
             props("plan_day_started", { source: "park-header" }, 4),
             // A day started from a ride page's button, with the panel shut.
             props("plan_day_started", { source: "none" }, 2),
+            // A day sent before the frontend named the way in.
+            props("plan_day_started", {}, 1),
             props("plan_optimized", { mode: "day" }, 3),
             props("plan_optimized", { mode: "headliners" }, 1),
             props("share_clicked", { target: "trip_plan" }, 2),
@@ -1524,7 +1526,7 @@ describe("SiteAnalyticsService", () => {
           ],
         ],
         [
-          "SELECT name, entity::text AS entity",
+          "ROW_NUMBER() OVER (PARTITION BY name",
           [
             { name: "plan_day_started", entity: PARK, count: "10" },
             { name: "plan_item_added", entity: RIDE, count: "7" },
@@ -1543,13 +1545,15 @@ describe("SiteAnalyticsService", () => {
 
       expect(result.funnel).toEqual({
         opened: 40,
-        started: 12,
+        started: 13,
         optimized: 4,
         shared: 2,
         closedEmpty: 28,
-        startRate: 0.3,
-        optimizeRate: 0.3333,
-        shareRate: 0.1667,
+        startedInOpening: 10,
+        startedPanelShut: 2,
+        startRate: 0.25,
+        optimizedPerStarted: 0.3077,
+        sharedPerStarted: 0.1538,
       });
       expect(result.sources).toEqual([
         { source: "header", opened: 30, started: 6, startRate: 0.2 },
@@ -1595,8 +1599,18 @@ describe("SiteAnalyticsService", () => {
         { id: GONE, name: null, url: null, count: 1 },
       ]);
       expect(sqlOf("SELECT name, props, SUM(count)")[0]).toContain(
-        "network <> 'datacenter'",
+        "network IS DISTINCT FROM 'datacenter'",
       );
+      // A merged park or ride counts for its winner, and each event's
+      // entities are cut before they are named.
+      const [entitySql, entityParams] = sqlOf(
+        "ROW_NUMBER() OVER (PARTITION BY name",
+      );
+      expect(entitySql).toContain(
+        "LEFT JOIN site_entity_merges m ON m.loser_id = e.entity",
+      );
+      expect(entitySql).toContain("COALESCE(m.winner_id, e.entity)");
+      expect(entityParams).toContain(100);
     });
 
     it("refuses a visit dimension, which events do not carry", async () => {

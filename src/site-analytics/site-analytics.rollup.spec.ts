@@ -281,7 +281,7 @@ describe("site-analytics.rollup", () => {
       expect(source).not.toContain("browser_language");
       expect(
         source.match(
-          /locale = \$\d+ AND network <> 'datacenter' AND country = \$\d+/g,
+          /locale = \$\d+ AND network IS DISTINCT FROM 'datacenter' AND country = \$\d+/g,
         ),
       ).toHaveLength(2);
       // The window's language and filter once, however many tables read them.

@@ -206,9 +206,9 @@ export class GeoipService implements OnModuleInit {
       return false;
     }
     try {
-      this.asnLookup = await maxmind.open<AsnResponse>(this.asnPath, {
-        watchForUpdates: true,
-      });
+      // No file watcher: the update job reopens the file itself, and a
+      // watching reader left behind would keep its copy alive.
+      this.asnLookup = await maxmind.open<AsnResponse>(this.asnPath);
       this.logger.log(`GeoLite2-ASN loaded: ${this.asnPath}`);
       return true;
     } catch (err) {
@@ -223,13 +223,7 @@ export class GeoipService implements OnModuleInit {
   private async downloadAsn(): Promise<void> {
     if (!(await this.downloadEdition("GeoLite2-ASN", this.asnPath))) return;
     this.logger.log(`GeoLite2-ASN updated at ${this.asnPath}`);
-    if (this.asnLookup) {
-      this.asnLookup = await maxmind.open<AsnResponse>(this.asnPath, {
-        watchForUpdates: true,
-      });
-    } else {
-      await this.openAsnIfExists();
-    }
+    await this.openAsnIfExists();
   }
 
   /**

@@ -128,7 +128,7 @@ describe("PageViewsService", () => {
       const [sql, params] = query.mock.calls[0];
       expect(sql).toContain("e.name = 'page_read'");
       // A scraper in a data centre does not decide what is most read.
-      expect(sql).toContain("e.network <> 'datacenter'");
+      expect(sql).toContain("e.network IS DISTINCT FROM 'datacenter'");
       expect(sql).toContain("LEFT JOIN site_entity_merges m");
       expect(sql).toContain("e.props->>'kind' = $2 AND e.locale = $3");
       // A park or ride ranks only while it exists, compared as uuids.

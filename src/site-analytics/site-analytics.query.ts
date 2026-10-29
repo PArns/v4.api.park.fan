@@ -421,9 +421,11 @@ export function dimConditionsOf(
     conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
   }
   const datacenter = window.datacenter ?? "exclude";
+  // IS DISTINCT FROM keeps a row whose network reads NULL, which `<>` would
+  // drop without a word.
   if (datacenter !== "include") {
     conditions.push(
-      `${col("network")} ${datacenter === "only" ? "=" : "<>"} 'datacenter'`,
+      `${col("network")} ${datacenter === "only" ? "=" : "IS DISTINCT FROM"} 'datacenter'`,
     );
   }
   for (const filter of window.filters) {
