@@ -403,6 +403,27 @@ describe("SearchConsoleService.pages", () => {
     expect(grouped.params).toContain("phantasialand");
   });
 
+  it("narrows the listed pages, not the totals, to those containing the search text", async () => {
+    const { service, calls } = build({ batches: WEEK, items: [] });
+    await service.pages({ days: 7, search: " Bruehl/% " }, NOW);
+    const grouped = calls.find((c) => c.sql.includes("GROUP BY r.page"))!;
+    expect(grouped.sql).toContain("strpos(r.page,");
+    expect(grouped.params).toContain("bruehl/%");
+    const totals = calls.find(
+      (c) =>
+        !c.sql.includes("GROUP BY") && c.sql.includes("search_console_rows"),
+    )!;
+    expect(totals.sql).not.toContain("strpos");
+  });
+
+  it("narrows the listed queries to those containing the search text", async () => {
+    const { service, calls } = build({ batches: WEEK, items: [] });
+    await service.queries({ days: 7, search: "Wartezeiten" }, NOW);
+    const grouped = calls.find((c) => c.sql.includes("GROUP BY r.query"))!;
+    expect(grouped.sql).toContain("strpos(r.query,");
+    expect(grouped.params).toContain("wartezeiten");
+  });
+
   it("does not ask the site statistic when there are no pages", async () => {
     const { service, calls } = build({ batches: WEEK, items: [] });
     await service.pages({ days: 7 }, NOW);

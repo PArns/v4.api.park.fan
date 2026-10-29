@@ -49,6 +49,8 @@ export interface SearchConsoleQuery {
   /** A page's path or URL. */
   page?: string | null;
   query?: string | null;
+  /** Text the listed query or path must contain, case ignored; narrows the list only. */
+  search?: string | null;
   /** ISO alpha-3. */
   country?: string | null;
   device?: string | null;
@@ -299,6 +301,7 @@ export class SearchConsoleService {
       plan,
       filters,
       query.limit ?? DEFAULT_REPORT_LIMIT,
+      query.search,
     );
     return {
       ...echo,
@@ -343,6 +346,7 @@ export class SearchConsoleService {
       plan,
       filters,
       query.limit ?? DEFAULT_REPORT_LIMIT,
+      query.search,
     );
     // The site statistic's search visits are not split by Google's type.
     const site =
@@ -558,13 +562,17 @@ export class SearchConsoleService {
     plan: LevelPlan,
     filters: Array<[string, string]>,
     limit: number,
+    search?: string | null,
   ): Promise<{
     totals: SearchConsoleTotalsDto;
     previous: SearchConsoleTotalsDto | null;
     rows: Row[];
   }> {
     const params = new SqlParams();
-    const where = this.rowsWhere(params, resolved, plan.list, filters);
+    let where = this.rowsWhere(params, resolved, plan.list, filters);
+    const needle = search?.trim().toLowerCase();
+    // strpos, not LIKE: a % or _ typed into the field is meant literally.
+    if (needle) where += ` AND strpos(${column}, ${params.add(needle)}) > 0`;
     const current = `r.day >= ${params.add(resolved.from)}::date`;
     const currentTo = `r.day <= ${params.add(resolved.dataTo)}::date`;
     const cur = `${current} AND ${currentTo}`;
