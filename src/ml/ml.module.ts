@@ -5,6 +5,7 @@ import { PredictionAccuracyService } from "./services/prediction-accuracy.servic
 import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
 import { PredictionDeviationService } from "./services/prediction-deviation.service";
+import { ForecastErrorBreakdownService } from "./services/forecast-error-breakdown.service";
 import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service";
 import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
 import { MLAlertService } from "./services/ml-alert.service";
@@ -78,6 +79,7 @@ import { BullModule } from "@nestjs/bull";
     MLAnomalyDetectionService,
     PredictionLeadSnapshotService,
     ForecastAccuracyService,
+    ForecastErrorBreakdownService,
   ],
   controllers: [MLController, MLHealthController, MLMonitoringController],
   exports: [
