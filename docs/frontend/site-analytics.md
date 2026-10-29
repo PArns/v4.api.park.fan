@@ -143,7 +143,7 @@ request.
   sends nothing under Do Not Track, GPC, the privacy page's opt-out, or off the production hosts.
 - **No address and no User-Agent is stored**, in Postgres, in Redis or in a log line
   (no log line of this API carries an address, [the rule](../rules/no-address-in-logs.md)). The address becomes the bucket for the
-  caps, the country, and a pseudonym; the User-Agent becomes two families, a device class and a pseudonym.
+  caps, the country, the network class ([data centres](#data-centres)) and a pseudonym; the User-Agent becomes two families, a device class and a pseudonym.
 - **Every Redis key that stands for a reader or an address is pseudonymous for one UTC day**: an
   HMAC-SHA256 under that day's key, `HMAC(secret, day)` (`dailyHashKey`), where the secret is
   `ANALYTICS_HASH_SECRET` (falling back to `PAGE_VIEWS_HASH_SECRET`, then to a random per-process
@@ -165,7 +165,7 @@ request.
   the flusher stopped no pseudonym stays there longer.
 - **What a row holds**: an hour, never a moment, and counts. A page view's row carries the page and
   its reader's classes (language, path, page type, device class, browser, OS, country, browser
-  language), `views` and `seconds`, and **nothing of the visit**; a visit's start row carries the
+  language, network), `views` and `seconds`, and **nothing of the visit**; a visit's start row carries the
   first page and the classes plus the entry, referrer site and channel, with `visits`, `engaged` and
   `visit_seconds`; an exit row carries the last page and the classes plus how the visit began, with
   `exits` and `visit_span_seconds` (last hit minus first, summed); an event's row carries the page,
@@ -191,6 +191,34 @@ request.
 | `site-analytics:drops:<day>`                                             | drop and overflow counts by reason                                                                                                  | to the end of the next day + 1 min                                                        |
 | `site-analytics:buf:<window>`, `…:flushing`                              | a window's counts until written                                                                                                     | no TTL; written within about six minutes                                                  |
 | `site-analytics:buf:<window>:parked`                                     | a window the flusher gave up on                                                                                                     | 7 days                                                                                    |
+
+## Data centres
+
+A headless browser with an ordinary User-Agent passes `isBotUserAgent`, and its address still says
+where it runs. Every row carries `network`: `datacenter` when the address's autonomous system is on
+`DATACENTER_ASNS` (`src/site-analytics/datacenter-networks.ts`, clouds and hosters, each with its holder
+as RIPEstat names it), `other` for any other, `unknown` without the ASN database and on the rows
+written before the column. The ASN comes from MaxMind GeoLite2-ASN, read in memory beside the country
+([GeoIP database](../architecture/location-resolution.md#geoip-database)); neither the ASN nor the address
+is kept.
+
+- **Marked, never dropped.** Every report and the live view leave the data centres' rows out unless
+  the query says `datacenter=include` (all rows) or `datacenter=only`; the window echoes `datacenter`.
+  The condition is in `dimConditionsOf`, so it applies to the hourly and the daily rows alike, and
+  `network` is in every cuboid as `locale` is, so the default report is still served from the daily
+  rows. A row of `unknown` counts as not from a data centre.
+- **Visitors** of a data centre's reader are counted under scopes of their own: `dca` for all
+  languages and `d` with the language (`dde`) for one, three characters like the scope columns, in the
+  day, hour, dimension and minute keys and in `site_visitor_days`, `site_visitor_hours` and
+  `site_visitor_dim_days`. The default report reads the scopes it always read; `include` adds both,
+  which are disjoint readers, so their counts add up (one PFCOUNT over both keys counts their union).
+- **The most-read rankings** (`/v1/page-views/top`) never count a data centre's read: a scraper would
+  otherwise decide what the site calls most read.
+- **Never on the list** (`NEVER_DATACENTER`, pinned by a test): the networks iCloud Private Relay and
+  Cloudflare WARP leave through (Akamai, Cloudflare, Fastly) and those VPN providers rent (M247,
+  Datacamp). Their readers are people.
+- **Adding a network** is a line in `DATACENTER_ASNS` with its holder, in a pull request; a deploy
+  applies it to new hits, not to rows already written.
 
 ## Visits, visitors, bounce, realtime
 
@@ -469,7 +497,9 @@ Days are UTC days, not a park's: a reader belongs to no park
 ([park timezone](../rules/park-timezone.md)). Every admin report takes a window, `locale`,
 `interval`, and `filter=<dim>:<value>` (repeatable, AND; dim ∈ `path`, `page_type`, `country`,
 `device`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
-`referrer`, `channel`), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters` and `hourlyFrom`.
+`referrer`, `channel`), `datacenter` (`exclude`, the default, `include` or `only`,
+[data centres](#data-centres)), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`,
+`datacenter` and `hourlyFrom`.
 
 **The window** is `days` (1–365, the last days with today; 30 without one) or `from` and `to`
 (`YYYY-MM-DD`, both included, `to` today at the latest, at most 366 days). Both at once, one of

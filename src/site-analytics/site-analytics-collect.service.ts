@@ -56,11 +56,14 @@ import {
   flushWindowOf,
   hourKey,
   minuteKey,
+  visitorScopeFor,
   type Channel,
   type DropReason,
   type LiveList,
   type SiteGuard,
+  type SiteNetwork,
 } from "./site-analytics.constants";
+import { networkOf } from "./datacenter-networks";
 import {
   propsKeyOf,
   validateHit,
@@ -104,8 +107,8 @@ export interface CollectRequest {
 
 /**
  * What the server derives about the reader, never what the browser says:
- * families and a class from the User-Agent, the country from the address, the
- * language from `Accept-Language`.
+ * families and a class from the User-Agent, the country and the network from
+ * the address, the language from `Accept-Language`.
  */
 interface Reader {
   browser: string;
@@ -113,6 +116,7 @@ interface Reader {
   device: string;
   country: string;
   browserLanguage: string;
+  network: SiteNetwork;
 }
 
 /**
@@ -271,12 +275,16 @@ export class SiteAnalyticsCollectService
     const capBucket = addressBucket(ip, ADDRESS_CAP_IPV6_PREFIX) ?? NO_ADDRESS;
     const { browser, os, device } = parseUserAgent(userAgent);
     const country = (ip && this.geoip.lookupCountry(ip)) || UNKNOWN_COUNTRY;
-    const reader = {
+    const network = ip
+      ? networkOf(this.geoip.isAsnAvailable(), this.geoip.lookupAsn(ip))
+      : "unknown";
+    const reader: Reader = {
       browser,
       os,
       device,
       country,
       browserLanguage: browserLanguage(acceptLanguage),
+      network,
     };
 
     let observed: { hits: ObservedHit[]; visit: VisitUpdate | null };
@@ -296,6 +304,7 @@ export class SiteAnalyticsCollectService
         capBucket,
         addressBucket(ip),
         userAgent ?? "",
+        network,
         drops,
         now,
       );
@@ -323,6 +332,7 @@ export class SiteAnalyticsCollectService
       hits: observed.hits,
       country,
       device,
+      network,
     });
     return observed.hits.length;
   }
@@ -416,13 +426,15 @@ export class SiteAnalyticsCollectService
    * per-address counters, the visit key (how the visit began and its
    * page-view count), the day's and the hour's visitors and the minute's
    * visitors and page views, which the realtime figure and the live view
-   * read. Throws when Redis is away.
+   * read, under the data centres' own scopes for a reader from one. Throws
+   * when Redis is away.
    */
   private async observe(
     hits: ValidHit[],
     capBucket: string,
     readerBucket: string | null,
     userAgent: string,
+    network: SiteNetwork,
     drops: Drops,
     now: Date,
   ): Promise<{ hits: ObservedHit[]; visit: VisitUpdate | null }> {
@@ -596,7 +608,7 @@ export class SiteAnalyticsCollectService
           ALL_LOCALES_SCOPE,
           ...new Set(pageviews.map((hit) => hit.locale)),
         ];
-        for (const scope of scopes) {
+        for (const scope of scopes.map((s) => visitorScopeFor(s, network))) {
           const dayKey = KEYS.visitors(day, scope);
           const hourKeyName = KEYS.hourVisitors(hourKey(now), scope);
           pipeline.pfadd(dayKey, visitor).expire(dayKey, dayKeyTtl, "NX");
@@ -609,7 +621,7 @@ export class SiteAnalyticsCollectService
       const minute = minuteKey(now);
       const active = new Set(hits.map((hit) => hit.locale));
       for (const scope of [ALL_LOCALES_SCOPE, ...active]) {
-        const key = KEYS.activeMinute(minute, scope);
+        const key = KEYS.activeMinute(minute, visitorScopeFor(scope, network));
         pipeline.pfadd(key, visitor).expire(key, LIVE_KEY_TTL_SECONDS);
         index += 2;
       }
@@ -620,7 +632,10 @@ export class SiteAnalyticsCollectService
       if (pageviews.length > 0)
         perLocale.set(ALL_LOCALES_SCOPE, pageviews.length);
       for (const [scope, count] of perLocale) {
-        const key = KEYS.pageviewsMinute(minute, scope);
+        const key = KEYS.pageviewsMinute(
+          minute,
+          visitorScopeFor(scope, network),
+        );
         pipeline.incrby(key, count).expire(key, LIVE_KEY_TTL_SECONDS);
         index += 2;
       }
@@ -758,7 +773,12 @@ export class SiteAnalyticsCollectService
     visit: VisitUpdate | null,
     drops: Drops,
     now: Date,
-    live: { hits: ObservedHit[]; country: string; device: string },
+    live: {
+      hits: ObservedHit[];
+      country: string;
+      device: string;
+      network: SiteNetwork;
+    },
   ): Promise<void> {
     const key = KEYS.buffer(window);
     const fields = [...increments.keys()];
@@ -775,7 +795,7 @@ export class SiteAnalyticsCollectService
         this.updateVisit(tx, visit, now);
         this.countVisitorDims(tx, visit, day, now);
       }
-      this.addLive(tx, live.hits, live.country, live.device, now);
+      this.addLive(tx, live, now);
       this.addDrops(tx, day, drops, now);
       const results = await tx.exec();
       if (results) {
@@ -861,20 +881,33 @@ export class SiteAnalyticsCollectService
   /**
    * The live view's minute, all languages and each: page views by page,
    * country and device, visits started by channel and referrer site, events
-   * by name, and the events counter. The values are the guarded ones.
+   * by name, and the events counter. The values are the guarded ones; a data
+   * centre's reader counts under its own scopes.
    */
   private addLive(
     tx: ReturnType<Redis["multi"]>,
-    hits: ObservedHit[],
-    country: string,
-    device: string,
+    {
+      hits,
+      country,
+      device,
+      network,
+    }: {
+      hits: ObservedHit[];
+      country: string;
+      device: string;
+      network: SiteNetwork;
+    },
     now: Date,
   ): void {
     const minute = minuteKey(now);
     const counts = new Map<string, Map<string, number>>();
     const events = new Map<string, number>();
+    const scopesOf = (locale: string) =>
+      [ALL_LOCALES_SCOPE, locale].map((scope) =>
+        visitorScopeFor(scope, network),
+      );
     const add = (list: LiveList, locale: string, field: string) => {
-      for (const scope of [ALL_LOCALES_SCOPE, locale]) {
+      for (const scope of scopesOf(locale)) {
         const key = KEYS.live(list, minute, scope);
         const fields = counts.get(key) ?? new Map<string, number>();
         fields.set(field, (fields.get(field) ?? 0) + 1);
@@ -894,7 +927,7 @@ export class SiteAnalyticsCollectService
         }
       } else if (hit.t === "event") {
         add("events", hit.locale, hit.name);
-        for (const scope of [ALL_LOCALES_SCOPE, hit.locale]) {
+        for (const scope of scopesOf(hit.locale)) {
           const key = KEYS.eventsMinute(minute, scope);
           events.set(key, (events.get(key) ?? 0) + 1);
         }
@@ -1014,6 +1047,7 @@ function pageDims(
     "",
     "",
     "",
+    reader.network,
   ];
 }
 
@@ -1031,6 +1065,7 @@ function visitDims(start: VisitStart, reader: Reader): PageviewDims {
     start.path,
     start.referrer,
     start.channel,
+    reader.network,
   ];
 }
 
@@ -1054,6 +1089,7 @@ export function exitDimsOf(
     start.path,
     start.referrer,
     start.channel,
+    reader.network,
   ] as PageviewDims;
 }
 
@@ -1090,6 +1126,7 @@ export function bufferIncrements(
           reader.country,
           hit.propsKey,
           hit.entity ?? "",
+          reader.network,
         ]),
       );
       continue;

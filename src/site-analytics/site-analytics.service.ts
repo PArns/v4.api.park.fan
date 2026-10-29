@@ -24,7 +24,9 @@ import {
   isVisitDim,
   hourKey,
   minuteKey,
+  visitorScopesOf,
   type BreakdownDim,
+  type DatacenterScope,
   type FilterDim,
   type SiteLocale,
   type VisitorDim,
@@ -194,7 +196,7 @@ export class SiteAnalyticsService {
           : visitorBasis.filter
             ? this.dimVisitors(window, visitorBasis.filter, now)
             : this.visitors(window, now),
-        this.realtime(window.locale, now),
+        this.realtime(window.locale, window.datacenter, now),
       ]);
 
       for (const row of [...trafficRows, ...eventRows]) {
@@ -1011,7 +1013,10 @@ export class SiteAnalyticsService {
     window: SiteAnalyticsWindow,
     now: Date,
   ): Promise<Visitors> {
-    const scope = window.locale ?? ALL_LOCALES_SCOPE;
+    const scopes = visitorScopesOf(
+      window.locale ?? ALL_LOCALES_SCOPE,
+      window.datacenter,
+    );
     const today = utcDay(now);
     const first = window.previous?.from ?? window.from;
     const hourPoints = window.hourly
@@ -1022,20 +1027,23 @@ export class SiteAnalyticsService {
       Array<{ hour: string; visitors: Count }>,
     ] = await Promise.all([
       this.runner.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day, visitors
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, SUM(visitors) AS visitors
            FROM site_visitor_days
-          WHERE scope = $1 AND day BETWEEN $2::date AND $3::date`,
-        [scope, first, window.to],
+          WHERE scope = ANY($1::text[]) AND day BETWEEN $2::date AND $3::date
+          GROUP BY day`,
+        [scopes, first, window.to],
       ),
       hourPoints.length === 0
         ? Promise.resolve([])
         : this.runner.query(
             `SELECT to_char(hour AT TIME ZONE 'UTC',
-                            'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour, visitors
+                            'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour,
+                    SUM(visitors) AS visitors
                FROM site_visitor_hours
-              WHERE scope = $1 AND hour >= $2::timestamptz
-                AND hour < $3::timestamptz`,
-            [scope, window.start, window.end],
+              WHERE scope = ANY($1::text[]) AND hour >= $2::timestamptz
+                AND hour < $3::timestamptz
+              GROUP BY hour`,
+            [scopes, window.start, window.end],
           ),
     ]);
     const days = new Map(rows.map((row) => [row.day, num(row.visitors)]));
@@ -1056,11 +1064,19 @@ export class SiteAnalyticsService {
     ].filter((day) => day < today);
     try {
       const pipeline = this.redis.pipeline();
-      for (const day of live) pipeline.pfcount(KEYS.visitors(day, scope));
-      for (const day of liveHourDays)
-        pipeline.exists(KEYS.visitors(day, scope));
+      // One PFCOUNT over the scopes' keys counts their union, which for
+      // disjoint readers is the sum.
+      for (const day of live) {
+        pipeline.pfcount(...scopes.map((scope) => KEYS.visitors(day, scope)));
+      }
+      for (const day of liveHourDays) {
+        pipeline.exists(...scopes.map((scope) => KEYS.visitors(day, scope)));
+      }
       for (const hour of liveHours) {
-        pipeline.pfcount(KEYS.hourVisitors(hourKey(new Date(hour)), scope));
+        const key = hourKey(new Date(hour));
+        pipeline.pfcount(
+          ...scopes.map((scope) => KEYS.hourVisitors(key, scope)),
+        );
       }
       const results = (await pipeline.exec()) ?? [];
       live.forEach((day, i) => {
@@ -1069,7 +1085,7 @@ export class SiteAnalyticsService {
       });
       const counted = new Set(
         liveHourDays.filter(
-          (_, i) => num(results[live.length + i]?.[1] as Count) === 1,
+          (_, i) => num(results[live.length + i]?.[1] as Count) > 0,
         ),
       );
       liveHours.forEach((hour, i) => {
@@ -1101,7 +1117,7 @@ export class SiteAnalyticsService {
     now: Date,
   ): Promise<Visitors> {
     const byValue = await this.dimDays(
-      window.locale ?? ALL_LOCALES_SCOPE,
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
       filter.dim,
       [filter.value],
       window.previous?.from ?? window.from,
@@ -1129,7 +1145,7 @@ export class SiteAnalyticsService {
     const basis = visitorBasisOf(window.filters, dim);
     if (!basis?.by) return null;
     const days = await this.dimDays(
-      window.locale ?? ALL_LOCALES_SCOPE,
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
       basis.by,
       values,
       window.from,
@@ -1147,11 +1163,11 @@ export class SiteAnalyticsService {
   /**
    * Unique visitors per day with each of `values` of one dimension: the
    * snapshot's rows, and for the days it has not written yet (today, and
-   * yesterday until it has run) the HyperLogLog in Redis. With Redis down the
-   * live days read zero.
+   * yesterday until it has run) the HyperLogLog in Redis, summed over the
+   * scopes (disjoint readers). With Redis down the live days read zero.
    */
   private async dimDays(
-    scope: string,
+    scopes: string[],
     dim: VisitorDim,
     values: string[],
     from: string,
@@ -1164,11 +1180,13 @@ export class SiteAnalyticsService {
     if (values.length === 0) return perValue;
     const rows: Array<{ day: string; value: string; visitors: Count }> =
       await this.runner.query(
-        `SELECT to_char(day, 'YYYY-MM-DD') AS day, value, visitors
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, value,
+                SUM(visitors) AS visitors
            FROM site_visitor_dim_days
-          WHERE scope = $1 AND dim = $2 AND value = ANY($3::text[])
-            AND day BETWEEN $4::date AND $5::date`,
-        [scope, dim, values, from, to],
+          WHERE scope = ANY($1::text[]) AND dim = $2 AND value = ANY($3::text[])
+            AND day BETWEEN $4::date AND $5::date
+          GROUP BY day, value`,
+        [scopes, dim, values, from, to],
       );
     for (const row of rows) {
       perValue.get(row.value)?.set(row.day, num(row.visitors));
@@ -1189,7 +1207,9 @@ export class SiteAnalyticsService {
     try {
       const pipeline = this.redis.pipeline();
       for (const { day, value } of live) {
-        pipeline.pfcount(KEYS.visitorDim(day, scope, dim, value));
+        pipeline.pfcount(
+          ...scopes.map((scope) => KEYS.visitorDim(day, scope, dim, value)),
+        );
       }
       const results = (await pipeline.exec()) ?? [];
       live.forEach(({ day, value }, i) => {
@@ -1208,13 +1228,14 @@ export class SiteAnalyticsService {
    * Distinct visitors over the last {@link REALTIME_ACTIVE_MINUTES} minutes
    * (one PFCOUNT over the minute keys counts their union) and page views per
    * minute over the last {@link REALTIME_SERIES_MINUTES}, for all languages or
-   * one; filters do not apply. Zero with Redis down.
+   * one and the report's network; filters do not apply. Zero with Redis down.
    */
   private async realtime(
     locale: SiteLocale | null,
+    datacenter: DatacenterScope,
     now: Date,
   ): Promise<SiteOverviewDto["realtime"]> {
-    const scope = locale ?? ALL_LOCALES_SCOPE;
+    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, datacenter);
     const start = Math.floor(now.getTime() / 60_000) * 60_000;
     const minutes = Array.from(
       { length: REALTIME_SERIES_MINUTES },
@@ -1230,12 +1251,16 @@ export class SiteAnalyticsService {
     try {
       const active = minutes
         .slice(-REALTIME_ACTIVE_MINUTES)
-        .map((minute) => KEYS.activeMinute(minuteKey(minute), scope));
+        .flatMap((minute) =>
+          scopes.map((scope) => KEYS.activeMinute(minuteKey(minute), scope)),
+        );
       const [activeVisitors, counts] = await Promise.all([
         this.redis.pfcount(...active),
         this.redis.mget(
-          ...minutes.map((minute) =>
-            KEYS.pageviewsMinute(minuteKey(minute), scope),
+          ...minutes.flatMap((minute) =>
+            scopes.map((scope) =>
+              KEYS.pageviewsMinute(minuteKey(minute), scope),
+            ),
           ),
         ),
       ]);
@@ -1243,7 +1268,10 @@ export class SiteAnalyticsService {
         activeVisitors: num(activeVisitors),
         perMinute: minutes.map((minute, i) => ({
           minute: isoMinute(minute),
-          pageviews: num(counts[i]),
+          pageviews: scopes.reduce(
+            (sum, _, s) => sum + num(counts[i * scopes.length + s]),
+            0,
+          ),
         })),
       };
     } catch (error) {
@@ -1268,6 +1296,7 @@ export function echo(window: SiteAnalyticsWindow) {
     interval: window.interval,
     locale: window.locale,
     filters: window.filters.map((f) => `${f.dim}:${f.value}`),
+    datacenter: window.datacenter,
     hourlyFrom: window.reach.hourlyFrom,
   };
 }

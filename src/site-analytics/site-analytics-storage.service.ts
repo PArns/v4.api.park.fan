@@ -29,8 +29,10 @@ import {
   ROLLUP_SETTLE_SECONDS,
   SITE_ANALYTICS_KEYS as KEYS,
   SITE_LOCALES,
+  UNKNOWN_NETWORK,
   VISIT_IDLE_SECONDS,
   bucketOf,
+  datacenterVisitorScope,
   flushWindowOf,
   hourKey,
 } from "./site-analytics.constants";
@@ -68,6 +70,7 @@ export type PageviewDims = [
   entry: string,
   referrer: string,
   channel: string,
+  network: string,
 ];
 
 /** A buffered event field's dimensions: the page's, never the visit's. */
@@ -82,6 +85,7 @@ export type EventDims = [
   country: string,
   propsKey: string,
   entity: string,
+  network: string,
 ];
 
 /**
@@ -544,18 +548,18 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       await manager.query(
         `INSERT INTO site_pageviews
            (bucket, locale, path, page_type, device, browser, os, country,
-            browser_language, entry, referrer, channel, views,
+            browser_language, entry, referrer, channel, network, views,
             seconds, visits, engaged, visit_seconds, exits,
             visit_span_seconds)
          SELECT $1::timestamptz, *
            FROM unnest($2::text[], $3::text[], $4::text[], $5::text[],
                        $6::text[], $7::text[], $8::text[], $9::text[],
-                       $10::text[], $11::text[], $12::text[],
-                       $13::int[], $14::int[], $15::int[], $16::int[],
-                       $17::int[], $18::int[], $19::int[])`,
+                       $10::text[], $11::text[], $12::text[], $13::text[],
+                       $14::int[], $15::int[], $16::int[], $17::int[],
+                       $18::int[], $19::int[], $20::int[])`,
         [
           bucket,
-          ...Array.from({ length: 11 }, (_, i) => column(i)),
+          ...Array.from({ length: PAGEVIEW_DIM_COUNT }, (_, i) => column(i)),
           count("views"),
           count("seconds"),
           count("visits"),
@@ -572,20 +576,22 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       await manager.query(
         `INSERT INTO site_events
            (bucket, name, locale, path, page_type, device, browser, os,
-            country, props_key, props, entity, count)
+            country, props_key, props, entity, network, count)
          SELECT $1::timestamptz, name, locale, path, page_type, device,
                 browser, os, country, props_key, props::jsonb,
-                NULLIF(entity, '')::uuid, count
+                NULLIF(entity, '')::uuid, network, count
            FROM unnest($2::text[], $3::text[], $4::text[], $5::text[],
                        $6::text[], $7::text[], $8::text[], $9::text[],
-                       $10::text[], $11::text[], $12::text[], $13::int[])
+                       $10::text[], $11::text[], $12::text[], $13::text[],
+                       $14::int[])
              AS e(name, locale, path, page_type, device, browser, os,
-                  country, props_key, props, entity, count)`,
+                  country, props_key, props, entity, network, count)`,
         [
           bucket,
           ...Array.from({ length: 9 }, (_, i) => column(i)),
           chunk.map((row) => JSON.stringify(propsOfKey(row.dims[8]))),
           column(9),
+          column(10),
           chunk.map((row) => row.count),
         ],
       );
@@ -608,7 +614,8 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
     now = new Date(),
   ): Promise<{ found: number; written: number; hoursWritten: number }> {
     const day = addIsoDays(utcDay(now), -1);
-    const scopes = [ALL_LOCALES_SCOPE, ...SITE_LOCALES];
+    const own = [ALL_LOCALES_SCOPE, ...SITE_LOCALES];
+    const scopes = [...own, ...own.map(datacenterVisitorScope)];
     const keys = scopes.map((scope) => ({
       day,
       scope,
@@ -647,20 +654,33 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
       ],
     );
 
-    // Without the all-languages key nothing says the day was counted.
-    const counted = rows.some((row) => row.scope === ALL_LOCALES_SCOPE);
+    // Without the all-languages key nothing says the day was counted; the
+    // data centres' scopes have their own, so a day without one writes no
+    // zeros for them.
+    const datacenterAll = datacenterVisitorScope(ALL_LOCALES_SCOPE);
+    const counted = new Set(
+      rows
+        .filter(
+          (row) =>
+            row.scope === ALL_LOCALES_SCOPE || row.scope === datacenterAll,
+        )
+        .map((row) => row.scope),
+    );
+    const ownScopes = new Set(own);
     const base = 2 * keys.length;
-    const wanted = !counted
-      ? []
-      : keys
-          .flatMap((entry, s) =>
-            hours.map((hour, h) => ({
+    const wanted = keys
+      .flatMap((entry, s) =>
+        counted.has(
+          ownScopes.has(entry.scope) ? ALL_LOCALES_SCOPE : datacenterAll,
+        )
+          ? hours.map((hour, h) => ({
               hour: hour.start.toISOString(),
               scope: entry.scope,
               visitors: Number(results[base + s * hours.length + h]?.[1] ?? 0),
-            })),
-          )
-          .filter((row) => Number.isFinite(row.visitors));
+            }))
+          : [],
+      )
+      .filter((row) => Number.isFinite(row.visitors));
     const hoursInserted: unknown[] = await this.dataSource.query(
       `INSERT INTO site_visitor_hours (hour, scope, visitors)
        SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::int[])
@@ -1215,13 +1235,16 @@ export function rowsOfFields(fields: Record<string, string>): {
     if (!Array.isArray(dims) || dims.some((d) => typeof d !== "string"))
       continue;
     if (measure === BUFFER_MEASURES.events) {
-      if (dims.length === 10) events.push({ dims: dims as EventDims, count });
+      const full = withNetwork(dims, EVENT_DIM_COUNT);
+      if (full) events.push({ dims: full as EventDims, count });
       continue;
     }
     const column = PAGEVIEW_COLUMNS[measure as PageviewMeasure];
-    if (!column || dims.length !== 11) continue;
-    const row = pageviews.get(json) ?? {
-      dims: dims as PageviewDims,
+    const full = withNetwork(dims, PAGEVIEW_DIM_COUNT);
+    if (!column || !full) continue;
+    const id = JSON.stringify(full);
+    const row = pageviews.get(id) ?? {
+      dims: full as PageviewDims,
       counts: {
         views: 0,
         seconds: 0,
@@ -1233,7 +1256,22 @@ export function rowsOfFields(fields: Record<string, string>): {
       },
     };
     row.counts[column] += count;
-    pageviews.set(json, row);
+    pageviews.set(id, row);
   }
   return { pageviews: [...pageviews.values()], events };
+}
+
+/** How many dimensions a page-view field and an event field carry, the network last. */
+const PAGEVIEW_DIM_COUNT = 12;
+const EVENT_DIM_COUNT = 11;
+
+/**
+ * A field's dimensions with the network: as they are, or with `unknown` added
+ * to a field written before the network was (one shorter), so the windows and
+ * the open visits a deploy finds in Redis are written, not skipped. Null for
+ * any other length.
+ */
+function withNetwork(dims: string[], count: number): string[] | null {
+  if (dims.length === count) return dims;
+  return dims.length === count - 1 ? [...dims, UNKNOWN_NETWORK] : null;
 }

@@ -101,6 +101,8 @@ describe("SiteAnalyticsCollectService", () => {
   let writeDirect: jest.Mock;
   let blocked: Set<string>;
   let lookupCountry: jest.Mock;
+  let lookupAsn: jest.Mock;
+  let asnLoaded: boolean;
   let known: { parks: Set<string>; attractions: Set<string> } | null;
 
   const build = async () => {
@@ -108,7 +110,14 @@ describe("SiteAnalyticsCollectService", () => {
       providers: [
         SiteAnalyticsCollectService,
         { provide: REDIS_CLIENT, useValue: redis },
-        { provide: GeoipService, useValue: { lookupCountry } },
+        {
+          provide: GeoipService,
+          useValue: {
+            lookupCountry,
+            lookupAsn,
+            isAsnAvailable: () => asnLoaded,
+          },
+        },
         { provide: SiteAnalyticsStorageService, useValue: { writeDirect } },
         {
           provide: SiteAnalyticsBlocklist,
@@ -156,6 +165,9 @@ describe("SiteAnalyticsCollectService", () => {
       .mockResolvedValue({ pageviewRows: 0, eventRows: 0 });
     blocked = new Set();
     lookupCountry = jest.fn().mockReturnValue("nl");
+    // Deutsche Telekom: an ordinary reader's network.
+    lookupAsn = jest.fn().mockReturnValue(3320);
+    asnLoaded = true;
     known = { parks: new Set([PARK_ID]), attractions: new Set([RIDE_ID]) };
     service = await build();
   });
@@ -165,6 +177,41 @@ describe("SiteAnalyticsCollectService", () => {
     delete process.env.PAGE_VIEWS_HASH_SECRET;
   });
 
+  it("marks a reader from a data centre and counts it under the data centres' own scopes", async () => {
+    lookupAsn.mockReturnValue(16509);
+    await collect([
+      pageview({ referrer: "www.google.de" }),
+      event("search_opened", { surface: "hero" }),
+    ]);
+    const { pageviews, events } = buffered();
+    expect(pageviews.map(({ dims }) => dims[11])).toEqual([
+      "datacenter",
+      "datacenter",
+    ]);
+    expect(events.map(({ dims }) => dims[10])).toEqual(["datacenter"]);
+    const hlls = [...redis.sets.keys()];
+    expect(hlls).toContain(KEYS.visitors(DAY, "dca"));
+    expect(hlls).toContain(KEYS.visitors(DAY, "dde"));
+    expect(hlls).not.toContain(KEYS.visitors(DAY, "all"));
+    expect(
+      hlls.some((key) => key.includes(":all:") || key.endsWith(":all")),
+    ).toBe(false);
+  });
+
+  it("marks the network unknown without the ASN database, other for an ordinary one", async () => {
+    asnLoaded = false;
+    lookupAsn.mockReturnValue(null);
+    await collect([pageview()]);
+    expect(buffered().pageviews[0].dims[11]).toBe("unknown");
+    redis = new SiteAnalyticsRedisMock();
+    asnLoaded = true;
+    lookupAsn.mockReturnValue(3320);
+    service = await build();
+    await collect([pageview()]);
+    expect(buffered().pageviews[0].dims[11]).toBe("other");
+    expect([...redis.sets.keys()]).toContain(KEYS.visitors(DAY, "all"));
+  });
+
   it("buffers a page view without visit dimensions, and its visit on a row of its own", async () => {
     await expect(
       collect([pageview({ referrer: "www.google.de" })]),
@@ -172,9 +219,9 @@ describe("SiteAnalyticsCollectService", () => {
     expect(await redis.smembers(KEYS.windows)).toEqual([WINDOW]);
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
     expect(buffered().pageviews).toEqual([
-      { dims: [...page, "", "", ""], counts: counts({ views: 1 }) },
+      { dims: [...page, "", "", "", "other"], counts: counts({ views: 1 }) },
       {
-        dims: [...page, PATH, "google", "search"],
+        dims: [...page, PATH, "google", "search", "other"],
         counts: counts({ visits: 1 }),
       },
     ]);
@@ -283,6 +330,7 @@ describe("SiteAnalyticsCollectService", () => {
           "nl",
           "tab=map",
           PARK_ID,
+          "other",
         ],
         count: 2,
       },
@@ -434,7 +482,11 @@ describe("SiteAnalyticsCollectService", () => {
     await collect([
       event("favorite_add", { type: "park" }, { entity: PARK_ID }),
     ]);
-    expect(buffered().events[0].dims.slice(8)).toEqual(["_overflow=1", ""]);
+    expect(buffered().events[0].dims.slice(8)).toEqual([
+      "_overflow=1",
+      "",
+      "other",
+    ]);
     expect(drops()[DROP_REASONS.combination]).toBe("1");
   });
 
@@ -468,6 +520,7 @@ describe("SiteAnalyticsCollectService", () => {
       OVERFLOW_VALUE,
       OVERFLOW_VALUE,
       "referral",
+      "other",
     ]);
   });
 
@@ -538,7 +591,11 @@ describe("SiteAnalyticsCollectService", () => {
       filled(SITE_GUARDS.combinations.limit),
     );
     await collect([event("page_read", { kind: "park" }, { entity: PARK_ID })]);
-    expect(buffered().events[0].dims.slice(8)).toEqual(["kind=park", PARK_ID]);
+    expect(buffered().events[0].dims.slice(8)).toEqual([
+      "kind=park",
+      PARK_ID,
+      "other",
+    ]);
   });
 
   it("drops the entity of a location-derived event before it reaches a row", async () => {
@@ -822,7 +879,7 @@ describe("SiteAnalyticsCollectService", () => {
     const key = visitKeys()[0];
     const member = key.slice("site-analytics:visit:".length);
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
-    const visitDims = [PATH, "google", "search"];
+    const visitDims = [PATH, "google", "search", "other"];
     const hash = () => Object.fromEntries(redis.hashes.get(key) ?? []);
     expect(hash()).toEqual({
       c: JSON.stringify({
@@ -887,11 +944,11 @@ describe("SiteAnalyticsCollectService", () => {
     const page = ["de", PATH, "park", "mobile", "safari", "ios", "nl", "zz"];
     expect(buffered().pageviews).toEqual([
       {
-        dims: [...page, "", "", ""],
+        dims: [...page, "", "", "", "other"],
         counts: counts({ views: 1, seconds: 42 }),
       },
       {
-        dims: [...page, PATH, "bing", "search"],
+        dims: [...page, PATH, "bing", "search", "other"],
         counts: counts({ visits: 1, visitSeconds: 42 }),
       },
     ]);
@@ -913,6 +970,8 @@ describe("SiteAnalyticsCollectService", () => {
           "",
           "",
           "",
+          // No address, so no network either.
+          "unknown",
         ],
         counts: counts({ seconds: 7 }),
       },
@@ -999,6 +1058,7 @@ describe("SiteAnalyticsCollectService", () => {
       PATH,
       "google",
       "search",
+      "other",
     ]);
     const stored = JSON.stringify([
       [...redis.hashes.values()].map((hash) => [...hash]),

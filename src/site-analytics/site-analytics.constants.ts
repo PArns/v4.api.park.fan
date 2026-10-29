@@ -431,6 +431,52 @@ export const ROLLUP_RUN_BUDGET_MS = 25 * 60 * 1000;
 /** Visitors over all languages, beside one row per language. */
 export const ALL_LOCALES_SCOPE = "all";
 
+/**
+ * The network a row's reader came from, from the address's autonomous system
+ * (`datacenter-networks.ts`): a data centre's, any other, or `unknown` without
+ * the ASN database and on the rows written before the column existed. Every
+ * page-view and event row carries it; the address and the ASN are not kept.
+ */
+export const SITE_NETWORKS = ["datacenter", "other", "unknown"] as const;
+export type SiteNetwork = (typeof SITE_NETWORKS)[number];
+
+/** The network of a row written before the column existed. */
+export const UNKNOWN_NETWORK: SiteNetwork = "unknown";
+
+/**
+ * Which rows a report counts by network (`datacenter=`): without the data
+ * centres' (`exclude`, the default), all of them, or only theirs. A data
+ * centre's hit is kept, so the choice is the report's, not the collector's.
+ */
+export const DATACENTER_SCOPES = ["exclude", "include", "only"] as const;
+export type DatacenterScope = (typeof DATACENTER_SCOPES)[number];
+
+/**
+ * The visitor scope a data centre's readers are counted under, beside `all`
+ * and each language's: their own HyperLogLogs and rows, so that the default
+ * report reads the scopes it always read and `include` adds two disjoint
+ * counts. Three characters, the width of the scope columns: `dca` for all
+ * languages, `d` and the language for one (`dde`).
+ */
+export function datacenterVisitorScope(scope: string): string {
+  return scope === ALL_LOCALES_SCOPE ? "dca" : `d${scope}`;
+}
+
+/** The scope a reader's visitors are written under: a data centre's own, or the scope itself. */
+export function visitorScopeFor(scope: string, network: SiteNetwork): string {
+  return network === "datacenter" ? datacenterVisitorScope(scope) : scope;
+}
+
+/** The visitor scopes a report sums: disjoint readers, so their counts add up. */
+export function visitorScopesOf(
+  scope: string,
+  datacenter: DatacenterScope,
+): string[] {
+  if (datacenter === "exclude") return [scope];
+  if (datacenter === "only") return [datacenterVisitorScope(scope)];
+  return [scope, datacenterVisitorScope(scope)];
+}
+
 /** The country of an address GeoIP cannot place. */
 export const UNKNOWN_COUNTRY = "zz";
 

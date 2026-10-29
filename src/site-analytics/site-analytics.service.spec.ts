@@ -246,7 +246,7 @@ describe("SiteAnalyticsService", () => {
           NOW,
         );
         expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
-          "all",
+          ["all"],
           "country",
           ["de"],
           "2026-10-25",
@@ -267,7 +267,7 @@ describe("SiteAnalyticsService", () => {
           NOW,
         );
         expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
-          "de",
+          ["de"],
           "channel",
           ["search"],
           "2026-10-25",
@@ -604,7 +604,7 @@ describe("SiteAnalyticsService", () => {
           NOW,
         );
         expect(sqlOf("FROM site_visitor_dim_days")[1]).toEqual([
-          "de",
+          ["de"],
           "country",
           ["de", "nl"],
           "2026-10-22",
@@ -1083,7 +1083,7 @@ describe("SiteAnalyticsService", () => {
         NOW,
       );
       expect(sqlOf("FROM site_visitor_hours")[1]).toEqual([
-        "all",
+        ["all"],
         "2026-10-27T00:00:00.000Z",
         "2026-10-29T00:00:00.000Z",
       ]);

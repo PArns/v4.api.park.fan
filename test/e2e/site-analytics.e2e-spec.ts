@@ -897,6 +897,68 @@ describe("Site analytics (e2e)", () => {
     });
   });
 
+  it("marks a data centre's reader, and leaves it out of the reports, the live view and the rankings unless asked", async () => {
+    const geoip = app.get(GeoipService, { strict: false });
+    // 198.51.100.0/24 stands in for AWS here, everything else for a home line.
+    jest.spyOn(geoip, "isAsnAvailable").mockReturnValue(true);
+    jest
+      .spyOn(geoip, "lookupAsn")
+      .mockImplementation((ip) =>
+        ip.startsWith("198.51.100.") ? 16509 : 3320,
+      );
+    try {
+      await beacon([
+        pageview(),
+        event("page_read", { kind: "news", key: "read-by-people" }),
+      ]).expect(204);
+      for (const ip of ["198.51.100.1", "198.51.100.2"]) {
+        await beacon(
+          [
+            pageview(),
+            event("page_read", { kind: "news", key: "read-by-a-scraper" }),
+          ],
+          ip,
+        ).expect(204);
+      }
+      await flush();
+      expect(
+        await dataSource.query(
+          `SELECT network, SUM(views)::int AS views FROM site_pageviews
+            GROUP BY network ORDER BY network`,
+        ),
+      ).toEqual([
+        { network: "datacenter", views: 2 },
+        { network: "other", views: 1 },
+      ]);
+
+      const overview = async (query = "") =>
+        (await admin(`/v1/admin/analytics/overview?days=1${query}`).expect(200))
+          .body;
+      const without = await overview();
+      expect(without.datacenter).toBe("exclude");
+      expect(without.totals).toMatchObject({ pageviews: 1, visitors: 1 });
+      expect(without.realtime.activeVisitors).toBe(1);
+      expect((await overview("&datacenter=only")).totals).toMatchObject({
+        pageviews: 2,
+        visitors: 2,
+      });
+      const all = await overview("&datacenter=include");
+      expect(all.totals).toMatchObject({ pageviews: 3, visitors: 3 });
+      expect(all.realtime.activeVisitors).toBe(3);
+      await admin("/v1/admin/analytics/overview?datacenter=all").expect(400);
+
+      const live = await admin("/v1/admin/analytics/live").expect(200);
+      expect(live.body.activeVisitors).toBe(1);
+
+      const news = await request(app.getHttpServer())
+        .get("/v1/page-views/top?kind=news&locale=de&days=7")
+        .expect(200);
+      expect(news.body.items).toEqual([{ key: "read-by-people", views: 1 }]);
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
   it("caps distinct names per day, admits yesterday's, and folds a flood of property combinations into _overflow", async () => {
     const collector = app.get(SiteAnalyticsCollectService);
     const day = utcDay(new Date());
@@ -1391,16 +1453,22 @@ describe("Site analytics (e2e)", () => {
           body.series.map((p: { visitors: number | null }) => p.visitors),
         ];
       };
-      expect(await visitorsOf("filter=country:de")).toEqual([4, 0, [2, 2]]);
-      expect(await visitorsOf("filter=country:fr")).toEqual([2, 0, [1, 1]]);
-      expect(await visitorsOf("filter=country:nl")).toEqual([0, 0, [0, 0]]);
+      // A two-day window ending today has no visitor comparison: its last day
+      // is not whole yet, the one before is.
+      expect(await visitorsOf("filter=country:de")).toEqual([4, null, [2, 2]]);
+      expect(await visitorsOf("filter=country:fr")).toEqual([2, null, [1, 1]]);
+      expect(await visitorsOf("filter=country:nl")).toEqual([0, null, [0, 0]]);
       expect(await visitorsOf("filter=device:mobile&locale=de")).toEqual([
         6,
-        0,
+        null,
         [3, 3],
       ]);
-      expect(await visitorsOf("filter=channel:direct")).toEqual([6, 0, [3, 3]]);
-      expect(await visitorsOf("")).toEqual([6, 0, [3, 3]]);
+      expect(await visitorsOf("filter=channel:direct")).toEqual([
+        6,
+        null,
+        [3, 3],
+      ]);
+      expect(await visitorsOf("")).toEqual([6, null, [3, 3]]);
       // No count for two filters, or for two values of one.
       expect(
         await visitorsOf("filter=country:de&filter=device:mobile"),

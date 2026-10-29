@@ -258,7 +258,11 @@ export class AdminSiteAnalyticsController {
   @ApiResponse({ status: 200, type: SiteLiveDto })
   @ApiResponse({ status: 503, description: "Redis did not answer." })
   live(@Query() query: SiteLiveQueryDto): Promise<SiteLiveDto> {
-    return this.liveView.live(query.locale ?? null);
+    return this.liveView.live(
+      query.locale ?? null,
+      new Date(),
+      query.datacenter ?? "exclude",
+    );
   }
 
   @Get("search")

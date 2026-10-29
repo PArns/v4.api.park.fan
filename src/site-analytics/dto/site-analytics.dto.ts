@@ -13,6 +13,7 @@ import {
 import {
   BREAKDOWN_DIMS,
   CHANNELS,
+  DATACENTER_SCOPES,
   FILTER_DIMS,
   HOURLY_RETENTION_DAYS,
   INTERVALS,
@@ -27,6 +28,7 @@ import {
   VISIT_DIMS,
   type BreakdownDim,
   type Channel,
+  type DatacenterScope,
   type SiteInterval,
   type SiteLocale,
 } from "../site-analytics.constants";
@@ -182,6 +184,18 @@ export class SiteAnalyticsQueryDto {
   @IsString({ each: true })
   @Matches(FILTER_PATTERN, { each: true })
   filter?: string[];
+
+  @ApiPropertyOptional({
+    enum: DATACENTER_SCOPES,
+    default: "exclude",
+    description:
+      "Rows from data-centre networks (clouds and hosters, by the address's ASN): left out " +
+      "(`exclude`, the default), counted with the rest (`include`) or alone (`only`). Rows " +
+      "written before the network was recorded count as not from a data centre.",
+  })
+  @IsOptional()
+  @IsIn(DATACENTER_SCOPES)
+  datacenter?: DatacenterScope;
 }
 
 export class SiteAnalyticsBreakdownQueryDto extends SiteAnalyticsQueryDto {
@@ -245,6 +259,16 @@ export class SiteLiveQueryDto {
   @IsOptional()
   @IsIn(SITE_LOCALES)
   locale?: SiteLocale;
+
+  @ApiPropertyOptional({
+    enum: DATACENTER_SCOPES,
+    default: "exclude",
+    description:
+      "Readers from data-centre networks: left out, counted too, or alone.",
+  })
+  @IsOptional()
+  @IsIn(DATACENTER_SCOPES)
+  datacenter?: DatacenterScope;
 }
 
 export class SiteChannelQueryDto extends SiteAnalyticsQueryDto {
@@ -323,6 +347,12 @@ class WindowDto {
 
   @ApiProperty({ type: [String], example: ["channel:search"] })
   filters: string[];
+
+  @ApiProperty({
+    enum: DATACENTER_SCOPES,
+    description: "Which rows count by network; see the query's `datacenter`.",
+  })
+  datacenter: DatacenterScope;
 
   @ApiProperty({
     nullable: true,

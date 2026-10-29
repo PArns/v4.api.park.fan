@@ -9,6 +9,7 @@ import {
   hideSmallInSeries,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
+import { datacenterInput } from "./site-analytics.inputs";
 
 export const analyticsLiveTool = defineMcpTool({
   name: "analytics_live",
@@ -30,9 +31,12 @@ export const analyticsLiveTool = defineMcpTool({
       .enum(SITE_LOCALES)
       .optional()
       .describe("Only this language of the site; all six when absent"),
+    datacenter: datacenterInput,
   },
-  async handler({ locale }, ctx) {
-    const live = await ctx.get(SiteAnalyticsLiveService).live(locale ?? null);
+  async handler({ locale, datacenter }, ctx) {
+    const live = await ctx
+      .get(SiteAnalyticsLiveService)
+      .live(locale ?? null, new Date(), datacenter ?? "exclude");
     // A minute of the whole site is a total; one language's is a slice.
     const minutes = locale
       ? hideSmallInSeries(live.perMinute, ["pageviews", "events", "visitors"])

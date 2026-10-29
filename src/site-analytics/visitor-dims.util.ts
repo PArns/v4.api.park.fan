@@ -9,7 +9,9 @@ import {
   ALL_LOCALES_SCOPE,
   OVERFLOW_VALUE,
   VISITOR_DIMS,
+  visitorScopeFor,
   type BreakdownDim,
+  type SiteNetwork,
   type VisitorDim,
 } from "./site-analytics.constants";
 import type { SiteFilter } from "./site-analytics.query";
@@ -89,22 +91,24 @@ export function parseVisitorDimMember(member: string): VisitorDimKey | null {
  * channel, in its own language only: a visit is of the language of its first
  * page, so under `locale=de` and `channel:search` a reader is a visitor of
  * the search visits that began in German. Empty without a page view. A value
- * the guards stored as an overflow value, or that is empty, is not counted.
+ * the guards stored as an overflow value, or that is empty, is not counted. A
+ * data centre's reader is counted under the data centres' scopes.
  */
 export function visitorDimKeys(
   reader: Pick<
     Record<VisitorDim, string>,
     "country" | "device" | "browser" | "os"
-  >,
+  > & { network?: SiteNetwork },
   pageviewLocales: Iterable<string>,
   opened: { locale: string; channel: string } | null,
 ): VisitorDimKey[] {
   const locales = new Set(pageviewLocales);
   if (locales.size === 0) return [];
   const keys = new Map<string, VisitorDimKey>();
+  const network = reader.network ?? "unknown";
   const add = (scope: string, dim: VisitorDim, value: string) => {
     if (!value || value === OVERFLOW_VALUE) return;
-    const key = { scope, dim, value };
+    const key = { scope: visitorScopeFor(scope, network), dim, value };
     keys.set(visitorDimMember(key), key);
   };
   for (const scope of [ALL_LOCALES_SCOPE, ...locales]) {

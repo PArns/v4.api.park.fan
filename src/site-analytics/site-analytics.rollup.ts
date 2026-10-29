@@ -6,8 +6,9 @@
  * docs/frontend/site-analytics.md.
  *
  * A cuboid is a set of dimensions. Its rows are the hourly rows summed per
- * UTC day and per value of those dimensions (and the language, which every
- * cuboid keeps); a column the cuboid does not name holds `''`. A report needs
+ * UTC day and per value of those dimensions (and the language and the
+ * network, which every cuboid keeps: every report filters by the network); a
+ * column the cuboid does not name holds `''`. A report needs
  * some columns, so it reads the smallest cuboid that has them all, or the
  * hourly rows when none has. Full-dimension daily rows would not shrink the
  * data (a page view's row is nearly unique at this traffic: 25,300 rows a
@@ -184,8 +185,18 @@ export const ROLLUP_TABLES: Readonly<Record<RollupSource, RollupTable>> = {
   },
 };
 
-/** Columns every row has whatever its cuboid. */
-const ALWAYS = ["bucket", "locale"] as const;
+/**
+ * Columns every row has whatever its cuboid: the network too, since every
+ * report reads it (`dimConditionsOf`), and a cuboid without it would send the
+ * default report to the hourly rows.
+ */
+const ALWAYS = ["bucket", "locale", "network"] as const;
+
+/** The dimensions every cuboid keeps, besides its own. */
+const KEPT_BY_EVERY_CUBOID: ReadonlySet<string> = new Set([
+  "locale",
+  "network",
+]);
 
 /**
  * The columns a cuboid's rows carry for reading: the bucket, the language, its
@@ -215,7 +226,9 @@ export function chooseCuboid(
   source: RollupSource,
   needed: Iterable<string>,
 ): Cuboid | null {
-  const wanted = [...new Set(needed)].filter((dim) => dim !== "locale");
+  const wanted = [...new Set(needed)].filter(
+    (dim) => !KEPT_BY_EVERY_CUBOID.has(dim),
+  );
   let best: Cuboid | null = null;
   for (const cuboid of ROLLUP_TABLES[source].cuboids) {
     if (!wanted.every((dim) => cuboid.dims.includes(dim))) continue;
@@ -497,6 +510,7 @@ export function rollupSql(source: RollupSource, cuboid: Cuboid): string {
   );
   const groups = [
     "locale",
+    "network",
     ...dimensionColumns.filter((column) => member(column)),
   ];
   const sums = table.measures.map((measure) => `SUM(${measure})::bigint`);
@@ -506,8 +520,8 @@ export function rollupSql(source: RollupSource, cuboid: Cuboid): string {
           WHERE source = '${source}' AND cuboid = $3::smallint AND day = $2::date)
      ), written AS (
        INSERT INTO ${table.daily}
-         (bucket, cuboid, locale, ${dimensionColumns.join(", ")}, ${table.measures.join(", ")})
-       SELECT $1::timestamptz, $3::smallint, locale, ${selected.join(", ")}, ${sums.join(", ")}
+         (bucket, cuboid, locale, network, ${dimensionColumns.join(", ")}, ${table.measures.join(", ")})
+       SELECT $1::timestamptz, $3::smallint, locale, network, ${selected.join(", ")}, ${sums.join(", ")}
          FROM ${table.hourly}, open
         WHERE bucket >= $1::timestamptz
           AND bucket < $1::timestamptz + interval '1 day'

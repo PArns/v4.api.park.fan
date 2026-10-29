@@ -25,7 +25,13 @@ const WINDOW = {
 };
 
 /** The service query of a tool given no window: every field null. */
-const NO_WINDOW = { days: null, from: null, to: null, interval: null };
+const NO_WINDOW = {
+  days: null,
+  from: null,
+  to: null,
+  interval: null,
+  datacenter: null,
+};
 
 /** Runs a tool the way the server does: the input parsed by its schema first. */
 async function run(
@@ -74,6 +80,7 @@ describe("site statistic tools", () => {
       siteQuery({ from: "2026-09-01", to: "2026-09-30", interval: "week" }),
     ).toEqual({
       days: null,
+      datacenter: null,
       from: "2026-09-01",
       to: "2026-09-30",
       interval: "week",
@@ -525,7 +532,17 @@ describe("site statistic tools", () => {
     };
     const service = { live: jest.fn(async () => live) };
     const answer = await run(analyticsLiveTool, { locale: "de" }, service);
-    expect(service.live).toHaveBeenCalledWith("de");
+    expect(service.live).toHaveBeenCalledWith(
+      "de",
+      expect.any(Date),
+      "exclude",
+    );
+    await run(analyticsLiveTool, { datacenter: "only" }, service);
+    expect(service.live).toHaveBeenLastCalledWith(
+      null,
+      expect.any(Date),
+      "only",
+    );
     expect(answer).toMatchObject({
       at: live.at,
       activeVisitors: 3,

@@ -35,6 +35,10 @@ client IP (`X-Forwarded-For` or `CF-Connecting-IP`).
   at startup (boot is not blocked); see `.env.example`.
 - Refreshed by `geoip-update` / `update-geolite2-city` every two days
   ([job queues](job-queues.md)).
+- Beside it GeoLite2-ASN, for the site statistic's [data centres](../frontend/site-analytics.md#data-centres):
+  `GEOIP_ASN_DATABASE_PATH`, default `GeoLite2-ASN.mmdb` next to the city file, downloaded and
+  refreshed with it by the same credentials and job. Optional: without it every network reads
+  `unknown`, and a failed ASN download only warns (`lookupAsn`, `isAsnAvailable`).
 
 ## Never cached by a CDN
 

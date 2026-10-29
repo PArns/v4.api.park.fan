@@ -16,6 +16,8 @@ import {
   LIVE_TOP_REFERRERS,
   SITE_ANALYTICS_KEYS as KEYS,
   minuteKey,
+  visitorScopesOf,
+  type DatacenterScope,
   type LiveList,
   type SiteLocale,
 } from "./site-analytics.constants";
@@ -43,14 +45,15 @@ export class SiteAnalyticsLiveService {
 
   /**
    * The last {@link LIVE_LONG_MINUTES} whole minutes and the current one, for
-   * all languages or one. 503 when Redis does not answer: zeros would read as
-   * an empty site.
+   * all languages or one, without the data centres' readers unless asked. 503
+   * when Redis does not answer: zeros would read as an empty site.
    */
   async live(
     locale: SiteLocale | null = null,
     now = new Date(),
+    datacenter: DatacenterScope = "exclude",
   ): Promise<SiteLiveDto> {
-    const scope = locale ?? ALL_LOCALES_SCOPE;
+    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, datacenter);
     const current = Math.floor(now.getTime() / 60_000) * 60_000;
     const minutes = Array.from(
       { length: LIVE_LONG_MINUTES + 1 },
@@ -59,17 +62,23 @@ export class SiteAnalyticsLiveService {
     const keys = minutes.map(minuteKey);
     const short = keys.slice(-LIVE_SHORT_MINUTES);
 
+    // Every minute key once per scope: a PFCOUNT over several counts their
+    // union, the counters and the lists are summed.
+    const each = (key: string, name: (key: string, scope: string) => string) =>
+      scopes.map((scope) => name(key, scope));
     const pipeline = this.redis.pipeline();
-    pipeline.pfcount(...short.map((key) => KEYS.activeMinute(key, scope)));
-    pipeline.mget(...keys.map((key) => KEYS.pageviewsMinute(key, scope)));
-    pipeline.mget(...keys.map((key) => KEYS.eventsMinute(key, scope)));
-    for (const key of keys) pipeline.pfcount(KEYS.activeMinute(key, scope));
+    pipeline.pfcount(...short.flatMap((key) => each(key, KEYS.activeMinute)));
+    pipeline.mget(...keys.flatMap((key) => each(key, KEYS.pageviewsMinute)));
+    pipeline.mget(...keys.flatMap((key) => each(key, KEYS.eventsMinute)));
+    for (const key of keys) pipeline.pfcount(...each(key, KEYS.activeMinute));
     const reads: Array<{ list: LiveList; at: number }> = [];
     let at = 3 + keys.length;
     for (const list of LIVE_LISTS) {
       for (const key of SHORT_LISTS.has(list) ? short : keys) {
-        pipeline.hgetall(KEYS.live(list, key, scope));
-        reads.push({ list, at: at++ });
+        for (const scope of scopes) {
+          pipeline.hgetall(KEYS.live(list, key, scope));
+          reads.push({ list, at: at++ });
+        }
       }
     }
 
@@ -101,6 +110,8 @@ export class SiteAnalyticsLiveService {
         .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
         .slice(0, limit);
 
+    const perMinute = (counts: Count[], i: number) =>
+      scopes.reduce((sum, _, s) => sum + num(counts[i * scopes.length + s]), 0);
     const pageviews = reply(1) as Count[];
     const events = reply(2) as Count[];
     return {
@@ -108,8 +119,8 @@ export class SiteAnalyticsLiveService {
       activeVisitors: num(reply(0) as Count),
       perMinute: minutes.map((minute, i) => ({
         minute: `${minute.toISOString().slice(0, 16)}:00Z`,
-        pageviews: num(pageviews[i]),
-        events: num(events[i]),
+        pageviews: perMinute(pageviews, i),
+        events: perMinute(events, i),
         visitors: num(reply(3 + i) as Count),
       })),
       pages: ranked("pages", LIVE_TOP_PAGES).map(([field, views]) => {

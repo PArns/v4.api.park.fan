@@ -119,6 +119,32 @@ describe("SiteAnalyticsLiveService", () => {
     expect(live.pages.map((p) => p.path)).not.toContain("/nl");
   });
 
+  it("leaves the data centres' readers out unless asked, and adds them up when asked", async () => {
+    redis.sets.set(KEYS.activeMinute(minute(0), "all"), new Set(["a"]));
+    redis.sets.set(KEYS.activeMinute(minute(0), "dca"), new Set(["x", "y"]));
+    redis.counters.set(KEYS.pageviewsMinute(minute(0), "all"), 2);
+    redis.counters.set(KEYS.pageviewsMinute(minute(0), "dca"), 5);
+    hash(KEYS.live("countries", minute(0), "all"), { de: 2 });
+    hash(KEYS.live("countries", minute(0), "dca"), { us: 5 });
+
+    const without = await service.live(null, NOW);
+    expect(without.activeVisitors).toBe(1);
+    expect(without.perMinute[30]).toMatchObject({ pageviews: 2 });
+    expect(without.countries).toEqual([{ country: "DE", views: 2 }]);
+
+    const only = await service.live(null, NOW, "only");
+    expect(only.activeVisitors).toBe(2);
+    expect(only.countries).toEqual([{ country: "US", views: 5 }]);
+
+    const all = await service.live(null, NOW, "include");
+    expect(all.activeVisitors).toBe(3);
+    expect(all.perMinute[30]).toMatchObject({ pageviews: 7, visitors: 3 });
+    expect(all.countries).toEqual([
+      { country: "US", views: 5 },
+      { country: "DE", views: 2 },
+    ]);
+  });
+
   it("answers 503 when Redis does not", async () => {
     redis.failNext = ["down"];
     await expect(service.live(null, NOW)).rejects.toBeInstanceOf(

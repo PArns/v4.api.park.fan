@@ -55,6 +55,13 @@ export class SitePageviewDay {
   @Column({ type: "varchar", length: 2 })
   country: string;
 
+  /**
+   * `datacenter`, `other` or `unknown` (`SITE_NETWORKS`), from the address's
+   * autonomous system; `unknown` on rows from before the column.
+   */
+  @Column({ type: "varchar", length: 10, default: "unknown" })
+  network: string;
+
   @Column({ name: "browser_language", type: "varchar", length: 2 })
   browserLanguage: string;
 
