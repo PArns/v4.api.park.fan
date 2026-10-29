@@ -394,6 +394,32 @@ describe("SearchService", () => {
       expect(result.results.map((r) => r.id)).toContain("fly");
     });
 
+    it("ranks a park by its curated abbreviation above parks holding the letters", async () => {
+      await primeIndex({
+        parks: [
+          park({ id: "thorpe", name: "Thorpe Park", slug: "thorpe-park" }),
+          park({
+            id: "europa",
+            name: "Europa-Park",
+            slug: "europa-park",
+            curatedAbbreviations: "EP, E.P.",
+          }),
+        ],
+      });
+      // Even closed against an open park: the abbreviation names it.
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([
+          ["thorpe", "OPERATING"],
+          ["europa", "CLOSED"],
+        ]),
+      );
+
+      for (const q of ["EP", "ep", "e.p."]) {
+        const result = await service.search({ q, type: ["park"] });
+        expect(result.results.map((r) => r.id)).toEqual(["europa", "thorpe"]);
+      }
+    });
+
     it("ranks exact park name above fuzzy park matches in-process", async () => {
       await primeIndex({
         parks: [

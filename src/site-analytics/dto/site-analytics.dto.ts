@@ -825,6 +825,24 @@ export class SiteSearchDayDto extends SitePeriodDto {
   @ApiProperty() opened: number;
 }
 
+/** A park or ride a report ranks by the events that named it. */
+export class SiteRankedEntityDto {
+  @ApiProperty({ format: "uuid" }) id: string;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: "Null for an id no table has any more.",
+  })
+  name: string | null;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: "Frontend path without a locale.",
+  })
+  url: string | null;
+  @ApiProperty() count: number;
+}
+
 export class SiteSearchDto extends WindowDto {
   @ApiProperty({
     type: [SiteSearchSurfaceDto],
@@ -849,6 +867,18 @@ export class SiteSearchDto extends WindowDto {
     description: "Every period × every surface.",
   })
   series: SiteSearchDayDto[];
+  @ApiProperty({
+    type: [SiteRankedEntityDto],
+    description:
+      "Parks by results and suggestions opened (the clicks' entity), the most first.",
+  })
+  topParks: SiteRankedEntityDto[];
+  @ApiProperty({
+    type: [SiteRankedEntityDto],
+    description:
+      "Rides by results and suggestions opened (the clicks' entity), the most first.",
+  })
+  topRides: SiteRankedEntityDto[];
 }
 
 /** One value of a planner event's property and how often it came. */
@@ -934,23 +964,6 @@ export class SitePlannerPointDto extends SitePeriodDto {
   @ApiProperty() optimized: number;
 }
 
-export class SitePlannerEntityDto {
-  @ApiProperty({ format: "uuid" }) id: string;
-  @ApiProperty({
-    nullable: true,
-    type: String,
-    description: "Null for an id no table has any more.",
-  })
-  name: string | null;
-  @ApiProperty({
-    nullable: true,
-    type: String,
-    description: "Frontend path without a locale.",
-  })
-  url: string | null;
-  @ApiProperty() count: number;
-}
-
 export class SitePlannerDto extends WindowDto {
   @ApiProperty({ type: SitePlannerFunnelDto }) funnel: SitePlannerFunnelDto;
   @ApiProperty({
@@ -1006,17 +1019,17 @@ export class SitePlannerDto extends WindowDto {
   byPageTypeAndDevice: SitePlannerPageTypeDto[];
   @ApiProperty({ type: [SitePlannerPointDto] }) series: SitePlannerPointDto[];
   @ApiProperty({
-    type: [SitePlannerEntityDto],
+    type: [SiteRankedEntityDto],
     description:
       "Parks by days started (plan_day_started's entity), the most first.",
   })
-  topParks: SitePlannerEntityDto[];
+  topParks: SiteRankedEntityDto[];
   @ApiProperty({
-    type: [SitePlannerEntityDto],
+    type: [SiteRankedEntityDto],
     description:
       "Rides by times added (plan_item_added's entity), the most first.",
   })
-  topRides: SitePlannerEntityDto[];
+  topRides: SiteRankedEntityDto[];
 }
 
 export class SiteBlockedEventDto {
