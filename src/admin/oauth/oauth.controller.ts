@@ -14,10 +14,12 @@ import { ApiExcludeEndpoint, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { addressBucket, getRateLimitIp } from "../../common/utils/request.util";
+import { GeoipService } from "../../geoip/geoip.service";
 import { OAuthAuthorizationService } from "./oauth-authorization.service";
 import { OAuthClientService } from "./oauth-client.service";
 import { OAuthError, OAuthErrorFilter, setNoStore } from "./oauth-error";
 import { sendAuthorizeErrorPage } from "./oauth-error-page";
+import { requestOrigin } from "./request-origin";
 
 type Params = Record<string, unknown>;
 
@@ -37,6 +39,7 @@ export class OAuthController {
   constructor(
     private readonly authorization: OAuthAuthorizationService,
     private readonly clients: OAuthClientService,
+    private readonly geoip: GeoipService,
   ) {}
 
   @Post("register")
@@ -72,9 +75,15 @@ export class OAuthController {
     @Req() request: Request,
     @Res() response: Response,
   ): Promise<void> {
+    // This request comes from the browser that started the connection, so
+    // its country and browser are what the consent page compares with the
+    // admin's. A missing User-Agent is passed as an empty one: here it is a
+    // fact about the starter, not a gap in what was recorded.
+    const ip = getRateLimitIp(request);
     const outcome = await this.authorization.authorize(
       query,
-      addressBucket(getRateLimitIp(request)),
+      addressBucket(ip),
+      requestOrigin(this.geoip, ip, request.headers["user-agent"] ?? ""),
     );
     if (outcome.kind === "error-page") {
       sendAuthorizeErrorPage(response, outcome.message);

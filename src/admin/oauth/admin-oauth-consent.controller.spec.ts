@@ -20,6 +20,7 @@ describe("AdminOAuthConsentController.approve", () => {
     const controller = new AdminOAuthConsentController(
       authorization as never,
       accounts as never,
+      { lookupCountry: () => null } as never,
     );
     return { controller, authorization, accounts };
   }
@@ -47,5 +48,35 @@ describe("AdminOAuthConsentController.approve", () => {
       controller.approve("req", ADMIN, { password: "bad" }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(authorization.approve).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What is pinned: the consent page learns the admin's country from the
+ * address and the browser from the session, not from the proxy's User-Agent.
+ */
+describe("AdminOAuthConsentController.describe", () => {
+  it("passes the reader's country and session browser along", async () => {
+    const authorization = { describe: jest.fn(async () => ({})) };
+    const geoip = {
+      lookupCountry: jest.fn((ip: string) =>
+        ip === "192.0.2.7" ? "de" : null,
+      ),
+    };
+    const controller = new AdminOAuthConsentController(
+      authorization as never,
+      {} as never,
+      geoip as never,
+    );
+    await controller.describe("req", {
+      ...ADMIN,
+      ip: "192.0.2.7",
+      sessionUserAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:131.0) Gecko/20100101 Firefox/131.0",
+    });
+    expect(authorization.describe).toHaveBeenCalledWith("req", {
+      country: "de",
+      browser: "firefox",
+    });
   });
 });

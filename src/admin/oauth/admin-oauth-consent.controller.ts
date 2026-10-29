@@ -22,7 +22,9 @@ import { AdminOAuthApproveDto } from "../auth/dto/auth.dto";
 import { AdminAuthGuard } from "../auth/admin-auth.guard";
 import { AdminLegacyAccess, CurrentAdmin } from "../auth/admin-auth.decorators";
 import type { AdminPrincipal } from "../auth/admin-principal";
+import { GeoipService } from "../../geoip/geoip.service";
 import { OAuthAuthorizationService } from "./oauth-authorization.service";
+import { requestOrigin } from "./request-origin";
 
 /** The identity-check bucket of consent approvals. */
 const OAUTH_APPROVE_ACTION = "oauth-approve";
@@ -45,6 +47,7 @@ export class AdminOAuthConsentController {
   constructor(
     private readonly authorization: OAuthAuthorizationService,
     private readonly accounts: AdminAuthService,
+    private readonly geoip: GeoipService,
   ) {}
 
   @Get(":id")
@@ -52,8 +55,13 @@ export class AdminOAuthConsentController {
     summary: "A pending OAuth authorization request, for the consent page",
   })
   @ApiResponse({ status: 404, description: "Expired or already answered" })
-  describe(@Param("id") id: string) {
-    return this.authorization.describe(id);
+  describe(@Param("id") id: string, @CurrentAdmin() admin: AdminPrincipal) {
+    // The page is read through the admin proxy, whose User-Agent is the
+    // frontend's own; the browser is the one the session signed in with.
+    return this.authorization.describe(
+      id,
+      requestOrigin(this.geoip, admin.ip, admin.sessionUserAgent),
+    );
   }
 
   @Post(":id/approve")

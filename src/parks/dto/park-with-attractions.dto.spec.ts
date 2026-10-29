@@ -2,6 +2,7 @@ import {
   ParkWithAttractionsDto,
   buildClosedAttractions,
 } from "./park-with-attractions.dto";
+import { ParkResponseDto } from "./park-response.dto";
 import type { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
@@ -354,5 +355,41 @@ describe("buildClosedAttractions", () => {
     );
 
     expect(list[0].name).toBe("X2");
+  });
+});
+
+/**
+ * `abbreviations` is the one curated identity field that is a list: present
+ * with entries on both park payloads, absent rather than empty without.
+ */
+describe("park payloads › abbreviations", () => {
+  const park = (curatedAbbreviations: string | null) =>
+    ({
+      id: "park-1",
+      name: "Europa-Park",
+      slug: "europa-park",
+      timezone: "Europe/Berlin",
+      curatedAbbreviations,
+      attractions: [],
+      shows: [],
+      restaurants: [],
+    }) as unknown as Park;
+
+  it("carries the list on the park page and in listings", () => {
+    expect(ParkWithAttractionsDto.fromEntity(park("EP")).abbreviations).toEqual(
+      ["EP"],
+    );
+    expect(ParkResponseDto.fromEntity(park("EP")).abbreviations).toEqual([
+      "EP",
+    ]);
+  });
+
+  it("leaves the key out when there is none", () => {
+    expect(
+      "abbreviations" in ParkWithAttractionsDto.fromEntity(park(null)),
+    ).toBe(false);
+    expect("abbreviations" in ParkResponseDto.fromEntity(park(" , "))).toBe(
+      false,
+    );
   });
 });

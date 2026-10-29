@@ -2,6 +2,14 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg18
     restart: unless-stopped
+    # Rotated here rather than left to the host's Docker default, which keeps
+    # a container's log until the container is replaced. Every service carries
+    # the same block (docs/deployment/coolify.md#container-logs).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     # Postgres keeps parallel-query dynamic shared memory in /dev/shm. Docker's
     # 64MB default overflowed ("could not resize shared memory segment ... No space
     # left on device") once /predict began running its heavy 730-day rolling-window
@@ -44,6 +52,11 @@ services:
   redis:
     image: redis:8.4-alpine
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
       - /data/parkfan/redis:/data
     healthcheck:
@@ -69,6 +82,11 @@ services:
       context: ./ml-service
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env
     environment:
@@ -130,6 +148,11 @@ services:
       context: ./nf-service
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env
     environment:
@@ -178,6 +201,11 @@ services:
       context: ./pcn-service
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env
     environment:
@@ -219,6 +247,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     # The budget the 20 s shutdown deadline in `graceful-shutdown.ts` is sized
     # against. Coolify passes `docker stop --timeout=30` on a deploy, but that
     # number lives in Coolify's command, not here — so every other stop path
@@ -312,6 +345,11 @@ services:
   bull-board:
     image: venatum/bull-board:latest
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     ports:
       - "3001:3000"
     environment:

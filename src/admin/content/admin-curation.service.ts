@@ -17,6 +17,7 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
+import { abbreviationsProblem } from "../../parks/utils/curated-park-facts.util";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import {
   AdminAuditService,
@@ -416,6 +417,16 @@ export class AdminCurationService {
 
     if (changed.length === 0) {
       return { entity: park, changed: [], auditId: null };
+    }
+
+    // On the merged row: a new name can collide with an abbreviation already
+    // stored as well as the other way round.
+    if (
+      changed.includes("curatedAbbreviations") ||
+      changed.includes("curatedName")
+    ) {
+      const problem = abbreviationsProblem(park);
+      if (problem) throw new BadRequestException(problem);
     }
 
     // Only the changed columns — see commitAttractionPatch.

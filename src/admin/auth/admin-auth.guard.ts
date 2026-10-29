@@ -158,6 +158,7 @@ export class AdminAuthGuard implements CanActivate {
       displayName: session.displayName,
       role: session.role,
       sessionToken: token,
+      sessionUserAgent: session.userAgent,
       legacy: false,
       ip: clientIp(request),
       mustChangePassword: session.mustChangePassword,
