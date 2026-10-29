@@ -16,6 +16,7 @@ import {
 import type Redis from "ioredis";
 import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { SearchConsoleImportService } from "../../src/search-console/search-console-import.service";
+import { SearchConsoleClient } from "../../src/search-console/search-console.client";
 import { BACKFILL_DAYS } from "../../src/search-console/search-console.constants";
 
 const PASSWORD = "a-long-enough-password";
@@ -135,6 +136,9 @@ describe("Search Console (e2e)", () => {
     await app.init();
     dataSource = app.get(DataSource);
     importService = app.get(SearchConsoleImportService);
+    // The mocked Google needs no spacing, and a backfill spaced like the
+    // real client's requests outlasts the test timeout.
+    app.get(SearchConsoleClient).wait = async () => undefined;
   });
 
   afterAll(async () => {
