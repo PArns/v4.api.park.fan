@@ -5,11 +5,15 @@ import {
 } from "../config/search-console.config";
 import { GoogleAuthError, ServiceAccountTokens } from "./google-auth";
 import {
+  DEFAULT_SEARCH_TYPE,
   GSC_API_BASE,
+  GSC_INSPECTION_URL,
   GSC_MAX_ATTEMPTS,
+  GSC_MIN_REQUEST_INTERVAL_MS,
   GSC_REQUEST_TIMEOUT_MS,
   GSC_ROW_LIMIT,
   GSC_SCOPE,
+  type GscSearchType,
 } from "./search-console.constants";
 
 /** One row of `searchAnalytics.query`, its `keys` in the order of the dimensions asked for; absent when none was. */
@@ -19,6 +23,34 @@ export interface GscApiRow {
   impressions: number;
   ctr: number;
   position: number;
+}
+
+/** The part of `urlInspection.index.inspect`'s answer the tool reads; every field may be absent. */
+export interface GscInspectionApiResult {
+  inspectionResult?: {
+    inspectionResultLink?: string;
+    indexStatusResult?: {
+      verdict?: string;
+      coverageState?: string;
+      robotsTxtState?: string;
+      indexingState?: string;
+      lastCrawlTime?: string;
+      pageFetchState?: string;
+      googleCanonical?: string;
+      userCanonical?: string;
+      sitemap?: string[];
+      referringUrls?: string[];
+      crawledAs?: string;
+    };
+    mobileUsabilityResult?: {
+      verdict?: string;
+      issues?: Array<{ issueType?: string }>;
+    };
+    richResultsResult?: {
+      verdict?: string;
+      detectedItems?: Array<{ richResultType?: string }>;
+    };
+  };
 }
 
 export type GscDimension = "page" | "query" | "country" | "device";
@@ -59,15 +91,15 @@ export class SearchConsoleClient {
   /** Pause between tries; a test sets it to nothing. */
   wait: (ms: number) => Promise<void> = sleep;
 
+  /** When the last request went out, to space the next one. */
+  private lastRequestAt = 0;
+
   setup(): SearchConsoleSetup {
     return getSearchConsoleSetup();
   }
 
-  /** Every row of one day for the dimensions, page after page. */
-  async fetchDay(
-    day: string,
-    dimensions: readonly GscDimension[],
-  ): Promise<GscApiRow[]> {
+  /** The configured setup, or a fatal error saying there is none. */
+  private configured(): Extract<SearchConsoleSetup, { configured: true }> {
     const setup = this.setup();
     if (!setup.configured) {
       throw new SearchConsoleApiError(
@@ -76,12 +108,36 @@ export class SearchConsoleClient {
         true,
       );
     }
+    return setup;
+  }
+
+  /** What Google knows of one URL of the property (index status, canonical, mobile, rich results). */
+  async inspectUrl(
+    inspectionUrl: string,
+    languageCode = "en-US",
+  ): Promise<GscInspectionApiResult> {
+    const setup = this.configured();
+    return this.post<GscInspectionApiResult>(setup, GSC_INSPECTION_URL, {
+      inspectionUrl,
+      siteUrl: setup.siteUrl,
+      languageCode,
+    });
+  }
+
+  /** Every row of one day for the dimensions and type, page after page. */
+  async fetchDay(
+    day: string,
+    dimensions: readonly GscDimension[],
+    type: GscSearchType = DEFAULT_SEARCH_TYPE,
+  ): Promise<GscApiRow[]> {
+    const setup = this.configured();
     const rows: GscApiRow[] = [];
     for (let startRow = 0; ; startRow += GSC_ROW_LIMIT) {
       const page = await this.query(setup, {
         startDate: day,
         endDate: day,
         dimensions,
+        type,
         rowLimit: GSC_ROW_LIMIT,
         startRow,
         // Final numbers only: a day Google has not finished comes back empty
@@ -107,6 +163,16 @@ export class SearchConsoleClient {
     body: Record<string, unknown>,
   ): Promise<GscApiRow[]> {
     const url = `${GSC_API_BASE}/sites/${encodeURIComponent(setup.siteUrl)}/searchAnalytics/query`;
+    const parsed = await this.post<{ rows?: GscApiRow[] }>(setup, url, body);
+    return parsed.rows ?? [];
+  }
+
+  /** One JSON POST with the account's token: spaced, retried on 429 and 5xx, refusals mapped. */
+  private async post<T>(
+    setup: Extract<SearchConsoleSetup, { configured: true }>,
+    url: string,
+    body: Record<string, unknown>,
+  ): Promise<T> {
     const tokens = this.tokensFor(setup);
     let refreshed = false;
     for (let attempt = 1; ; attempt++) {
@@ -121,6 +187,10 @@ export class SearchConsoleClient {
       }
       let response: Response | null = null;
       let failure = "";
+      const idle =
+        this.lastRequestAt + GSC_MIN_REQUEST_INTERVAL_MS - Date.now();
+      if (idle > 0) await this.wait(idle);
+      this.lastRequestAt = Date.now();
       try {
         response = await fetch(url, {
           method: "POST",
@@ -136,8 +206,7 @@ export class SearchConsoleClient {
       }
 
       if (response?.ok) {
-        const parsed = (await response.json()) as { rows?: GscApiRow[] };
-        return parsed.rows ?? [];
+        return (await response.json()) as T;
       }
       const status = response?.status ?? null;
       if (status === 401 && !refreshed) {

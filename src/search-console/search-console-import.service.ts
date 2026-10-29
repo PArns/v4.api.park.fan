@@ -20,12 +20,15 @@ import {
   BACKFILL_DAYS,
   BATCH_FORMAT,
   DROP_LOCK_TIMEOUT,
+  GSC_SEARCH_TYPES,
+  GSC_TYPES_WITHOUT_QUERIES,
   IMPORT_LOCK_KEY,
   IMPORT_LOCK_TTL_MS,
   INSERT_CHUNK_ROWS,
   MAX_CONSECUTIVE_FAILURES,
   RETENTION_DAYS,
   RUN_RETENTION_DAYS,
+  type GscSearchType,
 } from "./search-console.constants";
 import { currentBatches, type CurrentBatch } from "./search-console-batches";
 import {
@@ -81,6 +84,31 @@ const emptySummary = (): ImportSummary => ({
   failedDays: [],
 });
 
+/**
+ * The property's row for a type Google cannot aggregate by property: the sum
+ * of its page rows, the position weighted by the impressions. Discover lists
+ * a page once per day, so the sum is the total.
+ */
+export function propertyFromPages(pages: readonly GscApiRow[]): GscApiRow[] {
+  if (pages.length === 0) return [];
+  let clicks = 0;
+  let impressions = 0;
+  let weighted = 0;
+  for (const row of pages) {
+    clicks += row.clicks;
+    impressions += row.impressions;
+    weighted += row.position * row.impressions;
+  }
+  return [
+    {
+      clicks,
+      impressions,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+      position: impressions > 0 ? weighted / impressions : 0,
+    },
+  ];
+}
+
 /** One day's API rows by the dimensions asked for. */
 export interface DayFetch {
   /** No dimensions: the property's own figures, what the Search Console chart shows. */
@@ -91,7 +119,7 @@ export interface DayFetch {
   countries: readonly GscApiRow[];
   /** `device`: complete per device. */
   devices: readonly GscApiRow[];
-  /** `page, query, country, device`: visible queries only. */
+  /** `page, query, country, device`: visible queries only; empty for a type without queries. */
   queries: readonly GscApiRow[];
 }
 
@@ -176,11 +204,15 @@ export function isUnchanged(
   fresh: DayTotals,
 ): boolean {
   if (!current) return false;
+  // An older layout holds totals without the anonymised queries, so even an
+  // empty day is written again in the new one, or it would be asked for
+  // every night; only a day that had data is not replaced by an empty answer.
+  if (current.format < BATCH_FORMAT) {
+    return fresh.rows === 0 && current.rows > 0;
+  }
   // A download that came back empty changes nothing: either the day was asked
   // before and was empty, or it must not erase a day that had data.
   if (fresh.rows === 0) return true;
-  // An older layout holds totals without the anonymised queries.
-  if (current.format < BATCH_FORMAT) return false;
   return (
     current.rows === fresh.rows &&
     current.clicks === fresh.clicks &&
@@ -190,9 +222,10 @@ export function isUnchanged(
 }
 
 /**
- * The days a run looks at, newest first: the recent ones again, then those
- * never fetched, which includes those whose current batch is in an older
- * layout.
+ * The days a run looks at for one type, newest first: the recent ones again,
+ * then those never fetched, which includes those whose current batch is in an
+ * older layout. A type nobody has imported yet is all "never fetched", so its
+ * first run is its backfill.
  */
 export function planDays(
   now: Date,
@@ -274,18 +307,27 @@ export class SearchConsoleImportService {
     summary: ImportSummary,
   ): Promise<void> {
     const end = addIsoDays(utcDay(now), -1);
-    const current = await currentBatches(
-      this.db,
-      addIsoDays(end, -(BACKFILL_DAYS - 1)),
-      end,
-    );
-    const days = planDays(now, getSearchConsoleImportDays(), current);
+    const from = addIsoDays(end, -(BACKFILL_DAYS - 1));
+    const work: Array<{
+      day: string;
+      type: GscSearchType;
+      current: CurrentBatch | undefined;
+    }> = [];
+    for (const type of GSC_SEARCH_TYPES) {
+      const current = await currentBatches(this.db, from, end, type);
+      for (const day of planDays(now, getSearchConsoleImportDays(), current)) {
+        work.push({ day, type, current: current.get(day) });
+      }
+    }
+    // Newest day first across the types; the sort is stable, so web leads a day.
+    work.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
     let consecutive = 0;
     let lastMessage = "";
-    for (const day of days) {
+    for (const { day, type, current } of work) {
       summary.daysChecked++;
+      const label = type === "web" ? day : `${day} (${type})`;
       try {
-        await this.importDay(setup, day, current.get(day), summary);
+        await this.importDay(setup, day, type, current, summary);
         consecutive = 0;
       } catch (error) {
         lastMessage = (error as Error).message;
@@ -293,8 +335,8 @@ export class SearchConsoleImportService {
           // The account, the property or the key: every day would fail alike.
           throw error;
         }
-        summary.failedDays.push(day);
-        this.logger.warn(`Search Console ${day}: ${lastMessage}`);
+        summary.failedDays.push(label);
+        this.logger.warn(`Search Console ${label}: ${lastMessage}`);
         if (++consecutive >= MAX_CONSECUTIVE_FAILURES) {
           throw new Error(
             `Search Console import stopped after ${consecutive} failed days in a row: ${lastMessage}`,
@@ -312,20 +354,24 @@ export class SearchConsoleImportService {
   private async importDay(
     setup: Extract<SearchConsoleSetup, { configured: true }>,
     day: string,
+    type: GscSearchType,
     current: CurrentBatch | undefined,
     summary: ImportSummary,
   ): Promise<void> {
+    const queryless = GSC_TYPES_WITHOUT_QUERIES.includes(type);
+    const fetch = (
+      dimensions: Parameters<SearchConsoleClient["fetchDay"]>[1],
+    ) => this.client.fetchDay(day, dimensions, type);
+    const property = queryless ? null : await fetch([]);
+    const pages = await fetch(["page"]);
     const fetched: DayFetch = {
-      property: await this.client.fetchDay(day, []),
-      pages: await this.client.fetchDay(day, ["page"]),
-      countries: await this.client.fetchDay(day, ["country"]),
-      devices: await this.client.fetchDay(day, ["device"]),
-      queries: await this.client.fetchDay(day, [
-        "page",
-        "query",
-        "country",
-        "device",
-      ]),
+      property: property ?? propertyFromPages(pages),
+      pages,
+      countries: await fetch(["country"]),
+      devices: await fetch(["device"]),
+      queries: queryless
+        ? []
+        : await fetch(["page", "query", "country", "device"]),
     };
     const batch = buildBatch(fetched, setup.hosts);
     summary.skippedRows += batch.skipped;
@@ -333,7 +379,7 @@ export class SearchConsoleImportService {
       summary.unchanged++;
       return;
     }
-    await this.writeBatch(day, batch);
+    await this.writeBatch(day, type, batch);
     summary.batchesWritten++;
     summary.rowsWritten += batch.rows.length;
   }
@@ -342,11 +388,15 @@ export class SearchConsoleImportService {
    * The batch and its rows in one transaction, so a reader sees the day's
    * old batch or its new one and never half of either.
    */
-  private async writeBatch(day: string, batch: DayBatch): Promise<void> {
+  private async writeBatch(
+    day: string,
+    type: GscSearchType,
+    batch: DayBatch,
+  ): Promise<void> {
     await this.db.transaction(async (manager) => {
       const [{ id }] = (await manager.query(
-        `INSERT INTO search_console_batches (day, rows, clicks, impressions, position_sum, format)
-         VALUES ($1::date, $2, $3, $4, $5, $6) RETURNING id`,
+        `INSERT INTO search_console_batches (day, rows, clicks, impressions, position_sum, format, search_type)
+         VALUES ($1::date, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           day,
           batch.rows.length,
@@ -354,14 +404,15 @@ export class SearchConsoleImportService {
           batch.totals.impressions,
           batch.totals.positionSum,
           BATCH_FORMAT,
+          type,
         ],
       )) as Array<{ id: number }>;
       for (let i = 0; i < batch.rows.length; i += INSERT_CHUNK_ROWS) {
         const chunk = batch.rows.slice(i, i + INSERT_CHUNK_ROWS);
         await manager.query(
           `INSERT INTO search_console_rows
-             (day, batch_id, page, query, locale, country, device, clicks, impressions, position_sum)
-           SELECT $1::date, $2::int, * FROM unnest(
+             (day, batch_id, search_type, page, query, locale, country, device, clicks, impressions, position_sum)
+           SELECT $1::date, $2::int, $11::text, * FROM unnest(
              $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
              $8::int[], $9::int[], $10::float8[])`,
           [
@@ -375,6 +426,7 @@ export class SearchConsoleImportService {
             chunk.map((row) => row.clicks),
             chunk.map((row) => row.impressions),
             chunk.map((row) => row.positionSum),
+            type,
           ],
         );
       }

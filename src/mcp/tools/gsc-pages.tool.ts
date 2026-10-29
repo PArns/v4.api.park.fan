@@ -10,6 +10,7 @@ import {
   gscQuery,
   gscQueryFilter,
   gscWindowInput,
+  readable,
   withGscData,
 } from "./gsc-data";
 
@@ -41,7 +42,9 @@ export const gscPagesTool = defineMcpTool({
       .describe("Pages to list"),
   },
   async handler(input, ctx) {
-    const report = await ctx.get(SearchConsoleService).pages(gscQuery(input));
+    const report = await readable(
+      ctx.get(SearchConsoleService).pages(gscQuery(input)),
+    );
     const rate = <T extends { ctr: number }>(row: T) => ({
       ...row,
       ctr: round3(row.ctr),

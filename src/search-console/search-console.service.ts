@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { addIsoDays } from "../common/utils/date.util";
@@ -21,7 +21,11 @@ import { getSearchConsoleSetup } from "../config/search-console.config";
 import {
   BATCH_FORMAT,
   DEFAULT_REPORT_LIMIT,
+  DEFAULT_SEARCH_TYPE,
+  GSC_SEARCH_TYPES,
+  GSC_TYPES_WITHOUT_QUERIES,
   type GscInterval,
+  type GscSearchType,
 } from "./search-console.constants";
 import { currentBatches, lastDataDay } from "./search-console-batches";
 import { anchorRollingWindow } from "./search-console-window";
@@ -48,6 +52,8 @@ export interface SearchConsoleQuery {
   country?: string | null;
   device?: string | null;
   limit?: number | null;
+  /** The Search Console type; `web` when absent. */
+  type?: GscSearchType | null;
 }
 
 /** Sums over rows; the figures of a report are derived from these. */
@@ -107,6 +113,23 @@ export function levelPlan(
     totals: complete ? (query.country ? "country" : "device") : "query",
     partialBreakdown: report !== "queries",
   };
+}
+
+/**
+ * Discover has no queries, so a report that needs the query rows (the
+ * queries list, a query filter, a country or device slice of a list) cannot
+ * be answered for it. `levels` are the rows the report would read.
+ */
+export function assertAnswerable(
+  type: GscSearchType,
+  levels: readonly RowLevel[],
+): void {
+  if (GSC_TYPES_WITHOUT_QUERIES.includes(type) && levels.includes("query")) {
+    throw new BadRequestException(
+      `type=${type} has no search queries: use it without a query filter, and without a country or device filter on a page list; ` +
+        "gsc_queries is not available for it",
+    );
+  }
 }
 
 type Row = Record<string, Count | string>;
@@ -205,16 +228,26 @@ export class SearchConsoleService {
 
   async status(): Promise<SearchConsoleStatusDto> {
     const setup = getSearchConsoleSetup();
-    const [coverage]: Array<{
-      first: string | null;
-      last: string | null;
+    const coverages: Array<{
+      type: string;
+      first: string;
+      last: string;
       rows: Count;
     }> = await this.db.query(
-      `SELECT MIN(day)::text AS first, MAX(day)::text AS last, COALESCE(SUM(rows), 0) AS rows
-         FROM (SELECT DISTINCT ON (day) day, rows
-                 FROM search_console_batches ORDER BY day, id DESC) b
-        WHERE rows > 0`,
+      `SELECT search_type AS type, MIN(day)::text AS first, MAX(day)::text AS last, SUM(rows) AS rows
+         FROM (SELECT DISTINCT ON (day, search_type) day, search_type, rows
+                 FROM search_console_batches ORDER BY day, search_type, id DESC) b
+        WHERE rows > 0
+        GROUP BY search_type`,
     );
+    const byType = new Map(coverages.map((row) => [row.type, row]));
+    const coverageOf = (type: GscSearchType) => {
+      const row = byType.get(type);
+      return {
+        coverage: row ? { from: row.first, to: row.last } : null,
+        rows: num(row?.rows),
+      };
+    };
     const [success]: Array<{ at: Date | null }> = await this.db.query(
       `SELECT MAX(finished_at) AS at FROM search_console_runs WHERE ok`,
     );
@@ -232,11 +265,10 @@ export class SearchConsoleService {
         : latest && !latest.ok
           ? latest.error
           : null,
-      coverage:
-        coverage?.first && coverage.last
-          ? { from: coverage.first, to: coverage.last }
-          : null,
-      rows: num(coverage?.rows),
+      ...coverageOf(DEFAULT_SEARCH_TYPE),
+      types: Object.fromEntries(
+        GSC_SEARCH_TYPES.map((type) => [type, coverageOf(type)]),
+      ) as SearchConsoleStatusDto["types"],
     };
   }
 
@@ -245,8 +277,10 @@ export class SearchConsoleService {
     query: SearchConsoleQuery,
     now = new Date(),
   ): Promise<SearchConsoleQueriesDto> {
-    const resolved = await this.resolve(query, now);
+    const type = query.type ?? DEFAULT_SEARCH_TYPE;
     const plan = levelPlan(query, "queries");
+    assertAnswerable(type, [plan.list, plan.totals]);
+    const resolved = await this.resolve(query, now);
     const echo = this.echo(resolved, plan);
     if (!resolved.dataTo) {
       return { ...echo, totals: totalsOf(ZERO), previous: null, items: [] };
@@ -287,8 +321,10 @@ export class SearchConsoleService {
     query: SearchConsoleQuery,
     now = new Date(),
   ): Promise<SearchConsolePagesDto> {
-    const resolved = await this.resolve(query, now);
+    const type = query.type ?? DEFAULT_SEARCH_TYPE;
     const plan = levelPlan(query, "pages");
+    assertAnswerable(type, [plan.list, plan.totals]);
+    const resolved = await this.resolve(query, now);
     const echo = this.echo(resolved, plan);
     if (!resolved.dataTo) {
       return { ...echo, totals: totalsOf(ZERO), previous: null, items: [] };
@@ -301,10 +337,14 @@ export class SearchConsoleService {
       filters,
       query.limit ?? DEFAULT_REPORT_LIMIT,
     );
-    const site = await this.siteNumbers(
-      resolved.window,
-      rows.map((row) => String(row.item_key)),
-    );
+    // The site statistic's search visits are not split by Google's type.
+    const site =
+      type === DEFAULT_SEARCH_TYPE
+        ? await this.siteNumbers(
+            resolved.window,
+            rows.map((row) => String(row.item_key)),
+          )
+        : new Map<string, never>();
     return {
       ...echo,
       totals,
@@ -335,12 +375,13 @@ export class SearchConsoleService {
     query: SearchConsoleQuery,
     now = new Date(),
   ): Promise<SearchConsoleSeriesDto> {
+    const plan = levelPlan(query, "series");
+    assertAnswerable(query.type ?? DEFAULT_SEARCH_TYPE, [plan.totals]);
     const resolved = await this.resolve(query, now);
     const { window } = resolved;
     const fallback = defaultInterval(window.days);
     const interval: GscInterval =
       query.interval ?? (fallback === "hour" ? "day" : fallback);
-    const plan = levelPlan(query, "series");
     const echo = { ...this.echo(resolved, plan), interval };
     if (!resolved.dataTo) return { ...echo, series: [] };
 
@@ -418,14 +459,18 @@ export class SearchConsoleService {
       to: query.to ?? null,
       locale: (query.locale ?? null) as SiteAnalyticsWindow["locale"],
     };
+    const type = query.type ?? DEFAULT_SEARCH_TYPE;
     // Validates the query as asked before it is moved.
     siteAnalyticsWindow(request, now);
     const window = siteAnalyticsWindow(
-      anchorRollingWindow(request, await lastDataDay(this.db, BATCH_FORMAT)),
+      anchorRollingWindow(
+        request,
+        await lastDataDay(this.db, BATCH_FORMAT, type),
+      ),
       now,
     );
     const lookFrom = window.previous?.from ?? window.from;
-    const batches = await currentBatches(this.db, lookFrom, window.to);
+    const batches = await currentBatches(this.db, lookFrom, window.to, type);
     // A batch of an older layout has no complete rows; its day waits for the re-import.
     const withRows = [...batches.entries()].filter(
       ([, batch]) => batch.rows > 0 && batch.format >= BATCH_FORMAT,

@@ -78,3 +78,36 @@ export const GSC_DEVICES = ["desktop", "mobile", "tablet"] as const;
 /** The longest a stored page path or query is; longer ones are skipped or cut. */
 export const MAX_PATH_LENGTH = 820;
 export const MAX_QUERY_LENGTH = 500;
+
+/** Search Console's `type`s the import keeps, `web` being the default every report answers. */
+export const GSC_SEARCH_TYPES = ["web", "image", "news", "discover"] as const;
+export type GscSearchType = (typeof GSC_SEARCH_TYPES)[number];
+export const DEFAULT_SEARCH_TYPE: GscSearchType = "web";
+
+/**
+ * Types Google reports without queries, and without the `byProperty`
+ * aggregation: the import asks neither for the query level nor for the
+ * property level, and sums the page rows into the property's.
+ */
+export const GSC_TYPES_WITHOUT_QUERIES: readonly GscSearchType[] = ["discover"];
+
+/** Requests are spaced at least this far apart: at most 10 a second, 600 a minute. */
+export const GSC_MIN_REQUEST_INTERVAL_MS = 100;
+
+/** The URL Inspection API, served by the same Search Console API and scope as the reports. */
+export const GSC_INSPECTION_URL =
+  "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect";
+
+/** The origin an inspected path is made absolute with. */
+export const INSPECTION_ORIGIN = "https://park.fan";
+
+/** URLs one inspection call takes. */
+export const MAX_INSPECTION_URLS = 10;
+
+/** Google allows 2,000 inspections a day and property; refuse here before it does. */
+export const INSPECTION_DAILY_LIMIT = 1_800;
+
+/** An answer is kept this long, in seconds, to spare the quota. */
+export const INSPECTION_CACHE_SECONDS = 6 * 60 * 60;
+export const INSPECTION_CACHE_PREFIX = "search-console:inspection:";
+export const INSPECTION_COUNT_PREFIX = "search-console:inspections:";

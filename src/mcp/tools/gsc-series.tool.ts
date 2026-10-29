@@ -11,6 +11,7 @@ import {
   gscQuery,
   gscQueryFilter,
   gscWindowInput,
+  readable,
 } from "./gsc-data";
 
 export const gscSeriesTool = defineMcpTool({
@@ -36,9 +37,11 @@ export const gscSeriesTool = defineMcpTool({
     device: gscDeviceFilter,
   },
   async handler({ interval, ...input }, ctx) {
-    const report = await ctx
-      .get(SearchConsoleService)
-      .series({ ...gscQuery(input), interval: interval ?? null });
+    const report = await readable(
+      ctx
+        .get(SearchConsoleService)
+        .series({ ...gscQuery(input), interval: interval ?? null }),
+    );
     return {
       from: report.from,
       to: report.to,
