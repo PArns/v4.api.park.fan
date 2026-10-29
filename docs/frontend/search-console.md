@@ -21,13 +21,15 @@ of them alone is a 400) and `locale`, and echo `from`, `to`, `days` and `locale`
 | ------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows, types }`          |
 | POST   | `import`                                               | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
-| GET    | `queries?type=&page=&country=&device=&limit=`          | the queries, most clicks first                                                                           |
-| GET    | `pages?type=&query=&country=&device=&limit=`           | the pages, most clicks first, with the site's own numbers                                                |
+| GET    | `queries?type=&page=&country=&device=&search=&limit=`  | the queries, most clicks first                                                                           |
+| GET    | `pages?type=&query=&country=&device=&search=&limit=`   | the pages, most clicks first, with the site's own numbers                                                |
 | GET    | `series?type=&interval=&page=&query=&country=&device=` | per day, week or month                                                                                   |
 
 `limit` is 1–200, default 50. `page` is a path or a URL (lower-cased, no trailing slash, query and
 fragment dropped); `query` is one search query, exactly, lower case; `country` is Search Console's
-ISO alpha-3 (`deu`, `usa`, either case); `device` is `desktop`, `mobile` or `tablet`. `interval` is
+ISO alpha-3 (`deu`, `usa`, either case); `device` is `desktop`, `mobile` or `tablet`. `search` keeps
+the listed queries (on `queries`) or paths (on `pages`) that contain the text, case ignored, with `%`
+and `_` taken literally; the totals stay those of the whole report. `interval` is
 `day`, `week` (ISO, from Monday) or `month`; `hour` is a 400. `type` is the [search type](#search-types). Without it: day up to 92 days, week up to
 183, month beyond.
 

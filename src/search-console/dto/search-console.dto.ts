@@ -105,6 +105,12 @@ const COUNTRY_FILTER = {
   example: "deu",
 };
 const DEVICE_FILTER = { enum: GSC_DEVICES };
+const SEARCH_FILTER = {
+  description:
+    "Only the rows whose query (on `queries`) or path (on `pages`) contains this text, case " +
+    "ignored. Narrows the list, not the totals.",
+  example: "phantasialand",
+};
 
 export class SearchConsoleQueriesQueryDto extends SearchConsoleWindowDto {
   @ApiPropertyOptional(TYPE_FILTER)
@@ -127,6 +133,12 @@ export class SearchConsoleQueriesQueryDto extends SearchConsoleWindowDto {
   @IsOptional()
   @IsIn(GSC_DEVICES)
   device?: (typeof GSC_DEVICES)[number];
+
+  @ApiPropertyOptional(SEARCH_FILTER)
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_QUERY_LENGTH)
+  search?: string;
 
   @ApiPropertyOptional({
     minimum: 1,
@@ -162,6 +174,12 @@ export class SearchConsolePagesQueryDto extends SearchConsoleWindowDto {
   @IsOptional()
   @IsIn(GSC_DEVICES)
   device?: (typeof GSC_DEVICES)[number];
+
+  @ApiPropertyOptional(SEARCH_FILTER)
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_QUERY_LENGTH)
+  search?: string;
 
   @ApiPropertyOptional({
     minimum: 1,
