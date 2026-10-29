@@ -26,6 +26,7 @@ export interface CuratedParkSource {
   parkType?: string | null;
   curatedParkType?: string | null;
   curatedArticleDe?: string | null;
+  curatedAbbreviations?: string | null;
   citySlug?: string | null;
   slug?: string | null;
   curatedNoWaitTimesReason?: string | null;
@@ -94,6 +95,8 @@ export interface ResolvedCuratedPark {
    * it to put that name in a sentence.
    */
   articleDe: string | null;
+  /** What the park is abbreviated to in searches; empty for most parks. */
+  abbreviations: string[];
   /** Null when this park's wait times can be read. */
   noWaitTimesReason: NoLiveWaitTimesReason | null;
 }
@@ -146,6 +149,7 @@ export const CURATED_PARK_COLUMNS = [
   "curatedName",
   "curatedParkType",
   "curatedArticleDe",
+  "curatedAbbreviations",
   "curatedNoWaitTimesReason",
   "curatedUsesTwelveHourClock",
   "curatedHasEarlyEntry",
@@ -202,6 +206,30 @@ export function resolveArticleDe(park: CuratedParkSource): string | null {
   return (GERMAN_ARTICLES as readonly string[]).includes(value) ? value : null;
 }
 
+/** At most this many abbreviations, each at most this long: a search term, not a sentence. */
+const MAX_ABBREVIATIONS = 5;
+const MAX_ABBREVIATION_LENGTH = 12;
+
+/**
+ * The curated abbreviations as a list: split at commas, trimmed, duplicates
+ * (any case) and over-long entries dropped.
+ */
+export function resolveAbbreviations(park: CuratedParkSource): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of (park.curatedAbbreviations ?? "").split(",")) {
+    const value = part.trim();
+    const key = value.toLowerCase();
+    if (!value || value.length > MAX_ABBREVIATION_LENGTH || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(value);
+    if (result.length === MAX_ABBREVIATIONS) break;
+  }
+  return result;
+}
+
 export function resolveCuratedPark(
   park: CuratedParkSource,
 ): ResolvedCuratedPark {
@@ -209,6 +237,7 @@ export function resolveCuratedPark(
     name: cleaned(park.curatedName) ?? park.name ?? "",
     parkType: cleaned(park.curatedParkType) ?? park.parkType ?? "THEME_PARK",
     articleDe: resolveArticleDe(park),
+    abbreviations: resolveAbbreviations(park),
     noWaitTimesReason: resolveNoWaitTimesReason(park),
   };
 }

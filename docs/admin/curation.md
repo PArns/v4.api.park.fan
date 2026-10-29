@@ -60,6 +60,7 @@ paid window and a free type have the paid product recorded nowhere (PAR-539).
 | Links | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url` |
 | Contact, facts | `curated_street_address`, `curated_postal_code`, `curated_phone`, `curated_opened_year`, `curated_area_hectares` |
 | Grammar | `curated_article_de` (German nominative article; another language gets its own column) |
+| Search names | `curated_abbreviations` (comma separated, „EP, PHL“; served as `abbreviations: string[]`, at most five of up to 12 characters, for the park page's H1 and `alternateName`) |
 | Internal | `curation_note` |
 
 Human-only columns still carry the `curated_` prefix because the park column list, the merge and the

@@ -374,6 +374,20 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       'beugen ihn selbst („im", „auf das", „für den").',
   },
   {
+    key: "curatedAbbreviations",
+    label: "Kürzel",
+    type: "text",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Identität",
+    maxLength: 80,
+    hint:
+      "Kürzel, unter denen der Park gesucht wird, durch Komma getrennt: EP, " +
+      "PHL, SFGA. Sie stehen auf der Parkseite in der Überschrift hinter dem " +
+      "Namen und im strukturierten Datensatz für Suchmaschinen. Leer lassen, " +
+      "wenn niemand den Park so nennt.",
+  },
+  {
     key: "curatedNoWaitTimesReason",
     label: "Wartezeiten nicht lesbar",
     type: "enum",

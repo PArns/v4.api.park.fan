@@ -183,6 +183,7 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
       "curated_name",
       "curated_park_type",
       "curated_article_de",
+      "curated_abbreviations",
       "curated_no_wait_times_reason",
       "curated_uses_twelve_hour_clock",
       "curated_has_early_entry",
@@ -247,6 +248,37 @@ describe("resolveArticleDe", () => {
       resolveCuratedPark({ curatedArticleDe: "ein" }).articleDe,
     ).toBeNull();
     expect(resolveCuratedPark({ curatedArticleDe: "  " }).articleDe).toBeNull();
+  });
+});
+
+describe("resolveAbbreviations", () => {
+  it("splits the curated column at commas", () => {
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: "EP, Europapark" })
+        .abbreviations,
+    ).toEqual(["EP", "Europapark"]);
+  });
+
+  it("is empty when nobody wrote any", () => {
+    expect(resolveCuratedPark({}).abbreviations).toEqual([]);
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: " , " }).abbreviations,
+    ).toEqual([]);
+  });
+
+  it("drops duplicates in any case and entries too long to be one", () => {
+    expect(
+      resolveCuratedPark({
+        curatedAbbreviations: "PHL, phl, Phantasialand Brühl",
+      }).abbreviations,
+    ).toEqual(["PHL"]);
+  });
+
+  it("keeps at most five", () => {
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: "A, B, C, D, E, F" })
+        .abbreviations,
+    ).toEqual(["A", "B", "C", "D", "E"]);
   });
 });
 
