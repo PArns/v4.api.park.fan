@@ -166,11 +166,25 @@ describe("OAuthAuthorizationService", () => {
     });
 
     it("knows no start for a request parked before the origin was stored", async () => {
-      const { service } = build();
-      const outcome = await service.authorize(validRequest, null);
+      const { service, redis } = build();
+      const outcome = await service.authorize(validRequest, null, {
+        country: "us",
+        browser: "firefox",
+      });
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
+      const strings = (
+        redis as unknown as {
+          strings: Map<string, { value: string; expiresAt: number | null }>;
+        }
+      ).strings;
+      for (const entry of strings.values()) {
+        if (!entry.value.includes('"codeChallenge"')) continue;
+        const parked = JSON.parse(entry.value) as Record<string, unknown>;
+        delete parked.startedFrom;
+        entry.value = JSON.stringify(parked);
+      }
       const summary = await service.describe(id);
       expect(summary.startedFrom).toBeNull();
       expect(summary.viewer).toBeNull();
@@ -338,7 +352,10 @@ describe("OAuthAuthorizationService", () => {
 
     it("hands the code to the registered redirect with state and issuer, and audits it", async () => {
       const { service, audit, clients } = build();
-      const outcome = await service.authorize(validRequest, null);
+      const outcome = await service.authorize(validRequest, null, {
+        country: "us",
+        browser: "firefox",
+      });
       const id = new URL(
         (outcome as { location: string }).location,
       ).searchParams.get("request")!;
@@ -352,6 +369,9 @@ describe("OAuthAuthorizationService", () => {
         expect.objectContaining({
           action: "auth.oauth.grant",
           entityId: CLIENT.clientId,
+          after: expect.objectContaining({
+            startedFrom: { country: "us", browser: "firefox" },
+          }),
         }),
       );
       expect(clients.markUsed).toHaveBeenCalledWith(CLIENT.clientId);

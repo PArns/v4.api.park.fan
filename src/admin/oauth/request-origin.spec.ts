@@ -14,16 +14,15 @@ describe("requestOrigin", () => {
     });
   });
 
-  it("knows neither without an address or a User-Agent", () => {
+  it("knows neither without an address or a recorded User-Agent", () => {
     expect(requestOrigin(geoip, null, undefined)).toEqual({
       country: null,
       browser: null,
     });
+    expect(requestOrigin(geoip, null, null).browser).toBeNull();
   });
 
-  it("reads the first of a repeated User-Agent header", () => {
-    expect(requestOrigin(geoip, null, [SAFARI, "curl/8.0"]).browser).toBe(
-      "safari",
-    );
+  it("counts a request that sent no User-Agent as another browser", () => {
+    expect(requestOrigin(geoip, null, "").browser).toBe("other");
   });
 });

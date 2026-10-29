@@ -31,7 +31,7 @@ writing a `logger` call, a `logToFile` record or a request filter that touches t
 - **Redis counters** key on an address bucket or on an HMAC under the day's key and expire with the
   day ([site statistic](../frontend/site-analytics.md#privacy)); no address is a key's text.
 - The host's and Cloudflare's own logs are outside this API; how long the containers keep theirs
-  and what is still to check there: [container logs](../deployment/coolify.md#container-logs).
+  and how to see what the host logs: [container logs](../deployment/coolify.md#container-logs).
 
 ## Checks
 

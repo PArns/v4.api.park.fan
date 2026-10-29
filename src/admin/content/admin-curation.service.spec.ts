@@ -402,6 +402,28 @@ describe("AdminCurationService", () => {
       expect(second.curatedWebsite).toBeNull();
     });
 
+    it("refuses abbreviations it would not serve as typed", async () => {
+      const { service, parks } = build(null, {
+        id: "park-1",
+        name: "Efteling",
+      });
+      await expect(
+        service.curatePark(
+          "park-1",
+          { fields: { curatedAbbreviations: "EF; EFT" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/commas/);
+      await expect(
+        service.curatePark(
+          "park-1",
+          { fields: { curatedAbbreviations: "EF, Efteling" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/park's name/);
+      expect(parks.update).not.toHaveBeenCalled();
+    });
+
     it("rejects a URL past the length a real address has", async () => {
       const { service } = build(null, { id: "park-1", name: "Phantasialand" });
       await expect(

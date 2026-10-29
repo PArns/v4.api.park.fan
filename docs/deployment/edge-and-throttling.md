@@ -83,11 +83,12 @@ and Cloudflare absorbs most reads before they reach the origin.
 address. While `CF_ORIGIN_SECRET` is empty (the default) every request may. Once it is set, only a
 request whose `CF_ORIGIN_SECRET_HEADER` (default `x-cf-origin-secret`) carries that value may; the
 header is meant to be added by a Cloudflare Transform Rule or cloudflared. Both `.env` examples list
-the two variables. Production does not set them: the API is reached only through a Cloudflare Tunnel
-(Argo), and its published port is not reachable from outside. Cloudflare
-refuses to set a header whose name starts with `x-cf-`, so a Transform Rule needs another name
-(`x-origin-secret`) in `CF_ORIGIN_SECRET_HEADER`. Behind a Cloudflare Tunnel with no published port the
-secret is not needed: every request comes through Cloudflare, which writes `CF-Connecting-IP` itself.
+the two variables. Production does not set them: from the internet the API is reached only through a
+Cloudflare Tunnel (Argo), so every such request comes through Cloudflare, which writes
+`CF-Connecting-IP` itself. The compose file still publishes port 3000 on the host, and a request from
+the host's own network reaches it directly and may name any address; only the secret would close that
+(left open by the operator, 2026-10-29). Cloudflare refuses to set a header whose name starts with
+`x-cf-`, so a Transform Rule needs another name (`x-origin-secret`) in `CF_ORIGIN_SECRET_HEADER`.
 
 | Reader                                                                                | Request with a bypass key                                                                                                                                | May name its address                                                                                      | May not    |
 | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- |

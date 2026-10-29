@@ -18,15 +18,18 @@ export interface RequestOrigin {
   browser: BrowserFamily | null;
 }
 
-/** The {@link RequestOrigin} of an address and a User-Agent; neither is kept. */
+/**
+ * The {@link RequestOrigin} of an address and a User-Agent; neither is kept.
+ * A null User-Agent is one nobody recorded and is not compared; an empty one
+ * is a request that sent none, which no browser does, so it counts as `other`.
+ */
 export function requestOrigin(
   geoip: Pick<GeoipService, "lookupCountry">,
   ip: string | null,
-  userAgent: string | string[] | null | undefined,
+  userAgent: string | null | undefined,
 ): RequestOrigin {
-  const agent = Array.isArray(userAgent) ? userAgent[0] : userAgent;
   return {
     country: ip ? geoip.lookupCountry(ip) : null,
-    browser: agent ? parseUserAgent(agent).browser : null,
+    browser: userAgent == null ? null : parseUserAgent(userAgent).browser,
   };
 }

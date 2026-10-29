@@ -383,9 +383,10 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     maxLength: 80,
     hint:
       "Kürzel, unter denen der Park gesucht wird, durch Komma getrennt: EP, " +
-      "PHL, SFGA. Sie stehen auf der Parkseite in der Überschrift hinter dem " +
-      "Namen und im strukturierten Datensatz für Suchmaschinen. Leer lassen, " +
-      "wenn niemand den Park so nennt.",
+      "PHL, SFGA. Höchstens fünf, je bis zwölf Zeichen. Sie stehen auf der " +
+      "Parkseite in der Überschrift hinter dem Namen, in der Beschreibung " +
+      "für Suchmaschinen und im strukturierten Datensatz. Leer lassen, wenn " +
+      "niemand den Park so nennt.",
   },
   {
     key: "curatedNoWaitTimesReason",

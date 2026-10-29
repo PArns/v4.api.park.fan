@@ -1,4 +1,5 @@
 import {
+  abbreviationsProblem,
   CURATED_PARK_COLUMNS,
   CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
@@ -279,6 +280,40 @@ describe("resolveAbbreviations", () => {
       resolveCuratedPark({ curatedAbbreviations: "A, B, C, D, E, F" })
         .abbreviations,
     ).toEqual(["A", "B", "C", "D", "E"]);
+  });
+
+  it("drops the park's own name", () => {
+    expect(
+      resolveCuratedPark({ name: "Efteling", curatedAbbreviations: "efteling" })
+        .abbreviations,
+    ).toEqual([]);
+  });
+});
+
+describe("abbreviationsProblem", () => {
+  it("accepts what would be served as typed", () => {
+    expect(
+      abbreviationsProblem({ name: "Europa-Park", curatedAbbreviations: "EP" }),
+    ).toBeNull();
+    expect(abbreviationsProblem({ curatedAbbreviations: null })).toBeNull();
+  });
+
+  it("names what would be dropped or misread", () => {
+    expect(abbreviationsProblem({ curatedAbbreviations: "EP; PHL" })).toMatch(
+      /commas/,
+    );
+    expect(
+      abbreviationsProblem({ curatedAbbreviations: "A, B, C, D, E, F" }),
+    ).toMatch(/At most 5/);
+    expect(
+      abbreviationsProblem({ curatedAbbreviations: "Phantasialand Brühl" }),
+    ).toMatch(/longer than 12/);
+    expect(
+      abbreviationsProblem({
+        name: "Efteling",
+        curatedAbbreviations: "Efteling",
+      }),
+    ).toMatch(/park's name/);
   });
 });
 

@@ -93,7 +93,8 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   20 active ones revokes the oldest.
 - `last_used_at` is written at most once a minute per token.
 - **Audit rows:** `auth.token.create`, `auth.token.revoke`, `auth.oauth.grant` (at the approval,
-  with the redirect host). A reuse or code replay revokes and logs a warning; it has no actor.
+  with the redirect host, the scope and the request's `startedFrom`). A reuse or code replay revokes
+  and logs a warning; it has no actor.
 
 ## Tools
 
@@ -208,22 +209,22 @@ The answer also carries `hourlyFrom`, the day from which a figure that needed th
 
 ## Endpoints
 
-| Method      | Path                                             | Who                                      | Does                                                                                                                                         |
-| ----------- | ------------------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST        | `/v1/mcp`                                        | PAT or OAuth access token                | MCP JSON-RPC, Streamable HTTP, stateless, JSON answers                                                                                       |
-| GET, DELETE | `/v1/mcp`                                        | the same                                 | 405: no server stream, no session                                                                                                            |
-| GET         | `/.well-known/oauth-protected-resource[/v1/mcp]` | public                                   | RFC 9728 metadata                                                                                                                            |
-| GET         | `/.well-known/oauth-authorization-server`        | public                                   | RFC 8414 metadata                                                                                                                            |
-| POST        | `/v1/oauth/register`                             | public                                   | RFC 7591 registration, public clients only                                                                                                   |
-| GET         | `/v1/oauth/authorize`                            | public (browser)                         | validates, parks the request, 302 to the consent page                                                                                        |
-| POST        | `/v1/oauth/token`                                | public client                            | `authorization_code` (PKCE S256), `refresh_token`                                                                                            |
-| POST        | `/v1/oauth/revoke`                               | public client                            | RFC 7009; revokes the whole grant                                                                                                            |
+| Method      | Path                                             | Who                                      | Does                                                                                                                                                  |
+| ----------- | ------------------------------------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST        | `/v1/mcp`                                        | PAT or OAuth access token                | MCP JSON-RPC, Streamable HTTP, stateless, JSON answers                                                                                                |
+| GET, DELETE | `/v1/mcp`                                        | the same                                 | 405: no server stream, no session                                                                                                                     |
+| GET         | `/.well-known/oauth-protected-resource[/v1/mcp]` | public                                   | RFC 9728 metadata                                                                                                                                     |
+| GET         | `/.well-known/oauth-authorization-server`        | public                                   | RFC 8414 metadata                                                                                                                                     |
+| POST        | `/v1/oauth/register`                             | public                                   | RFC 7591 registration, public clients only                                                                                                            |
+| GET         | `/v1/oauth/authorize`                            | public (browser)                         | validates, parks the request, 302 to the consent page                                                                                                 |
+| POST        | `/v1/oauth/token`                                | public client                            | `authorization_code` (PKCE S256), `refresh_token`                                                                                                     |
+| POST        | `/v1/oauth/revoke`                               | public client                            | RFC 7009; revokes the whole grant                                                                                                                     |
 | GET         | `/v1/admin/oauth/requests/:id`                   | session, any role                        | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes), `expiresAt`, `startedFrom` and `viewer` |
-| POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode? }` | `{ redirectTo }` with the code; 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending |
-| POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                        |
-| GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                       |
-| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once                                                                                                      |
-| DELETE      | `/v1/admin/auth/tokens/:id`                      | session; others' owner only              | revokes a PAT or a grant                                                                                                                     |
+| POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode? }` | `{ redirectTo }` with the code; 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending          |
+| POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                                 |
+| GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                                |
+| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once                                                                                                               |
+| DELETE      | `/v1/admin/auth/tokens/:id`                      | session; others' owner only              | revokes a PAT or a grant                                                                                                                              |
 
 The shared pass is refused on every row. The response shapes the frontend reads are in
 [endpoints](endpoints.md#api-tokens-and-the-admin-mcp).
@@ -266,8 +267,11 @@ What was checked when this was built, and where it is enforced:
   a phished approval lands in the approving admin's own claude.ai session or on their own machine.
   The page also warns when the request was started from another country or browser family than the
   admin's: `/v1/oauth/authorize` parks the GeoIP country and the browser family of the browser that
-  started it (`request-origin.ts`, never the address or the User-Agent), and the consent read
-  compares them with the admin's address and the User-Agent the session signed in with.
+  started it (`request-origin.ts`, never the address or the User-Agent; no User-Agent counts as
+  another browser), the consent read returns them beside the same two facts of the admin's address
+  and the User-Agent the session signed in with, and the page compares them. Whoever starts the
+  request chooses both facts (a VPN exit, a copied User-Agent), so the warning catches a careless
+  phish and proves nothing about a careful one; the redirect limits above are the control.
 - **DCR abuse:** 10 registrations per address bucket (IPv4, IPv6 /64) and hour (Redis) plus 10 a
   minute (throttler), names stripped of control, bidi, zero-width, separator, filler and tag
   characters (`stripInvisibleCharacters`) and cut at 100, at most 10 redirect URIs. Registrations

@@ -77,12 +77,13 @@ export class OAuthController {
   ): Promise<void> {
     // This request comes from the browser that started the connection, so
     // its country and browser are what the consent page compares with the
-    // admin's.
+    // admin's. A missing User-Agent is passed as an empty one: here it is a
+    // fact about the starter, not a gap in what was recorded.
     const ip = getRateLimitIp(request);
     const outcome = await this.authorization.authorize(
       query,
       addressBucket(ip),
-      requestOrigin(this.geoip, ip, request.headers["user-agent"]),
+      requestOrigin(this.geoip, ip, request.headers["user-agent"] ?? ""),
     );
     if (outcome.kind === "error-page") {
       sendAuthorizeErrorPage(response, outcome.message);

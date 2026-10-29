@@ -210,19 +210,29 @@ export function resolveArticleDe(park: CuratedParkSource): string | null {
 const MAX_ABBREVIATIONS = 5;
 const MAX_ABBREVIATION_LENGTH = 12;
 
+/** The name the park is shown under: the curated one, else the synced one. */
+function resolveCuratedName(park: CuratedParkSource): string {
+  return cleaned(park.curatedName) ?? park.name ?? "";
+}
+
+function abbreviationParts(park: CuratedParkSource): string[] {
+  return (park.curatedAbbreviations ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 /**
  * The curated abbreviations as a list: split at commas, trimmed, duplicates
- * (any case) and over-long entries dropped.
+ * (any case), over-long entries and the park's own name dropped, which would
+ * read "Efteling (Efteling)".
  */
 export function resolveAbbreviations(park: CuratedParkSource): string[] {
-  const seen = new Set<string>();
+  const seen = new Set([resolveCuratedName(park).toLowerCase()]);
   const result: string[] = [];
-  for (const part of (park.curatedAbbreviations ?? "").split(",")) {
-    const value = part.trim();
+  for (const value of abbreviationParts(park)) {
     const key = value.toLowerCase();
-    if (!value || value.length > MAX_ABBREVIATION_LENGTH || seen.has(key)) {
-      continue;
-    }
+    if (value.length > MAX_ABBREVIATION_LENGTH || seen.has(key)) continue;
     seen.add(key);
     result.push(value);
     if (result.length === MAX_ABBREVIATIONS) break;
@@ -230,11 +240,33 @@ export function resolveAbbreviations(park: CuratedParkSource): string[] {
   return result;
 }
 
+/**
+ * Why the curated abbreviations would not be served as typed, or null. The
+ * admin write refuses such a value instead of letting
+ * {@link resolveAbbreviations} drop part of it unseen.
+ */
+export function abbreviationsProblem(park: CuratedParkSource): string | null {
+  if (/[;/|]/.test(park.curatedAbbreviations ?? "")) {
+    return "Separate abbreviations with commas";
+  }
+  const parts = abbreviationParts(park);
+  if (parts.length > MAX_ABBREVIATIONS) {
+    return `At most ${MAX_ABBREVIATIONS} abbreviations`;
+  }
+  const long = parts.find((part) => part.length > MAX_ABBREVIATION_LENGTH);
+  if (long) {
+    return `"${long}" is longer than ${MAX_ABBREVIATION_LENGTH} characters, a name rather than an abbreviation`;
+  }
+  const name = resolveCuratedName(park).toLowerCase();
+  const own = parts.find((part) => part.toLowerCase() === name);
+  return own ? `"${own}" is the park's name` : null;
+}
+
 export function resolveCuratedPark(
   park: CuratedParkSource,
 ): ResolvedCuratedPark {
   return {
-    name: cleaned(park.curatedName) ?? park.name ?? "",
+    name: resolveCuratedName(park),
     parkType: cleaned(park.curatedParkType) ?? park.parkType ?? "THEME_PARK",
     articleDe: resolveArticleDe(park),
     abbreviations: resolveAbbreviations(park),
