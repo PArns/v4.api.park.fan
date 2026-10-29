@@ -851,6 +851,157 @@ export class SiteSearchDto extends WindowDto {
   series: SiteSearchDayDto[];
 }
 
+/** One value of a planner event's property and how often it came. */
+export class SitePlannerCountDto {
+  @ApiProperty({ example: "headliners" }) value: string;
+  @ApiProperty() count: number;
+}
+
+export class SitePlannerFunnelDto {
+  @ApiProperty({
+    description: "planner_opened: the panel went from closed to open.",
+  })
+  opened: number;
+  @ApiProperty({
+    description: "plan_day_started: a park and day got their first block.",
+  })
+  started: number;
+  @ApiProperty({ description: "plan_optimized, every mode." })
+  optimized: number;
+  @ApiProperty({ description: "share_clicked with target trip_plan." })
+  shared: number;
+  @ApiProperty({
+    description:
+      "planner_closed_empty: an opening ended without a first block.",
+  })
+  closedEmpty: number;
+  @ApiProperty({
+    description: "started / opened, at most 1; 0 without an opening.",
+  })
+  startRate: number;
+  @ApiProperty({ description: "optimized / started, at most 1." })
+  optimizeRate: number;
+  @ApiProperty({ description: "shared / started, at most 1." })
+  shareRate: number;
+}
+
+export class SitePlannerSourceDto {
+  @ApiProperty({ example: "park-header" }) source: string;
+  @ApiProperty() opened: number;
+  @ApiProperty({
+    description:
+      "Days started in an opening that came this way (plan_day_started's source).",
+  })
+  started: number;
+  @ApiProperty({ description: "started / opened, at most 1." })
+  startRate: number;
+}
+
+export class SitePlannerItemDto {
+  @ApiProperty({ enum: ["added", "removed"] }) action: "added" | "removed";
+  @ApiProperty({ example: "ride" }) kind: string;
+  @ApiProperty({ example: "search" }) source: string;
+  @ApiProperty() count: number;
+}
+
+export class SitePlannerPageTypeDto {
+  @ApiProperty() pageType: string;
+  @ApiProperty() device: string;
+  @ApiProperty({ description: "Openings from this page type on this device." })
+  opened: number;
+}
+
+export class SitePlannerPointDto extends SitePeriodDto {
+  @ApiProperty() opened: number;
+  @ApiProperty() started: number;
+  @ApiProperty() optimized: number;
+}
+
+export class SitePlannerEntityDto {
+  @ApiProperty({ format: "uuid" }) id: string;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: "Null for an id no table has any more.",
+  })
+  name: string | null;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: "Frontend path without a locale.",
+  })
+  url: string | null;
+  @ApiProperty() count: number;
+}
+
+export class SitePlannerDto extends WindowDto {
+  @ApiProperty({ type: SitePlannerFunnelDto }) funnel: SitePlannerFunnelDto;
+  @ApiProperty({
+    type: [SitePlannerSourceDto],
+    description: "Every way in seen, the most opened first.",
+  })
+  sources: SitePlannerSourceDto[];
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "planner_wizard_step by step: openings that reached it.",
+  })
+  wizardSteps: SitePlannerCountDto[];
+  @ApiProperty({ description: "planner_wizard_finished." })
+  wizardFinished: number;
+  @ApiProperty({ description: "Of those, with the headliners laid out." })
+  wizardWithHeadliners: number;
+  @ApiProperty({
+    type: [SitePlannerItemDto],
+    description:
+      "plan_item_added and plan_item_removed by kind and source, the most first.",
+  })
+  items: SitePlannerItemDto[];
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "plan_optimized by mode.",
+  })
+  optimized: SitePlannerCountDto[];
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "planner_fit_opened by source.",
+  })
+  fitOpened: SitePlannerCountDto[];
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "planner_fit_lever by lever.",
+  })
+  fitLevers: SitePlannerCountDto[];
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "planner_undo by source.",
+  })
+  undo: SitePlannerCountDto[];
+  @ApiProperty({ description: "planner_day_cleared." }) dayCleared: number;
+  @ApiProperty({
+    type: [SitePlannerCountDto],
+    description: "planner_shared_opened by outcome.",
+  })
+  sharedOpened: SitePlannerCountDto[];
+  @ApiProperty({ description: "planner_shared_adopted." })
+  sharedAdopted: number;
+  @ApiProperty({ description: "planner_push_on." }) pushOn: number;
+  @ApiProperty({ type: [SitePlannerPageTypeDto] })
+  byPageTypeAndDevice: SitePlannerPageTypeDto[];
+  @ApiProperty({ type: [SitePlannerPointDto] }) series: SitePlannerPointDto[];
+  @ApiProperty({
+    type: [SitePlannerEntityDto],
+    description:
+      "Parks by days started (plan_day_started's entity), the most first.",
+  })
+  topParks: SitePlannerEntityDto[];
+  @ApiProperty({
+    type: [SitePlannerEntityDto],
+    description:
+      "Rides by times added (plan_item_added's entity), the most first.",
+  })
+  topRides: SitePlannerEntityDto[];
+}
+
 export class SiteBlockedEventDto {
   @ApiProperty() name: string;
   @ApiProperty({ example: "2026-10-28T07:12:00.000Z" }) blockedAt: string;

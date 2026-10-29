@@ -60,6 +60,7 @@ import {
   SiteNotFoundDto,
   SiteNotFoundQueryDto,
   SiteOverviewDto,
+  SitePlannerDto,
   SiteSearchDto,
   SiteTrafficCrosstabDto,
   SiteTrafficCrosstabQueryDto,
@@ -273,6 +274,17 @@ export class AdminSiteAnalyticsController {
   @ApiResponse({ status: 503, description: REPORT_BUSY })
   search(@Query() query: SiteAnalyticsQueryDto): Promise<SiteSearchDto> {
     return this.analytics.search(query);
+  }
+
+  @Get("planner")
+  @ApiOperation({
+    summary:
+      "How the trip planner is used: funnel, ways in, steps, tools, sharing",
+  })
+  @ApiResponse({ status: 200, type: SitePlannerDto })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
+  planner(@Query() query: SiteAnalyticsQueryDto): Promise<SitePlannerDto> {
+    return this.analytics.planner(query);
   }
 
   @Get("seo/landing-pages")

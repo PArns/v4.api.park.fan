@@ -408,6 +408,7 @@ export class PlanDayService {
 
     const base: PlanDayDto = {
       parkSlug: park.slug,
+      parkId: park.id,
       timezone: park.timezone,
       context,
       tier: PlanDayService.nominalTier(leadDays),
@@ -784,6 +785,7 @@ export class PlanDayService {
       if (known && known.length > 0) {
         out.push({
           showSlug: show.slug,
+          showId: show.id,
           showName: show.name,
           latitude: PlanDayService.coord(show.latitude),
           longitude: PlanDayService.coord(show.longitude),
@@ -809,6 +811,7 @@ export class PlanDayService {
 
       out.push({
         showSlug: show.slug,
+        showId: show.id,
         showName: show.name,
         latitude: PlanDayService.coord(show.latitude),
         longitude: PlanDayService.coord(show.longitude),
@@ -1369,6 +1372,7 @@ export class PlanDayService {
       if (cell) usedCells.add(cell);
       rides.push({
         attractionSlug: attraction.slug,
+        attractionId: attraction.id,
         attractionName: attraction.name,
         land: land.get(attractionId) ?? attraction.landName ?? null,
         hours,
@@ -1815,6 +1819,7 @@ export class PlanDayService {
       if (hours.length === 0) continue;
       rides.push({
         attractionSlug: attraction.slug,
+        attractionId: attraction.id,
         attractionName: attraction.name,
         land: land.get(attractionId) ?? attraction.landName ?? null,
         hours,
@@ -2088,6 +2093,7 @@ export class PlanDayService {
 
       rides.push({
         attractionSlug: attraction.slug,
+        attractionId: attraction.id,
         attractionName: attraction.name,
         land: attraction.landName ?? null,
         hours,

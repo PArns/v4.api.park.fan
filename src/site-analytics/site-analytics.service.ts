@@ -67,6 +67,7 @@ import type {
   SiteEventDetailDto,
   SiteEventsDto,
   SiteOverviewDto,
+  SitePlannerDto,
   SiteSearchDto,
   SiteTotalsDto,
   SiteTrafficCrosstabDto,
@@ -84,6 +85,33 @@ export const SEARCH_EVENTS = {
 
 /** The position buckets the frontend sends, in their order. */
 const SEARCH_POSITIONS = ["1", "2", "3", "4-5", "6-10", "11+"];
+
+/**
+ * The trip planner's events, as the frontend's funnel sends them
+ * (`lib/analytics/planner-funnel.ts`); `share_clicked` with
+ * `target=trip_plan` is its sharing.
+ */
+export const PLANNER_EVENTS = {
+  opened: "planner_opened",
+  started: "plan_day_started",
+  optimized: "plan_optimized",
+  closedEmpty: "planner_closed_empty",
+  wizardStep: "planner_wizard_step",
+  wizardFinished: "planner_wizard_finished",
+  itemAdded: "plan_item_added",
+  itemRemoved: "plan_item_removed",
+  fitOpened: "planner_fit_opened",
+  fitLever: "planner_fit_lever",
+  undo: "planner_undo",
+  dayCleared: "planner_day_cleared",
+  sharedOpened: "planner_shared_opened",
+  sharedAdopted: "planner_shared_adopted",
+  pushOn: "planner_push_on",
+  share: "share_clicked",
+} as const;
+
+/** How many parks and rides the planner report ranks. */
+const PLANNER_TOP_ENTITIES = 20;
 
 /** The label of an empty value in a crosstab or a property list. */
 const NONE = "(none)";
@@ -777,6 +805,264 @@ export class SiteAnalyticsService {
         row: query.row,
         col: query.col,
         ...foldCrosstab(cells, query.row, query.col, window),
+      };
+    });
+  }
+
+  /**
+   * How the trip planner is used, over its events: the funnel from an
+   * opening to a started, optimised and shared day with its rates; every way
+   * in with the days it led to; the wizard's steps; blocks added and removed
+   * by kind and source; the tools; sharing and push; openings by kind of
+   * page and device and per period; the parks and rides planned most. Three
+   * statements: the properties summed over the window, the openings drawn,
+   * and the entities.
+   */
+  async planner(
+    query: SiteAnalyticsQuery,
+    now = new Date(),
+  ): Promise<SitePlannerDto> {
+    return this.runner.run(async () => {
+      const window = siteAnalyticsWindow(query, now);
+      refuseFiltersBeyond(window, "The planner report", EVENT_DIMS);
+      const names = Object.values(PLANNER_EVENTS);
+      const drawn = [
+        PLANNER_EVENTS.opened,
+        PLANNER_EVENTS.started,
+        PLANNER_EVENTS.optimized,
+      ];
+      const ranked = [PLANNER_EVENTS.started, PLANNER_EVENTS.itemAdded];
+      const read = async (
+        events: readonly string[],
+        needed: string[],
+        collapse: boolean,
+        select: (namesParam: string) => string,
+      ) => {
+        const params = new SqlParams();
+        const namesParam = params.add(events);
+        const source = await rowsOf(
+          this.rolled,
+          "events",
+          params,
+          window,
+          "current",
+          needed,
+          { collapse },
+        );
+        return {
+          sql: `${select(namesParam)} FROM ${source.from}
+                 WHERE name = ANY(${namesParam}::text[]) AND ${source.where}`,
+          params,
+        };
+      };
+      const [props, opened, entities] = await Promise.all([
+        read(
+          names,
+          ["name", "props_key"],
+          true,
+          () => `SELECT name, props, count`,
+        ),
+        read(
+          drawn,
+          ["name", "page_type", "device"],
+          false,
+          () =>
+            `SELECT name, page_type, device, ${periodOf(window.hourly)} AS period, count`,
+        ),
+        read(
+          ranked,
+          ["name", "entity"],
+          true,
+          () => `SELECT name, entity, count`,
+        ),
+      ]);
+      const [propRows, openedRows, entityRows]: [
+        Array<{ name: string; props: Record<string, string>; count: Count }>,
+        Array<{
+          name: string;
+          page_type: string | null;
+          device: string | null;
+          period: string | null;
+          count: Count;
+        }>,
+        Array<{ name: string; entity: string | null; count: Count }>,
+      ] = await Promise.all([
+        this.runner.query(
+          `SELECT name, props, SUM(count) AS count FROM (${props.sql}) s
+            GROUP BY name, props`,
+          props.params.values,
+        ),
+        this.runner.query(
+          `SELECT name, page_type, device, period, SUM(count) AS count
+             FROM (${opened.sql}) s
+            GROUP BY GROUPING SETS ((name, page_type, device), (name, period))`,
+          opened.params.values,
+        ),
+        this.runner.query(
+          `SELECT name, entity::text AS entity, SUM(count) AS count
+             FROM (${entities.sql}) s
+            WHERE entity IS NOT NULL
+            GROUP BY name, entity`,
+          entities.params.values,
+        ),
+      ]);
+
+      // Each event's count by one property's value; `total` over all values.
+      const byProp = (name: string, prop: string) => {
+        const counts = new Map<string, number>();
+        for (const row of propRows) {
+          if (row.name !== name) continue;
+          addTo(counts, row.props?.[prop] ?? "", num(row.count));
+        }
+        return counts;
+      };
+      const total = (name: string) =>
+        propRows
+          .filter((row) => row.name === name)
+          .reduce((sum, row) => sum + num(row.count), 0);
+      const list = (name: string, prop: string) =>
+        byCountDesc(
+          [...byProp(name, prop)].map(([value, count]) => ({
+            value: value || NONE,
+            count,
+          })),
+          (item) => item.count,
+          (item) => item.value,
+        );
+
+      const openedTotal = total(PLANNER_EVENTS.opened);
+      const startedTotal = total(PLANNER_EVENTS.started);
+      const optimizedTotal = total(PLANNER_EVENTS.optimized);
+      const shared =
+        byProp(PLANNER_EVENTS.share, "target").get("trip_plan") ?? 0;
+      const openedBySource = byProp(PLANNER_EVENTS.opened, "source");
+      const startedBySource = byProp(PLANNER_EVENTS.started, "source");
+      const items = (["added", "removed"] as const).flatMap((action) => {
+        const counts = new Map<string, number>();
+        const name =
+          action === "added"
+            ? PLANNER_EVENTS.itemAdded
+            : PLANNER_EVENTS.itemRemoved;
+        for (const row of propRows) {
+          if (row.name !== name) continue;
+          const key = `${row.props?.kind ?? ""}|${row.props?.source ?? ""}`;
+          addTo(counts, key, num(row.count));
+        }
+        return [...counts].map(([key, count]) => {
+          const [kind, source] = key.split("|");
+          return { action, kind: kind || NONE, source: source || NONE, count };
+        });
+      });
+      const headliners = byProp(PLANNER_EVENTS.wizardFinished, "headliners");
+
+      const series = new Map<string, number>();
+      const pageTypes: Array<{
+        pageType: string;
+        device: string;
+        opened: number;
+      }> = [];
+      for (const row of openedRows) {
+        if (row.period !== null) {
+          const start = periodStartOf(
+            periodText(row.period, window.hourly) as string,
+            window.interval,
+          );
+          addTo(series, `${start}|${row.name}`, num(row.count));
+        } else if (
+          row.name === PLANNER_EVENTS.opened &&
+          row.page_type !== null &&
+          row.device !== null
+        ) {
+          pageTypes.push({
+            pageType: row.page_type,
+            device: row.device,
+            opened: num(row.count),
+          });
+        }
+      }
+
+      const named = await this.entityNames.resolve(
+        entityRows.flatMap((row) => (row.entity ? [row.entity] : [])),
+      );
+      const top = (event: string, kind: "park" | "attraction") =>
+        byCountDesc(
+          entityRows
+            .filter(
+              (row) =>
+                row.name === event &&
+                row.entity &&
+                (named.get(row.entity)?.kind ?? kind) === kind,
+            )
+            .map((row) => {
+              const entity = named.get(row.entity as string);
+              return {
+                id: row.entity as string,
+                name: entity?.name ?? null,
+                url: entity?.url ?? null,
+                count: num(row.count),
+              };
+            }),
+          (item) => item.count,
+          (item) => item.id,
+        ).slice(0, PLANNER_TOP_ENTITIES);
+
+      return {
+        ...echo(window),
+        funnel: {
+          opened: openedTotal,
+          started: startedTotal,
+          optimized: optimizedTotal,
+          shared,
+          closedEmpty: total(PLANNER_EVENTS.closedEmpty),
+          // A day can be started without the panel open (a ride page's
+          // button), and an optimisation or a share repeated: a rate stops at 1.
+          startRate: Math.min(1, rate(startedTotal, openedTotal)),
+          optimizeRate: Math.min(1, rate(optimizedTotal, startedTotal)),
+          shareRate: Math.min(1, rate(shared, startedTotal)),
+        },
+        sources: byCountDesc(
+          [...openedBySource].map(([source, count]) => {
+            const started = startedBySource.get(source) ?? 0;
+            return {
+              source: source || NONE,
+              opened: count,
+              started,
+              startRate: Math.min(1, rate(started, count)),
+            };
+          }),
+          (item) => item.opened,
+          (item) => item.source,
+        ),
+        wizardSteps: list(PLANNER_EVENTS.wizardStep, "step"),
+        wizardFinished: total(PLANNER_EVENTS.wizardFinished),
+        wizardWithHeadliners: headliners.get("true") ?? 0,
+        items: byCountDesc(
+          items,
+          (item) => item.count,
+          (item) => `${item.action}|${item.kind}|${item.source}`,
+        ),
+        optimized: list(PLANNER_EVENTS.optimized, "mode"),
+        fitOpened: list(PLANNER_EVENTS.fitOpened, "source"),
+        fitLevers: list(PLANNER_EVENTS.fitLever, "lever"),
+        undo: list(PLANNER_EVENTS.undo, "source"),
+        dayCleared: total(PLANNER_EVENTS.dayCleared),
+        sharedOpened: list(PLANNER_EVENTS.sharedOpened, "outcome"),
+        sharedAdopted: total(PLANNER_EVENTS.sharedAdopted),
+        pushOn: total(PLANNER_EVENTS.pushOn),
+        byPageTypeAndDevice: byCountDesc(
+          pageTypes,
+          (item) => item.opened,
+          (item) => `${item.pageType}|${item.device}`,
+        ),
+        series: seriesPeriods(window, now).map((point) => ({
+          ...pointOf(point),
+          opened: series.get(`${point.day}|${PLANNER_EVENTS.opened}`) ?? 0,
+          started: series.get(`${point.day}|${PLANNER_EVENTS.started}`) ?? 0,
+          optimized:
+            series.get(`${point.day}|${PLANNER_EVENTS.optimized}`) ?? 0,
+        })),
+        topParks: top(PLANNER_EVENTS.started, "park"),
+        topRides: top(PLANNER_EVENTS.itemAdded, "attraction"),
       };
     });
   }

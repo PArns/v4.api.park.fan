@@ -132,6 +132,7 @@ against these rules.
 | `analytics_event`            | one event: props with top values, combinations, page types, devices, entities                                                                                                           | `SiteAnalyticsService.event`                     |
 | `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where                                                                                          | `SiteAnalyticsService.search`                    |
+| `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
@@ -145,8 +146,10 @@ against these rules.
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
 (`hour`, `day`, `week`, `month`), `locale`, and `filters` as `[{ dim, value }]`, which become the
-reports' `filter=<dim>:<value>`. The tools over events (`analytics_events`, `analytics_event`,
-`analytics_crosstab`, `search_report`) take only the event's dimensions (`eventWindowInput`), and
+reports' `filter=<dim>:<value>`, and `datacenter` (`exclude` by default, `include`, `only`;
+[data centres](../frontend/site-analytics.md#data-centres)). The tools over events (`analytics_events`,
+`analytics_event`, `analytics_crosstab`, `search_report`, `planner_report`) take only the event's
+dimensions (`eventWindowInput`), and
 `seo_not_found` only the page view's (`pageWindowInput`, with `browser_language`): their rows carry
 no visit dimension, so the schema does not offer one rather than the report refusing it. Their
 descriptions carry what a model must know to read the numbers: rows are UTC hours, visitors are
@@ -186,7 +189,8 @@ the count that decides, and the measures that add up.
 - **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
   page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,
   events), `search_report` (surfaces, openings by page type and device, result types, positions, browse
-  items), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
+  items), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
+  device, the parks and rides planned most), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
   referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per
   language). `seo_uncovered` lists our own parks and rides that had no search visit at all, so there is no
   count in it to fold; `gsc_*` (Google drops rare queries itself) and `audit_log` are as they were.

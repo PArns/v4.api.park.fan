@@ -1458,4 +1458,151 @@ describe("SiteAnalyticsService", () => {
       ]);
     });
   });
+
+  describe("planner", () => {
+    const PARK = "11111111-1111-4111-8111-111111111111";
+    const RIDE = "22222222-2222-4222-8222-222222222222";
+    const GONE = "33333333-3333-4333-8333-333333333333";
+    const props = (
+      name: string,
+      values: Record<string, string>,
+      count: number,
+    ) => ({
+      name,
+      props: values,
+      count: String(count),
+    });
+
+    it("draws the funnel with capped rates, each way in with the days it led to, the steps, blocks, tools and the planned parks and rides", async () => {
+      routes = [
+        [
+          "SELECT name, props, SUM(count)",
+          [
+            props("planner_opened", { source: "header" }, 30),
+            props("planner_opened", { source: "park-header" }, 10),
+            props("plan_day_started", { source: "header" }, 6),
+            props("plan_day_started", { source: "park-header" }, 4),
+            // A day started from a ride page's button, with the panel shut.
+            props("plan_day_started", { source: "none" }, 2),
+            props("plan_optimized", { mode: "day" }, 3),
+            props("plan_optimized", { mode: "headliners" }, 1),
+            props("share_clicked", { target: "trip_plan" }, 2),
+            props("share_clicked", { target: "whatsapp" }, 9),
+            props("planner_closed_empty", {}, 28),
+            props("planner_wizard_step", { step: "park" }, 12),
+            props("planner_wizard_step", { step: "date" }, 8),
+            props("planner_wizard_finished", { headliners: "true" }, 3),
+            props("planner_wizard_finished", { headliners: "false" }, 2),
+            props("plan_item_added", { kind: "ride", source: "search" }, 7),
+            props(
+              "plan_item_added",
+              { kind: "show", source: "show_picker" },
+              2,
+            ),
+            props("plan_item_removed", { kind: "ride", source: "block" }, 1),
+            props("planner_fit_lever", { lever: "drop_block" }, 1),
+            props("planner_undo", { source: "optimize" }, 1),
+            props("planner_day_cleared", {}, 1),
+            props("planner_shared_opened", { outcome: "ready" }, 4),
+            props("planner_shared_adopted", {}, 3),
+            props("planner_push_on", {}, 2),
+          ],
+        ],
+        [
+          "GROUPING SETS ((name, page_type, device), (name, period))",
+          [
+            row(
+              { name: "planner_opened", page_type: "park", device: "mobile" },
+              25,
+            ),
+            row(
+              { name: "planner_opened", page_type: "home", device: "desktop" },
+              15,
+            ),
+            row({ name: "planner_opened", period: "2026-10-28" }, 40),
+            row({ name: "plan_day_started", period: "2026-10-28" }, 12),
+          ],
+        ],
+        [
+          "SELECT name, entity::text AS entity",
+          [
+            { name: "plan_day_started", entity: PARK, count: "10" },
+            { name: "plan_item_added", entity: RIDE, count: "7" },
+            { name: "plan_item_added", entity: GONE, count: "1" },
+          ],
+        ],
+      ];
+      resolve.mockResolvedValue(
+        new Map([
+          [PARK, { kind: "park", name: "Phantasialand", url: "/parks/p" }],
+          [RIDE, { kind: "attraction", name: "Taron", url: "/parks/p/taron" }],
+        ]),
+      );
+
+      const result = await service.planner({ days: 2 }, NOW);
+
+      expect(result.funnel).toEqual({
+        opened: 40,
+        started: 12,
+        optimized: 4,
+        shared: 2,
+        closedEmpty: 28,
+        startRate: 0.3,
+        optimizeRate: 0.3333,
+        shareRate: 0.1667,
+      });
+      expect(result.sources).toEqual([
+        { source: "header", opened: 30, started: 6, startRate: 0.2 },
+        { source: "park-header", opened: 10, started: 4, startRate: 0.4 },
+      ]);
+      expect(result.wizardSteps).toEqual([
+        { value: "park", count: 12 },
+        { value: "date", count: 8 },
+      ]);
+      expect(result).toMatchObject({
+        wizardFinished: 5,
+        wizardWithHeadliners: 3,
+        dayCleared: 1,
+        sharedAdopted: 3,
+        pushOn: 2,
+        optimized: [
+          { value: "day", count: 3 },
+          { value: "headliners", count: 1 },
+        ],
+        sharedOpened: [{ value: "ready", count: 4 }],
+      });
+      expect(result.items).toEqual([
+        { action: "added", kind: "ride", source: "search", count: 7 },
+        { action: "added", kind: "show", source: "show_picker", count: 2 },
+        { action: "removed", kind: "ride", source: "block", count: 1 },
+      ]);
+      expect(result.byPageTypeAndDevice).toEqual([
+        { pageType: "park", device: "mobile", opened: 25 },
+        { pageType: "home", device: "desktop", opened: 15 },
+      ]);
+      expect(result.series[result.series.length - 1]).toMatchObject({
+        day: "2026-10-28",
+        opened: 40,
+        started: 12,
+        optimized: 0,
+      });
+      expect(result.topParks).toEqual([
+        { id: PARK, name: "Phantasialand", url: "/parks/p", count: 10 },
+      ]);
+      // A ride no table has any more keeps its count, without a name.
+      expect(result.topRides).toEqual([
+        { id: RIDE, name: "Taron", url: "/parks/p/taron", count: 7 },
+        { id: GONE, name: null, url: null, count: 1 },
+      ]);
+      expect(sqlOf("SELECT name, props, SUM(count)")[0]).toContain(
+        "network <> 'datacenter'",
+      );
+    });
+
+    it("refuses a visit dimension, which events do not carry", async () => {
+      await expect(
+        service.planner({ days: 2, filter: ["channel:search"] }, NOW),
+      ).rejects.toThrow(/do not carry channel/);
+    });
+  });
 });

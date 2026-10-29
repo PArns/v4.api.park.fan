@@ -254,6 +254,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
         "analytics_traffic_crosstab",
         "analytics_live",
         "search_report",
+        "planner_report",
         "seo_landing_pages",
         "seo_trends",
         "seo_not_found",

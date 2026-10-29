@@ -959,6 +959,57 @@ describe("Site analytics (e2e)", () => {
     }
   });
 
+  it("reports the planner's funnel, ways in, blocks and planned parks from its events", async () => {
+    const park = await savePark();
+    await beacon([
+      event("planner_opened", { source: "park-header" }),
+      event("planner_wizard_step", { step: "park" }, { entity: park.id }),
+      event("plan_day_started", { source: "park-header" }, { entity: park.id }),
+      event("plan_item_added", { kind: "ride", source: "search" }),
+      event("plan_optimized", { mode: "headliners" }, { entity: park.id }),
+      event("share_clicked", { target: "trip_plan" }),
+    ]).expect(204);
+    await beacon(
+      [
+        event("planner_opened", { source: "header" }),
+        event("planner_closed_empty", {}),
+      ],
+      "203.0.113.8",
+    ).expect(204);
+    await flush();
+
+    const report = await admin("/v1/admin/analytics/planner?days=7").expect(
+      200,
+    );
+    expect(report.body.funnel).toEqual({
+      opened: 2,
+      started: 1,
+      optimized: 1,
+      shared: 1,
+      closedEmpty: 1,
+      startRate: 0.5,
+      optimizeRate: 1,
+      shareRate: 1,
+    });
+    expect(report.body.sources).toEqual([
+      { source: "header", opened: 1, started: 0, startRate: 0 },
+      { source: "park-header", opened: 1, started: 1, startRate: 1 },
+    ]);
+    expect(report.body.items).toEqual([
+      { action: "added", kind: "ride", source: "search", count: 1 },
+    ]);
+    expect(report.body.optimized).toEqual([{ value: "headliners", count: 1 }]);
+    expect(report.body.topParks).toEqual([
+      expect.objectContaining({ id: park.id, name: "Phantasialand", count: 1 }),
+    ]);
+    expect(report.body.byPageTypeAndDevice).toEqual([
+      expect.objectContaining({ pageType: "home", opened: 2 }),
+    ]);
+    await admin("/v1/admin/analytics/planner?filter=channel:search").expect(
+      400,
+    );
+  });
+
   it("caps distinct names per day, admits yesterday's, and folds a flood of property combinations into _overflow", async () => {
     const collector = app.get(SiteAnalyticsCollectService);
     const day = utcDay(new Date());
@@ -1651,6 +1702,7 @@ describe("Site analytics (e2e)", () => {
             `${base}/events/search_opened/crosstab?row=prop:surface&col=browser&${q}`,
           );
           list.push(`${base}/search?${q}`);
+          list.push(`${base}/planner?${q}`);
         }
       }
       return list;

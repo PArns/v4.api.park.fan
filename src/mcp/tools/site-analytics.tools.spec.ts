@@ -8,6 +8,7 @@ import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
 import { analyticsTrafficCrosstabTool } from "./analytics-traffic-crosstab.tool";
 import { analyticsLiveTool } from "./analytics-live.tool";
 import { searchReportTool } from "./search-report.tool";
+import { plannerReportTool } from "./planner-report.tool";
 import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
 import { seoNotFoundTool } from "./seo-not-found.tool";
@@ -604,6 +605,75 @@ describe("site statistic tools", () => {
       }),
     ]);
     expect(visitorData(answer).bySurfaceAndPageType).toHaveLength(1);
+    expect(visitorData(answer)).not.toHaveProperty("series");
+  });
+
+  it("planner_report: rounds the rates, folds small lists, names the planned parks and caps them", async () => {
+    const count = (value: string, n: number) => ({ value, count: n });
+    const service = {
+      planner: jest.fn(async () => ({
+        ...WINDOW,
+        funnel: {
+          opened: 40,
+          started: 12,
+          optimized: 4,
+          shared: 2,
+          closedEmpty: 28,
+          startRate: 0.30001,
+          optimizeRate: 0.33333,
+          shareRate: 0.16667,
+        },
+        sources: [
+          { source: "header", opened: 30, started: 6, startRate: 0.2 },
+          { source: "kids-page", opened: 2, started: 1, startRate: 0.5 },
+        ],
+        wizardSteps: [count("park", 12), count("date", 8)],
+        wizardFinished: 5,
+        wizardWithHeadliners: 3,
+        items: [
+          { action: "added", kind: "ride", source: "search", count: 7 },
+          { action: "added", kind: "show", source: "show_picker", count: 6 },
+        ],
+        optimized: [count("day", 30)],
+        fitOpened: [],
+        fitLevers: [],
+        undo: [],
+        dayCleared: 1,
+        sharedOpened: [count("ready", 9)],
+        sharedAdopted: 3,
+        pushOn: 2,
+        byPageTypeAndDevice: [],
+        series: [{ day: "2026-10-28", opened: 40, started: 12, optimized: 4 }],
+        topParks: [
+          { id: "p1", name: "Phantasialand", url: "/parks/p", count: 10 },
+          { id: "p2", name: "Efteling", url: "/parks/e", count: 8 },
+        ],
+        topRides: [],
+      })),
+    };
+    const answer = await run(
+      plannerReportTool,
+      { limit: 1, datacenter: "include" },
+      service,
+    );
+    expect(service.planner).toHaveBeenCalledWith(
+      expect.objectContaining({ datacenter: "include" }),
+    );
+    expect(answer).toMatchObject({
+      datacenter: "exclude",
+      funnel: { startRate: 0.3, optimizeRate: 0.333, shareRate: 0.167 },
+      wizardFinished: 5,
+      pushOn: 2,
+    });
+    // A way in opened twice is folded: too few to tell anyone apart.
+    expect(visitorData(answer).sources).toEqual([
+      expect.objectContaining({ source: "header", startRate: 0.2 }),
+      expect.objectContaining({ source: "(other)" }),
+    ]);
+    expect(visitorData(answer).topParks).toEqual([
+      { id: "p1", name: "Phantasialand", url: "/parks/p", count: 10 },
+    ]);
+    expect(visitorData(answer).items).toHaveLength(1);
     expect(visitorData(answer)).not.toHaveProperty("series");
   });
 
