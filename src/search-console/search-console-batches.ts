@@ -1,4 +1,8 @@
 import type { DataSource } from "typeorm";
+import {
+  DEFAULT_SEARCH_TYPE,
+  type GscSearchType,
+} from "./search-console.constants";
 
 /** An import of one day, as `search_console_batches` holds it. */
 export interface CurrentBatch {
@@ -11,13 +15,14 @@ export interface CurrentBatch {
 }
 
 /**
- * The newest batch of every day in the range, by day: the day's data. A day
- * imported again is a newer batch, and nothing reads an older one.
+ * The newest batch of every day in the range for one type, by day: the day's
+ * data. A day imported again is a newer batch, and nothing reads an older one.
  */
 export async function currentBatches(
   db: Pick<DataSource, "query">,
   from: string,
   to: string,
+  type: GscSearchType = DEFAULT_SEARCH_TYPE,
 ): Promise<Map<string, CurrentBatch>> {
   const rows: Array<{
     id: number;
@@ -30,9 +35,9 @@ export async function currentBatches(
   }> = await db.query(
     `SELECT DISTINCT ON (day) id, format, day::text AS day, rows, clicks, impressions, position_sum
        FROM search_console_batches
-      WHERE day BETWEEN $1::date AND $2::date
+      WHERE day BETWEEN $1::date AND $2::date AND search_type = $3
       ORDER BY day, id DESC`,
-    [from, to],
+    [from, to, type],
   );
   return new Map(
     rows.map((row) => [
@@ -56,13 +61,15 @@ export async function currentBatches(
 export async function lastDataDay(
   db: Pick<DataSource, "query">,
   format: number,
+  type: GscSearchType = DEFAULT_SEARCH_TYPE,
 ): Promise<string | null> {
   const [row]: Array<{ day: string | null }> = await db.query(
     `SELECT MAX(day)::text AS day
        FROM (SELECT DISTINCT ON (day) day, rows, format
-               FROM search_console_batches ORDER BY day, id DESC) b
+               FROM search_console_batches WHERE search_type = $2
+              ORDER BY day, id DESC) b
       WHERE rows > 0 AND format >= $1`,
-    [format],
+    [format, type],
   );
   return row?.day ?? null;
 }

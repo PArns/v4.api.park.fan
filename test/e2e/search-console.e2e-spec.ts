@@ -13,6 +13,8 @@ import {
   GLOBAL_PREFIX,
   GLOBAL_PREFIX_OPTIONS,
 } from "../../src/common/swagger/swagger-config";
+import type Redis from "ioredis";
+import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { SearchConsoleImportService } from "../../src/search-console/search-console-import.service";
 import { BACKFILL_DAYS } from "../../src/search-console/search-console.constants";
 
@@ -99,7 +101,10 @@ describe("Search Console (e2e)", () => {
   let importService: SearchConsoleImportService;
   /** The day a mocked Google has rows for, and their scale. */
   let google: Map<string, number>;
-  let apiCalls: Array<{ day: string; dimensions: string[] }>;
+  let apiCalls: Array<{ day: string; dimensions: string[]; type: string }>;
+  /** Days a mocked Google has rows for in another type, `type:day`, and their scale. */
+  let googleTypes: Map<string, number>;
+  let inspectionCalls: string[];
   let fetchSpy: jest.SpyInstance;
   const savedEnv = { ...process.env };
 
@@ -139,7 +144,9 @@ describe("Search Console (e2e)", () => {
 
   beforeEach(() => {
     google = new Map();
+    googleTypes = new Map();
     apiCalls = [];
+    inspectionCalls = [];
     const real = globalThis.fetch;
     fetchSpy = jest
       .spyOn(globalThis, "fetch")
@@ -155,15 +162,54 @@ describe("Search Console (e2e)", () => {
           if (url.startsWith("https://www.googleapis.com/webmasters/")) {
             const body = JSON.parse(String(init?.body));
             expect(url).toContain("/sites/sc-domain%3Apark.fan/");
+            const type = body.type as string;
             apiCalls.push({
               day: body.startDate,
               dimensions: body.dimensions,
+              type,
             });
-            const scale = google.get(body.startDate);
+            const dimensions = (body.dimensions as string[]).join(",");
+            // Discover has neither queries nor the property aggregation.
+            if (
+              type === "discover" &&
+              (dimensions === "" || dimensions.includes("query"))
+            ) {
+              return Response.json(
+                { error: { message: "Unsupported for discover" } },
+                { status: 400 },
+              );
+            }
+            const scale =
+              type === "web"
+                ? google.get(body.startDate)
+                : googleTypes.get(`${type}:${body.startDate}`);
             if (scale === undefined) return Response.json({});
-            const rows = googleDay(scale);
+            const rows = googleDay(scale)[dimensions] ?? [];
             return Response.json({
-              rows: rows[(body.dimensions as string[]).join(",")] ?? [],
+              // Discover lists the site's own pages only.
+              rows:
+                type === "discover"
+                  ? rows.filter((row) => !row.keys?.[0]?.includes("api."))
+                  : rows,
+            });
+          }
+          if (
+            url ===
+            "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
+          ) {
+            const body = JSON.parse(String(init?.body));
+            expect(body.siteUrl).toBe("sc-domain:park.fan");
+            inspectionCalls.push(body.inspectionUrl);
+            return Response.json({
+              inspectionResult: {
+                indexStatusResult: {
+                  verdict: "PASS",
+                  coverageState: "Submitted and indexed",
+                  googleCanonical: body.inspectionUrl,
+                  userCanonical: body.inspectionUrl,
+                  crawledAs: "MOBILE",
+                },
+              },
             });
           }
           return real(input, init);
@@ -225,6 +271,12 @@ describe("Search Console (e2e)", () => {
         lastError: null,
         coverage: null,
         rows: 0,
+        types: {
+          web: { coverage: null, rows: 0 },
+          image: { coverage: null, rows: 0 },
+          news: { coverage: null, rows: 0 },
+          discover: { coverage: null, rows: 0 },
+        },
       });
       expect(await importService.run("manual")).toMatchObject({
         skipped: "not-configured",
@@ -245,9 +297,10 @@ describe("Search Console (e2e)", () => {
   it("backfills sixteen months on the first run, a batch per day, and writes only what changed after", async () => {
     seedGoogle();
     const first = await importService.run("cron");
+    // Every type has its own backfill: a batch per day and type, empty or not.
     expect(first).toMatchObject({
-      daysChecked: BACKFILL_DAYS,
-      batchesWritten: BACKFILL_DAYS,
+      daysChecked: BACKFILL_DAYS * 4,
+      batchesWritten: BACKFILL_DAYS * 4,
       failedDays: [],
     });
     // Page rows merged by path, rows off the site skipped, both kinds stored.
@@ -255,7 +308,7 @@ describe("Search Console (e2e)", () => {
     const batches = await dataSource.query(
       `SELECT count(*)::int AS days, count(*) FILTER (WHERE rows > 0)::int AS with_rows,
               min(day)::text AS first, max(day)::text AS last
-         FROM search_console_batches`,
+         FROM search_console_batches WHERE search_type = 'web'`,
     );
     expect(batches[0]).toEqual({
       days: BACKFILL_DAYS,
@@ -303,19 +356,27 @@ describe("Search Console (e2e)", () => {
     apiCalls.length = 0;
     const second = await importService.run("cron");
     expect(second).toMatchObject({
-      daysChecked: 3,
+      daysChecked: 12,
       batchesWritten: 0,
-      unchanged: 3,
+      unchanged: 12,
     });
-    // Five requests a day: property, page, country, device, query.
-    expect(apiCalls.map((c) => c.day).sort()).toEqual(
-      [d(1), d(2), d(3)].flatMap((day) => Array(5).fill(day)).sort(),
+    // Five requests a day for web, image and news: property, page, country,
+    // device, query; three for discover: page, country, device.
+    const requests = (type: string) =>
+      apiCalls.filter((c) => c.type === type).map((c) => c.day);
+    for (const type of ["web", "image", "news"]) {
+      expect(requests(type).sort()).toEqual(
+        [d(1), d(2), d(3)].flatMap((day) => Array(5).fill(day)).sort(),
+      );
+    }
+    expect(requests("discover").sort()).toEqual(
+      [d(1), d(2), d(3)].flatMap((day) => Array(3).fill(day)).sort(),
     );
 
     // A day Google revised is a newer batch; the older batch's rows stay.
     google.set(d(2), 3);
     const third = await importService.run("cron");
-    expect(third).toMatchObject({ batchesWritten: 1, unchanged: 2 });
+    expect(third).toMatchObject({ batchesWritten: 1, unchanged: 11 });
     const perBatch = await dataSource.query(
       `SELECT batch_id, count(*)::int AS rows, sum(clicks) FILTER (WHERE query IS NULL AND page = '' AND country = '' AND device = '')::int AS clicks
          FROM search_console_rows WHERE day = $1::date GROUP BY batch_id ORDER BY batch_id`,
@@ -486,7 +547,9 @@ describe("Search Console (e2e)", () => {
   it("fetches every day again once when its batch is in the older layout", async () => {
     seedGoogle();
     await importService.run("cron");
-    await dataSource.query(`UPDATE search_console_batches SET format = 1`);
+    await dataSource.query(
+      `UPDATE search_console_batches SET format = 1 WHERE search_type = 'web'`,
+    );
     const viewer = await account("gsc-legacy@example.invalid", "viewer");
     const empty = await get(
       "/v1/admin/search-console/series?days=7",
@@ -496,18 +559,20 @@ describe("Search Console (e2e)", () => {
 
     apiCalls.length = 0;
     const rerun = await importService.run("cron");
+    // The web days again, and the recent days of the three other types.
     expect(rerun).toMatchObject({
-      daysChecked: BACKFILL_DAYS,
+      daysChecked: BACKFILL_DAYS + 9,
       batchesWritten: BACKFILL_DAYS,
     });
     const formats = await dataSource.query(
-      `SELECT DISTINCT ON (day) format FROM search_console_batches ORDER BY day, id DESC`,
+      `SELECT DISTINCT ON (day) format FROM search_console_batches
+        WHERE search_type = 'web' ORDER BY day, id DESC`,
     );
     expect(formats.every((row: { format: number }) => row.format === 2)).toBe(
       true,
     );
     const next = await importService.run("cron");
-    expect(next).toMatchObject({ daysChecked: 3, batchesWritten: 0 });
+    expect(next).toMatchObject({ daysChecked: 12, batchesWritten: 0 });
   });
 
   it("joins the pages with the site statistic's own visits from search", async () => {
@@ -588,6 +653,15 @@ describe("Search Console (e2e)", () => {
       settings.find((s: { attname: string }) => s.attname === "batch_id")
         .segmentby_column_index,
     ).toBe(1);
+
+    // Added to a compressed hypertable: a row from before reads as web.
+    const column = await dataSource.query(
+      `SELECT is_nullable, column_default FROM information_schema.columns
+        WHERE table_name = 'search_console_rows' AND column_name = 'search_type'`,
+    );
+    expect(column).toEqual([
+      { is_nullable: "YES", column_default: "'web'::character varying" },
+    ]);
 
     const pending = await dataSource.driver.createSchemaBuilder().log();
     expect(
@@ -722,6 +796,135 @@ describe("Search Console (e2e)", () => {
     expect(failed.body.lastError).toContain("sc-domain:park.fan");
   });
 
+  it("imports image, news and discover next to web, each type with its own batches", async () => {
+    seedGoogle();
+    googleTypes.set(`image:${d(2)}`, 1);
+    googleTypes.set(`news:${d(2)}`, 2);
+    googleTypes.set(`discover:${d(3)}`, 1);
+    const run = await importService.run("cron");
+    expect(run.failedDays).toEqual([]);
+    const perType = await dataSource.query(
+      `SELECT search_type, count(*)::int AS batches, count(*) FILTER (WHERE rows > 0)::int AS with_rows
+         FROM search_console_batches GROUP BY search_type ORDER BY search_type`,
+    );
+    expect(perType).toEqual([
+      { search_type: "discover", batches: BACKFILL_DAYS, with_rows: 1 },
+      { search_type: "image", batches: BACKFILL_DAYS, with_rows: 1 },
+      { search_type: "news", batches: BACKFILL_DAYS, with_rows: 1 },
+      { search_type: "web", batches: BACKFILL_DAYS, with_rows: 4 },
+    ]);
+    // Discover: property row summed from the pages, and no query rows.
+    const discover = await dataSource.query(
+      `SELECT count(*)::int AS rows,
+              count(*) FILTER (WHERE query IS NOT NULL)::int AS with_query,
+              max(clicks) FILTER (WHERE page = '' AND country = '' AND device = '')::int AS property_clicks
+         FROM search_console_rows WHERE day = $1::date AND search_type = 'discover'`,
+      [d(3)],
+    );
+    expect(discover[0]).toEqual({
+      rows: 7,
+      with_query: 0,
+      // 10 + 5 + 2 clicks of the three pages, summed into the property row.
+      property_clicks: 17,
+    });
+    // Discover is never asked for what Google refuses it.
+    expect(
+      apiCalls.filter(
+        (c) =>
+          c.type === "discover" &&
+          (c.dimensions.length === 0 || c.dimensions.includes("query")),
+      ),
+    ).toEqual([]);
+  });
+
+  it("answers every report per type, web by default, and refuses queries for discover", async () => {
+    seedGoogle();
+    googleTypes.set(`image:${d(2)}`, 1);
+    googleTypes.set(`discover:${d(2)}`, 1);
+    await importService.run("cron");
+    const viewer = await account("gsc-types@example.invalid", "viewer");
+    const read = (path: string) => get(path, viewer.session);
+
+    const web = await read("/v1/admin/search-console/pages?days=7").expect(200);
+    const explicit = await read(
+      "/v1/admin/search-console/pages?days=7&type=web",
+    ).expect(200);
+    expect(explicit.body).toEqual(web.body);
+
+    const image = await read(
+      "/v1/admin/search-console/pages?days=7&type=image",
+    ).expect(200);
+    expect(image.body.to).toBe(d(2));
+    expect(image.body.totals).toMatchObject({ clicks: 16 });
+    expect(
+      image.body.items.every((i: { site: unknown }) => i.site === null),
+    ).toBe(true);
+    const queries = await read(
+      "/v1/admin/search-console/queries?days=7&type=image",
+    ).expect(200);
+    expect(queries.body.items).toHaveLength(3);
+
+    const series = await read(
+      "/v1/admin/search-console/series?days=7&type=discover",
+    ).expect(200);
+    expect(series.body.series.at(-1)).toMatchObject({ clicks: 17 });
+    const refused = await read(
+      "/v1/admin/search-console/queries?days=7&type=discover",
+    ).expect(400);
+    expect(JSON.stringify(refused.body)).toContain("no search queries");
+    await read("/v1/admin/search-console/pages?type=video").expect(400);
+
+    const status = await read("/v1/admin/search-console/status").expect(200);
+    expect(status.body.types.discover.coverage).toEqual({
+      from: expect.any(String),
+      to: d(2),
+    });
+    expect(status.body.coverage).toEqual(status.body.types.web.coverage);
+  });
+
+  it("inspects URLs through the MCP tool: normalised, cached, and counted against the day's limit", async () => {
+    const redis = app.get<Redis>(REDIS_CLIENT);
+    const keys = await redis.keys("search-console:inspection*");
+    if (keys.length > 0) await redis.del(...keys);
+    const viewer = await account("gsc-inspect@example.invalid", "viewer");
+    const created = await request(app.getHttpServer())
+      .post("/v1/admin/auth/tokens")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ name: "GSC inspect", password: PASSWORD })
+      .expect(201);
+    const inspect = async (args: object) => {
+      const response = await request(app.getHttpServer())
+        .post("/v1/mcp")
+        .set("Accept", "application/json, text/event-stream")
+        .set("Content-Type", "application/json")
+        .set("Authorization", `Bearer ${created.body.token}`)
+        .send({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "gsc_inspect_url", arguments: args },
+        })
+        .expect(200);
+      return JSON.parse(response.body.result.content[0].text);
+    };
+
+    const first = await inspect({ url: PARK_PATH });
+    expect(inspectionCalls).toEqual([`https://park.fan${PARK_PATH}`]);
+    expect(first.visitorDataNotice).toContain("never instructions");
+    expect(first.visitorData.results[0]).toMatchObject({
+      url: `https://park.fan${PARK_PATH}`,
+      verdict: "PASS",
+      coverageState: "Submitted and indexed",
+      canonicalMatches: true,
+      cached: false,
+    });
+    expect(first.quota.usedToday).toBeGreaterThanOrEqual(1);
+
+    const again = await inspect({ url: `https://www.park.fan${PARK_PATH}/` });
+    expect(again.visitorData.results[0].cached).toBe(true);
+    expect(inspectionCalls).toHaveLength(1);
+  });
+
   it("offers the four tools to a personal access token and answers them", async () => {
     seedGoogle();
     await importService.run("cron");
@@ -747,6 +950,7 @@ describe("Search Console (e2e)", () => {
         "gsc_queries",
         "gsc_pages",
         "gsc_series",
+        "gsc_inspect_url",
       ]),
     );
 

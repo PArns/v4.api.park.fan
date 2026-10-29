@@ -7,7 +7,7 @@ import {
 } from "typeorm";
 
 /**
- * Search Console's numbers for one day, as one import batch wrote them, at
+ * Search Console's numbers for one day and type, as one import batch wrote them, at
  * four levels: with a `query`, a row per page, query, country and device;
  * without one, complete rows per page (`country` and `device` empty), per
  * country (`page` and `device` empty) or per device (`page` and `country`
@@ -37,6 +37,22 @@ export class SearchConsoleRow {
 
   @Column({ name: "batch_id", type: "integer" })
   batchId: number;
+
+  /**
+   * The Search Console `type` of the batch (`web`, `image`, `news`,
+   * `discover`). Nullable with a default because the table is a compressed
+   * hypertable: that is the form TimescaleDB adds to existing chunks, and a
+   * row from before reads as `web`. Reports never filter on it: the batch
+   * says the type, and they read rows by `batch_id`.
+   */
+  @Column({
+    name: "search_type",
+    type: "varchar",
+    length: 10,
+    nullable: true,
+    default: "web",
+  })
+  searchType: string | null;
 
   /** The page's path on the site: lower case, no origin, query or trailing slash; `''` on a country or device row. */
   @Column({ type: "varchar", length: 820 })

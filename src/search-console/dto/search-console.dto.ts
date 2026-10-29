@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsIn,
@@ -21,10 +26,12 @@ import {
   DEFAULT_REPORT_LIMIT,
   GSC_DEVICES,
   GSC_INTERVALS,
+  GSC_SEARCH_TYPES,
   MAX_PATH_LENGTH,
   MAX_QUERY_LENGTH,
   MAX_REPORT_LIMIT,
   type GscInterval,
+  type GscSearchType,
 } from "../search-console.constants";
 
 /**
@@ -74,6 +81,14 @@ export class SearchConsoleWindowDto {
   locale?: SiteLocale;
 }
 
+/** The `type` parameter of the three reports. */
+const TYPE_FILTER = {
+  enum: GSC_SEARCH_TYPES,
+  default: "web",
+  description:
+    "The Search Console search type: `web` (default), `image`, `news` (the News tab) or `discover`. " +
+    "`discover` has no queries: `queries`, a `query` filter and a country or device filter on `pages` answer 400.",
+};
 const PAGE_FILTER = {
   description:
     "One page: its path (`/de/parks/europe/germany/bruehl/phantasialand`) or its URL; lower-cased, " +
@@ -92,6 +107,11 @@ const COUNTRY_FILTER = {
 const DEVICE_FILTER = { enum: GSC_DEVICES };
 
 export class SearchConsoleQueriesQueryDto extends SearchConsoleWindowDto {
+  @ApiPropertyOptional(TYPE_FILTER)
+  @IsOptional()
+  @IsIn(GSC_SEARCH_TYPES)
+  type?: GscSearchType;
+
   @ApiPropertyOptional(PAGE_FILTER)
   @IsOptional()
   @IsString()
@@ -122,6 +142,11 @@ export class SearchConsoleQueriesQueryDto extends SearchConsoleWindowDto {
 }
 
 export class SearchConsolePagesQueryDto extends SearchConsoleWindowDto {
+  @ApiPropertyOptional(TYPE_FILTER)
+  @IsOptional()
+  @IsIn(GSC_SEARCH_TYPES)
+  type?: GscSearchType;
+
   @ApiPropertyOptional(QUERY_FILTER)
   @IsOptional()
   @IsString()
@@ -152,6 +177,11 @@ export class SearchConsolePagesQueryDto extends SearchConsoleWindowDto {
 }
 
 export class SearchConsoleSeriesQueryDto extends SearchConsoleWindowDto {
+  @ApiPropertyOptional(TYPE_FILTER)
+  @IsOptional()
+  @IsIn(GSC_SEARCH_TYPES)
+  type?: GscSearchType;
+
   @ApiPropertyOptional({
     enum: GSC_INTERVALS,
     description:
@@ -192,6 +222,15 @@ export class SearchConsoleCoverageDto {
   to: string;
 }
 
+export class SearchConsoleTypeCoverageDto {
+  @ApiProperty({ type: SearchConsoleCoverageDto, nullable: true })
+  coverage: SearchConsoleCoverageDto | null;
+
+  @ApiProperty({ description: "Rows of the type's current batches." })
+  rows: number;
+}
+
+@ApiExtraModels(SearchConsoleTypeCoverageDto)
 export class SearchConsoleStatusDto {
   @ApiProperty({
     description:
@@ -223,8 +262,16 @@ export class SearchConsoleStatusDto {
   })
   coverage: SearchConsoleCoverageDto | null;
 
-  @ApiProperty({ description: "Rows of the current batches." })
+  @ApiProperty({ description: "Rows of the current `web` batches." })
   rows: number;
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: { $ref: getSchemaPath(SearchConsoleTypeCoverageDto) },
+    description:
+      "Coverage and rows per search type (`web`, `image`, `news`, `discover`); `coverage` and `rows` above are the `web` entry.",
+  })
+  types: Record<GscSearchType, SearchConsoleTypeCoverageDto>;
 }
 
 export class SearchConsoleTotalsDto {

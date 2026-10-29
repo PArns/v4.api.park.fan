@@ -12,6 +12,7 @@ interface Batch {
   day: string;
   rows: number;
   format?: number;
+  type?: string;
 }
 
 /** A service over a fake database that answers by the shape of the statement. */
@@ -21,7 +22,7 @@ function build(options: {
   total?: Record<string, unknown>;
   perDay?: Array<Record<string, unknown>>;
   site?: Array<Record<string, unknown>>;
-  coverage?: Record<string, unknown>;
+  coverages?: Array<Record<string, unknown>>;
   success?: Date | null;
   latest?: { ok: boolean; error: string | null };
 }) {
@@ -34,25 +35,32 @@ function build(options: {
         sql.includes("ORDER BY day, id DESC") &&
         sql.includes("DISTINCT ON (day) id")
       ) {
-        return (options.batches ?? []).map((b) => ({
-          id: b.id,
-          format: b.format ?? 2,
-          day: b.day,
-          rows: b.rows,
-          clicks: 0,
-          impressions: 0,
-          position_sum: 0,
-        }));
+        return (options.batches ?? [])
+          .filter((b) => (b.type ?? "web") === params[2])
+          .map((b) => ({
+            id: b.id,
+            format: b.format ?? 2,
+            day: b.day,
+            rows: b.rows,
+            clicks: 0,
+            impressions: 0,
+            position_sum: 0,
+          }));
       }
       if (sql.includes("MAX(day)::text AS day")) {
         const withRows = (options.batches ?? [])
-          .filter((b) => b.rows > 0 && (b.format ?? 2) >= 2)
+          .filter(
+            (b) =>
+              (b.type ?? "web") === params[1] &&
+              b.rows > 0 &&
+              (b.format ?? 2) >= 2,
+          )
           .map((b) => b.day)
           .sort();
         return [{ day: withRows[withRows.length - 1] ?? null }];
       }
       if (sql.includes("MIN(day)::text AS first"))
-        return [options.coverage ?? { first: null, last: null, rows: 0 }];
+        return options.coverages ?? [];
       if (sql.includes("MAX(finished_at)"))
         return [{ at: options.success ?? null }];
       if (sql.includes("FROM search_console_runs"))
@@ -122,6 +130,12 @@ describe("SearchConsoleService.status", () => {
       lastError: expect.stringContaining("JSON"),
       coverage: null,
       rows: 0,
+      types: {
+        web: { coverage: null, rows: 0 },
+        image: { coverage: null, rows: 0 },
+        news: { coverage: null, rows: 0 },
+        discover: { coverage: null, rows: 0 },
+      },
     });
   });
 
@@ -148,7 +162,15 @@ describe("SearchConsoleService.status", () => {
     });
     process.env.GSC_SITE_URL = "sc-domain:park.fan";
     const { service } = build({
-      coverage: { first: "2025-07-05", last: "2026-10-25", rows: "81234" },
+      coverages: [
+        { type: "web", first: "2025-07-05", last: "2026-10-25", rows: "81234" },
+        {
+          type: "discover",
+          first: "2026-01-02",
+          last: "2026-10-25",
+          rows: "40",
+        },
+      ],
       success: new Date("2026-10-27T09:25:00Z"),
       latest: { ok: false, error: "Search Console refused the account" },
     });
@@ -159,6 +181,18 @@ describe("SearchConsoleService.status", () => {
       lastError: "Search Console refused the account",
       coverage: { from: "2025-07-05", to: "2026-10-25" },
       rows: 81234,
+      types: {
+        web: {
+          coverage: { from: "2025-07-05", to: "2026-10-25" },
+          rows: 81234,
+        },
+        image: { coverage: null, rows: 0 },
+        news: { coverage: null, rows: 0 },
+        discover: {
+          coverage: { from: "2026-01-02", to: "2026-10-25" },
+          rows: 40,
+        },
+      },
     });
   });
 });
@@ -518,6 +552,103 @@ describe("levelPlan", () => {
       totals: "query",
       partialBreakdown: false,
     });
+  });
+});
+
+describe("SearchConsoleService search types", () => {
+  const IMAGE: Batch[] = days(22, 25).map((day, i) => ({
+    id: 50 + i,
+    day,
+    rows: 5,
+    type: "image",
+  }));
+  const DISCOVER: Batch[] = days(22, 25).map((day, i) => ({
+    id: 70 + i,
+    day,
+    rows: 5,
+    type: "discover",
+  }));
+
+  const batchIds = (calls: Array<{ params: unknown[] }>) =>
+    calls
+      .map(
+        (c) => c.params.find((p) => Array.isArray(p)) as number[] | undefined,
+      )
+      .find(Boolean);
+
+  it("reads web when no type is given, and only the batches of the type asked for", async () => {
+    const both = [...WEEK, ...IMAGE];
+    const web = build({ batches: both });
+    await web.service.pages({ days: 7 }, NOW);
+    expect(batchIds(web.calls)).not.toContain(50);
+    const image = build({ batches: both });
+    const report = await image.service.pages({ days: 7, type: "image" }, NOW);
+    expect(batchIds(image.calls)).toEqual([50, 51, 52, 53]);
+    expect(report.to).toBe("2026-10-25");
+  });
+
+  it("ends a rolling window on the last day of the type, not of web", async () => {
+    const { service } = build({ batches: [...WEEK, ...IMAGE.slice(0, 2)] });
+    const report = await service.queries({ days: 7, type: "image" }, NOW);
+    expect(report.to).toBe("2026-10-23");
+  });
+
+  it("answers an empty report for a type nothing was imported for", async () => {
+    const { service } = build({ batches: WEEK });
+    expect(await service.queries({ days: 7, type: "news" }, NOW)).toMatchObject(
+      {
+        totals: { clicks: 0 },
+        items: [],
+      },
+    );
+  });
+
+  it("leaves the site statistic's visits out of another type's pages", async () => {
+    const { service, calls } = build({
+      batches: IMAGE,
+      items: [
+        {
+          item_key: "/de/parks",
+          ...sums("c", 1, 10, 20),
+          ...sums("p", 0, 0, 0),
+        },
+      ],
+      site: [{ path: "/de/parks", visits: 3, engaged: 1, visit_seconds: 30 }],
+    });
+    const report = await service.pages({ days: 7, type: "image" }, NOW);
+    expect(report.items[0].site).toBeNull();
+    expect(calls.some((c) => c.sql.includes("FROM site_pageviews"))).toBe(
+      false,
+    );
+  });
+
+  it("refuses queries for discover with a message, and anything that needs query rows", async () => {
+    const { service } = build({ batches: DISCOVER });
+    await expect(
+      service.queries({ days: 7, type: "discover" }, NOW),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.queries({ days: 7, type: "discover" }, NOW),
+    ).rejects.toThrow(/discover has no search queries/);
+    await expect(
+      service.pages({ days: 7, type: "discover", query: "x" }, NOW),
+    ).rejects.toThrow(/no search queries/);
+    await expect(
+      service.pages({ days: 7, type: "discover", country: "deu" }, NOW),
+    ).rejects.toThrow(/no search queries/);
+    await expect(
+      service.series(
+        { days: 7, type: "discover", country: "deu", device: "mobile" },
+        NOW,
+      ),
+    ).rejects.toThrow(/no search queries/);
+  });
+
+  it("answers pages and series for discover from the page and property rows", async () => {
+    const { service, calls } = build({ batches: DISCOVER });
+    await service.pages({ days: 7, type: "discover" }, NOW);
+    await service.series({ days: 7, type: "discover", country: "deu" }, NOW);
+    expect(calls.some((c) => c.sql.includes("r.page <> ''"))).toBe(true);
   });
 });
 

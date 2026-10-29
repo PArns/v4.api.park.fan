@@ -110,12 +110,14 @@ against these rules.
 | `whoami`                     | account, effective role, credential kind and client                                                                                                                                     | the principal                                    |
 | `find_parks`                 | parks by name, city or country, with status, crowd level, today's hours                                                                                                                 | `SearchService`                                  |
 | `get_park`                   | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), not run today                                                                  | `ParkIntegrationService`                         |
+| `park_forecast`              | the days ahead for one park as the calendar shows them: hours, crowd level, expected peak wait, weather, holidays; today's hourly curve and headliner waits; the serving models         | `CalendarService`, `MlOverviewService`           |
 | `find_attractions`           | rides by name, optionally in one park, with status and wait                                                                                                                             | `SearchService`                                  |
 | `get_attraction`             | one ride: queues, crowd level, outage, curated facts, typical waits, downtime, retirement, optional history                                                                             | `AttractionIntegrationService`                   |
 | `page_views`                 | reads per kind, language and page                                                                                                                                                       | `PageViewsService.adminOverview`                 |
 | `system_health`              | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half                                                                                     | `SystemHealthService`                            |
 | `queue_status`               | Bull counts per queue, recent failures of one                                                                                                                                           | `AdminQueueStatusService`                        |
 | `ml_overview`                | forecast components, decisions, comparison summary, drift                                                                                                                               | `MlOverviewService`                              |
+| `ml_accuracy`                | where the hourly forecasts miss: MAE, bias and baseline per park or per ride, against the window before, ranked                                                                         | `ForecastErrorBreakdownService`                  |
 | `data_quality`               | silenced clusters, failing jobs, unreviewed absence retirements, re-issue candidates                                                                                                    | `DataQualityMonitorService.report`               |
 | `duplicates`                 | duplicate attraction and park pairs with the merge winner                                                                                                                               | `AttractionMergeService`, `ParkValidatorService` |
 | `retirement_candidates`      | rides whose source went quiet                                                                                                                                                           | `AttractionReviewService`                        |
@@ -134,9 +136,10 @@ against these rules.
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
 | `seo_uncovered`              | parks or rides no search visit entered on                                                                                                                                               | `SiteAnalyticsSeoService.uncovered`              |
 | `gsc_status`                 | whether Google Search Console is connected, when it last imported, the days covered                                                                                                     | `SearchConsoleService.status`                    |
-| `gsc_queries`                | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device                                                                 | `SearchConsoleService.queries`                   |
+| `gsc_queries`                | the Google queries the site was found with: clicks, impressions, ctr, position, change; filter by page, country, device; `type` web, image, news, discover                              | `SearchConsoleService.queries`                   |
 | `gsc_pages`                  | the pages found in Google, with the site's own visits, bounce and visit length from search                                                                                              | `SearchConsoleService.pages`                     |
 | `gsc_series`                 | clicks, impressions, ctr and position per day, week or month                                                                                                                            | `SearchConsoleService.series`                    |
+| `gsc_inspect_url`            | Google's verdict on up to 10 park.fan pages (URL Inspection): indexed or why not, canonical, last crawl; cached 6 h, 1,800 a day                                                        | `SearchConsoleInspectionService.inspect`         |
 
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
@@ -323,3 +326,14 @@ What was checked when this was built, and where it is enforced:
 - A PAT is created with the password (and the two-factor code), but a stolen session plus the
   password can still mint a read-only token that outlives the session, until the account signs out
   everywhere.
+
+### `ml_accuracy` reads `prediction_accuracy` only
+
+`ForecastErrorBreakdownService` runs the drift watch's statement (`MlDecisionWatchService.computeDrift`:
+`scoredSlotSql`, the weekday-median baseline of the same ride and hour over the 4 weeks before) with a
+grouping key, so its totals equal the ML overview's drift figures. It reads the `(comparison_status,
+target_time)` index for `days` + `days` + 28 rows' worth of time, never `wait_time_predictions` or
+`queue_data`. `COMPLETED` rows are kept 90 days, so `days` is at most 28. The statement runs under a 45 s
+`statement_timeout` and the answer is cached 30 minutes per hour-aligned window; with `park` set the read
+narrows to that park's rides. Models are `catboost` (raw hourly), `pcn` and `chronos` (as served); TFT's
+daily level is scored in the forward archive, not per park.

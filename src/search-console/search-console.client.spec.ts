@@ -89,10 +89,64 @@ describe("SearchConsoleClient", () => {
       startDate: "2026-10-20",
       endDate: "2026-10-20",
       dimensions: ["page", "country", "device"],
+      type: "web",
       rowLimit: GSC_ROW_LIMIT,
       startRow: 0,
       dataState: "final",
     });
+  });
+
+  it("asks for the search type it is given", async () => {
+    api.mockResolvedValue(json({ rows: [row(1)] }));
+    await client.fetchDay("2026-10-20", ["page"], "discover");
+    const body = JSON.parse(String((api.mock.calls[0][1] as RequestInit).body));
+    expect(body.type).toBe("discover");
+  });
+
+  it("spaces requests at least 100 ms apart, so 10 a second at most", async () => {
+    api.mockImplementation(async () => json({ rows: [] }));
+    await client.fetchDay("2026-10-20", ["page"]);
+    await client.fetchDay("2026-10-20", ["country"]);
+    const waits = (client.wait as jest.Mock).mock.calls.map(
+      ([ms]) => ms as number,
+    );
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[0]).toBeLessThanOrEqual(100);
+  });
+
+  it("inspects a URL against the property with the same account and scope", async () => {
+    api.mockResolvedValue(
+      json({ inspectionResult: { indexStatusResult: { verdict: "PASS" } } }),
+    );
+    const answer = await client.inspectUrl("https://park.fan/de/parks");
+    expect(answer.inspectionResult?.indexStatusResult?.verdict).toBe("PASS");
+    const [url, init] = api.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect",
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      inspectionUrl: "https://park.fan/de/parks",
+      siteUrl: "sc-domain:park.fan",
+      languageCode: "en-US",
+    });
+    const assertion = fetchMock.mock.calls.find(([u]) =>
+      String(u).startsWith("https://oauth2.googleapis.com/"),
+    )![1] as RequestInit;
+    expect(String(assertion.body)).toContain("grant_type");
+  });
+
+  it("maps an inspection refusal like any other: 403 fatal, 400 not", async () => {
+    api.mockResolvedValueOnce(json({ error: { message: "no" } }, 403));
+    await expect(client.inspectUrl("https://park.fan/x")).rejects.toMatchObject(
+      { fatal: true },
+    );
+    api.mockResolvedValueOnce(
+      json({ error: { message: "URL is not in the property" } }, 400),
+    );
+    await expect(client.inspectUrl("https://park.fan/x")).rejects.toMatchObject(
+      { fatal: false, status: 400 },
+    );
   });
 
   it("pages through a day until a page is not full", async () => {
@@ -122,8 +176,11 @@ describe("SearchConsoleClient", () => {
       .mockResolvedValueOnce(json({ error: { message: "oops" } }, 503))
       .mockResolvedValueOnce(json({ rows: [row(1)] }));
     expect(await client.fetchDay("2026-10-20", ["page"])).toHaveLength(1);
-    expect(client.wait).toHaveBeenNthCalledWith(1, 7000);
-    expect(client.wait).toHaveBeenNthCalledWith(2, 2000);
+    // The pacing between requests waits too; only the pauses for the retries matter here.
+    const pauses = (client.wait as jest.Mock).mock.calls
+      .map(([ms]) => ms as number)
+      .filter((ms) => ms >= 1000);
+    expect(pauses).toEqual([7000, 2000]);
   });
 
   it("gives up on a 5xx after four tries, as a failure that is not fatal", async () => {

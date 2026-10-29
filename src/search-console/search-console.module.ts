@@ -7,13 +7,14 @@ import { SearchConsoleRow } from "./entities/search-console-row.entity";
 import { SearchConsoleRun } from "./entities/search-console-run.entity";
 import { AdminSearchConsoleController } from "./search-console.controller";
 import { SearchConsoleClient } from "./search-console.client";
+import { SearchConsoleInspectionService } from "./search-console-inspection.service";
 import { SearchConsoleImportService } from "./search-console-import.service";
 import { SearchConsoleService } from "./search-console.service";
 
 /**
  * Google Search Console: a nightly import of the queries and pages the site
  * was found with (a service account against Google's REST API), the admin's
- * reports over them, and the same reports for the MCP tools. Off without
+ * reports over them, URL inspection, and the same reports for the MCP tools. Off without
  * `GSC_SERVICE_ACCOUNT_JSON` and `GSC_SITE_URL`. The job's processor is
  * `SearchConsoleProcessor` in the queues module. See
  * docs/frontend/search-console.md and docs/admin/search-console-setup.md.
@@ -32,8 +33,13 @@ import { SearchConsoleService } from "./search-console.service";
   providers: [
     SearchConsoleClient,
     SearchConsoleImportService,
+    SearchConsoleInspectionService,
     SearchConsoleService,
   ],
-  exports: [SearchConsoleImportService, SearchConsoleService],
+  exports: [
+    SearchConsoleImportService,
+    SearchConsoleInspectionService,
+    SearchConsoleService,
+  ],
 })
 export class SearchConsoleModule {}

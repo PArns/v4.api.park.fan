@@ -8,6 +8,8 @@ import { pageViewsTool } from "./page-views.tool";
 import { systemHealthTool } from "./system-health.tool";
 import { queueStatusTool } from "./queue-status.tool";
 import { mlOverviewTool } from "./ml-overview.tool";
+import { mlAccuracyTool } from "./ml-accuracy.tool";
+import { parkForecastTool } from "./park-forecast.tool";
 import { dataQualityTool } from "./data-quality.tool";
 import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
@@ -29,6 +31,7 @@ import { gscStatusTool } from "./gsc-status.tool";
 import { gscQueriesTool } from "./gsc-queries.tool";
 import { gscPagesTool } from "./gsc-pages.tool";
 import { gscSeriesTool } from "./gsc-series.tool";
+import { gscInspectUrlTool } from "./gsc-inspect-url.tool";
 
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
@@ -39,12 +42,14 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   whoamiTool,
   findParksTool,
   getParkTool,
+  parkForecastTool,
   findAttractionsTool,
   getAttractionTool,
   pageViewsTool,
   systemHealthTool,
   queueStatusTool,
   mlOverviewTool,
+  mlAccuracyTool,
   dataQualityTool,
   duplicatesTool,
   retirementCandidatesTool,
@@ -66,4 +71,5 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   gscQueriesTool,
   gscPagesTool,
   gscSeriesTool,
+  gscInspectUrlTool,
 ];

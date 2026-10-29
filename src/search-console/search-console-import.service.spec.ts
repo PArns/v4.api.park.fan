@@ -4,9 +4,15 @@ import {
   buildBatch,
   isUnchanged,
   planDays,
+  propertyFromPages,
 } from "./search-console-import.service";
 import { SearchConsoleApiError, type GscApiRow } from "./search-console.client";
-import { BACKFILL_DAYS, BATCH_FORMAT } from "./search-console.constants";
+import {
+  BACKFILL_DAYS,
+  BATCH_FORMAT,
+  GSC_SEARCH_TYPES,
+  type GscSearchType,
+} from "./search-console.constants";
 
 const HOSTS = ["park.fan", "www.park.fan"];
 
@@ -159,6 +165,12 @@ describe("isUnchanged", () => {
     expect(isUnchanged({ ...current, format: 1 }, { ...current })).toBe(false);
   });
 
+  it("writes an empty day in an older layout again, so it is not asked for every night", () => {
+    const empty = { rows: 0, clicks: 0, impressions: 0, positionSum: 0 };
+    expect(isUnchanged({ ...current, ...empty, format: 1 }, empty)).toBe(false);
+    expect(isUnchanged({ ...current, format: 1 }, empty)).toBe(true);
+  });
+
   it("does not let an empty download erase a day that had data", () => {
     expect(
       isUnchanged(current, {
@@ -168,6 +180,15 @@ describe("isUnchanged", () => {
         positionSum: 0,
       }),
     ).toBe(true);
+  });
+});
+
+describe("propertyFromPages", () => {
+  it("sums clicks and impressions and weights the position by the impressions", () => {
+    expect(
+      propertyFromPages([apiRow(["a"], 2, 100, 2), apiRow(["b"], 3, 300, 6)]),
+    ).toEqual([{ clicks: 5, impressions: 400, ctr: 5 / 400, position: 5 }]);
+    expect(propertyFromPages([])).toEqual([]);
   });
 });
 
@@ -204,21 +225,36 @@ describe("planDays", () => {
   });
 });
 
+interface Fetched {
+  rows: number;
+  clicks: number;
+  impressions: number;
+  positionSum: number;
+  format?: number;
+}
+
+/** Every day the planner looks at, fetched and empty: a type that has nothing to import. */
+const settled = (now: Date): Record<string, Fetched> =>
+  Object.fromEntries(
+    planDays(now, 3, new Map()).map((day) => [
+      day,
+      { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
+    ]),
+  );
+
 /** A service over fakes: the API's rows by day, the batches table, a lock. */
 function build(
   options: {
     days?: Record<string, Record<string, GscApiRow[]>>;
-    fail?: (day: string) => Error | null;
-    fetched?: Record<
-      string,
-      {
-        rows: number;
-        clicks: number;
-        impressions: number;
-        positionSum: number;
-        format?: number;
-      }
+    /** What Google answers for a type other than web, by day. */
+    typeDays?: Partial<
+      Record<GscSearchType, Record<string, Record<string, GscApiRow[]>>>
     >;
+    /** Fails the fetches of a day, for `web` unless `type` says otherwise. */
+    fail?: (day: string, type: GscSearchType) => Error | null;
+    fetched?: Record<string, Fetched>;
+    /** The current batches of another type; every day empty and fetched when absent. */
+    typeFetched?: Partial<Record<GscSearchType, Record<string, Fetched>>>;
     lock?: boolean;
   } = {},
 ) {
@@ -232,14 +268,18 @@ function build(
   });
   process.env.GSC_SITE_URL = "sc-domain:park.fan";
 
-  const written: Array<{ day: string; rows: number }> = [];
+  const written: Array<{ day: string; rows: number; type: string }> = [];
   const statements: string[] = [];
   const manager = {
     query: jest.fn(
       async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
         statements.push(sql);
         if (sql.includes("INSERT INTO search_console_batches")) {
-          written.push({ day: String(params[0]), rows: Number(params[1]) });
+          written.push({
+            day: String(params[0]),
+            rows: Number(params[1]),
+            type: String(params[6]),
+          });
           return [{ id: written.length }];
         }
         return [];
@@ -248,10 +288,16 @@ function build(
   };
   const db = {
     query: jest.fn(
-      async (sql: string, _params?: unknown[]): Promise<unknown[]> => {
+      async (sql: string, params?: unknown[]): Promise<unknown[]> => {
         statements.push(sql);
         if (sql.includes("FROM search_console_batches")) {
-          return Object.entries(options.fetched ?? {}).map(([day, b], i) => ({
+          const type = String(params?.[2]);
+          const source =
+            type === "web"
+              ? (options.fetched ?? {})
+              : (options.typeFetched?.[type as GscSearchType] ??
+                settled(new Date("2026-10-28T09:20:00Z")));
+          return Object.entries(source).map(([day, b], i) => ({
             id: i + 1,
             format: b.format ?? BATCH_FORMAT,
             day,
@@ -274,10 +320,15 @@ function build(
     eval: jest.fn(async () => 1),
   };
   const fetchDay = jest.fn(
-    async (day: string, dimensions: readonly string[]) => {
-      const failure = options.fail?.(day);
+    async (
+      day: string,
+      dimensions: readonly string[],
+      type: GscSearchType = "web",
+    ) => {
+      const failure = options.fail?.(day, type);
       if (failure) throw failure;
-      const rows = options.days?.[day];
+      const rows =
+        type === "web" ? options.days?.[day] : options.typeDays?.[type]?.[day];
       if (!rows) return [];
       return rows[dimensions.join(",")] ?? [];
     },
@@ -360,11 +411,11 @@ describe("SearchConsoleImportService.run", () => {
     });
     const summary = await service.run("cron", now);
     expect(summary).toMatchObject({
-      daysChecked: 3,
+      daysChecked: 12,
       batchesWritten: 1,
       rowsWritten: 5,
     });
-    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5, type: "web" }]);
     expect(db.transaction).toHaveBeenCalledTimes(1);
     const insert = manager.query.mock.calls.find(([sql]) =>
       String(sql).includes("INSERT INTO search_console_rows"),
@@ -390,7 +441,7 @@ describe("SearchConsoleImportService.run", () => {
       days: { "2026-10-27": day(5) },
     });
     const summary = await service.run("cron", now);
-    expect(summary.unchanged).toBe(3);
+    expect(summary.unchanged).toBe(12);
     expect(written).toEqual([]);
   });
 
@@ -405,7 +456,7 @@ describe("SearchConsoleImportService.run", () => {
       days: { "2026-10-27": day(9) },
     });
     await service.run("cron", now);
-    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5, type: "web" }]);
   });
 
   it("writes a new batch for a day stored in an older layout, whatever its figures", async () => {
@@ -425,17 +476,97 @@ describe("SearchConsoleImportService.run", () => {
       days: { "2026-10-27": day(5) },
     });
     await service.run("cron", now);
-    expect(written).toEqual([{ day: "2026-10-27", rows: 5 }]);
+    expect(written).toEqual([{ day: "2026-10-27", rows: 5, type: "web" }]);
   });
 
-  it("asks Google five times a day: property, page, country, device, query", async () => {
+  const levelsOf = (
+    fetchDay: jest.Mock,
+    type: GscSearchType,
+    d = "2026-10-27",
+  ) =>
+    fetchDay.mock.calls
+      .filter(([day, , t]) => day === d && t === type)
+      .map(([, dims]) => (dims as string[]).join(","));
+
+  it("asks Google five times a day for web, image and news: property, page, country, device, query", async () => {
     const { service, fetchDay } = build({ fetched: olderFetched });
     await service.run("cron", now);
-    expect(
-      fetchDay.mock.calls
-        .filter(([d]) => d === "2026-10-27")
-        .map(([, dims]) => dims.join(",")),
-    ).toEqual(["", "page", "country", "device", "page,query,country,device"]);
+    for (const type of ["web", "image", "news"] as const) {
+      expect(levelsOf(fetchDay, type)).toEqual([
+        "",
+        "page",
+        "country",
+        "device",
+        "page,query,country,device",
+      ]);
+    }
+  });
+
+  it("asks three times a day for discover: no queries, and no property level it cannot aggregate", async () => {
+    const { service, fetchDay } = build({ fetched: olderFetched });
+    await service.run("cron", now);
+    expect(levelsOf(fetchDay, "discover")).toEqual([
+      "page",
+      "country",
+      "device",
+    ]);
+  });
+
+  it("stores a discover day with the property row summed from its pages, and no query rows", async () => {
+    const { service, written, manager } = build({
+      fetched: olderFetched,
+      typeFetched: {
+        image: settled(now),
+        news: settled(now),
+        discover: settled(now),
+      },
+      typeDays: {
+        discover: {
+          "2026-10-27": {
+            page: [
+              apiRow(["https://park.fan/de/parks"], 2, 100, 1),
+              apiRow(["https://park.fan/en/news"], 3, 300, 1),
+            ],
+            country: [apiRow(["deu"], 5, 400, 1)],
+            device: [apiRow(["MOBILE"], 5, 400, 1)],
+          },
+        },
+      },
+    });
+    await service.run("cron", now);
+    const discover = written.filter((w) => w.type === "discover");
+    // property + 2 pages + country + device
+    expect(discover).toEqual([
+      { day: "2026-10-27", rows: 5, type: "discover" },
+    ]);
+    const insert = manager.query.mock.calls.find(
+      ([sql, params]) =>
+        String(sql).includes("INSERT INTO search_console_rows") &&
+        (params as unknown[])[10] === "discover",
+    );
+    const params = insert?.[1] as unknown[];
+    expect(params[3]).toEqual([null, null, null, null, null]);
+    // The property row leads: 2 + 3 clicks over 100 + 300 impressions.
+    expect(params[7]).toEqual([5, 2, 3, 5, 5]);
+    expect((params[8] as number[])[0]).toBe(400);
+  });
+
+  it("plans each type on its own batches: a type never imported is all backfill", async () => {
+    const { service, fetchDay, db } = build({
+      fetched: olderFetched,
+      typeFetched: { image: settled(now), news: settled(now), discover: {} },
+    });
+    await service.run("cron", now).catch(() => undefined);
+    const discoverDays = new Set(
+      fetchDay.mock.calls.filter(([, , t]) => t === "discover").map(([d]) => d),
+    );
+    expect(discoverDays.size).toBeGreaterThan(3);
+    const batchQueries = db.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("FROM search_console_batches"),
+    );
+    expect(batchQueries.map(([, params]) => (params as string[])[2])).toEqual([
+      ...GSC_SEARCH_TYPES,
+    ]);
   });
 
   it("records the run and releases the lock", async () => {
@@ -478,13 +609,13 @@ describe("SearchConsoleImportService.run", () => {
     const { service, written } = build({
       fetched: olderFetched,
       days: { "2026-10-27": day(5), "2026-10-25": day(2) },
-      fail: (d) =>
-        d === "2026-10-26"
+      fail: (d, type) =>
+        type === "web" && d === "2026-10-26"
           ? new SearchConsoleApiError("boom", 500, false)
           : null,
     });
     await expect(service.run("cron", now)).rejects.toThrow(
-      /1 of 3 day\(s\) failed.*2026-10-26/,
+      /1 of 12 day\(s\) failed.*2026-10-26/,
     );
     expect(written.map((w) => w.day).sort()).toEqual([
       "2026-10-25",

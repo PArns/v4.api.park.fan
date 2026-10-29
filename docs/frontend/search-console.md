@@ -17,18 +17,18 @@ All on `AdminSearchConsoleController`: a session (`AdminAuthGuard`, any role unl
 (`days` 1–365, or `from` and `to`, at most 366 days, `to` today at the latest; both at once or one
 of them alone is a 400) and `locale`, and echo `from`, `to`, `days` and `locale`.
 
-| Method | Path                                             | Answers                                                                                                  |
-| ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| GET    | `status`                                         | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows }`                 |
-| POST   | `import`                                         | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
-| GET    | `queries?page=&country=&device=&limit=`          | the queries, most clicks first                                                                           |
-| GET    | `pages?query=&country=&device=&limit=`           | the pages, most clicks first, with the site's own numbers                                                |
-| GET    | `series?interval=&page=&query=&country=&device=` | per day, week or month                                                                                   |
+| Method | Path                                                   | Answers                                                                                                  |
+| ------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows, types }`          |
+| POST   | `import`                                               | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
+| GET    | `queries?type=&page=&country=&device=&limit=`          | the queries, most clicks first                                                                           |
+| GET    | `pages?type=&query=&country=&device=&limit=`           | the pages, most clicks first, with the site's own numbers                                                |
+| GET    | `series?type=&interval=&page=&query=&country=&device=` | per day, week or month                                                                                   |
 
 `limit` is 1–200, default 50. `page` is a path or a URL (lower-cased, no trailing slash, query and
 fragment dropped); `query` is one search query, exactly, lower case; `country` is Search Console's
 ISO alpha-3 (`deu`, `usa`, either case); `device` is `desktop`, `mobile` or `tablet`. `interval` is
-`day`, `week` (ISO, from Monday) or `month`; `hour` is a 400. Without it: day up to 92 days, week up to
+`day`, `week` (ISO, from Monday) or `month`; `hour` is a 400. `type` is the [search type](#search-types). Without it: day up to 92 days, week up to
 183, month beyond.
 
 ```json
@@ -78,6 +78,28 @@ point's `day` the period's first day, with `partial: true` when the window or th
 - **`previous`** is the figures over the same number of days at the start of the window before, and
   null over 180 days or when those days have no data.
 
+## Search types
+
+Search Console splits its data by the `type` of search. The import keeps `web` (the default), `image`
+(Google Images), `news` (the News tab in Search) and `discover`; `video` and `googleNews` are not
+imported. The reports take **`type`** (`web`, `image`, `news`, `discover`; default `web`, anything else
+is a 400) and answer from the batches of that type only, so a request without it, or with `type=web`,
+is the response it was before, field for field. The rolling window ends at the last day **of that
+type** with data, `site` on a `pages` item is `null` for every type but `web` (the site statistic
+cannot split its visits by Google's type), and a type nothing was imported for answers zeros.
+
+- **Discover has no queries.** `queries`, a `query` filter and a `country` or `device` filter on a
+  `pages` list need query rows, so they answer **400** (`type=discover has no search queries …`);
+  `pages` without filters and `series` (also with one `country` or `device`) work. The `gsc_queries`
+  tool says the same.
+- **Discover has no `byProperty` aggregation** (Google's API reference), so the import does not ask
+  for the property level there. It stores the property row as the sum of the page rows, the position
+  weighted by the impressions; Discover lists every page once a day, so that sum is the total. (A
+  request without dimensions for `discover` was not tried against the live API: no credentials were
+  available while this was built.)
+- **`status.types`** is `{ web, image, news, discover }`, each `{ coverage: { from, to } | null, rows }`.
+  `coverage` and `rows` at the top stay the `web` entry.
+
 ## What the numbers are
 
 Search Console's own, imported as they are, with four things a reader of them must know:
@@ -117,11 +139,11 @@ Search Console's own, imported as they are, with four things a reader of them mu
 
 ## Storage: insert-only, a batch per import
 
-| Table                    | Row                                                                                                                                                                                                                          | Notes                                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `search_console_rows`    | the day, `batch_id`, `page` (path, `''` on the property, country and device levels), `query` (null on the complete levels), `locale`, `country` and `device` (`''` where not asked), `clicks`, `impressions`, `position_sum` | hypertable on `day`, 30-day chunks, compressed after 35 days, one segment per batch; `HYPERTABLES` |
-| `search_console_batches` | one import of one day: `day`, `imported_at`, `format`, `rows`, `clicks`, `impressions`, `position_sum`                                                                                                                       | plain, a few hundred rows                                                                          |
-| `search_console_runs`    | one run: when, trigger (`cron`, `manual`), ok, days checked, batches written, error                                                                                                                                          | plain, pruned after 90 days                                                                        |
+| Table                    | Row                                                                                                                                                                                                                                         | Notes                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `search_console_rows`    | the day, `batch_id`, `search_type`, `page` (path, `''` on the property, country and device levels), `query` (null on the complete levels), `locale`, `country` and `device` (`''` where not asked), `clicks`, `impressions`, `position_sum` | hypertable on `day`, 30-day chunks, compressed after 35 days, one segment per batch; `HYPERTABLES` |
+| `search_console_batches` | one import of one day and type: `day`, `search_type`, `imported_at`, `format`, `rows`, `clicks`, `impressions`, `position_sum`                                                                                                              | plain, a few hundred rows                                                                          |
+| `search_console_runs`    | one run: when, trigger (`cron`, `manual`), ok, days checked, batches written, error                                                                                                                                                         | plain, pruned after 90 days                                                                        |
 
 Five levels are stored per day. Complete rows without a query: **property** (one row, no dimension,
 the day's totals), **page** (`country` and `device` empty), **country** and **device** (`page`
@@ -130,6 +152,18 @@ stored. `format` is the layout of the batch (`BATCH_FORMAT`, now 2; the column d
 adding it rewrites nothing). A day whose current batch has a lower format counts as never fetched: the
 next run imports it again and the reports ignore it until then. The first run after this layout
 arrived therefore re-imported the whole backfill, five requests a day.
+
+**The type.** `search_type` is on both tables: `varchar(10) NOT NULL DEFAULT 'web'` on the batches
+(a plain table), and **`varchar(10)` nullable with `DEFAULT 'web'`** on the rows. The rows table is a
+compressed hypertable and TimescaleDB adds a column to the existing chunks, compressed ones included,
+only as a nullable column or one with a constant default, without decompressing anything; the nullable
+form with a default is the one every TimescaleDB version since 2.6 accepts, and an old row reads as
+`web`. No report filters rows by `search_type`: the current batch of a day and type names the rows
+(`batch_id = ANY(…)`), so even a chunk that read the column wrong could not mix types. Compression
+settings are unchanged (segment by `batch_id`). Each (day, type) has its own current batch
+(`currentBatches(…, type)`: `DISTINCT ON (day) … WHERE search_type = $3`), its own plan
+(`planDays` per type, so a type with no batches is a full backfill) and its own change check
+(`isUnchanged`); the retention job drops chunks and old batches regardless of the type.
 
 **A day imported again replaces the earlier import without an UPDATE or a DELETE.** Each import of a
 day is a new batch; the reports read only the newest batch of every day
@@ -173,15 +207,22 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
 (`POST /v1/admin/search-console/import`, a second request within a minute queues nothing), and
 `drop-old-chunks` at 01:55 ([job queues](../architecture/job-queues.md)).
 
-1. **Which days.** The last `GSC_IMPORT_DAYS` days (default 3, 1–30) ending yesterday, newest first,
-   then every day of the last 480 days (16 months, a few days short of Google's limit) that has no
-   batch or whose batch is in an older format. The first run is therefore the backfill, newest days first; a run that stops resumes with
-   the days still missing, because every day is its own transaction.
-2. **One day:** five `searchAnalytics.query` requests: no dimension, `[page]`, `[country]`, `[device]` and
-   `[page, query, country, device]`, `dataState: final`, 25,000 rows a request with `startRow` until
-   a page is not full, four tries on a 429, a 5xx or a network failure with a doubling pause (or
-   Google's `Retry-After`); the requests run one after another, far below the per-minute quota, so a
-   re-import of 480 days needs no extra pacing. A 401 renews the token once.
+1. **Which days.** For every type: the last `GSC_IMPORT_DAYS` days (default 3, 1–30) ending yesterday,
+   newest first, then every day of the last 480 days (16 months, a few days short of Google's limit)
+   that has no batch of that type or whose batch is in an older format. The units (day, type) of a run
+   are processed newest day first. The first run after the types arrived is therefore the backfill of
+   `image`, `news` and `discover`, newest days first; a run that stops resumes with the units still
+   missing, because every unit is its own transaction.
+2. **One unit:** `searchAnalytics.query` requests with the unit's `type`: no dimension, `[page]`,
+   `[country]`, `[device]` and `[page, query, country, device]` for `web`, `image` and `news` (5), and
+   `[page]`, `[country]`, `[device]` for `discover` (3, no property request, no queries). That is up to
+   18 requests per day (5 + 5 + 5 + 3); a nightly run of three days is about 54 requests, and the
+   one-off backfill of the three new types over 480 days is 480 × 13 = **6,240 requests**
+   (more where a day has over 25,000 rows). `dataState: final`, 25,000 rows a request with
+   `startRow` until a page is not full, four tries on a 429, a 5xx or a network failure with a
+   doubling pause (or Google's `Retry-After`). **The client spaces requests at least 100 ms apart**
+   (10 a second, 600 a minute) against Google's 1,200 a minute per site and user, so the backfill takes
+   about ten minutes of waiting plus Google's own response time. A 401 renews the token once.
 3. **Failure.** A refusal that every day would meet (403, 404, a rejected key) stops the run with a
    message that names the service account and the property; three failed days in a row stop it too;
    one failed day among good ones is listed and the run goes on. Any failure fails the job, so it
@@ -191,14 +232,15 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
    job finds it taken and returns.
 
 `lastImportAt` is the end of the last successful run, `coverage` the first and last day with data in
-the current batches, `rows` their row count.
+the current `web` batches, `rows` their row count; `types` has the same per type.
 
 ## Google's API without a client library
 
 `search-console.client.ts` and `google-auth.ts` speak Google's REST API with `fetch` and Node's
 `crypto`: the service account's JWT (RS256, `iss`, `scope`, `aud`, an hour) exchanged at
 `https://oauth2.googleapis.com/token` for an access token kept until a minute before it expires, and
-`POST https://www.googleapis.com/webmasters/v3/sites/{siteUrl}/searchAnalytics/query`. The
+`POST https://www.googleapis.com/webmasters/v3/sites/{siteUrl}/searchAnalytics/query` (and the
+URL inspection endpoint above). The
 `googleapis` package is about 245 MB unpacked (188.0.0) with every Google API in it, and
 `google-auth-library` brings six direct dependencies, an HTTP client and a metadata client among
 them, into the path of a credential, for one grant type and one endpoint; this is about 330 lines and
@@ -206,9 +248,63 @@ no new dependency. The scope is `webmasters.readonly`, so the account could not
 change anything in Search Console if it wanted to. The token endpoint is fixed in code, not read from
 the key file.
 
+## URL inspection
+
+`gsc_inspect_url` asks Google about single pages: `POST
+https://searchconsole.googleapis.com/v1/urlInspection/index:inspect` with `{ inspectionUrl, siteUrl,
+languageCode }`. It is the same API and the same `webmasters.readonly` scope as the reports (the
+method's reference lists `webmasters` and `webmasters.readonly`), so the service account needs no new
+permission and the [setup](../admin/search-console-setup.md) does not change. The client's token
+handling, retries, pacing and error mapping (`SearchConsoleClient.inspectUrl`) are the import's.
+
+- **Input:** `url` and/or `urls` (up to 10): a path (`/de/parks/…`) or a park.fan URL, made
+  `https://park.fan` plus the path (`www`, `http`, query and fragment folded away). Another host is
+  refused before any request, since it would cost one and only earn a 400.
+- **Quota:** Google allows 2,000 inspections a day and 600 a minute per property. Answers are cached in
+  Redis for **6 hours** per URL (`cached: true`), a counter per Pacific day
+  (`search-console:inspections:<day>`, Google's quota day) stops at **1,800**, and a URL past it comes
+  back with an `error` saying so while cached ones still answer. The client's spacing keeps the minute
+  limit. Without Redis the tool still works, uncached and uncounted.
+- **Output** per URL: `verdict`, `coverageState`, `indexingState`, `robotsTxtState`, `pageFetchState`,
+  `lastCrawlTime`, `crawledAs`, `googleCanonical`, `userCanonical`, `canonicalMatches`, `sitemap`,
+  `referringUrls` (at most 10), and `mobileUsability` `{ verdict, issues }` and `richResults`
+  `{ verdict, types }` when Google reports them; or `{ url, error }` when Google refuses that URL.
+  Beside the results, `quota: { usedToday, dailyLimit }`. Everything Google wrote is under
+  `visitorData`.
+
+```json
+{
+  "quota": { "usedToday": 12, "dailyLimit": 1800 },
+  "visitorDataNotice": "…",
+  "visitorData": {
+    "results": [
+      {
+        "url": "https://park.fan/de/parks/europe/germany/bruehl/phantasialand",
+        "verdict": "PASS",
+        "coverageState": "Submitted and indexed",
+        "indexingState": "INDEXING_ALLOWED",
+        "robotsTxtState": "ALLOWED",
+        "pageFetchState": "SUCCESSFUL",
+        "lastCrawlTime": "2026-10-27T03:12:44Z",
+        "crawledAs": "MOBILE",
+        "googleCanonical": "https://park.fan/de/parks/europe/germany/bruehl/phantasialand",
+        "userCanonical": "https://park.fan/de/parks/europe/germany/bruehl/phantasialand",
+        "canonicalMatches": true,
+        "sitemap": ["https://park.fan/sitemap.xml"],
+        "referringUrls": [],
+        "cached": false
+      }
+    ]
+  }
+}
+```
+
+There is no admin REST route for it: the tool is the interface.
+
 ## MCP tools
 
-`gsc_status`, `gsc_queries`, `gsc_pages`, `gsc_series` (read-only, any role), one file each in
+`gsc_status`, `gsc_queries`, `gsc_pages`, `gsc_series` (read-only, any role; all but the status take
+`type`) and `gsc_inspect_url`, one file each in
 `src/mcp/tools/`, [listed with the others](../admin/mcp.md#tools). They wrap `SearchConsoleService`,
 and everything Google or a searcher wrote (queries, paths, Google's error message) comes back under
 `visitorData` beside a `visitorDataNotice`, as the site statistic's tools do. Their descriptions carry
@@ -234,5 +330,8 @@ A key that does not parse, or a missing property, leaves the module off and puts
 - The country is Google's alpha-3, not the site statistic's alpha-2.
 - Search Console's own limits apply: 16 months of history, the 50,000-row daily cut, final data two
   to three days late.
+- Frontend: the SEO page does not offer a type switch yet; every request without `type` is `web`.
+  A follow-up adds a `type` selector to `lib/admin/search-console.ts` and
+  `app/admin/traffic/_components/search-console-*`.
 - A change in Google's data after a day was imported is picked up only while the day is among the
   recent ones (three by default).
