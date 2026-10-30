@@ -19,7 +19,7 @@ of them alone is a 400) and `locale`, and echo `from`, `to`, `days` and `locale`
 
 | Method | Path                                                   | Answers                                                                                                  |
 | ------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, coverage: { from, to } \| null, rows, types }`          |
+| GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, runningSince, coverage: { from, to } \| null, rows, types }`          |
 | POST   | `import`                                               | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
 | GET    | `queries?type=&page=&country=&device=&search=&limit=`  | the queries, most clicks first                                                                           |
 | GET    | `pages?type=&query=&country=&device=&search=&limit=`   | the pages, most clicks first, with the site's own numbers                                                |
@@ -235,10 +235,18 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
    reaches the [data-quality report](../architecture/job-queues.md#failed-jobs-retention-and-monitoring),
    and the run's error is the status's `lastError` until a later run succeeds.
 4. **One run at a time:** a Redis lock (`search-console:import:lock`, three hours at most); a second
-   job finds it taken and returns.
+   job finds it taken and returns, without a run of its own.
+5. **Where a run shows.** The status's `runningSince` is the start of the run in progress, and the
+   queue is on the admin's queue screen ([`queue-status`](../admin/endpoints.md)): a run is `active`
+   there until it ends, and a failed one says why (`queue-failures?queue=search-console`).
 
 `lastImportAt` is the end of the last successful run, `coverage` the first and last day with data in
-the current `web` batches, `rows` their row count; `types` has the same per type.
+the current `web` batches, `rows` their row count; `types` has the same per type. `runningSince` is
+the start of the newest run while it has no end and started less than the lock's three hours ago,
+`null` otherwise. While it is set an import request queues a job that returns at once, so a client
+disables its button and waits for `lastImportAt` or `lastError` to change. A run lost with its
+process (a deploy mid-run) counts until its lock expires, because no other run starts before then
+either.
 
 ## Google's API without a client library
 

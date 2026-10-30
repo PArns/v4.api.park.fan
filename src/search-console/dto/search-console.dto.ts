@@ -273,6 +273,16 @@ export class SearchConsoleStatusDto {
   lastError: string | null;
 
   @ApiProperty({
+    nullable: true,
+    description:
+      "When the import that is running now started; null when none is. While it is set, " +
+      "an import request queues a job that returns at once, so wait until `lastImportAt` or " +
+      "`lastError` changes. A run lost with its process counts until its lock expires, three " +
+      "hours after its start, because no other run starts before then either.",
+  })
+  runningSince: string | null;
+
+  @ApiProperty({
     type: SearchConsoleCoverageDto,
     nullable: true,
     description:

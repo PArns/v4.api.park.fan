@@ -25,6 +25,7 @@ import {
   GSC_SEARCH_TYPES,
   GSC_TYPES_WITHOUT_DEVICES,
   GSC_TYPES_WITHOUT_QUERIES,
+  IMPORT_LOCK_TTL_MS,
   type GscInterval,
   type GscSearchType,
 } from "./search-console.constants";
@@ -265,6 +266,16 @@ export class SearchConsoleService {
         `SELECT ok, error FROM search_console_runs
           WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1`,
       );
+    // The newest run, while it has not finished and its lock has not expired:
+    // a run lost with its process holds the lock as long as a live one, and
+    // no other run starts before it lapses either.
+    const [running]: Array<{ running_since: Date }> = await this.db.query(
+      `SELECT started_at AS running_since FROM search_console_runs
+        WHERE id = (SELECT MAX(id) FROM search_console_runs)
+          AND finished_at IS NULL
+          AND started_at > now() - ($1::int * interval '1 millisecond')`,
+      [IMPORT_LOCK_TTL_MS],
+    );
     return {
       configured: setup.configured,
       siteUrl: setup.siteUrl,
@@ -274,6 +285,9 @@ export class SearchConsoleService {
         : latest && !latest.ok
           ? latest.error
           : null,
+      runningSince: running?.running_since
+        ? new Date(running.running_since).toISOString()
+        : null,
       ...coverageOf(DEFAULT_SEARCH_TYPE),
       types: Object.fromEntries(
         GSC_SEARCH_TYPES.map((type) => [type, coverageOf(type)]),
