@@ -116,7 +116,10 @@ gone, and the lock only decides how soon the stall is noticed.
   (`failureWindowStarts`), so a weekly failure stays visible until it runs again.
 - **A later success clears it** when the `completed` set holds a run of that name finished after the
   newest failure. Limits: only 100 completed runs are kept, and the match is by job name, so an
-  intermittent failure of a five-minute job that has since succeeded is not reported.
+  intermittent failure of a five-minute job that has since succeeded is not reported. The admin's
+  queue screen applies the same rule (`src/queues/queue-job-history.ts`): `queue-status` counts the
+  open failures as `failedOpen`, and `queue-failures` gives each failure its `failedAt` and
+  `succeededSince`, so a failure fixed days ago no longer reads as a current one.
 - **Blind spot:** a job added with `removeOnFail: true` leaves no failed entry (the term audit and the
   sweep itself, and the delayed `revalidate-parks` that the ride-stats and curated-data processors and
   `AdminCurationService` enqueue).
