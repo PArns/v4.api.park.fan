@@ -5,6 +5,7 @@ import type Redis from "ioredis";
 import { DataSource } from "typeorm";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { addIsoDays } from "../common/utils/date.util";
+import { isShuttingDown } from "../common/utils/graceful-shutdown";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
   getSearchConsoleImportDays,
@@ -20,9 +21,11 @@ import {
   BACKFILL_DAYS,
   BATCH_FORMAT,
   DROP_LOCK_TIMEOUT,
+  EMPTY_DAY_RETRY_DAYS,
   GSC_SEARCH_TYPES,
   GSC_TYPES_WITHOUT_DEVICES,
   GSC_TYPES_WITHOUT_QUERIES,
+  IMPORT_HEARTBEAT_MS,
   IMPORT_LOCK_KEY,
   IMPORT_LOCK_TTL_MS,
   INSERT_CHUNK_ROWS,
@@ -68,6 +71,8 @@ export interface DayBatch {
 export interface ImportSummary {
   /** Why nothing ran, when nothing did. */
   skipped?: "not-configured" | "running";
+  /** The app began to shut down, so the run ended before its last unit. */
+  stopped?: boolean;
   daysChecked: number;
   batchesWritten: number;
   unchanged: number;
@@ -224,22 +229,28 @@ export function isUnchanged(
 
 /**
  * The days a run looks at for one type, newest first: the recent ones again,
- * then those never fetched, which includes those whose current batch is in an
- * older layout. A type nobody has imported yet is all "never fetched", so its
- * first run is its backfill.
+ * then the older ones without an answer: never fetched (which includes those
+ * whose current batch is in an older layout), or fetched empty while Google
+ * may still deliver them (`EMPTY_DAY_RETRY_DAYS`). A type nobody has imported
+ * yet is all "never fetched", so its first run is its backfill.
  */
 export function planDays(
   now: Date,
   recentDays: number,
-  current: ReadonlyMap<string, Pick<CurrentBatch, "format">>,
+  current: ReadonlyMap<string, Pick<CurrentBatch, "format" | "rows">>,
 ): string[] {
   const end = addIsoDays(utcDay(now), -1);
   const recent = daysBetween(addIsoDays(end, -(recentDays - 1)), end).reverse();
+  const emptyFrom = addIsoDays(end, -(EMPTY_DAY_RETRY_DAYS - 1));
   const older = daysBetween(
     addIsoDays(end, -(BACKFILL_DAYS - 1)),
     addIsoDays(end, -recentDays),
   )
-    .filter((day) => (current.get(day)?.format ?? 0) < BATCH_FORMAT)
+    .filter((day) => {
+      const batch = current.get(day);
+      if (!batch || batch.format < BATCH_FORMAT) return true;
+      return batch.rows === 0 && day >= emptyFrom;
+    })
     .reverse();
   return [...recent, ...older];
 }
@@ -259,6 +270,12 @@ export function planDays(
 export class SearchConsoleImportService {
   private readonly logger = new Logger(SearchConsoleImportService.name);
 
+  /** Whether the app is shutting down; a test replaces it. */
+  shuttingDown: () => boolean = isShuttingDown;
+
+  /** How often a run renews its lock and stamps its heartbeat; a test shortens it. */
+  heartbeatMs = IMPORT_HEARTBEAT_MS;
+
   constructor(
     @InjectDataSource() private readonly db: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -270,6 +287,12 @@ export class SearchConsoleImportService {
    * the lock. Throws once every day it could was written, if some days failed
    * or Google refused the account, so the job shows as failed and the status
    * carries the reason.
+   *
+   * While it runs it renews its lock and stamps its run every minute, so a
+   * run lost with its process frees the lock within minutes (PAR-1182). When
+   * the app shuts down it stops before the next unit, within the shutdown's
+   * 20 s: the run is recorded as stopped, with the reason as its error, and
+   * the job does not fail, since nothing went wrong but the timing.
    */
   async run(
     triggeredBy: "cron" | "manual",
@@ -283,6 +306,11 @@ export class SearchConsoleImportService {
     if (!lock) return { ...emptySummary(), skipped: "running" };
 
     const runId = await this.startRun(triggeredBy);
+    const heartbeat = setInterval(
+      () => void this.heartbeat(lock, runId),
+      this.heartbeatMs,
+    );
+    heartbeat.unref();
     const summary = emptySummary();
     let failure: Error | null = null;
     try {
@@ -295,7 +323,17 @@ export class SearchConsoleImportService {
     } catch (error) {
       failure = error as Error;
     } finally {
-      await this.finishRun(runId, summary, failure);
+      clearInterval(heartbeat);
+      await this.finishRun(
+        runId,
+        summary,
+        failure ??
+          (summary.stopped
+            ? new Error(
+                `Stopped by a shutdown after ${summary.daysChecked} unit(s); the next run picks up the rest`,
+              )
+            : null),
+      );
       await this.releaseLock(lock);
     }
     if (failure) throw failure;
@@ -325,6 +363,13 @@ export class SearchConsoleImportService {
     let consecutive = 0;
     let lastMessage = "";
     for (const { day, type, current } of work) {
+      if (this.shuttingDown()) {
+        summary.stopped = true;
+        this.logger.warn(
+          `Search Console import stopped by a shutdown after ${summary.daysChecked} of ${work.length} unit(s)`,
+        );
+        break;
+      }
       summary.daysChecked++;
       const label = type === "web" ? day : `${day} (${type})`;
       try {
@@ -507,6 +552,40 @@ export class SearchConsoleImportService {
       );
     } catch (error) {
       this.logger.warn(`Could not close the run: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Keeps the run's lock while the process lives, and stamps the run, which
+   * is what the status reads as "running". Neither failing stops the run.
+   */
+  private async heartbeat(token: string, runId: number | null): Promise<void> {
+    try {
+      const renewed = await this.redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) end return 0",
+        1,
+        IMPORT_LOCK_KEY,
+        token,
+        String(IMPORT_LOCK_TTL_MS),
+      );
+      if (renewed !== 1) {
+        this.logger.warn(
+          "Search Console import lock was lost; another run may start",
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not renew the import lock: ${(error as Error).message}`,
+      );
+    }
+    if (runId === null) return;
+    try {
+      await this.db.query(
+        `UPDATE search_console_runs SET heartbeat_at = now() WHERE id = $1`,
+        [runId],
+      );
+    } catch (error) {
+      this.logger.warn(`Could not stamp the run: ${(error as Error).message}`);
     }
   }
 

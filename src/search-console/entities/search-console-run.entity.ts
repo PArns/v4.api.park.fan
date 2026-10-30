@@ -8,8 +8,9 @@ import {
 /**
  * One run of the import, for the status: when it last succeeded and what the
  * last one failed on. Inserted when a run starts and completed once when it
- * ends; a run that died with its process stays unfinished, counts as running
- * while its lock would hold (three hours), and is ignored after that.
+ * ends, and stamped every minute while it runs (`heartbeatAt`). A run that
+ * died with its process stays unfinished; once its stamp is older than the
+ * lock's five minutes it no longer counts as running.
  * Pruned after 90 days.
  */
 @Entity("search_console_runs")
@@ -26,6 +27,10 @@ export class SearchConsoleRun {
 
   @Column({ name: "finished_at", type: "timestamptz", nullable: true })
   finishedAt: Date | null;
+
+  /** The last minute the run was alive; null until its first stamp. */
+  @Column({ name: "heartbeat_at", type: "timestamptz", nullable: true })
+  heartbeatAt: Date | null;
 
   @Column({ type: "boolean", nullable: true })
   ok: boolean | null;

@@ -33,6 +33,15 @@ export const DEFAULT_IMPORT_DAYS = 3;
 export const MAX_IMPORT_DAYS = 30;
 
 /**
+ * A day that came back empty is asked again until it is this many days old
+ * (yesterday is 1). Google's final numbers usually arrive two days late, but
+ * a delay of a few more would otherwise leave the day empty for good once it
+ * leaves the recent days (PAR-1181). Only empty days pay for it: a few
+ * requests a night for the types that are often empty (news, Discover).
+ */
+export const EMPTY_DAY_RETRY_DAYS = 10;
+
+/**
  * How far back the first run reaches. Search Console keeps 16 months; a few
  * days short of it, since a start date past its limit is a 400.
  */
@@ -56,9 +65,17 @@ export const MAX_CONSECUTIVE_FAILURES = 3;
 /** `drop_chunks` gives up on a lock after this, rather than queueing the API behind it. */
 export const DROP_LOCK_TIMEOUT = "5s";
 
-/** The Redis lock of a running import, in ms; the job ends long before it. */
-export const IMPORT_LOCK_TTL_MS = 3 * 60 * 60 * 1000;
+/**
+ * The Redis lock of a running import, in ms. A live run renews it every
+ * `IMPORT_HEARTBEAT_MS`, so it outlasts any run; a run lost with its process
+ * (a deploy that could not wait for it) releases it within this time instead
+ * of holding off every other run for hours (PAR-1182).
+ */
+export const IMPORT_LOCK_TTL_MS = 5 * 60 * 1000;
 export const IMPORT_LOCK_KEY = "search-console:import:lock";
+
+/** How often a running import renews its lock and stamps its run's `heartbeat_at`. */
+export const IMPORT_HEARTBEAT_MS = 60 * 1000;
 
 /** A second click on "import now" within this many seconds queues nothing new. */
 export const IMPORT_REQUEST_COOLDOWN_SECONDS = 60;
