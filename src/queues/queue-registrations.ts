@@ -19,7 +19,15 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // path (PAR-822). See LiveCacheWarmupProcessor.
   { name: "live-cache-warmup" },
   { name: "park-metadata" },
-  { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
+  {
+    // Phase 6.2: Combined Attractions + Shows + Restaurants. The weekly
+    // sync-attraction-details runs ~4 h, so a deploy can stop it more than
+    // once; Bull's default of one stall failed it on 2026-10-25 after two
+    // (PAR-1183). It resumes after the last ride it finished, so a few more
+    // stalls cost minutes, not a restart.
+    name: "children-metadata",
+    settings: { maxStalledCount: 3 },
+  },
   { name: "six-flags-heights" }, // Ride heights the wiki does not carry
   { name: "ride-stats" }, // Speed/height/length from Wikidata
   { name: "manual-metadata" }, // Curated data (name is historical — see CuratedDataProcessor)
