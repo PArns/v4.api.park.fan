@@ -235,7 +235,11 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
    reaches the [data-quality report](../architecture/job-queues.md#failed-jobs-retention-and-monitoring),
    and the run's error is the status's `lastError` until a later run succeeds.
 4. **One run at a time:** a Redis lock (`search-console:import:lock`, three hours at most); a second
-   job finds it taken and returns.
+   job finds it taken and returns, without a run of its own.
+5. **Where a run shows.** The queue is on the admin's queue screen
+   ([`queue-status`](../admin/endpoints.md)): a run started by hand is `active` there until it ends,
+   and a failed one says why (`queue-failures?queue=search-console`). The status below has no
+   "running" field.
 
 `lastImportAt` is the end of the last successful run, `coverage` the first and last day with data in
 the current `web` batches, `rows` their row count; `types` has the same per type.

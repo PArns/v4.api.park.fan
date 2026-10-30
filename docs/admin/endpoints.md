@@ -67,8 +67,8 @@ dates ISO strings or null. `redirectHost` is the redirect URI's host, with its p
 | POST | `backfill-park-day-operation` | owner | job `park-day-operation` / `backfill-park-day-operation` ([calendar rules](../architecture/calendar-schedule-and-ml-rules.md)) |
 | POST | `dedupe-percentile-aggregates` | owner | job `analytics` / `dedupe-percentile-aggregates` |
 | POST | `rebuild-downtime?days=` | **viewer** | job `downtime` / `reconstruct-downtime`, one attempt, `days` 1–400 (default 30) ([ride downtime](../analytics/ride-downtime/reconstruction.md)). It carries no `@AdminMinRole`, so any account can start it |
-| GET | `queue-status` | viewer | job counts for eleven queues, not all of them |
-| GET | `queue-failures?queue=&limit=3` | viewer | failure reasons of recent failed jobs; seven queues accepted (`wait-times`, `park-metadata`, `children-metadata`, `manual-metadata`, `six-flags-heights`, `ride-stats`, `prediction-accuracy`) |
+| GET | `queue-status` | viewer | job counts for fifteen queues, not all of them: the main ones and every queue the admin starts by hand (`search-console` among them) |
+| GET | `queue-failures?queue=&limit=3` | viewer | failure reasons of recent failed jobs, for every queue `queue-status` counts; another name answers `Unknown queue` with the list |
 
 ## Models and forecasts
 

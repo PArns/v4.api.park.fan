@@ -26,10 +26,11 @@ export interface QueueFailure {
  */
 @Injectable()
 export class AdminQueueStatusService {
-  /** The queues the status screen counts. */
-  private readonly counted: Record<string, Queue>;
-  /** The queues whose failures can be read. */
-  private readonly inspectable: Record<string, Queue>;
+  /**
+   * The queues the status screen counts, and whose failures it can read: one
+   * list, because the screen offers "why" on every queue that shows a failure.
+   */
+  private readonly queues: Record<string, Queue>;
 
   constructor(
     @InjectQueue("holidays") holidays: Queue,
@@ -43,8 +44,12 @@ export class AdminQueueStatusService {
     @InjectQueue("manual-metadata") manualMetadata: Queue,
     @InjectQueue("prediction-accuracy") accuracy: Queue,
     @InjectQueue("analytics") analytics: Queue,
+    @InjectQueue("search-console") searchConsole: Queue,
+    @InjectQueue("downtime") downtime: Queue,
+    @InjectQueue("pcn-shadow") pcnShadow: Queue,
+    @InjectQueue("park-day-operation") parkDayOperation: Queue,
   ) {
-    this.counted = {
+    this.queues = {
       "wait-times": waitTimes,
       "park-metadata": parkMetadata,
       "ml-training": mlTraining,
@@ -58,22 +63,16 @@ export class AdminQueueStatusService {
       "manual-metadata": manualMetadata,
       "six-flags-heights": sixFlagsHeights,
       "ride-stats": rideStats,
-    };
-    this.inspectable = {
-      "wait-times": waitTimes,
-      "park-metadata": parkMetadata,
-      "children-metadata": children,
-      "manual-metadata": manualMetadata,
-      "six-flags-heights": sixFlagsHeights,
-      "ride-stats": rideStats,
-      analytics,
-      "prediction-accuracy": accuracy,
+      "search-console": searchConsole,
+      downtime,
+      "pcn-shadow": pcnShadow,
+      "park-day-operation": parkDayOperation,
     };
   }
 
   async counts(): Promise<QueueCounts[]> {
     return Promise.all(
-      Object.entries(this.counted).map(async ([name, queue]) => ({
+      Object.entries(this.queues).map(async ([name, queue]) => ({
         name,
         active: await queue.getActiveCount(),
         pending: await queue.getWaitingCount(),
@@ -86,13 +85,13 @@ export class AdminQueueStatusService {
 
   /** Names `failures` accepts. */
   inspectableQueues(): string[] {
-    return Object.keys(this.inspectable);
+    return Object.keys(this.queues);
   }
 
   /** The most recent failed jobs of one queue, or null for an unknown queue. */
   async failures(name: string, limit: number): Promise<QueueFailure[] | null> {
-    const queue = Object.prototype.hasOwnProperty.call(this.inspectable, name)
-      ? this.inspectable[name]
+    const queue = Object.prototype.hasOwnProperty.call(this.queues, name)
+      ? this.queues[name]
       : undefined;
     if (!queue) return null;
     const jobs = await queue.getFailed(0, Math.max(limit, 1) - 1);
