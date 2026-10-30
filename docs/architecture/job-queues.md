@@ -33,7 +33,7 @@ find what runs when, or before adding a queue or a cron.
 | `park-metadata` / `sync-schedules-only` | 15:00 | Schedules only ([schedule sync](schedule-sync-and-calendar.md)); `sync-park-schedule` and `fill-all-gaps` run on demand |
 | `park-metadata` / `warmup-calendar-daily` | 08:00, 20:00 | Calendar months and the `/best-days` snapshot ([caching](caching-strategy.md#cache-warmup)) |
 | `park-metadata` / `decay-popularity` | 00:00 | Decays the popularity sorted sets |
-| `children-metadata` / `sync-attraction-details` | Sun 05:30 | Attraction detail sync |
+| `children-metadata` / `sync-attraction-details` | Sun 05:30 | Attraction detail sync, ~4 h; a run a deploy stopped resumes after the last ride it finished (see below) |
 | `six-flags-heights` / `sync-heights` | Mon 03:00 | Ride heights the wiki lacks |
 | `weather` / `fetch-weather` | 00:00, 12:00 (full); 07:00, 19:00 (current) | [Weather](weather.md) |
 | `weather-warnings` / `sync-warnings` | every 15 min | Severe-weather warnings |
@@ -66,7 +66,7 @@ find what runs when, or before adding a queue or a cron.
 | `trips` / `sweep-expired` | 04:45 | Deletes expired stored plans |
 | `site-analytics` / `flush`, `snapshot-visitors`, `rollup-days`, `drop-old-chunks` | every 5 min from :01; 00:05, 00:20, 00:35, 00:50; 02:35, 08:35, 14:35, 20:35; 01:47 | The [site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples): visits idle for 30 minutes ended with an exit each, then finished five-minute windows from Redis into its hourly rows (a failing window set aside after an hour, the rest go on; a failing flush keeps 100 failures), yesterday's visitors and their hours in the hour its HyperLogLogs outlive it, each finished day summed into the [daily tables](../frontend/site-analytics.md#the-daily-level) the long reports read (a day once it has settled, two hours after midnight; the other runs find nothing or catch up), and at 01:47 the [retention](../frontend/site-analytics.md#retention): hourly chunks past 90 days, only once every day with rows in them is rolled up (a chunk that is not stays and fails the job, which reaches the failing-jobs report), daily chunks past 400 days, and the visitor counts and roll-up markers past theirs deleted |
 | `admin-audit` / `sweep-addresses` | 01:15 | The [audit log's address](../admin/authentication.md#address-retention): cleared on rows past 90 days, any full address still stored cut to its network; logs counts only |
-| `search-console` / `import`, `drop-old-chunks` | 09:20 and on demand; 01:55 | [Google Search Console](../frontend/search-console.md#the-import): the last three days again and every day of 16 months never fetched, a batch per changed day; chunks past 500 days. Does nothing without `GSC_SERVICE_ACCOUNT_JSON` |
+| `search-console` / `import`, `drop-old-chunks` | 09:20 and on demand; 01:55 | [Google Search Console](../frontend/search-console.md#the-import): the last three days again, every day of 16 months never fetched and every empty day of the last ten, a batch per changed day; chunks past 500 days. Does nothing without `GSC_SERVICE_ACCOUNT_JSON` |
 | `manual-metadata` / `audit-ride-profile-terms` | 06:30 | Checks every glossary term id in `attraction_ride_profiles` against the frontend's list. The queue keeps its old name because Bull keys repeatable jobs by queue name; it is `CuratedDataProcessor` |
 | `db-maintenance` / `prune-tft-forecasts`, `vacuum-churn-tables`, `reindex-pcn-forecasts-pkey` | 04:35; 04:50; Sun 19:10 | TFT retention, VACUUM before training, PCN index rebuild ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md); plan in `src/database/maintenance/vacuum-plan.ts`) |
 | `geoip-update` / `update-geolite2-city` | 00:00 every second day | [GeoIP](location-resolution.md) |
@@ -86,6 +86,20 @@ reads CLOSED is re-checked against the live sources in `buildIntegratedResponse`
 never fetch at the same time. Both log `⏱️ … phases {json}`; the wait-times line carries `prepareMs`,
 `parksMs`, `heartbeatsMs` and per-park sums (`mappingsSumMs`, `fetch.<source>.SumMs`, `writeSumMs`)
 that overlap because five parks run in parallel.
+
+## A job a deploy stops
+
+A deploy gives the jobs in flight 20 s (`SHUTDOWN_DEADLINE_MS`, `graceful-shutdown.ts`); a job
+still running then dies with the process. Bull notices the lost lock, counts a stall and hands the
+job to the next container, which runs it again from its start; past `maxStalledCount` (default 1)
+it fails with "job stalled more than allowable limit" and `attemptsMade` 0, since nothing threw.
+
+A job long enough to meet deploys keeps its place instead: `sync-attraction-details` (~4 h) walks
+the rides in id order, stores the last one it finished as the job's `progress`, which Bull keeps
+across the stall, and a run resumes after it. Its queue, `children-metadata`, allows three stalls
+(`settings.maxStalledCount` in `queue-registrations.ts`); two deploys on 2026-10-25 failed the
+run under the default of one (PAR-1183). A longer `lockDuration` would not help here: the process is
+gone, and the lock only decides how soon the stall is noticed.
 
 ## Failed jobs: retention and monitoring
 

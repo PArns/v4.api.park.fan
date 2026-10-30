@@ -191,7 +191,10 @@ A day that did not change is not written at all: the next run compares the fresh
 count, clicks, impressions and position sum with the current batch's, and skips it. So the cost of
 re-importing three days a night is five requests a day and, in the steady state, no write; storage
 holds each day once plus the days Google revised. A day Google had nothing for gets a batch without
-rows, so it is asked about again only while it is among the recent days. Retention is
+rows, and is asked about again until it is ten days old (`EMPTY_DAY_RETRY_DAYS`): Google's final
+numbers usually arrive two days late, and a delay of a few more would otherwise leave the day empty
+for good once it left the recent days (PAR-1181). An empty answer to that question writes nothing,
+so the cost is the requests of the empty days, mostly `news` and `discover`. Retention is
 `drop_chunks` past 500 days (16 months and the rest of a chunk) in the nightly job, under a 5 s
 `lock_timeout` ([lock queues](../troubleshooting/timescaledb-lock-queues.md)), which also deletes
 the batch rows of dropped days and the runs older than 90 days.
@@ -215,14 +218,16 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
 
 1. **Which days.** For every type: the last `GSC_IMPORT_DAYS` days (default 3, 1–30) ending yesterday,
    newest first, then every day of the last 480 days (16 months, a few days short of Google's limit)
-   that has no batch of that type or whose batch is in an older format. The units (day, type) of a run
+   that has no batch of that type or whose batch is in an older format, and every day of the last ten
+   whose batch is empty. The units (day, type) of a run
    are processed newest day first. The first run after the types arrived is therefore the backfill of
    `image`, `news` and `discover`, newest days first; a run that stops resumes with the units still
    missing, because every unit is its own transaction.
 2. **One unit:** `searchAnalytics.query` requests with the unit's `type`: no dimension, `[page]`,
    `[country]`, `[device]` and `[page, query, country, device]` for `web`, `image` and `news` (5), and
    `[page]` and `[country]` for `discover` (2: no property request, no device, no queries). That is up
-   to 17 requests per day (5 + 5 + 5 + 2); a nightly run of three days is about 51 requests, and the
+   to 17 requests per day (5 + 5 + 5 + 2); a nightly run of three days is about 51 requests, plus up to
+   seven older empty days of a type (35 for `news`, 14 for `discover`), and the
    one-off backfill of the three new types over 480 days is 480 × 12 = **5,760 requests**
    (more where a day has over 25,000 rows). `dataState: final`, 25,000 rows a request with
    `startRow` until a page is not full, four tries on a 429, a 5xx or a network failure with a
@@ -234,19 +239,28 @@ Queue `search-console`, `import` nightly at 09:20 UTC and on demand
    one failed day among good ones is listed and the run goes on. Any failure fails the job, so it
    reaches the [data-quality report](../architecture/job-queues.md#failed-jobs-retention-and-monitoring),
    and the run's error is the status's `lastError` until a later run succeeds.
-4. **One run at a time:** a Redis lock (`search-console:import:lock`, three hours at most); a second
-   job finds it taken and returns, without a run of its own.
-5. **Where a run shows.** The status's `runningSince` is the start of the run in progress, and the
+4. **One run at a time:** a Redis lock (`search-console:import:lock`); a second job finds it taken and
+   returns, without a run of its own. The lock lasts five minutes and the run renews it every minute,
+   stamping its row's `heartbeat_at` with the same beat, so a run lost with its process (a deploy
+   that could not wait) frees the lock within five minutes instead of holding off every run for
+   hours (PAR-1182).
+5. **A shutdown.** A deploy gives the jobs in flight 20 s
+   ([a job a deploy stops](../architecture/job-queues.md#a-job-a-deploy-stops)). The run checks for a
+   shutdown before each unit and stops there: it records itself as not ok with "Stopped by a shutdown
+   after N unit(s)" as its error (the status's `lastError` until the next success), releases the
+   lock, and the job ends without failing. The units it did not reach are the next run's: the days
+   never fetched are planned anyway, the recent ones every night.
+6. **Where a run shows.** The status's `runningSince` is the start of the run in progress, and the
    queue is on the admin's queue screen ([`queue-status`](../admin/endpoints.md)): a run is `active`
    there until it ends, and a failed one says why (`queue-failures?queue=search-console`).
 
 `lastImportAt` is the end of the last successful run, `coverage` the first and last day with data in
 the current `web` batches, `rows` their row count; `types` has the same per type. `runningSince` is
-the start of the newest run while it has no end and started less than the lock's three hours ago,
-`null` otherwise. While it is set an import request queues a job that returns at once, so a client
-disables its button and waits for `lastImportAt` or `lastError` to change. A run lost with its
-process (a deploy mid-run) counts until its lock expires, because no other run starts before then
-either.
+the start of the newest run while it has no end and has stamped `heartbeat_at` (or, before its
+first stamp, started) within the lock's five minutes, `null` otherwise. While it is set an import
+request queues a job that returns at once, so a client disables its button and waits for
+`lastImportAt` or `lastError` to change. A run lost with its process stops counting when its lock
+lapses.
 
 ## Google's API without a client library
 

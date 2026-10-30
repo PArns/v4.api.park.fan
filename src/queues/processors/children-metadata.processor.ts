@@ -254,6 +254,30 @@ export function lastListingOf(row: {
 }
 
 /** Decimal places `attractions.latitude` and `.longitude` are stored with. */
+/** What `sync-attraction-details` stores as its job's progress: the last ride it finished. */
+export interface DetailSyncProgress {
+  after: string;
+}
+
+/**
+ * The ride id a run of `sync-attraction-details` resumes after, or null for a
+ * fresh run. Bull keeps a job's progress when a stalled job goes back to the
+ * queue, so the run after a deploy finds where the one before it stopped.
+ */
+export function detailSyncResumePoint(
+  job: Pick<Job, "progress">,
+): string | null {
+  const progress: unknown = job.progress();
+  if (
+    progress !== null &&
+    typeof progress === "object" &&
+    typeof (progress as Partial<DetailSyncProgress>).after === "string"
+  ) {
+    return (progress as DetailSyncProgress).after;
+  }
+  return null;
+}
+
 export const COORDINATE_SCALE = 7;
 
 /**
@@ -784,9 +808,14 @@ export class ChildrenMetadataProcessor {
    * publishes a different number (deliberate — the park's own sign wins) and
    * `may_get_wet` likewise. A hand-made correction to the wet flag therefore
    * belongs in `curated_may_get_wet`, which this sync never touches.
+   *
+   * A run takes ~4 h, so a deploy can land in it; the next container then
+   * runs the job again. It walks the rides in id order and stores the last
+   * one finished as the job's progress, so that run picks up after it
+   * instead of starting over (PAR-1183).
    */
   @Process("sync-attraction-details")
-  async handleSyncAttractionDetails(_job: Job): Promise<void> {
+  async handleSyncAttractionDetails(job: Job): Promise<void> {
     this.logger.log("📏 Starting attraction detail sync (minimumHeight)...");
 
     const repo = this.attractionsService.getRepository();
@@ -813,13 +842,23 @@ export class ChildrenMetadataProcessor {
     // Queue-Times-only attractions (e.g. "qt-ride-8") are skipped.
     const UUID_RE =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const wikiAttractions = attractions.filter((a) =>
-      UUID_RE.test(a.externalId),
-    );
+    const wikiAttractions = attractions
+      .filter((a) => UUID_RE.test(a.externalId))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
     this.logger.log(
       `📊 ${wikiAttractions.length}/${attractions.length} attractions have wiki entity documents`,
     );
+
+    const resumeAfter = detailSyncResumePoint(job);
+    const pending = resumeAfter
+      ? wikiAttractions.filter((a) => a.id > resumeAfter)
+      : wikiAttractions;
+    if (resumeAfter) {
+      this.logger.log(
+        `↪️ Resuming after ${resumeAfter}: ${pending.length}/${wikiAttractions.length} left`,
+      );
+    }
 
     // Deliberately slow: one request every 2 s, ~1/8 of the client's 240/min
     // cap. The 5-minute live poll shares that budget, and at the old 4/s this
@@ -833,8 +872,8 @@ export class ChildrenMetadataProcessor {
     let updated = 0;
     let failed = 0;
 
-    for (let i = 0; i < wikiAttractions.length; i += BATCH_SIZE) {
-      const batch = wikiAttractions.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      const batch = pending.slice(i, i + BATCH_SIZE);
       await Promise.all(
         batch.map(async (attraction) => {
           for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -894,12 +933,21 @@ export class ChildrenMetadataProcessor {
         }),
       );
 
+      try {
+        const progress: DetailSyncProgress = {
+          after: batch[batch.length - 1].id,
+        };
+        await job.progress(progress);
+      } catch {
+        // Only the resume point is lost; the run itself goes on.
+      }
+
       if (i % 500 === 0 && i > 0) {
         this.logger.log(
-          `Progress: ${i}/${wikiAttractions.length} (${updated} updated, ${failed} failed)`,
+          `Progress: ${i}/${pending.length} (${updated} updated, ${failed} failed)`,
         );
       }
-      if (i + BATCH_SIZE < wikiAttractions.length) {
+      if (i + BATCH_SIZE < pending.length) {
         await this.sleep(BATCH_DELAY_MS);
       }
     }

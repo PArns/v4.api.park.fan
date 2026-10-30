@@ -203,7 +203,7 @@ describe("SearchConsoleService.status", () => {
     });
   });
 
-  it("says since when an import is running, read from the newest run while its lock holds", async () => {
+  it("says since when an import is running, read from the newest run while it shows signs of life", async () => {
     const { service, calls } = build({
       success: new Date("2026-10-29T09:20:16Z"),
       running: new Date("2026-10-30T09:20:00Z"),
@@ -215,6 +215,7 @@ describe("SearchConsoleService.status", () => {
     const query = calls.find((call) => call.sql.includes("AS running_since"));
     expect(query?.sql).toContain("WHERE id = (SELECT MAX(id)");
     expect(query?.sql).toContain("finished_at IS NULL");
+    expect(query?.sql).toContain("COALESCE(heartbeat_at, started_at)");
     expect(query?.params).toEqual([IMPORT_LOCK_TTL_MS]);
   });
 });

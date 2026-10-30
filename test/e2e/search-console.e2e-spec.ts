@@ -786,29 +786,46 @@ describe("Search Console (e2e)", () => {
     expect(audit).toEqual([{ action: "job.search-console/import" }]);
   });
 
-  it("says since when an import runs, and not for a run that finished or whose lock has lapsed", async () => {
+  it("says since when an import runs, and not for a run that finished or stopped showing signs of life", async () => {
     const viewer = await account("gsc-running@example.invalid", "viewer");
     const runningSince = async () =>
       (await get("/v1/admin/search-console/status", viewer.session).expect(200))
         .body.runningSince as string | null;
+    const insertRun = async (
+      startedAgo: string,
+      heartbeatAgo: string | null,
+    ) => {
+      const [{ id, started_at }]: Array<{ id: number; started_at: Date }> =
+        await dataSource.query(
+          `INSERT INTO search_console_runs (triggered_by, started_at, heartbeat_at)
+           VALUES ('cron', now() - $1::interval, now() - $2::interval)
+           RETURNING id, started_at`,
+          [startedAgo, heartbeatAgo],
+        );
+      return { id, since: new Date(started_at).toISOString() };
+    };
 
-    // A run lost with its process four hours ago: its lock has lapsed.
+    // Lost with its process hours ago, never stamped: not running.
+    await insertRun("4 hours", null);
+    expect(await runningSince()).toBeNull();
+
+    // A long run that stamped half a minute ago is running since its start.
+    const long = await insertRun("2 hours", "30 seconds");
+    expect(await runningSince()).toBe(long.since);
+
+    // The same run, silent for ten minutes: its process is gone.
     await dataSource.query(
-      `INSERT INTO search_console_runs (triggered_by, started_at)
-       VALUES ('manual', now() - interval '4 hours')`,
+      `UPDATE search_console_runs SET heartbeat_at = now() - interval '10 minutes' WHERE id = $1`,
+      [long.id],
     );
     expect(await runningSince()).toBeNull();
 
-    const [{ started_at }]: Array<{ started_at: Date }> =
-      await dataSource.query(
-        `INSERT INTO search_console_runs (triggered_by, started_at)
-         VALUES ('cron', now() - interval '5 minutes') RETURNING started_at`,
-      );
-    expect(await runningSince()).toBe(new Date(started_at).toISOString());
-
+    // A run a minute old, before its first stamp, is running; finished, it is not.
+    const fresh = await insertRun("1 minute", null);
+    expect(await runningSince()).toBe(fresh.since);
     await dataSource.query(
-      `UPDATE search_console_runs SET finished_at = now(), ok = true
-        WHERE started_at > now() - interval '1 hour'`,
+      `UPDATE search_console_runs SET finished_at = now(), ok = true WHERE id = $1`,
+      [fresh.id],
     );
     expect(await runningSince()).toBeNull();
   });

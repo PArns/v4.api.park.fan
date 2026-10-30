@@ -277,8 +277,8 @@ export class SearchConsoleStatusDto {
     description:
       "When the import that is running now started; null when none is. While it is set, " +
       "an import request queues a job that returns at once, so wait until `lastImportAt` or " +
-      "`lastError` changes. A run lost with its process counts until its lock expires, three " +
-      "hours after its start, because no other run starts before then either.",
+      "`lastError` changes. A run lost with its process stops counting within five minutes, " +
+      "when its lock lapses too.",
   })
   runningSince: string | null;
 

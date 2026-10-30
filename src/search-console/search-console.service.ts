@@ -266,14 +266,14 @@ export class SearchConsoleService {
         `SELECT ok, error FROM search_console_runs
           WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1`,
       );
-    // The newest run, while it has not finished and its lock has not expired:
-    // a run lost with its process holds the lock as long as a live one, and
-    // no other run starts before it lapses either.
+    // The newest run, while it has not finished and has shown a sign of life
+    // within the lock's time: a run lost with its process stops stamping, and
+    // its lock lapses in the same time (PAR-1182).
     const [running]: Array<{ running_since: Date }> = await this.db.query(
       `SELECT started_at AS running_since FROM search_console_runs
         WHERE id = (SELECT MAX(id) FROM search_console_runs)
           AND finished_at IS NULL
-          AND started_at > now() - ($1::int * interval '1 millisecond')`,
+          AND COALESCE(heartbeat_at, started_at) > now() - ($1::int * interval '1 millisecond')`,
       [IMPORT_LOCK_TTL_MS],
     );
     return {

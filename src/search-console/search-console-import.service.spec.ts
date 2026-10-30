@@ -11,6 +11,8 @@ import {
   BACKFILL_DAYS,
   BATCH_FORMAT,
   GSC_SEARCH_TYPES,
+  IMPORT_LOCK_KEY,
+  IMPORT_LOCK_TTL_MS,
   type GscSearchType,
 } from "./search-console.constants";
 
@@ -194,8 +196,8 @@ describe("propertyFromPages", () => {
 
 describe("planDays", () => {
   const now = new Date("2026-10-28T09:20:00Z");
-  const fetched = (days: string[], format = BATCH_FORMAT) =>
-    new Map(days.map((day) => [day, { format }]));
+  const fetched = (days: string[], format = BATCH_FORMAT, rows = 5) =>
+    new Map(days.map((day) => [day, { format, rows }]));
   const older = planDays(now, 3, new Map()).slice(3);
 
   it("re-imports the last days, newest first, ending yesterday", () => {
@@ -214,10 +216,29 @@ describe("planDays", () => {
     expect(days[days.length - 1]).toBe("2025-07-05");
   });
 
-  it("leaves out an old day that was fetched, even one that came back empty", () => {
+  it("leaves out an old day that was fetched with data", () => {
     const days = planDays(now, 3, fetched(["2026-10-24", "2026-10-23"]));
     expect(days).toHaveLength(BACKFILL_DAYS - 2);
     expect(days).not.toContain("2026-10-24");
+  });
+
+  it("asks an empty day again until it is ten days old, then leaves it", () => {
+    // Yesterday is 2026-10-27, so the tenth day back is 2026-10-18.
+    const empty = fetched(older, BATCH_FORMAT, 0);
+    expect(planDays(now, 3, empty)).toEqual([
+      "2026-10-27",
+      "2026-10-26",
+      "2026-10-25",
+      "2026-10-24",
+      "2026-10-23",
+      "2026-10-22",
+      "2026-10-21",
+      "2026-10-20",
+      "2026-10-19",
+      "2026-10-18",
+    ]);
+    // The same days with data are not asked again.
+    expect(planDays(now, 3, fetched(older))).toHaveLength(3);
   });
 
   it("fetches again every day whose current batch is in an older layout", () => {
@@ -233,12 +254,16 @@ interface Fetched {
   format?: number;
 }
 
-/** Every day the planner looks at, fetched and empty: a type that has nothing to import. */
+/**
+ * Every day the planner looks at, fetched with data: a type that has nothing
+ * new to import. With data, so only its recent days are asked again (an empty
+ * day would be asked for ten days, PAR-1181).
+ */
 const settled = (now: Date): Record<string, Fetched> =>
   Object.fromEntries(
     planDays(now, 3, new Map()).map((day) => [
       day,
-      { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
+      { rows: 1, clicks: 0, impressions: 0, positionSum: 0 },
     ]),
   );
 
@@ -317,7 +342,7 @@ function build(
   };
   const redis = {
     set: jest.fn(async () => (options.lock === false ? null : "OK")),
-    eval: jest.fn(async () => 1),
+    eval: jest.fn(async (..._args: unknown[]) => 1),
   };
   const fetchDay = jest.fn(
     async (
@@ -366,13 +391,13 @@ describe("SearchConsoleImportService.run", () => {
     process.env = { ...saved };
   });
 
-  /** Every older day already fetched, so only the recent three are in play. */
+  /** Every older day already fetched with data, so only the recent three are in play. */
   const olderFetched = Object.fromEntries(
     planDays(now, 3, new Map())
       .slice(3)
       .map((day) => [
         day,
-        { rows: 0, clicks: 0, impressions: 0, positionSum: 0 },
+        { rows: 1, clicks: 0, impressions: 0, positionSum: 0 },
       ]),
   );
 
@@ -574,6 +599,51 @@ describe("SearchConsoleImportService.run", () => {
     const update = paramsOf(db, "UPDATE search_console_runs");
     expect(update?.[1]).toBe(true);
     expect(redis.eval).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops before the next unit when the app shuts down, records why, and does not fail the job", async () => {
+    const { service, fetchDay, db, redis } = build({ fetched: olderFetched });
+    let asked = 0;
+    // Shutting down from the third unit on: web and image of 2026-10-27 run.
+    service.shuttingDown = () => asked++ >= 2;
+    const summary = await service.run("cron", now);
+    expect(summary).toMatchObject({ stopped: true, daysChecked: 2 });
+    expect(fetchDay).toHaveBeenCalledTimes(10);
+    const update = paramsOf(db, "UPDATE search_console_runs");
+    expect(update?.[1]).toBe(false);
+    expect(String(update?.[5])).toContain("Stopped by a shutdown after 2");
+    // The lock is released for the next container.
+    expect(redis.eval).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews its lock and stamps its run while it runs, and stops when it ends", async () => {
+    const { service, db, redis, fetchDay } = build({ fetched: olderFetched });
+    service.heartbeatMs = 5;
+    fetchDay.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return [];
+    });
+    await service.run("cron", now);
+
+    const renewals = redis.eval.mock.calls.filter(([script]) =>
+      String(script).includes("pexpire"),
+    );
+    expect(renewals.length).toBeGreaterThan(0);
+    expect(renewals[0].slice(2)).toEqual([
+      IMPORT_LOCK_KEY,
+      expect.any(String),
+      String(IMPORT_LOCK_TTL_MS),
+    ]);
+    const stamps = () =>
+      db.query.mock.calls.filter(([sql]) =>
+        String(sql).includes("SET heartbeat_at = now()"),
+      );
+    expect(stamps().length).toBeGreaterThan(0);
+    expect(stamps()[0][1]).toEqual([1]);
+
+    const after = stamps().length;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(stamps().length).toBe(after);
   });
 
   it("does not run while another run holds the lock", async () => {
