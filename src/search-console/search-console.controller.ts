@@ -65,7 +65,8 @@ export class AdminSearchConsoleController {
     description:
       "`configured` is false without `GSC_SERVICE_ACCOUNT_JSON` and `GSC_SITE_URL` " +
       "(or with ones that do not parse; `lastError` says which). `coverage` is the " +
-      "first and last day with data, `lastImportAt` the end of the last successful run.",
+      "first and last day with data, `lastImportAt` the end of the last successful run, " +
+      "`runningSince` the start of the run in progress (null when none is).",
   })
   @ApiResponse({ status: 200, type: SearchConsoleStatusDto })
   status(): Promise<SearchConsoleStatusDto> {

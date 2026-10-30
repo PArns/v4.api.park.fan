@@ -137,7 +137,7 @@ Google Search Console's numbers, imported nightly: every report takes the site s
 
 | Method | Path | Role | Does |
 | --- | --- | --- | --- |
-| GET | `search-console/status` | viewer | `{ configured, siteUrl, lastImportAt, lastError, coverage, rows }` |
+| GET | `search-console/status` | viewer | `{ configured, siteUrl, lastImportAt, lastError, runningSince, coverage, rows, types }` |
 | POST | `search-console/import` | editor | job `search-console` / `import`, `202 { queued: true }`, audited; `409` when not configured |
 | GET | `search-console/queries?page=&country=&device=&limit=` | viewer | the queries the site was found with, most clicks first, with the change against the window before |
 | GET | `search-console/pages?query=&country=&device=&limit=` | viewer | the pages, with the site statistic's own visits from search (`site`) |

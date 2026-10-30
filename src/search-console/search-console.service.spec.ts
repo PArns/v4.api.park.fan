@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { IMPORT_LOCK_TTL_MS } from "./search-console.constants";
 import {
   SearchConsoleService,
   levelPlan,
@@ -25,6 +26,8 @@ function build(options: {
   coverages?: Array<Record<string, unknown>>;
   success?: Date | null;
   latest?: { ok: boolean; error: string | null };
+  /** The start of the run in progress. */
+  running?: Date;
 }) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   const db = {
@@ -63,6 +66,8 @@ function build(options: {
         return options.coverages ?? [];
       if (sql.includes("MAX(finished_at)"))
         return [{ at: options.success ?? null }];
+      if (sql.includes("AS running_since"))
+        return options.running ? [{ running_since: options.running }] : [];
       if (sql.includes("FROM search_console_runs"))
         return options.latest ? [options.latest] : [];
       if (sql.includes("FROM site_pageviews")) return options.site ?? [];
@@ -128,6 +133,7 @@ describe("SearchConsoleService.status", () => {
       siteUrl: "sc-domain:park.fan",
       lastImportAt: null,
       lastError: expect.stringContaining("JSON"),
+      runningSince: null,
       coverage: null,
       rows: 0,
       types: {
@@ -179,6 +185,7 @@ describe("SearchConsoleService.status", () => {
       siteUrl: "sc-domain:park.fan",
       lastImportAt: "2026-10-27T09:25:00.000Z",
       lastError: "Search Console refused the account",
+      runningSince: null,
       coverage: { from: "2025-07-05", to: "2026-10-25" },
       rows: 81234,
       types: {
@@ -194,6 +201,21 @@ describe("SearchConsoleService.status", () => {
         },
       },
     });
+  });
+
+  it("says since when an import is running, read from the newest run while its lock holds", async () => {
+    const { service, calls } = build({
+      success: new Date("2026-10-29T09:20:16Z"),
+      running: new Date("2026-10-30T09:20:00Z"),
+    });
+    expect(await service.status()).toMatchObject({
+      lastImportAt: "2026-10-29T09:20:16.000Z",
+      runningSince: "2026-10-30T09:20:00.000Z",
+    });
+    const query = calls.find((call) => call.sql.includes("AS running_since"));
+    expect(query?.sql).toContain("WHERE id = (SELECT MAX(id)");
+    expect(query?.sql).toContain("finished_at IS NULL");
+    expect(query?.params).toEqual([IMPORT_LOCK_TTL_MS]);
   });
 });
 

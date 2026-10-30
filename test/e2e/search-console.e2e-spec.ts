@@ -281,6 +281,7 @@ describe("Search Console (e2e)", () => {
         siteUrl: "sc-domain:park.fan",
         lastImportAt: null,
         lastError: null,
+        runningSince: null,
         coverage: null,
         rows: 0,
         types: {
@@ -783,6 +784,33 @@ describe("Search Console (e2e)", () => {
       `SELECT action FROM admin_audit_log WHERE action LIKE 'job.search-console%'`,
     );
     expect(audit).toEqual([{ action: "job.search-console/import" }]);
+  });
+
+  it("says since when an import runs, and not for a run that finished or whose lock has lapsed", async () => {
+    const viewer = await account("gsc-running@example.invalid", "viewer");
+    const runningSince = async () =>
+      (await get("/v1/admin/search-console/status", viewer.session).expect(200))
+        .body.runningSince as string | null;
+
+    // A run lost with its process four hours ago: its lock has lapsed.
+    await dataSource.query(
+      `INSERT INTO search_console_runs (triggered_by, started_at)
+       VALUES ('manual', now() - interval '4 hours')`,
+    );
+    expect(await runningSince()).toBeNull();
+
+    const [{ started_at }]: Array<{ started_at: Date }> =
+      await dataSource.query(
+        `INSERT INTO search_console_runs (triggered_by, started_at)
+         VALUES ('cron', now() - interval '5 minutes') RETURNING started_at`,
+      );
+    expect(await runningSince()).toBe(new Date(started_at).toISOString());
+
+    await dataSource.query(
+      `UPDATE search_console_runs SET finished_at = now(), ok = true
+        WHERE started_at > now() - interval '1 hour'`,
+    );
+    expect(await runningSince()).toBeNull();
   });
 
   it("records why a run failed when Google refuses the account, and clears it with the next success", async () => {

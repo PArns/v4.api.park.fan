@@ -8,7 +8,8 @@ import {
 /**
  * One run of the import, for the status: when it last succeeded and what the
  * last one failed on. Inserted when a run starts and completed once when it
- * ends; a run that died with its process stays unfinished and is ignored.
+ * ends; a run that died with its process stays unfinished, counts as running
+ * while its lock would hold (three hours), and is ignored after that.
  * Pruned after 90 days.
  */
 @Entity("search_console_runs")

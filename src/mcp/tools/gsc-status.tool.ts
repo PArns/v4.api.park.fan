@@ -7,7 +7,8 @@ export const gscStatusTool = defineMcpTool({
   title: "Search Console status",
   description:
     "Whether Google Search Console is connected to park.fan's admin, the property it reads " +
-    "(siteUrl), when the nightly import last succeeded (lastImportAt), the first and last day " +
+    "(siteUrl), when the nightly import last succeeded (lastImportAt), when the run in progress " +
+    "started (runningSince; null when none is), the first and last day " +
     "with data (coverage; null before the first import) and the rows held. lastError says why " +
     "the last import failed or why the connection is off. Call it first: when configured is " +
     "false the other gsc_ tools have nothing to answer with, and coverage.to is the newest " +
