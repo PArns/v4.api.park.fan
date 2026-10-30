@@ -7,8 +7,11 @@ export const queueStatusTool = defineMcpTool({
   title: "Job queues",
   description:
     "The Bull job queues (wait-times, park-metadata, ml-training, analytics, holidays …): active, " +
-    "waiting, failed, delayed and completed counts for each. With `failuresOf`, also the most " +
-    "recent failed jobs of that queue with their reason and first stack lines.",
+    "waiting, failed, delayed and completed counts for each. `failed` is every failure Bull still " +
+    "keeps, however old; `failedOpen` only those no later run of the same job has succeeded " +
+    "since. With `failuresOf`, also the most recent failed jobs of that queue with their reason, " +
+    "first stack lines, when they failed (`failedAt`) and when the job last succeeded after that " +
+    "(`succeededSince`, null while it has not).",
   input: {
     failuresOf: z
       .string()

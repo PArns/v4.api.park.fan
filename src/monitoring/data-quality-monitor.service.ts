@@ -8,6 +8,7 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { CronExpressionParser } from "cron-parser";
 import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
+import { newestSuccessByName, settledAt } from "../queues/queue-job-history";
 
 /**
  * Three detectors for the ways this system went quietly wrong for weeks.
@@ -848,29 +849,15 @@ export class DataQualityMonitorService {
         // A later success clears the failure. Only completions newer than the
         // oldest reported failure can matter, so read just those.
         const earliest = Math.min(...newestFailure.values());
-        const completed: string[] = await client.zrangebyscore(
-          `${prefix}:${queueName}:completed`,
-          `(${earliest}`,
-          "+inf",
-          "WITHSCORES",
+        const newestSuccess = await newestSuccessByName(
+          client,
+          (typeOrId) => `${prefix}:${queueName}:${typeOrId}`,
+          earliest,
         );
-        const newestSuccess = new Map<string, number>();
-        for (let i = 0; i < completed.length; i += 2) {
-          const doneAt = Number(completed[i + 1]);
-          const [name] = await client.hmget(
-            `${prefix}:${queueName}:${completed[i]}`,
-            "name",
-          );
-          const jobName = name ?? "unknown";
-          newestSuccess.set(
-            jobName,
-            Math.max(newestSuccess.get(jobName) ?? 0, doneAt),
-          );
-        }
 
         for (const [jobName, job] of byJobName) {
           const failedAt = newestFailure.get(jobName) ?? 0;
-          if ((newestSuccess.get(jobName) ?? 0) > failedAt) continue;
+          if (settledAt(newestSuccess, jobName, failedAt) !== null) continue;
           results.push(job);
         }
       } catch (e) {
