@@ -168,6 +168,19 @@ export class AssistantRecordsService {
     return { days, ratings: ratings[0], openFeedback };
   }
 
+  /**
+   * Deletes one chat with its messages, for the admin. Feedback sent from it stays and only
+   * loses its link. False when there is no such chat.
+   */
+  async deleteConversation(id: string): Promise<boolean> {
+    await this.feedback.update(
+      { conversationId: id },
+      { conversationId: null },
+    );
+    const result = await this.conversations.delete({ id });
+    return (result.affected ?? 0) > 0;
+  }
+
   /** Deletes chats past the retention; their messages go with them. */
   async pruneConversations(): Promise<number> {
     const result = await this.conversations
