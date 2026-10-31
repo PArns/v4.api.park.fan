@@ -53,7 +53,14 @@ export type AssistantCard =
     }
   | {
       kind: "parks";
-      parks: Array<{ name: string; place: string | null; url: string | null }>;
+      parks: Array<{
+        name: string;
+        place: string | null;
+        url: string | null;
+        status: string | null;
+        crowdLevel: string | null;
+        avgWaitMinutes: number | null;
+      }>;
     };
 
 export type ClientAction =

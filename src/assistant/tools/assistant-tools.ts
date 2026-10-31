@@ -48,7 +48,7 @@ type ParkSummary =
       country?: string | null;
       status?: string | null;
       pageUrl?: string | null;
-      crowd?: { level?: string | null } | null;
+      crowd?: { level?: string | null; avgWaitMinutes?: number | null } | null;
       scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
       rides?: {
         longestWaits?: Array<{ id: string; name: string; waitMinutes: number }>;
@@ -589,24 +589,35 @@ export const ASSISTANT_TOOLS = [
     run: async ({ kind, park, parks, rideId, order, limit }, ctx) => {
       if (kind === "parks") {
         if (!parks?.length) throw new McpToolError("kind parks needs parks");
-        const rows: Array<{
-          name: string;
-          place: string | null;
-          url: string | null;
-        }> = [];
-        for (const reference of parks) {
-          const found = await resolvePark(mcp(ctx), reference).catch(
-            () => null,
-          );
-          if (!found || isAmbiguous(found)) continue;
-          const pageUrl = parkPageUrl(found);
-          rows.push({
-            name: found.name,
-            place:
-              [found.city, found.country].filter(Boolean).join(", ") || null,
-            url: pageUrl ? siteOnlyPath(pageUrl) : null,
-          });
-        }
+        // Each row with its live state, as the park cards on the site show it.
+        const rows = (
+          await Promise.all(
+            parks.map(async (reference) => {
+              const found = await resolvePark(mcp(ctx), reference).catch(
+                () => null,
+              );
+              if (!found || isAmbiguous(found)) return null;
+              const live = (await getParkTool
+                .handler({ park: found.id, longestWaits: 0 }, mcp(ctx))
+                .catch(() => null)) as ParkSummary | null;
+              const summary = live && !("ambiguous" in live) ? live : null;
+              const pageUrl = parkPageUrl(found);
+              return {
+                name: found.name,
+                place:
+                  [found.city, found.country].filter(Boolean).join(", ") ||
+                  null,
+                url: pageUrl ? siteOnlyPath(pageUrl) : null,
+                status: summary?.status ?? null,
+                crowdLevel: summary?.crowd?.level ?? null,
+                avgWaitMinutes:
+                  summary?.crowd?.avgWaitMinutes != null
+                    ? Math.round(summary.crowd.avgWaitMinutes)
+                    : null,
+              };
+            }),
+          )
+        ).filter((row) => row !== null);
         const card: AssistantCard = { kind: "parks", parks: rows };
         return new ActionOutcome(
           { type: "card", card },
