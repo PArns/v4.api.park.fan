@@ -126,6 +126,8 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // than a second job on the push tick, because it is maintenance on a
   // table and has nothing to do with notifying anybody.
   { name: "trips" },
+  // Parky's chats: one nightly delete of the ones past their retention.
+  { name: "assistant" },
   // The site statistic's nightly visitor snapshot (yesterday's HyperLogLogs
   // into Postgres) and its retention prune. Two small statements a day.
   { name: "site-analytics" },

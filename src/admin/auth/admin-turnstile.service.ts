@@ -41,7 +41,14 @@ export interface TurnstileVerdict {
 export class AdminTurnstileService {
   private readonly logger = new Logger(AdminTurnstileService.name);
 
-  async verify(token: string, ip: string | null): Promise<TurnstileVerdict> {
+  /**
+   * @param expectedAction When given, a token solved for another form (its `action`) is refused.
+   */
+  async verify(
+    token: string,
+    ip: string | null,
+    expectedAction?: string,
+  ): Promise<TurnstileVerdict> {
     const secret = getAdminTurnstileSecret();
     // Callers gate on isAdminLoginTurnstileEnforced() before asking, so this is
     // a belt-and-braces guard rather than the live path. It refuses rather than
@@ -68,8 +75,16 @@ export class AdminTurnstileService {
 
       const data = (await response.json()) as {
         success?: boolean;
+        action?: string;
         "error-codes"?: string[];
       };
+      if (
+        data.success === true &&
+        expectedAction !== undefined &&
+        data.action !== expectedAction
+      ) {
+        return { success: false, reason: "wrong-action" };
+      }
       if (data.success === true) return { success: true };
       return {
         success: false,

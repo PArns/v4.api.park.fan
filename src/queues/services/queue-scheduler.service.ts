@@ -106,6 +106,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
+    @InjectQueue("assistant") private assistantQueue: Queue,
     @InjectQueue("site-analytics") private siteAnalyticsQueue: Queue,
     @InjectQueue("search-console") private searchConsoleQueue: Queue,
     @InjectQueue("admin-audit") private adminAuditQueue: Queue,
@@ -1126,6 +1127,22 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "45 4 * * *" },
           jobId: "trip-sweep-cron",
+        },
+      );
+    }
+
+    // Assistant chats: delete the ones past their retention, nightly at 04:50.
+    const hasAssistantPruneCron = await this.hasRepeatableJob(
+      this.assistantQueue,
+      "assistant-prune-cron",
+    );
+    if (!hasAssistantPruneCron) {
+      await this.assistantQueue.add(
+        "prune-conversations",
+        {},
+        {
+          repeat: { cron: "50 4 * * *" },
+          jobId: "assistant-prune-cron",
         },
       );
     }
