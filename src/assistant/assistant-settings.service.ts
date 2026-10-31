@@ -15,7 +15,7 @@ const SETTINGS_ID = 1;
 const TOKENS_PREFIX = "assistant:tokens:";
 const VISITOR_PREFIX = "assistant:visitor-tokens:";
 /** What one session may spend a day: a few dozen chats, a sliver of the budget. */
-export const VISITOR_DAILY_TOKENS = 150_000;
+export const VISITOR_DAILY_TOKENS = 500_000;
 const TWO_DAYS_SECONDS = 2 * 24 * 60 * 60;
 
 /** What the admin may change; every field optional. `apiKey: null` removes the key. */

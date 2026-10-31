@@ -21,8 +21,8 @@ export class AssistantSettings {
   @Column({ type: "varchar", length: 32, nullable: true })
   apiKeyMasked: string | null;
 
-  /** Input plus output tokens all chats may spend per UTC day; 0 means no cap. */
-  @Column({ type: "integer", default: 2_000_000 })
+  /** Tokens all chats may spend per UTC day (about 12,000 a chat, 0.1 cent); 0 means no cap. */
+  @Column({ type: "integer", default: 50_000_000 })
   dailyTokenBudget: number;
 
   @Column({ type: "varchar", length: 200, nullable: true })

@@ -86,7 +86,7 @@ buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_bloc
 
 ## Limits and cost
 
-Per session (`AssistantRateLimitService`): 20 questions per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 150,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
+Per session (`AssistantRateLimitService`): 20 questions per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
 spent, the config says off and new chats get a 503. Cache reads cost a tenth and are left out of
 both counts. A stream cut short is counted from its events, so dropping the connection is no way
 around the budget. Each answer stores its tokens and cost at Haiku 5.5's prices.
