@@ -31,6 +31,11 @@ export class AssistantPostsClient {
     return this.get("assistant-post", { locale, slug });
   }
 
+  /** Up to five glossary terms for a query, with their short definitions. */
+  glossary(locale: string, query: string): Promise<unknown> {
+    return this.get("glossary-search", { locale, q: query });
+  }
+
   private async get(
     route: string,
     params: Record<string, string>,
@@ -42,6 +47,9 @@ export class AssistantPostsClient {
 
     const response = await fetch(`${getFrontendUrl()}/api/${route}?${search}`, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
+      // Named, so park.fan's Cloudflare rules and logs can tell these reads apart; the three
+      // routes need a skip rule there for the API server (docs/frontend/assistant.md).
+      headers: { "User-Agent": "api.park.fan-assistant" },
     });
     if (response.status === 404) return { found: false };
     if (!response.ok) {

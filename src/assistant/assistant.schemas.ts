@@ -25,6 +25,12 @@ export const chatRequestSchema = z.strictObject({
   pagePath,
   message: z.string().trim().min(1).max(1000),
   sessionToken,
+  /** The browser's IANA zone, e.g. Europe/Berlin; an unknown one counts as UTC. */
+  timeZone: z
+    .string()
+    .max(64)
+    .regex(/^[A-Za-z_+\-/0-9]+$/)
+    .optional(),
   /**
    * Sent only after the visitor pressed „Standort teilen" in the chat; rounded here to two
    * decimals (about a kilometre), never stored or logged.

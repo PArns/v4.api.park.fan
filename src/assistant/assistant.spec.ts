@@ -7,6 +7,12 @@ import {
 } from "./assistant-secret.util";
 import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
 import {
+  bookableHours,
+  localizeTimes,
+  parkHourInstant,
+  userTimeZone,
+} from "./assistant-time";
+import {
   issueSessionToken,
   sessionKey,
   SESSION_TTL_SECONDS,
@@ -80,17 +86,95 @@ describe("session token", () => {
   });
 });
 
+describe("browser time", () => {
+  it("rewrites every instant into the visitor's zone, and nothing else", () => {
+    expect(
+      localizeTimes(
+        {
+          closes: "2026-10-31T18:00:00+01:00",
+          opens: "2026-10-31T08:00:00Z",
+          date: "2026-10-31",
+          name: "Taron",
+          hours: [{ at: "2026-10-31T13:00:00.000Z", waitMinutes: 20 }],
+        },
+        "Europe/Berlin",
+      ),
+    ).toEqual({
+      closes: "2026-10-31 18:00",
+      opens: "2026-10-31 09:00",
+      date: "2026-10-31",
+      name: "Taron",
+      hours: [{ at: "2026-10-31 14:00", waitMinutes: 20 }],
+    });
+    expect(localizeTimes("2026-07-01T16:00:00Z", "America/New_York")).toBe(
+      "2026-07-01 12:00",
+    );
+  });
+
+  it("falls back to UTC for a zone the runtime does not know", () => {
+    expect(userTimeZone("Europe/Berlin")).toBe("Europe/Berlin");
+    expect(userTimeZone("Mars/Olympus")).toBe("UTC");
+    expect(userTimeZone(undefined)).toBe("UTC");
+  });
+
+  it("turns a park-local hour into the instant it is", () => {
+    // Orlando, EDT before 1 November: 14:00 there is 18:00 UTC, 19:00 in Berlin.
+    const at = parkHourInstant("2026-10-31", 14, "America/New_York");
+    expect(at).toBe("2026-10-31T18:00:00.000Z");
+    expect(localizeTimes(at, "Europe/Berlin")).toBe("2026-10-31 19:00");
+  });
+});
+
+describe("bookable forecast hours", () => {
+  const hours = [8, 9, 12, 14, 17, 18, 19].map((hour) => ({ hour }));
+
+  it("keeps only the opening, never the closing hour", () => {
+    // Open 09:00 to 18:00: closeHour is 18, the last hour to queue in is 17.
+    expect(
+      bookableHours(hours, { openHour: 9, closeHour: 18 }, null).map(
+        (h) => h.hour,
+      ),
+    ).toEqual([9, 12, 14, 17]);
+  });
+
+  it("drops the hours already over today", () => {
+    expect(
+      bookableHours(hours, { openHour: 9, closeHour: 18 }, 14).map(
+        (h) => h.hour,
+      ),
+    ).toEqual([14, 17]);
+  });
+
+  it("unfolds a day that runs past midnight", () => {
+    const late = [10, 22, 23, 24, 25].map((hour) => ({ hour }));
+    expect(
+      bookableHours(late, { openHour: 10, closeHour: 0 }, null).map(
+        (h) => h.hour,
+      ),
+    ).toEqual([10, 22, 23]);
+    expect(parkHourInstant("2026-10-31", 24, "UTC")).toBe(
+      "2026-11-01T00:00:00.000Z",
+    );
+  });
+});
+
 describe("system prompt", () => {
   it("sets the language and the informal address per locale", () => {
     const de = chatContext({
       locale: "de",
-      today: "2026-10-31",
+      now: "2026-10-31 14:21",
+      timeZone: "Europe/Berlin",
       pagePath: "/de",
     });
     expect(de).toContain("Always answer in German");
     expect(de).toContain('"du"');
     expect(
-      chatContext({ locale: "fr", today: "2026-10-31", pagePath: "/fr" }),
+      chatContext({
+        locale: "fr",
+        now: "2026-10-31 14:21",
+        timeZone: "Europe/Paris",
+        pagePath: "/fr",
+      }),
     ).toContain('"tu", never "vous"');
   });
 
@@ -208,6 +292,7 @@ describe("assistant tools", () => {
       "get_best_days",
       "search_posts",
       "get_post",
+      "look_up_glossary",
       "find_parks_nearby",
       "request_location",
       "get_directions",
