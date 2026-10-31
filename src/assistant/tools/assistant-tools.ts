@@ -14,7 +14,7 @@ import { BestDaysService } from "../../parks/services/best-days.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
-import { DataSource } from "typeorm";
+import { DataSource, In } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AssistantPostsClient } from "./assistant-posts.client";
 import { getFrontendUrl } from "../../config/oauth.config";
@@ -50,7 +50,9 @@ type ParkSummary =
       pageUrl?: string | null;
       crowd?: { level?: string | null } | null;
       scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
-      rides?: { longestWaits?: Array<{ name: string; waitMinutes: number }> };
+      rides?: {
+        longestWaits?: Array<{ id: string; name: string; waitMinutes: number }>;
+      };
     };
 
 /** The fields of `get_attraction`'s answer a card reads. */
@@ -297,7 +299,9 @@ export const ASSISTANT_TOOLS = [
     description:
       "The days ahead for one park: per day the opening hours or closed, the expected crowd level, " +
       "the expected peak wait of the headliners, weather (basis climate_normal is the long-run " +
-      "average, not a forecast) and holidays; plus today's hourly forecast. Days after " +
+      "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
+      "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
+      "forecast. Use it for special days and events too. Days after " +
       "scheduleCoverage.to have no published hours yet: treat their status as unknown.",
     input: z.object({
       park: parkRef,
@@ -560,11 +564,18 @@ export const ASSISTANT_TOOLS = [
     description:
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
       "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
-      "level), or a park's rides with their current waits (kind rides, longest or shortest " +
-      "first). Whenever the answer lists rides with waits, show kind rides instead of writing " +
-      "the waits as text; keep the text to a sentence and do not repeat the card's numbers.",
+      "level), a park's rides with their current waits (kind rides, longest or shortest " +
+      "first), or several parks to click (kind parks). Whenever the answer lists rides with " +
+      "waits, show kind rides, and whenever it lists parks, show kind parks, instead of writing " +
+      "the list as text; keep the text to a sentence and do not repeat the card's numbers.",
     input: z.object({
-      kind: z.enum(["park", "ride", "rides"]),
+      kind: z.enum(["park", "ride", "rides", "parks"]),
+      parks: z
+        .array(parkRef)
+        .min(1)
+        .max(8)
+        .optional()
+        .describe("For kind parks: park ids or slugs, in the order to show"),
       park: parkRef
         .optional()
         .describe("For kind park or rides: park id or slug"),
@@ -575,7 +586,33 @@ export const ASSISTANT_TOOLS = [
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
-    run: async ({ kind, park, rideId, order, limit }, ctx) => {
+    run: async ({ kind, park, parks, rideId, order, limit }, ctx) => {
+      if (kind === "parks") {
+        if (!parks?.length) throw new McpToolError("kind parks needs parks");
+        const rows: Array<{
+          name: string;
+          place: string | null;
+          url: string | null;
+        }> = [];
+        for (const reference of parks) {
+          const found = await resolvePark(mcp(ctx), reference).catch(
+            () => null,
+          );
+          if (!found || isAmbiguous(found)) continue;
+          const pageUrl = parkPageUrl(found);
+          rows.push({
+            name: found.name,
+            place:
+              [found.city, found.country].filter(Boolean).join(", ") || null,
+            url: pageUrl ? siteOnlyPath(pageUrl) : null,
+          });
+        }
+        const card: AssistantCard = { kind: "parks", parks: rows };
+        return new ActionOutcome(
+          { type: "card", card },
+          { shown: rows.map((row) => row.name) },
+        );
+      }
       if (kind === "rides") {
         if (!park) throw new McpToolError("kind rides needs park");
         // Every operating ride with a posted wait, longest first, so both ends can be cut.
@@ -585,9 +622,31 @@ export const ASSISTANT_TOOLS = [
         )) as ParkSummary;
         if ("ambiguous" in live) return live;
         const all = live.rides?.longestWaits ?? [];
-        const rides = (order === "shortest" ? [...all].reverse() : all)
-          .slice(0, limit)
-          .map((ride) => ({ name: ride.name, waitMinutes: ride.waitMinutes }));
+        const picked = (order === "shortest" ? [...all].reverse() : all).slice(
+          0,
+          limit,
+        );
+        // Each row links its own ride page, built from the ride's park and slug.
+        const found = await ctx
+          .get(DataSource)
+          .getRepository(Attraction)
+          .find({
+            where: { id: In(picked.map((ride) => ride.id)) },
+            relations: { park: true },
+          });
+        const pages = new Map(
+          found.map((ride) => {
+            const pageUrl = ride.park
+              ? attractionPageUrl(ride.park, ride)
+              : null;
+            return [ride.id, pageUrl ? siteOnlyPath(pageUrl) : null];
+          }),
+        );
+        const rides = picked.map((ride) => ({
+          name: ride.name,
+          waitMinutes: ride.waitMinutes,
+          url: pages.get(ride.id) ?? null,
+        }));
         const card: AssistantCard = {
           kind: "rides",
           park: live.name,

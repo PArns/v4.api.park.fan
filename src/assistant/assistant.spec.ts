@@ -191,6 +191,17 @@ describe("system prompt", () => {
       pageSubject("/de/parks/europe/germany/bruehl/phantasialand/taron"),
     ).toContain('the ride with slug "taron"');
     expect(pageSubject("/de/blog")).toBeNull();
+    expect(pageSubject("/de/news/taron-neu")).toContain(
+      'the news post with slug "taron-neu"',
+    );
+    expect(pageSubject("/de/glossary/airtime")).toContain(
+      'the glossary entry with slug "airtime"',
+    );
+    expect(
+      pageSubject(
+        "/de/parks/europe/germany/bruehl/phantasialand/wait-time-calendar",
+      ),
+    ).toBe('the wait-time calendar of the park with slug "phantasialand"');
   });
 });
 

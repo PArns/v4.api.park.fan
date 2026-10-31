@@ -48,8 +48,12 @@ export type AssistantCard =
       /** The park the list belongs to, its page the card's link. */
       park: string;
       order: "longest" | "shortest";
-      rides: Array<{ name: string; waitMinutes: number }>;
+      rides: Array<{ name: string; waitMinutes: number; url: string | null }>;
       url: string | null;
+    }
+  | {
+      kind: "parks";
+      parks: Array<{ name: string; place: string | null; url: string | null }>;
     };
 
 export type ClientAction =
