@@ -9,7 +9,7 @@ import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import { parkForecastTool } from "../../mcp/tools/park-forecast.tool";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
-import { parkPageUrl } from "../../mcp/tools/links";
+import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
@@ -136,6 +136,10 @@ function tool<Shape extends z.ZodRawShape>(
 function mcp(ctx: AssistantToolContext): McpToolContext {
   return { admin: PARKY, get: ctx.get.bind(ctx) };
 }
+
+/** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
+const CONTENT_PATH =
+  /^\/(?:en|de|nl|fr|es|it)\/(?:blog|news|glossary)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const parkRef = z
   .string()
@@ -641,23 +645,54 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "open_page",
     description:
-      "Take the user to a park.fan page in their browser: a park's or ride's pageUrl, or a " +
-      "post's url, exactly as another tool returned it. Only when the user asks to go to, see " +
-      "or open a page. Their chat stays open.",
+      "Take the user to a park.fan page in their browser, only when they ask to go to, see or " +
+      "open it. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
+      "glossary term (its url from search_posts or look_up_glossary). The page address is " +
+      "built from the park.fan data, never typed by you.",
     input: z.object({
+      park: parkRef.optional(),
+      rideId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("Ride id from find_rides or get_park_live"),
       url: z
         .string()
         .max(400)
-        .describe("A pageUrl or url from another tool's result"),
+        .optional()
+        .describe(
+          "A post's or glossary term's url, exactly as a tool returned it",
+        ),
     }),
-    run: ({ url }) => {
-      const path = siteOnlyPath(url);
-      if (!path) {
-        throw new McpToolError("Only park.fan pages from a tool result");
+    run: async ({ park, rideId, url }, ctx) => {
+      let path: string | null = null;
+      if (rideId) {
+        const ride = await ctx
+          .get(DataSource)
+          .getRepository(Attraction)
+          .findOne({
+            where: { id: rideId.toLowerCase() },
+            relations: { park: true },
+          });
+        if (!ride?.park) throw new McpToolError("No such ride; try find_rides");
+        const pageUrl = attractionPageUrl(ride.park, ride);
+        path = pageUrl ? siteOnlyPath(pageUrl) : null;
+      } else if (park) {
+        const found = await resolvePark(mcp(ctx), park);
+        if (isAmbiguous(found)) return found;
+        const pageUrl = parkPageUrl(found);
+        path = pageUrl ? siteOnlyPath(pageUrl) : null;
+      } else if (url) {
+        const candidate = siteOnlyPath(url);
+        // Posts and glossary terms only; parks and rides go by id, so no address is guessed.
+        path = candidate && CONTENT_PATH.test(candidate) ? candidate : null;
       }
-      return Promise.resolve(
-        new ActionOutcome({ type: "navigate", path }, { opened: path }),
-      );
+      if (!path) {
+        throw new McpToolError(
+          "Give a park, a rideId, or a post or glossary url a tool returned",
+        );
+      }
+      return new ActionOutcome({ type: "navigate", path }, { opened: true });
     },
   }),
   tool({
