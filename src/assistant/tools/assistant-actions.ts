@@ -42,6 +42,14 @@ export type AssistantCard =
       crowdLevel: string | null;
       waitMinutes: number | null;
       url: string | null;
+    }
+  | {
+      kind: "rides";
+      /** The park the list belongs to, its page the card's link. */
+      park: string;
+      order: "longest" | "shortest";
+      rides: Array<{ name: string; waitMinutes: number }>;
+      url: string | null;
     };
 
 export type ClientAction =

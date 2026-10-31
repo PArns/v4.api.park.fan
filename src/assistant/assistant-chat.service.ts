@@ -11,6 +11,7 @@ import {
 } from "./entities/assistant-message.entity";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
 import {
   ASSISTANT_TOOL_PARAMS,
@@ -134,6 +135,7 @@ export class AssistantChatService {
     ip: string | null,
   ): Promise<void> {
     const { conversation, request } = chat;
+    const timeZone = userTimeZone(request.timeZone);
     emit({ type: "start", conversationId: conversation.id });
     await this.messages.save(
       this.messages.create({
@@ -158,7 +160,8 @@ export class AssistantChatService {
         type: "text",
         text: chatContext({
           locale: request.locale,
-          today: new Date().toISOString().slice(0, 10),
+          now: nowIn(timeZone),
+          timeZone,
           pagePath: request.pagePath,
           pageSubject: pageSubject(request.pagePath),
         }),
@@ -174,6 +177,7 @@ export class AssistantChatService {
       locale: request.locale,
       ip,
       location: request.location ?? null,
+      timeZone,
     };
     const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const toolCalls: AssistantToolCall[] = [];

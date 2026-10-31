@@ -17,6 +17,14 @@ import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 import { DataSource } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AssistantPostsClient } from "./assistant-posts.client";
+import { getFrontendUrl } from "../../config/oauth.config";
+import {
+  bookableHours,
+  localizeTimes,
+  parkHourInstant,
+} from "../assistant-time";
+import { formatInTimeZone } from "date-fns-tz";
+import { unfoldedCloseHour } from "../../common/utils/day-shape.util";
 import { LocationService } from "../../location/location.service";
 import { GeoipService } from "../../geoip/geoip.service";
 import {
@@ -91,6 +99,8 @@ export interface AssistantToolContext {
   ip?: string | null;
   /** The position the visitor shared in this question, rounded to about a kilometre. */
   location?: { lat: number; lng: number } | null;
+  /** The browser's IANA zone; every instant in a result is shown in it. */
+  timeZone?: string;
 }
 
 interface AssistantTool<Shape extends z.ZodRawShape> {
@@ -114,7 +124,8 @@ export type AssistantToolStatus =
   | "posts"
   | "planner"
   | "location"
-  | "weather";
+  | "weather"
+  | "glossary";
 
 function tool<Shape extends z.ZodRawShape>(
   definition: AssistantTool<Shape>,
@@ -238,8 +249,15 @@ export const ASSISTANT_TOOLS = [
         throw new McpToolError(`No ride ${rideId}; try find_rides`);
       const day = date ?? getCurrentDateInTimezone(ride.park.timezone);
       const plan = await ctx.get(PlanDayService).buildPlanDay(ride.park, day);
-      const hours =
-        plan.rides.find((r) => r.attractionId === ride.id)?.hours ?? [];
+      const tz = ride.park.timezone;
+      const isToday = day === getCurrentDateInTimezone(tz);
+      // Never an hour after closing, and today never one that is already over.
+      const hours = bookableHours(
+        plan.rides.find((r) => r.attractionId === ride.id)?.hours ?? [],
+        plan.context,
+        isToday ? Number(formatInTimeZone(new Date(), tz, "H")) : null,
+      );
+      const { openHour, closeHour } = plan.context;
       const best = hours.reduce<(typeof hours)[number] | null>(
         (low, hour) => (low === null || hour.wait < low.wait ? hour : low),
         null,
@@ -249,11 +267,23 @@ export const ASSISTANT_TOOLS = [
         park: ride.park.name,
         date: day,
         tier: plan.tier,
+        parkStatus: plan.context.status,
+        opens: openHour !== null ? parkHourInstant(day, openHour, tz) : null,
+        closes:
+          openHour !== null && closeHour !== null
+            ? parkHourInstant(day, unfoldedCloseHour(openHour, closeHour), tz)
+            : null,
+        // Park-local hours become instants, so they reach the model in the visitor's clock.
         hours: hours.map((hour) => ({
-          hour: hour.hour,
+          at: parkHourInstant(day, hour.hour, ride.park.timezone),
           waitMinutes: hour.wait,
         })),
-        shortestAt: best ? { hour: best.hour, waitMinutes: best.wait } : null,
+        shortestAt: best
+          ? {
+              at: parkHourInstant(day, best.hour, ride.park.timezone),
+              waitMinutes: best.wait,
+            }
+          : null,
       };
     },
   }),
@@ -281,6 +311,19 @@ export const ASSISTANT_TOOLS = [
         mcp(ctx),
       )) as Record<string, unknown>;
       delete forecast.servingModels;
+      // `todayHourly` counts park-local hours of the park's today; make them instants.
+      const parkInfo = forecast.park as { timezone?: string } | undefined;
+      const forecastDays = forecast.days as Array<{ date: string }> | undefined;
+      const hourly = forecast.todayHourly as Array<
+        { hour: number } & Record<string, unknown>
+      > | null;
+      const today = forecastDays?.[0]?.date;
+      if (hourly && parkInfo?.timezone && today) {
+        forecast.todayHourly = hourly.map(({ hour, ...rest }) => ({
+          at: parkHourInstant(today, hour, parkInfo.timezone as string),
+          ...rest,
+        }));
+      }
       return forecast;
     },
   }),
@@ -413,12 +456,45 @@ export const ASSISTANT_TOOLS = [
       ctx.get(AssistantPostsClient).post(ctx.locale, slug),
   }),
   tool({
+    name: "look_up_glossary",
+    status: "glossary",
+    description:
+      "park.fan's glossary of theme-park words: ride types, coaster elements, queue systems, " +
+      "industry terms (e.g. airtime, launch, single rider, B&M, dark ride). Returns the term, a " +
+      "short definition and its page. Use it for what a word means, and for a nerdy fact.",
+    input: z.object({
+      term: z.string().trim().min(3).max(60).describe("The word to look up"),
+    }),
+    run: async ({ term }, ctx) => {
+      const found = (await ctx
+        .get(AssistantPostsClient)
+        .glossary(ctx.locale, term)) as {
+        results?: Array<{
+          name: string;
+          slug: string;
+          shortDefinition: string;
+          category?: string;
+        }>;
+      };
+      return {
+        terms: (found.results ?? [])
+          .filter((t) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(t.slug))
+          .map((t) => ({
+            name: t.name,
+            definition: t.shortDefinition,
+            category: t.category ?? null,
+            url: `${getFrontendUrl()}/${ctx.locale}/glossary/${t.slug}`,
+          })),
+      };
+    },
+  }),
+  tool({
     name: "find_parks_nearby",
     status: "location",
     description:
       "Parks near the user, or, when they are inside a park, the rides around them with distance " +
       "and live wait. Uses the position the user shared in this chat; without one, a rough guess " +
-      "from their network (precise: false) - then say it is approximate and offer request_location. " +
+      "from their network (precise: false) - then offer request_location. " +
       "Inside a park, the park's page shows a compass pointing at the rides: open it with open_page.",
     input: z.object({
       limit: z.number().int().min(1).max(8).default(5),
@@ -478,15 +554,48 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "show_card",
     description:
-      "Show a live card in the chat: a park (status, crowd level, today's hours, longest waits) " +
-      "or a ride (status, standby wait, crowd level), linking to its page. Use it when one park " +
-      "or ride is the answer; then keep your text short and do not repeat the card's numbers.",
+      "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
+      "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
+      "level), or a park's rides with their current waits (kind rides, longest or shortest " +
+      "first). Whenever the answer lists rides with waits, show kind rides instead of writing " +
+      "the waits as text; keep the text to a sentence and do not repeat the card's numbers.",
     input: z.object({
-      kind: z.enum(["park", "ride"]),
-      park: parkRef.optional().describe("For kind park: park id or slug"),
+      kind: z.enum(["park", "ride", "rides"]),
+      park: parkRef
+        .optional()
+        .describe("For kind park or rides: park id or slug"),
+      order: z
+        .enum(["longest", "shortest"])
+        .default("longest")
+        .describe("For kind rides: longest or shortest waits first"),
+      limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
-    run: async ({ kind, park, rideId }, ctx) => {
+    run: async ({ kind, park, rideId, order, limit }, ctx) => {
+      if (kind === "rides") {
+        if (!park) throw new McpToolError("kind rides needs park");
+        // Every operating ride with a posted wait, longest first, so both ends can be cut.
+        const live = (await getParkTool.handler(
+          { park, longestWaits: 30 },
+          mcp(ctx),
+        )) as ParkSummary;
+        if ("ambiguous" in live) return live;
+        const all = live.rides?.longestWaits ?? [];
+        const rides = (order === "shortest" ? [...all].reverse() : all)
+          .slice(0, limit)
+          .map((ride) => ({ name: ride.name, waitMinutes: ride.waitMinutes }));
+        const card: AssistantCard = {
+          kind: "rides",
+          park: live.name,
+          order,
+          rides,
+          url: live.pageUrl ? siteOnlyPath(live.pageUrl) : null,
+        };
+        return new ActionOutcome(
+          { type: "card", card },
+          { shown: `${rides.length} rides of ${live.name}` },
+        );
+      }
       if (kind === "park") {
         if (!park) throw new McpToolError("kind park needs park");
         const live = (await getParkTool.handler(
@@ -702,7 +811,10 @@ export async function runAssistantTool(
     const action =
       outcome instanceof ActionOutcome ? outcome.action : undefined;
     const result = JSON.stringify(
-      outcome instanceof ActionOutcome ? outcome.result : outcome,
+      localizeTimes(
+        outcome instanceof ActionOutcome ? outcome.result : outcome,
+        ctx.timeZone ?? "UTC",
+      ),
     );
     return {
       content:

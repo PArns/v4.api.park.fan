@@ -31,7 +31,7 @@ chat id shows nobody else's history.
 
 ## The chat
 
-The body is `{ conversationId?, locale, pagePath, message, sessionToken, location? }`. There is no
+The body is `{ conversationId?, locale, pagePath, message, sessionToken, location?, timeZone? }`. There is no
 history in it: the server reads the last ten messages from the database, so a caller cannot hand
 the model made-up earlier answers; a failed answer (empty text) is left out with its question.
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
@@ -47,6 +47,14 @@ The switch and the share in the admin only decide which browsers are shown the w
 answered whenever a key is stored and budget is left, so a signed-in admin and a `?assistant=on`
 tester can chat while the switch is off. To stop every chat at once, remove the key.
 
+## Times in the visitor's clock
+
+`timeZone` is the browser's IANA zone (an unknown one counts as UTC). The model never converts a
+time: `localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in a tool result into that
+zone as `yyyy-MM-dd HH:mm` before the model reads it, and the per-hour forecasts turn their
+park-local hours into instants first (`parkHourInstant`). A ride forecast keeps only the hours the
+park is open, the closing hour excluded, and on today only those not over yet (`bookableHours`).
+
 ## The answer loop
 
 `AssistantChatService.answer` streams Claude Haiku 5.5 (`ASSISTANT_MODEL`) with effort `low`, at
@@ -61,16 +69,18 @@ The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing t
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
 `get_ride`, `get_ride_forecast` (per hour, from `PlanDayService`), `get_park_forecast` (at most 31
 days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
+`look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
 which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cached ten minutes in
-Redis). There is no web search, no fetch of a URL and no admin data. Every input is checked with
+Redis; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
+which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log.
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
-widget gets the `action` and carries it out after checking it again: `show_card` (a park or ride
-card from live data), `open_page` (only a park.fan path of slugs), `request_location` (the share
+widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride or a
+park's rides with their waits, from live data), `open_page` (only a park.fan path of slugs), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_block` and
 `plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner").
 
