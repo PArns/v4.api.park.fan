@@ -24,6 +24,7 @@ import { SitemapModule } from "./sitemap/sitemap.module";
 import { GeoipModule } from "./geoip/geoip.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { TripsModule } from "./trips/trips.module";
+import { AssistantModule } from "./assistant/assistant.module";
 import { PushModule } from "./push/push.module";
 import { RideAlertsModule } from "./ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "./show-follows/show-follows.module";
@@ -106,6 +107,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     // Favorites
     FavoritesModule,
     TripsModule,
+    AssistantModule,
     PushModule,
     RideAlertsModule,
     ShowFollowsModule,

@@ -44,6 +44,7 @@
     "repair:schedule-dates": "ts-node scripts/repair-schedule-dates.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@elsikora/string-similarity": "^1.0.1",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@nestjs/bull": "^12.0.0",
