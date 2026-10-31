@@ -1179,10 +1179,12 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Google Search Console (PAR-1160): the import at 09:20 (Google's finished
     // days are in by then, and the CatBoost training window is over) and the
-    // chunks past 500 days at 01:55. Without credentials the import returns
-    // at once.
+    // chunks past 500 days at 01:55, and the reindex scan at 10:00, after the
+    // import's impressions and the frontend's 05:30 content-change crawl.
+    // Without credentials each returns at once.
     for (const [name, jobId, cron] of [
       ["import", "search-console-import-cron", "20 9 * * *"],
+      ["reindex-scan", "search-console-reindex-cron", "0 10 * * *"],
       ["drop-old-chunks", "search-console-chunks-cron", "55 1 * * *"],
     ] as const) {
       if (await this.hasRepeatableJob(this.searchConsoleQueue, jobId, cron))
