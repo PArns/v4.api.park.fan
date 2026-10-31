@@ -379,12 +379,33 @@ export function pageSubject(pagePath: string): string | null {
   const parts = pagePath.split("/").filter(Boolean);
   const at = parts.indexOf("parks");
   const park = at >= 0 ? parts[at + 4] : undefined;
-  if (!park) return null;
-  const ride = parts[at + 5];
-  return ride
-    ? `the ride with slug "${ride}" in the park with slug "${park}"`
-    : `the park with slug "${park}"`;
+  if (park) {
+    const next = parts[at + 5];
+    if (!next) return `the park with slug "${park}"`;
+    const chapter = PARK_CHAPTERS[next];
+    if (chapter) return `the ${chapter} of the park with slug "${park}"`;
+    return `the ride with slug "${next}" in the park with slug "${park}"`;
+  }
+  // `/<locale>/news|blog|glossary/<slug>`: a post or a glossary term.
+  const [, section, slug] = parts;
+  if (slug && section === "news") {
+    return `the news post with slug "${slug}" (read it with get_post)`;
+  }
+  if (slug && section === "blog") {
+    return `the article with slug "${slug}" (read it with get_post)`;
+  }
+  if (slug && section === "glossary") {
+    return `the glossary entry with slug "${slug}" (look it up with look_up_glossary)`;
+  }
+  return null;
 }
+
+/** A park's own sub-pages, which sit where a ride's slug would. */
+const PARK_CHAPTERS: Record<string, string> = {
+  "wait-time-calendar": "wait-time calendar",
+  "average-wait-times": "average wait times page",
+  "with-kids": "page for a visit with kids",
+};
 
 /**
  * Tells one visitor's chats of a day apart without storing the address: the
