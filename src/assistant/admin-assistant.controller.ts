@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpException,
@@ -150,6 +151,20 @@ export class AdminAssistantController {
     const found = await this.records.conversation(id);
     if (!found) throw new NotFoundException();
     return found;
+  }
+
+  @Delete("conversations/:id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @AdminMinRole("editor")
+  @ApiOperation({
+    summary: "Delete one chat with its messages; its feedback stays, unlinked",
+  })
+  async deleteConversation(
+    @Param("id", new ParseUUIDPipe()) id: string,
+  ): Promise<void> {
+    if (!(await this.records.deleteConversation(id))) {
+      throw new NotFoundException();
+    }
   }
 
   @Get("feedback")

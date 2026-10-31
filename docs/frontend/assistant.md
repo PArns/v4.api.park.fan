@@ -7,18 +7,18 @@ park.fan's `docs/features/assistant.md`.
 
 ## Endpoints
 
-| Endpoint                                     | Who               | What                                                         |
-| -------------------------------------------- | ----------------- | ------------------------------------------------------------ |
-| `GET /v1/assistant/config`                   | park.fan's server | `{ enabled, rolloutPercent }`, a minute at the edge          |
-| `POST /v1/assistant/session`                 | browser (CORS)    | a solved Turnstile token in, a session token out             |
-| `POST /v1/assistant/chat`                    | browser           | one question, answered as server-sent events                 |
-| `POST /v1/assistant/rating`                  | browser           | 👍/👎 for one answer                                         |
-| `POST /v1/assistant/feedback`                | browser           | feedback about the site                                      |
-| `GET/PUT /v1/admin/assistant/settings`       | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown) |
-| `POST /v1/admin/assistant/settings/test`     | owner             | a one-token request with the stored key                      |
-| `GET /v1/admin/assistant/stats`              | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
-| `GET /v1/admin/assistant/conversations[/id]` | admin             | stored chats with tool calls, tokens and cost                |
-| `GET/PATCH /v1/admin/assistant/feedback`     | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                |
+| Endpoint                                            | Who               | What                                                         |
+| --------------------------------------------------- | ----------------- | ------------------------------------------------------------ |
+| `GET /v1/assistant/config`                          | park.fan's server | `{ enabled, rolloutPercent }`, a minute at the edge          |
+| `POST /v1/assistant/session`                        | browser (CORS)    | a solved Turnstile token in, a session token out             |
+| `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                 |
+| `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                         |
+| `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                      |
+| `GET/PUT /v1/admin/assistant/settings`              | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown) |
+| `POST /v1/admin/assistant/settings/test`            | owner             | a one-token request with the stored key                      |
+| `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
+| `GET/DELETE /v1/admin/assistant/conversations[/id]` | admin, DELETE ed. | stored chats with tool calls, tokens and cost; delete one    |
+| `GET/PATCH /v1/admin/assistant/feedback`            | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                |
 
 ## The challenge
 
