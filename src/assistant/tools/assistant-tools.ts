@@ -299,7 +299,9 @@ export const ASSISTANT_TOOLS = [
     description:
       "The days ahead for one park: per day the opening hours or closed, the expected crowd level, " +
       "the expected peak wait of the headliners, weather (basis climate_normal is the long-run " +
-      "average, not a forecast) and holidays; plus today's hourly forecast. Days after " +
+      "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
+      "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
+      "forecast. Use it for special days and events too. Days after " +
       "scheduleCoverage.to have no published hours yet: treat their status as unknown.",
     input: z.object({
       park: parkRef,
