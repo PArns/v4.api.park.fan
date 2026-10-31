@@ -307,19 +307,22 @@ describe("assistant tools", () => {
       expect(t.input_schema.type).toBe("object");
   });
 
-  it("opens only park.fan pages, and tells the widget to", async () => {
+  it("opens a post or glossary page by url, nothing typed for a park", async () => {
     const onError = jest.fn();
     const opened = await runAssistantTool(
       "open_page",
-      { url: "https://park.fan/parks/europe/germany/bruehl/phantasialand" },
+      { url: "https://park.fan/de/news/taron-neu" },
       ctx,
       onError,
     );
     expect(opened.action).toEqual({
       type: "navigate",
-      path: "/parks/europe/germany/bruehl/phantasialand",
+      path: "/de/news/taron-neu",
     });
     for (const url of [
+      // A park page by url would be a guess; parks go by id or slug.
+      "https://park.fan/phantasialand",
+      "https://park.fan/parks/europe/germany/bruehl/phantasialand",
       "https://evil.example/x",
       "javascript:alert(1)",
       "/\\evil.example",
