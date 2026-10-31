@@ -40,6 +40,13 @@ import type {
   SearchConsoleTotalsDto,
 } from "./dto/search-console.dto";
 
+/** One page's search figures over a window; `position` impression-weighted. */
+export interface PageFigures {
+  clicks: number;
+  impressions: number;
+  position: number;
+}
+
 /** What every report takes: the window, a language and the filters. */
 export interface SearchConsoleQuery {
   days?: number | null;
@@ -293,6 +300,45 @@ export class SearchConsoleService {
         GSC_SEARCH_TYPES.map((type) => [type, coverageOf(type)]),
       ) as SearchConsoleStatusDto["types"],
     };
+  }
+
+  /**
+   * Clicks, impressions and position per page path over the last `days` days
+   * with data (web), every page with an impression; the reindex queue shows
+   * them beside each page and ranks by the impressions.
+   */
+  async pageFigures(
+    days: number,
+    now = new Date(),
+  ): Promise<Map<string, PageFigures>> {
+    const resolved = await this.resolve({ days }, now);
+    if (!resolved.dataTo) return new Map();
+    const params = new SqlParams();
+    const where = this.rowsWhere(params, resolved, "page", [], false);
+    const rows: Array<{
+      page: string;
+      clicks: Count;
+      impressions: Count;
+      position_sum: Count;
+    }> = await this.db.query(
+      `SELECT r.page, SUM(r.clicks) AS clicks, SUM(r.impressions) AS impressions,
+              SUM(r.position_sum) AS position_sum
+         FROM search_console_rows r
+        WHERE ${where}
+        GROUP BY r.page
+       HAVING SUM(r.impressions) > 0`,
+      params.values,
+    );
+    return new Map(
+      rows.map((row) => [
+        row.page,
+        {
+          clicks: num(row.clicks),
+          impressions: num(row.impressions),
+          position: num(row.position_sum) / num(row.impressions),
+        },
+      ]),
+    );
   }
 
   /** The queries the site was found with, most clicks first. */

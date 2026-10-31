@@ -22,6 +22,7 @@ function build(redisAnswers: Array<string | null | Error> = ["OK"]) {
     reports as never,
     queue as never,
     redis as never,
+    {} as never,
   );
   return { controller, reports, queue, redis };
 }

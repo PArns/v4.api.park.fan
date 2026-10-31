@@ -418,3 +418,12 @@ export class SearchConsoleSeriesDto extends SearchConsoleWindowEchoDto {
   @ApiProperty({ type: [SearchConsoleSeriesPointDto] })
   series: SearchConsoleSeriesPointDto[];
 }
+
+/** The page a "request indexing" was sent for, as the reindex queue lists it. */
+export class SearchConsoleReindexRequestDto {
+  @ApiProperty({ example: "/de/blog/europa-park-wartezeiten-tipps" })
+  @IsString()
+  @MaxLength(MAX_PATH_LENGTH)
+  @Matches(/^\/[^\s?#]*$/, { message: "path must be a site path like /de/…" })
+  path: string;
+}

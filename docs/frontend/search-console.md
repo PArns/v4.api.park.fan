@@ -17,13 +17,16 @@ All on `AdminSearchConsoleController`: a session (`AdminAuthGuard`, any role unl
 (`days` 1–365, or `from` and `to`, at most 366 days, `to` today at the latest; both at once or one
 of them alone is a 400) and `locale`, and echo `from`, `to`, `days` and `locale`.
 
-| Method | Path                                                   | Answers                                                                                                  |
-| ------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, runningSince, coverage: { from, to } \| null, rows, types }`          |
-| POST   | `import`                                               | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured |
-| GET    | `queries?type=&page=&country=&device=&search=&limit=`  | the queries, most clicks first                                                                           |
-| GET    | `pages?type=&query=&country=&device=&search=&limit=`   | the pages, most clicks first, with the site's own numbers                                                |
-| GET    | `series?type=&interval=&page=&query=&country=&device=` | per day, week or month                                                                                   |
+| Method | Path                                                   | Answers                                                                                                       |
+| ------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `status`                                               | `{ configured, siteUrl, lastImportAt, lastError, runningSince, coverage: { from, to } \| null, rows, types }` |
+| POST   | `import`                                               | editor and above, audited (`job.search-console/import`): `202 { queued: true }`; 409 when not configured      |
+| GET    | `queries?type=&page=&country=&device=&search=&limit=`  | the queries, most clicks first                                                                                |
+| GET    | `pages?type=&query=&country=&device=&search=&limit=`   | the pages, most clicks first, with the site's own numbers                                                     |
+| GET    | `series?type=&interval=&page=&query=&country=&device=` | per day, week or month                                                                                        |
+| GET    | `reindex`                                              | the [reindex queue](#reindex-queue): `{ open, requested, requestsLast24h, dailyLimit, history, … }`           |
+| POST   | `reindex/requests` `{ path }`                          | editor and above, audited: records a request, once per change; `{ recorded, requestedAt, … }`                 |
+| POST   | `reindex/scan`                                         | editor and above: `202 { queued: true }`, the daily scan now; 409 when not configured                         |
 
 `limit` is 1–200, default 50. `page` is a path or a URL (lower-cased, no trailing slash, query and
 fragment dropped); `query` is one search query, exactly, lower case; `country` is Search Console's
@@ -327,7 +330,37 @@ handling, retries, pacing and error mapping (`SearchConsoleClient.inspectUrl`) a
 }
 ```
 
-There is no admin REST route for it: the tool is the interface.
+There is no admin REST route for single inspections: the tool is the interface. The
+[reindex queue](#reindex-queue) spends inspections of the same quota on its own.
+
+## Reindex queue
+
+Which recently changed pages Google has not crawled since the change, so the admin
+(`/admin/traffic/seo`, panel "Nachindizieren") can send "request indexing" for them. Google has no
+API for that request (the Indexing API is for job postings and livestreams only), so the admin opens
+Search Console's URL Inspection for the page and the API records the click.
+
+- **Candidates** (`search_console_reindex_pages`): the daily `reindex-scan` job (10:00 UTC, after the
+  import and the frontend's 05:30 content-change crawl; also `POST reindex/scan`) reads
+  `/sitemap.xml` and `/sitemap-attractions.xml` with its children and keeps every page whose
+  `<lastmod>` is within **30 days**. That date is observed, not stamped (the frontend's
+  `/api/cron/content-changes` fingerprints parks, rides, hubs and blog posts), so it is the day
+  park.fan saw the content change. Each row carries clicks, impressions and position over the last 28
+  days with data. The set is replaced on every run, keeping what the last inspection learned; an
+  empty sitemap answer throws instead of emptying it.
+- **Inspection:** up to **300** a run, most impressions first (among pages without any, the shorter
+  path first), of the pages never inspected or not crawled since their change and not inspected
+  within 20 hours. The inspection service's cache and daily limit apply.
+- **State** (`reindexState`, `search-console-reindex.ts`): a `<lastmod>` of D means a change between
+  D−1 05:30 and D 05:30 UTC. A crawl before D−1 00:00 is `stale`, one before D 06:00 `uncertain`,
+  a later one `fresh` (out of the queue); no crawl at all is `unknown`.
+- **Requests** (`search_console_reindex_requests`: path, time, actor): `POST reindex/requests`
+  records one **once per change**. A page requested on or after its change day answers
+  `recorded: false` with that request's time and writes nothing, and `GET reindex` lists it under
+  `requested`, not `open`, until a crawl after the change takes it out or a newer change puts it
+  back. So a page is not requested twice while Search Console still shows the old crawl.
+  `requestsLast24h` counts the last 24 hours against `dailyLimit` (10, about what Google accepts a
+  day per property); the admin warns past it and still records.
 
 ## MCP tools
 

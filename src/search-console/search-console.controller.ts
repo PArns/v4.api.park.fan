@@ -1,4 +1,5 @@
 import {
+  Body,
   ConflictException,
   Controller,
   Get,
@@ -20,12 +21,17 @@ import {
 import type { Queue } from "bull";
 import type Redis from "ioredis";
 import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
-import { AdminMinRole } from "../admin/auth/admin-auth.decorators";
+import {
+  AdminMinRole,
+  CurrentAdmin,
+} from "../admin/auth/admin-auth.decorators";
+import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getSearchConsoleSetup } from "../config/search-console.config";
 import {
+  SearchConsoleReindexRequestDto,
   SearchConsolePagesDto,
   SearchConsolePagesQueryDto,
   SearchConsoleQueriesDto,
@@ -39,6 +45,11 @@ import {
   IMPORT_REQUEST_KEY,
 } from "./search-console.constants";
 import { SearchConsoleService } from "./search-console.service";
+import {
+  SearchConsoleReindexService,
+  type ReindexQueue,
+  type ReindexRecordResult,
+} from "./search-console-reindex.service";
 
 /**
  * Google Search Console in the admin: how the site is found in Google's
@@ -57,6 +68,7 @@ export class AdminSearchConsoleController {
     private readonly reports: SearchConsoleService,
     @InjectQueue("search-console") private readonly queue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly reindex: SearchConsoleReindexService,
   ) {}
 
   @Get("status")
@@ -159,5 +171,72 @@ export class AdminSearchConsoleController {
     @Query() query: SearchConsoleSeriesQueryDto,
   ): Promise<SearchConsoleSeriesDto> {
     return this.reports.series(query);
+  }
+
+  @Get("reindex")
+  @ApiOperation({
+    summary: "Pages Google has not crawled since they changed",
+    description:
+      "The reindex queue: pages whose sitemap `<lastmod>` is within 30 days and whose " +
+      "last crawl (URL Inspection, by the daily scan) predates it, with clicks, " +
+      "impressions, CTR and position over 28 days. `open` holds the pages not requested " +
+      "since their change, `requested` those that were and wait for Google's crawl. " +
+      "`state` is `unknown` (Google has no crawl), `stale` (crawled before the change) or " +
+      "`uncertain` (crawled within the change's day). With the requests of the last 24 " +
+      "hours against Google's ten a day, and the last 50 requests.",
+  })
+  @ApiResponse({ status: 200, description: "The queue" })
+  reindexQueue(): Promise<ReindexQueue> {
+    return this.reindex.queue();
+  }
+
+  @Post("reindex/requests")
+  @AdminMinRole("editor")
+  @ApiOperation({
+    summary: 'Record a "request indexing" sent in Search Console',
+    description:
+      "Google has no API for the request, so the admin sends it in Search Console " +
+      "and this records which page, when and by whom, once per change: a page already " +
+      "requested since its change answers `recorded: false` with that request's time. " +
+      "Returns the requests of the last 24 hours; past `dailyLimit` Google usually " +
+      "refuses more. Audited.",
+  })
+  @ApiResponse({
+    status: 201,
+    description: "`{ recorded, requestedAt, requestsLast24h, dailyLimit }`",
+  })
+  recordReindex(
+    @Body() body: SearchConsoleReindexRequestDto,
+    @CurrentAdmin() admin: AdminPrincipal,
+  ): Promise<ReindexRecordResult> {
+    return this.reindex.record(body.path, admin);
+  }
+
+  @Post("reindex/scan")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Run the reindex scan now",
+    description:
+      "Queues the daily scan: the candidates from the sitemaps, and URL Inspection " +
+      "for the ones not inspected within 20 hours. Returns at once.",
+  })
+  @ApiResponse({ status: 202, description: "`{ queued: true }`" })
+  async scanReindex(): Promise<{ queued: true }> {
+    if (!getSearchConsoleSetup().configured) {
+      throw new ConflictException(
+        "Search Console is not configured: set GSC_SERVICE_ACCOUNT_JSON and GSC_SITE_URL",
+      );
+    }
+    await this.queue.add(
+      "reindex-scan",
+      {},
+      {
+        jobId: "search-console-reindex-manual",
+        removeOnComplete: true,
+        removeOnFail: 20,
+      },
+    );
+    return { queued: true };
   }
 }
