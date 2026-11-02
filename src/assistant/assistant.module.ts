@@ -5,6 +5,7 @@ import { AssistantController } from "./assistant.controller";
 import { AdminAssistantController } from "./admin-assistant.controller";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { AssistantChatService } from "./assistant-chat.service";
+import { AssistantPageService } from "./assistant-page.service";
 import { AssistantRecordsService } from "./assistant-records.service";
 import { AssistantRateLimitService } from "./assistant-rate-limit.service";
 import { AssistantChallengeService } from "./assistant-challenge.service";
@@ -34,6 +35,7 @@ import { SiteFeedback } from "./entities/site-feedback.entity";
   providers: [
     AssistantSettingsService,
     AssistantChatService,
+    AssistantPageService,
     AssistantRecordsService,
     AssistantRateLimitService,
     AssistantChallengeService,

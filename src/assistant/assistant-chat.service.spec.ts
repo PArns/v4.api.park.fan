@@ -1,6 +1,7 @@
 import type { ModuleRef } from "@nestjs/core";
 import type { Repository } from "typeorm";
 import type { AssistantSettingsService } from "./assistant-settings.service";
+import type { AssistantPageService } from "./assistant-page.service";
 import type { AssistantConversation } from "./entities/assistant-conversation.entity";
 import type { AssistantMessage } from "./entities/assistant-message.entity";
 
@@ -83,6 +84,9 @@ describe("AssistantChatService.answer", () => {
       moduleRef,
       repository<AssistantConversation>({}),
       repository<AssistantMessage>({ id: "message-1" }),
+      {
+        subject: () => Promise.resolve(null),
+      } as unknown as AssistantPageService,
     );
 
     const events: ChatEvent[] = [];
