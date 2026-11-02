@@ -225,7 +225,9 @@ export class AttractionOutageDto {
       "feed never emits DOWN (102 of 182 scheduled parks), where the " +
       "alternative is silence rather than a stronger signal. **A client MUST " +
       "word the two differently**: nobody reported a `closed_gap`, so no " +
-      "sentence built on it may say 'reported'.",
+      "sentence built on it may say 'reported'. `maintenance` is a ride the " +
+      "feed reports as under maintenance (REFURBISHMENT), with its own " +
+      "recovery curve; word it as maintenance, never as a fault.",
     enum: OUTAGE_SIGNALS,
     example: "down",
   })

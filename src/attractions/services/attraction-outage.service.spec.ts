@@ -316,6 +316,70 @@ describe("AttractionOutageService — the closure path", () => {
     });
   });
 
+  describe("maintenance", () => {
+    const MAINT_RIDE = {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      effectiveStatus: "REFURBISHMENT",
+    };
+    const curveRow = (signal: "down" | "maintenance", p30: string) => ({
+      parkId: null,
+      signal,
+      elapsedMinutes: 45,
+      atRisk: 5000,
+      recoveryWithin30: p30,
+      recoveryWithin60: "0.600",
+      remainingP25: 20,
+      remainingMedian: 45,
+      remainingP75: 120,
+    });
+
+    it("places a REFURBISHMENT run as `maintenance`, read off its own curve", async () => {
+      curves.find.mockResolvedValue([
+        curveRow("down", "0.900"),
+        curveRow("maintenance", "0.300"),
+      ]);
+      query.mockImplementation((sql: string, params: unknown[]) => {
+        if (sql.includes('AS "opensAt"')) return Promise.resolve([]);
+        if (sql.includes("status <> 'REFURBISHMENT'")) {
+          expect(params[3]).toEqual([MAINT_RIDE.id]);
+          return Promise.resolve([
+            {
+              attractionId: MAINT_RIDE.id,
+              startedAt: new Date("2026-09-08T11:20:00Z"),
+              startObserved: true,
+              rowsInRun: 3,
+              elapsedOperatingMinutes: "50",
+              hasWindows: true,
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const out = await service.getCurrentOutages(PARK, [
+        MAINT_RIDE,
+        DOWN_RIDE,
+      ]);
+
+      const m = out.get(MAINT_RIDE.id);
+      expect(m?.signal).toBe("maintenance");
+      expect(m?.startedAt.toISOString()).toBe("2026-09-08T11:20:00.000Z");
+      expect(m?.estimate?.recoveryWithin30).toBe(0.3);
+    });
+
+    it("a failing maintenance read costs that line only", async () => {
+      query.mockImplementation((sql: string) =>
+        sql.includes("status <> 'REFURBISHMENT'")
+          ? Promise.reject(new Error("timeout"))
+          : Promise.resolve([]),
+      );
+
+      const out = await service.getCurrentOutages(PARK, [MAINT_RIDE]);
+
+      expect(out.size).toBe(0);
+    });
+  });
+
   it("a closure never overwrites a reported outage already placed", async () => {
     // The closure statement is only asked about rides the DOWN query did not
     // place, so this should be unreachable — but `out.set` would overwrite

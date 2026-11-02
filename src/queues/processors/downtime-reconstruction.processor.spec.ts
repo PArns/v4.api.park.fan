@@ -13,6 +13,7 @@ import { statementLimitSql } from "../../common/utils/statement-limits.util";
 import { DowntimeProfileService } from "../../analytics/downtime-profile.service";
 import { DowntimeRecoveryService } from "../../analytics/downtime-recovery.service";
 import {
+  MAINTENANCE_INTERVALS_SQL,
   OUTAGE_EXPOSURE_SQL,
   OUTAGE_INTERVALS_SQL,
 } from "../../analytics/utils/outage-reconstruction.sql";
@@ -47,6 +48,9 @@ describe("DowntimeReconstructionProcessor", () => {
     closureGapsFail?: boolean;
     /** The message it throws with. */
     closureGapsError?: string;
+    maintenance?: Array<Record<string, unknown>>;
+    /** Make the maintenance statement throw. */
+    maintenanceFail?: boolean;
     scanStart?: Date;
   }
 
@@ -112,6 +116,10 @@ describe("DowntimeReconstructionProcessor", () => {
       }
       if (sql === OUTAGE_INTERVALS_SQL) return fixture.intervals ?? [];
       if (sql === OUTAGE_EXPOSURE_SQL) return fixture.exposure ?? [];
+      if (sql === MAINTENANCE_INTERVALS_SQL) {
+        if (fixture.maintenanceFail) throw new Error("maintenance timeout");
+        return fixture.maintenance ?? [];
+      }
       if (sql === CLOSURE_GAP_INTERVALS_SQL) {
         if (fixture.closureGapsFail) {
           throw new Error(
@@ -282,13 +290,51 @@ describe("DowntimeReconstructionProcessor", () => {
     });
 
     const { outages, exposure } = deletes();
-    expect(outages.sql).toContain("signal = 'down'");
+    expect(outages.sql).toContain("signal NOT IN ('closed_gap')");
     // Only the outage table carries the signal; the closure-gap statement
     // writes no exposure day, so that delete is unqualified either way.
     expect(exposure.sql).not.toContain("signal");
     // And the run still covers the ride, so its DOWN history is rewritten
     // whole. Restricting the signal must not turn the delete off.
     expect(outages.params[2]).toEqual(["ride-a"]);
+  });
+
+  it("writes maintenance runs under their own signal, usable only when recovered", async () => {
+    await run({
+      exposure: [exposureDay("ride-m")],
+      maintenance: [
+        interval("ride-m"),
+        {
+          ...interval("ride-m"),
+          startedAt: new Date("2026-09-02T10:00:00.000Z"),
+          endReason: "closed",
+        },
+      ],
+    });
+
+    const rows = inserted
+      .flatMap((i) => i.rows)
+      .filter((r) => r.signal === "maintenance");
+    expect(rows.map((r) => [r.endReason, r.durationUsable])).toEqual([
+      ["recovered", true],
+      ["closed", false],
+    ]);
+    expect(deletes().outages.params[2]).toEqual(["ride-m"]);
+  });
+
+  it("keeps the maintenance rows it could not read, and the DOWN rows it could", async () => {
+    await run({
+      exposure: [exposureDay("ride-a")],
+      intervals: [interval("ride-a")],
+      maintenanceFail: true,
+    });
+
+    expect(deletes().outages.sql).toContain("signal NOT IN ('maintenance')");
+    const signals = inserted
+      .flatMap((i) => i.rows)
+      .map((r) => r.signal)
+      .filter(Boolean);
+    expect(signals).toEqual(["down"]);
   });
 
   it("deletes both signals when the closure-gap statement merely found nothing", async () => {
@@ -412,7 +458,7 @@ describe("DowntimeReconstructionProcessor", () => {
       });
 
       const { outages } = deletes();
-      expect(outages.sql).toContain("signal = 'down'");
+      expect(outages.sql).toContain("signal NOT IN ('closed_gap')");
       const rows = inserted.flatMap((batch) => batch.rows);
       expect(rows.filter((row) => row.signal === "down")).toHaveLength(1);
     });

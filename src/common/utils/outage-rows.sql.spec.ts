@@ -46,6 +46,30 @@ describe("outageRunBreaks / rowBreaksOutageRun", () => {
     return status !== "DOWN" || synthetic.includes(source);
   }
 
+  it("builds a REFURBISHMENT run by the same rule, from its own status", () => {
+    expect(flat(outageRunBreaks("qd", "REFURBISHMENT"))).toContain(
+      "qd.status <> 'REFURBISHMENT'",
+    );
+    expect(
+      rowBreaksOutageRun(
+        { status: "REFURBISHMENT", dataSource: "themeparks-wiki" },
+        "REFURBISHMENT",
+      ),
+    ).toBe(false);
+    expect(
+      rowBreaksOutageRun(
+        { status: "DOWN", dataSource: "themeparks-wiki" },
+        "REFURBISHMENT",
+      ),
+    ).toBe(true);
+    expect(
+      rowBreaksOutageRun(
+        { status: "REFURBISHMENT", dataSource: HEARTBEAT_SOURCE },
+        "REFURBISHMENT",
+      ),
+    ).toBe(true);
+  });
+
   it("agrees with its TypeScript twin on every status and source", () => {
     const disagreements: string[] = [];
     for (const status of STATUSES) {
