@@ -56,6 +56,7 @@ type ParkSummary =
       pageUrl?: string | null;
       crowd?: { level?: string | null; avgWaitMinutes?: number | null } | null;
       scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
+      nextSchedule?: unknown;
       rides?: {
         longestWaits?: Array<{ id: string; name: string; waitMinutes: number }>;
       };
@@ -186,12 +187,21 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_live",
     status: "wait-times",
     description:
-      "The park right now: open or closed, today's hours (park local time), crowd level, average " +
-      "and peak waits today, weather now, the longest current standby waits, rides that are down " +
-      "and rides that have not run today, and the park's pageUrl.",
+      "The park right now: open or closed, today's hours and the next opening, crowd level, " +
+      "average and peak waits today, weather now, the longest current standby waits, rides that " +
+      "are down and rides that have not run today, and the park's pageUrl.",
     input: z.object({ park: parkRef }),
-    run: ({ park }, ctx) =>
-      getParkTool.handler({ park, longestWaits: 8 }, mcp(ctx)),
+    run: async ({ park }, ctx) => {
+      const live = (await getParkTool.handler(
+        { park, longestWaits: 8 },
+        mcp(ctx),
+      )) as Record<string, unknown>;
+      // Every time reaches the model in the visitor's clock, so the park's own clock and zone
+      // only cost tokens.
+      const { localTime: _localTime, timezone: _timezone, ...rest } = live;
+      if (rest.retiredAt === null) delete rest.retiredAt;
+      return rest;
+    },
   }),
   tool({
     name: "find_rides",
@@ -230,6 +240,23 @@ export const ASSISTANT_TOOLS = [
         mcp(ctx),
       )) as Record<string, unknown>;
       delete ride.predictionAccuracy;
+      // Today's readings one by one and the bookkeeping around them answer nothing a visitor
+      // asks; the averages and the peak stay. New objects, because the response may be cached.
+      const statistics = ride.statistics as Record<string, unknown> | null;
+      if (statistics) {
+        const {
+          history: _history,
+          dataPoints: _dataPoints,
+          timestamp: _timestamp,
+          ...kept
+        } = statistics;
+        ride.statistics = kept;
+      }
+      ride.facts = Object.fromEntries(
+        Object.entries(ride.facts as Record<string, unknown>).filter(
+          ([, value]) => value !== null,
+        ),
+      );
       return ride;
     },
   }),
@@ -738,7 +765,17 @@ export const ASSISTANT_TOOLS = [
           })),
           url: live.pageUrl ? siteOnlyPath(live.pageUrl) : null,
         };
-        return new ActionOutcome({ type: "card", card }, { shown: card.name });
+        // What the card says, so the sentence after it needs no second lookup.
+        const { url: _url, ...shown } = card;
+        return new ActionOutcome(
+          { type: "card", card },
+          {
+            shown,
+            ...(live.status !== "OPERATING" && {
+              nextOpening: live.nextSchedule ?? null,
+            }),
+          },
+        );
       }
       if (!rideId) throw new McpToolError("kind ride needs rideId");
       const ride = (await getAttractionTool.handler(
@@ -755,7 +792,8 @@ export const ASSISTANT_TOOLS = [
         waitMinutes: standby?.waitMinutes ?? null,
         url: ride.pageUrl ? siteOnlyPath(ride.pageUrl) : null,
       };
-      return new ActionOutcome({ type: "card", card }, { shown: card.name });
+      const { url: _url, ...shown } = card;
+      return new ActionOutcome({ type: "card", card }, { shown });
     },
   }),
   tool({
@@ -920,13 +958,32 @@ export const ASSISTANT_TOOLS = [
 const BY_NAME = new Map(ASSISTANT_TOOLS.map((t) => [t.name, t]));
 
 /** The tool list as the Messages API takes it, in a fixed order for caching. */
+/**
+ * A JSON schema without what only costs tokens: the `$schema` dialect, and the long pattern zod
+ * writes beside `format: "uuid"`. The model writes ids it was given, and zod still checks every
+ * input before a tool runs.
+ */
+export function leanSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(leanSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const node = schema as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(
+        ([key]) =>
+          key !== "$schema" && !(key === "pattern" && node.format === "uuid"),
+      )
+      .map(([key, value]) => [key, leanSchema(value)]),
+  );
+}
+
 export const ASSISTANT_TOOL_PARAMS: Anthropic.Tool[] = ASSISTANT_TOOLS.map(
   (t) => ({
     name: t.name,
     description: t.description,
-    input_schema: z.toJSONSchema(t.input, {
-      io: "input",
-    }) as Anthropic.Tool.InputSchema,
+    input_schema: leanSchema(
+      z.toJSONSchema(t.input, { io: "input" }),
+    ) as Anthropic.Tool.InputSchema,
   }),
 );
 

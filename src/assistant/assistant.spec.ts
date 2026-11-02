@@ -327,6 +327,13 @@ describe("assistant tools", () => {
       expect(t.input_schema.type).toBe("object");
   });
 
+  it("sends schemas without the dialect and the uuid pattern, which only cost tokens", () => {
+    const sent = JSON.stringify(ASSISTANT_TOOL_PARAMS);
+    expect(sent).not.toContain("$schema");
+    expect(sent).not.toContain("[0-9a-fA-F]{8}");
+    expect(sent).toContain('"format":"uuid"');
+  });
+
   it("opens a post or glossary page by url, nothing typed for a park", async () => {
     const onError = jest.fn();
     const opened = await runAssistantTool(

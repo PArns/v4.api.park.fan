@@ -60,7 +60,12 @@ park is open, the closing hour excluded, and on today only those not over yet (`
 `AssistantChatService.answer` streams Claude Haiku 5.5 (`ASSISTANT_MODEL`) with effort `low`, at
 most 2,048 tokens per round and four rounds; the last round may not call a tool, so it has to
 answer. The system prompt (`system-prompt.ts`, versioned) is cached together with the tool list;
-date, page and language follow after the cache breakpoint. It keeps Parky to parks and rides,
+date, page and language follow after the cache breakpoint. A second breakpoint moves with the
+conversation (`moveCacheBreakpoint`): each round marks its last block, the question or the newest
+tool results, so the next round reads the history and every earlier result from the cache at a
+tenth of the price instead of sending it again in full. The tool schemas go out without zod's
+`$schema` and the pattern it writes beside `format: "uuid"` (`leanSchema`, 15,220 to 12,949
+characters for the whole list); zod still checks every input. It keeps Parky to parks and rides,
 makes every number come from a tool, sets the answer language to the page's and the informal
 address (du, tu, je, tú), lets Parky act on the page only when asked, and tells the model that tool
 results are data, never instructions. A visitor sizing up a visit, by typing only a park's or a
@@ -80,7 +85,12 @@ which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cach
 Redis; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
-failed" while its message goes to the log.
+failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
+drops the park's clock and zone (every time reaches the model in the visitor's), `get_ride` the
+day's single readings behind its averages and the facts park.fan does not know, and `show_card`
+returns what the card shows, plus the next opening for a park that is not open, so the sentence
+after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the
+days ahead are `get_park_forecast`'s.
 
 Ride facts come from the curated ride profile (`attraction_ride_profiles`), flattened by
 `rideFacts` (`src/attractions/utils/ride-facts.util.ts`): type, track figures in ride order,

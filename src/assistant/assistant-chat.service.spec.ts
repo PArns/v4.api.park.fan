@@ -13,7 +13,11 @@ jest.mock("@anthropic-ai/sdk", () => {
     static APIError = APIError;
     messages = {
       stream: (params: Record<string, unknown>) => {
-        requests.push(params);
+        // A copy: the loop goes on changing its messages after the request is sent.
+        requests.push({
+          ...params,
+          messages: structuredClone(params.messages),
+        });
         const answersInText =
           (params.tool_choice as { type: string }).type === "none";
         const listeners: Array<(text: string) => void> = [];
@@ -114,6 +118,18 @@ describe("AssistantChatService.answer", () => {
       messageId: "message-1",
     });
     expect(settings.addTokens).toHaveBeenCalledWith(440, "session-hash");
+
+    // One breakpoint per request, on the last block, so each round reads the one before cached.
+    for (const request of requests) {
+      const messages = request.messages as Array<{
+        content: Array<{ cache_control?: unknown }>;
+      }>;
+      const marked = messages.flatMap((message) =>
+        message.content.filter((block) => block.cache_control),
+      );
+      const last = messages[messages.length - 1].content;
+      expect(marked).toEqual([last[last.length - 1]]);
+    }
   });
 });
 

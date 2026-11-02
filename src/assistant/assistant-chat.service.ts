@@ -185,9 +185,11 @@ export class AssistantChatService {
     /** The running round's usage from its stream events, for a round that never finishes. */
     let partial: Usage | null = null;
 
+    let breakpoint: Anthropic.CacheControlEphemeral | null = null;
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         const lastRound = round === MAX_ROUNDS - 1;
+        breakpoint = moveCacheBreakpoint(messages, breakpoint);
         const stream = client.messages.stream(
           {
             model: ASSISTANT_MODEL,
@@ -331,6 +333,36 @@ export class AssistantChatService {
       .execute();
     return message;
   }
+}
+
+/**
+ * Puts the one cache breakpoint of the conversation on its last block, and takes it off the block
+ * that had it. The next round then reads the question, the history and every earlier tool result
+ * from the cache at a tenth of the price, instead of paying for all of it again; one moving
+ * breakpoint is enough, because a read looks back from it for the longest prefix cached before.
+ */
+export function moveCacheBreakpoint(
+  messages: Anthropic.MessageParam[],
+  previous: Anthropic.CacheControlEphemeral | null,
+): Anthropic.CacheControlEphemeral {
+  const last = messages[messages.length - 1];
+  if (typeof last.content === "string") {
+    last.content = [{ type: "text", text: last.content }];
+  }
+  for (const message of messages) {
+    if (typeof message.content === "string") continue;
+    for (const block of message.content) {
+      if ("cache_control" in block && block.cache_control === previous) {
+        delete block.cache_control;
+      }
+    }
+  }
+  const block = last.content[last.content.length - 1] as {
+    cache_control?: Anthropic.CacheControlEphemeral | null;
+  };
+  const control: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
+  block.cache_control = control;
+  return control;
 }
 
 /**
