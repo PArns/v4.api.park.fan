@@ -41,7 +41,8 @@ The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, 
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
 to do, below), `delta` (text), then `done` (the stored answer's id) or `error`. A refusal before the
 stream is a normal status: 400, 401 (no valid session), 404 (unknown chat or another session's),
-429 with `Retry-After`, 503 (no key stored or the day's budget spent).
+422 (`unclear`: junk, below), 429 with `Retry-After`, 503 (no key stored or the day's budget
+spent).
 
 The switch and the share in the admin only decide which browsers are shown the widget. A chat is
 answered whenever a key is stored and budget is left, so a signed-in admin and a `?assistant=on`
@@ -113,10 +114,20 @@ buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_bloc
 
 ## Limits and cost
 
-Per session (`AssistantRateLimitService`): 20 questions per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
+Per session (`AssistantRateLimitService`): 3 questions per 30 seconds (room for a quick "yes" to
+an offer, none for rapid fire), 20 per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
 spent, the config says off and new chats get a 503. Cache reads cost a tenth and are left out of
 both counts. A stream cut short is counted from its events, so dropping the connection is no way
 around the budget. Each answer stores its tokens and cost at Haiku 5.5's prices.
+
+Junk never reaches the model (`assistant-junk.ts`): a message with no letter or digit in any
+script, one key held down, or at least six lower-case Latin letters without a vowel, and the
+question just answered asked again within two minutes. It gets a 422 the widget words as "ask me
+about parks", at no token cost. The third junk message in a row, counted per session for ten
+minutes, starts a ten-minute pause: every question until then gets a 429 with `Retry-After`. A
+real question in between resets the count. The rules are narrow on purpose: a real question taken
+for junk annoys a visitor, while junk let through costs what any question costs and gets the
+prompt's playful off-topic line.
 
 ## The key and what is stored
 

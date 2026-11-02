@@ -4,6 +4,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import {
   checkRateLimit,
   hashRateLimitKey,
+  incrementWithWindow,
   type RateLimitVerdict,
 } from "../common/redis/rate-limit.util";
 import { addressBucket } from "../common/utils/request.util";
@@ -11,10 +12,12 @@ import { addressBucket } from "../common/utils/request.util";
 /**
  * Parky's own limits per address, counted here for the reason the trip
  * limiter gives: the global throttler is a loose circuit breaker, and every
- * chat costs money at Anthropic. A chat is held in two windows, so a burst
- * and a whole day of questions are both bounded.
+ * chat costs money at Anthropic. A chat is held in three windows, so rapid
+ * fire, a long burst and a whole day of questions are all bounded. Three in
+ * thirty seconds leaves room for a quick "yes" to an offer Parky made.
  */
 const BUCKETS = {
+  chatShort: { max: 3, windowSeconds: 30 },
   chatBurst: { max: 20, windowSeconds: 10 * 60 },
   chatDay: { max: 150, windowSeconds: 24 * 60 * 60 },
   feedback: { max: 5, windowSeconds: 60 * 60 },
@@ -23,6 +26,12 @@ const BUCKETS = {
 } as const;
 
 type Bucket = keyof typeof BUCKETS;
+
+/** Junk messages in a row that earn a session its pause, and how long they are remembered. */
+const JUNK_STRIKES = { max: 3, windowSeconds: 10 * 60 } as const;
+
+/** The pause a session gets for {@link JUNK_STRIKES} junk messages in a row. */
+export const JUNK_COOLDOWN_SECONDS = 10 * 60;
 
 @Injectable()
 export class AssistantRateLimitService {
@@ -66,5 +75,56 @@ export class AssistantRateLimitService {
       }
     }
     return verdict;
+  }
+
+  /** Seconds left of a session's pause for junk, 0 when it has none. */
+  async cooldown(session: string): Promise<number> {
+    try {
+      const left = await this.redis.ttl(this.key("cooldown", session));
+      return left > 0 ? left : 0;
+    } catch (error) {
+      this.logger.warn(`Assistant cooldown unreadable: ${String(error)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Counts a junk message. The one that makes {@link JUNK_STRIKES} in a row
+   * starts the pause and returns its length; before that it returns 0.
+   */
+  async strike(session: string): Promise<number> {
+    try {
+      const strikes = this.key("junk", session);
+      const count = await incrementWithWindow(
+        this.redis,
+        strikes,
+        JUNK_STRIKES.windowSeconds,
+      );
+      if (count < JUNK_STRIKES.max) return 0;
+      await this.redis.del(strikes);
+      await this.redis.set(
+        this.key("cooldown", session),
+        "1",
+        "EX",
+        JUNK_COOLDOWN_SECONDS,
+      );
+      return JUNK_COOLDOWN_SECONDS;
+    } catch (error) {
+      this.logger.warn(`Assistant strike not counted: ${String(error)}`);
+      return 0;
+    }
+  }
+
+  /** A real question ends the run of junk: the strikes only count in a row. */
+  async clearStrikes(session: string): Promise<void> {
+    try {
+      await this.redis.del(this.key("junk", session));
+    } catch (error) {
+      this.logger.warn(`Assistant strikes not cleared: ${String(error)}`);
+    }
+  }
+
+  private key(kind: "junk" | "cooldown", session: string): string {
+    return `assistant:${kind}:${hashRateLimitKey(`s:${session}`)}`;
   }
 }

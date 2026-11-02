@@ -25,6 +25,7 @@ import {
 import { AssistantChatService, type ChatEvent } from "./assistant-chat.service";
 import { AssistantRecordsService } from "./assistant-records.service";
 import { AssistantRateLimitService } from "./assistant-rate-limit.service";
+import { junkReason } from "./assistant-junk";
 import {
   chatRequestSchema,
   feedbackRequestSchema,
@@ -115,6 +116,12 @@ export class AssistantController {
       "next question.",
   })
   @ApiResponse(RATE_LIMITED_RESPONSE)
+  @ApiResponse({
+    status: 422,
+    description:
+      "`unclear`: junk (no words, one key held down, a run of letters without a vowel, or the " +
+      "question just answered asked again). The third in a row pauses the session.",
+  })
   @ApiResponse({ status: 503, description: "The assistant is switched off." })
   async ask(
     @Body() body: unknown,
@@ -131,17 +138,23 @@ export class AssistantController {
         .json({ statusCode: 401, message: "challenge" });
       return;
     }
+    const pause = await this.rateLimit.cooldown(session);
+    if (pause > 0) {
+      tooManyQuestions(response, pause);
+      return;
+    }
     const verdict = await this.rateLimit.check(
       { session },
+      "chatShort",
       "chatBurst",
       "chatDay",
     );
     if (!verdict.allowed) {
-      response
-        .status(HttpStatus.TOO_MANY_REQUESTS)
-        .setHeader("Retry-After", String(verdict.retryAfterSeconds))
-        .setHeader("Cache-Control", "no-store")
-        .json({ statusCode: 429, message: "Too many questions" });
+      tooManyQuestions(response, verdict.retryAfterSeconds);
+      return;
+    }
+    if (junkReason(input.message)) {
+      await this.refuseJunk(response, session);
       return;
     }
 
@@ -150,6 +163,11 @@ export class AssistantController {
       ip,
       hashRateLimitKey(session),
     );
+    if (prepared === "junk") {
+      await this.refuseJunk(response, session);
+      return;
+    }
+    await this.rateLimit.clearStrikes(session);
     if (typeof prepared === "string") {
       const status = {
         off: HttpStatus.SERVICE_UNAVAILABLE,
@@ -219,6 +237,22 @@ export class AssistantController {
     return { id };
   }
 
+  /**
+   * Junk gets no answer and costs no tokens: a 422 the widget words as "ask me about parks",
+   * and the third in a row a pause, refused as too many questions.
+   */
+  private async refuseJunk(response: Response, session: string): Promise<void> {
+    const pause = await this.rateLimit.strike(session);
+    if (pause > 0) {
+      tooManyQuestions(response, pause);
+      return;
+    }
+    response
+      .status(HttpStatus.UNPROCESSABLE_ENTITY)
+      .setHeader("Cache-Control", "no-store")
+      .json({ statusCode: 422, message: "unclear" });
+  }
+
   private requireSession(token: string): string {
     const session = this.challenge.session(token);
     if (!session) throw new HttpException("challenge", HttpStatus.UNAUTHORIZED);
@@ -241,4 +275,12 @@ export class AssistantController {
       );
     }
   }
+}
+
+function tooManyQuestions(response: Response, retryAfterSeconds: number): void {
+  response
+    .status(HttpStatus.TOO_MANY_REQUESTS)
+    .setHeader("Retry-After", String(retryAfterSeconds))
+    .setHeader("Cache-Control", "no-store")
+    .json({ statusCode: 429, message: "Too many questions" });
 }
