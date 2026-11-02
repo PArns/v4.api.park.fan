@@ -21,6 +21,7 @@ import { ParkStatusRevalidationService } from "../../common/revalidation/park-st
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { isShuttingDown } from "../../common/utils/graceful-shutdown";
 import { PopularityService } from "../../popularity/popularity.service";
 import {
   CALENDAR_WARMUP_CURRENT_MONTH_TTL,
@@ -147,6 +148,14 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     let successCount = 0;
 
     for (let i = 0; i < items.length; i += batchSize) {
+      // Bull's queue.close() waits for the running job; a ~200 s warmup held
+      // every deploy past the 20 s shutdown deadline, so stop between batches.
+      if (isShuttingDown()) {
+        this.logger.log(
+          `[${label}] Stopped at ${i}/${items.length} — shutting down`,
+        );
+        break;
+      }
       if (beforeBatch) await beforeBatch();
       const batch = items.slice(i, i + batchSize);
 
