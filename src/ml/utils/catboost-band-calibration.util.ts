@@ -19,6 +19,14 @@ import { ForecastAccuracyService } from "../services/forecast-accuracy.service";
 export const BAND_TARGET_COVERAGE = 0.95;
 /** A cell below this many scored slots borrows the pooled factor. */
 export const BAND_MIN_SAMPLE = 500;
+/**
+ * A borrowing cell with at least this many slots of its own never takes a pool
+ * factor LARGER than its own fit. The pool is ~75 % quiet rides; lent to
+ * mid/busy cells whose raw band already covered 100 % it doubled their band
+ * (Taron late November ±50 instead of ±25, 2026-11-02). 50 of 50 covered leaves
+ * a ~8 % chance the true coverage is below 95 %.
+ */
+export const BAND_MIN_OWN_EVIDENCE = 50;
 /** Histogram bin width of the conformity score; k is a multiple of it, rounded up. */
 export const SCORE_BIN = 0.05;
 /** Scores beyond ±(this × SCORE_BIN) are clamped into the outermost bin. */
@@ -146,19 +154,21 @@ export function fitBandCalibration(
     if (own.n >= BAND_MIN_SAMPLE && own.k !== null) {
       cells[key] = { ...own, source: "cell" };
     } else {
-      // Coverage of the pooled k on THIS cell's slots, so the page shows what it buys here.
+      const k =
+        pooled.k !== null && own.k !== null && own.n >= BAND_MIN_OWN_EVIDENCE
+          ? Math.min(pooled.k, own.k)
+          : pooled.k;
+      // Coverage of the served k on THIS cell's slots, so the page shows what it buys here.
       let atK = 0;
-      if (pooled.k !== null) {
-        for (const [bin, c] of bins)
-          if (bin * SCORE_BIN <= pooled.k + 1e-9) atK += c;
+      if (k !== null) {
+        for (const [bin, c] of bins) if (bin * SCORE_BIN <= k + 1e-9) atK += c;
       }
       cells[key] = {
         n: own.n,
-        k: pooled.k,
+        k,
         source: "pooled",
         coverageRaw: own.coverageRaw,
-        coverageCalibrated:
-          pooled.k === null || own.n === 0 ? null : atK / own.n,
+        coverageCalibrated: k === null || own.n === 0 ? null : atK / own.n,
       };
     }
   }
