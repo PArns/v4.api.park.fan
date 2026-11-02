@@ -10,6 +10,7 @@ import {
   type AssistantToolCall,
 } from "./entities/assistant-message.entity";
 import { AssistantSettingsService } from "./assistant-settings.service";
+import { AssistantPageService } from "./assistant-page.service";
 import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
 import { repeatsLastQuestion } from "./assistant-junk";
 import { nowIn, userTimeZone } from "./assistant-time";
@@ -84,6 +85,7 @@ export class AssistantChatService {
     private readonly conversations: Repository<AssistantConversation>,
     @InjectRepository(AssistantMessage)
     private readonly messages: Repository<AssistantMessage>,
+    private readonly pages: AssistantPageService,
   ) {}
 
   /**
@@ -169,7 +171,10 @@ export class AssistantChatService {
           now: nowIn(timeZone),
           timeZone,
           pagePath: request.pagePath,
-          pageSubject: pageSubject(request.pagePath),
+          pageSubject: await this.pages.subject(
+            request.pagePath,
+            request.locale,
+          ),
         }),
       },
     ];
@@ -408,42 +413,6 @@ export function costUsd(usage: Usage): number {
     1_000_000
   );
 }
-
-/**
- * The park or ride a park.fan path is about, by slug, so "here" can be
- * resolved: `/de/parks/europe/germany/bruehl/phantasialand/taron`.
- */
-export function pageSubject(pagePath: string): string | null {
-  const parts = pagePath.split("/").filter(Boolean);
-  const at = parts.indexOf("parks");
-  const park = at >= 0 ? parts[at + 4] : undefined;
-  if (park) {
-    const next = parts[at + 5];
-    if (!next) return `the park with slug "${park}"`;
-    const chapter = PARK_CHAPTERS[next];
-    if (chapter) return `the ${chapter} of the park with slug "${park}"`;
-    return `the ride with slug "${next}" in the park with slug "${park}"`;
-  }
-  // `/<locale>/news|blog|glossary/<slug>`: a post or a glossary term.
-  const [, section, slug] = parts;
-  if (slug && section === "news") {
-    return `the news post with slug "${slug}" (read it with get_post)`;
-  }
-  if (slug && section === "blog") {
-    return `the article with slug "${slug}" (read it with get_post)`;
-  }
-  if (slug && section === "glossary") {
-    return `the glossary entry with slug "${slug}" (look it up with look_up_glossary)`;
-  }
-  return null;
-}
-
-/** A park's own sub-pages, which sit where a ride's slug would. */
-const PARK_CHAPTERS: Record<string, string> = {
-  "wait-time-calendar": "wait-time calendar",
-  "average-wait-times": "average wait times page",
-  "with-kids": "page for a visit with kids",
-};
 
 /**
  * Tells one visitor's chats of a day apart without storing the address: the
