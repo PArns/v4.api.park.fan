@@ -28,6 +28,7 @@ import {
   NearbyParkInfoDto,
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
+import { pickShortWaits } from "./short-waits.util";
 import { buildLiveWaitTimes } from "../parks/dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import {
@@ -463,6 +464,7 @@ export class LocationService {
       return {
         parks: [],
         count: 0,
+        shortWaits: [],
       };
     }
 
@@ -620,9 +622,27 @@ export class LocationService {
       };
     });
 
+    // Cache hits only: a miss has no per-ride baselines without the park
+    // payload's own queries, and the prewarm makes a miss rare.
+    const shortWaits = pickShortWaits(
+      sortedParks.flatMap((park) => {
+        const integrated = integratedMap.get(park.id);
+        return integrated
+          ? [
+              {
+                integrated,
+                name: resolveCuratedPark(park).name,
+                distance: Math.round(park.distance),
+              },
+            ]
+          : [];
+      }),
+    );
+
     return {
       parks: parkDtos,
       count: parkDtos.length,
+      shortWaits,
     };
   }
 
