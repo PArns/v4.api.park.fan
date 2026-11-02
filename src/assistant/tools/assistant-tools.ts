@@ -14,8 +14,14 @@ import { BestDaysService } from "../../parks/services/best-days.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
-import { DataSource, In } from "typeorm";
+import { DataSource, In, IsNull } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { RideProfileService } from "../../attractions/services/ride-profile.service";
+import {
+  compareRides,
+  comparedRides,
+  RIDE_RANKINGS,
+} from "../../attractions/utils/ride-facts.util";
 import { AssistantPostsClient } from "./assistant-posts.client";
 import { getFrontendUrl } from "../../config/oauth.config";
 import {
@@ -208,8 +214,10 @@ export const ASSISTANT_TOOLS = [
     status: "rides",
     description:
       "One ride now: status, every queue with its wait, crowd level and trend, a running outage, " +
-      "facts (minimum height, gets you wet, single rider, indoor/outdoor, season), typical waits " +
-      "on weekdays and weekends, reliability, and its pageUrl.",
+      "facts (minimum height in cm, gets you wet, single rider, indoor/outdoor, season), its " +
+      "profile where park.fan has one (type, track figures in order, launches, inversions, " +
+      "manufacturer, model, opening year, top speed, height, length, duration), typical waits, " +
+      "reliability, and its pageUrl.",
     input: z.object({
       rideId: z
         .string()
@@ -223,6 +231,44 @@ export const ASSISTANT_TOOLS = [
       )) as Record<string, unknown>;
       delete ride.predictionAccuracy;
       return ride;
+    },
+  }),
+  tool({
+    name: "compare_rides",
+    status: "rides",
+    description:
+      "One park's rides ranked by a fact: top speed, height, length, duration, inversions, " +
+      "launches, opening year or minimum rider height (cm), highest first unless order asc. With " +
+      'riderHeightCm only the rides someone that tall may ride. For "the fastest ride in X", ' +
+      '"the newest coaster", "what can my 1 m child ride". Counts what it left out for lack of data.',
+    input: z.object({
+      park: parkRef,
+      by: z.enum(RIDE_RANKINGS),
+      order: z.enum(["desc", "asc"]).default("desc"),
+      riderHeightCm: z.number().int().min(50).max(250).optional(),
+      limit: z.number().int().min(1).max(15).default(5),
+    }),
+    run: async ({ park: reference, by, order, riderHeightCm, limit }, ctx) => {
+      const park = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(park)) return park;
+      const attractions = await ctx
+        .get(DataSource)
+        .getRepository(Attraction)
+        .find({ where: { parkId: park.id, retiredAt: IsNull() } });
+      const profiles = await ctx
+        .get(RideProfileService)
+        .findByAttractions(attractions.map((attraction) => attraction.id));
+      return {
+        park: park.name,
+        by,
+        order,
+        ...compareRides(comparedRides(attractions, profiles), {
+          by,
+          order,
+          riderHeightCm,
+          limit,
+        }),
+      };
     },
   }),
   tool({

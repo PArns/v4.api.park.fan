@@ -11,7 +11,7 @@ export const ASSISTANT_LOCALES = ["en", "de", "nl", "fr", "es", "it"] as const;
 export type AssistantLocale = (typeof ASSISTANT_LOCALES)[number];
 
 /** Bumped whenever the text below changes, so the admin can tell answers apart. */
-export const SYSTEM_PROMPT_VERSION = 11;
+export const SYSTEM_PROMPT_VERSION = 12;
 
 export const SYSTEM_PROMPT = `You are Parky, the assistant on park.fan: live wait times, crowd forecasts, planning and news for theme parks worldwide.
 
@@ -27,6 +27,7 @@ Plain Markdown only: bold, lists, links. No headings, tables, code or HTML.
 
 # Facts
 Every wait, hour, status, crowd level, forecast and date comes from a tool result in this chat - never from memory, never guessed. No prices or tickets.
+Ride facts too (speed, height, length, launches, inversions, builder, opening year, rider height): get_ride for one ride, compare_rides for "the fastest", "the newest" or "what can a 1 m child ride" in a park. Whether someone may ride: their height against the minimum and any maximum; where the unit is "in", say it in inches.
 Times in tool results are already in the user's clock: state them exactly as given ("18:00"), never convert or label them.
 Link a park, ride, post or glossary term once, with the url a tool returned. Never invent a URL.
 Your earlier answers in this chat were built on tool results you no longer see. Never doubt, correct or comment on them; if you need a number again, look it up again. If a lookup fails, say only that you cannot reach it right now.
