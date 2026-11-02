@@ -13,6 +13,8 @@ import { SearchConsoleClient } from "./search-console.client";
 import { SearchConsoleInspectionService } from "./search-console-inspection.service";
 import {
   parseSitemap,
+  REINDEX_RECENT_DAYS,
+  reindexPriority,
   reindexState,
   type ReindexState,
   type SitemapEntry,
@@ -25,8 +27,6 @@ const SITEMAPS = ["/sitemap.xml", "/sitemap-attractions.xml"];
 const SITE_HOSTS = ["park.fan", "www.park.fan"];
 const SITEMAP_TIMEOUT_MS = 60_000;
 
-/** A change older than this is out of the queue: Google has recrawled or will not soon. */
-export const REINDEX_RECENT_DAYS = 30;
 /** Inspections the daily scan spends at most, of the 1,800 shared with the MCP tool. */
 export const REINDEX_SCAN_BUDGET = 300;
 /** A page inspected more recently than this is not inspected again by the scan. */
@@ -58,7 +58,7 @@ export interface ReindexItem {
 }
 
 export interface ReindexQueue {
-  /** Not requested since the change: certain cases first, then most impressions. */
+  /** Not requested since the change: what a request gains most on first ({@link reindexPriority}). */
   open: ReindexItem[];
   /** Requested since the change and not yet crawled after it: waiting for Google. */
   requested: ReindexItem[];
@@ -198,7 +198,7 @@ export class SearchConsoleReindexService {
       .find({ order: { impressions: "DESC", path: "ASC" } });
     const latest = await this.latestRequests();
 
-    const open: ReindexItem[] = [];
+    const open: Array<{ item: ReindexItem; priority: number }> = [];
     const requested: ReindexItem[] = [];
     for (const page of pages) {
       if (!page.inspectedAt) continue;
@@ -224,12 +224,20 @@ export class SearchConsoleReindexService {
         requestedAt: sinceChange?.at.toISOString() ?? null,
         requestedBy: sinceChange?.actor ?? null,
       };
-      (sinceChange ? requested : open).push(item);
+      if (sinceChange) {
+        requested.push(item);
+        continue;
+      }
+      const priority = reindexPriority(
+        page.impressions,
+        state,
+        page.lastCrawlAt,
+        page.inspectedAt,
+      );
+      open.push({ item, priority });
     }
-    const certainFirst = (a: ReindexItem, b: ReindexItem) =>
-      Number(a.state === "uncertain") - Number(b.state === "uncertain") ||
-      b.impressions - a.impressions;
-    open.sort(certainFirst);
+    // Stable, so pages that gain the same keep most impressions first.
+    open.sort((a, b) => b.priority - a.priority);
     requested.sort((a, b) => b.requestedAt!.localeCompare(a.requestedAt!));
 
     const history = await this.db
@@ -237,7 +245,7 @@ export class SearchConsoleReindexService {
       .find({ order: { requestedAt: "DESC" }, take: HISTORY_LIMIT });
     const inspectedPages = pages.filter((page) => page.inspectedAt);
     return {
-      open: open.slice(0, LIST_LIMIT),
+      open: open.slice(0, LIST_LIMIT).map(({ item }) => item),
       requested: requested.slice(0, LIST_LIMIT),
       requestsLast24h: await this.requestsLast24h(now),
       dailyLimit: REINDEX_DAILY_LIMIT,

@@ -17,6 +17,9 @@ export type ReindexState =
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** A change older than this is out of the queue: Google has recrawled or will not soon. */
+export const REINDEX_RECENT_DAYS = 30;
+
 /**
  * The frontend's content-change crawl runs at 05:30 UTC and stamps the day it
  * ran, so a `<lastmod>` of D means a change between D−1 05:30 and D 05:30. A
@@ -35,6 +38,28 @@ export function reindexState(
   if (crawl < day - DAY_MS) return "stale";
   if (crawl < day + OBSERVED_BY_MS) return "uncertain";
   return "fresh";
+}
+
+/**
+ * What a "request indexing" gains on a page: its impressions over 28 days
+ * times the days Google had not crawled it when inspected, at most
+ * {@link REINDEX_RECENT_DAYS} so a page Google has long forgotten does not
+ * outrank pages it shows far more often, and half that for an `uncertain`
+ * page whose change Google may have seen. Google's own gap is the guess at how
+ * long it takes without a request: a page it crawled two days ago comes round
+ * again anyway. A page never crawled counts the full days.
+ */
+export function reindexPriority(
+  impressions: number,
+  state: Exclude<ReindexState, "fresh">,
+  lastCrawlAt: Date | null,
+  inspectedAt: Date,
+): number {
+  const days = lastCrawlAt
+    ? (inspectedAt.getTime() - lastCrawlAt.getTime()) / DAY_MS
+    : REINDEX_RECENT_DAYS;
+  const counted = Math.min(REINDEX_RECENT_DAYS, Math.max(0, days));
+  return impressions * counted * (state === "uncertain" ? 0.5 : 1);
 }
 
 /** One `<url>` or `<sitemap>` of a sitemap file. */

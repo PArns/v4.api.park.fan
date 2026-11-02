@@ -354,6 +354,12 @@ Search Console's URL Inspection for the page and the API records the click.
 - **State** (`reindexState`, `search-console-reindex.ts`): a `<lastmod>` of D means a change between
   D−1 05:30 and D 05:30 UTC. A crawl before D−1 00:00 is `stale`, one before D 06:00 `uncertain`,
   a later one `fresh` (out of the queue); no crawl at all is `unknown`.
+- **Order** (`reindexPriority`, same file): `open` comes sorted by what a request gains, the
+  impressions over 28 days times the days Google had not crawled the page when inspected, capped at
+  the queue's 30 days and halved for `uncertain`; ties keep most impressions first, and at most 100
+  come back. Google's own gap is the guess at how long it takes without a request: a park page it
+  crawled two days before the inspection (14,648 impressions, 29,296) goes below a glossary entry it
+  last crawled two months before (1,593 impressions, 47,790).
 - **Requests** (`search_console_reindex_requests`: path, time, actor): `POST reindex/requests`
   records one **once per change**. A page requested on or after its change day answers
   `recorded: false` with that request's time and writes nothing, and `GET reindex` lists it under
