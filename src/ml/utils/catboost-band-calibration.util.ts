@@ -154,9 +154,13 @@ export function fitBandCalibration(
     if (own.n >= BAND_MIN_SAMPLE && own.k !== null) {
       cells[key] = { ...own, source: "cell" };
     } else {
+      // Own k null with slots = 95 % of actuals sit under the forecast: the raw
+      // band over-covers, so serve it raw rather than widen it with the pool.
       const k =
-        pooled.k !== null && own.k !== null && own.n >= BAND_MIN_OWN_EVIDENCE
-          ? Math.min(pooled.k, own.k)
+        pooled.k !== null && own.n >= BAND_MIN_OWN_EVIDENCE
+          ? own.k === null
+            ? null
+            : Math.min(pooled.k, own.k)
           : pooled.k;
       // Coverage of the served k on THIS cell's slots, so the page shows what it buys here.
       let atK = 0;

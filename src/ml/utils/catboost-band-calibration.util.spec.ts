@@ -57,6 +57,19 @@ describe("fitBandCalibration (PAR-1060)", () => {
     expect(bandFactor(t, 30 * 24 * 60, 30)).toBe(1); // served: raw band, not doubled
   });
 
+  it("a borrowing cell that over-forecasts (own 95th score ≤ 0) serves the raw band, not the pool", () => {
+    // The production shape behind PAR-1222: h24+|mid raw coverage 100 %, own fit
+    // has no factor at all — the first fix still lent it the pool's 2.15.
+    const rows = [
+      ...uniform("h24+", "quiet", 10),
+      { lead: "h24+", segment: "mid", bin: -2, n: 432 },
+    ];
+    const t = fitBandCalibration(rows);
+    expect(t.cells["h24+|mid"].k).toBeNull();
+    expect(bandFactor(t, 30 * 24 * 60, 30)).toBeNull(); // raw
+    expect(bandFactor(t, 30 * 24 * 60, 10)).toBe(2); // quiet keeps its widened band
+  });
+
   it("a borrowing cell that needs MORE than the pool still gets the pool", () => {
     const rows = [
       ...uniform("h6-24", "quiet", 10), // pool k ≈ 4.75
