@@ -101,6 +101,16 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
           signal: ride.outage?.signal ?? null,
           operatingMinutesDown: ride.outage?.estimate?.elapsedMinutes ?? null,
         })),
+      // REFURBISHMENT rides, with the same since-when as `down`.
+      maintenance: rides
+        .filter((ride) => rideStatus(ride) === "REFURBISHMENT")
+        .map((ride) => ({
+          id: ride.id,
+          name: ride.name,
+          since: ride.outage?.startedAt ?? null,
+          startObserved: ride.outage?.startObserved ?? null,
+          operatingMinutes: ride.outage?.estimate?.elapsedMinutes ?? null,
+        })),
       notRunToday: rides
         .filter((ride) => ride.notRunToday)
         .map((ride) => ({ id: ride.id, name: ride.name })),
@@ -117,7 +127,8 @@ export const getParkTool = defineMcpTool({
     "Live state of one park, as park.fan shows it now: open or closed, today's schedule in the " +
     "park's timezone, crowd level and average/peak waits, current weather, ride counts by status, " +
     "the longest standby waits, rides that are down (since when, and whether the park reported it " +
-    "or park.fan inferred it from a gap: signal `down` vs `closed_gap`) and rides that have not run " +
+    "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
+    "(since when) and rides that have not run " +
     "today. Pass the park id from find_parks, or its slug when that is unambiguous.",
   input: {
     park: z
