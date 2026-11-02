@@ -11,6 +11,7 @@ import {
 } from "./entities/assistant-message.entity";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import { repeatsLastQuestion } from "./assistant-junk";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
 import {
@@ -58,7 +59,8 @@ export interface PreparedChat {
 }
 
 /** Why a chat is refused before anything is streamed. */
-export type ChatRefusal = "off" | "not-found" | "limit";
+/** Why a question gets no answer; `junk` repeats the question just answered. */
+export type ChatRefusal = "off" | "not-found" | "limit" | "junk";
 
 interface Usage {
   input: number;
@@ -114,7 +116,11 @@ export class AssistantChatService {
         order: { createdAt: "DESC" },
         take: HISTORY_MESSAGES,
       });
-      history = historyOf(earlier.reverse());
+      earlier.reverse();
+      if (repeatsLastQuestion(request.message, earlier, new Date())) {
+        return "junk";
+      }
+      history = historyOf(earlier);
     } else {
       conversation = await this.conversations.save(
         this.conversations.create({
