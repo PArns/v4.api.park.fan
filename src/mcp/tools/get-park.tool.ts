@@ -6,6 +6,7 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { Park } from "../../parks/entities/park.entity";
 import { formatInTimeZone } from "date-fns-tz";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 import type {
   ParkAttractionDto,
   ParkWithAttractionsDto,
@@ -28,6 +29,7 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
     byStatus[status] = (byStatus[status] ?? 0) + 1;
   }
   const statistics = dto.analytics?.statistics;
+  const today = getCurrentDateInTimezone(dto.timezone);
 
   return {
     id: dto.id,
@@ -44,12 +46,15 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
     status: dto.status ?? null,
     retiredAt: dto.retiredAt ?? null,
     liveWaitTimes: dto.liveWaitTimes,
-    scheduleToday: (dto.schedule ?? []).map((entry) => ({
-      date: entry.date,
-      type: entry.scheduleType,
-      opens: entry.openingTime,
-      closes: entry.closingTime,
-    })),
+    // The payload's schedule runs on for weeks; the days ahead are `park_forecast`'s.
+    scheduleToday: (dto.schedule ?? [])
+      .filter((entry) => entry.date === today)
+      .map((entry) => ({
+        date: entry.date,
+        type: entry.scheduleType,
+        opens: entry.openingTime,
+        closes: entry.closingTime,
+      })),
     nextSchedule: dto.nextSchedule ?? null,
     crowd: statistics
       ? {
