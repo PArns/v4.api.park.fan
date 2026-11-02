@@ -1,4 +1,8 @@
-import { parseSitemap, reindexState } from "./search-console-reindex";
+import {
+  parseSitemap,
+  reindexPriority,
+  reindexState,
+} from "./search-console-reindex";
 
 describe("reindexState", () => {
   const changedOn = "2026-10-30";
@@ -26,6 +30,76 @@ describe("reindexState", () => {
     expect(reindexState(changedOn, new Date("2026-10-30T06:00:00Z"))).toBe(
       "fresh",
     );
+  });
+});
+
+describe("reindexPriority", () => {
+  const inspectedAt = new Date("2026-11-01T10:00:00Z");
+  const crawled = (iso: string) => new Date(iso);
+
+  it("counts the impressions once per day Google had not crawled the page", () => {
+    expect(
+      reindexPriority(
+        14648,
+        "stale",
+        crawled("2026-10-30T10:00:00Z"),
+        inspectedAt,
+      ),
+    ).toBe(29296);
+  });
+
+  it("counts at most 30 days", () => {
+    expect(
+      reindexPriority(
+        1593,
+        "stale",
+        crawled("2026-09-01T10:00:00Z"),
+        inspectedAt,
+      ),
+    ).toBe(47790);
+  });
+
+  it("counts 30 days for a page never crawled, and nothing without impressions", () => {
+    expect(reindexPriority(40, "unknown", null, inspectedAt)).toBe(1200);
+    expect(reindexPriority(0, "unknown", null, inspectedAt)).toBe(0);
+  });
+
+  it("halves an uncertain page: Google may have seen the change", () => {
+    expect(
+      reindexPriority(
+        1000,
+        "uncertain",
+        crawled("2026-10-31T10:00:00Z"),
+        inspectedAt,
+      ),
+    ).toBe(500);
+  });
+
+  it("counts no days for a crawl after the inspection", () => {
+    expect(
+      reindexPriority(
+        1000,
+        "stale",
+        crawled("2026-11-01T11:00:00Z"),
+        inspectedAt,
+      ),
+    ).toBe(0);
+  });
+
+  it("puts a page Google left alone for months above one it crawls every few days", () => {
+    const glossary = reindexPriority(
+      1593,
+      "stale",
+      crawled("2026-09-01T10:00:00Z"),
+      inspectedAt,
+    );
+    const park = reindexPriority(
+      14648,
+      "stale",
+      crawled("2026-10-30T10:00:00Z"),
+      inspectedAt,
+    );
+    expect(glossary).toBeGreaterThan(park);
   });
 });
 
