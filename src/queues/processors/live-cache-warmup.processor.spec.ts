@@ -156,4 +156,19 @@ describe("LiveCacheWarmupProcessor", () => {
     await expect(processor.handleWarmup(job([]))).resolves.toBeUndefined();
     expect(calls).toEqual(["attractions", "occupancy"]);
   });
+
+  it("skips the remaining warmups once a shutdown has begun", async () => {
+    // Shutdown starts during the park warmup: attractions and occupancy never run.
+    let down = false;
+    processor.shuttingDown = () => down;
+    warmup.warmupOperatingParks.mockImplementationOnce(async () => {
+      down = true;
+      return 0;
+    });
+
+    await processor.handleWarmup(job(["p1"]));
+
+    expect(warmup.warmupTopAttractions).not.toHaveBeenCalled();
+    expect(warmup.warmupParkOccupancy).not.toHaveBeenCalled();
+  });
 });

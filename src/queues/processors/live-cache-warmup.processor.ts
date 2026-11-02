@@ -2,6 +2,7 @@ import { InjectQueue, Process, Processor } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { Job, Queue } from "bull";
 import { CacheWarmupService } from "../services/cache-warmup.service";
+import { isShuttingDown } from "../../common/utils/graceful-shutdown";
 
 export const LIVE_CACHE_WARMUP_QUEUE = "live-cache-warmup";
 export const LIVE_CACHE_WARMUP_JOB = "warmup-after-sync";
@@ -62,6 +63,9 @@ export class LiveCacheWarmupProcessor {
   ) {}
 
   /** Overridable in tests. */
+  shuttingDown: () => boolean = isShuttingDown;
+
+  /** Overridable in tests. */
   protected sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -104,6 +108,8 @@ export class LiveCacheWarmupProcessor {
     const startedAt = Date.now();
     const phases: Record<string, number> = {};
     const timed = async (name: string, fn: () => Promise<unknown>) => {
+      // The shutdown waits for this job; the next sync warms up again anyway.
+      if (this.shuttingDown()) return;
       const t = Date.now();
       try {
         await fn();
