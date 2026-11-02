@@ -4,6 +4,7 @@ import { defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
 import { attractionPageUrl } from "./links";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
+import { rideFacts } from "../../attractions/utils/ride-facts.util";
 
 export const getAttractionTool = defineMcpTool({
   name: "get_attraction",
@@ -12,8 +13,10 @@ export const getAttractionTool = defineMcpTool({
     "One ride as park.fan shows it now: status and effective status, every queue (standby, single " +
     "rider, virtual queue …) with its wait, live crowd level and trend against its baseline, a " +
     "running outage, whether it has run today, works periods, the curated facts (minimum height, " +
-    "gets you wet, single rider, indoor/outdoor, season months), typical waits, downtime reliability " +
-    "and, if retired, when and why. Optionally the daily history of the last days. Get the id from " +
+    "gets you wet, single rider, indoor/outdoor, season months), the ride profile where one is " +
+    "curated (type, track figures in order, launches, inversions, manufacturer, model, opening " +
+    "year, top speed, height, length, duration), typical waits, downtime reliability and, if " +
+    "retired, when and why. Optionally the daily history of the last days. Get the id from " +
     "find_attractions or get_park.",
   input: {
     attractionId: uuidInput().describe(
@@ -78,6 +81,7 @@ export const getAttractionTool = defineMcpTool({
         seasonMonths: dto.seasonMonths ?? null,
         isCurrentlyInSeason: dto.isCurrentlyInSeason ?? null,
       },
+      profile: rideFacts(dto.rideProfile),
       statistics: dto.statistics ?? null,
       typicalWaits: dto.typicalWaits
         ? {

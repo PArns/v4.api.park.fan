@@ -305,6 +305,7 @@ describe("assistant tools", () => {
       "get_park_live",
       "find_rides",
       "get_ride",
+      "compare_rides",
       "get_ride_forecast",
       "get_park_forecast",
       "get_park_weather",

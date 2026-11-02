@@ -71,7 +71,7 @@ asking, so Parky then calls `open_page`, `plan_day` or `get_best_days`.
 
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
-`get_ride`, `get_ride_forecast` (per hour, from `PlanDayService`), `get_park_forecast` (at most 31
+`get_ride` (with the ride profile below), `compare_rides`, `get_ride_forecast` (per hour, from `PlanDayService`), `get_park_forecast` (at most 31
 days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
@@ -81,6 +81,19 @@ Redis; park.fan's Cloudflare needs a skip rule for these three paths from the AP
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log.
+
+Ride facts come from the curated ride profile (`attraction_ride_profiles`), flattened by
+`rideFacts` (`src/attractions/utils/ride-facts.util.ts`): type, track figures in ride order,
+inversions, manufacturer, model, opening year and the merged measurements (top speed, height,
+length, duration), each field left out when unknown. Launches are counted off the track figures
+(`launch` and `swing-launch`, the frontend's rule), and only when figures were curated at all, so
+an uncurated layout gives no count rather than a zero. `get_ride` carries this as `profile`, through
+the admin MCP's `get_attraction`. `compare_rides` ranks one park's rides by one fact (top speed,
+height, length, duration, inversions, launches, opening year, minimum rider height), one row per
+name as the park page serves it. With `riderHeightCm` it keeps only rides whose known minimum the
+rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
+apart (`heightUnknown`), never passed. Minimum heights are centimetres; `heightUnit: "in"` marks a
+park that signs them in inches, and the prompt has Parky say them in inches there.
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride or a
