@@ -1,4 +1,5 @@
 import {
+  BAND_MIN_OWN_EVIDENCE,
   BAND_MIN_SAMPLE,
   ScoreHistogramRow,
   applyBandCalibration,
@@ -28,16 +29,42 @@ describe("fitBandCalibration (PAR-1060)", () => {
   it("a cell under the minimum sample borrows its lead bucket's pool", () => {
     const rows = [
       ...uniform("h2-6", "busy", 10),
-      // 50 slots, all at s = 0.5: alone it would read k = 0.5.
-      { lead: "h2-6", segment: "quiet", bin: 10, n: 50 },
+      // 40 slots, all at s = 0.5: too few to trust its own k = 0.5.
+      { lead: "h2-6", segment: "quiet", bin: 10, n: 40 },
     ];
     const t = fitBandCalibration(rows);
     const small = t.cells["h2-6|quiet"];
-    expect(small.n).toBeLessThan(BAND_MIN_SAMPLE);
+    expect(small.n).toBeLessThan(BAND_MIN_OWN_EVIDENCE);
     expect(small.source).toBe("pooled");
     expect(small.k).toBe(t.pooledByLead["h2-6"].k);
-    expect(small.k).toBe(4.75); // 1050 slots: 10·95 + 50 ≥ 997.5, own would be 0.5
+    expect(small.k).toBe(4.75); // 1040 slots: 10·95 + 40 ≥ 988, own would be 0.5
     expect(small.coverageCalibrated).toBe(1);
+  });
+
+  it("a borrowing cell whose own slots already cover never takes a wider pool factor", () => {
+    // Production 2026-11-02: h24+|mid had 424 slots, raw coverage 100 %, yet
+    // took the quiet-dominated pool's 2.35 → Taron's band doubled to ±50.
+    const rows = [
+      ...uniform("h24+", "quiet", 10), // pool k 4.75
+      { lead: "h24+", segment: "mid", bin: 10, n: 424 }, // all at s = 0.5
+    ];
+    const t = fitBandCalibration(rows);
+    const mid = t.cells["h24+|mid"];
+    expect(mid.n).toBeLessThan(BAND_MIN_SAMPLE);
+    expect(mid.source).toBe("pooled");
+    expect(mid.k).toBe(0.5);
+    expect(mid.coverageCalibrated).toBe(1);
+    expect(bandFactor(t, 30 * 24 * 60, 30)).toBe(1); // served: raw band, not doubled
+  });
+
+  it("a borrowing cell that needs MORE than the pool still gets the pool", () => {
+    const rows = [
+      ...uniform("h6-24", "quiet", 10), // pool k ≈ 4.75
+      { lead: "h6-24", segment: "busy", bin: 100, n: 60 }, // own would be 5
+    ];
+    expect(fitBandCalibration(rows).cells["h6-24|busy"].k).toBe(
+      fitBandCalibration(rows).pooledByLead["h6-24"].k,
+    );
   });
 
   it("never lends a short-lead factor to a long lead bucket (PAR-1060 review)", () => {

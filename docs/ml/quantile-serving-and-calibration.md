@@ -213,7 +213,10 @@ The daily seam above is still open. The **hourly** band is calibrated, because
   `target_time − prediction_time` (the run that last wrote the slot); segments quiet < 30 ≤ mid
   < 60 ≤ busy on the predicted wait. A cell with fewer than 500 slots (`BAND_MIN_SAMPLE`) borrows
   its **lead bucket's** pool; a bucket pool under 500 gives no factor, and the band is served
-  raw. A lead bucket never borrows from another: `uq_pa_attraction_target` keeps one row per slot
+  raw. A borrowing cell with at least 50 slots of its own (`BAND_MIN_OWN_EVIDENCE`) takes the
+  smaller of the pool's factor and its own fit: the pool is mostly quiet rides, and lent to
+  mid/busy cells whose raw band already covered 100 % it doubled their band (PAR-1222, Taron
+  late November ±50 instead of ±25). A lead bucket never borrows from another: `uq_pa_attraction_target` keeps one row per slot
   and the latest run overwrites `prediction_time`, so nearly every row lands in `h0-2`, and a
   short-lead factor on a long-lead band would leave it under-covered while reading as calibrated.
   A non-positive factor (the cell over-forecasts so far that 95 % of actuals sit under the median)
