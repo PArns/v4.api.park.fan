@@ -193,6 +193,78 @@ export class NearbyRidesDto {
 // ParkWithDistanceDto is now imported from common/dto/park-with-distance.dto
 
 /**
+ * The park a short-wait ride stands in.
+ */
+export class NearbyShortWaitParkDto {
+  @ApiProperty({ description: "Park ID" })
+  id: string;
+
+  @ApiProperty({ description: "Park name", example: "Phantasialand" })
+  name: string;
+
+  @ApiProperty({ description: "Park slug", example: "phantasialand" })
+  slug: string;
+
+  @ApiProperty({
+    description: "Distance from the user to the park in meters",
+    example: 19000,
+  })
+  distance: number;
+
+  @ApiProperty({
+    description: "Frontend URL to the park",
+    example: "/europe/germany/bruehl/phantasialand",
+    nullable: true,
+  })
+  url: string | null;
+}
+
+/**
+ * A ride in one of the nearby parks whose live wait is well below its usual
+ * one, as `nearby_parks` lists it under `shortWaits`.
+ */
+export class NearbyShortWaitDto {
+  @ApiProperty({ description: "Attraction ID" })
+  id: string;
+
+  @ApiProperty({ description: "Attraction name", example: "Taron" })
+  name: string;
+
+  @ApiProperty({ description: "Attraction slug", example: "taron" })
+  slug: string;
+
+  @ApiProperty({
+    description: "Frontend URL to the attraction",
+    example: "/europe/germany/bruehl/phantasialand/taron",
+    nullable: true,
+  })
+  url: string | null;
+
+  @ApiProperty({
+    description: "Live standby wait in minutes, rounded to 5 (13 stays 13)",
+    example: 15,
+  })
+  waitTime: number;
+
+  @ApiProperty({
+    description:
+      "The wait the live one is rated against (the ride's P50, P90 when it has " +
+      "none), rounded to 5. Never below 15 and always at least 10 above `waitTime`.",
+    example: 40,
+  })
+  typicalWait: number;
+
+  @ApiProperty({
+    description: "Whether this is one of the park's headliners",
+    example: true,
+  })
+  isHeadliner: boolean;
+
+  @ApiProperty({ description: "The park the ride stands in" })
+  park: NearbyShortWaitParkDto;
+}
+
+/**
  * Response when user is outside all parks
  */
 export class NearbyParksDto {
@@ -207,6 +279,16 @@ export class NearbyParksDto {
     example: 5,
   })
   count: number;
+
+  @ApiProperty({
+    description:
+      "Rides in the open parks of `parks` whose live wait is at most 60 % of " +
+      "their usual one and at least 10 minutes below it, the biggest gap first, " +
+      "at most three per park and five in all. Empty when nothing qualifies; a " +
+      "park whose live payload was not in the cache adds nothing.",
+    type: [NearbyShortWaitDto],
+  })
+  shortWaits: NearbyShortWaitDto[];
 }
 
 /**

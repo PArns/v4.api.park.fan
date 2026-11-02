@@ -67,6 +67,11 @@ describe("LocationService", () => {
     recordParkHit: jest.fn().mockResolvedValue(undefined),
     recordParkHits: jest.fn().mockResolvedValue(undefined),
   };
+  const redis = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue(undefined),
+    mget: jest.fn().mockResolvedValue([]),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -84,11 +89,7 @@ describe("LocationService", () => {
           // Empty GET/MGET → cache miss → exercises the DB + batch fallback
           // path these tests already mock (incl. the park-coordinate index).
           provide: REDIS_CLIENT,
-          useValue: {
-            get: jest.fn().mockResolvedValue(null),
-            set: jest.fn().mockResolvedValue(undefined),
-            mget: jest.fn().mockResolvedValue([]),
-          },
+          useValue: redis,
         },
       ],
     }).compile();
@@ -151,6 +152,46 @@ describe("LocationService", () => {
       const result = await service.findNearby(50.85, 6.95, 1000, 6);
 
       expect(result.type).toBe("nearby_parks");
+    });
+
+    it("lists the short waits of a nearby park from its cached payload", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+      redis.mget.mockResolvedValueOnce([
+        JSON.stringify({
+          id: "p1",
+          slug: "phantasialand",
+          status: "OPERATING",
+          liveWaitTimes: { available: true, reason: null },
+          url: "/europe/germany/bruehl/phantasialand",
+          attractions: [
+            {
+              id: "taron",
+              name: "Taron",
+              slug: "taron",
+              effectiveStatus: "OPERATING",
+              queues: [{ queueType: "STANDBY", waitTime: 15 }],
+              baseline: 40,
+              comparison: "lower",
+              isHeadliner: true,
+              url: "/europe/germany/bruehl/phantasialand/taron",
+            },
+          ],
+        }),
+      ]);
+
+      const result = await service.findNearby(52.52, 13.405, 1000, 6);
+
+      expect(result.type).toBe("nearby_parks");
+      const data = result.data as { shortWaits: { id: string }[] };
+      expect(data.shortWaits.map((r) => r.id)).toEqual(["taron"]);
+    });
+
+    it("answers an empty shortWaits when no park payload is cached", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+
+      const result = await service.findNearby(52.52, 13.405, 1000, 6);
+
+      expect((result.data as { shortWaits: unknown[] }).shortWaits).toEqual([]);
     });
 
     it("respects an enlarged radius (in-park threshold)", async () => {

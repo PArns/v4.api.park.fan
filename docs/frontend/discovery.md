@@ -5,15 +5,15 @@ which numbers are live, and what a missing field means. Open it when rendering a
 city listing, a country landing page or the "near me" list. How `nearby` finds the visitor:
 [location resolution](../architecture/location-resolution.md).
 
-| Endpoint | Returns | HTTP cache |
-| --- | --- | --- |
-| `GET /v1/discovery/geo` | `{ continents[], continentCount, countryCount, cityCount, parkCount, attractionCount, generatedAt }` | 5 min |
-| `GET /v1/discovery/continents` | `continents[]` of the same tree | 5 min |
-| `GET /v1/discovery/continents/:continent` | `{ data: countries[], breadcrumbs }` | 5 min |
-| `GET /v1/discovery/continents/:continent/:country` | `{ data: cities[], breadcrumbs }` | 5 min |
-| `GET /v1/discovery/continents/:continent/:country/summary` | the country summary below | 24 h |
-| `GET /v1/discovery/:continent/:country` | `{ data, breadcrumbs }`, `data` being what `GET /v1/parks/:continent/:country` returns | 5 min |
-| `GET /v1/discovery/nearby` | `{ type, userLocation, data }` | `private, no-store` |
+| Endpoint                                                   | Returns                                                                                              | HTTP cache          |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------- |
+| `GET /v1/discovery/geo`                                    | `{ continents[], continentCount, countryCount, cityCount, parkCount, attractionCount, generatedAt }` | 5 min               |
+| `GET /v1/discovery/continents`                             | `continents[]` of the same tree                                                                      | 5 min               |
+| `GET /v1/discovery/continents/:continent`                  | `{ data: countries[], breadcrumbs }`                                                                 | 5 min               |
+| `GET /v1/discovery/continents/:continent/:country`         | `{ data: cities[], breadcrumbs }`                                                                    | 5 min               |
+| `GET /v1/discovery/continents/:continent/:country/summary` | the country summary below                                                                            | 24 h                |
+| `GET /v1/discovery/:continent/:country`                    | `{ data, breadcrumbs }`, `data` being what `GET /v1/parks/:continent/:country` returns               | 5 min               |
+| `GET /v1/discovery/nearby`                                 | `{ type, userLocation, data }`                                                                       | `private, no-store` |
 
 An unknown slug answers 404. `breadcrumbs` is `[{ name, url }]` with site paths (`/europe/germany`), not
 API paths.
@@ -46,10 +46,22 @@ statistics cache (`DiscoveryService.hydrateStructure`).
 ## The country summary
 
 ```jsonc
-{ "countrySlug": "germany", "parkCount": 15, "cityCount": 8,
-  "topParks": [{ "name": "Europa-Park", "slug": "europa-park", "city": "Rust",
-                 "path": "/parks/europe/germany/rust/europa-park", "avgAnnualCrowdScore": 3.4 }],
-  "avgPeakMonths": [7, 8, 10], "avgQuietMonths": [1, 2, 11] }
+{
+  "countrySlug": "germany",
+  "parkCount": 15,
+  "cityCount": 8,
+  "topParks": [
+    {
+      "name": "Europa-Park",
+      "slug": "europa-park",
+      "city": "Rust",
+      "path": "/parks/europe/germany/rust/europa-park",
+      "avgAnnualCrowdScore": 3.4,
+    },
+  ],
+  "avgPeakMonths": [7, 8, 10],
+  "avgQuietMonths": [1, 2, 11],
+}
 ```
 
 - `avgAnnualCrowdScore` is the mean of the park's monthly average P50 wait over the last 12 months
@@ -71,12 +83,32 @@ GET /v1/discovery/nearby?lat=&lng=&radius=1000&limit=6
   clamped, not rejected.
 - A coordinate that is sent but unusable (only one of the pair, or out of range) is a 400; it never
   falls back to the IP. Without coordinates and without a GeoIP answer it is a 400 too.
-- **`nearby_parks`** → `{ parks[], count }`: the nearest non-retired geocoded parks, in the park-card
-  shape [favorites](./favorites.md) also uses, here with `hasOperatingSchedule`.
+- **`nearby_parks`** → `{ parks[], count, shortWaits[] }`: the nearest non-retired geocoded parks, in
+  the park-card shape [favorites](./favorites.md) also uses, here with `hasOperatingSchedule`, and the
+  rides in them where a wait is short right now (below).
 - **`in_park`** → `{ park, rides[] }`. `park` carries `status`, `hasOperatingSchedule`,
   `analytics { avgWaitTime, crowdLevel, operatingAttractions }`, `todaySchedule`, `nextSchedule`.
   `rides` are the park's rides with coordinates, nearest first; a ride without coordinates is left
   out, and so is one whose `isCurrentlyInSeason` is `false`.
+
+### `shortWaits`
+
+Each entry is `{ id, name, slug, url, waitTime, typicalWait, isHeadliner, park { id, name, slug,
+distance, url } }`, built by `pickShortWaits` (`src/location/short-waits.util.ts`) from the cached
+park payload (`park:integrated:<id>`), the one the park page reads:
+
+- **Which parks:** those in `parks` whose payload was in the cache, whose `status` is `OPERATING` and
+  whose `liveWaitTimes.available` is not `false`. A cache miss adds nothing rather than costing the
+  payload's own queries; the five-minute prewarm makes a miss rare.
+- **Which rides:** `effectiveStatus` `OPERATING`, not out of season, with a standby wait and a
+  `baseline`, and a `comparison` of `lower` or `much_lower` (at most 60 % of the baseline, the same
+  rating the park page's badge shows). `typicalWait` is the `baseline` rounded to 5 and has to be at
+  least 15; `waitTime` (rounded to 5, 13 stays 13) has to be at least 10 below it.
+- **Order and size:** the biggest gap first, a headliner before a plain ride on a tie, then the nearer
+  park; at most three per park and five in all. Empty when nothing qualifies.
+
+`typicalWait` is the ride's median wait over the last 548 days (`calculateAttractionP50`), not this
+hour's typical wait: it says "usually", not "usually at this time". It is never a forecast.
 
 What a ride in `rides` may not be read as:
 
