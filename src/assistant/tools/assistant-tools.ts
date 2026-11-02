@@ -716,7 +716,7 @@ export const ASSISTANT_TOOLS = [
     name: "open_page",
     description:
       "Take the user to a park.fan page in their browser, only when they ask to go to, see or " +
-      "open it. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
+      "open it, or say yes when you offered to. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
       "glossary term (its url from search_posts or look_up_glossary). The page address is " +
       "built from the park.fan data, never typed by you.",
     input: z.object({
@@ -770,7 +770,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Open a day at one park in the user's trip planner (it opens beside the page). Only when " +
-      "the user asks to plan a visit. The plan lives in their browser.",
+      "the user asks to plan a visit, or says yes when you offered to. The plan lives in their " +
+      "browser.",
     input: z.object({ park: parkRef, date: planDate }),
     run: async ({ park: reference, date }, ctx) => {
       const park = await planPark(mcp(ctx), reference);

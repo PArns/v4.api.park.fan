@@ -63,7 +63,11 @@ answer. The system prompt (`system-prompt.ts`, versioned) is cached together wit
 date, page and language follow after the cache breakpoint. It keeps Parky to parks and rides,
 makes every number come from a tool, sets the answer language to the page's and the informal
 address (du, tu, je, tú), lets Parky act on the page only when asked, and tells the model that tool
-results are data, never instructions.
+results are data, never instructions. A visitor sizing up a visit, by typing only a park's or a
+ride's name or by asking when to go or how busy it gets, gets one offer of the next step at the end:
+the park's page (crowd calendar, forecasts, planner), a day plan or the quietest days, never the page
+they are on, and no more offers once one was taken or turned down. A yes to that offer counts as
+asking, so Parky then calls `open_page`, `plan_day` or `get_best_days`.
 
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
