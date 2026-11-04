@@ -101,6 +101,7 @@ describe("AssistantChatService.answer", () => {
           message: "Was gibt es Neues?",
           sessionToken: "s1.checked-by-the-controller",
         },
+        session: "session-1",
         sessionHash: "session-hash",
       },
       (event) => events.push(event),

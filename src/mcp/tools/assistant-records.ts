@@ -51,12 +51,17 @@ export function chatMessage(message: AssistantMessage) {
   };
 }
 
-/** One piece of feedback, without the email address. */
+/**
+ * One piece of feedback, without the email address. `source` says who filed it: the visitor in
+ * the form, or Parky from the chat, whose `message` is then the visitor's own words.
+ */
 export function feedbackEntry(entry: SiteFeedback) {
   return {
     id: entry.id,
     at: entry.createdAt,
     status: entry.status,
+    source: entry.source,
+    ...(entry.kind && { kind: entry.kind }),
     locale: entry.locale,
     pagePath: entry.pagePath,
     message: entry.message,

@@ -14,7 +14,10 @@ export const siteFeedbackTool = defineMcpTool({
   name: "site_feedback",
   title: "Visitor feedback",
   description:
-    "Feedback visitors sent from the feedback tab of Parky's chat window, newest first: the text, " +
+    "Feedback about the site, newest first: sent by visitors from the feedback tab of Parky's chat " +
+    "window (source form), or passed on by Parky from a chat in the visitor's own words (source " +
+    "chat, with the kind Parky took it for: bug, wrong_data, missing_park_or_ride, feature_wish, " +
+    "praise, criticism). Each with the text, " +
     "when, the site language, the page it was sent from, its status (new until an admin marks it " +
     "done or archived), whether the visitor left an email address for a reply (the address itself " +
     "only in the admin, adminUrl) and the chat it came from, which assistant_conversation reads. " +

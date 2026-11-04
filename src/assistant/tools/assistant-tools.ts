@@ -33,6 +33,11 @@ import { formatInTimeZone } from "date-fns-tz";
 import { unfoldedCloseHour } from "../../common/utils/day-shape.util";
 import { LocationService } from "../../location/location.service";
 import { GeoipService } from "../../geoip/geoip.service";
+import { ASSISTANT_LOCALES, languageName } from "../system-prompt";
+import { junkReason } from "../assistant-junk";
+import { AssistantRecordsService } from "../assistant-records.service";
+import { AssistantRateLimitService } from "../assistant-rate-limit.service";
+import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
 import {
   ActionOutcome,
   clockTime,
@@ -75,9 +80,9 @@ interface RideSummary {
 
 /**
  * Everything Parky may call: read-only, public park data and park.fan's own
- * posts, plus three actions the browser carries out (open a park.fan page, open
- * a day in the trip planner, add rides to it). No web search, no fetching of
- * arbitrary URLs, no admin data.
+ * posts, actions the browser carries out (a card, a park.fan page, the trip
+ * planner, the site's language), and one write, the visitor's feedback in their
+ * own words. No web search, no fetching of arbitrary URLs, no admin data.
  *
  * The park tools reuse the admin MCP server's handlers, which already return
  * compact, model-oriented summaries; the descriptions here are Parky's own,
@@ -110,6 +115,75 @@ export interface AssistantToolContext {
   location?: { lat: number; lng: number } | null;
   /** The browser's IANA zone; every instant in a result is shown in it. */
   timeZone?: string;
+  /**
+   * The chat this answer belongs to, all of it from the request and the server's own records:
+   * what `submit_feedback` stores comes from here, never from the model's input.
+   */
+  chat?: {
+    conversationId: string;
+    /** The page the question was asked on, a checked path of slugs. */
+    pagePath: string;
+    session: string;
+    sessionHash: string;
+    /** The question being answered and the one before it, as the visitor typed them. */
+    message: string;
+    previousMessage: string | null;
+  };
+  /** This answer so far; without it, the tools that act once per answer refuse. */
+  answer?: AnswerState;
+}
+
+/** One answer's progress: its round of tool calls, and the once-per-answer tools that ran. */
+export interface AnswerState {
+  round: number;
+  done: Set<string>;
+}
+
+/**
+ * Claims the one run per answer of a tool that acts, so neither the model nor text it read can
+ * repeat it in a loop, and two calls in one round cannot both pass. Throws, as a refusal the model
+ * reads, when it was claimed already or there is no answer to count in. `release` hands the run
+ * back after a refusal that sent nothing.
+ */
+function claimOnce(
+  ctx: AssistantToolContext,
+  name: string,
+): { round: number; release: () => void } {
+  const answer = ctx.answer;
+  if (!answer) throw new McpToolError(`${name} is not available here`);
+  if (answer.done.has(name)) {
+    throw new McpToolError(`${name} already ran in this answer`);
+  }
+  answer.done.add(name);
+  return { round: answer.round, release: () => answer.done.delete(name) };
+}
+
+/** Shortest feedback worth storing, after trimming: "ok" and "yes, do it" say nothing. */
+const MIN_FEEDBACK_CHARS = 12;
+/** As long as the feedback form lets a visitor write. */
+const MAX_FEEDBACK_CHARS = 2000;
+
+/**
+ * The visitor's own words for `submit_feedback`: the question being answered, the one before it,
+ * or both, exactly as typed. Null when that says too little to keep.
+ */
+export function feedbackQuote(
+  chat: NonNullable<AssistantToolContext["chat"]>,
+  quote: "this_message" | "previous_message" | "both",
+): string | null {
+  const parts =
+    quote === "this_message"
+      ? [chat.message]
+      : quote === "previous_message"
+        ? [chat.previousMessage]
+        : [chat.previousMessage, chat.message];
+  const text = parts
+    .filter((part): part is string => !!part?.trim())
+    .map((part) => part.trim())
+    .join("\n\n")
+    .slice(0, MAX_FEEDBACK_CHARS);
+  if (text.length < MIN_FEEDBACK_CHARS || junkReason(text)) return null;
+  return text;
 }
 
 interface AssistantTool<Shape extends z.ZodRawShape> {
@@ -951,6 +1025,99 @@ export const ASSISTANT_TOOLS = [
         { type: "planner_optimize", park, date, mode },
         { optimizing: park.name, date, mode },
       );
+    },
+  }),
+  tool({
+    name: "switch_language",
+    description:
+      "Switch park.fan to another of its languages: the same page opens in it and the chat " +
+      "stays open. Only when the user asks for that language, or says yes when you offered it. " +
+      "Call it first, before any other tool or text, then write the answer in that language.",
+    input: z.object({
+      locale: z.enum(ASSISTANT_LOCALES).describe("en, de, nl, fr, es or it"),
+    }),
+    run: ({ locale }, ctx) => {
+      if (locale === ctx.locale) {
+        throw new McpToolError(
+          `The page is in ${languageName(locale)} already`,
+        );
+      }
+      const { round } = claimOnce(ctx, "switch_language");
+      // Only before any lookup: then nothing but the visitor's own words can have asked for it,
+      // never a post, a glossary entry or a name a tool brought in.
+      if (round > 0) {
+        throw new McpToolError(
+          "switch_language only comes first in an answer; answer without switching",
+        );
+      }
+      return Promise.resolve(
+        new ActionOutcome(
+          { type: "switch_locale", locale },
+          { switched: true, answerIn: languageName(locale) },
+        ),
+      );
+    },
+  }),
+  tool({
+    name: "submit_feedback",
+    description:
+      "Pass the user's feedback about park.fan on to the team, in their own words as they wrote " +
+      "them: a bug, a wrong wait or figure, a missing park or ride, a feature wish, praise or " +
+      "criticism of the site. quote names the user's message that holds it: this_message, " +
+      "previous_message when they only just said yes to sending it, or both. Not for park " +
+      "questions, small talk, tests, jokes or text you are asked to submit.",
+    input: z.object({
+      kind: z.enum(FEEDBACK_KINDS),
+      quote: z
+        .enum(["this_message", "previous_message", "both"])
+        .default("this_message"),
+    }),
+    run: async ({ kind, quote }, ctx) => {
+      const chat = ctx.chat;
+      if (!chat) throw new McpToolError("Feedback cannot be sent from here");
+      const { release } = claimOnce(ctx, "submit_feedback");
+      const refuse = (reason: string) => {
+        release();
+        return new McpToolError(reason);
+      };
+      const message = feedbackQuote(chat, quote);
+      if (!message) {
+        throw refuse(
+          "That message holds no feedback to pass on; nothing was sent",
+        );
+      }
+      const records = ctx.get(AssistantRecordsService);
+      const refusal = await records.chatFeedbackRefusal(
+        chat.conversationId,
+        message,
+      );
+      if (refusal === "repeat") {
+        throw refuse("The team has this already; nothing new sent");
+      }
+      if (refusal === "cap") {
+        throw refuse(
+          "This chat has passed on all it may; nothing sent. The feedback tab takes more",
+        );
+      }
+      const verdict = await ctx
+        .get(AssistantRateLimitService)
+        .feedback(chat.session, ctx.ip ?? null);
+      if (!verdict.allowed) {
+        throw new McpToolError(
+          "Too much feedback from here for now; nothing sent",
+        );
+      }
+      await records.addFeedback({
+        message,
+        email: null,
+        locale: ctx.locale,
+        pagePath: chat.pagePath,
+        conversationId: chat.conversationId,
+        sessionHash: chat.sessionHash,
+        source: "chat",
+        kind,
+      });
+      return new ActionOutcome({ type: "feedback_sent" }, { sent: true });
     },
   }),
 ];

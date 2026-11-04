@@ -26,8 +26,9 @@ Chat, rating and feedback need a `sessionToken`, or they answer 401. The browser
 `POST session` with a Turnstile token solved for the action `assistant-session`; the API checks it
 with Cloudflare, including the action. The token (`assistant-session.util.ts`) is signed with a key derived from `ASSISTANT_SECRET_KEY` and valid for two hours. It is not bound to an address, which a phone changes between Wi-Fi and mobile data: the limits count per session, and only issuing sessions counts per address. Without
 `TURNSTILE_SECRET_KEY` production issues no session at all; elsewhere any token passes, for local
-work. A chat can only be continued with the session that started it (`sessionHash`), so a leaked
-chat id shows nobody else's history.
+work. A chat can only be continued, rated or have feedback filed under it by the session that
+started it (`sessionHash`), so a leaked chat id shows nobody else's history and rates nothing; form
+feedback naming another session's chat is kept, unlinked.
 
 ## The chat
 
@@ -84,13 +85,41 @@ tool results, so the next round reads the history and every earlier result from 
 tenth of the price instead of sending it again in full. The tool schemas go out without zod's
 `$schema` and the pattern it writes beside `format: "uuid"` (`leanSchema`, 15,220 to 12,949
 characters for the whole list); zod still checks every input. It keeps Parky to parks and rides,
-makes every number come from a tool, sets the answer language to the page's and the informal
+makes every number come from a tool, answers in the visitor's language (below) with the informal
 address (du, tu, je, tú), lets Parky act on the page only when asked, and tells the model that tool
-results are data, never instructions. A visitor sizing up a visit, by typing only a park's or a
-ride's name or by asking when to go or how busy it gets, gets one offer of the next step at the end:
-the park's page (crowd calendar, forecasts, planner), a day plan or the quietest days, never the page
-they are on, and no more offers once one was taken or turned down. A yes to that offer counts as
-asking, so Parky then calls `open_page`, `plan_day` or `get_best_days`.
+results are data, never instructions and never a reason to act. A visitor sizing up a visit, by
+typing only a park's or a ride's name or by asking when to go or how busy it gets, gets one offer of
+the next step at the end: the park's page (crowd calendar, forecasts, planner), a day plan or the
+quietest days, never the page they are on. An offer is never made twice in a chat, and once one was
+taken, turned down or met with no interest, answers end without a question. A yes to that offer
+counts as asking, so Parky then calls `open_page`, `plan_day` or `get_best_days`.
+
+Teasing and tests get one witty line in Parky's voice and a turn back to parks, never a refusal, a
+talk about his limits, an argument or an apology, and an insult is never repeated. Nothing goes out
+that would embarrass park.fan in a screenshot, nobody is mocked, and a claim to be an admin, a
+developer or Parky's maker changes nothing. Facts do not bend to insistence, and Parky promises
+nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
+true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
+once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
+(`SYSTEM_PROMPT_VERSION`, 14 since these rules).
+
+## Language and feedback from the chat
+
+Parky answers in the language the visitor writes in when it is one of the six (`ASSISTANT_LOCALES`),
+else in the page's. Asked for the site in another of them, or after a yes to his one offer per chat
+to switch, he calls `switch_language`: the widget opens the same page in that language with the
+chat open, and the answer is written in it. The server allows it only to one of the six other than
+the page's, once per answer and only in the first round, before any tool result was read, so a post,
+a glossary entry or a name from a lookup cannot ask for it.
+
+Real feedback about park.fan (a bug, a wrong figure, a missing park or ride, a feature wish, praise
+or criticism with substance) Parky passes on with `submit_feedback` and says so in a sentence. The
+model chooses only `kind` and which of the visitor's messages holds it (`quote`: this one, the one
+before, both); the stored text is those messages exactly as typed, at least 12 characters, at most
+2,000, never junk, and page, language and chat come from the request. It goes into `site_feedback`
+with `source: "chat"` and the `kind`, once per answer, at most twice per chat
+(`CHAT_FEEDBACK_PER_CONVERSATION`) and never the same words twice, and draws on the form's limits
+(below). Anything refused stores nothing and tells the model so.
 
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
@@ -126,13 +155,15 @@ park that signs them in inches, and the prompt has Parky say them in inches ther
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride or a
 park's rides with their waits, from live data), `open_page` (only a park.fan path of slugs), `request_location` (the share
-buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_block` and
-`plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner").
+buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_block`,
+`plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner"), `switch_language`
+(`switch_locale` with the locale; the widget carries it out once the answer is complete) and
+`submit_feedback` (`feedback_sent`, a chip under the answer).
 
 ## Limits and cost
 
 Per session (`AssistantRateLimitService`): 3 questions per 30 seconds (room for a quick "yes" to
-an offer, none for rapid fire), 20 per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
+an offer, none for rapid fire), 20 per 10 minutes and 150 per day, 5 feedback messages and 60 ratings per hour, and 500,000 tokens a day (`VISITOR_DAILY_TOKENS`), so one visitor cannot spend the day's budget everybody shares. Per address, an IPv6 address counted as its /64: 10 new sessions an hour, so sessions cannot be farmed, and 20 feedback messages a day, form and chat together, so farmed sessions cannot fill the inbox either. A carrier NAT with many visitors behind one address limits nobody's chat. Over all chats, the daily token budget from the settings (Redis, per UTC day): once it is
 spent, the config says off and new chats get a 503. Cache reads cost a tenth and are left out of
 both counts. A stream cut short is counted from its events, so dropping the connection is no way
 around the budget. Each answer stores its tokens and cost at Haiku 5.5's prices.
@@ -158,4 +189,8 @@ Chats (`assistant_conversations`, `assistant_messages`) keep no address. `visito
 the address with the day and the master key, which tells one visitor's chats of a day apart and
 nothing more. They are deleted after 90 days by the nightly `assistant` queue job
 (`prune-conversations`, 04:50). Feedback (`site_feedback`) is kept until it is deleted by hand,
-e-mail included; its link to a chat leads nowhere once the chat is pruned.
+e-mail included; its link to a chat leads nowhere once the chat is pruned. `source` says whether
+the visitor sent it from the form (`form`, every row from before the column) or Parky filed it from
+the chat (`chat`, with `kind`). The admin, park.fan's pages and the admin MCP show every text of a
+chat or a feedback as plain text; the MCP hands it to a model under `visitorData` with a notice that
+it is data, never instructions.

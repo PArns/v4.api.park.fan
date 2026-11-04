@@ -19,6 +19,8 @@ import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
   toolStatus,
+  type AnswerState,
+  type AssistantToolContext,
   type AssistantToolStatus,
 } from "./tools/assistant-tools";
 import type { ClientAction } from "./tools/assistant-actions";
@@ -55,6 +57,8 @@ export interface PreparedChat {
   conversation: AssistantConversation;
   history: Anthropic.MessageParam[];
   request: ChatRequest;
+  /** The session's id, which the feedback limits are counted under. */
+  session: string;
   /** The session's hash, which its token budget is counted under. */
   sessionHash: string;
 }
@@ -89,14 +93,15 @@ export class AssistantChatService {
   ) {}
 
   /**
-   * @param sessionHash A hash of the caller's session token: a chat can only be continued from
-   *   the session that started it, so a leaked chat id shows nobody else's history.
+   * @param session The caller's checked session: a chat can only be continued from the session
+   *   that started it, so a leaked chat id shows nobody else's history.
    */
   async prepare(
     request: ChatRequest,
     ip: string | null,
-    sessionHash: string,
+    session: string,
   ): Promise<PreparedChat | ChatRefusal> {
+    const sessionHash = hashRateLimitKey(session);
     // The switch only decides who is shown the widget: admins and `?assistant=on` testers chat
     // while it is off. What stops every chat is no key or a spent budget.
     const apiKey = await this.settings.apiKey();
@@ -133,7 +138,7 @@ export class AssistantChatService {
         }),
       );
     }
-    return { apiKey, conversation, history, request, sessionHash };
+    return { apiKey, conversation, history, request, session, sessionHash };
   }
 
   async answer(
@@ -182,13 +187,23 @@ export class AssistantChatService {
       ...chat.history,
       { role: "user", content: request.message },
     ];
-    const toolContext = {
+    const answer: AnswerState = { round: 0, done: new Set() };
+    const toolContext: AssistantToolContext = {
       get: <T>(token: Parameters<ModuleRef["get"]>[0]) =>
         this.moduleRef.get(token, { strict: false }) as T,
       locale: request.locale,
       ip,
       location: request.location ?? null,
       timeZone,
+      chat: {
+        conversationId: conversation.id,
+        pagePath: request.pagePath,
+        session: chat.session,
+        sessionHash: chat.sessionHash,
+        message: request.message,
+        previousMessage: lastQuestion(chat.history),
+      },
+      answer,
     };
     const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const toolCalls: AssistantToolCall[] = [];
@@ -199,6 +214,7 @@ export class AssistantChatService {
     let breakpoint: Anthropic.CacheControlEphemeral | null = null;
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
+        answer.round = round;
         const lastRound = round === MAX_ROUNDS - 1;
         breakpoint = moveCacheBreakpoint(messages, breakpoint);
         const stream = client.messages.stream(
@@ -394,6 +410,17 @@ export function historyOf(
   }
   while (history[0]?.role === "assistant") history.shift();
   return history;
+}
+
+/** The visitor's question before this one, as they typed it, or null in a new chat. */
+export function lastQuestion(history: Anthropic.MessageParam[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    if (message.role === "user" && typeof message.content === "string") {
+      return message.content;
+    }
+  }
+  return null;
 }
 
 function addUsage(total: Usage, usage: Anthropic.Usage): void {

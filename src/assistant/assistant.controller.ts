@@ -14,7 +14,10 @@ import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { getRateLimitIp } from "../common/utils/request.util";
-import { hashRateLimitKey } from "../common/redis/rate-limit.util";
+import {
+  hashRateLimitKey,
+  type RateLimitVerdict,
+} from "../common/redis/rate-limit.util";
 import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
 import { AssistantChallengeService } from "./assistant-challenge.service";
 import { SESSION_TTL_SECONDS } from "./assistant-session.util";
@@ -90,7 +93,9 @@ export class AssistantController {
     @Req() request: Request,
   ): Promise<{ sessionToken: string; expiresInSeconds: number }> {
     const { turnstileToken } = parse(sessionRequestSchema, body);
-    await this.guard({ ip: getRateLimitIp(request) }, "session");
+    refuseOverLimit(
+      await this.rateLimit.check({ ip: getRateLimitIp(request) }, "session"),
+    );
     const opened = await this.challenge.open(
       turnstileToken,
       getRateLimitIp(request),
@@ -158,11 +163,7 @@ export class AssistantController {
       return;
     }
 
-    const prepared = await this.chat.prepare(
-      input,
-      ip,
-      hashRateLimitKey(session),
-    );
+    const prepared = await this.chat.prepare(input, ip, session);
     if (prepared === "junk") {
       await this.refuseJunk(response, session);
       return;
@@ -210,11 +211,12 @@ export class AssistantController {
   async rate(@Body() body: unknown): Promise<void> {
     const input = parse(ratingRequestSchema, body);
     const session = this.requireSession(input.sessionToken);
-    await this.guard({ session }, "rating");
+    refuseOverLimit(await this.rateLimit.check({ session }, "rating"));
     const rated = await this.records.rate(
       input.conversationId,
       input.messageId,
       input.rating,
+      hashRateLimitKey(session),
     );
     if (!rated) throw new HttpException("No such answer", HttpStatus.NOT_FOUND);
   }
@@ -223,16 +225,23 @@ export class AssistantController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Send feedback about the site" })
   @ApiResponse(RATE_LIMITED_RESPONSE)
-  async feedback(@Body() body: unknown): Promise<{ id: string }> {
+  async feedback(
+    @Body() body: unknown,
+    @Req() request: Request,
+  ): Promise<{ id: string }> {
     const input = parse(feedbackRequestSchema, body);
     const session = this.requireSession(input.sessionToken);
-    await this.guard({ session }, "feedback");
+    refuseOverLimit(
+      await this.rateLimit.feedback(session, getRateLimitIp(request)),
+    );
     const id = await this.records.addFeedback({
       message: input.message,
       email: input.email || null,
       locale: input.locale,
       pagePath: input.pagePath,
       conversationId: input.conversationId ?? null,
+      sessionHash: hashRateLimitKey(session),
+      source: "form",
     });
     return { id };
   }
@@ -258,23 +267,18 @@ export class AssistantController {
     if (!session) throw new HttpException("challenge", HttpStatus.UNAUTHORIZED);
     return session;
   }
+}
 
-  private async guard(
-    who: { session: string } | { ip: string | null },
-    bucket: "rating" | "feedback" | "session",
-  ) {
-    const verdict = await this.rateLimit.check(who, bucket);
-    if (!verdict.allowed) {
-      throw new HttpException(
-        {
-          statusCode: 429,
-          message: "Too many requests",
-          retryAfter: verdict.retryAfterSeconds,
-        },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-  }
+function refuseOverLimit(verdict: RateLimitVerdict): void {
+  if (verdict.allowed) return;
+  throw new HttpException(
+    {
+      statusCode: 429,
+      message: "Too many requests",
+      retryAfter: verdict.retryAfterSeconds,
+    },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
 }
 
 function tooManyQuestions(response: Response, retryAfterSeconds: number): void {
