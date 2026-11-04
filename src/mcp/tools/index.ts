@@ -14,6 +14,9 @@ import { dataQualityTool } from "./data-quality.tool";
 import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
 import { auditLogTool } from "./audit-log.tool";
+import { assistantConversationsTool } from "./assistant-conversations.tool";
+import { assistantConversationTool } from "./assistant-conversation.tool";
+import { siteFeedbackTool } from "./site-feedback.tool";
 import { downtimeTool } from "./downtime.tool";
 import { analyticsOverviewTool } from "./analytics-overview.tool";
 import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
@@ -55,6 +58,9 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   duplicatesTool,
   retirementCandidatesTool,
   auditLogTool,
+  assistantConversationsTool,
+  assistantConversationTool,
+  siteFeedbackTool,
   downtimeTool,
   analyticsOverviewTool,
   analyticsLiveTool,

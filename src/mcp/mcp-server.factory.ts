@@ -16,7 +16,8 @@ const INSTRUCTIONS =
   "outages, page-view popularity, the site statistic and its SEO reports (analytics_*, " +
   "search_report, planner_report, seo_*), system and ML health, job queues, data-quality " +
   "findings, " +
-  "duplicate and retirement candidates, outage statistics and the admin audit log. Ids are " +
+  "duplicate and retirement candidates, outage statistics, the admin audit log, and Parky's " +
+  "chats and the visitors' feedback (assistant_*, site_feedback). Ids are " +
   "UUIDs; find_parks and find_attractions turn names into ids. Timestamps are ISO 8601 and " +
   "park-local times carry their offset. Nothing here changes data.";
 
