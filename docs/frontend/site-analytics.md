@@ -42,9 +42,14 @@ page's row (`seconds`) and, while the visit's key knows how the visit began, to 
 (`visit_seconds`); without a visit (no address, Redis away, the visit already ended) to the page
 only. The browser sends no time: the seconds land in the hour the report arrives in.
 
-A hit carries no device class and no window width, and the beacon reads no query parameter of the
-landing URL: `utm_source` and `utm_campaign` are not read, and `referrer` is the external host and
-nothing else. A field the table does not list is ignored, so a tab that still runs an older script and
+A hit carries no device class and no window width. `referrer` is the external host of
+`document.referrer`; without one, the beacon reads `utm_source` and sends it as `referrer` only when
+it is the host of an AI assistant that `REFERRER_RULES` puts in the `ai` channel (`chatgpt.com`,
+`perplexity.ai`, …; the frontend's `AI_SOURCE_HOSTS`), because ChatGPT tags its links that way and
+often sends no referrer. No other query parameter is read, `utm_campaign` included. The beacon sends
+a page view only once the page is on screen (not a background tab, not prerendered), and nothing at
+all for a load nobody looked at or for a tab whose User-Agent names iOS or Android while
+`navigator.userAgentData` reports another system. A field the table does not list is ignored, so a tab that still runs an older script and
 sends `viewport` or `campaign` is counted all the same and neither is stored.
 
 **No location-derived entity.** `nearby_parks_loaded` and every `compass_*` event lose their `entity`
@@ -801,9 +806,9 @@ its window once, so a year's took about four times the 90-day figure.
   A row written to the hourly tables after its day was rolled up is not in the daily rows.
 - Hours of the days before `site_visitor_hours` existed have `visitors: null`.
 - Page views and events cannot be filtered by how their visit began (see Reports).
-- The referrer is the host the browser reports and nothing else: a link's `utm_` parameters are not
-  read, so a newsletter or an ad is a `referral` under its own host, or `direct` when the mail client
-  or the app sends none.
+- The referrer is the host the browser reports, or an AI assistant's host from `utm_source` when the
+  browser reports none. Other `utm_` values are not read, so a newsletter or an ad is a `referral`
+  under its own host, or `direct` when the mail client or the app sends none.
 - With Redis down the guards, visits and visitors are off and an instance holds at most 5000 fields in
   memory; past that, hits are dropped and counted.
 - The first 512 characters of a User-Agent decide browser, OS, device class and bot.
