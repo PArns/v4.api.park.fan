@@ -5,6 +5,7 @@ import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
+import type { AssistantLocale } from "../system-prompt";
 
 /**
  * Parky's actions on the page: what the browser does for it, never the API. A tool returns an
@@ -90,7 +91,11 @@ export type ClientAction =
       park: PlannerPark;
       date: string;
       mode: "order" | "headliners";
-    };
+    }
+  /** The same page in another of the site's languages, carried out once the answer is complete. */
+  | { type: "switch_locale"; locale: AssistantLocale }
+  /** Parky stored the visitor's feedback; the widget shows it under the answer. */
+  | { type: "feedback_sent" };
 
 /** The trip planner's block icons (park.fan `PLANNER_BLOCK_ICONS`). */
 export const PLANNER_BLOCK_ICONS = [

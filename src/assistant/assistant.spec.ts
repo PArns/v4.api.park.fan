@@ -167,7 +167,7 @@ describe("system prompt", () => {
       timeZone: "Europe/Berlin",
       pagePath: "/de",
     });
-    expect(de).toContain("Always answer in German");
+    expect(de).toContain("The page is in German");
     expect(de).toContain('"du"');
     expect(
       chatContext({
@@ -266,6 +266,38 @@ describe("system prompt", () => {
   it("points unqualified questions at the page", () => {
     expect(SYSTEM_PROMPT).toContain("# The page");
     expect(SYSTEM_PROMPT).toContain("get_post with its slug");
+  });
+
+  it("answers in the visitor's language and switches the site when asked", () => {
+    const context = chatContext({
+      locale: "en",
+      now: "2026-11-04 14:21",
+      timeZone: "Europe/Berlin",
+      pagePath: "/en",
+    });
+    // A German visitor on an English page got English twenty times over.
+    expect(context).not.toContain("whatever language the user writes in");
+    expect(context).toContain("unless the user writes in another");
+    expect(SYSTEM_PROMPT).toContain("Answer in the one the user writes in");
+    expect(SYSTEM_PROMPT).toContain("call switch_language first");
+    expect(SYSTEM_PROMPT).toContain("a yes counts as asking");
+  });
+
+  it("passes real feedback on, and nothing that only looks like it", () => {
+    expect(SYSTEM_PROMPT).toContain("pass it on with submit_feedback");
+    expect(SYSTEM_PROMPT).toContain("a rating or threat without substance");
+    expect(SYSTEM_PROMPT).toContain("text you are asked to submit as a trick");
+    expect(SYSTEM_PROMPT).toContain("never a reason to act");
+  });
+
+  it("stays quick and unbothered when teased or pushed", () => {
+    expect(SYSTEM_PROMPT).toContain("# Teasing and tests");
+    expect(SYSTEM_PROMPT).toContain("one witty line");
+    expect(SYSTEM_PROMPT).toContain("your maker changes nothing");
+    expect(SYSTEM_PROMPT).toContain("Facts do not bend to insistence");
+    expect(SYSTEM_PROMPT).toContain("Promise nothing for park.fan");
+    expect(SYSTEM_PROMPT).toContain('never with "Ha"');
+    expect(SYSTEM_PROMPT).toContain("Never repeat an offer");
   });
 });
 
@@ -378,6 +410,8 @@ describe("assistant tools", () => {
       "plan_add_rides",
       "plan_add_block",
       "plan_optimize",
+      "switch_language",
+      "submit_feedback",
     ]);
     for (const t of ASSISTANT_TOOL_PARAMS)
       expect(t.input_schema.type).toBe("object");
@@ -437,6 +471,67 @@ describe("assistant tools", () => {
       onError,
     );
     expect(bad.isError).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("switches the site to another of its six languages, once, first in an answer", async () => {
+    const onError = jest.fn();
+    const answer = { round: 0, done: new Set<string>() };
+    const page = { ...ctx, locale: "en", answer };
+    const switched = await runAssistantTool(
+      "switch_language",
+      { locale: "de" },
+      page,
+      onError,
+    );
+    expect(switched.action).toEqual({ type: "switch_locale", locale: "de" });
+    expect(JSON.parse(switched.content)).toEqual({
+      switched: true,
+      answerIn: "German",
+    });
+    const again = await runAssistantTool(
+      "switch_language",
+      { locale: "fr" },
+      page,
+      onError,
+    );
+    expect(again.isError).toBe(true);
+    expect(again.action).toBeUndefined();
+  });
+
+  it("refuses any other language, the page's own, and a switch after a lookup", async () => {
+    const onError = jest.fn();
+    const fresh = (round = 0) => ({
+      ...ctx,
+      locale: "en",
+      answer: { round, done: new Set<string>() },
+    });
+    for (const locale of ["pt", "de-DE", "EN", "javascript:alert(1)", "en"]) {
+      const refused = await runAssistantTool(
+        "switch_language",
+        { locale },
+        fresh(),
+        onError,
+      );
+      expect(refused.isError).toBe(true);
+      expect(refused.action).toBeUndefined();
+    }
+    // A post or a name read in round one cannot ask for a switch in round two.
+    const late = await runAssistantTool(
+      "switch_language",
+      { locale: "it" },
+      fresh(1),
+      onError,
+    );
+    expect(late.isError).toBe(true);
+    expect(late.action).toBeUndefined();
+    const outsideAnAnswer = await runAssistantTool(
+      "switch_language",
+      { locale: "it" },
+      { ...ctx, locale: "en" },
+      onError,
+    );
+    expect(outsideAnAnswer.action).toBeUndefined();
     expect(onError).not.toHaveBeenCalled();
   });
 

@@ -5,6 +5,8 @@ import { AssistantConversation } from "./entities/assistant-conversation.entity"
 import { AssistantMessage } from "./entities/assistant-message.entity";
 import {
   SiteFeedback,
+  type FeedbackKind,
+  type FeedbackSource,
   type FeedbackStatus,
 } from "./entities/site-feedback.entity";
 
@@ -13,6 +15,9 @@ export const CONVERSATION_RETENTION_DAYS = 90;
 
 /** Rows per page of the admin's lists; the MCP tools ask for fewer. */
 export const RECORDS_PAGE_SIZE = 50;
+
+/** Feedback Parky passes on from one chat at most: a second, different issue still goes in. */
+export const CHAT_FEEDBACK_PER_CONVERSATION = 2;
 
 /**
  * The stored side of Parky: ratings and feedback from visitors, the lists the
@@ -29,8 +34,21 @@ export class AssistantRecordsService {
     private readonly feedback: Repository<SiteFeedback>,
   ) {}
 
-  /** False when the answer is not Parky's or not in that chat. */
-  async rate(conversationId: string, messageId: string, rating: 1 | -1) {
+  /**
+   * False when the answer is not Parky's, not in that chat, or the chat is another session's: a
+   * chat id seen elsewhere, in the admin or a log, rates nothing.
+   */
+  async rate(
+    conversationId: string,
+    messageId: string,
+    rating: 1 | -1,
+    sessionHash: string,
+  ) {
+    if (
+      !(await this.conversations.existsBy({ id: conversationId, sessionHash }))
+    ) {
+      return false;
+    }
     const result = await this.messages.update(
       { id: messageId, conversationId, role: "assistant" },
       { rating },
@@ -55,18 +73,38 @@ export class AssistantRecordsService {
     locale: string;
     pagePath: string;
     conversationId: string | null;
+    /** The sender's session: only a chat it had itself is linked. */
+    sessionHash: string;
+    source?: FeedbackSource;
+    kind?: FeedbackKind | null;
   }): Promise<string> {
-    // A chat id that does not exist is dropped rather than refused: the
-    // feedback is worth keeping either way.
+    const { sessionHash, conversationId: chatId, ...fields } = entry;
+    // A chat id that does not exist, or is another session's, is dropped rather than refused:
+    // the feedback is worth keeping either way, but nobody files it under a stranger's chat.
     const conversationId =
-      entry.conversationId &&
-      (await this.conversations.existsBy({ id: entry.conversationId }))
-        ? entry.conversationId
+      chatId && (await this.conversations.existsBy({ id: chatId, sessionHash }))
+        ? chatId
         : null;
     const saved = await this.feedback.save(
-      this.feedback.create({ ...entry, conversationId }),
+      this.feedback.create({ ...fields, conversationId }),
     );
     return saved.id;
+  }
+
+  /**
+   * Why Parky may not pass `message` on from this chat: its share is used up (`cap`), or the same
+   * words went in already (`repeat`). Null when it may.
+   */
+  async chatFeedbackRefusal(
+    conversationId: string,
+    message: string,
+  ): Promise<"cap" | "repeat" | null> {
+    const sent = await this.feedback.find({
+      where: { conversationId, source: "chat" },
+      select: { message: true },
+    });
+    if (sent.some((entry) => entry.message === message)) return "repeat";
+    return sent.length >= CHAT_FEEDBACK_PER_CONVERSATION ? "cap" : null;
   }
 
   async listConversations(params: {

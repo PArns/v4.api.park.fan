@@ -112,6 +112,29 @@ describe("AssistantController.ask, junk and pauses", () => {
   });
 });
 
+describe("AssistantRateLimitService, feedback", () => {
+  it("takes five an hour per session and twenty a day per address", async () => {
+    const limiter = new AssistantRateLimitService(fakeRedis() as never);
+    const ip = "203.0.113.7";
+    for (let i = 0; i < 5; i++) {
+      expect((await limiter.feedback("session-1", ip)).allowed).toBe(true);
+    }
+    expect((await limiter.feedback("session-1", ip)).allowed).toBe(false);
+    // Fresh sessions from the same address, as a troll would farm them, share the address's day.
+    for (let session = 2; session <= 4; session++) {
+      for (let i = 0; i < 5; i++) {
+        expect((await limiter.feedback(`session-${session}`, ip)).allowed).toBe(
+          true,
+        );
+      }
+    }
+    expect((await limiter.feedback("session-5", ip)).allowed).toBe(false);
+    expect((await limiter.feedback("session-6", "198.51.100.1")).allowed).toBe(
+      true,
+    );
+  });
+});
+
 describe("AssistantRateLimitService, the short window", () => {
   it("takes three questions in thirty seconds and refuses the fourth", async () => {
     const limiter = new AssistantRateLimitService(fakeRedis() as never);

@@ -21,6 +21,8 @@ const BUCKETS = {
   chatBurst: { max: 20, windowSeconds: 10 * 60 },
   chatDay: { max: 150, windowSeconds: 24 * 60 * 60 },
   feedback: { max: 5, windowSeconds: 60 * 60 },
+  // Per address, the form and Parky together: sessions can be farmed, ten an hour, the inbox not.
+  feedbackAddress: { max: 20, windowSeconds: 24 * 60 * 60 },
   rating: { max: 60, windowSeconds: 60 * 60 },
   session: { max: 10, windowSeconds: 60 * 60 },
 } as const;
@@ -75,6 +77,19 @@ export class AssistantRateLimitService {
       }
     }
     return verdict;
+  }
+
+  /**
+   * Counts one feedback against the session's hourly share and then the address's daily one. The
+   * form and Parky's `submit_feedback` draw on the same two, so neither floods the inbox.
+   */
+  async feedback(
+    session: string,
+    ip: string | null,
+  ): Promise<RateLimitVerdict> {
+    const bySession = await this.check({ session }, "feedback");
+    if (!bySession.allowed) return bySession;
+    return this.check({ ip }, "feedbackAddress");
   }
 
   /** Seconds left of a session's pause for junk, 0 when it has none. */
