@@ -11,7 +11,8 @@ import {
 /** How long chats are kept; feedback is kept until it is deleted by hand. */
 export const CONVERSATION_RETENTION_DAYS = 90;
 
-const PAGE_SIZE = 50;
+/** Rows per page of the admin's lists; the MCP tools ask for fewer. */
+export const RECORDS_PAGE_SIZE = 50;
 
 /**
  * The stored side of Parky: ratings and feedback from visitors, the lists the
@@ -72,12 +73,14 @@ export class AssistantRecordsService {
     rating?: number;
     q?: string;
     page: number;
+    pageSize?: number;
   }) {
+    const pageSize = params.pageSize ?? RECORDS_PAGE_SIZE;
     const query = this.conversations
       .createQueryBuilder("c")
       .orderBy("c.createdAt", "DESC")
-      .take(PAGE_SIZE)
-      .skip((params.page - 1) * PAGE_SIZE);
+      .take(pageSize)
+      .skip((params.page - 1) * pageSize);
     if (params.rating !== undefined)
       query.andWhere("c.rating = :rating", { rating: params.rating });
     if (params.q) {
@@ -92,7 +95,7 @@ export class AssistantRecordsService {
     return {
       total,
       page: params.page,
-      pageSize: PAGE_SIZE,
+      pageSize,
       items: items.map((c) => ({
         ...c,
         firstQuestion: firstQuestions.get(c.id) ?? null,
@@ -129,14 +132,19 @@ export class AssistantRecordsService {
     return { ...conversation, messages, feedback };
   }
 
-  async listFeedback(params: { status?: FeedbackStatus; page: number }) {
+  async listFeedback(params: {
+    status?: FeedbackStatus;
+    page: number;
+    pageSize?: number;
+  }) {
+    const pageSize = params.pageSize ?? RECORDS_PAGE_SIZE;
     const [items, total] = await this.feedback.findAndCount({
       where: params.status ? { status: params.status } : {},
       order: { createdAt: "DESC" },
-      take: PAGE_SIZE,
-      skip: (params.page - 1) * PAGE_SIZE,
+      take: pageSize,
+      skip: (params.page - 1) * pageSize,
     });
-    return { total, page: params.page, pageSize: PAGE_SIZE, items };
+    return { total, page: params.page, pageSize, items };
   }
 
   async setFeedbackStatus(id: string, status: FeedbackStatus) {

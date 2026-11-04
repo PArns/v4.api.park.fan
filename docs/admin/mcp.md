@@ -3,7 +3,7 @@
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
 site statistic and its SEO reports, Google Search Console, system and ML health, job queues, data-quality findings,
-duplicate and retirement candidates, outage statistics and the audit log. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
+duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
 `/.well-known/oauth-*`. The admin login itself: [authentication](authentication.md).
@@ -123,6 +123,9 @@ against these rules.
 | `duplicates`                 | duplicate attraction and park pairs with the merge winner                                                                                                                               | `AttractionMergeService`, `ParkValidatorService` |
 | `retirement_candidates`      | rides whose source went quiet                                                                                                                                                           | `AttractionReviewService`                        |
 | `audit_log`                  | admin actions, filterable                                                                                                                                                               | `AdminAuditService.list`                         |
+| `assistant_conversations`    | Parky's chats, newest first: language, messages, tokens, cost, rating, start page and first question; filter by rating or a word                                                        | `AssistantRecordsService.listConversations`      |
+| `assistant_conversation`     | one chat in full: questions, answers, the tools Parky called with their input, tokens, cost, ratings, its feedback                                                                      | `AssistantRecordsService.conversation`           |
+| `site_feedback`              | feedback from the widget, newest first, by status; whether the visitor wants a reply, never the address                                                                                 | `AssistantRecordsService.listFeedback`           |
 | `downtime`                   | outage events per park and ride over a window                                                                                                                                           | `DowntimeMeasurementService.measure`             |
 | `analytics_overview`         | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview`                  |
 | `analytics_live`             | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events                                                                            | `SiteAnalyticsLiveService.live`                  |
@@ -294,6 +297,11 @@ What was checked when this was built, and where it is enforced:
   description says the same; parks and rides come by the name in park.fan's own tables, and keys that
   no longer resolve are left out. OAuth client names are self-chosen too: `whoami` and `audit_log`
   say so.
+- **Prompt injection through Parky's chats and the feedback:** the `assistant_*` and `site_feedback`
+  tools return what visitors typed, and Parky's answers with it, since a visitor can steer those,
+  under `visitorData` with the chat notice (`CHAT_DATA_NOTICE`). The feedback's email address and
+  the hashes of visitor and session stay out: a model gets `wantsReply`, a person the address in
+  the admin through `adminUrl`.
 - **Amplification:** JSON-RPC batches are refused (one tool call per request, which the throttler
   counts), and one token runs at most 10 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
