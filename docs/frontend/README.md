@@ -56,3 +56,4 @@ page for the field or endpoint you are reading or changing.
 | [page-views](./page-views.md)                                     | `/v1/page-views`: the most-read counter                                                                         |
 | [site-analytics](./site-analytics.md)                             | `/v1/analytics/collect` and `/v1/admin/analytics/*`: the site statistic, its events and reports                 |
 | [search-console](./search-console.md)                             | `/v1/admin/search-console/*`: Google Search Console's queries, pages and series, joined with the site statistic |
+| [cpu-temperature](./cpu-temperature.md)                           | `/v1/admin/system-health`: the host's one CPU temperature and its limits, counted down from TjMax               |

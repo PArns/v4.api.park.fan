@@ -6,7 +6,8 @@ export const systemHealthTool = defineMcpTool({
   name: "system_health",
   title: "System health",
   description:
-    "The admin health dashboard. `infrastructure`: host CPU/RAM/disk and temperatures, GPU, " +
+    "The admin health dashboard. `infrastructure`: host CPU/RAM/disk and temperatures (the CPU " +
+    "package with `temperatureLimits`, amber and red counted down from the chip's TjMax), GPU, " +
     "Postgres (size, connections, slow queries), Redis, data freshness (minutes since the " +
     "newest wait-time row, rows in the last hour, newest weather day) and `siteAnalytics`: the site " +
     "statistic's flush backlog (windows waiting in Redis, the oldest one's age, windows set aside " +
