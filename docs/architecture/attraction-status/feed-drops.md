@@ -220,3 +220,27 @@ this rule needs a current row (it retracts a published CLOSED), the never-observ
 rule's; a ride with no row and no reading ever is that one's. Both leave a free-flow ride to the
 free-flow override and an out-of-season ride on CLOSED.
 
+
+## A frozen feed on a closed day (PAR-1236, 2026-11-05)
+
+Queue-times and wartezeiten-app never see a park's calendar. On a closed day they can keep repeating
+the last open day's waits with fresh timestamps (Energylandia, 2026-11-05: 33 rides, one value each for
+12 hours), and the wiki keeps some entries on OPERATING for months (LEGOLAND Billund: source timestamp
+2026-04-06). The wait-times poll therefore asks the park's own schedule first
+(`src/common/utils/schedule-closed-now.util.ts`): while today's decisive rows say the park is closed
+now (no OPERATING window, an hour of grace on both sides), `ConflictResolverService`'s CLOSED→OPERATING
+override is taken back, an OPERATING from those two sources alone reads CLOSED, and so does one whose
+source timestamp is over a day old. A fresh wiki reading stays; without a decisive schedule row nothing
+changes.
+
+Why the schedule and not a timestamp: queue-times' own answer for Energylandia at 23:10 local on that
+closed day had 45 of 46 rides `is_open: true`, four Halloween houses at 10–20 minutes, and every ride's
+`last_updated` on the same second (22:10:04 UTC), which is queue-times' fetch time, not a reading
+([API page](https://queue-times.com/pages/api) documents only the 5-minute refresh and UTC times).
+A freshness check on queue-times' timestamp can therefore never see a frozen feed. The wiki's
+`lastUpdated` is the entity's own (its live route is uncached), so a months-old one there is a real
+stale entry.
+
+The same rows passed the cluster query's health gate, so parks between seasons were listed as silent
+feeds. The cluster query now drops a cluster when the park's schedule decided every day since the
+silence and opened on none of them; without schedule rows for those days the cluster stays.
