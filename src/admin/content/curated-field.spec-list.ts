@@ -1,7 +1,11 @@
 import type { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
-import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
+import {
+  FUN_FACT_COLUMNS,
+  type FunFactLocale,
+  resolveCuratedPark,
+} from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
@@ -337,6 +341,15 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   },
 ];
 
+const FUN_FACT_LANGUAGE_LABELS: Record<FunFactLocale, string> = {
+  en: "Englisch",
+  de: "Deutsch",
+  nl: "Niederländisch",
+  fr: "Französisch",
+  es: "Spanisch",
+  it: "Italienisch",
+};
+
 export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   {
     key: "curatedName",
@@ -620,6 +633,23 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "express-pass, lightning-lane. Damit verlinkt der Chip auf der Bahnseite " +
       "ins Glossar. Eine unbekannte Id wird beim Speichern abgelehnt.",
   },
+  ...Object.entries(FUN_FACT_COLUMNS).map(
+    ([locale, key]): CuratedFieldSpec => ({
+      key,
+      label: `Fun Facts (${FUN_FACT_LANGUAGE_LABELS[locale as FunFactLocale]})`,
+      type: "longtext",
+      syncedKey: null,
+      resolvedKey: null,
+      group: "Fun Facts",
+      maxLength: 2000,
+      hint:
+        locale === "en"
+          ? "Ein Fakt pro Zeile, kurz genug für Parkys Sprechblase. Nur, was " +
+            "eine Quelle belegt. Jede Sprache hat ihr eigenes Feld; was dort " +
+            "fehlt, sieht ein Besucher in dieser Sprache nicht."
+          : undefined,
+    }),
+  ),
   {
     key: "curationNote",
     label: "Notiz",

@@ -248,6 +248,30 @@ export class Park {
   @Column({ name: "curated_abbreviations", type: "text", nullable: true })
   curatedAbbreviations: string | null;
 
+  /**
+   * Short fun facts Parky tells about the park, one per line, one column per
+   * locale: the admin editor renders one plain input per column, and a fact
+   * nobody translated stays absent in that language instead of showing up in
+   * English. `resolveFunFacts` splits them for the payload.
+   */
+  @Column({ name: "curated_fun_facts_en", type: "text", nullable: true })
+  curatedFunFactsEn: string | null;
+
+  @Column({ name: "curated_fun_facts_de", type: "text", nullable: true })
+  curatedFunFactsDe: string | null;
+
+  @Column({ name: "curated_fun_facts_nl", type: "text", nullable: true })
+  curatedFunFactsNl: string | null;
+
+  @Column({ name: "curated_fun_facts_fr", type: "text", nullable: true })
+  curatedFunFactsFr: string | null;
+
+  @Column({ name: "curated_fun_facts_es", type: "text", nullable: true })
+  curatedFunFactsEs: string | null;
+
+  @Column({ name: "curated_fun_facts_it", type: "text", nullable: true })
+  curatedFunFactsIt: string | null;
+
   // Timezone is deliberately NOT curated here, and the reason is worth writing
   // down so it does not get "fixed" later. `timezone` is read at 206 call
   // sites — every schedule, every park-local date, the whole seasonality month

@@ -393,3 +393,33 @@ describe("park payloads › abbreviations", () => {
     );
   });
 });
+
+describe("park payload › funFacts", () => {
+  const park = (facts: Partial<Park>) =>
+    ({
+      id: "park-1",
+      name: "Efteling",
+      slug: "efteling",
+      timezone: "Europe/Amsterdam",
+      attractions: [],
+      shows: [],
+      restaurants: [],
+      ...facts,
+    }) as unknown as Park;
+
+  it("serves one list per written locale, a fact per non-blank line", () => {
+    expect(
+      ParkWithAttractionsDto.fromEntity(
+        park({
+          curatedFunFactsEn: " First fact \r\n\n  Second fact\n",
+          curatedFunFactsDe: "Erster Fakt",
+          curatedFunFactsNl: "  \n ",
+        }),
+      ).funFacts,
+    ).toEqual({ en: ["First fact", "Second fact"], de: ["Erster Fakt"] });
+  });
+
+  it("is null when no locale has a fact", () => {
+    expect(ParkWithAttractionsDto.fromEntity(park({})).funFacts).toBeNull();
+  });
+});

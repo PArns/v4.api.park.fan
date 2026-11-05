@@ -53,6 +53,7 @@ page for the field or endpoint you are reading or changing.
 | [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                |
 | [indoor-outdoor](./indoor-outdoor.md)                             | `indoorOutdoor`                                                                                                 |
 | [fast-pass](./fast-pass.md)                                       | `fastPass`                                                                                                      |
+| [park-fun-facts](./park-fun-facts.md)                             | `funFacts`: Parky's curated park facts, per locale                                                              |
 | [ride-glossary-link](./ride-glossary-link.md)                     | `rideProfile` and the glossary → rides lookup                                                                   |
 | [weather-warnings](./weather-warnings.md)                         | `weather.warnings`                                                                                              |
 | [page-views](./page-views.md)                                     | `/v1/page-views`: the most-read counter                                                                         |
