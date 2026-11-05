@@ -1,5 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { CrowdLevel } from "../../common/types/crowd-level.type";
+import {
+  CROWD_LEVEL_VALUES,
+  CrowdLevel,
+} from "../../common/types/crowd-level.type";
 
 export class TickerItemDto {
   @ApiProperty({ example: "Tokyo DisneySea" })
@@ -36,7 +39,7 @@ export class TickerItemDto {
   waitTime: number;
 
   @ApiProperty({
-    enum: ["very_low", "low", "moderate", "high", "very_high", "extreme"],
+    enum: CROWD_LEVEL_VALUES,
     nullable: true,
     description: "Crowd level relative to P50 baseline",
   })
