@@ -86,6 +86,7 @@ import {
   runAssistantTool,
   showsCard,
   showsOnDay,
+  reopeningOf,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -1086,5 +1087,248 @@ describe("planner tools", () => {
     expect(
       (await call("plan_remove", { entryIds: ["r1"] }, null)).isError,
     ).toBe(true);
+  });
+});
+
+describe("alert tools", () => {
+  const RIDE_ID = "22222222-2222-4222-8222-222222222222";
+  const ride = (openWithPark = false, parkSlug = "phantasialand") => ({
+    id: RIDE_ID,
+    slug: "taron",
+    name: "Taron",
+    openWithPark,
+    park: { ...park, slug: parkSlug },
+  });
+  const today = formatInTimeZone(new Date(), "Europe/Berlin", "yyyy-MM-dd");
+  const instant = `${today}T23:59:00.000Z`;
+  const start = formatInTimeZone(new Date(instant), "Europe/Berlin", "HH:mm");
+  const providers = (found: unknown) =>
+    new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+      [
+        DataSource,
+        { getRepository: () => ({ findOne: jest.fn(async () => found) }) },
+      ],
+      [
+        ShowsService,
+        {
+          findByParkId: jest.fn(async () => [
+            { id: "s1", slug: "stunt-show", name: "Stunt Show" },
+          ]),
+          getShowtimeInstantsOnDate: jest.fn(
+            async () => new Map([["s1", [instant]]]),
+          ),
+        },
+      ],
+    ]);
+  const alerts = {
+    push: "ready" as const,
+    rides: [
+      {
+        park: "phantasialand",
+        rideSlug: "taron",
+        name: "Taron",
+        kind: "reopen" as const,
+      },
+    ],
+    shows: [],
+  };
+  const call = (
+    name: string,
+    input: Record<string, unknown>,
+    found: unknown = ride(),
+    held: typeof alerts | null = alerts,
+  ) =>
+    runAssistantTool(
+      name,
+      { park: PARK_ID, ...input },
+      { ...context(providers(found)), alerts: held },
+      jest.fn(),
+    );
+  const plannerPark = {
+    slug: "phantasialand",
+    name: "Phantasialand",
+    geo: { continent: "europe", country: "germany", city: "bruehl" },
+    timezone: "Europe/Berlin",
+  };
+
+  it("sets a wait alert and a reopen alert on a ride of the park", async () => {
+    expect(
+      (
+        await call("set_ride_alert", {
+          rideId: RIDE_ID,
+          kind: "wait_below",
+          thresholdMinutes: 20,
+        })
+      ).action,
+    ).toEqual({
+      type: "alert_ride_set",
+      park: plannerPark,
+      rideId: RIDE_ID,
+      rideSlug: "taron",
+      rideName: "Taron",
+      kind: "wait_below",
+      thresholdMinutes: 20,
+    });
+    expect(
+      (
+        await call("set_ride_alert", {
+          rideId: RIDE_ID,
+          kind: "reopen",
+          thresholdMinutes: 20,
+        })
+      ).action,
+    ).not.toHaveProperty("thresholdMinutes");
+  });
+
+  it("sets a show reminder for one of today's performances", async () => {
+    const result = await call("set_show_reminder", {
+      showSlug: "stunt-show",
+      start,
+    });
+    expect(result.action).toEqual({
+      type: "alert_show_set",
+      park: plannerPark,
+      showId: "s1",
+      showSlug: "stunt-show",
+      showName: "Stunt Show",
+      start: parkInstant(instant, "Europe/Berlin"),
+    });
+  });
+
+  it("removes an alert the browser holds", async () => {
+    expect((await call("remove_alert", { rideSlug: "taron" })).action).toEqual({
+      type: "alert_remove",
+      park: plannerPark,
+      rideSlug: "taron",
+    });
+  });
+
+  it.each([
+    [
+      "a ride of another park",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(false, "efteling"),
+    ],
+    [
+      "a wait alert without a threshold",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "wait_below" },
+      ride(),
+    ],
+    [
+      "a threshold over the push limit",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "wait_below", thresholdMinutes: 241 },
+      ride(),
+    ],
+    [
+      "a reopen alert on a ride open with the park",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(true),
+    ],
+    [
+      "a reminder at a time the show does not start",
+      "set_show_reminder",
+      { showSlug: "stunt-show", start: "03:07" },
+      ride(),
+    ],
+    [
+      "removing an alert the browser does not hold",
+      "remove_alert",
+      { showSlug: "stunt-show" },
+      ride(),
+    ],
+    ["removing without saying which", "remove_alert", {}, ride()],
+  ])("refuses %s", async (_case, name, input, found) => {
+    const result = await call(name, input, found);
+    expect(result.isError).toBe(true);
+    expect(result.action).toBeUndefined();
+  });
+
+  it("offers nothing where the browser cannot receive push", async () => {
+    const result = await call(
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(),
+      { ...alerts, push: "unavailable" as never },
+    );
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("reopeningOf", () => {
+  it("names a breakdown's start and how such outages ended before", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "DOWN",
+          outage: {
+            startedAt: "2026-11-05T10:00:00.000Z",
+            signal: "down",
+            estimate: {
+              recoveryWithin30: 0.4,
+              recoveryWithin60: 0.6,
+              recoveryWindow: { from: "2026-11-05T10:40:00.000Z" },
+            },
+          },
+          downtime: { kind: "figures", medianMinutes: 35 },
+        },
+        11,
+      ),
+    ).toEqual({
+      reason: "breakdown",
+      downSince: "2026-11-05T10:00:00.000Z",
+      reportedByPark: true,
+      backWithin30MinutesPercent: 0.4,
+      backWithin60MinutesPercent: 0.6,
+      likelyBack: { from: "2026-11-05T10:40:00.000Z" },
+      typicalOutageMinutes: 35,
+    });
+  });
+
+  it("names a works period's last closed day, and says when that is our guess", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "REFURBISHMENT",
+          worksPeriod: {
+            to: "2027-03-13",
+            toUncertain: true,
+            runningToday: true,
+          },
+        },
+        11,
+      ),
+    ).toEqual({
+      reason: "works",
+      closedUntil: "2027-03-13",
+      estimatedByParkFan: true,
+    });
+  });
+
+  it("names the next season month out of season", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "CLOSED",
+          facts: {
+            seasonMonths: [4, 5, 6, 7, 8, 9, 10],
+            isCurrentlyInSeason: false,
+          },
+        },
+        11,
+      ),
+    ).toMatchObject({ reason: "season", nextSeasonMonth: 4 });
+  });
+
+  it("says unknown without data, and nothing while the ride runs", () => {
+    expect(reopeningOf({ status: "CLOSED" }, 11)).toEqual({
+      reason: "unknown",
+      status: "CLOSED",
+    });
+    expect(reopeningOf({ status: "OPERATING" }, 11)).toBeNull();
   });
 });

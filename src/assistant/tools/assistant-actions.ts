@@ -377,6 +377,31 @@ export type ClientAction =
       done: boolean;
     }
   | { type: "planner_clear_day"; park: PlannerPark; date: string }
+  /** The widget files these through its own push endpoints, which check them again. */
+  | {
+      type: "alert_ride_set";
+      park: PlannerPark;
+      rideId: string;
+      rideSlug: string;
+      rideName: string;
+      kind: "wait_below" | "reopen";
+      thresholdMinutes?: number;
+    }
+  | {
+      type: "alert_show_set";
+      park: PlannerPark;
+      showId: string;
+      showSlug: string;
+      showName: string;
+      /** The performance, ISO 8601 with the park's offset (the follow's `startTime`). */
+      start: string;
+    }
+  | {
+      type: "alert_remove";
+      park: PlannerPark;
+      rideSlug?: string;
+      showSlug?: string;
+    }
   | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
   | { type: "planner_undo"; park: PlannerPark; date: string }
   | { type: "planner_share" }

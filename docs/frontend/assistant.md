@@ -241,6 +241,34 @@ planner actions carry; times are `HH:MM` on the park's clock.
 `plan_update_block` changes blocks only. `plan_add_show` checks the time against the show's
 showtimes that day; `get_shows` lists each show's `slug` for it.
 
+### Push alerts in the chat
+
+The chat request carries an optional `alerts` snapshot (`alertsSnapshotSchema`): `{ push: "ready" |
+"needs-permission" | "unavailable", rides: [{ park, rideSlug, name, kind: "wait_below" | "reopen",
+thresholdMinutes? }], shows: [{ park, showSlug, name, start? }] }`, at most 100 of each (the push
+endpoints' cap per browser), unknown keys below the top dropped. It reaches the model as JSON in
+"This chat". The widget files the alerts through its own [push](push.md) endpoints, which check
+them again; the tools check first, so Parky never offers what those would refuse.
+
+| Tool                | Action                                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `set_ride_alert`    | `{ type: "alert_ride_set", park, rideId, rideSlug, rideName, kind, thresholdMinutes? }`              |
+| `set_show_reminder` | `{ type: "alert_show_set", park, showId, showSlug, showName, start }` (`start` the follow's instant) |
+| `remove_alert`      | `{ type: "alert_remove", park, rideSlug? \| showSlug? }` (one held in the snapshot)                  |
+
+`set_ride_alert` refuses a ride of another park, a `wait_below` without a threshold or outside
+1–240 minutes (`RIDE_ALERT_THRESHOLD_*`), a park whose wait times cannot be read and a reopen alert
+on a ride open whenever its park is. `set_show_reminder` takes one of today's verified showtimes, as
+`HH:MM` on the park's clock, and sends it as an instant with the park's offset. With push
+`unavailable` both refuse.
+
+`get_ride` carries `reopening` while a ride is not running (`reopeningOf`): `breakdown`
+(`downSince`, `reportedByPark`, the outage estimate's `backWithin30MinutesPercent`,
+`backWithin60MinutesPercent`, `likelyBack`, and `typicalOutageMinutes`, the median of its
+outages), `works` (`closedUntil`, the works period's last closed day, null while unknown;
+`estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth`) or `unknown`.
+Parky words a breakdown as an estimate from past outages, never a promise.
+
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { ASSISTANT_LOCALES } from "./system-prompt";
+import {
+  RIDE_ALERT_THRESHOLD_MAX,
+  RIDE_ALERT_THRESHOLD_MIN,
+} from "../ride-alerts/dto/ride-alert.dto";
 
 /** A park.fan path: slug segments only, no query, host or scheme. */
 const pagePath = z
@@ -68,6 +72,43 @@ export const plannerSnapshotSchema = z.object({
 export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
 export type PlannerDay = PlannerSnapshot["days"][number];
 
+/**
+ * The browser's push state and the alerts it holds, sent with every question. Not strict below
+ * the top, like the planner. At most 100 of each, the push endpoints' own cap per browser.
+ */
+export const alertsSnapshotSchema = z.object({
+  push: z.enum(["ready", "needs-permission", "unavailable"]),
+  rides: z
+    .array(
+      z.object({
+        park: slug,
+        rideSlug: slug,
+        name: plannerName,
+        kind: z.enum(["wait_below", "reopen"]),
+        thresholdMinutes: z
+          .number()
+          .int()
+          .min(RIDE_ALERT_THRESHOLD_MIN)
+          .max(RIDE_ALERT_THRESHOLD_MAX)
+          .optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
+  shows: z
+    .array(
+      z.object({
+        park: slug,
+        showSlug: slug,
+        name: plannerName,
+        start: z.string().max(40).optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
+});
+export type AlertsSnapshot = z.infer<typeof alertsSnapshotSchema>;
+
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
 
@@ -107,6 +148,7 @@ export const chatRequestSchema = z.strictObject({
     }))
     .optional(),
   planner: plannerSnapshotSchema.optional(),
+  alerts: alertsSnapshotSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

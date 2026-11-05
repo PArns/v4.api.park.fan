@@ -34,6 +34,11 @@ import {
 } from "../../common/utils/date.util";
 import { DataSource, In, IsNull } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
+import {
+  RIDE_ALERT_THRESHOLD_MAX,
+  RIDE_ALERT_THRESHOLD_MIN,
+} from "../../ride-alerts/dto/ride-alert.dto";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import {
   compareRides,
@@ -83,6 +88,7 @@ import {
   plannerPrefs,
   type PlannerDay,
   type PlannerSnapshot,
+  type AlertsSnapshot,
 } from "../assistant.schemas";
 
 /** The fields of `get_park`'s summary a card reads. */
@@ -192,6 +198,8 @@ export interface AssistantToolContext {
   timeZone?: string;
   /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
   planner?: PlannerSnapshot | null;
+  /** The browser's push state and alerts as it sent them. */
+  alerts?: AlertsSnapshot | null;
   /**
    * The chat this answer belongs to, all of it from the request and the server's own records:
    * what `submit_feedback` stores comes from here, never from the model's input.
@@ -327,6 +335,46 @@ function plannedEntries(day: PlannerDay, ids: readonly string[]) {
   });
 }
 
+/**
+ * One performance of a park's show: the show by slug, `start` (HH:MM, the park's clock) one of
+ * its verified times that day. A refusal names the real times, so the model can correct itself.
+ */
+async function showPerformance(
+  ctx: AssistantToolContext,
+  reference: string,
+  date: string,
+  showSlug: string,
+  start: string,
+) {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const park = plannerPark(found);
+  const shows = ctx.get(ShowsService);
+  const [all, starts] = await Promise.all([
+    shows.findByParkId(found.id),
+    shows.getShowtimeInstantsOnDate(found.id, found.timezone, date),
+  ]);
+  const show = all.find((candidate) => candidate.slug === showSlug);
+  if (!show) {
+    throw new McpToolError(
+      `${park.name} has no show ${showSlug}; use get_shows`,
+    );
+  }
+  const instants = starts.get(show.id) ?? [];
+  const times = instants.map((instant) =>
+    formatInTimeZone(new Date(instant), found.timezone, "HH:mm"),
+  );
+  const at = times.indexOf(start);
+  if (at < 0) {
+    throw new McpToolError(
+      times.length
+        ? `${show.name} starts at ${times.join(", ")} that day, park time`
+        : `${show.name} has no published time that day`,
+    );
+  }
+  return { park, show, timezone: found.timezone, instant: instants[at] };
+}
+
 /** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
 const CONTENT_PATH =
   /^\/(?:en|de|nl|fr|es|it)\/(?:blog|news|glossary)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -442,6 +490,77 @@ function pastDay(
 
 /** Most shows one answer lists. */
 const MAX_SHOWS = 30;
+
+/** The fields of `get_attraction`'s answer that say why a ride is not running. */
+interface RideClosure {
+  status?: string | null;
+  effectiveStatus?: string | null;
+  outage?: {
+    startedAt: string;
+    signal: string;
+    estimate?: {
+      recoveryWithin30?: number;
+      recoveryWithin60?: number;
+      recoveryWindow?: { from: string; to?: string } | null;
+    };
+  } | null;
+  worksPeriod?: {
+    to: string | null;
+    toUncertain: boolean;
+    runningToday: boolean;
+  } | null;
+  facts?: {
+    seasonMonths?: number[] | null;
+    isCurrentlyInSeason?: boolean | null;
+  };
+  downtime?: { kind: string; medianMinutes?: number } | null;
+}
+
+/**
+ * Why a ride is not running and what is known about its return, so "when does it reopen" is
+ * answered from data: a breakdown (since when, how such outages ended before), a works period
+ * (its last closed day, when the park named one), out of season (the next season month), or
+ * `unknown`. Null while the ride runs.
+ */
+export function reopeningOf(ride: RideClosure, month: number) {
+  const status = ride.effectiveStatus ?? ride.status ?? null;
+  if (status === "OPERATING") return null;
+  if (ride.worksPeriod?.runningToday) {
+    return {
+      reason: "works" as const,
+      closedUntil: ride.worksPeriod.to,
+      ...(ride.worksPeriod.toUncertain && { estimatedByParkFan: true }),
+    };
+  }
+  if (ride.facts?.isCurrentlyInSeason === false) {
+    const months = ride.facts.seasonMonths ?? [];
+    const next =
+      months.find((candidate) => candidate > month) ?? months[0] ?? null;
+    return {
+      reason: "season" as const,
+      seasonMonths: months,
+      nextSeasonMonth: next,
+    };
+  }
+  if (status === null) return null;
+  if (status === "DOWN" && ride.outage) {
+    const estimate = ride.outage.estimate;
+    return {
+      reason: "breakdown" as const,
+      downSince: ride.outage.startedAt,
+      reportedByPark: ride.outage.signal === "down",
+      ...(estimate && {
+        backWithin30MinutesPercent: estimate.recoveryWithin30,
+        backWithin60MinutesPercent: estimate.recoveryWithin60,
+        ...(estimate.recoveryWindow && { likelyBack: estimate.recoveryWindow }),
+      }),
+      ...(ride.downtime?.kind === "figures" && {
+        typicalOutageMinutes: ride.downtime.medianMinutes,
+      }),
+    };
+  }
+  return { reason: "unknown" as const, status };
+}
 
 /**
  * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
@@ -792,7 +911,8 @@ export const ASSISTANT_TOOLS = [
       "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
       "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
       "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
-      "best visit times, and its pageUrl.",
+      "best visit times, its pageUrl and, while it is not running, reopening: why (breakdown, " +
+      "works, season or unknown) and what is known about its return.",
     input: z.object({
       rideId: z
         .string()
@@ -822,6 +942,12 @@ export const ASSISTANT_TOOLS = [
           ([, value]) => value !== null,
         ),
       );
+      // shortcut: the UTC month, not the park's; off only for hours at a month's turn.
+      const reopening = reopeningOf(
+        ride as RideClosure,
+        new Date().getUTCMonth() + 1,
+      );
+      if (reopening) ride.reopening = reopening;
       return ride;
     },
   }),
@@ -1831,33 +1957,173 @@ export const ASSISTANT_TOOLS = [
       start: plannerClock.describe("Start in the park's local time, HH:MM"),
     }),
     run: async ({ park: reference, date, showSlug, start }, ctx) => {
-      const found = await resolvePark(mcp(ctx), reference);
-      if (isAmbiguous(found)) return found;
-      const park = plannerPark(found);
-      const shows = ctx.get(ShowsService);
-      const [all, starts] = await Promise.all([
-        shows.findByParkId(found.id),
-        shows.getShowtimeInstantsOnDate(found.id, found.timezone, date),
-      ]);
-      const show = all.find((candidate) => candidate.slug === showSlug);
-      if (!show) {
-        throw new McpToolError(
-          `${park.name} has no show ${showSlug}; use get_shows`,
-        );
-      }
-      const times = (starts.get(show.id) ?? []).map((instant) =>
-        formatInTimeZone(new Date(instant), found.timezone, "HH:mm"),
+      const found = await showPerformance(
+        ctx,
+        reference,
+        date,
+        showSlug,
+        start,
       );
-      if (!times.includes(start)) {
-        throw new McpToolError(
-          times.length
-            ? `${show.name} starts at ${times.join(", ")} that day, park time`
-            : `${show.name} has no published time that day`,
-        );
-      }
+      if ("ambiguous" in found) return found;
+      const { park, show } = found;
       return new ActionOutcome(
         { type: "planner_add_show", park, date, showSlug, start },
         { added: show.name, start, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "set_ride_alert",
+    status: "planner",
+    description:
+      "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
+      "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
+      "find_rides or get_park_live. One alert per ride, a new one replaces it. Only when the " +
+      "user asks or says yes to your offer.",
+    input: z.object({
+      park: parkRef,
+      rideId: z.string().uuid(),
+      kind: z.enum(["wait_below", "reopen"]),
+      thresholdMinutes: z
+        .number()
+        .int()
+        .min(RIDE_ALERT_THRESHOLD_MIN)
+        .max(RIDE_ALERT_THRESHOLD_MAX)
+        .optional()
+        .describe("For wait_below: notify under this many minutes"),
+    }),
+    run: async ({ park: reference, rideId, kind, thresholdMinutes }, ctx) => {
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      if (ctx.alerts?.push === "unavailable") {
+        throw new McpToolError("This browser cannot receive push messages");
+      }
+      if (kind === "wait_below" && thresholdMinutes === undefined) {
+        throw new McpToolError("A wait_below alert needs thresholdMinutes");
+      }
+      const ride = await ctx
+        .get(DataSource)
+        .getRepository(Attraction)
+        .findOne({
+          where: { id: rideId.toLowerCase() },
+          relations: { park: true },
+        });
+      if (!ride || ride.park?.slug !== park.slug) {
+        throw new McpToolError(
+          `Ride ${rideId} is not in this park; use find_rides`,
+        );
+      }
+      // The push endpoint's own refusals, checked first so Parky never offers what it rejects.
+      const unreadable = getNoLiveWaitTimesReason(
+        ride.park.citySlug,
+        ride.park.slug,
+      );
+      if (unreadable) {
+        throw new McpToolError(
+          `${park.name}'s wait times cannot be read (${unreadable}); no alert would fire`,
+        );
+      }
+      if (kind === "reopen" && ride.openWithPark) {
+        throw new McpToolError(`${ride.name} is open whenever the park is`);
+      }
+      return new ActionOutcome(
+        {
+          type: "alert_ride_set",
+          park,
+          rideId: ride.id,
+          rideSlug: ride.slug,
+          rideName: ride.name,
+          kind,
+          ...(kind === "wait_below" && { thresholdMinutes }),
+        },
+        {
+          alert: kind,
+          ride: ride.name,
+          ...(kind === "wait_below" && { thresholdMinutes }),
+          push: ctx.alerts?.push ?? null,
+        },
+      );
+    },
+  }),
+  tool({
+    name: "set_show_reminder",
+    status: "planner",
+    description:
+      "Have park.fan remind the user by push before one of today's performances of a show. Slug " +
+      "and times from get_shows; start is the park's local time, HH:MM. Only when the user asks " +
+      "or says yes to your offer.",
+    input: z.object({
+      park: parkRef,
+      showSlug: z
+        .string()
+        .max(160)
+        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+        .describe("Slug from get_shows"),
+      start: plannerClock.describe("Start in the park's local time, HH:MM"),
+    }),
+    run: async ({ park: reference, showSlug, start }, ctx) => {
+      if (ctx.alerts?.push === "unavailable") {
+        throw new McpToolError("This browser cannot receive push messages");
+      }
+      const resolved = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(resolved)) return resolved;
+      const today = getCurrentDateInTimezone(resolved.timezone);
+      const found = await showPerformance(
+        ctx,
+        resolved.id,
+        today,
+        showSlug,
+        start,
+      );
+      if ("ambiguous" in found) return found;
+      const { park, show, timezone, instant } = found;
+      return new ActionOutcome(
+        {
+          type: "alert_show_set",
+          park,
+          showId: show.id,
+          showSlug,
+          showName: show.name,
+          start: parkInstant(instant, timezone) as string,
+        },
+        { reminder: show.name, start, push: ctx.alerts?.push ?? null },
+      );
+    },
+  }),
+  tool({
+    name: "remove_alert",
+    status: "planner",
+    description:
+      "Remove one of the user's push alerts: a ride's (rideSlug) or a show reminder (showSlug), " +
+      "as listed in This chat. Only when the user asks.",
+    input: z.object({
+      park: parkRef,
+      rideSlug: z.string().max(160).optional(),
+      showSlug: z.string().max(160).optional(),
+    }),
+    run: async ({ park: reference, rideSlug, showSlug }, ctx) => {
+      if (!rideSlug === !showSlug) {
+        throw new McpToolError("Give either rideSlug or showSlug");
+      }
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      const held = rideSlug
+        ? ctx.alerts?.rides.find(
+            (alert) => alert.park === park.slug && alert.rideSlug === rideSlug,
+          )
+        : ctx.alerts?.shows.find(
+            (alert) => alert.park === park.slug && alert.showSlug === showSlug,
+          );
+      if (!held) {
+        throw new McpToolError("The user has no such alert; see This chat");
+      }
+      return new ActionOutcome(
+        {
+          type: "alert_remove",
+          park,
+          ...(rideSlug ? { rideSlug } : { showSlug }),
+        },
+        { removed: held.name },
       );
     },
   }),

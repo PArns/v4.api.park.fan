@@ -181,6 +181,7 @@ export class AssistantChatService {
             request.locale,
           ),
           planner: request.planner,
+          alerts: request.alerts,
         }),
       },
     ];
@@ -197,6 +198,7 @@ export class AssistantChatService {
       location: request.location ?? null,
       timeZone,
       planner: request.planner ?? null,
+      alerts: request.alerts ?? null,
       chat: {
         conversationId: conversation.id,
         pagePath: request.pagePath,
