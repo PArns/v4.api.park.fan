@@ -267,7 +267,9 @@ export class LocationService {
     // Fetch park and attractions in parallel
     const [park, attractions] = await Promise.all([
       this.parkRepository.findOne({ where: { id: parkId } }),
-      this.attractionRepository.find({ where: { parkId } }),
+      this.attractionRepository.find({
+        where: { parkId, retiredAt: IsNull() },
+      }),
     ]);
 
     if (!park) {

@@ -1,5 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { LocationService } from "./location.service";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -117,6 +118,17 @@ describe("LocationService", () => {
       expect(result.userLocation).toEqual({
         latitude: 50.7997,
         longitude: 6.8783,
+      });
+    });
+
+    it("loads only the park's non-retired rides for 'in_park'", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+      parkRepo.findOne.mockResolvedValue(phantasialand);
+
+      await service.findNearby(50.7997, 6.8783, 1000, 6);
+
+      expect(attractionRepo.find).toHaveBeenCalledWith({
+        where: { parkId: "p1", retiredAt: IsNull() },
       });
     });
 

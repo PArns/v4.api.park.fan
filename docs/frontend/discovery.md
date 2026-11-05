@@ -24,10 +24,9 @@ Continent → country → city → park, for every park that is not retired and 
 The skeleton is cached for 24 hours; the live fields are filled in on each request from a 5-minute
 statistics cache (`DiscoveryService.hydrateStructure`).
 
-- **A park carries no rides.** The Swagger example still shows `attractions[]`; the tree has
-  `attractionCount` only.
+- **A park carries no rides.** The tree has `attractionCount` only.
 - **`url` is the API path** (`/v1/parks/<continent>/<country>/<city>/<park>`).
-- **`status` is `OPERATING` or `CLOSED`**, never `REFURBISHMENT` despite the enum: open while a
+- **`status` is `OPERATING` or `CLOSED`**: open while a
   published schedule covers now, or, when nothing was published for today, while rides report
   ([calendar status](./calendar-schedule-status.md)).
 - **`analytics.statistics` is over the last 30 minutes of readings.** `operatingAttractions` is the
@@ -115,8 +114,7 @@ What a ride in `rides` may not be read as:
 - **`status` is the newest reading of the last 30 minutes** (standby first), else `CLOSED`. It is not
   `effectiveStatus`: it never reads `UNKNOWN`, ignores whether the park is open and whether its wait
   times are readable ([effective status](./effective-status.md)).
-- **`CLOSED` can mean "no reading".** The list is not filtered for retired rides
-  (`LocationService.findRidesInPark`), and a retired ride, having no reading, shows as `CLOSED`.
+- **`CLOSED` can mean "no reading".** Retired rides are left out (`LocationService.findRidesInPark`).
 - `waitTime` is rounded to 5 and absent without a reading. `crowdLevel` is rated against the ride's
   P50 (P90 when there is none) only while it is `OPERATING` with a wait; `unknown` when the park is not
   ratable, absent otherwise. `analytics` is today's `p50`/`p90`; Swagger's `avgWaitToday` is never
