@@ -45,7 +45,11 @@ import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
 import {
   ActionOutcome,
+  calendarCard,
   clockTime,
+  tilesCard,
+  type ForecastSummary,
+  type LiveParkSummary,
   localizePageUrls,
   parkRides,
   planDate,
@@ -235,6 +239,66 @@ const parkRef = z
   .min(2)
   .max(120)
   .describe('Park id from search_parks, or its slug like "phantasialand"');
+
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** How far `park_forecast` looks ahead, today included. */
+const FORECAST_DAYS = 60;
+
+/** Days from `from` to `to`, both YYYY-MM-DD: calendar days, no clock involved. */
+function daysBetween(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+      86_400_000,
+  );
+}
+
+/** The calendar or tiles card of one park, from `park_forecast` and, live, `get_park`. */
+async function dayCard(
+  ctx: AssistantToolContext,
+  reference: string,
+  kind: "calendar" | "tiles",
+  start: string | undefined,
+  days: number,
+): Promise<unknown> {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const today = getCurrentDateInTimezone(found.timezone);
+  const first = start ?? today;
+  const count = kind === "calendar" ? days : 1;
+  const ahead = daysBetween(today, first);
+  if (ahead < 0 || ahead + count > FORECAST_DAYS) {
+    throw new McpToolError(
+      `Pick days from ${today} up to ${FORECAST_DAYS} days ahead`,
+    );
+  }
+  const live = kind === "tiles" && first === today;
+  const [forecast, summary] = await Promise.all([
+    parkForecastTool.handler(
+      { park: found.id, days: ahead + count },
+      mcp(ctx),
+    ) as Promise<ForecastSummary>,
+    live
+      ? (getParkTool.handler(
+          { park: found.id, longestWaits: 0 },
+          mcp(ctx),
+        ) as Promise<LiveParkSummary>)
+      : null,
+  ]);
+  if (kind === "calendar") {
+    const card = calendarCard(forecast, first, count);
+    const open = card.days.filter((day) => day.status === "OPERATING").length;
+    return new ActionOutcome(
+      { type: "card", card },
+      {
+        shown: `${card.days.length} days of ${card.park} from ${first}, ${open} open`,
+      },
+    );
+  }
+  const card = tilesCard(forecast, first, summary);
+  const { url: _url, ...shown } = card;
+  return new ActionOutcome({ type: "card", card }, { shown });
+}
 
 /** Most restaurants one answer lists; Phantasialand has 46. */
 const MAX_RESTAURANTS = 25;
@@ -819,11 +883,27 @@ export const ASSISTANT_TOOLS = [
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
       "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
       "level), a park's rides with their current waits (kind rides, longest or shortest " +
-      "first), or several parks to click (kind parks). Whenever the answer lists rides with " +
-      "waits, show kind rides, and whenever it lists parks, show kind parks, instead of writing " +
-      "the list as text; keep the text to a sentence and do not repeat the card's numbers.",
+      "first; type coaster for coasters only), several parks to click (kind parks), a park's " +
+      "crowd calendar over 7 to 42 days with levels, hours and holidays (kind calendar), or one " +
+      "day's tiles: live today, else the forecast for date (kind tiles). Whenever the answer " +
+      "lists rides with waits, show kind rides, and whenever it lists parks, show kind parks, " +
+      "instead of writing the list as text; keep the text to a sentence and do not repeat the " +
+      "card's numbers.",
     input: z.object({
-      kind: z.enum(["park", "ride", "rides", "parks"]),
+      kind: z.enum(["park", "ride", "rides", "parks", "calendar", "tiles"]),
+      from: isoDay
+        .optional()
+        .describe("For kind calendar: first day; default the park's today"),
+      days: z
+        .number()
+        .int()
+        .min(7)
+        .max(42)
+        .default(14)
+        .describe("For kind calendar: how many days"),
+      date: isoDay
+        .optional()
+        .describe("For kind tiles: the day; default today, live"),
       parks: z
         .array(parkRef)
         .min(1)
@@ -832,7 +912,7 @@ export const ASSISTANT_TOOLS = [
         .describe("For kind parks: park ids or slugs, in the order to show"),
       park: parkRef
         .optional()
-        .describe("For kind park or rides: park id or slug"),
+        .describe("For kind park, rides, calendar or tiles: park id or slug"),
       order: z
         .enum(["longest", "shortest"])
         .default("longest")
@@ -844,7 +924,20 @@ export const ASSISTANT_TOOLS = [
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
-    run: async ({ kind, park, parks, rideId, order, type, limit }, ctx) => {
+    run: async (
+      { kind, park, parks, rideId, order, type, limit, from, days, date },
+      ctx,
+    ) => {
+      if (kind === "calendar" || kind === "tiles") {
+        if (!park) throw new McpToolError(`kind ${kind} needs park`);
+        return dayCard(
+          ctx,
+          park,
+          kind,
+          kind === "calendar" ? from : date,
+          days,
+        );
+      }
       if (kind === "parks") {
         if (!parks?.length) throw new McpToolError("kind parks needs parks");
         // Each row with its live state, as the park cards on the site show it.

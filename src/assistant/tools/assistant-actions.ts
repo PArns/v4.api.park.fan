@@ -62,7 +62,175 @@ export type AssistantCard =
         crowdLevel: string | null;
         avgWaitMinutes: number | null;
       }>;
+    }
+  | {
+      kind: "calendar";
+      park: string;
+      /** The park's page; the widget appends its localized calendar subpage. */
+      url: string | null;
+      /** Consecutive park-local days, 7 to 42. */
+      days: CalendarCardDay[];
+    }
+  | {
+      kind: "tiles";
+      park: string;
+      url: string | null;
+      /** The park-local day the tiles describe. */
+      date: string;
+      /** True: right now, today. False: the forecast for `date`. */
+      live: boolean;
+      crowdLevel: string | null;
+      /** Live only. */
+      avgWaitMinutes: number | null;
+      /** Live: the peak so far today. Forecast: the expected headliner peak. */
+      peakWaitMinutes: number | null;
+      /** Live only. */
+      openRides: number | null;
+      /** Live only. */
+      totalRides: number | null;
+      opens: string | null;
+      closes: string | null;
+      weather: {
+        condition: string | null;
+        tempMin: number | null;
+        tempMax: number | null;
+        climateNormal: boolean;
+      } | null;
     };
+
+export interface CalendarCardDay {
+  /** YYYY-MM-DD, park-local. */
+  date: string;
+  status: "OPERATING" | "CLOSED" | "UNKNOWN";
+  /** The calendar's level, `unknown` included; null when closed. */
+  crowdLevel: string | null;
+  /** ISO 8601 with the park's offset. */
+  opens: string | null;
+  closes: string | null;
+  /** A public or school holiday the calendar counts for this park. */
+  holiday: boolean;
+}
+
+/** The fields of `park_forecast`'s answer the calendar and tiles cards read. */
+export interface ForecastSummary {
+  park: { name: string; pageUrl: string | null };
+  scheduleCoverage: { from: string | null; to: string | null };
+  days: Array<{
+    date: string;
+    status: string;
+    opens: string | null;
+    closes: string | null;
+    crowdLevel: string;
+    expectedPeakWaitMinutes?: number;
+    holiday?: boolean;
+    schoolVacation?: boolean;
+    weather?: {
+      basis?: string;
+      condition?: string | null;
+      tempMin?: number | null;
+      tempMax?: number | null;
+    } | null;
+  }>;
+}
+
+/**
+ * One forecast day as the cards show it. Past the published schedule the status is the calendar's
+ * guess, so it reads UNKNOWN and carries no hours (docs/rules/absent-facts.md).
+ */
+function cardDay(
+  day: ForecastSummary["days"][number],
+  coverage: ForecastSummary["scheduleCoverage"],
+): CalendarCardDay {
+  const published = coverage.to !== null && day.date <= coverage.to;
+  const status = !published
+    ? "UNKNOWN"
+    : day.status === "OPERATING" || day.status === "CLOSED"
+      ? day.status
+      : "UNKNOWN";
+  return {
+    date: day.date,
+    status,
+    crowdLevel:
+      status === "CLOSED" || day.crowdLevel === "closed"
+        ? null
+        : day.crowdLevel,
+    opens: published ? day.opens : null,
+    closes: published ? day.closes : null,
+    holiday: !!(day.holiday || day.schoolVacation),
+  };
+}
+
+/** The calendar card: `count` days of the forecast from `from` on. */
+export function calendarCard(
+  forecast: ForecastSummary,
+  from: string,
+  count: number,
+): Extract<AssistantCard, { kind: "calendar" }> {
+  return {
+    kind: "calendar",
+    park: forecast.park.name,
+    url: forecast.park.pageUrl ? siteOnlyPath(forecast.park.pageUrl) : null,
+    days: forecast.days
+      .filter((day) => day.date >= from)
+      .slice(0, count)
+      .map((day) => cardDay(day, forecast.scheduleCoverage)),
+  };
+}
+
+/** The fields of `get_park`'s summary the live tiles read. */
+export interface LiveParkSummary {
+  crowd?: {
+    level?: string | null;
+    avgWaitMinutes?: number | null;
+    peakWaitTodayMinutes?: number | null;
+  } | null;
+  scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
+  rides?: { total?: number; byStatus?: Record<string, number> };
+}
+
+/**
+ * The tiles card for `date`: the live state when `live` is given (today), else the forecast.
+ * Levels are passed on as the calendar or the live reading serves them, never re-derived.
+ */
+export function tilesCard(
+  forecast: ForecastSummary,
+  date: string,
+  live: LiveParkSummary | null,
+): Extract<AssistantCard, { kind: "tiles" }> {
+  const found = forecast.days.find((day) => day.date === date);
+  const day = found ? cardDay(found, forecast.scheduleCoverage) : null;
+  const weather = found?.weather;
+  const minutes = (value: number | null | undefined) =>
+    value != null ? Math.round(value) : null;
+  const today = live?.scheduleToday?.[0];
+  return {
+    kind: "tiles",
+    park: forecast.park.name,
+    url: forecast.park.pageUrl ? siteOnlyPath(forecast.park.pageUrl) : null,
+    date,
+    live: live !== null,
+    crowdLevel: live ? (live.crowd?.level ?? null) : (day?.crowdLevel ?? null),
+    avgWaitMinutes: live ? minutes(live.crowd?.avgWaitMinutes) : null,
+    peakWaitMinutes: live
+      ? minutes(live.crowd?.peakWaitTodayMinutes)
+      : day?.crowdLevel != null
+        ? minutes(found?.expectedPeakWaitMinutes)
+        : null,
+    openRides:
+      live?.rides?.total != null ? (live.rides.byStatus?.OPERATING ?? 0) : null,
+    totalRides: live?.rides?.total ?? null,
+    opens: live ? (today?.opens ?? null) : (day?.opens ?? null),
+    closes: live ? (today?.closes ?? null) : (day?.closes ?? null),
+    weather: weather
+      ? {
+          condition: weather.condition ?? null,
+          tempMin: weather.tempMin ?? null,
+          tempMax: weather.tempMax ?? null,
+          climateNormal: weather.basis === "climate_normal",
+        }
+      : null,
+  };
+}
 
 export type ClientAction =
   | { type: "navigate"; path: string }

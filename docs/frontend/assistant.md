@@ -123,6 +123,7 @@ with `source: "chat"` and the `kind`, once per answer, at most twice per chat
 
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
+`find_restaurants`,
 `get_ride` (with the ride profile below), `compare_rides`, `get_ride_forecast` (per hour, from `PlanDayService`), `get_park_forecast` (at most 31
 days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
@@ -137,7 +138,22 @@ drops the park's clock and zone (every time reaches the model in the visitor's),
 day's single readings behind its averages and the facts park.fan does not know, and `show_card`
 returns what the card shows, plus the next opening for a park that is not open, so the sentence
 after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the
-days ahead are `get_park_forecast`'s.
+days ahead are `get_park_forecast`'s. The results of `show_card` and `open_page` also carry
+`alreadyShown`: the chat streams the text of every model round, so text the model wrote before the
+call is on screen already and a repeat after the result would show twice.
+
+`find_restaurants` lists a park's non-retired restaurants and food stands from the park payload
+(deduplicated by name as the park page shows them), optionally only those whose name or cuisine
+contains `query` (case and accents folded: "eis" finds "Eiscafé"), at most 25 with the totals:
+name, `status` only where the restaurant has a live reading of its own (the payload's fallback is
+a guess from the park's status), `cuisine` and `requiresReservation` only when known, `land`, and
+the park's `pageUrl`. A food stop goes into the plan with `plan_add_block`.
+
+Park and ride page URLs reach the model in the chat's language: `localizePageUrls`
+(`tools/assistant-actions.ts`), run on every result in `runAssistantTool`, turns
+`https://park.fan/parks/…` into `https://park.fan/<locale>/parks/…`. It touches nothing else, so a
+localized subpage (the calendar's `calendrier-temps-attente`) is never built by guessing. Cards carry
+site-only paths without a locale, which the widget localizes.
 
 Ride facts come from the curated ride profile (`attraction_ride_profiles`), flattened by
 `rideFacts` (`src/attractions/utils/ride-facts.util.ts`): type, track figures in ride order,
@@ -145,20 +161,69 @@ inversions, manufacturer, model, opening year and the merged measurements (top s
 length, duration), each field left out when unknown. Launches are counted off the track figures
 (`launch` and `swing-launch`, the frontend's rule), and only when figures were curated at all, so
 an uncurated layout gives no count rather than a zero. `get_ride` carries this as `profile`, through
-the admin MCP's `get_attraction`. `compare_rides` ranks one park's rides by one fact (top speed,
-height, length, duration, inversions, launches, opening year, minimum rider height), one row per
-name as the park page serves it. With `riderHeightCm` it keeps only rides whose known minimum the
+the admin MCP's `get_attraction`. `compare_rides` ranks the rides of one `park`, or of every
+non-retired park in a `country` (an English name, a German alias or the ISO code, read through
+`getCountryISOCode`; one query for the attractions with their parks, one for the profiles), by one
+fact (top speed, height, length, duration, inversions, launches, opening year, minimum rider
+height), one row per name and park as the park page serves it, each row with its `park` in country
+scope. `type: "coaster"` keeps only coasters, read off the profile's glossary type ids (every
+`*-coaster` id plus `boomerang`, `euro-fighter`, `mine-train`, `wild-mouse`, `out-and-back`, `slc`,
+the frontend glossary's `coasters` category); upstream's `attractionType` is empty and says nothing.
+Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "not a coaster".
+`show_card` kind `rides` takes the same `type`. With `riderHeightCm` it keeps only rides whose known minimum the
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
 apart (`heightUnknown`), never passed. Minimum heights are centimetres; `heightUnit: "in"` marks a
 park that signs them in inches, and the prompt has Parky say them in inches there.
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
-widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride or a
-park's rides with their waits, from live data), `open_page` (only a park.fan path of slugs), `request_location` (the share
+widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
+park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_block`,
 `plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner"), `switch_language`
 (`switch_locale` with the locale; the widget carries it out once the answer is complete) and
 `submit_feedback` (`feedback_sent`, a chip under the answer).
+
+### Card shapes
+
+A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
+site-only path without a locale. `park`, `ride`, `rides` and `parks` are drawn from live data. Two
+more come from `park_forecast` (and, for live tiles, `get_park`); their levels are what the calendar
+or the live reading serves, never re-derived ([crowd levels](../rules/crowd-levels.md)):
+
+```ts
+| {
+    kind: "calendar";            // show_card { kind: "calendar", park, from?: YYYY-MM-DD, days?: 7..42 = 14 }
+    park: string;                // park name
+    url: string | null;          // the park's page; the widget appends its localized calendar subpage
+    days: Array<{
+      date: string;              // YYYY-MM-DD, park-local
+      status: "OPERATING" | "CLOSED" | "UNKNOWN";
+      crowdLevel: string | null; // the calendar's ladder value, "unknown" included; null when closed
+      opens: string | null;      // ISO 8601 with the park's offset
+      closes: string | null;
+      holiday: boolean;          // a public or school holiday the calendar counts for this park
+    }>;                          // consecutive days, 7..42
+  }
+| {
+    kind: "tiles";               // show_card { kind: "tiles", park, date?: YYYY-MM-DD = today, live }
+    park: string;
+    url: string | null;
+    date: string;                // YYYY-MM-DD park-local, the day the tiles describe
+    live: boolean;               // true = right now (today), false = forecast for `date`
+    crowdLevel: string | null;
+    avgWaitMinutes: number | null;  // live only
+    peakWaitMinutes: number | null; // live: peak so far today; forecast: expected headliner peak
+    openRides: number | null;       // live only
+    totalRides: number | null;      // live only
+    opens: string | null;
+    closes: string | null;
+    weather: { condition: string | null; tempMin: number | null; tempMax: number | null; climateNormal: boolean } | null;
+  }
+```
+
+`from` starts no earlier than the park's today and the days end within `park_forecast`'s 60.
+A day past `scheduleCoverage.to` reads `UNKNOWN` without hours, whatever the calendar's gap-fill
+says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` summary only.
 
 ## Limits and cost
 

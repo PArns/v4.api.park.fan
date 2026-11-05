@@ -4,7 +4,12 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { foldText, runAssistantTool } from "./assistant-tools";
-import { localizePageUrls } from "./assistant-actions";
+import {
+  calendarCard,
+  localizePageUrls,
+  tilesCard,
+  type ForecastSummary,
+} from "./assistant-actions";
 import { getFrontendUrl } from "../../config/oauth.config";
 
 describe("page urls in the chat's language", () => {
@@ -337,5 +342,151 @@ describe("display tools", () => {
     );
     expect(json.opened).toBe(true);
     expect(json.alreadyShown).toMatch(/do not repeat/);
+  });
+});
+
+describe("calendar and tiles cards", () => {
+  const forecast: ForecastSummary = {
+    park: {
+      name: "Phantasialand",
+      pageUrl: `${getFrontendUrl()}/parks/europe/germany/bruehl/phantasialand`,
+    },
+    scheduleCoverage: { from: "2026-03-01", to: "2026-11-06" },
+    days: [
+      {
+        date: "2026-11-05",
+        status: "OPERATING",
+        opens: "2026-11-05T09:00+01:00",
+        closes: "2026-11-05T18:00+01:00",
+        crowdLevel: "high",
+        expectedPeakWaitMinutes: 52.4,
+        schoolVacation: true,
+        weather: {
+          basis: "forecast",
+          condition: "Rain",
+          tempMin: 4,
+          tempMax: 9,
+        },
+      },
+      {
+        date: "2026-11-06",
+        status: "CLOSED",
+        opens: null,
+        closes: null,
+        crowdLevel: "closed",
+      },
+      {
+        // Past the published schedule: the calendar's status is a guess.
+        date: "2026-11-07",
+        status: "OPERATING",
+        opens: "2026-11-07T09:00+01:00",
+        closes: "2026-11-07T18:00+01:00",
+        crowdLevel: "unknown",
+        weather: {
+          basis: "climate_normal",
+          condition: null,
+          tempMin: 3,
+          tempMax: 10,
+        },
+      },
+    ],
+  };
+
+  it("shows the calendar's days, closed without a level, unpublished as unknown", () => {
+    const card = calendarCard(forecast, "2026-11-05", 7);
+    expect(card.url).toBe("/parks/europe/germany/bruehl/phantasialand");
+    expect(card.days).toEqual([
+      {
+        date: "2026-11-05",
+        status: "OPERATING",
+        crowdLevel: "high",
+        opens: "2026-11-05T09:00+01:00",
+        closes: "2026-11-05T18:00+01:00",
+        holiday: true,
+      },
+      {
+        date: "2026-11-06",
+        status: "CLOSED",
+        crowdLevel: null,
+        opens: null,
+        closes: null,
+        holiday: false,
+      },
+      {
+        date: "2026-11-07",
+        status: "UNKNOWN",
+        crowdLevel: "unknown",
+        opens: null,
+        closes: null,
+        holiday: false,
+      },
+    ]);
+  });
+
+  it("tiles a forecast day with its expected peak and no live numbers", () => {
+    expect(tilesCard(forecast, "2026-11-05", null)).toEqual({
+      kind: "tiles",
+      park: "Phantasialand",
+      url: "/parks/europe/germany/bruehl/phantasialand",
+      date: "2026-11-05",
+      live: false,
+      crowdLevel: "high",
+      avgWaitMinutes: null,
+      peakWaitMinutes: 52,
+      openRides: null,
+      totalRides: null,
+      opens: "2026-11-05T09:00+01:00",
+      closes: "2026-11-05T18:00+01:00",
+      weather: {
+        condition: "Rain",
+        tempMin: 4,
+        tempMax: 9,
+        climateNormal: false,
+      },
+    });
+    expect(tilesCard(forecast, "2026-11-07", null).weather?.climateNormal).toBe(
+      true,
+    );
+  });
+
+  it("tiles today live, with the live level rather than the forecast's", () => {
+    const card = tilesCard(forecast, "2026-11-05", {
+      crowd: {
+        level: "moderate",
+        avgWaitMinutes: 21.6,
+        peakWaitTodayMinutes: 60,
+      },
+      scheduleToday: [
+        { opens: "2026-11-05T09:00+01:00", closes: "2026-11-05T18:00+01:00" },
+      ],
+      rides: { total: 30, byStatus: { OPERATING: 24, DOWN: 1 } },
+    });
+    expect(card).toMatchObject({
+      live: true,
+      crowdLevel: "moderate",
+      avgWaitMinutes: 22,
+      peakWaitMinutes: 60,
+      openRides: 24,
+      totalRides: 30,
+    });
+  });
+
+  it("refuses a day before the park's today or past the forecast", async () => {
+    const providers = new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+    ]);
+    for (const input of [
+      { kind: "calendar", park: PARK_ID, from: "2020-01-01" },
+      { kind: "tiles", park: PARK_ID, date: "2099-01-01" },
+    ]) {
+      const result = await runAssistantTool(
+        "show_card",
+        input,
+        context(providers),
+        jest.fn(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.action).toBeUndefined();
+    }
   });
 });
