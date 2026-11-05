@@ -63,7 +63,8 @@ archive and the reader-facing badge; the drift monitor splits by horizon (`byHor
 `pcn_forecasts`, only rows written in the last **3 hours** (`PCN_MAX_FORECAST_AGE_H`). A frozen
 producer — the 15-minute cron stuck on a lock on 2026-06-30 — would otherwise keep serving
 day-old waits; under healthy operation the newest row is < 15 minutes old and the guard never
-trips. A park whose forecast is skipped (stale feed, no model) falls back the same way. Any read
+trips. A park whose forecast is skipped (stale feed, no model) falls back the same way; which parks
+and why: [PCN: skipped parks](pcn.md#the-forecast-tick). Any read
 error → pure CatBoost.
 
 Per matched slot (`applyPcnIntradayOverride`):
@@ -115,5 +116,3 @@ At short lead "the wait now" predicts the wait an hour from now better than the 
 
 - **Known limit:** CatBoost keeps only the newest hourly row per slot, so it cannot be compared
   with PCN at longer leads; a forward-written per-origin record is PAR-658.
-- **Known limit:** which parks the forecast tick skipped, and why, is only in the pcn-service log
-  (PAR-1120).

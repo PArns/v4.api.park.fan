@@ -11,7 +11,8 @@ endpoint or one-off that changes what a park or ride page shows.
    (`src/common/cache/park-cache-invalidation.ts`).
 3. **Tell the frontend** to revalidate: `RevalidationService.revalidateTags(["parks", "attractions"])`.
 4. **Tell it again after `CDN_SETTLE_MS` (16 min)**, because the Cloudflare copy
-   (`max-age=300` + `stale-while-revalidate=600`) cannot be purged from this service.
+   (`max-age=300` + `stale-while-revalidate=600`) cannot be purged from this service. Import the
+   constant from `src/common/revalidation/revalidation.service.ts`; never copy the number.
 
 Doing 3 before 2 publishes nothing: the frontend refetches the pre-write payload, still warm in
 Redis or at the edge, and pins it in its own data cache for 24 h. That is how a curated ride profile

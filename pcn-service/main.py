@@ -178,9 +178,13 @@ def train(req: TrainRequest):
 def _run_job(kind: str, fn, **kwargs):
     """Run a light job (forecast/score) off the request thread with a PER-KIND lock."""
     path = _job_status_path(kind)
-    if _read(path, {}).get("running"):
+    prev = _read(path, {})
+    if prev.get("running"):
         raise HTTPException(status_code=409, detail=f"{kind} already running")
-    _write(path, {"running": True, "kind": kind, "status": "running"})
+    # Keep the last result while running: the admin overview reads the forecast's
+    # skipped parks from it (PAR-1120) and would lose them for every tick's duration.
+    _write(path, {"running": True, "kind": kind, "status": "running",
+                  "result": prev.get("result")})
 
     def _go():
         try:

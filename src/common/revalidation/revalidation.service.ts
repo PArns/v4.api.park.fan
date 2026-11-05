@@ -15,6 +15,18 @@ import {
 const REVALIDATE_TAG_BATCH = 50;
 
 /**
+ * How long the public copy of a park response can outlive a write, and so the
+ * delay of the second revalidation (docs/rules/publish-outside-in.md).
+ *
+ * The park endpoint is served `max-age=300, s-maxage=300,
+ * stale-while-revalidate=600` and nothing in this service can purge
+ * Cloudflare: the edge copy only expires by TTL, so 900 s is the worst case.
+ * A minute of margin on top covers clock skew and a slow revalidation. Every
+ * publish path imports this one value, so the rule cannot drift per caller.
+ */
+export const CDN_SETTLE_MS = 16 * 60 * 1000;
+
+/**
  * On-demand revalidation webhook client.
  *
  * Fires `POST {REVALIDATE_URL}` with `{ tags: [...] }` so the frontend can drop

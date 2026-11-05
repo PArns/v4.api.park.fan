@@ -25,6 +25,7 @@ import { serveChronosIntraday } from "../ml/chronos-serving";
 import { servePcnIntraday } from "../ml/pcn-serving.constants";
 import { ModelComparisonResponseDto } from "../ml/dto/model-comparison.dto";
 import {
+  MlBlockedParkDto,
   MlComponentDto,
   MlDecisionReportDto,
   MlDriftWatchDto,
@@ -71,12 +72,28 @@ interface LatestRow {
 
 interface TrainStatus {
   status?: string;
+  /** pcn-service `/status` only: the last job result per kind. */
+  forecast?: { result?: PcnForecastResult | null };
   is_training?: boolean;
   finished_at?: string | null;
   error?: string | null;
   enabled?: boolean;
   loaded?: boolean;
 }
+
+/** The `result` pcn-service's forecast job leaves in its status file (PAR-1120). */
+interface PcnForecastResult {
+  skipped?: { idle?: Record<string, string>; blocked?: Record<string, string> };
+}
+
+/** pcn-service's reasons for a park that should get a forecast and did not. */
+const PCN_BLOCKED_REASON_DE: Record<string, string> = {
+  no_model: "kein trainiertes Modell",
+  no_panel: "keine Daten im Fenster",
+  too_few_slots: "zu wenige Slots",
+  no_trained_ride: "keine trainierte Attraktion",
+  failed: "Fehler",
+};
 
 const toDate = (v: Date | string | null | undefined): Date | null =>
   v ? new Date(v) : null;
@@ -243,6 +260,7 @@ export class MlOverviewService {
       mlTrain,
       chronosStatus,
       pcnTrain,
+      pcnJobs,
     ] = await Promise.all([
       // Backward scan of idx_pcn_forecasts_created_at, recent window only.
       this.probe<LatestRow[]>(
@@ -293,6 +311,7 @@ export class MlOverviewService {
       this.service(`${getMlServiceUrl()}/train/status`),
       this.service(`${getNfServiceUrl()}/chronos/status`),
       this.service(`${getPcnServiceUrl()}/train/status`),
+      this.service(`${getPcnServiceUrl()}/status`),
     ]);
 
     let chronosRun: ChronosRunSummary | null = null;
@@ -318,7 +337,13 @@ export class MlOverviewService {
     // run fails, so their age alone never shows it. pcn-service's status file
     // carries no finish time, so a `failed` there stands until the next run.
     const pcnFailed = trainingFailedAfter(pcnTrain, null);
-    const pcnNote = trainingNote(pcnTrain, pcnFailed, pcn?.[0]?.version);
+    const pcnBlocked = pcnBlockedParks(pcnJobs?.forecast?.result);
+    const pcnNote = [
+      trainingNote(pcnTrain, pcnFailed, pcn?.[0]?.version),
+      pcnBlockedNote(pcnBlocked),
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
     // --- TFT -----------------------------------------------------------
     const tftAt = toDate(tft?.[0]?.at);
@@ -368,8 +393,9 @@ export class MlOverviewService {
         expected: "alle 15 Min. (rund um die Uhr)",
         status: status(pcnAt, LATE_AFTER_MS.pcn, pcnFailed ? "failed" : null),
         note: pcnServed
-          ? pcnNote
+          ? pcnNote || null
           : `nicht ausgeliefert (SERVE_PCN_INTRADAY aus)${pcnNote ? ` · ${pcnNote}` : ""}`,
+        blockedParks: pcnBlocked,
       },
       {
         id: "tft",
@@ -483,6 +509,32 @@ export function trainingNote(
   const v = versionNote(version);
   if (v) parts.push(v);
   return parts.length ? parts.join(" · ") : null;
+}
+
+/**
+ * Parks the last PCN forecast tick should have covered and did not (PAR-1120):
+ * fresh data, but no model, too few slots, no trained ride or an error. Parks
+ * with nothing to do (closed, origin unchanged) are left out on purpose. These
+ * parks are served CatBoost instead, which is intended but otherwise invisible.
+ */
+export function pcnBlockedParks(
+  result: PcnForecastResult | null | undefined,
+): MlBlockedParkDto[] {
+  return Object.entries(result?.skipped?.blocked ?? {})
+    .map(([parkId, reason]) => ({ parkId, reason }))
+    .sort((a, b) => a.reason.localeCompare(b.reason));
+}
+
+/** "2 Parks ohne PCN-Prognose: 1× kein trainiertes Modell, 1× zu wenige Slots". */
+export function pcnBlockedNote(parks: MlBlockedParkDto[]): string | null {
+  if (!parks.length) return null;
+  const counts = new Map<string, number>();
+  for (const p of parks) counts.set(p.reason, (counts.get(p.reason) ?? 0) + 1);
+  const parts = [...counts].map(
+    ([r, n]) => `${n}× ${PCN_BLOCKED_REASON_DE[r] ?? r}`,
+  );
+  const label = parks.length === 1 ? "1 Park" : `${parks.length} Parks`;
+  return `${label} ohne PCN-Prognose: ${parts.join(", ")}`;
 }
 
 function short(s: string): string {

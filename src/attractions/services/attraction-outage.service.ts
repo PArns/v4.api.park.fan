@@ -148,7 +148,8 @@ export interface OutageParkContext {
  * It also computes no duration, no rate and no history. A carried heartbeat row
  * is indistinguishable from an observed one apart from `lastUpdated`, so an
  * elapsed figure taken from this alone would be wrong upward exactly on the long
- * outages. The duration work needs the `is_heartbeat` column first.
+ * outages. Durations come from the nightly reconstruction, which reads
+ * `is_heartbeat` (docs/analytics/ride-downtime/reconstruction.md).
  *
  * ## Two refusals, both from configuration rather than from the result
  *

@@ -223,6 +223,40 @@ describe("MlOverviewService", () => {
     });
   });
 
+  // PAR-1120: a park PCN should cover and does not falls back to CatBoost silently.
+  it("lists the parks the last PCN tick should have covered, not the idle ones", async () => {
+    process.env.SERVE_PCN_INTRADAY = "true";
+    mockedGet.mockImplementation(async (url: string) => {
+      if (url.includes("pcn") && url.endsWith("/status")) {
+        return {
+          data: {
+            forecast: {
+              status: "completed",
+              result: {
+                rows: 100,
+                skipped: {
+                  idle: { closed: "no_fresh_data" },
+                  blocked: { p2: "too_few_slots", p1: "no_model" },
+                },
+              },
+            },
+          },
+        };
+      }
+      throw new Error("unreachable");
+    });
+    const { service } = make({});
+    const out = await service.build(NOW);
+    expect(out.components[0]).toMatchObject({
+      id: "pcn",
+      note: "2 Parks ohne PCN-Prognose: 1× kein trainiertes Modell, 1× zu wenige Slots",
+      blockedParks: [
+        { parkId: "p1", reason: "no_model" },
+        { parkId: "p2", reason: "too_few_slots" },
+      ],
+    });
+  });
+
   it("reports Chronos warming from the archive's last run summary", async () => {
     const { service } = make(
       {

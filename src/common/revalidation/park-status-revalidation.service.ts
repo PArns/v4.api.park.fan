@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../redis/redis.module";
-import { RevalidationService } from "./revalidation.service";
+import { CDN_SETTLE_MS, RevalidationService } from "./revalidation.service";
 import {
   diffParkStatuses,
   parkCacheTag,
@@ -33,15 +33,6 @@ const OPEN_PARK_REFRESH_MS = 14 * 60 * 1000;
 
 /** Long enough to survive a quiet night and any deploy; refreshed on every write anyway. */
 const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
-
-/**
- * How long the public copy of a park response can outlive the opening.
- *
- * Same number and same reason as `CuratedDataProcessor.CDN_SETTLE_MS`: the park endpoint is served
- * `max-age=300, s-maxage=300, stale-while-revalidate=600` and nothing in this service can purge
- * Cloudflare, so 900s is the worst case with a minute of margin.
- */
-const CDN_SETTLE_MS = 16 * 60 * 1000;
 
 /**
  * Tells the frontend which parks just opened or closed.

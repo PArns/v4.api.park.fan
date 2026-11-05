@@ -13,7 +13,10 @@ import { Redis } from "ioredis";
 import { IsNull, Not, Repository } from "typeorm";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
-import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import {
+  CDN_SETTLE_MS,
+  RevalidationService,
+} from "../../common/revalidation/revalidation.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
@@ -32,19 +35,6 @@ import {
   PARK_CURATED_KEYS,
   type CuratedFieldSpec,
 } from "./curated-field.spec-list";
-
-/**
- * Delay before the second revalidation sweep.
- *
- * The park endpoint is served `max-age=300, s-maxage=300,
- * stale-while-revalidate=600` — a 900 s worst case at the edge, which nothing
- * in this codebase can purge. Sixteen minutes is that window plus a minute of
- * margin. Copied deliberately from CuratedDataProcessor rather than shared:
- * the two publish paths answer to the same cache and would have to change
- * together anyway, and a shared constant in a third file is how the reason for
- * the number gets separated from the number.
- */
-const CDN_SETTLE_MS = 16 * 60 * 1000;
 
 export interface CurationPatch {
   fields: Record<string, unknown>;

@@ -39,12 +39,31 @@ uvicorn main:app --reload --port 8000
 
 ## Test and lint
 
-| Command          | What                                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`      | Unit tests (Jest).                                                                                                   |
-| `pnpm test:e2e`  | E2E tests against a Testcontainers TimescaleDB ([which version](e2e-database-version.md), [merge schema](e2e-merge-coverage.md)). |
-| `pnpm lint`      | ESLint with `--fix`; `pnpm lint:check` without.                                                                      |
-| `pnpm build`     | Nest build plus the Swagger spec (`scripts/generate-swagger-spec.ts`).                                               |
-| `ruff check .`   | Python lint, per service ([rule sets differ](python-dependencies.md#lint)).                                          |
+| Command         | What                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`     | Unit tests (Jest).                                                                                                                |
+| `pnpm test:e2e` | E2E tests against a Testcontainers TimescaleDB ([which version](e2e-database-version.md), [merge schema](e2e-merge-coverage.md)). |
+| `pnpm lint`     | ESLint with `--fix`; `pnpm lint:check` without.                                                                                   |
+| `pnpm build`    | Nest build plus the Swagger spec (`scripts/generate-swagger-spec.ts`).                                                            |
+| `ruff check .`  | Python lint, per service ([rule sets differ](python-dependencies.md#lint)).                                                       |
+
+### E2E runs: one worker, recycled
+
+Every E2E suite boots `AppModule` against one shared TimescaleDB and Redis, which `test/global-setup.ts`
+starts once per run. The suites therefore run one at a time (`maxWorkers: 1` in `test/jest-e2e.json`),
+never in parallel. They run in a child worker rather than in band: each suite leaves some heap behind,
+and in one process (`--runInBand`) 26 suites reached about 2 GB and died with `JavaScript heap out of
+memory` after 9 to 12 minutes (PAR-1162). `workerIdleMemoryLimit: "1GB"` makes Jest replace the worker
+once it is above that after a suite. Do not add `--runInBand` back: it disables the limit. The
+container addresses reach the worker through the environment `global-setup.ts` sets before the worker
+starts.
+
+**Leftover containers.** Testcontainers' reaper (Ryuk) removes the containers when the run ends,
+also after a crash. With `TESTCONTAINERS_RYUK_DISABLED=true` (needed on some Docker setups) nothing
+does that after a crash, because `globalTeardown` never runs; remove them by hand:
+
+```bash
+docker ps -a --filter label=org.testcontainers=true -q | xargs -r docker rm -f
+```
 
 Other commands: [scripts](scripts.md).
