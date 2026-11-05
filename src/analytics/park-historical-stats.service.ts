@@ -83,6 +83,45 @@ const DEFAULT_MIN_ATTRACTION_DAYS = 20;
  */
 const DAY_CURVE_CANDIDATES = 8;
 
+/** Redis key of one hourly-profile build. */
+function hourlyProfileCacheKey(
+  parkId: string,
+  years: number,
+  topN: number,
+  minAttractionDays: number,
+  range?: { from: string; to: string },
+): string {
+  const rangeSuffix = range ? `:${range.from}:${range.to}` : "";
+  return `park:hourly-profile:v7:${parkId}:${years}:${topN}:${minAttractionDays}${rangeSuffix}`;
+}
+
+/** The profile entry `getRideDayCurve` picks its rides from. */
+export function dayCurveProfileKey(parkId: string): string {
+  return hourlyProfileCacheKey(
+    parkId,
+    1,
+    DAY_CURVE_CANDIDATES,
+    DEFAULT_MIN_ATTRACTION_DAYS,
+  );
+}
+
+/**
+ * Whether `/stats/day?attraction=<slug>` answers for this slug, read from the
+ * cached profile (`dayCurveProfileKey`) and never computed. Undefined while
+ * the entry is cold: then nobody knows, and the client asks as before.
+ */
+export function hasDayCurve(
+  cachedProfile: string | null,
+  attractionSlug: string,
+): boolean | undefined {
+  const profile = safeJsonParse<ParkHourlyProfileDto>(cachedProfile);
+  if (!profile?.meta || !Array.isArray(profile.attractions)) return undefined;
+  return (
+    profile.meta.displayable === true &&
+    profile.attractions.some((a) => a.attractionSlug === attractionSlug)
+  );
+}
+
 /** Hourly-profile schema version (see ParkHourlyProfileDto). */
 const HOURLY_SCHEMA_VERSION = 4;
 
@@ -360,8 +399,13 @@ export class ParkHistoricalStatsService {
     // key — the version segment is the only way to retire one.
     // An explicit window (PAR-978) appends its two days, so the key without
     // one is the key it always was.
-    const rangeSuffix = range ? `:${range.from}:${range.to}` : "";
-    const cacheKey = `park:hourly-profile:v7:${park.id}:${years}:${topN}:${minAttractionDays}${rangeSuffix}`;
+    const cacheKey = hourlyProfileCacheKey(
+      park.id,
+      years,
+      topN,
+      minAttractionDays,
+      range,
+    );
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
