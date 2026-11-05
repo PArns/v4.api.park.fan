@@ -1033,11 +1033,13 @@ export class QueueDataService {
     if (misses.length === 0) return never;
 
     const rows: Array<{ id: string }> = await this.queueDataRepository.query(
-      `SELECT id::text AS id
-         FROM unnest($1::uuid[]) AS id
+      // `u.id`, qualified: a bare `id` inside the subquery is queue_data's own
+      // primary key, which turns the probe into a full-table scan that never matches.
+      `SELECT u.id::text AS id
+         FROM unnest($1::uuid[]) AS u(id)
         WHERE NOT EXISTS (
           SELECT 1 FROM queue_data qd
-           WHERE qd."attractionId" = id
+           WHERE qd."attractionId" = u.id
              AND COALESCE(${observedReadingsSql("qd")}, true)
         )`,
       [misses],

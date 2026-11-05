@@ -623,7 +623,10 @@ describe("QueueDataService", () => {
         mockQueueDataRepository.query.mock.calls[
           mockQueueDataRepository.query.mock.calls.length - 1
         ];
-      expect(sql).toContain("unnest($1::uuid[])");
+      expect(sql).toContain("unnest($1::uuid[]) AS u(id)");
+      // A bare `id` in the subquery would bind to queue_data.id, never match,
+      // and scan the whole table.
+      expect(sql).toContain('qd."attractionId" = u.id');
       expect(sql).toContain("NOT EXISTS");
       expect(params).toEqual([[id]]);
     });
