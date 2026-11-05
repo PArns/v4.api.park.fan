@@ -153,6 +153,24 @@ models keep forecasting; `/admin/ml-overview` reads `GET /train/status` for it (
 6. Writes 48 slots × q0.5 / q0.8 per ride from the newest slot (`origin_slot`) into
    `pcn_forecasts`.
 
+**Skipped parks** (PAR-1120). Every skip carries a reason, and the job result in the forecast
+status file (`GET /status` → `forecast.result.skipped`) splits them in two:
+
+| Group     | Reason             | Meaning                                                           |
+| --------- | ------------------ | ----------------------------------------------------------------- |
+| `idle`    | `no_fresh_data`    | step 1: nothing in 36 h, the park is closed                       |
+| `idle`    | `stale_origin`     | step 3: the grid's newest slot is older than 36 h                 |
+| `idle`    | `already_forecast` | step 5: origin and checkpoint unchanged                           |
+| `blocked` | `no_model`         | no checkpoint for the park; it needs `/train`                     |
+| `blocked` | `no_panel`         | fresh data, but the panel came back empty (no timezone, no rides) |
+| `blocked` | `too_few_slots`    | fresh data, but not more than `L` slots even in the full window   |
+| `blocked` | `no_trained_ride`  | step 4: none of the trained rides is in the window                |
+| `blocked` | `failed`           | an exception in `forecast_park`                                   |
+
+`blocked` parks should get a forecast and do not; they are served CatBoost.
+`/v1/admin/ml-overview` lists them on the `pcn` row (`blockedParks`, counted in the note). The
+previous result stays in the file while the next tick runs.
+
 ## `pcn_forecasts`
 
 ```
@@ -278,8 +296,6 @@ regressed); a residual hybrid on top of CatBoost (two systems, the skew only hal
 
 - **Known limit:** every park trains a fixed 500 steps with no validation split or early stop
   (PAR-453).
-- **Known limit:** which parks a forecast tick skipped, and why, is only in the pcn-service log
-  (PAR-1120).
 - Open work: weather, schedule-relative and school-break channels (PAR-455 / PAR-456 / PAR-457),
   the `in_force` flip then `PCN_RESIDUAL` (PAR-1044), a regime head or Tweedie loss and a
   TouringPlans pretraining seed (PAR-1121); all under PAR-454.
