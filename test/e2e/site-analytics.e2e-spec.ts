@@ -824,6 +824,14 @@ describe("Site analytics (e2e)", () => {
     const ghost = "22222222-2222-4222-8222-222222222222";
     const gone = "33333333-3333-4333-8333-333333333333";
     const day = addIsoDays(today, -2);
+    // No entity makes the old table any more (PAR-1158); production still
+    // has it until the owner drops it, so the test builds its shape.
+    await dataSource.query(
+      `CREATE TABLE page_view_days (
+         kind varchar(16), key varchar(120), locale varchar(8), day date,
+         views integer NOT NULL DEFAULT 0,
+         PRIMARY KEY (kind, key, locale, day))`,
+    );
     await dataSource.query(
       `INSERT INTO page_view_days (kind, key, locale, day, views) VALUES
          ('news', 'old-news', 'de', $1, 7),
@@ -835,15 +843,12 @@ describe("Site analytics (e2e)", () => {
     const storage = app.get(SiteAnalyticsStorageService);
     await expect(storage.importPageViewDays()).resolves.toBe(3);
     await expect(storage.importPageViewDays()).resolves.toBe(0);
+    // The owner's drop, after which the import has nothing to read.
+    await dataSource.query(`DROP TABLE page_view_days`);
+    await expect(storage.importPageViewDays()).resolves.toBe(0);
 
-    // A read through the old endpoint and two through the beacon.
-    await request(app.getHttpServer())
-      .post("/v1/page-views")
-      .set("User-Agent", UA)
-      .set("CF-Connecting-IP", "203.0.113.20")
-      .send({ kind: "news", key: "old-news", locale: "de" })
-      .expect(204);
     await beacon([
+      event("page_read", { kind: "news", key: "old-news" }),
       event("page_read", { kind: "park" }, { entity: park.id }),
       event("page_read", { kind: "news", key: "fresh-news" }),
       // A park that does not exist is not counted at all.

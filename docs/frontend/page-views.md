@@ -23,8 +23,8 @@ In the event a post's key is the prop `key` beside `kind`, and an entity sent wi
 park's or ride's UUID is the event's `entity` (a read without one is dropped) and `kind` its only
 prop. A UUID rather than a slug for parks and rides,
 because a slug changes with a rename and the counts would split. A free-form key under `park` would
-reach the admin's `IN (…)` on a uuid column and fail the whole overview, so the deprecated `POST`
-checks it too (`isPageKeyFor`).
+reach the admin's `IN (…)` on a uuid column and fail the whole overview, so the admin overview
+checks every key again before it looks names up (`isPageKeyFor`).
 
 ## Every ranking is per language
 
@@ -43,20 +43,21 @@ silently loses a day under memory pressure ranks wrong without saying so. The bu
 for minutes and has no TTL, which that policy never evicts. A read's row carries its hour, the page
 (`kind` and `key`, or the park's or ride's id), the language and the device, nothing of the visit.
 
-**`page_view_days`** (`PageViewDay`), the old per-day upsert table, is no longer written. At the
-first start after the deploy, `SiteAnalyticsStorageService.importPageViewDays` copies its rows once
+**`page_view_days`**, the old per-day upsert table, is no longer written, read or moved by merges, and
+has no entity since PAR-1158. At the first start after PAR-1151,
+`SiteAnalyticsStorageService.importPageViewDays` copied its rows once
 into `site_events` (a row per page, language and day at 00:00 UTC, no path, device, browser or OS,
 country `zz`), in one transaction with the marker `page_view_days` in `site_analytics_imports`, so a
 second instance or a restart copies nothing. A park or ride key that is not a UUID is left behind,
-and so are the few reads an old instance still counts there during the rolling deploy. The table
-stays, entity included, until a later release drops it.
+and so are the few reads an old instance still counted there during the rolling deploy.
+`synchronize` does not drop the table; the owner drops it by hand after checking the marker
+([runbook](../troubleshooting/db-health-runbook.md#2b-dropping-a-table-whose-entity-is-gone)).
 
 **Merges.** When the admin merges a park or a ride into another, the compressed rows are not
 rewritten: the merge records `loser → winner` in `site_entity_merges` (`recordEntityMerge`, a
 `custom` entry of `PARK_DEPENDENCIES` and `ATTRACTION_DEPENDENCIES` in
 `src/parks/utils/merge-dependencies.ts`), and both rankings read
-`COALESCE(winner_id, entity)`, so the survivor carries both pages' reads. `mergePageViewDays` still
-moves the old table's rows, for as long as it exists.
+`COALESCE(winner_id, entity)`, so the survivor carries both pages' reads.
 
 ## What is not counted
 
@@ -83,11 +84,11 @@ moves the old table's rows, for as long as it exists.
   the database away, reads pass), and the public ranking lists a park or ride only while it exists,
   so neither a made-up id nor a deleted one reaches the site. The admin overview counts every read
   stored, a deleted page's unnamed. The frontend drops post keys it does not know.
-- **Off park.fan**, in production: both endpoints count only a request from the site's own origin
+- **Off park.fan**, in production: the collector counts only a request from the site's own origin
   (`isFromSite`, [privacy](site-analytics.md#privacy)).
 
-The caps are counted in `SiteAnalyticsCollectService` for every `page_read`, whichever endpoint
-brought it, before the hit reaches the buffer. An **address** there is an IPv4 address whole and an
+The caps are counted in `SiteAnalyticsCollectService` for every `page_read`, before the hit reaches
+the buffer. An **address** there is an IPv4 address whole and an
 IPv6 address as its /56 (`addressBucket`, `src/common/utils/request.util.ts`): a provider delegates a
 /56 to one customer, who can take a new /64 per request, so a cap per /64 would give one customer
 256 budgets. The address is `getRateLimitIp`
@@ -111,22 +112,17 @@ carries an address ([the rule](../rules/no-address-in-logs.md)).
 The browser sends the read straight to api.park.fan, never through the frontend's relay, so the
 address and the User-Agent are the reader's own. The frontend's beacon sends each page once per tab,
 only on park.fan, after a few seconds on the page, and not at all under Do Not Track, GPC or after
-the analytics opt-out on the privacy page. It now sends the read as a `page_read` hit in the site
-statistic's batch; `POST /v1/page-views` records the same event and stays for one release as a
-deprecated alias, so a page cached with the old beacon keeps counting. It keeps nothing in the
-browser's storage, so a reader who reloads is held to three a day by the cap alone.
-
-`POST` always answers **204**, counted or not: a caller that could tell the two apart could probe
-the caps and the bot rule. Both writes answer `Cross-Origin-Resource-Policy: cross-origin`, since a
-beacon is a no-cors request from park.fan and helmet's `same-origin` would have the browser block the
-empty answer and log an error for every read.
+the analytics opt-out on the privacy page. It sends the read as a `page_read` hit in the site
+statistic's batch. The old beacon's `POST /v1/page-views` was removed in PAR-1158 and answers 404. The
+beacon keeps nothing in the browser's storage, so a reader who reloads is held to three a day by the
+cap alone. The collector always answers **204**, counted or not
+([wire format](site-analytics.md#wire-format)).
 
 ## Endpoints
 
 | Endpoint                                                | Who      | Cache                           |
 | ------------------------------------------------------- | -------- | ------------------------------- |
 | `POST /v1/analytics/collect`, a `page_read` hit         | browser  | `no-store`                      |
-| `POST /v1/page-views` `{ kind, key, locale }`, deprecated | browser  | `no-store`                      |
 | `GET /v1/page-views/top?kind=&locale=&days=30&limit=10` | frontend | 1 h (`CacheControlInterceptor`) |
 | `GET /v1/admin/page-views?days=30&limit=25&locale=`     | admin    | `no-store` (admin path)         |
 
@@ -150,4 +146,4 @@ days at ten times today's traffic ([measurements](site-analytics.md#measurements
 takes 14, 47 and 79 ms for 7, 30 and 90 days, the attraction ranking 19, 52 and 137 ms, the admin
 overview 85, 382 and 1,421 ms. The public rankings sit behind an hour of cache at Cloudflare and the
 frontend. Nothing here updates a row, so there are no storage options, no dead tuples and nothing
-for VACUUM; the old table's `fillfactor` and autovacuum settings stay on it until it goes.
+for VACUUM.

@@ -233,7 +233,7 @@ export class SiteAnalyticsCollectService
    * Returns how many counted; the beacon gets its 204 either way.
    */
   async collect(request: CollectRequest, now = new Date()): Promise<number> {
-    // Bots go through `record` too, which counts them once as dropped.
+    // A bot's hits are validated too, so `record` counts each once as dropped.
     const valid = request.hits
       .map(validateHit)
       .filter((hit): hit is ValidHit => hit !== null);
@@ -247,12 +247,11 @@ export class SiteAnalyticsCollectService
   }
 
   /**
-   * Counts hits that are already checked: from `collect`, and from the
-   * deprecated `POST /v1/page-views`, which builds its `page_read` itself.
-   * Blocked names and reads of parks or rides that do not exist go first,
+   * Counts the hits `collect` checked. A bot's are counted once as dropped;
+   * then blocked names and reads of parks or rides that do not exist go,
    * then the address's and the window's caps, then the per-day guards.
    */
-  async record(
+  private async record(
     valid: ValidHit[],
     ip: string | null,
     rawUserAgent: string | null,

@@ -110,6 +110,35 @@ covering): `queue_data`'s `IDX_aa19b21038bdfe8d295a5f2f2c` (prefix of `idx_queue
 constraints on `destinations` (slug, externalId), `restaurants` and `shows` (externalId).
 `test/e2e/db-cleanup-writes.e2e-spec.ts` fails if `synchronize` would build any of them again.
 
+### 2b. Dropping a table whose entity is gone
+
+`synchronize` never drops a table: removing an entity leaves its table in production, unread. Drop it by
+hand once the release without the entity is live, first checking what it holds.
+
+**`page_view_days`** (the old most-read counter, entity removed in PAR-1158). Its rows were copied into
+`site_events` once, at the first start after PAR-1151; **drop it only if the import marker is there**:
+
+```bash
+scripts/prod-psql.sh <<'SQL'
+-- The marker: one row, with the number of rows copied. No row = the copy never ran: stop, do not drop.
+SELECT name, imported_at, rows FROM site_analytics_imports WHERE name = 'page_view_days';
+-- What would go: rows (compare with the marker's count) and size.
+SELECT count(*) AS rows, pg_size_pretty(pg_total_relation_size('page_view_days')) AS size
+  FROM page_view_days;
+SQL
+```
+
+The marker's `rows` can be a little lower than `count(*)`: a park or ride key that was no UUID was never
+copied, and an old instance could still write a read during the rolling deploy after the copy. A gap of
+more than a handful of rows is worth a look before dropping. With the marker present:
+
+```bash
+scripts/prod-psql.sh -c 'DROP TABLE page_view_days;'
+```
+
+Afterwards `SiteAnalyticsStorageService.importPageViewDays` finds no table and does nothing; it can then
+be deleted.
+
 ## 3. Sequential scans
 
 ```sql

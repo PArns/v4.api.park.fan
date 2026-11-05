@@ -6,12 +6,7 @@ import { utcDay } from "../common/utils/reader-hash.util";
 import { buildAttractionUrl, buildParkUrl } from "../common/utils/url.util";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
-import { SiteAnalyticsCollectService } from "../site-analytics/site-analytics-collect.service";
 import { PAGE_READ_EVENT } from "../site-analytics/site-analytics.constants";
-import {
-  propsKeyOf,
-  type ValidEventHit,
-} from "../site-analytics/site-analytics.hits";
 import { periodText } from "../site-analytics/site-analytics.query";
 import {
   PAGE_VIEW_KINDS,
@@ -24,14 +19,6 @@ import type {
   AdminPageViewsResponseDto,
   TopPageViewDto,
 } from "./dto/page-view.dto";
-
-export interface PageView {
-  kind: PageViewKind;
-  key: string;
-  locale: PageViewLocale;
-  ip: string | null;
-  userAgent: string | null;
-}
 
 /**
  * The page a `page_read` row names: a post's `translationKey`, or a park's or
@@ -72,37 +59,7 @@ export class PageViewsService {
     @InjectRepository(Park) private readonly parks: Repository<Park>,
     @InjectRepository(Attraction)
     private readonly attractions: Repository<Attraction>,
-    private readonly collector: SiteAnalyticsCollectService,
   ) {}
-
-  /**
-   * Records one view sent to the deprecated `POST /v1/page-views` as a
-   * `page_read`. The old beacon knows no path, so its row has none (`''`),
-   * and its page type is the kind. Returns whether it counted.
-   */
-  async record(view: PageView, now: Date = new Date()): Promise<boolean> {
-    const entityKind = view.kind === "park" || view.kind === "attraction";
-    const props: Record<string, string> = entityKind
-      ? { kind: view.kind }
-      : { key: view.key, kind: view.kind };
-    const hit = {
-      t: "event",
-      locale: view.locale,
-      path: "",
-      pageType: view.kind === "article" ? "guide" : view.kind,
-      name: PAGE_READ_EVENT,
-      props,
-      propsKey: propsKeyOf(props),
-      entity: entityKind ? view.key : null,
-    } as unknown as ValidEventHit;
-    const counted = await this.collector.record(
-      [hit],
-      view.ip,
-      view.userAgent,
-      now,
-    );
-    return counted > 0;
-  }
 
   /** The first UTC day of a window of `days` days ending today. */
   windowStart(days: number, now: Date = new Date()): string {

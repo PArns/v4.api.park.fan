@@ -107,6 +107,27 @@ export const REFERRER_RULES: readonly ReferrerRule[] = [
   { site: "discord", channel: "social", hosts: ["discord.com", "discord.gg"] },
 ];
 
+/**
+ * The values a page view's `source` may name: the AI assistants' hosts the
+ * frontend reads from `utm_source` (its `AI_SOURCE_HOSTS` in
+ * `lib/analytics/site-analytics.ts`), because ChatGPT tags its links that way
+ * and often sends no referrer. Each one is a host of an `ai` rule above.
+ */
+export const AI_SOURCE_HOSTS: ReadonlySet<string> = new Set([
+  "chatgpt.com",
+  "chat.openai.com",
+  "perplexity.ai",
+  "gemini.google.com",
+  "copilot.microsoft.com",
+  "claude.ai",
+  "meta.ai",
+  "grok.com",
+  "deepseek.com",
+  "chat.mistral.ai",
+  "you.com",
+  "phind.com",
+]);
+
 /** Prefixes a site's own pages carry in front of its name. */
 const HOST_PREFIX = /^(?:www\d?|m|l|lm|mobile|amp)\./;
 
