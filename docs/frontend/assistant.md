@@ -304,9 +304,11 @@ warning can have come before, and runs once per answer.
 - **The server enforces it:** the conversation gets `endedAt` and `endedReason` and takes no
   further question (403), and the session that sent it is refused every question for the cooldown
   (Redis `assistant:ended:<hash>`, `AssistantRateLimitService.endChats`).
-- **The refusal:** `403 { statusCode: 403, message: "chat_ended", retryAfterSeconds }` with
+- **The refusal:** `403 { statusCode: 403, message: "chat_ended", code: "chat_ended", retryAfterSeconds }` with
   `Retry-After` while the session's ban runs; for the ended chat after that, the same body without
-  `retryAfterSeconds`. A new chat from the same session works once the cooldown is over.
+  `retryAfterSeconds`. A new chat from the same session works once the cooldown is over. A stream
+  is never refused midway: the answer that ends the chat streams to its end and carries the
+  `chat_end` action; only the next question gets the 403.
 - The admin's chat list and chat view carry `endedAt` and `endedReason`; the admin MCP's
   `assistant_conversations` and `assistant_conversation` show `endedByParky { at, reason }`.
 

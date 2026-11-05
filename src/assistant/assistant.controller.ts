@@ -311,6 +311,7 @@ function chatEnded(response: Response, retryAfterSeconds: number | null): void {
     .json({
       statusCode: 403,
       message: "chat_ended",
+      code: "chat_ended",
       ...(retryAfterSeconds !== null && { retryAfterSeconds }),
     });
 }

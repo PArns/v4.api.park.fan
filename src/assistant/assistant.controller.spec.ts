@@ -148,6 +148,7 @@ describe("AssistantController.ask, after Parky ended a chat", () => {
     expect(refused.body).toEqual({
       statusCode: 403,
       message: "chat_ended",
+      code: "chat_ended",
       retryAfterSeconds: 900,
     });
     expect(refused.headers["Retry-After"]).toBe("900");
@@ -159,7 +160,11 @@ describe("AssistantController.ask, after Parky ended a chat", () => {
     const refused = await ask();
     expect(chat.prepare).toHaveBeenCalledTimes(1);
     expect(refused.status).toBe(403);
-    expect(refused.body).toEqual({ statusCode: 403, message: "chat_ended" });
+    expect(refused.body).toEqual({
+      statusCode: 403,
+      message: "chat_ended",
+      code: "chat_ended",
+    });
     expect(refused.headers["Retry-After"]).toBeUndefined();
   });
 });
