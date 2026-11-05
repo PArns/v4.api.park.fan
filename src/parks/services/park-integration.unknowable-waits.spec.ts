@@ -300,6 +300,15 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       expect(dto.analytics?.statistics.totalAttractions).toBe(0);
       expect(dto.analytics?.statistics.crowdLevel).toBe("unknown");
     });
+
+    it("stamps when the payload's live data was read (PAR-1106)", async () => {
+      const before = Date.now();
+      const dto = await buildResponse(buildPark(false));
+
+      const stamped = Date.parse(dto.dataTimestamp ?? "");
+      expect(stamped).toBeGreaterThanOrEqual(before);
+      expect(stamped).toBeLessThanOrEqual(Date.now());
+    });
   });
 
   describe("a feed that has said nothing for a month (measured half)", () => {

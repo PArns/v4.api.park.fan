@@ -48,6 +48,7 @@ page for the field or endpoint you are reading or changing.
 | [works-period](./works-period.md)                                 | `worksPeriod`: a curated rebuild window                                                                         |
 | [not-run-today](./not-run-today.md)                               | `notRunToday`: a ride that has not run yet today                                                                |
 | [retired-parks](./retired-parks.md)                               | `retiredAt` on a park                                                                                           |
+| [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                          |
 | [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                |
 | [indoor-outdoor](./indoor-outdoor.md)                             | `indoorOutdoor`                                                                                                 |
 | [fast-pass](./fast-pass.md)                                       | `fastPass`                                                                                                      |

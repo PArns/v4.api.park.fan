@@ -223,6 +223,8 @@ export class ParkIntegrationService {
   ): Promise<ParkWithAttractionsDto> {
     // Start with base DTO
     const dto = ParkWithAttractionsDto.fromEntity(park);
+    // Stamped before the live reads below: the payload's data is at least this fresh.
+    dto.dataTimestamp = new Date().toISOString();
 
     // Fetch weather, schedule, queue data, and ML predictions in parallel
     // These all only depend on park.id so they can run simultaneously

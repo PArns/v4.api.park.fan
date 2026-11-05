@@ -823,6 +823,17 @@ export class ParkWithAttractionsDto {
   retiredReason?: string | null;
 
   @ApiProperty({
+    description:
+      "When this payload's live data was read (ISO 8601, UTC): the build time " +
+      "of the cached park payload, not the newest queue reading. Use it for " +
+      "the page's data-as-of line.",
+    type: String,
+    required: false,
+    example: "2026-08-29T10:35:00.000Z",
+  })
+  dataTimestamp?: string;
+
+  @ApiProperty({
     description: "Current operating status",
     enum: ["OPERATING", "CLOSED"],
     required: false,
