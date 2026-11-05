@@ -550,6 +550,48 @@ describe("compare_rides across a country", () => {
   });
 });
 
+describe("get_park_live › funFacts", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const withFacts = (funFacts: unknown) =>
+    jest
+      .spyOn(getParkTool, "handler")
+      .mockResolvedValue({ name: "Efteling", funFacts });
+
+  it("hands the model the chat language's list", async () => {
+    withFacts({ en: ["English fact"], nl: ["Nederlands feitje"] });
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "nl",
+    );
+    expect(json.funFacts).toEqual(["Nederlands feitje"]);
+  });
+
+  it("falls back to English when that language has none", async () => {
+    withFacts({ en: ["English fact"] });
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "de",
+    );
+    expect(json.funFacts).toEqual(["English fact"]);
+  });
+
+  it("leaves the key out when the park has none", async () => {
+    withFacts(null);
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "de",
+    );
+    expect("funFacts" in json).toBe(false);
+  });
+});
+
 describe("show_card kind rides with a type", () => {
   afterEach(() => jest.restoreAllMocks());
 

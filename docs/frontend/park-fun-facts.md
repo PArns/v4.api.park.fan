@@ -21,6 +21,9 @@ hand-written facts about the park for Parky to tell. No feed carries them and no
   CDN) and every locale of the park page reads the same one. A locale parameter would split that
   into six entries for a few hundred bytes of text.
 - Only the detail payload carries it, never the listings.
+- **Parky's chat** gets the same facts from `get_park_live`: the chat language's list, or the
+  English one when that language has none (the model retells it). The admin MCP's `get_park`
+  carries the whole map.
 
 ## Where they come from
 

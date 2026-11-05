@@ -5,6 +5,10 @@ import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
+import type {
+  FunFactLocale,
+  FunFacts,
+} from "../../parks/utils/curated-park-facts.util";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import {
@@ -591,7 +595,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
       "average and peak waits today, weather now, only the 8 longest current standby waits, " +
-      "rides that are down and rides that have not run today, and the park's pageUrl. Not the " +
+      "rides that are down and rides that have not run today, the park's pageUrl and the " +
+      "editors' funFacts about it. Not the " +
       "shortest waits or one ride type: show_card kind rides order shortest (type coaster for " +
       "coasters) has every waiting ride.",
     input: z.object({ park: parkRef }),
@@ -602,8 +607,17 @@ export const ASSISTANT_TOOLS = [
       )) as Record<string, unknown>;
       // Every time reaches the model in the visitor's clock, so the park's own clock and zone
       // only cost tokens.
-      const { localTime: _localTime, timezone: _timezone, ...rest } = live;
+      const {
+        localTime: _localTime,
+        timezone: _timezone,
+        funFacts,
+        ...rest
+      } = live;
       if (rest.retiredAt === null) delete rest.retiredAt;
+      // English stands in for an untranslated locale: the model retells it in the chat's language.
+      const facts = funFacts as FunFacts | null;
+      const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
+      if (told) rest.funFacts = told;
       return rest;
     },
   }),
