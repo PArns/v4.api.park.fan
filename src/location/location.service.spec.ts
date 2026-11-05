@@ -8,6 +8,8 @@ import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { ShowsService } from "../shows/shows.service";
+import { NearbyRidesDto } from "./dto/nearby-response.dto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
@@ -68,6 +70,11 @@ describe("LocationService", () => {
     recordParkHit: jest.fn().mockResolvedValue(undefined),
     recordParkHits: jest.fn().mockResolvedValue(undefined),
   };
+  const showsService = {
+    findByParkId: jest.fn().mockResolvedValue([]),
+    findCurrentStatusByPark: jest.fn().mockResolvedValue(new Map()),
+    getShowtimeInstantsOnDate: jest.fn().mockResolvedValue(new Map()),
+  };
   const redis = {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue(undefined),
@@ -86,6 +93,7 @@ describe("LocationService", () => {
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: ParksService, useValue: parksService },
         { provide: PopularityService, useValue: popularityService },
+        { provide: ShowsService, useValue: showsService },
         {
           // Empty GET/MGET → cache miss → exercises the DB + batch fallback
           // path these tests already mock (incl. the park-coordinate index).
@@ -129,6 +137,80 @@ describe("LocationService", () => {
 
       expect(attractionRepo.find).toHaveBeenCalledWith({
         where: { parkId: "p1", retiredAt: IsNull() },
+      });
+    });
+
+    describe("shows of the park the visitor is in", () => {
+      const far = {
+        id: "s-far",
+        name: "Far",
+        slug: "far",
+        latitude: 50.81,
+        longitude: 6.8783,
+        isSeasonal: false,
+        seasonMonths: null,
+      };
+      const near = {
+        ...far,
+        id: "s-near",
+        name: "Near",
+        slug: "near",
+        latitude: 50.8,
+      };
+      const noCoords = {
+        ...far,
+        id: "s-none",
+        name: "None",
+        slug: "none",
+        latitude: null,
+        longitude: null,
+        isSeasonal: true,
+        seasonMonths: [1],
+      };
+
+      beforeEach(() => {
+        parkRepo.find.mockResolvedValue([phantasialand]);
+        parkRepo.findOne.mockResolvedValue(phantasialand);
+        showsService.findByParkId.mockResolvedValueOnce([noCoords, far, near]);
+        showsService.findCurrentStatusByPark.mockResolvedValueOnce(
+          new Map([["s-near", { status: "OPERATING" }]]),
+        );
+        showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+          new Map([["s-near", ["2026-08-29T10:30:00.000Z"]]]),
+        );
+      });
+
+      it("lists every show nearest first, with today's showtimes", async () => {
+        parksService.getBatchParkStatus.mockResolvedValueOnce(
+          new Map([["p1", "OPERATING"]]),
+        );
+
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+        const shows = (result.data as NearbyRidesDto).shows as unknown as Array<
+          Record<string, unknown>
+        >;
+
+        expect(shows.map((s) => s.id)).toEqual(["s-near", "s-far", "s-none"]);
+        expect(shows[0]).toMatchObject({
+          status: "OPERATING",
+          showtimes: [{ startTime: "2026-08-29T10:30:00.000Z" }],
+          isCurrentlyInSeason: null,
+        });
+        expect(shows[1]).toMatchObject({ status: "CLOSED", showtimes: [] });
+        expect(shows[2].distance).toBeNull();
+        expect(typeof shows[2].isCurrentlyInSeason).toBe("boolean");
+        expect(showsService.getShowtimeInstantsOnDate).toHaveBeenCalledWith(
+          "p1",
+          "Europe/Berlin",
+          expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        );
+      });
+
+      it("reads every show CLOSED while the park is not open", async () => {
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+        const shows = (result.data as NearbyRidesDto).shows;
+
+        expect(shows.every((s) => s.status === "CLOSED")).toBe(true);
       });
     });
 

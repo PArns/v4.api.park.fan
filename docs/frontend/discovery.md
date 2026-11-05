@@ -85,10 +85,26 @@ GET /v1/discovery/nearby?lat=&lng=&radius=1000&limit=6
 - **`nearby_parks`** → `{ parks[], count, shortWaits[] }`: the nearest non-retired geocoded parks, in
   the park-card shape [favorites](./favorites.md) also uses, here with `hasOperatingSchedule`, and the
   rides in them where a wait is short right now (below).
-- **`in_park`** → `{ park, rides[] }`. `park` carries `status`, `hasOperatingSchedule`,
+- **`in_park`** → `{ park, rides[], shows[] }`. `park` carries `status`, `hasOperatingSchedule`,
   `analytics { avgWaitTime, crowdLevel, operatingAttractions }`, `todaySchedule`, `nextSchedule`.
   `rides` are the park's rides with coordinates, nearest first; a ride without coordinates is left
-  out, and so is one whose `isCurrentlyInSeason` is `false`.
+  out, and so is one whose `isCurrentlyInSeason` is `false`. `shows` is below.
+
+### `shows` (in `in_park`)
+
+Every non-retired show of the park, **not** cut to a radius, nearest first, shows without coordinates
+last. Each is `{ id, name, slug, distance, status, showtimes[] { startTime }, isSeasonal,
+seasonMonths, isCurrentlyInSeason, url }` (`LocationService.findShowsInPark`):
+
+- **`distance`** is metres (Haversine), `null` without coordinates.
+- **`showtimes`** are today's performances on the park-local operating day, past ones included, as
+  ISO 8601 instants in UTC (`…Z`, from `ShowsService.getShowtimeInstantsOnDate`). Pick the next one
+  yourself. Empty when the feed published none today.
+- **`status`** is the show's newest reading while the park is `OPERATING`, else `CLOSED`, as on the
+  park payload ([shows](./shows.md)). `CLOSED` also means no reading.
+- **Season fields** read the park's month ([seasonality](./seasonality.md)); a show out of season is
+  still listed.
+- **`url`** is the park's API path: shows have no route of their own.
 
 ### `shortWaits`
 

@@ -188,6 +188,76 @@ export class NearbyRidesDto {
     type: [RideWithDistanceDto],
   })
   rides: RideWithDistanceDto[];
+
+  @ApiProperty({
+    description:
+      "Every show of the park (not cut to any radius), nearest first; shows without coordinates last",
+    type: () => [ShowWithDistanceDto],
+  })
+  shows: ShowWithDistanceDto[];
+}
+
+/**
+ * A show of the park the visitor is in, with today's programme
+ */
+export class ShowWithDistanceDto {
+  @ApiProperty({ description: "Show ID" })
+  id: string;
+
+  @ApiProperty({ description: "Show name" })
+  name: string;
+
+  @ApiProperty({ description: "Show slug" })
+  slug: string;
+
+  @ApiProperty({
+    description:
+      "Distance from the visitor in metres; null without coordinates",
+    nullable: true,
+    example: 240,
+  })
+  distance: number | null;
+
+  @ApiProperty({
+    description:
+      "The show's newest reading while the park is OPERATING, else CLOSED. CLOSED also means no reading.",
+    example: "OPERATING",
+  })
+  status: string;
+
+  @ApiProperty({
+    description:
+      "Today's (park-local) performances, past ones included, as ISO 8601 instants",
+    example: [{ startTime: "2026-08-29T10:30:00.000Z" }],
+  })
+  showtimes: Array<{ startTime: string }>;
+
+  @ApiProperty({
+    description: "Whether this show only runs in certain seasons",
+  })
+  isSeasonal: boolean;
+
+  @ApiProperty({
+    description:
+      "Months (1–12) the show runs. Null if unknown or not seasonal.",
+    nullable: true,
+    type: [Number],
+  })
+  seasonMonths: number[] | null;
+
+  @ApiProperty({
+    description:
+      "In season this park-local month. Null when not seasonal or months unknown.",
+    nullable: true,
+  })
+  isCurrentlyInSeason: boolean | null;
+
+  @ApiProperty({
+    description:
+      "API path of the show's park; shows have no route of their own",
+    nullable: true,
+  })
+  url: string | null;
 }
 
 // ParkWithDistanceDto is now imported from common/dto/park-with-distance.dto
