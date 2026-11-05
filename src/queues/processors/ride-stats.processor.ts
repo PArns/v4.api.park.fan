@@ -5,14 +5,10 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { RideStatsService } from "../../attractions/services/ride-stats.service";
-import { RevalidationService } from "../../common/revalidation/revalidation.service";
-
-/**
- * How long the public copy of a park response can outlive a write: the park
- * endpoint is served `max-age=300, stale-while-revalidate=600` and nothing here
- * can purge Cloudflare. Mirrors `CuratedDataProcessor`.
- */
-const CDN_SETTLE_MS = 16 * 60 * 1000;
+import {
+  CDN_SETTLE_MS,
+  RevalidationService,
+} from "../../common/revalidation/revalidation.service";
 
 /** Optional cap for a trial run, read off the job payload. */
 interface RideStatsJob {
