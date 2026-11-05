@@ -11,6 +11,7 @@ import { utcDay } from "../common/utils/reader-hash.util";
 import {
   ALL_LOCALES_SCOPE,
   CROSSTAB_REST,
+  DROP_REASONS,
   EVENT_DIMS,
   MAX_CROSSTAB_SIDE,
   MAX_EVENT_DETAIL_ITEMS,
@@ -214,32 +215,39 @@ export class SiteAnalyticsService {
       const eventSource = !eventsOn
         ? null
         : await rowsOf(this.rolled, "events", events, window, "both", []);
-      const [trafficRows, eventRows, visitors, realtime] = await Promise.all([
-        this.runner.query(
-          `SELECT ${period} AS period, SUM(views) AS views,
+      const [trafficRows, eventRows, visitors, realtime, botHits] =
+        await Promise.all([
+          this.runner.query(
+            `SELECT ${period} AS period, SUM(views) AS views,
                 SUM(seconds) AS seconds, SUM(visits) AS visits,
                 SUM(engaged) AS engaged, SUM(visit_seconds) AS visit_seconds
            FROM ${pageviewRows.from}
           WHERE ${pageviewRows.where}
           GROUP BY 1`,
-          traffic.values,
-        ) as Promise<Array<{ period: string } & Record<TrafficMeasure, Count>>>,
-        eventSource
-          ? (this.runner.query(
-              `SELECT ${period} AS period, SUM(count) AS events
+            traffic.values,
+          ) as Promise<
+            Array<{ period: string } & Record<TrafficMeasure, Count>>
+          >,
+          eventSource
+            ? (this.runner.query(
+                `SELECT ${period} AS period, SUM(count) AS events
                FROM ${eventSource.from}
               WHERE ${eventSource.where}
               GROUP BY 1`,
-              events.values,
-            ) as Promise<Array<{ period: string; events: Count }>>)
-          : Promise.resolve([] as Array<{ period: string; events: Count }>),
-        !visitorBasis
-          ? Promise.resolve(null)
-          : visitorBasis.filter
-            ? this.dimVisitors(window, visitorBasis.filter, now)
-            : this.visitors(window, now),
-        this.realtime(window.locale, window.datacenter, now),
-      ]);
+                events.values,
+              ) as Promise<Array<{ period: string; events: Count }>>)
+            : Promise.resolve([] as Array<{ period: string; events: Count }>),
+          !visitorBasis
+            ? Promise.resolve(null)
+            : visitorBasis.filter
+              ? this.dimVisitors(window, visitorBasis.filter, now)
+              : this.visitors(window, now),
+          this.realtime(window.locale, window.datacenter, now),
+          // A bot's hit is dropped before it has a language or any dimension.
+          window.locale || window.filters.length > 0
+            ? Promise.resolve(null)
+            : this.botHits(window.from, window.to, now),
+        ]);
 
       for (const row of [...trafficRows, ...eventRows]) {
         row.period = periodText(row.period, window.hourly) as string;
@@ -318,8 +326,41 @@ export class SiteAnalyticsService {
           };
         }),
         realtime,
+        bots: { hits: botHits },
       };
     });
+  }
+
+  /**
+   * The hits dropped as a bot's from `from` to `to`: the finished days from
+   * `site_bot_days`, the ones the nightly snapshot has not written yet from
+   * the day's drop counts in Redis (they outlive their day by a day).
+   */
+  private async botHits(from: string, to: string, now: Date): Promise<number> {
+    const rows: Array<{ day: string; hits: Count }> = await this.runner.query(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, hits
+         FROM site_bot_days
+        WHERE day BETWEEN $1::date AND $2::date`,
+      [from, to],
+    );
+    const written = new Set(rows.map((row) => row.day));
+    const today = utcDay(now);
+    const live = [addIsoDays(today, -1), today].filter(
+      (day) => day >= from && day <= to && !written.has(day),
+    );
+    let hits = rows.reduce((sum, row) => sum + num(row.hits), 0);
+    try {
+      for (const day of live) {
+        hits += num(
+          (await this.redis.hget(KEYS.drops(day), DROP_REASONS.bot)) as Count,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Live bot counts unavailable: ${(error as Error).message}`,
+      );
+    }
+    return hits;
   }
 
   /**

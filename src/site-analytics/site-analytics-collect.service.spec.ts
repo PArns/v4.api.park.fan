@@ -337,15 +337,20 @@ describe("SiteAnalyticsCollectService", () => {
     ]);
   });
 
-  it("counts nothing from a bot or a request without a User-Agent", async () => {
+  it("counts the hits of a bot or a request without a User-Agent only as dropped, once", async () => {
     for (const userAgent of [
       "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
       "curl/8.5.0",
       null,
     ]) {
-      await expect(collect([pageview()], { userAgent })).resolves.toBe(0);
+      await expect(
+        collect([pageview(), event("ok_event")], { userAgent }),
+      ).resolves.toBe(0);
     }
-    expect(redis.commands).toEqual([]);
+    expect(drops()).toEqual({ [DROP_REASONS.bot]: "6" });
+    expect(redis.commands.every(([, key]) => key === KEYS.drops(DAY))).toBe(
+      true,
+    );
   });
 
   it("drops a malformed hit alone and a blocked event name", async () => {

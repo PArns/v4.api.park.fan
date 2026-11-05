@@ -465,6 +465,16 @@ export class SiteRealtimeDto {
   perMinute: SiteMinuteDto[];
 }
 
+export class SiteBotsDto {
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      "Hits the collector dropped as a bot's (an empty user agent counts as one) from `from` to `to`: page views, engagement pings and events alike, so a share against `totals.pageviews` is an upper bound. Every network, whatever `datacenter` says. Null under a language or a filter, which a dropped hit never had.",
+  })
+  hits: number | null;
+}
+
 export class SiteOverviewDto extends WindowDto {
   @ApiProperty({ type: SiteTotalsDto }) totals: SiteTotalsDto;
 
@@ -483,6 +493,8 @@ export class SiteOverviewDto extends WindowDto {
   series: SiteSeriesPointDto[];
 
   @ApiProperty({ type: SiteRealtimeDto }) realtime: SiteRealtimeDto;
+
+  @ApiProperty({ type: SiteBotsDto }) bots: SiteBotsDto;
 }
 
 export class SiteViewsVisitsDto {

@@ -220,6 +220,11 @@ export const KNOWN_MEMBER_HEADROOM = 2;
  * which the system-health report shows.
  */
 export const DROP_REASONS = {
+  /**
+   * A bot's hit (an empty user agent counts as one). The nightly snapshot
+   * keeps a finished day's count in `site_bot_days` for the overview's `bots`.
+   */
+  bot: "dropped:bot",
   /** Past {@link MAX_HITS_PER_ADDRESS_PER_DAY}. */
   address: "dropped:address",
   /** Past {@link MAX_HITS_PER_WINDOW}. */

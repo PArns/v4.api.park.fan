@@ -233,8 +233,7 @@ export class SiteAnalyticsCollectService
    * Returns how many counted; the beacon gets its 204 either way.
    */
   async collect(request: CollectRequest, now = new Date()): Promise<number> {
-    if (isBotUserAgent(request.userAgent?.slice(0, MAX_USER_AGENT_LENGTH)))
-      return 0;
+    // Bots go through `record` too, which counts them once as dropped.
     const valid = request.hits
       .map(validateHit)
       .filter((hit): hit is ValidHit => hit !== null);
@@ -261,8 +260,11 @@ export class SiteAnalyticsCollectService
     acceptLanguage: string | null = null,
   ): Promise<number> {
     const userAgent = rawUserAgent?.slice(0, MAX_USER_AGENT_LENGTH) ?? null;
-    if (isBotUserAgent(userAgent)) return 0;
     const drops: Drops = new Map();
+    if (isBotUserAgent(userAgent)) {
+      countDrop(drops, DROP_REASONS.bot, valid.length);
+      return this.noteDrops(drops, now);
+    }
     const blocked = await this.blocklist.names();
     let hits = await this.existing(
       valid.filter((hit) => hit.t !== "event" || !blocked.has(hit.name)),

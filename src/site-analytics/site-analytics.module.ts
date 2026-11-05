@@ -12,6 +12,7 @@ import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
 import { SitePageviewRow } from "./entities/site-pageview-row.entity";
 import { SiteEventRow } from "./entities/site-event-row.entity";
+import { SiteBotDay } from "./entities/site-bot-day.entity";
 import { SiteVisitorDay } from "./entities/site-visitor-day.entity";
 import { SiteBlockedEvent } from "./entities/site-blocked-event.entity";
 import { SiteEntityMerge } from "./entities/site-entity-merge.entity";
@@ -57,6 +58,7 @@ export const COLLECT_ROUTE = {
       SitePageviewRow,
       SiteEventRow,
       SiteVisitorDay,
+      SiteBotDay,
       SiteVisitorHour,
       SiteVisitorDimDay,
       SitePageviewDay,
