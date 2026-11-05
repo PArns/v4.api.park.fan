@@ -59,8 +59,8 @@ geo path, because slugs repeat: `disneyland-park` is Anaheim and Paris). The tag
   (`revalidate:park-status:pending`) and picked up by whichever five-minute cycle finds it due.
 - The previous statuses live in `revalidate:park-status`; an absent or unreadable snapshot counts as a
   first run and reports nothing, or every restart would post all parks.
-- **While a park is OPERATING** its tag goes out again about every 20 minutes (PAR-1103), in the
-  default stale-while-revalidate profile, so a crawled park page shows waits at most ~20 minutes plus
+- **While a park is OPERATING** its tag goes out again about every 15 minutes (PAR-1103), in the
+  default stale-while-revalidate profile, so a crawled park page shows waits at most ~15 minutes plus
   the edge window old instead of up to a day. The last send per tag lives in
   `revalidate:park-status:refreshed`; a park seen open for the first time is recorded, not sent, and a
   closed park drops out, so closed parks cost no extra writes. Gated, like every ping, by

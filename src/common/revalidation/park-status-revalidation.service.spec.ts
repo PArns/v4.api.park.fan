@@ -235,7 +235,7 @@ describe("ParkStatusRevalidationService", () => {
     expect(sent).toBe(1);
     expect(sentTags()[1]).toEqual(["park:europe/germany/bruehl/phantasialand"]);
 
-    // And it does not repeat forever (the periodic open-park refresh is next due at +36 min).
+    // And it does not repeat forever (the periodic open-park refresh is next due at +31 min).
     jest.spyOn(Date, "now").mockReturnValue(openedAt + 30 * 60 * 1000);
     await service.revalidateChangedParks(
       [PHANTASIALAND],
@@ -275,8 +275,8 @@ describe("ParkStatusRevalidationService", () => {
   });
 
   // PAR-1103: the frontend keeps the park snapshot for a day, so a crawler saw waits up to a day
-  // old. An open park is pinged about every 20 minutes; a closed one costs nothing extra.
-  it("refreshes an open park about every 20 minutes and leaves a closed one alone", async () => {
+  // old. An open park is pinged about every 15 minutes; a closed one costs nothing extra.
+  it("refreshes an open park about every 15 minutes and leaves a closed one alone", async () => {
     const t0 = Date.parse("2026-09-01T10:00:00Z");
     const at = (minutes: number) =>
       jest.spyOn(Date, "now").mockReturnValue(t0 + minutes * 60 * 1000);
@@ -289,25 +289,25 @@ describe("ParkStatusRevalidationService", () => {
     // First sight of the open park is recorded, not sent — a restart must not post them all.
     at(0);
     await cycle();
-    for (const minutes of [5, 10, 15]) {
+    for (const minutes of [5, 10]) {
       at(minutes);
       await cycle();
     }
     expect(revalidation.revalidateTags).not.toHaveBeenCalled();
 
-    at(20);
+    at(15);
     expect(await cycle()).toBe(1);
     expect(revalidation.revalidateTags).toHaveBeenLastCalledWith([
       "park:europe/germany/bruehl/phantasialand",
     ]);
 
-    at(25);
+    at(20);
     await cycle();
-    at(35);
+    at(25);
     await cycle();
     expect(revalidation.revalidateTags).toHaveBeenCalledTimes(1);
 
-    at(40);
+    at(30);
     await cycle();
     expect(sentTags()).toEqual([
       ["park:europe/germany/bruehl/phantasialand"],

@@ -24,11 +24,12 @@ const REFRESHED_KEY = "revalidate:park-status:refreshed";
 
 /**
  * How often an OPERATING park's tag is sent again (PAR-1103). The frontend keeps the park
- * snapshot for a day, so a crawler read waits up to a day old; a ping every ~20 minutes keeps an
- * open park's page fresh and leaves closed parks' write volume alone. 19 rather than 20: this runs
- * on the 5-minute warmup, and a cycle a few seconds early must not push the ping to 25.
+ * snapshot for a day, so a crawler read waits up to a day old; a ping every ~15 minutes keeps an
+ * open park's page within 30 minutes (ping plus the ~15-minute edge window) and leaves closed
+ * parks' write volume alone. 14 rather than 15: this runs on the 5-minute warmup, and a cycle a
+ * few seconds early must not push the ping to 20.
  */
-const OPEN_PARK_REFRESH_MS = 19 * 60 * 1000;
+const OPEN_PARK_REFRESH_MS = 14 * 60 * 1000;
 
 /** Long enough to survive a quiet night and any deploy; refreshed on every write anyway. */
 const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
