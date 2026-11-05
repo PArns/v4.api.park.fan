@@ -26,8 +26,9 @@ import { ParkSeasonService } from "./services/park-season.service";
  * re-polled every five minutes for as long as a tab stays open, while seasons
  * change a handful of times a year. Putting them in it would pay for them on
  * every poll of every park, including the majority that have none on file.
- * Seasons are day-stable, so they belong in a request the page makes once and
- * caches for a day.
+ * Seasons are day-stable, so they belong in a request the page makes once.
+ * The route sets no cache policy of its own (the global 5-minute one applies)
+ * and has no Redis cache.
  */
 @ApiTags("parks")
 @Controller("parks")

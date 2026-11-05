@@ -60,9 +60,8 @@ export type RainIntensity = "light" | "moderate" | "heavy";
 
 export interface ParkNowcast {
   /**
-   * ISO timestamp when the upstream forecast was last fetched. Acts as
-   * the data-freshness indicator and as the reference time for every
-   * `current*` field below. Stable for the lifetime of a cache entry.
+   * ISO timestamp of the read the snapshot was derived at (not the upstream
+   * fetch); the reference time for every `current*` field below.
    */
   observedAt: string;
   /**
