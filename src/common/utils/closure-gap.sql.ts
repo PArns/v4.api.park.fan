@@ -1511,9 +1511,15 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- blind parks this statement serves, 2391 park-days carry an OPERATING entry
   -- and **none** of them has a null close or a close that stays at or before
   -- the opening after repair (2026-09-15). The two readings agree on every row
-  -- the statement can see, and the day the first one appears it will be a
-  -- measurement rather than a silent change -- nothing here pins it yet
-  -- (PAR-1094).
+  -- the statement can see. The day the first one appears, the data-quality
+  -- monitor names it (findBlindParkUnusableScheduleDays, PAR-1094), so it is a
+  -- warning rather than a silent change.
+  --
+  -- Still open under PAR-1094: early_end below joins the readings to win with
+  -- a LEFT JOIN, so an OPERATING reading after the close (feeds often leave
+  -- one) counts as the day's last_operating and a ride looks more punctual
+  -- than it is. An INNER JOIN would be more correct but moves last_operating
+  -- for every park; it waits for a before/after measurement.
   park_day_close AS (
     SELECT w.op_day AS d, max(w.closes_at) AS closes_at
       FROM win w

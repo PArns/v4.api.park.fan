@@ -77,6 +77,23 @@ export class DataQualityProcessor {
       );
     }
 
+    // Its own guard and outside the clean count, like the re-issue check: it
+    // pins an assumption the live early-end filter rests on (PAR-1094) rather
+    // than a feed fault, and has never fired in production.
+    try {
+      for (const p of await this.monitor.findBlindParkUnusableScheduleDays()) {
+        this.logger.warn(
+          `🕳️ ${p.parkName}: ${p.days.length} OPERATING day(s) without usable hours ` +
+            `(no closing time, or closing at/before opening): ${p.days.slice(0, 5).join(", ")}. ` +
+            `The closure early-end filter cannot count them (PAR-1094).`,
+        );
+      }
+    } catch (e) {
+      this.logger.error(
+        `Blind-park-schedule-days check failed: ${asMessage(e)}`,
+      );
+    }
+
     for (const c of clusters) {
       this.logger.warn(
         `🔇 ${c.parkName}: ${c.attractionCount} attractions stopped reporting on ${c.lastOperating} ` +

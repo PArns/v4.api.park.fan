@@ -90,4 +90,14 @@ stored closures in 60 days, and those parks publish status and nothing else. Rid
 **Known limit:** whether those closures are real has no ground truth yet; the closed_gap hand check
 (PAR-1095) decides whether a track-record gate on that share is needed.
 
+## Days the window builder cannot use (PAR-1094)
+
+Both statements take a park's days from `parkOpenWindowCtes()`, which drops an `OPERATING` row with no
+opening or closing time, or a close at or before the opening after repair. Such a day leaves the live
+early-end denominator silently. None existed when measured (2026-09-15); the nightly
+`monitor-data-quality` sweep warns per blind park when one appears
+(`findBlindParkUnusableScheduleDays`). Still open: `early_end` joins its readings to the window with a
+LEFT JOIN, so an `OPERATING` reading after the close counts as the day's last; an INNER JOIN waits for a
+before/after measurement.
+
 Cases are pinned in `test/e2e/closure-standing.e2e-spec.ts` and `closure-gap-operating-day.e2e-spec.ts`.
