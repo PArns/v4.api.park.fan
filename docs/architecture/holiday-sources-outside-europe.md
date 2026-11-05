@@ -130,7 +130,9 @@ reach parks next door, but not every feature: CatBoost's `neighbor_school_holida
 any influence is uncovered (every US list still has one); `is_school_holiday_any` becomes 1 on a
 neighbour's break; TFT's `is_holiday_neighbor` (`nf-service/db.py`) has no coverage gate, so it went from
 a confident 0 to 1 (the Orlando parks on every NC and TN break) — a train/serve gap until the next TFT
-training; the calendar's `neighborHolidays` lists them.
+training; the calendar's `neighborHolidays` and `influencingHolidays` list them. A state that is not
+in the park's `influencingRegions` reaches neither, nor the recommendation's influencing-holiday bonus
+(PAR-1075: TN and NC breaks used to lift Disneyland's recommendation).
 
 ## Great Britain (PAR-1072)
 
