@@ -1,4 +1,5 @@
 import { DataSource, In } from "typeorm";
+import { formatInTimeZone } from "date-fns-tz";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
@@ -43,14 +44,55 @@ export type AssistantCard =
       crowdLevel: string | null;
       waitMinutes: number | null;
       url: string | null;
+      /** Each badge only when true or known; absent never means "no". */
+      ropeDrop?: { strength: "high" | "moderate" | null; savings: number };
+      singleRider?: true;
+      virtualLine?: true;
+      paidExpress?: true;
+      /** In a curated works period today. */
+      worksPeriod?: true;
+      outOfSeason?: true;
     }
   | {
       kind: "rides";
       /** The park the list belongs to, its page the card's link. */
       park: string;
       order: "longest" | "shortest";
-      rides: Array<{ name: string; waitMinutes: number; url: string | null }>;
+      /** The waiting rides, then up to 3 that are DOWN (waitMinutes null). */
+      rides: Array<{
+        name: string;
+        status: string | null;
+        waitMinutes: number | null;
+        url: string | null;
+      }>;
       url: string | null;
+    }
+  | {
+      kind: "shows";
+      park: string;
+      url: string | null;
+      /** YYYY-MM-DD, park-local. */
+      date: string;
+      /** At most 10, by next time; times with the park's offset, never Z. */
+      shows: Array<{
+        name: string;
+        status: string | null;
+        times: string[];
+        url: string | null;
+      }>;
+    }
+  | {
+      kind: "restaurants";
+      park: string;
+      url: string | null;
+      /** At most 12. */
+      restaurants: Array<{
+        name: string;
+        status: string | null;
+        land: string | null;
+        cuisine: string | null;
+        requiresReservation: boolean | null;
+      }>;
     }
   | {
       kind: "parks";
@@ -92,6 +134,8 @@ export type AssistantCard =
       closes: string | null;
       weather: {
         condition: string | null;
+        /** The WMO code. */
+        weatherCode: number | null;
         tempMin: number | null;
         tempMax: number | null;
         climateNormal: boolean;
@@ -113,7 +157,7 @@ export interface CalendarCardDay {
 
 /** The fields of `park_forecast`'s answer the calendar and tiles cards read. */
 export interface ForecastSummary {
-  park: { name: string; pageUrl: string | null };
+  park: { name: string; pageUrl: string | null; timezone: string };
   scheduleCoverage: { from: string | null; to: string | null };
   days: Array<{
     date: string;
@@ -127,6 +171,7 @@ export interface ForecastSummary {
     weather?: {
       basis?: string;
       condition?: string | null;
+      weatherCode?: number | null;
       tempMin?: number | null;
       tempMax?: number | null;
     } | null;
@@ -140,6 +185,7 @@ export interface ForecastSummary {
 function cardDay(
   day: ForecastSummary["days"][number],
   coverage: ForecastSummary["scheduleCoverage"],
+  timezone: string,
 ): CalendarCardDay {
   const published = coverage.to !== null && day.date <= coverage.to;
   const status = !published
@@ -154,10 +200,25 @@ function cardDay(
       status === "CLOSED" || day.crowdLevel === "closed"
         ? null
         : day.crowdLevel,
-    opens: published ? day.opens : null,
-    closes: published ? day.closes : null,
+    opens: published ? parkInstant(day.opens, timezone) : null,
+    closes: published ? parkInstant(day.closes, timezone) : null,
     holiday: !!(day.holiday || day.schoolVacation),
   };
+}
+
+/**
+ * An instant with the park's own UTC offset (`+00:00`, never `Z`): the widget reads the park's
+ * wall clock off the offset.
+ */
+export function parkInstant(
+  value: string | null | undefined,
+  timezone: string,
+): string | null {
+  if (!value) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime())
+    ? null
+    : formatInTimeZone(at, timezone, "yyyy-MM-dd'T'HH:mm:ssxxx");
 }
 
 /** The calendar card: `count` days of the forecast from `from` on. */
@@ -173,7 +234,9 @@ export function calendarCard(
     days: forecast.days
       .filter((day) => day.date >= from)
       .slice(0, count)
-      .map((day) => cardDay(day, forecast.scheduleCoverage)),
+      .map((day) =>
+        cardDay(day, forecast.scheduleCoverage, forecast.park.timezone),
+      ),
   };
 }
 
@@ -198,7 +261,10 @@ export function tilesCard(
   live: LiveParkSummary | null,
 ): Extract<AssistantCard, { kind: "tiles" }> {
   const found = forecast.days.find((day) => day.date === date);
-  const day = found ? cardDay(found, forecast.scheduleCoverage) : null;
+  const timezone = forecast.park.timezone;
+  const day = found
+    ? cardDay(found, forecast.scheduleCoverage, timezone)
+    : null;
   const weather = found?.weather;
   const minutes = (value: number | null | undefined) =>
     value != null ? Math.round(value) : null;
@@ -219,11 +285,12 @@ export function tilesCard(
     openRides:
       live?.rides?.total != null ? (live.rides.byStatus?.OPERATING ?? 0) : null,
     totalRides: live?.rides?.total ?? null,
-    opens: live ? (today?.opens ?? null) : (day?.opens ?? null),
-    closes: live ? (today?.closes ?? null) : (day?.closes ?? null),
+    opens: live ? parkInstant(today?.opens, timezone) : (day?.opens ?? null),
+    closes: live ? parkInstant(today?.closes, timezone) : (day?.closes ?? null),
     weather: weather
       ? {
           condition: weather.condition ?? null,
+          weatherCode: weather.weatherCode ?? null,
           tempMin: weather.tempMin ?? null,
           tempMax: weather.tempMax ?? null,
           climateNormal: weather.basis === "climate_normal",

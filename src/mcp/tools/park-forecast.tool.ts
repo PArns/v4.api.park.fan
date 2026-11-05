@@ -35,6 +35,8 @@ export function compactDay(day: CalendarDay, timezone: string) {
     weather: weather && {
       basis: weather.basis,
       condition: weather.condition,
+      // The WMO code, as get_park_weather names it.
+      weatherCode: weather.icon ?? null,
       tempMin: weather.tempMin,
       tempMax: weather.tempMax,
       precipitationMm: weather.precipitationMm ?? weather.rainChance,

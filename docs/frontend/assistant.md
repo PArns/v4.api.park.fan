@@ -142,6 +142,32 @@ days ahead are `get_park_forecast`'s. The results of `show_card` and `open_page`
 `alreadyShown`: the chat streams the text of every model round, so text the model wrote before the
 call is on screen already and a repeat after the result would show twice.
 
+`get_ride` (the admin MCP's `get_attraction`) also carries, from the attraction detail: `land`,
+`fastPass` (the paid product; absent is "nobody checked or none sold") and `headliner` (the set
+the park payload's `isHeadliner` reads, `AnalyticsService.getHeadlinerAttractionIds`; null when it
+cannot be read) under `facts`; `worksPeriod.runningToday` against the park's today; `ropeDrop`
+(`worth`, `strength`, `confidence`, the wait at opening against the busy peak and the minutes
+saved, `rideBy` and `bestSlot` as instants of the next operating day, `betterLateInTheDay`); and
+`bestVisitTimesToday`.
+
+`get_shows` lists one park's non-retired shows with a showtime on a day (the park's today by
+default), earliest first, at most 30, with the count of shows without a time: name, land, every
+start as an instant (`ShowsService.getShowtimeInstantsOnDate`, so it reaches the model in the
+visitor's clock), and season. `status` and `durationMinutes` come only from the show's own
+reading today (`findCurrentStatusByPark`); without one they are null, never a guessed "closed".
+
+`get_park_history` answers "how busy was it on this date last year": the same date a year back
+(29 February becomes the 28th) and the nearest day of the same weekday, at most three days off
+(`lastYearDays`). Both come from the calendar's own history path
+(`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
+day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
+headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
+events. A day the calendar has nothing on is `null`. No new query on `queue_data`.
+
+`get_best_days` returns `tenQuietestOpenDays`, the ten quietest rated open days, and counts the
+unrated ones apart (`unratedOpenDays`): an `unknown` day is never ranked as quiet, and a day
+missing from the ten is not a day to avoid.
+
 `find_restaurants` lists a park's non-retired restaurants and food stands from the park payload
 (deduplicated by name as the park page shows them), optionally only those whose name or cuisine
 contains `query` (case and accents folded: "eis" finds "Eiscafé"), at most 25 with the totals:
@@ -186,11 +212,88 @@ buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_bloc
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
-site-only path without a locale. `park`, `ride`, `rides` and `parks` are drawn from live data. Two
-more come from `park_forecast` (and, for live tiles, `get_park`); their levels are what the calendar
-or the live reading serves, never re-derived ([crowd levels](../rules/crowd-levels.md)):
+site-only path without a locale. `park`, `ride`, `rides` and `parks` are drawn from live data,
+`shows` from `get_shows`, `restaurants` from `find_restaurants`. `calendar` and `tiles` come from
+`park_forecast` (and, for live tiles, `get_park`); their levels are what the calendar or the live
+reading serves, never re-derived ([crowd levels](../rules/crowd-levels.md)). Every `opens`,
+`closes` and show time carries the park's own UTC offset (`+00:00`, never `Z`; `parkInstant`), so
+the widget reads the park's wall clock off it. An optional key is sent only when it is true or
+known; its absence never means "no" ([absent facts](../rules/absent-facts.md)).
 
 ```ts
+| {
+    kind: "park";
+    name: string;
+    place: string | null;
+    status: string | null;
+    crowdLevel: string | null;
+    opens: string | null;
+    closes: string | null;
+    waits: Array<{ name: string; waitMinutes: number }>;
+    url: string | null;
+  }
+| {
+    kind: "ride";
+    name: string;
+    park: string | null;
+    status: string | null;
+    crowdLevel: string | null;
+    waitMinutes: number | null;
+    url: string | null;
+    ropeDrop?: { strength: "high" | "moderate" | null; savings: number }; // only when ropeDrop.worth
+    singleRider?: true;  // a single-rider line
+    virtualLine?: true;  // a virtual queue
+    paidExpress?: true;  // a paid fast pass (a price of 0 is free and sends nothing)
+    worksPeriod?: true;  // a curated works period runs today (park-local)
+    outOfSeason?: true;  // isCurrentlyInSeason === false
+  }
+| {
+    kind: "rides";               // show_card { kind: "rides", park, order?, type?: "coaster", limit? }
+    park: string;
+    order: "longest" | "shortest";
+    rides: Array<{
+      name: string;
+      status: string | null;     // OPERATING for the waits, DOWN for the rows after them
+      waitMinutes: number | null;
+      url: string | null;
+    }>;                          // the waits, then up to 3 rides DOWN now, unless a "shortest" list is full
+    url: string | null;
+  }
+| {
+    kind: "parks";
+    parks: Array<{
+      name: string;
+      place: string | null;
+      url: string | null;
+      status: string | null;
+      crowdLevel: string | null;
+      avgWaitMinutes: number | null;
+    }>;
+  }
+| {
+    kind: "shows";               // show_card { kind: "shows", park, date?: YYYY-MM-DD = today }
+    park: string;
+    url: string | null;
+    date: string;                // YYYY-MM-DD, park-local
+    shows: Array<{
+      name: string;
+      status: string | null;     // today only, from the show's own reading
+      times: string[];           // instants with the park's offset, e.g. 2026-11-05T15:30:00+01:00
+      url: string | null;        // null: a show has no page of its own
+    }>;                          // at most 10, by next start; shows over for the day last
+  }
+| {
+    kind: "restaurants";         // show_card { kind: "restaurants", park, query? }
+    park: string;
+    url: string | null;
+    restaurants: Array<{
+      name: string;
+      status: string | null;     // only from the restaurant's own reading
+      land: string | null;
+      cuisine: string | null;
+      requiresReservation: boolean | null;
+    }>;                          // at most 12
+  }
 | {
     kind: "calendar";            // show_card { kind: "calendar", park, from?: YYYY-MM-DD, days?: 7..42 = 14 }
     park: string;                // park name
@@ -217,7 +320,13 @@ or the live reading serves, never re-derived ([crowd levels](../rules/crowd-leve
     totalRides: number | null;      // live only
     opens: string | null;
     closes: string | null;
-    weather: { condition: string | null; tempMin: number | null; tempMax: number | null; climateNormal: boolean } | null;
+    weather: {
+      condition: string | null;
+      weatherCode: number | null; // the WMO code
+      tempMin: number | null;
+      tempMax: number | null;
+      climateNormal: boolean;     // the long-run average, not a forecast
+    } | null;
   }
 ```
 

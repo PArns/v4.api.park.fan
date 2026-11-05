@@ -6,6 +6,17 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { rideFacts } from "../../attractions/utils/ride-facts.util";
 import { AnalyticsService } from "../../analytics/analytics.service";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+
+/** Whether `day` lies inside a works window; an open end runs on. */
+function inWindow(
+  window: { from?: string | null; to?: string | null },
+  day: string,
+): boolean {
+  return (
+    (!window.from || window.from <= day) && (!window.to || window.to >= day)
+  );
+}
 
 export const getAttractionTool = defineMcpTool({
   name: "get_attraction",
@@ -78,7 +89,16 @@ export const getAttractionTool = defineMcpTool({
       baselineMinutes: dto.baseline ?? null,
       outage: dto.outage ?? null,
       notRunToday: dto.notRunToday ?? null,
-      worksPeriod: dto.worksPeriod ?? null,
+      // The window's days are park-local, so "running today" is the park's today.
+      worksPeriod: dto.worksPeriod
+        ? {
+            ...dto.worksPeriod,
+            runningToday: inWindow(
+              dto.worksPeriod,
+              getCurrentDateInTimezone(attraction.park.timezone),
+            ),
+          }
+        : null,
       facts: {
         kind: dto.attractionKind ?? null,
         indoorOutdoor: dto.indoorOutdoor ?? null,

@@ -55,7 +55,9 @@ describe("get_best_days", () => {
 import {
   foldText,
   lastYearDays,
+  rideBadges,
   runAssistantTool,
+  showsCard,
   showsOnDay,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
@@ -184,6 +186,7 @@ describe("get_shows", () => {
 import {
   calendarCard,
   localizePageUrls,
+  parkInstant,
   tilesCard,
   type ForecastSummary,
 } from "./assistant-actions";
@@ -339,6 +342,31 @@ describe("find_restaurants", () => {
     );
   });
 
+  it("draws them as a card with nulls for what nobody said", async () => {
+    const { action } = await run(
+      "show_card",
+      { kind: "restaurants", park: PARK_ID, query: "ice" },
+      providers,
+    );
+    expect(action).toEqual({
+      type: "card",
+      card: {
+        kind: "restaurants",
+        park: "Phantasialand",
+        url: "/parks/europe/germany/bruehl/phantasialand",
+        restaurants: [
+          {
+            name: "Ice Cream Stand",
+            status: null,
+            land: null,
+            cuisine: null,
+            requiresReservation: true,
+          },
+        ],
+      },
+    });
+  });
+
   it("folds case and accents for the query", () => {
     expect(foldText("Crème Glacée")).toBe("creme glacee");
   });
@@ -482,12 +510,22 @@ describe("show_card kind rides with a type", () => {
           { id: "b", name: "River Quest", waitMinutes: 30 },
           { id: "c", name: "Raik", waitMinutes: 5 },
         ],
+        down: [
+          { id: "d", name: "Black Mamba" },
+          { id: "e", name: "Talocan" },
+        ],
       },
     });
     const providers = new Map<unknown, unknown>([
       [
         RideProfileService,
-        profiles({ a: ["launch-coaster"], b: ["rapids"], c: ["boomerang"] }),
+        profiles({
+          a: ["launch-coaster"],
+          b: ["rapids"],
+          c: ["boomerang"],
+          d: ["inverted-coaster"],
+          e: ["top-spin"],
+        }),
       ],
       [
         DataSource,
@@ -502,11 +540,107 @@ describe("show_card kind rides with a type", () => {
     expect(
       (handler.mock.calls[0][0] as { longestWaits: number }).longestWaits,
     ).toBeGreaterThan(30);
-    expect(action).toMatchObject({
+    expect(action).toEqual({
       type: "card",
-      card: { kind: "rides", rides: [{ name: "Raik" }, { name: "Taron" }] },
+      card: expect.objectContaining({
+        kind: "rides",
+        rides: [
+          { name: "Raik", status: "OPERATING", waitMinutes: 5, url: null },
+          { name: "Taron", status: "OPERATING", waitMinutes: 45, url: null },
+          // Down rides follow, under the same type filter.
+          { name: "Black Mamba", status: "DOWN", waitMinutes: null, url: null },
+        ],
+      }),
     });
-    expect(json.shown).toBe("2 coasters of Phantasialand");
+    expect(json.shown).toBe("3 coasters of Phantasialand");
+
+    // A full "shortest" list leaves no room for rides that are down.
+    const full = await run(
+      "show_card",
+      {
+        kind: "rides",
+        park: PARK_ID,
+        type: "coaster",
+        order: "shortest",
+        limit: 2,
+      },
+      providers,
+    );
+    expect(
+      (full.action as { card: { rides: unknown[] } }).card.rides,
+    ).toHaveLength(2);
+  });
+});
+
+describe("ride card badges", () => {
+  it("sends each badge only when true or known", () => {
+    expect(
+      rideBadges({
+        name: "Taron",
+        facts: {
+          hasSingleRider: true,
+          hasVirtualLine: false,
+          fastPass: { name: "QuickPass", price: 12 },
+          isCurrentlyInSeason: null,
+        },
+        worksPeriod: { from: "2026-11-01", runningToday: true },
+        ropeDrop: { worth: true, strength: "high", savingsMinutes: 40 },
+      }),
+    ).toEqual({
+      ropeDrop: { strength: "high", savings: 40 },
+      singleRider: true,
+      paidExpress: true,
+      worksPeriod: true,
+    });
+    expect(
+      rideBadges({
+        name: "Silver Star",
+        facts: {
+          fastPass: { name: "Virtual Line", price: 0 },
+          isCurrentlyInSeason: false,
+        },
+        worksPeriod: { from: "2027-01-10", runningToday: false },
+        ropeDrop: { worth: false, strength: null, savingsMinutes: 10 },
+      }),
+    ).toEqual({ outOfSeason: true });
+  });
+});
+
+describe("shows card", () => {
+  it("orders by the next start, max ten, times with the park's offset", () => {
+    const now = Date.parse("2026-11-05T12:00:00Z");
+    const card = showsCard(
+      {
+        name: "Phantasialand",
+        timezone: "Europe/Berlin",
+        pageUrl: `${getFrontendUrl()}/parks/europe/germany/bruehl/phantasialand`,
+      },
+      "2026-11-05",
+      [
+        {
+          name: "Morning",
+          status: null,
+          showtimes: ["2026-11-05T09:00:00.000Z"],
+        },
+        {
+          name: "Twice",
+          status: "OPERATING",
+          showtimes: ["2026-11-05T10:00:00.000Z", "2026-11-05T15:00:00.000Z"],
+        },
+        { name: "Soon", status: null, showtimes: ["2026-11-05T13:00:00.000Z"] },
+      ],
+      now,
+    );
+    expect(card.shows.map((show) => show.name)).toEqual([
+      "Soon",
+      "Twice",
+      "Morning",
+    ]);
+    expect(card.shows[1].times).toEqual([
+      "2026-11-05T11:00:00+01:00",
+      "2026-11-05T16:00:00+01:00",
+    ]);
+    expect(card.url).toBe("/parks/europe/germany/bruehl/phantasialand");
   });
 });
 
@@ -527,13 +661,15 @@ describe("calendar and tiles cards", () => {
     park: {
       name: "Phantasialand",
       pageUrl: `${getFrontendUrl()}/parks/europe/germany/bruehl/phantasialand`,
+      timezone: "Europe/Berlin",
     },
     scheduleCoverage: { from: "2026-03-01", to: "2026-11-06" },
     days: [
       {
         date: "2026-11-05",
         status: "OPERATING",
-        opens: "2026-11-05T09:00+01:00",
+        // Any instant comes out with the park's own offset.
+        opens: "2026-11-05T08:00:00.000Z",
         closes: "2026-11-05T18:00+01:00",
         crowdLevel: "high",
         expectedPeakWaitMinutes: 52.4,
@@ -541,6 +677,7 @@ describe("calendar and tiles cards", () => {
         weather: {
           basis: "forecast",
           condition: "Rain",
+          weatherCode: 61,
           tempMin: 4,
           tempMax: 9,
         },
@@ -577,8 +714,8 @@ describe("calendar and tiles cards", () => {
         date: "2026-11-05",
         status: "OPERATING",
         crowdLevel: "high",
-        opens: "2026-11-05T09:00+01:00",
-        closes: "2026-11-05T18:00+01:00",
+        opens: "2026-11-05T09:00:00+01:00",
+        closes: "2026-11-05T18:00:00+01:00",
         holiday: true,
       },
       {
@@ -612,10 +749,11 @@ describe("calendar and tiles cards", () => {
       peakWaitMinutes: 52,
       openRides: null,
       totalRides: null,
-      opens: "2026-11-05T09:00+01:00",
-      closes: "2026-11-05T18:00+01:00",
+      opens: "2026-11-05T09:00:00+01:00",
+      closes: "2026-11-05T18:00:00+01:00",
       weather: {
         condition: "Rain",
+        weatherCode: 61,
         tempMin: 4,
         tempMax: 9,
         climateNormal: false,
@@ -634,7 +772,7 @@ describe("calendar and tiles cards", () => {
         peakWaitTodayMinutes: 60,
       },
       scheduleToday: [
-        { opens: "2026-11-05T09:00+01:00", closes: "2026-11-05T18:00+01:00" },
+        { opens: "2026-11-05T08:00:00.000Z", closes: "2026-11-05T17:00:00Z" },
       ],
       rides: { total: 30, byStatus: { OPERATING: 24, DOWN: 1 } },
     });
@@ -645,7 +783,16 @@ describe("calendar and tiles cards", () => {
       peakWaitMinutes: 60,
       openRides: 24,
       totalRides: 30,
+      opens: "2026-11-05T09:00:00+01:00",
+      closes: "2026-11-05T18:00:00+01:00",
     });
+  });
+
+  it("writes a UTC+0 park's times with +00:00, never Z", () => {
+    expect(parkInstant("2026-11-05T09:00:00.000Z", "Europe/London")).toBe(
+      "2026-11-05T09:00:00+00:00",
+    );
+    expect(parkInstant(null, "Europe/London")).toBeNull();
   });
 
   it("refuses a day before the park's today or past the forecast", async () => {
