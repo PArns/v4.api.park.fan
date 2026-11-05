@@ -605,4 +605,34 @@ describe("QueueDataService", () => {
       ).toBe(false);
     });
   });
+  describe("findNeverObservedAttractionIds (PAR-1100)", () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+
+    it("binds only canonical uuids, cast on the parameter", async () => {
+      mockQueueDataRepository.query.mockResolvedValueOnce([{ id }]);
+
+      const result = await service.findNeverObservedAttractionIds([
+        id,
+        "not-a-uuid",
+      ]);
+
+      expect(result).toEqual(new Set([id]));
+      const [sql, params] =
+        mockQueueDataRepository.query.mock.calls[
+          mockQueueDataRepository.query.mock.calls.length - 1
+        ];
+      expect(sql).toContain("unnest($1::uuid[])");
+      expect(sql).toContain("NOT EXISTS");
+      expect(params).toEqual([[id]]);
+    });
+
+    it("asks nothing for an empty list", async () => {
+      mockQueueDataRepository.query.mockClear();
+
+      await expect(service.findNeverObservedAttractionIds([])).resolves.toEqual(
+        new Set(),
+      );
+      expect(mockQueueDataRepository.query).not.toHaveBeenCalled();
+    });
+  });
 });

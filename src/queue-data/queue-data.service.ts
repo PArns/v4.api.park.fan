@@ -20,7 +20,11 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
-import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
+import {
+  PARK_OBSERVED_READING_SQL,
+  observedReadingsSql,
+} from "../common/utils/closure-gap.sql";
+import { isCanonicalUuid } from "../common/utils/uuid-param.util";
 import { HEARTBEAT_SOURCE } from "../common/utils/outage-rows.sql";
 import { RECONCILIATION_SOURCE } from "../common/utils/source-absent-status.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
@@ -998,6 +1002,35 @@ export class QueueDataService {
       [parkId, days],
     );
     return rows.length > 0;
+  }
+
+  /**
+   * The subset of `attractionIds` no source has ever reported: not one
+   * observed row in `queue_data` (heartbeats and reconciliation do not count).
+   *
+   * Unbounded in time on purpose — "never" is the question, and the table has
+   * no retention policy. Callers pass only the rides that have no row in the
+   * live window, so a working park asks about none or a handful; a ride with
+   * history stops at its first row. A row we cannot classify counts as an
+   * observation (`COALESCE(…, true)`), the optimistic direction
+   * `hasObservedReadingWithin` takes too.
+   */
+  async findNeverObservedAttractionIds(
+    attractionIds: string[],
+  ): Promise<Set<string>> {
+    const ids = attractionIds.filter(isCanonicalUuid);
+    if (ids.length === 0) return new Set();
+    const rows: Array<{ id: string }> = await this.queueDataRepository.query(
+      `SELECT id::text AS id
+         FROM unnest($1::uuid[]) AS id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM queue_data qd
+           WHERE qd."attractionId" = id
+             AND COALESCE(${observedReadingsSql("qd")}, true)
+        )`,
+      [ids],
+    );
+    return new Set(rows.map((r) => r.id));
   }
 
   /**

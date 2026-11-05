@@ -110,6 +110,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
   const queueDataService = {
     findCurrentStatusByPark: jest.fn().mockResolvedValue(new Map()),
     hasObservedReadingWithin: jest.fn().mockResolvedValue(true),
+    findNeverObservedAttractionIds: jest.fn().mockResolvedValue(new Set()),
   };
 
   const parksService = {
@@ -326,6 +327,57 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       );
       expect(dto.analytics?.statistics.avgWaitTime).toBeNull();
       expect(dto.analytics?.occupancy).toBeUndefined();
+    });
+  });
+
+  describe("a ride with no row in the live window (PAR-1100)", () => {
+    const parkWith = (...ids: string[]) => {
+      const park = buildPark(true);
+      (park as unknown as { attractions: unknown[] }).attractions = ids.map(
+        (id) => ({ id, name: id, slug: id }),
+      );
+      return park;
+    };
+
+    it("reads UNKNOWN when no source has ever reported it", async () => {
+      queueDataService.findNeverObservedAttractionIds.mockResolvedValueOnce(
+        new Set(["pumpkin-festival"]),
+      );
+
+      const dto = await buildResponse(parkWith("pumpkin-festival", "quiet"));
+      const status = (id: string) =>
+        dto.attractions?.find((a) => a.id === id)?.status;
+
+      expect(status("pumpkin-festival")).toBe("UNKNOWN");
+      // A ride with history that is only quiet keeps the optimistic fallback.
+      expect(status("quiet")).toBe("OPERATING");
+      expect(
+        queueDataService.findNeverObservedAttractionIds,
+      ).toHaveBeenCalledWith(["pumpkin-festival", "quiet"]);
+    });
+
+    it("leaves a free-flow ride out of the probe", async () => {
+      const park = parkWith("playground");
+      (
+        park as unknown as { attractions: Array<{ openWithPark?: boolean }> }
+      ).attractions[0].openWithPark = true;
+
+      const dto = await buildResponse(park);
+
+      expect(
+        queueDataService.findNeverObservedAttractionIds,
+      ).toHaveBeenCalledWith([]);
+      expect(dto.attractions?.[0].status).toBe("OPERATING");
+    });
+
+    it("keeps the fallback when the probe fails", async () => {
+      queueDataService.findNeverObservedAttractionIds.mockRejectedValueOnce(
+        new Error("db down"),
+      );
+
+      const dto = await buildResponse(parkWith("quiet"));
+
+      expect(dto.attractions?.[0].status).toBe("OPERATING");
     });
   });
 
