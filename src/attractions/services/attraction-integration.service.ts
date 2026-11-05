@@ -17,6 +17,10 @@ import { AttractionResponseDto } from "../dto/attraction-response.dto";
 import { QueueDataItemDto } from "../../queue-data/dto/queue-data-item.dto";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
+import {
+  dayCurveProfileKey,
+  hasDayCurve,
+} from "../../analytics/park-historical-stats.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
@@ -110,21 +114,25 @@ export class AttractionIntegrationService {
    *
    * @param attraction - Attraction entity
    * @param days - Number of days of history to include (default: 30)
+   * @param countHit - False for a read that is not a visitor's, so the
+   *   popularity ranking reflects real demand (the admin MCP)
    * @returns Complete attraction DTO with all integrated live data
    */
   async buildIntegratedResponse(
     attraction: Attraction,
     days: number = 30,
+    countHit: boolean = true,
   ): Promise<AttractionResponseDto> {
     // Try cache first
     const cacheKey = CacheKeys.attractionIntegrated(attraction.id, days);
 
-    // Track popularity hit (background)
-    this.popularityService
-      .recordAttractionHit(attraction.id)
-      .catch((err) =>
-        this.logger.debug(`Failed to record attraction hit: ${err}`),
-      );
+    if (countHit) {
+      this.popularityService
+        .recordAttractionHit(attraction.id)
+        .catch((err) =>
+          this.logger.debug(`Failed to record attraction hit: ${err}`),
+        );
+    }
 
     const cached = await this.redis.get(cacheKey);
     const cachedDto = safeJsonParse<AttractionResponseDto>(cached);
@@ -746,6 +754,19 @@ export class AttractionIntegrationService {
       dto.url = buildAttractionUrl(parkForUrl, attraction);
     } else {
       dto.url = null;
+    }
+
+    // --- Day curve: read from the cached profile, never built here (PAR-1124) ---
+    if (attraction.parkId) {
+      try {
+        const curve = hasDayCurve(
+          await this.redis.get(dayCurveProfileKey(attraction.parkId)),
+          dto.slug,
+        );
+        if (curve !== undefined) dto.hasDayCurve = curve;
+      } catch {
+        // Unknown: the flag stays absent and the client asks as before.
+      }
     }
 
     // Cache aligned to next 5-min boundary (+5s buffer) so the entry expires

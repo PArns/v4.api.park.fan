@@ -1,4 +1,5 @@
 import { ThrottlerModuleOptions } from "@nestjs/throttler";
+import { constantTimeEquals } from "../../admin/auth/token-hash.util";
 
 /**
  * Origin rate-limit configuration.
@@ -75,7 +76,11 @@ export const carriesThrottleBypassKey = (
   const provided = headers?.[getThrottleBypassHeader()];
   const values = Array.isArray(provided) ? provided : [provided];
   return values.some(
-    (value) => typeof value === "string" && keys.includes(value),
+    // Constant time: this key also vouches for `x-forwarded-for`, the address
+    // every admin-login and rate-limit bucket is keyed on.
+    (value) =>
+      typeof value === "string" &&
+      keys.some((key) => constantTimeEquals(value, key)),
   );
 };
 
@@ -94,3 +99,23 @@ export const getCfOriginSecretHeader = (): string =>
 
 export const getCfOriginSecret = (): string =>
   process.env.CF_ORIGIN_SECRET ?? "";
+
+/**
+ * Whether a request may be believed about its own address: true until
+ * `CF_ORIGIN_SECRET` is configured, then only when it carries the secret
+ * header Cloudflare adds. Asked by the throttler and by `getRateLimitIp`, so
+ * the two never disagree about who a caller is.
+ */
+export const carriesCfOriginSecret = (
+  headers: Record<string, unknown> | undefined,
+): boolean => {
+  const secret = getCfOriginSecret();
+  if (!secret) return true;
+  const provided = headers?.[getCfOriginSecretHeader()];
+  const values = Array.isArray(provided) ? provided : [provided];
+  // Constant time, like the bypass keys: this secret decides whether
+  // cf-connecting-ip is trusted, and so which bucket a login is counted in.
+  return values.some(
+    (value) => typeof value === "string" && constantTimeEquals(value, secret),
+  );
+};

@@ -8,8 +8,12 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
  * the two signals do not compete for the same events. In the 95 blind parks the
  * DOWN rate is 0.00 and the closure-gap rate is 5.78 — which is the only thing
  * that can be said there at all.
+ *
+ * `maintenance` is a REFURBISHMENT run (wartezeiten „Wartung", ThemeParks.wiki
+ * REFURBISHMENT), built by the same run rules as `down` but kept apart: its
+ * own recovery curve, and never in a published fault count or rate.
  */
-export const OUTAGE_SIGNALS = ["down", "closed_gap"] as const;
+export const OUTAGE_SIGNALS = ["down", "closed_gap", "maintenance"] as const;
 export type OutageSignal = (typeof OUTAGE_SIGNALS)[number];
 
 /**

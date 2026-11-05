@@ -86,6 +86,15 @@ export class AdminAuditLog {
   @Column({ name: "source_url", type: "text", nullable: true })
   sourceUrl: string | null;
 
+  /**
+   * The network the account acted from (a /24 or /48, from `truncateIp`), never
+   * the address. The nightly sweep sets it to null once the row is older than
+   * `AUDIT_ADDRESS_RETENTION_DAYS`; the row stays.
+   *
+   * Stays nullable `text`: `synchronize` runs in production, and another type
+   * (`inet`, `cidr`) would rewrite the table under a lock
+   * (docs/rules/the-entities-are-the-schema.md).
+   */
   @Column({ name: "actor_ip", type: "text", nullable: true })
   actorIp: string | null;
 

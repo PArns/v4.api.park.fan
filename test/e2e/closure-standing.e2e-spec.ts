@@ -443,6 +443,9 @@ describe("standing closures, nightly and live (e2e)", () => {
       parkId,
     ]);
     expect(live).toHaveLength(0);
+    // Nor is it stored: 18:05 is after the day's last close, so the nightly
+    // pre-opening fallback finds no window either (PAR-1092).
+    expect((await nightly()).get("A")).toHaveLength(0);
 
     // The counter-check: one hour earlier on the Monday, with the margin
     // still open in the window it started in, the same ride is a closure.
@@ -492,6 +495,39 @@ describe("standing closures, nightly and live (e2e)", () => {
       parkId,
     ]);
     expect(early).toHaveLength(0);
+
+    // And the nightly statement stores what the page showed, from the same
+    // clipped start (PAR-1092). It stood until the 26-hour horizon: Tuesday
+    // 10:00-18:00 and Wednesday 10:00-12:00 on the operating clock.
+    const [stored, ...rest] = (await nightly()).get("C")!;
+    expect(rest).toHaveLength(0);
+    expect(iso(stored.startedAt)).toBe(iso(at("2026-06-09", "10:00:00")));
+    expect(stored.endReason).toBe("window_edge");
+    expect(Number(stored.operatingMinutes)).toBe(480 + 120);
+    expect(Number(stored.wallMinutes)).toBe(LIVE_LOOKBACK_HOURS * 60);
+  });
+
+  it("stores a pre-opening closure only when it was still closed at the opening (PAR-1092)", async () => {
+    await seedPark();
+    // E: a pre-opening gap that was over before the park opened — not an
+    // outage of the operating day, and clipping it would start it after its
+    // own end.
+    await reading("E", at("2026-06-09", "09:05:00"), "OPERATING");
+    await reading("E", at("2026-06-09", "09:40:00"), "CLOSED");
+    await reading("E", at("2026-06-09", "09:50:00"), "OPERATING");
+    // F: closed from 09:55, running again at 10:40 — a gap from the opening.
+    await reading("F", at("2026-06-09", "09:05:00"), "OPERATING");
+    await reading("F", at("2026-06-09", "09:55:00"), "CLOSED");
+    await reading("F", at("2026-06-09", "10:40:00"), "OPERATING");
+
+    const byRide = await nightly();
+
+    expect(byRide.get("E")).toHaveLength(0);
+    const [gap, ...rest] = byRide.get("F")!;
+    expect(rest).toHaveLength(0);
+    expect(gap.endReason).toBe("recovered");
+    expect(iso(gap.startedAt)).toBe(iso(at("2026-06-09", "10:00:00")));
+    expect(Number(gap.operatingMinutes)).toBe(40);
   });
 
   it("does not clip a reading the feed left standing after the close into the next day (PAR-913)", async () => {
@@ -510,6 +546,9 @@ describe("standing closures, nightly and live (e2e)", () => {
       parkId,
     ]);
     expect(rows).toHaveLength(0);
+    // The nightly fallback applies the same night_mid to the last OPERATING
+    // reading, so nothing is stored for it either (PAR-1092).
+    expect((await nightly()).get("D")).toHaveLength(0);
   });
 
   it("never turns a free-flow ride's CLOSED run into a closure, live or stored (PAR-913)", async () => {

@@ -737,7 +737,7 @@ describe("calendar questions (PAR-1037)", () => {
   const q = (id: string) => COMPARISON_QUESTIONS.find((x) => x.id === id)!;
   it("compares TFT's days with TFT and CatBoost's with CatBoost", () => {
     expect(q("cal_busier").reference).toBe("served_tft");
-    expect(q("cal_far").leads).toEqual(["d30", "d45", "d60"]);
+    expect(q("cal_far").leads).toEqual(["d30", "d45"]);
     expect(q("cal_far_90")).toMatchObject({
       servedModel: "catboost",
       leads: ["d90"],
@@ -757,10 +757,10 @@ describe("calendar questions (PAR-1037)", () => {
       expect(q(id).models.tft_grid_drivers).toEqual(["tft_grid_drivers"]);
     }
     expect(q("cal_far_90").models.tft_grid).toBeUndefined();
-    expect(cellFloorDate("cal_far", "tft_grid_drivers")).toBe("2027-01-08");
+    expect(cellFloorDate("cal_far", "tft_grid_drivers")).toBe("2026-12-24");
     // Its rows begin with the shadow, not with the archive.
-    expect(cellFloorDate("cal_far", "tft_grid")).toBe("2027-01-08");
-    expect(cellFloorDate("cal_far", "wkd")).toBe("2026-12-22");
+    expect(cellFloorDate("cal_far", "tft_grid")).toBe("2026-12-24");
+    expect(cellFloorDate("cal_far", "wkd")).toBe("2026-12-07");
     const agg = Array.from({ length: 24 }, (_, i) => ({
       useCase: "PEAK",
       lead: "d3",
@@ -970,6 +970,15 @@ describe("calendar questions (PAR-1037)", () => {
     ]);
     expect(cellLeads(q("plan_besttime"), ["shadow_h5"])).toEqual(
       q("plan_besttime").leads,
+    );
+  });
+
+  it("does not ask the CatBoost shadow for today, which CatBoost never forecasts", () => {
+    expect(cellLeads(q("cal_rank"), ["catboost_shadow"])).toEqual(
+      q("cal_rank").leads.filter((l) => l !== "d0"),
+    );
+    expect(cellLeads(q("cal_rank"), ["weekday_avg"])).toEqual(
+      q("cal_rank").leads,
     );
   });
 });

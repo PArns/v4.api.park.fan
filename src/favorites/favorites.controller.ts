@@ -56,8 +56,8 @@ export class FavoritesController {
       "including live data (status, wait times, showtimes, dining availability, etc.). " +
       "Data is grouped by entity type for easy consumption. " +
       "If latitude and longitude are provided (or derived from IP via GeoIP when omitted), distances from user location are calculated in meters. " +
-      "Cached in Redis and HTTP cache for 2 minutes for optimal performance. " +
-      "Uses stale-while-revalidate pattern to refresh cache in background when TTL < 1 minute.",
+      "Cached in Redis for 5 minutes per set of ids and position, refreshed in the background once less than 1 minute is left. " +
+      "Sent `private, no-store`: the answer depends on the caller.",
   })
   @ApiQuery({
     name: "parkIds",

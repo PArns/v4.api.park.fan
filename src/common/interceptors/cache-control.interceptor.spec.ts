@@ -56,6 +56,10 @@ describe("CacheControlInterceptor", () => {
       "/v1/ml/monitoring/alerts",
       "/v1/ml/health",
       "/v1/ml/accuracy/system",
+      // Express routes these to the same handlers, case-insensitively.
+      "/V1/ADMIN/analytics/overview",
+      "/v1/Admin/oauth/requests/x",
+      "/V1/ML/dashboard",
     ])("marks %s as private, no-store", async (url) => {
       const { ctx, headers } = buildMockContext(url);
       await firstValueFrom(interceptor.intercept(ctx, handlerOf({ ok: true })));
@@ -73,6 +77,24 @@ describe("CacheControlInterceptor", () => {
       await firstValueFrom(interceptor.intercept(ctx, handlerOf({ d: 1 })));
       expect(headers["Cache-Control"]).toContain("max-age");
       expect(headers["Cache-Control"]).not.toContain("no-store");
+    });
+
+    it("caches a page-view ranking for an hour, and the admin's view not at all", async () => {
+      const ranking = buildMockContext(
+        "/v1/page-views/top?kind=news&locale=de&days=7",
+      );
+      await firstValueFrom(
+        interceptor.intercept(ranking.ctx, handlerOf({ items: [] })),
+      );
+      expect(ranking.headers["Cache-Control"]).toBe(
+        "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400",
+      );
+
+      const admin = buildMockContext("/v1/admin/page-views?days=30");
+      await firstValueFrom(
+        interceptor.intercept(admin.ctx, handlerOf({ kinds: [] })),
+      );
+      expect(admin.headers["Cache-Control"]).toContain("no-store");
     });
 
     it("does not snag slugs that merely contain 'ml' or 'admin'", async () => {

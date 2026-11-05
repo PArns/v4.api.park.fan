@@ -1,6 +1,28 @@
 import { Logger as TypeOrmLogger, QueryRunner } from "typeorm";
 import { Logger } from "@nestjs/common";
+import { isIP } from "net";
 import { logToFile } from "./file-logger.util";
+import { truncateIp } from "./request.util";
+
+/**
+ * The bound parameters of a statement for a log, with every address cut to its
+ * network. The audit row's `actor_ip` is a network before it is bound, so
+ * this is the net under that write and under any statement that comes to bind
+ * an address; the privacy policy says no log line holds one
+ * (docs/rules/no-address-in-logs.md). Strings and the strings of an array are
+ * checked; nothing else can be one.
+ */
+export function withoutAddresses(
+  parameters: unknown[] | undefined,
+): unknown[] | undefined {
+  const cut = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(cut);
+    if (typeof value !== "string") return value;
+    const bare = value.startsWith("::ffff:") ? value.slice(7) : value;
+    return isIP(bare) ? (truncateIp(value) ?? value) : value;
+  };
+  return parameters?.map(cut);
+}
 
 /**
  * Custom TypeORM logger that writes slow queries to logs/slow-queries.log.
@@ -19,7 +41,7 @@ export class SlowQueryFileLogger implements TypeOrmLogger {
     logToFile("slow-queries", {
       durationMs: time,
       query,
-      parameters: parameters?.length ? parameters : undefined,
+      parameters: parameters?.length ? withoutAddresses(parameters) : undefined,
     });
   }
 
@@ -32,7 +54,7 @@ export class SlowQueryFileLogger implements TypeOrmLogger {
     // Keep query errors visible in the main log
     this.logger.error(`Query failed: ${query}`, {
       error,
-      parameters,
+      parameters: withoutAddresses(parameters),
     });
   }
   logSchemaBuild(message: string): void {

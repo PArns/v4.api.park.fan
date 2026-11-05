@@ -115,11 +115,12 @@ export type ArchiveSourceName =
  * ~76 rows per ride per origin, each paying a 24-byte tuple header and a key of
  * 30+ bytes for a 2-byte wait — the array is roughly a tenth of that.
  *
- * NOT A HYPERTABLE. Sized in docs/ml/forward-archive.md at ~29 MB a day with
- * its indexes, kept 14 days past the TARGET date (~0.8 GB steady state, most
+ * NOT A HYPERTABLE. Sized in
+ * docs/ml/forward-archive/capture.md#size-and-db-impact-measured-2026-10-09 at ~35 MB a day with
+ * its indexes, kept 14 days past the TARGET date (~0.85 GB steady state, most
  * of it the d10-d90 rows waiting for their day); a plain DELETE keeps
  * retention free of the `drop_chunks` lock on referenced tables that took the
- * API down in October (db-health-runbook §0b). For the same reason there is NO
+ * API down in October (docs/troubleshooting/timescaledb-lock-queues.md). For the same reason there is NO
  * foreign key: a FK to `attractions` would put this table into that lock path.
  */
 @Entity("forecast_archive_curves")

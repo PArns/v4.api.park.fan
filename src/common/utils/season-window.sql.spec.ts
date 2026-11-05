@@ -30,8 +30,10 @@ describe("attractionIsOutOfSeason", () => {
     );
   });
 
-  it("asks the calendar whenever months are on file", () => {
-    expect(sql).toContain("to_jsonb(EXTRACT(MONTH FROM NOW())::int)");
+  it("asks the park's calendar whenever months are on file", () => {
+    expect(sql).toContain(
+      `to_jsonb(EXTRACT(MONTH FROM NOW() AT TIME ZONE COALESCE( (SELECT p.timezone FROM parks p WHERE p.id = a."parkId"), 'UTC' ))::int)`,
+    );
   });
 
   it("never closes a ride on `is_seasonal` alone", () => {

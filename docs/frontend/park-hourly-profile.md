@@ -1,48 +1,36 @@
-# The park's day shape — `/stats/hourly` (frontend guide)
+# The park's day shape (`/stats/hourly`)
 
-> The matrix behind a "when is the queue longest" table: median and busy wait
-> per hour of the operating day, ride by ride. Shipped 2026-08-24.
-
-## Where it lives
+The contract for the matrix behind a "when is the queue longest" table: P25/P50/P90
+wait per park-local hour of the operating day, ride by ride, in ~2 KB. Covers the
+window parameters, the shape, which hours become columns, which rides make the
+table, and the SQL fence that must not be inlined. `/plan/day` composes its curves
+from the same read ([plan-day rides](./plan-day/rides.md#which-rides-a-day-carries)).
 
 ```
 GET /v1/parks/:continent/:country/:city/:parkSlug/stats/hourly
-    ?years=1&topN=8&minAttractionDays=20
+    ?years=1&topN=8&minAttractionDays=20     # or &from=YYYY-MM-DD&to=YYYY-MM-DD
 → ParkHourlyProfileDto
 ```
 
-Cached 24 h (Redis + `HttpCacheInterceptor`), like `/stats`. The inputs are the
-daily hourly percentile rollups, which only change once a day — do not poll it.
+Code: `ParkHistoricalStatsService.getParkHourlyProfile`
+(`src/analytics/park-historical-stats.service.ts`).
 
-**An explicit window (PAR-978).** `?from=2025-12-01&to=2026-10-21` reads those
-park-local days, both inclusive, instead of the last `years` years, and
-`meta.dataFrom` / `meta.dataTo` echo them; `meta.windowYears` then reports the
-span read in years (one decimal) rather than the `years` parameter. Both or
-neither: one alone, a day the calendar does not have, `from` after `to` or a
-span over 1830 days (both ends counted) answers 400. A window with too few measured days is not an
-error — it answers `meta.displayable: false`, usually because no ride clears
-`minAttractionDays` (20 by default; lower it for a short window). Each window
-is its own cache entry; a request without one keeps the key and the answer it
-always had.
-
-The bound is the park's midnight (PAR-999). It used to be `$from::date` /
-`$to::date + 1 day` as timestamps in the session zone (UTC), so a park east of
-UTC lost the first local hours of `from` and read a few hours of the day after
-`to`. Measured against production for Universal Studios Japan (UTC+9, window
-2025-10-22 … 2026-10-22): the old bound returned 303 days ending `2026-10-23`,
-a day outside the window the caller asked for; the park-local bound returns 302
-ending `2026-10-22`. This applied to the default `years` window as well, which
-is why fixing it moved both answers.
-
-## Why it is its own endpoint
-
-Everything in it could be read off the attraction detail endpoint. That one
-answers ~53 KB for a single ride, about 45 % of it a `schedule` nobody renders,
-so an eight-ride table would cost ~424 KB. This projection is ~2 KB for the same
-eight rides.
-
-It reads the same `queue_data_aggregates` rollup as `/stats`, so its numbers
-agree with the top-attraction ranking by construction rather than by luck.
+- `years` default **1** (max 5) — not 2 like `/stats`: the table describes a day as it
+  looks now, and a park that moved its opening time last spring would otherwise
+  average the old shape in. `topN` default 8, max 20. `minAttractionDays` default 20.
+- **An explicit window (PAR-978).** `from` + `to` read those park-local days, both
+  inclusive, instead of the last `years`; `meta.dataFrom`/`dataTo` echo them and
+  `meta.windowYears` reports the span in years (one decimal). Both or neither: one
+  alone, a day the calendar does not have, `from` after `to`, or a span over 1830
+  days is a 400. Too few measured days is not an error but `meta.displayable: false`
+  (lower `minAttractionDays` for a short window). Each window is its own cache entry.
+- **The bounds are the park's midnight** (PAR-999), not UTC: a UTC+9 park used to lose
+  the first local hours of `from` and read hours past `to`.
+- Cached 24 h (Redis + `HttpCacheInterceptor`) from the daily
+  `queue_data_aggregates` rollup — do not poll it. It reads the same rollup as
+  `/stats`, so its numbers agree with the top-attraction ranking by construction.
+- It exists because the attraction detail answers ~53 KB per ride (45 % of it an
+  unrendered `schedule`): an eight-ride table would cost ~424 KB.
 
 ## Shape
 
@@ -51,125 +39,73 @@ interface ParkHourlyProfile {
   hours: number[]; // park-local, ascending, e.g. [9,10,…,18]
   attractions: Array<{
     attractionSlug: string;
-    attractionName: string; // curated name winning
+    attractionName: string; // curated name wins
     land?: string | null;
-    p25: Array<number | null>; // schema v4 and up; absent from older responses
+    p25: Array<number | null>; // schema v4 and up
     p50: Array<number | null>; // one entry per `hours` entry, same order
     p90: Array<number | null>;
-    peakHour: number | null; // the hour in `hours` where p50 peaks
+    peakHour: number | null;   // this ride's busiest hour in `hours`
     sampleDays: number;
   }>;
-  meta: {
-    parkSlug: string;
-    dataFrom: string; // YYYY-MM-DD, park tz
-    dataTo: string;
-    windowYears: number;
-    totalSampleDays: number;
-    displayable: boolean;
-    generatedAt: string; // ISO 8601 UTC
-    schemaVersion: number; // 4
-  };
+  meta: { parkSlug; dataFrom; dataTo; windowYears; totalSampleDays; displayable;
+          generatedAt; schemaVersion: 4 };
 }
 ```
 
-## Rendering rules
-
-- **`hours` is derived from the data, never assumed.** A park that opens at 11
-  starts at 11. Both axes come from the payload; hardcoding 9–18 would put
-  Phantasialands winter season an hour to the left of where it happened.
-- **The three arrays are positional, not keyed.** `p25[i]`, `p50[i]` and
-  `p90[i]` all belong to `hours[i]`.
-  A `null` is a gap — the ride reported nothing in that hour — and must render
-  as a dash, never as a zero. A zero says "no queue", which is a different
-  claim from "we were not watching".
-- **`p25` is optional, and the fallback is part of the contract.** It arrives
-  with schema v4; a deployment still answering v3 sends none. A spread band is
-  then drawn median-to-busy and labelled as such — a P50–P90 fill captioned
-  "P25–P90" is a claim about the quiet quarter of days that nothing measured.
-  Together `p25` and `p90` say how far a day reasonably falls either side of the
-  median, which `p50` alone cannot.
-- **Gate on `meta.displayable`.** It is false when fewer than three hours
-  survived or no ride cleared the sample floor. There is nothing to draw from a
-  two-column matrix.
-- **`peakHour` is per ride**, not per park: Voletarium peaks at rope drop and
-  Wodan climbs all afternoon, which is the whole point of the table. Highlight
-  each row's own peak cell.
-- **`windowYears` defaults to 1**, not 2 like `/stats`. The table describes what
-  a day looks like _now_; a park that moved its opening time or rebuilt a queue
-  line last spring would otherwise average the old shape into the new one.
+- **`hours` comes from the data**, never assumed (a park opening at 11 starts at 11).
+- **The arrays are positional**: `p25[i]`, `p50[i]`, `p90[i]` belong to `hours[i]`. A
+  `null` is a gap ("we were not watching") and renders as a dash, never 0 ("no
+  queue").
+- **`p25` may be absent** from an older response; then draw the band median-to-busy
+  and label it so — a P50–P90 fill captioned "P25–P90" claims something nothing
+  measured.
+- **Gate on `meta.displayable`**: false when fewer than three hours survive or no
+  ride clears the floor.
+- **`peakHour` is per ride** — Voletarium peaks at rope drop, Wodan climbs all
+  afternoon; highlight each row's own cell.
 
 ## Which hours become columns
 
-Three tests, and an hour must pass all of them:
+An hour must pass all three (`visibleHours`):
 
-1. **10 measured days** across the window — an absolute floor for small or young
-   parks.
-2. **At least 40 % of the best-observed hour's day count.** A flat threshold
-   cannot decide this alone, because "the park was open" is not a fixed number of
-   days: Europa-Parks Winterzauber runs 11:00–20:00 for about six weeks, so any
-   single number either keeps 20:00 (drawing a winter-only hour as part of a
-   normal day) or drops hours a smaller park only ever measures forty times.
-   Measuring each hour against the hours the park is _always_ open scales to
-   both.
+1. **10 measured days** across the window (`MIN_DAYS_PER_HOUR`).
+2. **≥ 40 % of the best-observed hour's day count** (`MIN_HOUR_DAY_RATIO`). No flat
+   threshold works alone: Europa-Park's Winterzauber runs 11:00–20:00 for six weeks,
+   so any fixed number either keeps 20:00 or drops hours a small park only measures
+   forty times.
+3. **At least half the table's rides report it** (`MIN_HOUR_RIDE_RATIO`), tested after
+   the ranking and `topN` cut. One ride's hotel early entry minted 07:00 and 08:00
+   columns at Europa-Park with seven of eight rows empty. `peakHour` is recomputed on
+   the trimmed axis.
 
-3. **At least half the rides in the table report it.** The two day-count tests
-   ask the _best-observed_ ride whether an hour exists, so one ride is enough to
-   mint a column: Europa-Park opened at 07:00 and 08:00 with seven of eight rows
-   empty, which is the hotel guests' early entry through one queue, not an hour
-   of the park's day. This test runs after the ranking and the `topN` cut, so it
-   asks the rides the table will actually show. `peakHour` is recomputed against
-   the trimmed axis — a peak in a cut hour would point at a column the response
-   no longer carries.
-
-The day count behind the first two is **per (ride, hour)** — the days that hour was
-measured. It is not the ride's `sample_days`, which counts its measured days
-across the whole window and is identical for all 24 of its hours. Reading the
-wrong one is what shipped 21:00–23:00 columns for Europa-Park at 58–68 minutes:
-every hour inherited ~157 days and the filter never fired.
-
-A single ride's cell is blanked by the same 10-day floor even when the hour
-survives as a column, so a ride that opened mid-season does not put a number
-built on six days next to one built on 118.
+The day count is **per (ride, hour)**, never the ride's `sample_days` (which is the
+same for all 24 of its hours — reading it shipped 21:00–23:00 columns at
+Europa-Park). A single cell is blanked by the same 10-day floor even when its hour
+survives, so a ride that opened mid-season does not put six days next to 118.
 
 ## Which rides make the table
 
-1. A ride needs `minAttractionDays` (default 20) measured days — the same floor
-   `/stats` now applies to its ranking.
-2. SQL pre-ranks by all-day average P90 and over-fetches (`topN × 3`, capped at
-   60), because …
-3. … the projection then **re-ranks by each ride's busiest hour** and cuts to
-   `topN`. A ride with one sharp rope-drop spike belongs in a table about _when_
-   a queue happens; its all-day average would have hidden it.
+1. A ride needs `minAttractionDays` (default 20) measured days, the floor `/stats`
+   applies to its ranking.
+2. SQL pre-ranks by all-day average P90 and over-fetches (`topN × 3`, capped at 60) …
+3. … because the projection **re-ranks by each ride's busiest hour** and then cuts to
+   `topN`: a ride with one rope-drop spike belongs in a table about *when* a queue
+   happens.
 
-## Timezone
-
-The hour bucket is extracted `AT TIME ZONE` the **park's** timezone. Reading it
-in UTC shifts Gardaland's morning by two hours in summer and one in winter —
-i.e. by a different amount inside the same window, which smears the peak instead
-of moving it.
+Hours are bucketed `AT TIME ZONE` the **park's** zone; in UTC Gardaland's morning
+would shift by a different amount in summer and winter, smearing the peak.
 
 ## The query's shape is load-bearing (PAR-832)
 
-`queryHourlyProfile` reads the rows in a `measured` CTE that ends in `OFFSET 0`
-and groups them outside it. Written as one grouped SELECT over
-`queue_data_aggregates`, with the closed-day anti join (PAR-698) beside
-`COUNT(DISTINCT local day)`, PostgreSQL 18.6 + TimescaleDB 2.24.0 failed at
-plan time with `XX000 no tlist entry for key 6` for five parks (Europa-Park,
-Energylandia, Hersheypark, Kennywood, Plopsaland Belgium), and only at the
-60-ride fetch the day planner uses — so `/stats/hourly` at its default `topN=8`
-(a 24-ride fetch) looked healthy while `/plan/day` returned no rides past its
-hourly-model window for those parks. `SET timescaledb.enable_chunk_append = off`
-makes the old statement run, which places the fault in ChunkAppend's handling of
-the sort the aggregate pushes into the chunks. It depends on row estimates and
-does not reproduce on the E2E database; the unit test pins the shape instead.
-Do not inline the fence.
+`queryHourlyProfile` reads rows in a `measured` CTE that ends in **`OFFSET 0`** and
+groups outside it. Written as one grouped SELECT (the closed-day anti join beside
+`COUNT(DISTINCT local day)`), PostgreSQL 18.6 + TimescaleDB 2.24.0 failed at plan
+time with `XX000 no tlist entry for key 6` for five parks, and only at the 60-ride
+fetch `/plan/day` uses — so `/stats/hourly` looked healthy while `/plan/day` lost its
+rides. `SET timescaledb.enable_chunk_append = off` makes the old statement run, which
+places the fault in ChunkAppend. It depends on row estimates and does not reproduce
+on the E2E database; a unit test pins the shape. **Do not inline the fence.**
 
-**The same fault reappeared on `queryHeadlinerDayValues` with PAR-999's
-park-local bound, but only in `EXPLAIN`.** `no tlist entry for key 5` on the
-same PostgreSQL 18.6 + TimescaleDB 2.24.0, for both park-local spellings and
-with or without `ANALYZE`, while the statement itself runs: checked as a plain
-`SELECT` against production for all five parks above plus Gardaland, Chimelong
-Paradise and Universal Studios Japan, at the day planner's 60-ride fetch as
-well, with identical row counts to the old bound. So this one costs the plan,
-not the answer — time that query with `\timing`, not `EXPLAIN ANALYZE`
-(PAR-1014).
+The same error appears for `queryHeadlinerDayValues` with the park-local bound, but
+**only in `EXPLAIN`** (`no tlist entry for key 5`); the statement itself runs with
+identical results (PAR-1014). Time that query with `\timing`, not `EXPLAIN ANALYZE`.

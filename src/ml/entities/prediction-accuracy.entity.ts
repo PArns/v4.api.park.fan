@@ -128,7 +128,7 @@ export class PredictionAccuracy {
   /**
    * The wait a reader was SERVED for this slot when the row was written
    * (PAR-854) — `predictedWaitTime` after the PCN champion-swap override and
-   * the §7.7 persistence blend, captured at generation time with the lead it
+   * the persistence blend, captured at generation time with the lead it
    * had then. `predictedWaitTime` stays the raw CatBoost answer, because the
    * admin boards compare CatBoost against PCN and must not see PCN on both
    * sides.

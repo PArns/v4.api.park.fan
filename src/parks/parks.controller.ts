@@ -880,7 +880,7 @@ export class ParksController {
    * Use this endpoint to drive in-park live warnings such as
    * "Rain in 17 min, ending around 14:45".
    *
-   * Cache TTL: 15 minutes (matches the upstream data resolution).
+   * Cache: until `nextUpdateAt`, the next quarter-hour mark.
    */
   @Get(":continent/:country/:city/:parkSlug/weather/nowcast")
   @ApiOperation({
@@ -900,10 +900,10 @@ export class ParksController {
     description: "Nowcast data",
     type: WeatherNowcastDto,
   })
-  @ApiResponse({ status: 404, description: "Park not found" })
   @ApiResponse({
-    status: 503,
-    description: "Nowcast unavailable (missing coordinates or upstream error)",
+    status: 404,
+    description:
+      "Park not found, or nowcast unavailable (missing coordinates or upstream error)",
   })
   async getWeatherNowcastByGeographicPath(
     @Param("continent") continent: string,
@@ -1052,11 +1052,13 @@ export class ParksController {
     // Parse date range with timezone awareness
     const { parseDateRange, validateDateRange } =
       await import("../common/utils/date-parsing.util");
-    const { fromDate, toDate } = parseDateRange(from, to, {
-      timezone: park.timezone,
-      defaultFromDaysAgo: 30,
-      defaultToDaysAhead: 0, // Default 'to' is today
-    });
+    // `to` defaults to the park's today; parseDateRange's own default counts
+    // from `from`, which made a bare request one day a month back.
+    const { fromDate, toDate } = parseDateRange(
+      from,
+      to ?? getCurrentDateInTimezone(park.timezone),
+      { timezone: park.timezone, defaultFromDaysAgo: 30 },
+    );
     validateDateRange(fromDate, toDate, 90);
 
     const weatherData = await this.weatherService.getWeatherData(
@@ -1662,7 +1664,15 @@ export class ParksController {
    * Returns yearly crowd predictions via geographic path.
    */
   @Get(":continent/:country/:city/:parkSlug/predictions/yearly")
-  @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours HTTP cache
+  // 24 hours, except an answer built while the forecast could not be read:
+  // that one is `no-store`, so the edge does not keep an outage for a day.
+  @UseInterceptors(
+    new HttpCacheInterceptor(
+      24 * 60 * 60,
+      undefined,
+      (body) => (body as { isDegraded?: boolean })?.isDegraded === true,
+    ),
+  )
   @ApiOperation({
     summary: "Get yearly crowd predictions (geo)",
     description:
@@ -1673,7 +1683,8 @@ export class ParksController {
       "or a bridge day in the park's own region, by the calendar's rule, whether or not the forecast covers it; " +
       "it is absent when the holiday table could not be read. " +
       "Useful for long-term trip planning and identifying best times to visit. " +
-      "Cached for 24 hours.",
+      "Cached for 24 hours. When the forecast cannot be read the answer carries `predictions: []` and " +
+      "`isDegraded: true` and is sent `no-store`.",
   })
   @ApiExtraModels(ParkDailyPredictionDto, ParkYearlyHolidayDto)
   @ApiResponse({
@@ -1707,7 +1718,14 @@ export class ParksController {
           type: "string",
           format: "date-time",
           example: "2024-01-15T10:00:00.000Z",
-          description: "Timestamp when predictions were generated",
+          description:
+            "When this response was built, not when the forecast was computed",
+        },
+        isDegraded: {
+          type: "boolean",
+          example: true,
+          description:
+            "Present and true only when the forecast could not be read; `predictions` is then empty and the answer is not cached",
         },
       },
     },
@@ -1759,6 +1777,7 @@ export class ParksController {
       predictions: dailyPredictions,
       ...(holidays && { holidays }),
       generatedAt: new Date().toISOString(),
+      ...(predictions.modelVersion === "unavailable" && { isDegraded: true }),
     };
   }
 
@@ -1810,7 +1829,7 @@ export class ParksController {
       "in 4 groups the `slug` differs too.\n\n" +
       "A differing `slug` does **not** make them two rides. A slug is a frozen name, so a row " +
       "keeps the slug of whatever it was called when it was created — see " +
-      "`docs/architecture/attraction-status-and-seasonality.md` §4a, where identity is the " +
+      "`docs/architecture/attraction-status/identity.md`, where identity is the " +
       "`externalId` and never the slug. Three of those four groups carry the exact damage " +
       "shape that page describes, one row holding the name another row's slug claims. " +
       "Resolved against the upstream entities on 2026-09-20, in each of the three the ride " +
@@ -1821,7 +1840,7 @@ export class ParksController {
       "`castaway-bay-sky-fortress`; New Jersey's `discovery-bay-mini-waves` is grouped under " +
       '"Discovery Bay", and "Discovery Bay - Mini Waves" is `discovery-bay-treehouse`. ' +
       "New Jersey differs underneath — its two rows bind to two different upstream entities " +
-      "the feed names alike, so the `externalId` would split them too; see §4a. **So the " +
+      "the feed names alike, so the `externalId` would split them too; see `identity.md`. **So the " +
       "park payload's number is the one that describes the park**, and this route's surplus " +
       "is duplicate rows rather than hidden attractions (PAR-259).",
   })

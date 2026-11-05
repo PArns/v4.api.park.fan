@@ -10,6 +10,7 @@ export const ADMIN_PUBLIC_KEY = "adminPublic";
 export const ADMIN_MIN_ROLE_KEY = "adminMinRole";
 export const ADMIN_ALLOW_PENDING_PASSWORD_KEY = "adminAllowPendingPassword";
 export const ADMIN_LEGACY_ALLOWED_KEY = "adminLegacyAllowed";
+export const ADMIN_TOKEN_ONLY_KEY = "adminTokenOnly";
 
 /**
  * Marks an endpoint as reachable without a session — the login form, and
@@ -62,6 +63,18 @@ export const AdminLegacyAccess = (
   allowed: boolean,
 ): MethodDecorator & ClassDecorator =>
   SetMetadata(ADMIN_LEGACY_ALLOWED_KEY, allowed);
+
+/**
+ * Marks the surface API tokens are issued for, and the only one they reach.
+ *
+ * Such an endpoint accepts a personal access token or an OAuth access token
+ * and nothing else: not a session, which was never issued for it, and not the
+ * shared pass. Every other endpoint refuses API tokens, so one added later is
+ * closed to them until it says otherwise. The token's role is already capped
+ * when the guard checks `@AdminMinRole`.
+ */
+export const AdminTokenOnly = (): MethodDecorator & ClassDecorator =>
+  SetMetadata(ADMIN_TOKEN_ONLY_KEY, true);
 
 /** Injects the authenticated principal into a handler parameter. */
 export const CurrentAdmin = createParamDecorator(

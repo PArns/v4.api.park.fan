@@ -6,7 +6,8 @@
  * them", "something is broken" — and a caller could not tell them apart.
  * Measured against production on 2026-09-14: of 73 parks with a park-wide
  * OPERATING entry for 2026-10-14, **19 (26 %) came back empty**, and those 19
- * carry six different causes. See `docs/frontend/plan-day-endpoint.md` §11.
+ * carry six different causes. See
+ * `docs/frontend/plan-day/availability.md#a-day-with-no-rides-says-why-ridesunavailable`.
  *
  * Two of them mean the plan is not coming back: a park that publishes no wait
  * times anywhere readable has none to publish. The rest are gaps that close on
@@ -143,7 +144,7 @@ export interface PlanDayAvailabilityInput {
  * sits **after** the feed checks on purpose: `season_out_since` is written by a
  * detector that reads the feed, so on a park whose feed stopped in June "out of
  * season" is our own bookkeeping rather than the operator's word, and reporting
- * it there would be exactly the substitution `claude.md` §4 bans. With a live
+ * it there would be exactly the substitution `docs/rules/absent-facts.md` bans. With a live
  * feed the note means what it says and is reported.
  */
 export function classifyPlanDayUnavailable(
@@ -167,7 +168,7 @@ export function classifyPlanDayUnavailable(
   //
   // `season_out_since` is written by a detector that reads the feed, so with
   // the feed alive the note means what it says — which is why tier 2 is above
-  // this and not below it (`claude.md` §4). The live-status lookup is what
+  // this and not below it (`docs/rules/absent-facts.md`). The live-status lookup is what
   // lifts a ride back out of that filter, so its failure has to be named before
   // the emptiness it causes, and `rides_cannot_open` is structural: an outage
   // reported there leaves the watched number for good.

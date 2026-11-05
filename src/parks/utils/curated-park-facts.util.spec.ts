@@ -1,4 +1,5 @@
 import {
+  abbreviationsProblem,
   CURATED_PARK_COLUMNS,
   CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
@@ -183,6 +184,7 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
       "curated_name",
       "curated_park_type",
       "curated_article_de",
+      "curated_abbreviations",
       "curated_no_wait_times_reason",
       "curated_uses_twelve_hour_clock",
       "curated_has_early_entry",
@@ -247,6 +249,71 @@ describe("resolveArticleDe", () => {
       resolveCuratedPark({ curatedArticleDe: "ein" }).articleDe,
     ).toBeNull();
     expect(resolveCuratedPark({ curatedArticleDe: "  " }).articleDe).toBeNull();
+  });
+});
+
+describe("resolveAbbreviations", () => {
+  it("splits the curated column at commas", () => {
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: "EP, Europapark" })
+        .abbreviations,
+    ).toEqual(["EP", "Europapark"]);
+  });
+
+  it("is empty when nobody wrote any", () => {
+    expect(resolveCuratedPark({}).abbreviations).toEqual([]);
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: " , " }).abbreviations,
+    ).toEqual([]);
+  });
+
+  it("drops duplicates in any case and entries too long to be one", () => {
+    expect(
+      resolveCuratedPark({
+        curatedAbbreviations: "PHL, phl, Phantasialand Brühl",
+      }).abbreviations,
+    ).toEqual(["PHL"]);
+  });
+
+  it("keeps at most five", () => {
+    expect(
+      resolveCuratedPark({ curatedAbbreviations: "A, B, C, D, E, F" })
+        .abbreviations,
+    ).toEqual(["A", "B", "C", "D", "E"]);
+  });
+
+  it("drops the park's own name", () => {
+    expect(
+      resolveCuratedPark({ name: "Efteling", curatedAbbreviations: "efteling" })
+        .abbreviations,
+    ).toEqual([]);
+  });
+});
+
+describe("abbreviationsProblem", () => {
+  it("accepts what would be served as typed", () => {
+    expect(
+      abbreviationsProblem({ name: "Europa-Park", curatedAbbreviations: "EP" }),
+    ).toBeNull();
+    expect(abbreviationsProblem({ curatedAbbreviations: null })).toBeNull();
+  });
+
+  it("names what would be dropped or misread", () => {
+    expect(abbreviationsProblem({ curatedAbbreviations: "EP; PHL" })).toMatch(
+      /commas/,
+    );
+    expect(
+      abbreviationsProblem({ curatedAbbreviations: "A, B, C, D, E, F" }),
+    ).toMatch(/At most 5/);
+    expect(
+      abbreviationsProblem({ curatedAbbreviations: "Phantasialand Brühl" }),
+    ).toMatch(/longer than 12/);
+    expect(
+      abbreviationsProblem({
+        name: "Efteling",
+        curatedAbbreviations: "Efteling",
+      }),
+    ).toMatch(/park's name/);
   });
 });
 

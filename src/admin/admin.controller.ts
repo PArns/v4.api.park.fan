@@ -31,7 +31,10 @@ import {
   RideProfileAuditService,
   RideProfileTermAudit,
 } from "../attractions/services/ride-profile-audit.service";
-import { ParkValidatorService } from "../parks/services/park-validator.service";
+import {
+  ParkValidatorService,
+  type DuplicatePairVerdict,
+} from "../parks/services/park-validator.service";
 import { ParkRepairService } from "../parks/services/park-repair.service";
 import {
   AttractionMergeService,
@@ -54,6 +57,7 @@ import {
 } from "../ml/dto/model-comparison.dto";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
 import { MlOverviewService } from "./ml-overview.service";
+import { AdminQueueStatusService } from "./admin-queue-status.service";
 import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
@@ -179,6 +183,7 @@ export class AdminController {
     private readonly forecastArchiveScoring: ForecastArchiveScoringService,
     private readonly modelComparison: ModelComparisonService,
     private readonly mlOverview: MlOverviewService,
+    private readonly queueStatus: AdminQueueStatusService,
   ) {}
 
   /**
@@ -340,24 +345,7 @@ export class AdminController {
   })
   async getDataQuality(@Query("windowDays") windowDays?: string) {
     const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
-    const [
-      silencedClusters,
-      failingJobs,
-      absenceRetiredUnreviewed,
-      reissueCandidates,
-    ] = await Promise.all([
-      this.dataQualityMonitor.findSilencedClusters(days),
-      this.dataQualityMonitor.findFailingJobs(),
-      this.dataQualityMonitor.findAbsenceRetiredUnreviewed(),
-      this.dataQualityMonitor.findReissueCandidates(),
-    ]);
-    return {
-      windowDays: days,
-      silencedClusters,
-      failingJobs,
-      absenceRetiredUnreviewed,
-      reissueCandidates,
-    };
+    return this.dataQualityMonitor.report(days);
   }
 
   /**
@@ -367,7 +355,8 @@ export class AdminController {
    * endpoint counts distinct clock hours carrying a DOWN reading, across the
    * whole park-local calendar day and with no opening-hours bound, so it reads
    * 16 on a ten-hour park day. Every threshold in
-   * `docs/analytics/ride-downtime.md` is provisional until this has run.
+   * `docs/analytics/ride-downtime/publishing.md#ride-gates` is provisional until
+   * this has run.
    */
   @Get("downtime-measurement")
   @ApiOperation({
@@ -445,6 +434,7 @@ export class AdminController {
    * run, which has no history to be incremental about.
    */
   @Post("rebuild-downtime")
+  @AdminMinRole("editor")
   @ApiOperation({
     summary: "Run the downtime reconstruction now",
     description:
@@ -496,33 +486,10 @@ export class AdminController {
     description: "Active/pending/failed/delayed counts per queue",
   })
   async getQueueStatus(): Promise<Record<string, unknown>> {
-    const queues = [
-      { name: "wait-times", queue: this.waitTimesQueue },
-      { name: "park-metadata", queue: this.parkMetadataQueue },
-      { name: "ml-training", queue: this.mlTrainingQueue },
-      { name: "prediction-accuracy", queue: this.accuracyQueue },
-      { name: "analytics", queue: this.analyticsQueue },
-      { name: "holidays", queue: this.holidaysQueue },
-      { name: "park-enrichment", queue: this.parkEnrichmentQueue },
-      { name: "children-metadata", queue: this.childrenQueue },
-      // The queues you can trigger by hand were missing from this list, which
-      // is exactly when you want it: after firing one of those endpoints there
-      // was no way to see whether the job was waiting, failed or done.
-      { name: "manual-metadata", queue: this.manualMetadataQueue },
-      { name: "six-flags-heights", queue: this.sixFlagsHeightsQueue },
-      { name: "ride-stats", queue: this.rideStatsQueue },
-    ];
-    const results = await Promise.all(
-      queues.map(async ({ name, queue }) => ({
-        name,
-        active: await queue.getActiveCount(),
-        pending: await queue.getWaitingCount(),
-        failed: await queue.getFailedCount(),
-        delayed: await queue.getDelayedCount(),
-        completed: await queue.getCompletedCount(),
-      })),
-    );
-    return { timestamp: new Date().toISOString(), queues: results };
+    return {
+      timestamp: new Date().toISOString(),
+      queues: await this.queueStatus.counts(),
+    };
   }
 
   /**
@@ -544,39 +511,15 @@ export class AdminController {
     @Query("queue") queueName: string,
     @Query("limit") limit?: string,
   ): Promise<Record<string, unknown>> {
-    const queues: Record<string, Queue> = {
-      "wait-times": this.waitTimesQueue,
-      "park-metadata": this.parkMetadataQueue,
-      "children-metadata": this.childrenQueue,
-      "manual-metadata": this.manualMetadataQueue,
-      "six-flags-heights": this.sixFlagsHeightsQueue,
-      "ride-stats": this.rideStatsQueue,
-      analytics: this.analyticsQueue,
-      "prediction-accuracy": this.accuracyQueue,
-    };
-    const queue = queues[queueName];
-    if (!queue) {
+    const count = Math.min(Number(limit) || 3, 20);
+    const failures = await this.queueStatus.failures(queueName, count);
+    if (!failures) {
       return {
         error: `Unknown queue "${queueName}"`,
-        known: Object.keys(queues),
+        known: this.queueStatus.inspectableQueues(),
       };
     }
-
-    const count = Math.min(Number(limit) || 3, 20);
-    const jobs = await queue.getFailed(0, count - 1);
-    return {
-      queue: queueName,
-      failures: jobs.map((job) => ({
-        id: job.id,
-        name: job.name,
-        data: job.data as unknown,
-        attemptsMade: job.attemptsMade,
-        failedReason: job.failedReason,
-        // First frames only: the interesting line is always near the top and
-        // a full stack turns this response into a wall.
-        stack: (job.stacktrace ?? []).join("\n").split("\n").slice(0, 12),
-      })),
-    };
+    return { queue: queueName, failures };
   }
 
   /**
@@ -619,7 +562,7 @@ export class AdminController {
       "D9 (coverage). Counters are pooled before dividing. `chronos`: the " +
       "Chronos-2 shadow (PAR-852, never served) per use case × lead — own " +
       "MAE plus the paired difference vs served / persistence / H5 with a " +
-      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive.md.",
+      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive/scoring.md#admin-board.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
   @ApiQuery({
@@ -654,7 +597,7 @@ export class AdminController {
       "Cells: today | better | worse | unclear | pending, with the live " +
       "paired difference (model − served, minutes, negative = better) and its " +
       "95 % park-cluster CI, the offline verdict, the three switch checks and " +
-      "when the outstanding one reports. See docs/ml/forward-archive.md §9.",
+      "when the outstanding one reports. See docs/ml/forward-archive/model-comparison.md.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 28" })
   @ApiQuery({
@@ -1716,49 +1659,14 @@ export class AdminController {
     total: number;
     safe: number;
     needsReview: number;
-    pairs: Array<{
-      park1: { id: string; name: string; city: string | null };
-      park2: { id: string; name: string; city: string | null };
-      score: number;
-      reason: string;
-      winnerId: string | null;
-      loserId: string | null;
-      safe: boolean;
-      reviewReason: string | null;
-    }>;
+    pairs: DuplicatePairVerdict[];
   }> {
-    const duplicates = await this.parkValidatorService.findDuplicates();
-    if (duplicates.length === 0)
-      return { total: 0, safe: 0, needsReview: 0, pairs: [] };
-
-    // One query for every park involved, rather than two per pair.
-    const parkRepo = this.parkValidatorService.getParkRepository();
-    const ids = Array.from(
-      new Set(duplicates.flatMap((d) => [d.park1.id, d.park2.id])),
-    );
-    const parks = await parkRepo.find({ where: { id: In(ids) } });
-    const parkById = new Map(parks.map((park) => [park.id, park]));
-
+    const pairs = await this.parkValidatorService.findDuplicatesWithWinners();
     return {
-      total: duplicates.length,
-      safe: duplicates.filter((d) => d.safe).length,
-      needsReview: duplicates.filter((d) => !d.safe).length,
-      pairs: duplicates.map((duplicate) => {
-        const park1 = parkById.get(duplicate.park1.id);
-        const park2 = parkById.get(duplicate.park2.id);
-        const verdict =
-          park1 && park2 ? determineMergeWinner(park1, park2) : null;
-        return {
-          park1: duplicate.park1,
-          park2: duplicate.park2,
-          score: duplicate.score,
-          reason: duplicate.reason,
-          winnerId: verdict?.winnerId ?? null,
-          loserId: verdict?.loserId ?? null,
-          safe: duplicate.safe,
-          reviewReason: duplicate.reviewReason,
-        };
-      }),
+      total: pairs.length,
+      safe: pairs.filter((p) => p.safe).length,
+      needsReview: pairs.filter((p) => !p.safe).length,
+      pairs,
     };
   }
 

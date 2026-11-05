@@ -21,6 +21,7 @@ from db import (
     fetch_attraction_ids_for_park,
     FROZEN_OUT_OF_WINDOW_SQL,
     MEASURED_DAY_SCHEDULE_SQL,
+    _evict_expired_entries,
 )
 from config import get_settings
 from features import (
@@ -180,25 +181,6 @@ _SERVING_QUEUE_FILTER = f"""
                     ))
                 )
 """
-
-
-def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
-    """Drop cache buckets older than `ttl`, tolerating concurrent mutation.
-
-    The cache is a module-level dict shared by the threadpool threads of one
-    worker process (sync `def predict` handlers). Two races follow from that:
-
-    - Iterating `cache.items()` while another thread inserts a bucket raised
-      "dictionary changed size during iteration" and failed the whole request
-      with an HTTP 500 (PAR-815). The iteration now runs over a snapshot taken
-      in one C-level call, and `_cached_read` holds `_recent_cache_lock` around
-      eviction and insertion.
-    - A key collected as expired can already be gone by the time we act on it;
-      `del` raised KeyError for the thread that lost that race (2026-08-31).
-      `pop(..., None)` makes losing it a no-op — the entry we wanted gone is gone.
-    """
-    for key in [k for k, (_, ts) in list(cache.items()) if now_ts - ts >= ttl]:
-        cache.pop(key, None)
 
 
 def _bucket_end_time(end_time: Optional[datetime]) -> datetime:
@@ -1025,7 +1007,10 @@ def fetch_weather_climatology(park_ids: list[str], months: list[int]) -> pd.Data
         clim = pd.DataFrame(columns=CLIMATOLOGY_COLUMNS)
     else:
         clim["month"] = clim["month"].astype(int)
-    _weather_historical_cache[cache_key] = (clim.copy(), time.time())
+    now_ts = time.time()
+    # The key carries the park and month sets, so evict on write (PAR-1149).
+    _evict_expired_entries(_weather_historical_cache, now_ts, _weather_historical_cache_ttl)
+    _weather_historical_cache[cache_key] = (clim.copy(), now_ts)
     return clim
 
 
@@ -1948,7 +1933,7 @@ def crowd_level_for(
     The TYPICAL-DAY-PEAK baseline comes first so the ML service's crowd levels
     match the calendar (100% = a typical day = moderate); P50 when it is absent.
     Without either there is no baseline to rate against, and the answer is
-    ("unknown", 0.0) (rule 3, docs/rules/crowd-levels.md) - never a placeholder
+    ("unknown", 0.0) (docs/rules/crowd-levels.md) - never a placeholder
     "moderate", and never the ride's own rolling_avg_7d, which rates on a
     different scale than the park path does (PAR-943). The 0.0 baseline keeps
     the API's served re-tiering (PCN / Chronos, gated on baseline > 0) off it.

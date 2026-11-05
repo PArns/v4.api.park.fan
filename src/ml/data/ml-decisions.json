@@ -1,5 +1,5 @@
 {
-  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired. evaluateOn (PAR-1036, owner decision): the fixed date on which a decision is judged, once, on the matrix window ending the day before; before it the decision is never 'ready', after it the verdict no longer moves. Each date is at least the earliest the gate can be met (ARCHIVE_START 2026-10-09 + the longest lead of the decision's cells + 14 days; a spec checks it) and, for the short-lead decisions, two weeks after the paired-definition-3 deploy so it does not rest on the replay alone. expect (PAR-1042): absent = the cell's model must beat what is served; 'not_better' = the live gate is met and the model does not beat what is served (live check 'no') — for switching a model off, on cells that measure it against its replacement. To re-judge a decision, move its evaluateOn to a later date here; to stop the fixed date, remove the field.",
+  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive/model-comparison.md): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired. evaluateOn (PAR-1036, owner decision): the fixed date on which a decision is judged, once, on the matrix window ending the day before; before it the decision is never 'ready', after it the verdict no longer moves. Each date is at least the earliest the gate can be met (ARCHIVE_START 2026-10-09 + the longest lead of the decision's cells + 14 days; a spec checks it) and, for the short-lead decisions, two weeks after the paired-definition-3 deploy so it does not rest on the replay alone. expect (PAR-1042): absent = the cell's model must beat what is served; 'not_better' = the live gate is met and the model does not beat what is served (live check 'no') — for switching a model off, on cells that measure it against its replacement. To re-judge a decision, move its evaluateOn to a later date here; to stop the fixed date, remove the field.",
   "decisions": [
     {
       "id": "planner_h5_slots",
@@ -41,7 +41,7 @@
       "id": "calendar_tft_headliners",
       "title": "Kalender: TFT nur noch für volle Fahrgeschäfte",
       "detail": "TFT verliert im Kalender leicht gegen den Wochentag-Durchschnitt, nicht sicher.",
-      "evaluateOn": "2026-12-22",
+      "evaluateOn": "2026-12-07",
       "cells": [
         { "questionId": "cal_rank", "modelId": "tft" },
         { "questionId": "cal_rank", "modelId": "wkd" },
@@ -55,7 +55,7 @@
       "id": "calendar_tft_grid",
       "title": "Kalender: TFT mit Lücken-Raster",
       "detail": "Dasselbe Tagesmodell, trainiert auf jedem Kalendertag statt nur auf Öffnungstagen, mit Öffnungsplan und Schulferien. Läuft seit dem Deploy jede Nacht nebenher und wird nur im Archiv mit dem heutigen TFT verglichen. Offline ist es noch nicht gemessen; erst danach kann es den heutigen TFT im Kalender ersetzen.",
-      "evaluateOn": "2027-01-08",
+      "evaluateOn": "2026-12-24",
       "cells": [
         { "questionId": "cal_rank", "modelId": "tft_grid" },
         { "questionId": "cal_busier", "modelId": "tft_grid" },
@@ -66,7 +66,7 @@
       "id": "calendar_tft_grid_drivers",
       "title": "Kalender: TFT mit Lücken-Raster + Treibern",
       "detail": "Wie das Lücken-Raster, zusätzlich mit Öffnungszeiten gegenüber den letzten vier gleichen Wochentagen, spätem Schluss, dem ersten Tag nach einer Schließung und Ferienanfang/-ende, und mit der zeitgewichteten Tagesspitze als Ziel. Läuft als eigenes Modell neben dem Lücken-Raster, damit beide getrennt gegen den heutigen TFT gemessen werden. Offline ist es noch nicht gemessen.",
-      "evaluateOn": "2027-01-08",
+      "evaluateOn": "2026-12-24",
       "cells": [
         { "questionId": "cal_rank", "modelId": "tft_grid_drivers" },
         { "questionId": "cal_busier", "modelId": "tft_grid_drivers" },
@@ -81,9 +81,21 @@
       "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
       "evaluateOn": "2027-01-21",
       "cells": [
-        { "questionId": "cal_rank", "modelId": "catboost", "expect": "not_better" },
-        { "questionId": "cal_busier", "modelId": "catboost", "expect": "not_better" },
-        { "questionId": "cal_far", "modelId": "catboost", "expect": "not_better" },
+        {
+          "questionId": "cal_rank",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
+        {
+          "questionId": "cal_busier",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
+        {
+          "questionId": "cal_far",
+          "modelId": "catboost",
+          "expect": "not_better"
+        },
         { "questionId": "cal_far_90", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "wkd" }
       ]

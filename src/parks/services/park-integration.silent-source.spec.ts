@@ -156,6 +156,8 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
       ]),
     ),
     hasObservedReadingWithin: jest.fn().mockResolvedValue(true),
+    // PAR-1100's probe for rides with no current row; empty unless a test says so.
+    findNeverObservedAttractionIds: jest.fn().mockResolvedValue(new Set()),
   };
 
   const parksService = {
@@ -433,6 +435,20 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
     // closure to retract — that case belongs to the optimism one branch
     // further down and is not this rule's decision to take.
     expect(rideIn(dto, SILENT)?.status).not.toBe("UNKNOWN");
+  });
+
+  it("hands a ride with no current row and no reading ever to the never-observed rule", async () => {
+    queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(new Map());
+    queueDataService.findNeverObservedAttractionIds.mockResolvedValueOnce(
+      new Set([SILENT]),
+    );
+
+    const dto = await buildResponse(buildPark(threeRides()));
+
+    // PAR-1100 owns this ride, not the silent-source rule: no row, so nothing
+    // published to retract, but no reading ever either, so no optimism.
+    expect(rideIn(dto, SILENT)?.status).toBe("UNKNOWN");
+    expect(rideIn(dto, MEASURED)?.status).toBe("OPERATING");
   });
 
   it("leaves every ride alone before the job has ever run", async () => {

@@ -20,7 +20,11 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
-import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
+import {
+  PARK_OBSERVED_READING_SQL,
+  observedReadingsSql,
+} from "../common/utils/closure-gap.sql";
+import { isCanonicalUuid } from "../common/utils/uuid-param.util";
 import { HEARTBEAT_SOURCE } from "../common/utils/outage-rows.sql";
 import { RECONCILIATION_SOURCE } from "../common/utils/source-absent-status.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
@@ -998,6 +1002,62 @@ export class QueueDataService {
       [parkId, days],
     );
     return rows.length > 0;
+  }
+
+  /**
+   * The subset of `attractionIds` no source has ever reported: not one
+   * observed row in `queue_data` (heartbeats and reconciliation do not count).
+   *
+   * Unbounded in time on purpose — "never" is the question, and the table has
+   * no retention policy. Callers pass only the rides that have no row in the
+   * live window, so a working park asks about none or a handful; a ride with
+   * history stops at its first row. A row we cannot classify counts as an
+   * observation (`COALESCE(…, true)`), the optimistic direction
+   * `hasObservedReadingWithin` takes too.
+   *
+   * The answer is cached per ride in Redis: the park payload is rebuilt every
+   * five minutes for every open park, and the unbounded probe can't prune a
+   * single chunk. "Observed" never reverts, so it is kept a day; "never" an
+   * hour, so a ride's first reading is honoured soon (it then has a live row
+   * and stops being asked about anyway).
+   */
+  async findNeverObservedAttractionIds(
+    attractionIds: string[],
+  ): Promise<Set<string>> {
+    const ids = attractionIds.filter(isCanonicalUuid);
+    if (ids.length === 0) return new Set();
+    const keys = ids.map((id) => `never-observed:v1:${id}`);
+    const cached = await this.redis.mget(...keys);
+    const never = new Set(ids.filter((_, i) => cached[i] === "1"));
+    const misses = ids.filter((_, i) => cached[i] == null);
+    if (misses.length === 0) return never;
+
+    const rows: Array<{ id: string }> = await this.queueDataRepository.query(
+      // `u.id`, qualified: a bare `id` inside the subquery is queue_data's own
+      // primary key, which turns the probe into a full-table scan that never matches.
+      `SELECT u.id::text AS id
+         FROM unnest($1::uuid[]) AS u(id)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM queue_data qd
+           WHERE qd."attractionId" = u.id
+             AND COALESCE(${observedReadingsSql("qd")}, true)
+        )`,
+      [misses],
+    );
+    const found = new Set(rows.map((r) => r.id));
+    const pipeline = this.redis.pipeline();
+    for (const id of misses) {
+      const isNever = found.has(id);
+      if (isNever) never.add(id);
+      pipeline.set(
+        `never-observed:v1:${id}`,
+        isNever ? "1" : "0",
+        "EX",
+        isNever ? 60 * 60 : 24 * 60 * 60,
+      );
+    }
+    await pipeline.exec();
+    return never;
   }
 
   /**

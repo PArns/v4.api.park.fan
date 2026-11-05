@@ -19,7 +19,6 @@ import {
   buildCityDiscoveryUrl,
 } from "../common/utils/url.util";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
-import { cleanSlugSuffix } from "../common/utils/slug.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -32,7 +31,10 @@ import { SearchCounts } from "./types/search-counts.type";
 import { PopularityService } from "../popularity/popularity.service";
 import { logToFile } from "../common/utils/file-logger.util";
 import { resolveCuratedFacts } from "../attractions/utils/curated-attraction-facts.util";
-import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
+import {
+  resolveAbbreviations,
+  resolveCuratedPark,
+} from "../parks/utils/curated-park-facts.util";
 
 interface ParkIndexData {
   id: string;
@@ -48,6 +50,11 @@ interface ParkIndexData {
   country: string;
   city: string;
   destination: { id: string; name: string } | null;
+  /**
+   * The curated abbreviations („EP", „SFGA"), folded to lower-case letters
+   * and digits. Absent on an index cached before they were indexed.
+   */
+  abbreviations?: string[];
 }
 
 interface AttractionIndexEntry {
@@ -273,7 +280,7 @@ export class SearchService implements OnModuleInit {
 
     // Build cache key
     const typeKey = type && type.length > 0 ? type.join(",") : "all";
-    const cacheKey = `search:fuzzy:v1:${typeKey}:${q.toLowerCase()}`;
+    const cacheKey = `search:fuzzy:v2:${typeKey}:${limit}:${q.toLowerCase()}`;
 
     // Try cache first
     const cachedResponse = safeJsonParse<SearchResultDto>(
@@ -388,8 +395,14 @@ export class SearchService implements OnModuleInit {
       secondary: (string | null | undefined)[] = [],
     ): boolean =>
       this.isLiteralHit(exactQueryLc, exactQueryNorm, name, secondary);
+    // A park's curated abbreviation ("EP", "SFGA") is as good as its name.
+    const abbreviationHit = (p: (typeof rawParks)[number]): boolean =>
+      exactQueryNorm.length > 0 &&
+      ((p as Partial<ParkIndexData>).abbreviations ?? []).includes(
+        exactQueryNorm,
+      );
     const literalPark = (p: (typeof rawParks)[number]): boolean =>
-      literal(p.name, [p.city, p.country, p.continent]);
+      abbreviationHit(p) || literal(p.name, [p.city, p.country, p.continent]);
     const literalAttraction = (a: (typeof rawAttractions)[number]): boolean =>
       literal(a.name, [a.landName]);
     const literalName = (e: { name: string }): boolean => literal(e.name);
@@ -442,13 +455,16 @@ export class SearchService implements OnModuleInit {
     // (Blackpool, open) above the ride actually called Flyer (Knoebels, closed).
     // "Verbatim" ignores punctuation and accents, the same way the matcher does,
     // so "fly" is an exact hit on "F.L.Y." and "farup" on "Fårup Sommerland".
+    // A park's curated abbreviation counts as its name: "EP" is Europa-Park
+    // even on a day it is closed and Thorpe Park is open.
     // Deliberately narrow: prefix and substring hits stay subject to OPERATING-first.
     const isVerbatimName = (c: Candidate): boolean => {
       const name = this.fold(c.entity.name).toLowerCase();
       return (
         name === exactQueryLc ||
         (exactQueryNorm.length > 0 &&
-          name.replace(/[^a-z0-9]/g, "") === exactQueryNorm)
+          name.replace(/[^a-z0-9]/g, "") === exactQueryNorm) ||
+        (c.type === "park" && abbreviationHit(c.entity))
       );
     };
 
@@ -1349,11 +1365,11 @@ export class SearchService implements OnModuleInit {
         type: "attraction" as const,
         id: attraction.id,
         name: resolveCuratedFacts(attraction).name,
-        slug: cleanSlugSuffix(attraction.slug),
+        // As stored: stripping `-<digits>` made `apollo-13` read `apollo` and
+        // sent a `-2` twin's hit to the other ride.
+        slug: attraction.slug,
         url: attraction.park
-          ? buildAttractionUrl(attraction.park, {
-              slug: cleanSlugSuffix(attraction.slug),
-            })
+          ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
           : null,
         latitude: attraction.park?.latitude
           ? Number(attraction.park.latitude)
@@ -1918,6 +1934,7 @@ export class SearchService implements OnModuleInit {
         "park.continent",
         "park.country",
         "park.city",
+        "park.curatedAbbreviations",
         "destination.id",
         "destination.name",
       ])
@@ -1945,7 +1962,17 @@ export class SearchService implements OnModuleInit {
       destination: park.destination
         ? { id: park.destination.id, name: park.destination.name }
         : null,
+      abbreviations: resolveAbbreviations(park)
+        .map((abbreviation) => this.normalizedTerm(abbreviation))
+        .filter(Boolean),
     };
+  }
+
+  /** A term as the park ranking compares it: folded, lower case, letters and digits only. */
+  private normalizedTerm(term: string): string {
+    return this.fold(term)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
   }
 
   private async loadAttractionIndexFromDb(): Promise<AttractionIndexEntry[]> {
@@ -2425,7 +2452,11 @@ export class SearchService implements OnModuleInit {
    * Mirrors the searchParks() ranking CASE: matches on name / normalized name /
    * city / country / continent / trigram, and assigns the same priority tiers
    * (0 exact name, 1 normalized exact, 2 prefix, 3 popularity, 4 exact city,
-   * 5 other). dmetaphone is approximated by the trigram threshold.
+   * 5 other). dmetaphone is approximated by the trigram threshold. A query
+   * that is one of a park's curated abbreviations ranks that park above all
+   * of them: „EP" is Europa-Park, not the parks whose names hold the letters.
+   * The SQL path, which serves only until the index has loaded, has no
+   * abbreviations.
    */
   private searchParksInProcess(q: string, limit: number): ParkIndexData[] {
     const {
@@ -2464,7 +2495,10 @@ export class SearchService implements OnModuleInit {
           qWords,
         );
 
+      const abbreviation =
+        qNorm.length > 0 && (park.abbreviations ?? []).includes(qNorm);
       const literal =
+        abbreviation ||
         nameLower.includes(qLower) ||
         (qNorm.length > 0 && nameNorm.includes(qNorm)) ||
         cityLower.includes(qLower) ||
@@ -2473,7 +2507,8 @@ export class SearchService implements OnModuleInit {
       if (!literal && sim < 0.3 && !fuzzyWord && !fuzzyCity) continue;
 
       let tier: number;
-      if (nameLower === qLower) tier = 0;
+      if (abbreviation) tier = -1;
+      else if (nameLower === qLower) tier = 0;
       else if (qNorm.length > 0 && nameNorm === qNorm) tier = 1;
       else if (nameLower.startsWith(qLower)) tier = 2;
       else if (cityLower === qLower) tier = 4;
@@ -2670,7 +2705,8 @@ export class SearchService implements OnModuleInit {
         const batch = terms.slice(i, i + batchSize);
         await Promise.all(
           batch.map((term) =>
-            this.search({ q: term, limit: 10 } as any).catch(() => null),
+            // The default limit: the one park.fan sends, so the warm key is the one it reads.
+            this.search({ q: term } as any).catch(() => null),
           ),
         );
         // Small pause between batches

@@ -1,51 +1,49 @@
-# Smart Gaps: Operating Hours & Status Inference
+# Smart gaps: opening hours inferred from ride activity
 
-The "Smart Gaps" system is a core part of the park.fan API intelligence. It allows the platform to provide a rich user experience even for parks that do not provide official operating hours via an API (e.g., Efteling, Hellendoorn) and ensures accurate data across seasonal closures.
+How the calendar fills in a park that publishes no opening hours (Efteling, Hellendoorn, many parks fed
+only by wait-time sources): reconstructed hours for past days, the open/closed verdict, the seasonal
+off-season rule and the flags that mark all of it as estimated. Open it before changing
+`ParksService.getDerivedHistoricalHours` or the status branch of `CalendarService.buildCalendarDay`.
+What `UNKNOWN` and `CLOSED` mean on the calendar is [the calendar rules](../architecture/calendar-schedule-and-ml-rules.md).
 
-## 1. The Problem
-Many theme parks only provide real-time wait times but no digital calendar for their opening hours. Without this data:
-- Future planning is difficult (users don't know if the park might be open).
-- Historical analytics are messy (no clear "opening" or "closing" time to anchor wait-time curves).
-- Seasonal closures look like "data gaps" rather than planned shutdowns.
+## Reconstructed hours
 
-## 2. Historical Hour Reconstruction (Smart Gaps)
+`ParksService.getDerivedHistoricalHours` (one window-function query, cached) works in 15-minute slots:
 
-For past days without official schedule data, the system reconstructs opening hours from raw attraction activity.
+1. **Service points are left out**: rides whose name contains `bar`, `snack`, `restaurant`, `shop`, `cafe`,
+   `corner` or `hire` would otherwise make a park look open around the clock.
+2. **A slot is active** when at least 10 % of the park's rides, at least 2 and at most 10, show a wait of
+   ≥ 5 minutes at the same time. Early test runs and maintenance stay below it.
+3. **Opening** is the first active slot, rounded down to the hour (10:15 → 10:00); **closing** the end of the
+   last active slot, rounded up (17:15 → 18:00).
 
-### The Algorithm
-The reconstruction works in 15-minute sliding windows:
+## Which days it decides
 
-1.  **Gastro/Service Filtering:** Attractions with names containing keywords like *bar, snack, restaurant, shop, cafe, corner, hire* are excluded from activity measurements to prevent 24h false-positives from service points.
-2.  **Activity Threshold (10%):** A park is considered "active" in a window only if at least **10% of its rides** (minimum 2, maximum 10) simultaneously show a wait time of **≥ 5 minutes**. This filters out early-morning test runs and maintenance.
-3.  **Opening Time:** The start of the first 15-minute window that reaches the threshold, rounded **down** to the nearest full hour (e.g., 10:15 AM → 10:00 AM).
-4.  **Closing Time:** The end of the last 15-minute window that reaches the threshold, rounded **up** to the nearest full hour (e.g., 5:15 PM → 6:00 PM).
-5.  **Status Validation:** If the threshold is never reached for a day, the day is marked as `CLOSED`, and all crowd/analytics data is suppressed to prevent "ghost" records.
+Only for a park with no `OPERATING` schedule row at all (`hasOperatingSchedule = false`):
 
-## 3. Seasonal Detection
+- a past day or today with reconstructed hours reads `OPERATING`, `isEstimated: true`;
+- a strictly past day with no active slot reads `CLOSED`, `isEstimated: true`, and its crowd figures are
+  suppressed;
+- today with no activity yet stays `UNKNOWN`, so predictions still show.
 
-The system automatically distinguishes between year-round and seasonal parks via the `isParkSeasonal` check.
+Separately, any `UNKNOWN` day is set to `CLOSED` by `isClosedByOperatingRange` when it lies **between** two
+operating dates, or **outside** the known operating range of a **seasonal** park (`isParkSeasonal`: a gap of
+more than 21 days between `OPERATING` rows). A year-round park keeps `UNKNOWN` outside its range, so the
+calendar can still show crowd predictions for months whose hours are not published yet. The yearly
+predictions share the same function.
 
-- **Logic:** It scans the database for historical gaps of more than 21 days between `OPERATING` entries.
-- **Seasonal Parks:** Future dates outside the known operating range are automatically marked as `CLOSED`. This prevents showing crowd predictions for the middle of winter in a park like Hansa-Park.
-- **Year-Round Parks:** Future dates without hours remain as `UNKNOWN`. This allows showing ML-powered crowd and ride-time predictions for trip planning, even if official hours aren't published yet.
+## Flags
 
-## 4. API Flags & Signals
+| Flag                   | Scope | Meaning                                                                   |
+| ---------------------- | ----- | ------------------------------------------------------------------------- |
+| `hasOperatingSchedule` | park  | `false` when the park has no published calendar; the frontend shows a best-effort note. |
+| `isEstimated`          | day   | The status or hours of this day were reconstructed from activity.          |
+| `isInferred`           | hours | The opening and closing times are derived and rounded.                    |
 
-The API provides three main signals to the frontend to communicate data reliability:
+`ParksService.getBatchHasOperatingSchedule` answers the first flag for many parks at once.
 
-| Flag | Scope | Meaning |
-|------|-------|---------|
-| `hasOperatingSchedule` | Park | `false` if the park doesn't provide an official API calendar. Signals to the frontend to show a "Best Effort" disclaimer. |
-| `isEstimated` | Day | `true` if the status or hours for this day were reconstructed from activity. |
-| `isInferred` | Hours | `true` if the specific start/end times are derived/rounded. |
+## ML
 
-## 5. ML Integration
-
-The reconstruction logic is mirrored in the Machine Learning `buildFeatureContext`. 
-
-Instead of using static assumptions (like "Parks usually open at 9 AM"), the ML service receives the **actual detected opening time** for the current day. If the 10% threshold hasn't been met yet, the model receives `null` for the opening time, allowing it to correctly predict "Closed/0min" during the early morning hours.
-
-## 6. Implementation References
-- **SQL Logic:** `ParksService.getDerivedHistoricalHours` (uses Window Functions for performance).
-- **Inference Logic:** `CalendarService.buildCalendarDay`.
-- **Batch Processing:** `ParksService.getBatchHasOperatingSchedule`.
+`MLService.buildFeatureContext` sends today's real opening time when the schedule has one, otherwise the
+reconstructed opening from today's activity. Before the activity threshold is reached the park has no
+opening time in the request, which lets the model predict a closed early morning.

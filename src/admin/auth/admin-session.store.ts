@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
-import { createHash, randomBytes } from "crypto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import type { AdminRole } from "./entities/admin-user.entity";
+import { generateToken, hashToken } from "./token-hash.util";
 
 /**
  * Server-side admin sessions, in Redis.
@@ -78,10 +78,6 @@ export interface IssuedSession {
   session: AdminSession;
 }
 
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 @Injectable()
 export class AdminSessionStore {
   private readonly logger = new Logger(AdminSessionStore.name);
@@ -99,9 +95,7 @@ export class AdminSessionStore {
       lastSeenAt: now,
     };
 
-    // 32 bytes of CSPRNG, base64url — 256 bits of entropy, and no characters
-    // that need escaping in a header or a Set-Cookie value.
-    const token = randomBytes(32).toString("base64url");
+    const token = generateToken();
     const key = SESSION_PREFIX + hashToken(token);
 
     await this.redis.set(key, JSON.stringify(session), "EX", IDLE_TTL_SECONDS);

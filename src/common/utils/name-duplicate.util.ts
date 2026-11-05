@@ -97,9 +97,11 @@ function rank(row: NameDuplicateRow): [number, number, string] {
  * freshness, which would bring the flicker back. It is fixed upstream of this
  * function: `retireAbsentAttractions` in the children sync retires a row whose
  * id has left `/children` for 60 days, and a retired row takes no part in the
- * grouping. Section 5.9 of the doc below has the numbers. Whether the two rows ARE one ride
+ * grouping.
+ * `docs/architecture/attraction-status/reclassification-and-absence.md#an-entity-left-children-par-621`
+ * has the numbers. Whether the two rows ARE one ride
  * is a curation question and not one a grouping key can answer — see
- * `docs/architecture/attraction-status-and-seasonality.md` §4a.
+ * `docs/architecture/attraction-status/identity.md`.
  */
 export function outranksNameDuplicate(
   candidate: NameDuplicateRow,

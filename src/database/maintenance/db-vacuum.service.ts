@@ -127,7 +127,8 @@ export class DbVacuumService {
       user: cfg.username,
       password: cfg.password,
       database: cfg.database,
-      // Same naming rule as the pool (runbook §0b): a lock holder in
+      // Same naming rule as the pool (docs/troubleshooting/timescaledb-lock-queues.md):
+      // a lock holder in
       // pg_stat_activity must say whose session it is.
       application_name: "parkfan-db-maintenance",
     });
@@ -328,7 +329,7 @@ export class DbVacuumService {
    * 5.2 GB heap on 2026-10-24) — VACUUM marks pages reusable but never shrinks
    * an index. CONCURRENTLY works because the table is a plain one (not in
    * `HYPERTABLES`); it takes SHARE UPDATE EXCLUSIVE, never ACCESS EXCLUSIVE,
-   * so reads and writes go on (runbook §0b).
+   * so reads and writes go on (docs/troubleshooting/timescaledb-lock-queues.md).
    *
    * Skipped when another index build is running anywhere, when the table is
    * being vacuumed, or when another maintenance session is active. An

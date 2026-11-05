@@ -13,7 +13,7 @@ import { join } from "path";
  *
  * A full `Test.createTestingModule({ imports: [AppModule] })` would catch more,
  * but it needs Postgres and Redis, so it cannot run in the dev container (see
- * `docs/development/full-db-validation-checklist.md` for why that matters here).
+ * `docs/analytics/crowd-levels.md#checking-the-calibration-against-production` for why that matters here).
  * This reads the decorators instead: no database, no boot, and it catches the
  * one mistake that has actually happened.
  */

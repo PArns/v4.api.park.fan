@@ -15,13 +15,14 @@ import {
 } from "../common/utils/statement-limits.util";
 
 /**
- * Thresholds, all of them provisional.
+ * Thresholds.
  *
- * Every number here is a placeholder until `GET /v1/admin/downtime-measurement`
- * has been run against production and the event distribution is known. They are
- * written down in one object so re-deriving them is an edit to a constant rather
- * than a hunt through a service, and `docs/analytics/ride-downtime.md` records
- * which of them the measurement is supposed to replace.
+ * The event floor (`minOutages`) was confirmed against production on
+ * 2026-09-06 with `GET /v1/admin/downtime-measurement`; the measurement backing
+ * it is in its docblock and in
+ * `docs/analytics/ride-downtime/publishing.md#ride-gates`. They are written down
+ * in one object so re-deriving one is an edit to a constant rather than a hunt
+ * through a service.
  *
  * They are deliberately strict. Publishing nothing is the correct default here,
  * and every one of them was chosen so that the first production run withholds

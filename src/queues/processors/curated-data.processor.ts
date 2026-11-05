@@ -9,17 +9,10 @@ import {
   TouchedPark,
 } from "../../attractions/services/ride-profile.service";
 import { RideProfileAuditService } from "../../attractions/services/ride-profile-audit.service";
-import { RevalidationService } from "../../common/revalidation/revalidation.service";
-
-/**
- * How long the public copy of a park response can outlive a write.
- *
- * The park endpoint is served with `max-age=300, s-maxage=300,
- * stale-while-revalidate=600` and nothing in this service can purge
- * Cloudflare — the edge copy only expires by TTL, so 900s is the worst case.
- * A minute of margin on top covers clock skew and a slow revalidation.
- */
-const CDN_SETTLE_MS = 16 * 60 * 1000;
+import {
+  CDN_SETTLE_MS,
+  RevalidationService,
+} from "../../common/revalidation/revalidation.service";
 
 /**
  * Publishes hand-curated attraction data, and audits the glossary term ids it

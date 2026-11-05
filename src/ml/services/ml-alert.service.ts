@@ -49,7 +49,8 @@ export class MLAlertService {
     // the alert useful (catches a real climb above the q0.8 baseline) without the
     // constant false positive. The honest fix for the quiet over-read is
     // MultiQuantile serving (median for the wait display, q0.8 for the crowd
-    // signal) — see docs/ml/tft-vs-catboost-clean-comparison.md §6.5.
+    // signal) — see
+    // docs/ml/quantile-serving-and-calibration.md#why-these-quantiles-measured.
     //
     // PAR-912: most of that "structural baseline" was not the quantile at all.
     // `overall.mae` averaged every 0 on a day the park was open, and 65–70 % of

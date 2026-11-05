@@ -170,6 +170,14 @@ export class PlanDayRideDto {
   @ApiProperty({ example: "taron" })
   attractionSlug: string;
 
+  @ApiProperty({
+    format: "uuid",
+    description:
+      "The ride's id, which the planner's own events name it by; the slug " +
+      "stays the plan's key.",
+  })
+  attractionId: string;
+
   @ApiProperty({ example: "Taron" })
   attractionName: string;
 
@@ -215,7 +223,7 @@ export class PlanDayRideDto {
       "none of its numbers were composed (all measured, or another tier). " +
       "Diagnostic: it is how the forward archive tells the old composer from " +
       "the new one, and it changes nothing a reader has to do. See " +
-      "docs/frontend/plan-day-endpoint.md §2a.",
+      "docs/frontend/plan-day/slots-and-h5.md.",
   })
   composer?: PlanDayComposer;
 
@@ -436,6 +444,12 @@ export class PlanDayRideDto {
 export class PlanDayShowDto {
   @ApiProperty({ example: "big-moments-the-celebration-show" })
   showSlug: string;
+
+  @ApiProperty({
+    format: "uuid",
+    description: "The show's id, for the planner's events, like a ride's.",
+  })
+  showId: string;
 
   @ApiProperty({ example: "Big Moments – The Celebration-Show" })
   showName: string;
@@ -698,7 +712,7 @@ export class PlanDayAccuracyDto {
  * the union would drop out of the OpenAPI enum without a word. Keying a
  * `Record` by the union makes the compiler demand every one. That drift is
  * exactly how `unknown` stayed out of the published `AttractionStatus` contract
- * for months (`claude.md` §4).
+ * for months (`docs/rules/absent-facts.md`).
  */
 const UNAVAILABLE_REASON_SET: Record<PlanDayUnavailableReason, true> = {
   park_closed: true,
@@ -802,6 +816,12 @@ export class PlanDayClimatologyDto {
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
+
+  @ApiProperty({
+    format: "uuid",
+    description: "The park's id, for the planner's events, like a ride's.",
+  })
+  parkId: string;
 
   @ApiProperty({ example: "Europe/Berlin" })
   timezone: string;

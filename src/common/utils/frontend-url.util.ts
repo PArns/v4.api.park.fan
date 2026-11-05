@@ -32,3 +32,9 @@ export function frontendShowsPath(park: GeocodedEntity): string | null {
   const base = frontendParkPath(park);
   return base ? `${base}#shows` : null;
 }
+
+/** The park's restaurants tab — there is no per-restaurant page on the site. */
+export function frontendRestaurantsPath(park: GeocodedEntity): string | null {
+  const base = frontendParkPath(park);
+  return base ? `${base}#restaurants` : null;
+}

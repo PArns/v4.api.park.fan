@@ -2,13 +2,23 @@ import { Controller, Get, INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import {
+  buildCorsDelegate,
   buildCorsOptions,
   corsOriginMatcher,
   isAllowedCorsOrigin,
+  isPublicCorsPath,
 } from "./cors.config";
 
 @Controller("ping")
 class PingController {
+  @Get()
+  ping(): { ok: boolean } {
+    return { ok: true };
+  }
+}
+
+@Controller("v1/mcp")
+class McpLikeController {
   @Get()
   ping(): { ok: boolean } {
     return { ok: true };
@@ -21,6 +31,16 @@ async function appWithCors(isProduction: boolean): Promise<INestApplication> {
   }).compile();
   const app = moduleRef.createNestApplication({ logger: false });
   app.enableCors(buildCorsOptions(isProduction));
+  await app.init();
+  return app;
+}
+
+async function appWithCorsDelegate(): Promise<INestApplication> {
+  const moduleRef = await Test.createTestingModule({
+    controllers: [PingController, McpLikeController],
+  }).compile();
+  const app = moduleRef.createNestApplication({ logger: false });
+  app.enableCors(buildCorsDelegate(true));
   await app.init();
   return app;
 }
@@ -194,6 +214,84 @@ describe("cors.config", () => {
         .set("Origin", "https://park.fan")
         .expect(200);
       expect(prod.headers["access-control-allow-origin"]).toBeUndefined();
+    });
+  });
+
+  describe("the admin MCP's public surface", () => {
+    let app: INestApplication;
+    afterEach(async () => {
+      await app?.close();
+    });
+
+    it.each([
+      "/v1/mcp",
+      "/v1/oauth/register",
+      "/v1/oauth/token",
+      "/v1/oauth/revoke",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/v1/mcp",
+      "/.well-known/oauth-authorization-server",
+      "/v1/mcp?x=1",
+    ])("treats %s as public", (path) => {
+      expect(isPublicCorsPath(path)).toBe(true);
+    });
+
+    it.each([
+      "/v1/oauth/authorize",
+      "/v1/admin/oauth/requests/x/approve",
+      "/v1/admin/auth/tokens",
+      "/v1/mcp/extra",
+      "/v1/parks",
+      "/.well-known/security.txt",
+    ])("keeps %s on the site's list", (path) => {
+      expect(isPublicCorsPath(path)).toBe(false);
+    });
+
+    it("answers any origin there, without credentials", async () => {
+      app = await appWithCorsDelegate();
+      const preflight = await request(app.getHttpServer())
+        .options("/v1/mcp")
+        .set("Origin", "http://localhost:6274")
+        .set("Access-Control-Request-Method", "POST")
+        .set(
+          "Access-Control-Request-Headers",
+          "authorization,content-type,mcp-protocol-version",
+        )
+        .expect(204);
+      expect(preflight.headers["access-control-allow-origin"]).toBe("*");
+      expect(
+        preflight.headers["access-control-allow-credentials"],
+      ).toBeUndefined();
+      expect(preflight.headers["access-control-allow-headers"]).toContain(
+        "Authorization",
+      );
+      expect(preflight.headers["access-control-allow-headers"]).toContain(
+        "Mcp-Protocol-Version",
+      );
+      const answer = await request(app.getHttpServer())
+        .get("/v1/mcp")
+        .set("Origin", "http://localhost:6274")
+        .expect(200);
+      expect(answer.headers["access-control-expose-headers"]).toContain(
+        "WWW-Authenticate",
+      );
+    });
+
+    it("leaves every other route on the site's own list", async () => {
+      app = await appWithCorsDelegate();
+      const foreign = await request(app.getHttpServer())
+        .get("/ping")
+        .set("Origin", "http://localhost:6274")
+        .expect(200);
+      expect(foreign.headers["access-control-allow-origin"]).toBeUndefined();
+      const site = await request(app.getHttpServer())
+        .get("/ping")
+        .set("Origin", "https://park.fan")
+        .expect(200);
+      expect(site.headers["access-control-allow-origin"]).toBe(
+        "https://park.fan",
+      );
+      expect(site.headers["access-control-allow-credentials"]).toBe("true");
     });
   });
 });

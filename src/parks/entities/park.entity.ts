@@ -240,6 +240,14 @@ export class Park {
   })
   curatedArticleDe: string | null;
 
+  /**
+   * Abbreviations the park is searched by („EP", „PHL", „SFGA"), comma
+   * separated. No feed carries them; `resolveAbbreviations` splits and cleans
+   * them for the payload.
+   */
+  @Column({ name: "curated_abbreviations", type: "text", nullable: true })
+  curatedAbbreviations: string | null;
+
   // Timezone is deliberately NOT curated here, and the reason is worth writing
   // down so it does not get "fixed" later. `timezone` is read at 206 call
   // sites — every schedule, every park-local date, the whole seasonality month

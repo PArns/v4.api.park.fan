@@ -1,4 +1,4 @@
-"""Intraday bake-off across parks — "find what fits us best" (design doc §11.7 step 2).
+"""Intraday bake-off across parks — "find what fits us best" (docs/ml/pcn.md#measured).
 
 For each park: build the cross-ride tensor, run every registered candidate (GP-STGNN +
 the LocalGRU ablation) through the leakage-free rolling-origin harness, and pool the
@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--loss", default="quantile", choices=["quantile", "tweedie"])
     # Graph WaveNet temporal depth. Receptive field = 1 + sum(2^i): 2 layers see only
     # 4 slots (1h) of the context; 8 layers see 256 (> L). THE bake-off knob for the
-    # "does a full-context TCN beat the 1h-RF one on busy?" question (review §5a).
+    # "does a full-context TCN beat the 1h-RF one on busy?" question (docs/ml/pcn.md#measured).
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--residual", action="store_true",
                     help="predict last wait_ffill + delta (PCN_RESIDUAL, PAR-1034)")

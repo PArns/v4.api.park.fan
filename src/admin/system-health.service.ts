@@ -7,6 +7,12 @@ import * as os from "os";
 import * as fs from "fs";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { readSiteAnalyticsBacklog } from "../site-analytics/site-analytics-storage.service";
+import {
+  cpuTemperatureLimits,
+  cpuTemperatureSensor,
+  type HwmonSensor,
+} from "./cpu-temperature";
 
 // Read lazily: ConfigModule only assigns a .env file into process.env at
 // runtime, after this module's imports are evaluated. The Docker defaults are
@@ -41,6 +47,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
+      siteAnalytics,
       catboost,
       tft,
       pcnComparison,
@@ -51,6 +58,11 @@ export class SystemHealthService {
       this.safe("postgres", () => this.postgres()),
       this.safe("redis", () => this.redisStats()),
       this.safe("freshness", () => this.freshness()),
+      // The site statistic's flush backlog and today's drops: a stalled
+      // flusher or a flood shows here before it shows in a report.
+      this.safe("siteAnalytics", () =>
+        readSiteAnalyticsBacklog(this.redis, this.dataSource),
+      ),
       this.safe("catboost", () => this.catboost()),
       this.safe("tft", () => this.tft()),
       this.safe("pcnComparison", () => this.intradayComparison()),
@@ -63,6 +75,7 @@ export class SystemHealthService {
       postgres,
       redis,
       freshness,
+      siteAnalytics,
       ml: {
         catboost,
         tft,
@@ -116,17 +129,16 @@ export class SystemHealthService {
     }
   }
 
-  /** All hwmon temperature sensors (chip + label + °C). temp*_input is millidegrees.
+  /** All hwmon temperature sensors (chip + label + °C, and the driver's crit where
+   * it has one). temp*_input and temp*_crit are millidegrees.
    * Containers don't expose /sys/class/hwmon by default, so we also look under
    * /host/sys (bind-mounted read-only in docker-compose). Returns [] if none. */
-  private async readSensors(): Promise<
-    Array<{ chip: string; label: string; tempC: number }>
-  > {
+  private async readSensors(): Promise<HwmonSensor[]> {
     for (const root of ["/sys", "/host/sys"]) {
       try {
         const base = `${root}/class/hwmon`;
         const dirs = await fs.promises.readdir(base);
-        const out: Array<{ chip: string; label: string; tempC: number }> = [];
+        const out: HwmonSensor[] = [];
         for (const d of dirs) {
           const dir = `${base}/${d}`;
           let chip = "";
@@ -161,10 +173,21 @@ export class SystemHealthService {
             } catch {
               label = "";
             }
+            let crit = 0;
+            try {
+              crit = Number(
+                (
+                  await fs.promises.readFile(`${dir}/temp${m[1]}_crit`, "utf8")
+                ).trim(),
+              );
+            } catch {
+              crit = 0;
+            }
             out.push({
               chip,
               label: label || `temp${m[1]}`,
               tempC: +(raw / 1000).toFixed(1),
+              ...(crit > 0 ? { critC: +(crit / 1000).toFixed(1) } : {}),
             });
           }
         }
@@ -174,19 +197,6 @@ export class SystemHealthService {
       }
     }
     return [];
-  }
-
-  /** Headline CPU temp: the coretemp/k10temp "Package"/Tctl reading (else the max
-   * of the CPU chip's cores). null if no CPU sensor is present. */
-  private cpuTempFromSensors(
-    sensors: Array<{ chip: string; label: string; tempC: number }>,
-  ): number | null {
-    const cpu = sensors.filter((s) =>
-      /coretemp|k10temp|zenpower|cpu_thermal/i.test(s.chip),
-    );
-    if (!cpu.length) return null;
-    const pkg = cpu.find((s) => /package|tctl|tdie/i.test(s.label));
-    return pkg ? pkg.tempC : Math.max(...cpu.map((s) => s.tempC));
   }
 
   /** thermal_zone fallback for hosts without hwmon coretemp (prefer a CPU-ish type). */
@@ -227,8 +237,8 @@ export class SystemHealthService {
   private async host() {
     const cores = os.cpus()?.length ?? 0;
     const sensors = await this.readSensors();
-    const cpuTempC =
-      this.cpuTempFromSensors(sensors) ?? (await this.thermalZone());
+    const cpuSensor = cpuTemperatureSensor(sensors);
+    const cpuTempC = cpuSensor?.tempC ?? (await this.thermalZone());
     const [l1, l5, l15] = os.loadavg();
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
@@ -276,6 +286,8 @@ export class SystemHealthService {
         },
         loadPct: cores ? +((l1 / cores) * 100).toFixed(0) : null,
         temperatureC: cpuTempC,
+        temperatureLimits:
+          cpuTempC == null ? null : cpuTemperatureLimits(cpuSensor?.critC),
       },
       memory: {
         totalGB: +(totalMem / GB).toFixed(1),
@@ -490,7 +502,7 @@ export class SystemHealthService {
     );
   }
 
-  /** PCN lead-curve board (§7.7): PCN@{1h,3h,6h} vs a persistence baseline on matched
+  /** PCN lead-curve board (docs/ml/pcn.md#shadow-boards): PCN@{1h,3h,6h} vs a persistence baseline on matched
    * slots. The main intraday board only scores the freshest ~15-min origin, so the
    * quality of the LONGER leads the UI serves for rest-of-day was unmeasured. Verdict =
    * PCN−persistence MAE delta per (horizon, segment). Owned by pcn-service. */

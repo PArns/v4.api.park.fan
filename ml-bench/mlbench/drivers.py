@@ -19,7 +19,7 @@ importance — the runner exposes no headliner flag to plug-ins),
 ``since_season_start_a``/``to_season_end_a`` and the event flags
 ``ticketed_a``/``extra_a``/``ref_ticketed``. So the harness result is a LOWER
 BOUND on what the offline analysis prices, not a realisation of it — see
-``docs/ml/level-drivers.md`` §5a.
+``docs/ml/level-drivers.md`` §6.
 
 Caveat on three ``sched`` drivers used by the OFFLINE analysis only:
 ``since_season_start``, ``to_season_end`` and ``since_prev_open`` are computed

@@ -8,6 +8,7 @@ import * as dotenv from "dotenv";
 import * as path from "path";
 import { createMlForecastTables } from "./helpers/ml-forecast-tables";
 import { HYPERTABLES } from "../src/database/hypertables";
+import { TimescaleInitService } from "../src/database/timescale-init.service";
 
 /**
  * One TimescaleDB and one Redis for the whole E2E run.
@@ -33,7 +34,17 @@ export interface E2eContainers {
 
 export const E2E_CONTAINERS = Symbol.for("parkfan.e2e.containers");
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(globalConfig?: {
+  maxWorkers?: number;
+}): Promise<void> {
+  // The suites share one Postgres and one Redis and reset both between tests,
+  // so two at once flake. `--runInBand` used to force this; since PAR-1162 only
+  // `maxWorkers: 1` in jest-e2e.json does, and a CLI `--maxWorkers=2` beats it.
+  if ((globalConfig?.maxWorkers ?? 1) > 1) {
+    throw new Error(
+      `e2e suites share one database and must run one at a time; drop --maxWorkers (got ${globalConfig?.maxWorkers})`,
+    );
+  }
   // Load .env.test BEFORE any other module reads config
   dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
   process.env.NODE_ENV = "test";
@@ -176,8 +187,8 @@ async function createSchema(database: string): Promise<void> {
     //
     // Second effect, easy to miss: every suite that boots `AppModule` runs
     // `TimescaleInitService`, whose `enableCompression` is a silent no-op on a
-    // non-hypertable. It takes hold the moment a table becomes one, so the
-    // first suite to boot decides the compression state the later ones inherit.
+    // non-hypertable. It takes hold the moment a table becomes one; it is run
+    // once more below, before any suite, for the reason given there.
     //
     // Unlike `TimescaleInitService.createHypertable`, this does not rebuild the
     // primary key around the time column — it does not have to, because every
@@ -213,6 +224,14 @@ async function createSchema(database: string): Promise<void> {
         );
       }
     }
+
+    // Compression, its policies and the truncate behaviour, as the first
+    // `AppModule` boot would set them. Left to that boot, its ALTER TABLE …
+    // SET (timescaledb.compress) statements ran beside the first test's
+    // TRUNCATE … CASCADE and the two deadlocked, failing whichever test ran
+    // first. Done here, every boot finds them in place and only reads the
+    // catalog; the state the suites start from is the same.
+    await new TimescaleInitService(dataSource)["initializeHypertables"]();
 
     // The two merge tables no entity owns, so `synchronize` above never made
     // them. Unguarded on purpose, unlike the extensions and the hypertable: a

@@ -350,7 +350,7 @@ describe("PlanDayService", () => {
    * of every Berlin evening, so a suite built on it called a date seven days
    * back eight days back, and today tomorrow — two tests that failed between
    * 22:00 and midnight UTC and passed all day. The service reads the park's
-   * clock (CLAUDE.md §1); its fixtures have to as well.
+   * clock (docs/rules/park-timezone.md); its fixtures have to as well.
    */
   function dayFromToday(days: number): string {
     return dayShift(
@@ -1877,6 +1877,7 @@ describe("PlanDayService", () => {
       expect(plan.shows).toEqual([
         {
           showSlug: "big-moments",
+          showId: "s-1",
           showName: "Big Moments",
           latitude: null,
           longitude: null,
@@ -2768,7 +2769,9 @@ describe("PlanDayService", () => {
 
     it("does not reach back into last night's session on a park that runs past midnight", async () => {
       // The case park-local midnight got wrong, and the reason the cutoff is
-      // the opening (docs §6). La Ronde's operating day ends at 02:00, so a
+      // the opening
+      // (docs/frontend/plan-day/availability.md#a-ride-out-of-season-is-absent-not-closed).
+      // La Ronde's operating day ends at 02:00, so a
       // reading from 01:30 lies AFTER the planned day's park-local midnight and
       // BEFORE its opening — midnight lets it through and rescues the ride into
       // a day that row says nothing about.
@@ -3683,8 +3686,9 @@ describe("PlanDayService", () => {
     it("serves exactly what it served before with the flag off", async () => {
       // Byte for byte against the response the code BEFORE this change gave
       // for the same fixture (recorded from origin/main 1cb2792c with
-      // WRITE_PLAN_DAY_GOLDEN=1), minus the one documented addition,
-      // `composer`. A composed day and a measured day, on a fixed clock.
+      // WRITE_PLAN_DAY_GOLDEN=1), minus the documented additions: `composer`,
+      // and the ids the planner's events name the park, rides and shows by.
+      // A composed day and a measured day, on a fixed clock.
       delete process.env.PLAN_DAY_H5_COMPOSER;
       jest.useFakeTimers().setSystemTime(new Date("2026-09-14T06:00:00.000Z"));
       try {
@@ -3701,9 +3705,15 @@ describe("PlanDayService", () => {
                   uncertaintyMinutes: 7,
                 }))
               : [];
-          const plan = await service.buildPlanDay(park, date);
+          const { parkId, ...plan } = await service.buildPlanDay(park, date);
+          expect(parkId).toBe(park.id);
           for (const ride of plan.rides) {
             if (ride.composer === "peak_scaled") delete ride.composer;
+            expect(ride.attractionId).toEqual(expect.any(String));
+            delete (ride as { attractionId?: string }).attractionId;
+          }
+          for (const show of plan.shows) {
+            delete (show as { showId?: string }).showId;
           }
           out[date] = plan;
         }

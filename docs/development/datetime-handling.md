@@ -1,234 +1,137 @@
-# Date & Time Handling (The "Park Time" Rule)
+# Date and time handling
 
-## ⚠️ The Golden Rule
+The mechanism behind the [park-timezone rule](../rules/park-timezone.md): which helper answers which
+question, how to query a park-local day, how date-only values shift, the two anti-patterns that broke US
+parks repeatedly, and the pandas trap in the Python services. Open it before writing code that turns a
+time into a date or a date into a range.
 
-**NEVER use `new Date()` directly for business logic.**
+## 1. Park time
 
-In a global application like Park Fan, "today" is different depending on where the park is.
-- When it is **10:00 AM** in Berlin (Phantasialand is open), it might be **01:00 AM** in Los Angeles (Disneyland is closed).
-- If you use `new Date()`, you get the **server's time** (usually UTC), which will often be wrong for the park you are processing.
+Timestamps are stored in UTC (`TIMESTAMPTZ`) and the container runs in UTC. Every decision about a day
+("is the park open today", "is this a holiday", "yesterday's stats") is made in the park's
+`parks.timezone`. When it is 10:00 in Berlin it is 01:00 in Los Angeles, and `new Date()` answers for
+neither.
 
-## Core Concept: Park Time
+`new Date()` is fine where no park day is involved:
 
-**"Park Time"** refers to the date and time *relative to the park's physical location*.
+- absolute metadata (`lastUpdated`, `generatedAt`, `geocodingAttemptedAt`);
+- relative windows (`Date.now() - 2 * 60 * 60 * 1000` for "the last two hours", retry delays);
+- comparing instants (`now >= schedule.openingTime`: both are UTC instants);
+- parsing a `TIMESTAMPTZ` from the database (`new Date(row.timestamp)`).
 
-- **Database Storage**: We generally store timestamps in **UTC**.
-- **Application Logic**: We strictly convert UTC to **Park Time** before making decisions (e.g., "Is the park open?", "Is this a holiday?").
+## 2. The helpers (`src/common/utils/date.util.ts`)
 
-## Key Utilities
+| Need                                         | Helper                                                                                         |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Today / tomorrow / yesterday as `YYYY-MM-DD` | `getCurrentDateInTimezone`, `getTomorrowDateInTimezone`, `getYesterdayDateInTimezone` (`…At(now)` variants for tests) |
+| An instant's park-local date                 | `formatInParkTimezone(date, tz)`                                                               |
+| Park-local midnight as a UTC instant         | `getStartOfDayInTimezone(tz)` (`getStartOfDayInTimezoneAt`)                                    |
+| Hour or weekday of "now" in the park         | `getCurrentTimeInTimezone(tz)`. Its result carries the park's wall clock in a `Date`; read `getHours()`/`getDay()` from it and never use it as an instant. |
+| Same park day?                               | `isSameDayInTimezone(a, b, tz)`                                                                |
+| Iterate days in a range                      | `eachDayAtNoonInTimezone(from, to, tz)`: one noon instant per day. Stepping `setDate(+1)` from local midnight skipped Berlin's 2027-03-28 (23-hour day). |
+| Date arithmetic on `YYYY-MM-DD`              | `addIsoDays(iso, n)`; `isRealIsoDate(value)` validates one                                     |
+| TTL of a cached "today" answer               | `secondsUntilEndOfDayInTimezone(tz)`: a copy must not outlive the day it describes            |
 
-We use `date-fns-tz` for robust timezone handling. All date logic should use our centralized utilities in `src/common/utils/date.util.ts`.
+## 3. Querying a park-local day
 
-### 1. Getting "Today"
+"All wait times on 2026-05-20" is not `00:00–23:59 UTC`. Compute the park's boundaries
+(`getStartOfDayInTimezone`, or `fromZonedTime('2026-05-20T00:00:00', tz)`), and prefer date-string
+equality (`schedule.date = :todayStr`) for a single day so the result does not depend on the database
+session's timezone. Two parks are compared only after both are normalised to their own days.
 
-**❌ Wrong:**
-```typescript
-const today = new Date().toISOString().split('T')[0]; // Uses server time!
-```
+## 4. Tests
 
-**✅ Correct:**
-```typescript
-import { getCurrentDateInTimezone } from 'src/common/utils/date.util';
+Mock the system time or pass fixed instants (the `…At(now)` helpers); never depend on the runner's local
+time.
 
-const parkTimezone = park.timezone; // e.g., "America/New_York"
-const today = getCurrentDateInTimezone(parkTimezone); // Returns "2024-05-20"
-```
+## 5. Caching an answer about today
 
-### 2. Getting Current Time (Hour/Minute)
+A TTL is blind to the day boundary: a cached `isToday`, a today-only crowd reading or "the current day's
+cell" is wrong the moment the copy outlives its day. The origin can re-derive those on a cache read; a CDN
+copy cannot, and a browser copy cannot even be purged. Cap such a TTL with
+`secondsUntilEndOfDayInTimezone(park.timezone)`.
 
-**❌ Wrong:**
-```typescript
-const hour = new Date().getHours(); // Server hour!
-```
+## 6. Date-only values (holidays, schedules, events)
 
-**✅ Correct:**
-```typescript
-import { getCurrentTimeInTimezone } from 'src/common/utils/date.util';
+Holidays, school holidays and `schedule_entries.date` are `DATE` columns. A date means **that whole
+calendar day in the park's timezone**. Keep it a `YYYY-MM-DD` string end to end: `new Date("2025-12-25")`
+is midnight UTC, which is 19:00 on 24 December in New York. If an instant is unavoidable, use noon UTC
+(`new Date(`${dateStr}T12:00:00Z`)`), which has the same date in every offset from −12 h to +12 h.
 
-const nowInPark = getCurrentTimeInTimezone(park.timezone);
-const hour = nowInPark.getHours(); // 14 (if it's 2 PM in the park)
-```
-
-### 3. Formatting for Display or External APIs
-
-When communicating with external APIs or generating daily stats, always ensure the date match the park's day.
-
-```typescript
-import { formatInParkTimezone } from 'src/common/utils/date.util';
-
-const dateStr = formatInParkTimezone(someDateObj, park.timezone);
-```
-
-## Common Pitfalls
-
-### The "Midnight" Traps
-
-1. **Querying by Date**:
-   When you query the database for "all wait times on 2024-05-20", you **cannot** just query `2024-05-20 00:00:00 UTC` to `2024-05-20 23:59:59 UTC`.
-   
-   You must calculate the UTC start and end time **for that specific timezone**.
-   
-   ```typescript
-   // Helper available in some services
-   const start = getStartOfDayInTimezone(park.timezone); 
-   // Returns a Date object that is Midnight in local time, converted to UTC.
-   ```
-
-2. **Mixing Timezones**:
-   Never compare a date from Park A (Europe) with Park B (USA) without normalizing them.
-
-## Testing Timezones
-
-When writing tests, **always mock the system time** or use fixed dates. Do not rely on the test runner's local time.
-
-## 6. Strict Date-Only Handling (Holidays, Schedules & Events)
-
-**Feiertage und Ferien** (holidays, school holidays) sowie **Schedule-Einträge** speichern **nur das Datum** (keine Uhrzeit). In der DB steht ggf. ein DATE oder Timestamp; semantisch bedeuten sie immer **den vollen Kalendertag 00:00–23:59 in der Park-Zeitzone**.
-
-To prevent "Timeshifting" (e.g., a holiday on Dec 25th becoming Dec 24th 23:00 UTC), **Pure Dates** must be handled as strings (`YYYY-MM-DD`).
-
-> [!CAUTION]
-> **NEVER** verify a Date-Only value by converting it to a `Date` object without explicit Noon-UTC forcing.
-
-**The Golden Rule for Holidays & Schedules:**
-1.  **Storage**: DB stores as `DATE` type (holidays, `schedule_entries.date`).
-2.  **Meaning**: The date always means **that calendar day in the park’s timezone** (00:00–23:59 park time).
-3.  **"Today"**: Use `getCurrentDateInTimezone(park.timezone)` to get today’s date string; use that for holiday checks and for schedule queries.
-4.  **Queries**: Prefer **date-string equality** (`schedule.date = :todayStr`) over timestamp ranges when filtering by a single calendar day, so results do not depend on the DB session timezone.
-
-#### Why?
-`new Date("2025-12-25")` defaults to `00:00:00` UTC.
-If the browser or server applies a timezone offset (e.g., EST -5), it becomes `Dec 24th, 19:00`. **The day has shifted.**
-
-**Best Practice:**
-```typescript
-// BAD
-const holidayDate = new Date(holiday.date); // Risk of shift
-
-// GOOD
-const dateStr = holiday.date; // Use "YYYY-MM-DD" string
-const isMatch = dateStr === targetDateStr;
-```
-
-**Schedule "today" (timezone-safe):**
 ```typescript
 const todayStr = getCurrentDateInTimezone(park.timezone);
-const schedule = await this.getScheduleForDate(parkId, todayStr); // DATE = :todayStr
+const isHoliday = holiday.date === todayStr;                       // string equality
+const schedule = await this.getScheduleForDate(parkId, todayStr);  // DATE = :todayStr
 ```
 
----
+## 7. Two anti-patterns that shift US parks by a day
 
-## 7. Two Recurring Anti-Patterns That Break US Parks (Read Before Touching Date Code!)
+Each earlier fix broke either UTC parks or US parks; these two patterns were the cause every time.
 
-> **Context**: This has been attempted to fix multiple times. Each attempt broke either UTC parks or US parks. These two patterns are the root cause.
+**A. External date-only string → `new Date()` → `formatInParkTimezone()`.** ThemeParks.wiki returns
+`{ date: "2026-03-02", openingTime: "2026-03-02T10:00:00-05:00" }`, where `date` is already the park's
+local day. `new Date("2026-03-02")` is midnight UTC, and formatted in `America/New_York` it is
+`2026-03-01`. Parks east of UTC are unaffected, which is why it hides. `saveScheduleData` therefore uses a
+date-only string as it is:
 
-### Anti-Pattern A — External API date-only string → `new Date()` → `formatInParkTimezone()`
-
-This is the core bug in `saveScheduleData`. External APIs (ThemeParks.wiki) return dates as date-only strings representing the **park's local calendar day**:
-```
-{ date: "2026-03-02", openingTime: "2026-03-02T10:00:00-05:00" }
-```
-
-**The trap**: `new Date("2026-03-02")` = `2026-03-02T00:00:00.000Z` (midnight UTC per ECMAScript spec). Then `formatInParkTimezone(midnight_UTC, "America/New_York")` = `"2026-03-01"` (7 PM EST = previous day). **The date shifts back 1 day for all parks west of UTC.**
-
-**Why it only affects US parks**: East-of-UTC parks (Europe/Berlin, Asia/Tokyo) are ahead of UTC, so midnight UTC is still the same calendar day in those timezones. UTC parks are unaffected. Only west-of-UTC parks (Americas) are shifted.
-
-**The fix**: detect date-only strings with regex and use them directly:
 ```typescript
-const raw = typeof entry.date === "string" ? entry.date : String(entry.date);
-const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
-const dateStr = isDateOnly
-  ? raw  // ← use as-is; it already represents the park's local calendar day
-  : formatInParkTimezone(new Date(raw), park.timezone); // full ISO → convert
+const raw = String(entry.date);
+const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+  ? raw                                          // already the park's day
+  : formatInParkTimezone(new Date(raw), park.timezone);
 ```
 
-**Also**: when you need to calculate a date range (min/max) from date-only strings, always use noon UTC to avoid the same shift in `formatInParkTimezone`:
-```typescript
-const ts = new Date(`${dateStr}T12:00:00Z`).getTime(); // noon UTC = safe for all timezones
-```
+**B. TypeORM `DATE` column → `formatInParkTimezone()`.** TypeORM returns a `DATE` as a `Date` at midnight
+UTC; formatting it in a US timezone gives the previous day, so `formatInParkTimezone(new Date(w.date), tz)
+=== todayStr` silently fails there. Read the stored date with `.toISOString().split("T")[0]` (or keep the
+string).
 
----
+| Source                                           | Runtime type           | Correct handling                              |
+| ------------------------------------------------ | ---------------------- | --------------------------------------------- |
+| External date-only string (`"2026-03-02"`)       | `string`               | Use as is; no `new Date()`                     |
+| External ISO datetime (`"2026-03-02T10:00-05:00"`) | `string`             | `formatInParkTimezone(new Date(raw), tz)`     |
+| TypeORM `DATE` column                            | `Date` (midnight UTC)  | `.toISOString().split("T")[0]`                |
+| TypeORM `TIMESTAMPTZ` column                     | `Date` (real instant)  | `formatInParkTimezone(date, tz)`              |
 
-### Anti-Pattern B — TypeORM DATE column → `new Date(entity.date)` → `formatInParkTimezone()`
+## 8. Python and pandas: one column, one timezone
 
-PostgreSQL `DATE` columns are returned by TypeORM as JavaScript `Date` objects at **midnight UTC** (the pg driver gives "YYYY-MM-DD" string; TypeORM converts with `new Date("YYYY-MM-DD")`). Applying `formatInParkTimezone(midnight_UTC, "America/New_York")` shifts the date back one day for US parks.
-
-**Affected code**: Any place that does `formatInParkTimezone(new Date(entity.date), tz) === todayStr` on a DATE column will silently fail for US parks.
-
-**Example** (weather service):
-```typescript
-// ❌ BAD — shifts midnight UTC back 1 day for US parks
-const weatherDate = new Date(w.date);  // midnight UTC
-return formatInParkTimezone(weatherDate, park.timezone) === todayStr; // "2026-03-01" ≠ "2026-03-02"
-
-// ✅ CORRECT — midnight UTC → toISOString → YYYY-MM-DD is always the stored calendar date
-const dateStr = w.date instanceof Date ? w.date.toISOString().split("T")[0] : String(w.date);
-return dateStr === todayStr; // "2026-03-02" === "2026-03-02" ✓
-```
-
-**Why `.toISOString().split("T")[0]` is always correct here**: midnight UTC for `2026-03-02` produces `"2026-03-02T00:00:00.000Z"`. Splitting gives `"2026-03-02"` — exactly the calendar date stored in the DB. This is safe because the DB stores calendar dates *as* midnight UTC, and UTC midnight does not cross a day boundary in UTC.
-
-**Summary table — which approach to use:**
-
-| Source of date | Type at runtime | Correct approach |
-|---|---|---|
-| External API date-only string (`"2026-03-02"`) | `string` | Use directly (no `new Date()`!) |
-| External API ISO datetime (`"2026-03-02T10:00-05:00"`) | `string` | `formatInParkTimezone(new Date(raw), tz)` |
-| TypeORM `DATE` column | `Date` (midnight UTC) | `.toISOString().split("T")[0]` |
-| TypeORM `TIMESTAMPTZ` column | `Date` (real instant) | `formatInParkTimezone(date, tz)` ✓ |
----
-
-## 8. Python / pandas — One Column, One Timezone (Read Before Touching `ml-service`)
-
-The rules above are about `Date` objects. The ML service works on pandas columns,
-where park time has a trap of its own.
-
-**A pandas datetime column carries exactly ONE timezone.** Writing per-park
-tz-aware values into one column does not give you a column of local times — pandas
-converts each write into the column's timezone. It does this silently: no warning,
-no error, no dtype change.
+**A pandas datetime column carries exactly one timezone.** Writing per-park tz-aware values into one
+column converts each write back to the column's timezone, silently (PAR-452).
 
 ```python
-# ❌ BAD — every write is converted back to the column's tz (PAR-452)
-df["local_timestamp"] = df["timestamp"]                     # dtype: datetime64[ns, UTC]
+# Wrong: looks local, lands as UTC
+df["local_timestamp"] = df["timestamp"]                     # datetime64[ns, UTC]
 for park_id, idx in df.groupby("parkId").groups.items():
-    df.loc[idx, "local_timestamp"] = (                      # looks local, lands as UTC
-        df.loc[idx, "timestamp"].dt.tz_convert(tz_map[park_id])
-    )
+    df.loc[idx, "local_timestamp"] = df.loc[idx, "timestamp"].dt.tz_convert(tz_map[park_id])
 
-# ✅ CORRECT — convert once per TIMEZONE, store the wall clock naive
+# Right: convert once per timezone, store the wall clock naive
 tz_per_row = df["parkId"].map(tz_map).fillna("UTC")
 local = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
 for tz_name, idx in df.groupby(tz_per_row, sort=False).groups.items():
     local.loc[idx] = df.loc[idx, "timestamp"].dt.tz_convert(tz_name).dt.tz_localize(None)
-df["local_timestamp"] = local                               # dtype: datetime64[ns]
+df["local_timestamp"] = local                               # datetime64[ns]
 ```
 
-**The consequence for every reader: `local_timestamp` is a READING, not an instant.**
+**`local_timestamp` is a reading, not an instant.**
 
-| What you need | Column to use |
-|---|---|
-| Wall-clock features — `hour`, `day_of_week`, `month`, `season`, `date_local` | `local_timestamp` (naive) |
-| Join key for holidays, school holidays, schedules, `downtime_minutes_today` | `date_local` (park-local calendar date) |
-| Any comparison against a `TIMESTAMPTZ` from the DB (`openingTime`, `closingTime`) or an ISO instant from the API (`parkOpeningTimes`) | `timestamp` (UTC) — **never** `local_timestamp` |
+| Need                                                                                  | Column                                      |
+| ------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Wall-clock features: `hour`, `day_of_week`, `month`, `season`, `date_local`           | `local_timestamp` (naive)                   |
+| Join key for holidays, school holidays, schedules, `downtime_minutes_today`           | `date_local`                                |
+| Any comparison with a `TIMESTAMPTZ` (`openingTime`, `closingTime`) or an API instant (`parkOpeningTimes`) | `timestamp` (UTC), never `local_timestamp` |
 
-Comparing a naive reading against a `TIMESTAMPTZ` either raises or, worse, compares
-two numbers that mean different things. The schedule joins in `features.py` and
-`predict.py` are the reference shape: **join on the local date, compare the instants.**
+The schedule joins in `features.py` and `predict.py` are the reference: join on the local date, compare
+the instants. While this was broken, `hour` was wrong on 99.8 % of production training rows and
+`date_local` on 3.1 %, and nothing failed, because training and serving were wrong the same way
+(`ml-service/test_local_time_features.py`).
 
-**Why this is worth a section**: while it was broken, `hour` was wrong on 99.8 % of
-production training rows and `date_local` on 3.1 % — and nothing failed. Training and
-serving were wrong in the same direction, so the model never protested; what broke was
-every lookup keyed on the calendar day. See `ml-service/test_local_time_features.py`.
+**Values crossing the API ↔ ML boundary (PAR-818):**
 
-**Values crossing the API ↔ ML boundary (PAR-818).** Three more places read a
-park's wall clock off a UTC value and were fixed the same way:
+| Value                                      | Rule                                                                                                                                                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `weatherForecast[].time` sent to `/predict` | A UTC instant. The hourly Open-Meteo call asks for `timezone: "GMT"`: with `"auto"` it applies the offset in force at request time to every hour, which is wrong across a DST change. The DB fallback (`synthesizeHourlyFromDaily`) steps real UTC hours between local midnights. |
+| Historical occupancy profile lookup        | Keyed on park-local (Postgres DOW, hour), read from `local_timestamp` with `pg_dow = (pandas_dow + 1) % 7`.                                                                                                 |
+| Daily peak hours (`DAILY_PEAK_HOURS`, `12,14,16`) | Hours on the park's clock, collapsed per park-local date; the daily row is published at park-local noon (`daily_anchor_time`).                                                                        |
+| An API-side date key for a prediction      | `MLService.localDateOf(predictedTime, tz)`, never `predictedTime.slice(0, 10)`.                                                                                                                              |
 
-| Value | Rule |
-|---|---|
-| `weatherForecast[].time` sent to `/predict` | A UTC instant (`…Z`). The hourly Open-Meteo call asks for `timezone:"GMT"`: with `"auto"` it applies ONE offset (the one at request time) to the whole response, so its strings are neither UTC nor the park's wall clock across a DST change. The DB fallback (`synthesizeHourlyFromDaily`) steps real UTC hours between local midnights. |
-| Historical occupancy profile lookup | Keyed on park-local `(Postgres DOW, hour)`; read with `local_timestamp`, `pg_dow = (pandas_dow + 1) % 7`. |
-| Daily peak hours (`DAILY_PEAK_HOURS`) | Hours on the park's clock, collapsed per park-local date; the daily row is published at park-local **noon** of its day (`daily_anchor_time`), which has the same UTC date for every offset in (−12 h, +12 h). |
-| Any API-side date key for a prediction | `MLService.localDateOf(predictedTime, tz)`, never `predictedTime.slice(0, 10)` on an instant. |
-
-See `ml-service/test_park_local_daily_and_occupancy.py`.
+Tests: `ml-service/test_park_local_daily_and_occupancy.py`.

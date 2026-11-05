@@ -7,15 +7,14 @@ CatBoost model itself is only ~12 MB on disk, so model memory is negligible — 
 old "~4 GiB model / COW serving floor" reasoning was wrong and is removed).
 
 The real memory risk is per-worker GROWTH, not the model. The serving caches in
-predict.py/db.py (_recent_wait_times_cache, _weather_historical_cache, …) check a
-TTL on read but never EVICT stale entries, and their keys include base_time +
-attraction combos, so the keyspace is effectively unbounded. Left unbounded the
-workers grew to ~15 GiB combined over ~25 h and pushed the host into swap.
+predict.py/db.py are keyed by date ranges, park sets and time buckets, so their
+keyspace grows every day. Before they evicted, the workers grew to ~15 GiB
+combined over ~25 h and pushed the host into swap. Every such cache now drops
+expired entries on write (db._evict_expired_entries, PAR-1149).
 
 max_requests recycles each worker after a bounded number of requests (re-forking
-fresh from the preloaded master), which caps that growth regardless of the cache
-leak. It's the safety net; properly bounding/evicting those caches is the real
-follow-up fix.
+fresh from the preloaded master), which caps any remaining growth. It stays as
+the safety net until a worker's RSS has been measured over a day without it.
 """
 
 import os
@@ -38,7 +37,7 @@ keepalive = 120
 # No access log (was uvicorn --no-access-log): keeps GET /health out of the logs.
 accesslog = None
 
-# Recycle workers periodically to bound the never-evicting serving caches (see the
+# Recycle workers periodically as a safety net for per-worker growth (see the
 # module docstring). At recycle a worker re-forks from the preloaded master, so it
 # starts back at the small serving floor. jitter staggers the two workers so they
 # don't recycle on the same request and briefly drop capacity together. Tunable via

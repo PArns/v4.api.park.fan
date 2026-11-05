@@ -16,7 +16,8 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
  * slots, `se_*` Σ(pred − truth). The paired difference of a cell is
  * (Σ sae_model − Σ sae_ref) / Σ n — "sum the minutes, then divide".
  *
- * Plain table, no FK, app-side retention (forward-archive.md §2): ~8 k rows a
+ * Plain table, no FK, app-side retention
+ * (docs/ml/forward-archive/capture.md#size-and-db-impact-measured-2026-10-09): ~8 k rows a
  * day, kept {@link PAIRED_RETENTION_DAYS} days.
  */
 export const PAIRED_RETENTION_DAYS = 120;

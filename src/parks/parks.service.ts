@@ -2282,7 +2282,7 @@ export class ParksService {
     // A day with only per-ride rows is not a gap the park can speak about — it
     // is a day whose park-level row somebody lost, and `isGapClosed` would turn
     // it into a "Gap-filled" CLOSED between the park's first and last operating
-    // day. That is a confident claim built from an absence (claude.md §4), it
+    // day. That is a confident claim built from an absence (docs/rules/absent-facts.md), it
     // cannot be demoted again inside the season, and the analytics joins read
     // CLOSED as "drop this day's queue data from P50/P90" while they read a
     // missing row as "keep it". Reconstructing those rows is out of scope
@@ -3073,11 +3073,15 @@ export class ParksService {
         parksNeedingNextQuery.includes(p.id),
       );
 
-      // Earliest "tomorrow" among parks (for query start); lookAhead = +365 days
-      const tomorrowStrs = parksForNext.map((p) =>
-        getTomorrowDateInTimezone(p.timezone || "UTC"),
+      // Each park's own "tomorrow"; the query starts at the earliest of them
+      // and the grouping below drops what lies before a park's own one.
+      const tomorrowByPark = new Map(
+        parksForNext.map((p) => [
+          p.id,
+          getTomorrowDateInTimezone(p.timezone || "UTC"),
+        ]),
       );
-      const minTomorrowStr = tomorrowStrs.sort()[0];
+      const minTomorrowStr = [...tomorrowByPark.values()].sort()[0];
       const minTomorrowDate = new Date(minTomorrowStr + "T12:00:00Z");
       const lookAheadDate = new Date(minTomorrowDate);
       lookAheadDate.setDate(lookAheadDate.getDate() + 365);
@@ -3102,9 +3106,17 @@ export class ParksService {
         .addOrderBy("schedule.date", "ASC")
         .getMany();
 
-      // Group by parkId and take first (earliest) for each park
+      // Group by parkId and take the first (earliest) on or after the park's
+      // own tomorrow. The query's lower bound is the EARLIEST tomorrow of the
+      // batch, which for a park far east is still its today (PAR-1154).
       const nextScheduleMap = new Map<string, ScheduleEntry>();
       for (const schedule of nextSchedules) {
+        const day =
+          schedule.date instanceof Date
+            ? schedule.date.toISOString().slice(0, 10)
+            : cachedScheduleDay(schedule.date);
+        const tomorrow = tomorrowByPark.get(schedule.parkId);
+        if (!day || !tomorrow || day < tomorrow) continue;
         if (!nextScheduleMap.has(schedule.parkId)) {
           nextScheduleMap.set(schedule.parkId, schedule);
         }

@@ -2,13 +2,14 @@
 
 Loads each park's trained GP-STGNN, builds the context up to NOW from the live panel,
 predicts the next H 15-min slots, and writes the served quantiles (q0.5 display, q0.8
-crowd) to pcn_forecasts. This is the going-forward shadow (design doc §12): forecasts
-are stored at inference time so they can be scored later against actuals — CatBoost's
+crowd) to pcn_forecasts. This is the going-forward shadow (docs/ml/pcn.md#shadow-boards):
+forecasts are stored at inference time so they can be scored later against actuals — CatBoost's
 own intraday preds are dedup-destroyed for past origins, so a fair head-to-head MUST
 capture both forward.
 
 PCN runs in the SHADOW — it only writes pcn_forecasts; CatBoost stays the served
-champion until score.py shows a busy/headliner win (gate §8). Inference is cheap and the
+champion until score.py shows a busy/headliner win (gate:
+docs/ml/model-overview.md#how-a-model-change-is-judged). Inference is cheap and the
 GPU is ~99% idle, so re-inferring every 15 min with the current state is effectively
 free and never touches CatBoost (CPU).
 
@@ -49,6 +50,21 @@ settings = get_settings()
 # the first tick writes each park once more.
 _written: dict[str, tuple[pd.Timestamp, float]] = {}
 
+# Why a park got no forecast this tick, split by what it means (PAR-1120). The job
+# result (pcn-service /status → /v1/admin/ml-overview) carries both groups, so a park
+# that silently falls back to CatBoost is visible without reading the container log.
+# IDLE: nothing to do — the park is closed or its origin has not moved.
+IDLE_REASONS = frozenset({"no_fresh_data", "stale_origin", "already_forecast"})
+# BLOCKED: it has fresh data and should run, but something upstream of PCN is missing.
+BLOCKED_REASONS = frozenset({"no_model", "no_panel", "too_few_slots",
+                             "no_trained_ride", "failed"})
+
+
+def _skip(skipped: dict[str, str] | None, park_id: str, reason: str) -> int:
+    if skipped is not None:
+        skipped[park_id] = reason
+    return 0
+
 
 def _load_model(park_id: str):
     path = model_path(park_id)
@@ -61,18 +77,19 @@ def _load_model(park_id: str):
     return reg[settings.PCN_ARCH]().load(path)
 
 
-def forecast_park(park_id: str, version: str) -> int:
+def forecast_park(park_id: str, version: str,
+                  skipped: dict[str, str] | None = None) -> int:
     # Staleness pre-check BEFORE the panel fetch: seasonally-closed / dead-data parks
     # used to pay the full history aggregation every tick just to be skipped afterwards.
     # One bounded EXISTS query replaces that.
     if not db.park_has_fresh_data(park_id, settings.PCN_MAX_ORIGIN_AGE_HOURS):
         logger.info("park %s: no STANDBY data in %dh — skip forecast (pre-check)",
                     park_id, settings.PCN_MAX_ORIGIN_AGE_HOURS)
-        return 0
+        return _skip(skipped, park_id, "no_fresh_data")
     model = _load_model(park_id)
     if model is None:
         logger.warning("park %s: no trained model — run /train first", park_id)
-        return 0
+        return _skip(skipped, park_id, "no_model")
     # Inputs are built under the target mode the checkpoint was TRAINED in, not the
     # current env: a median-trained model fed in-force inputs (denser obs_mask /
     # wait_ffill / park_occ) would serve silently skewed forecasts until the retrain.
@@ -88,7 +105,7 @@ def forecast_park(park_id: str, version: str) -> int:
     t = pipeline.build_park_tensor(
         park_id, window_days=settings.PCN_FORECAST_WINDOW_DAYS, in_force=in_force)
     if t is None:
-        return 0
+        return _skip(skipped, park_id, "no_panel")
     # Defense-in-depth: the pre-check said "some fresh data exists", this checks the
     # assembled grid's freshest slot too (park-local naive vs park wall-clock now).
     tz = pipeline.park_timezone(park_id)
@@ -98,7 +115,7 @@ def forecast_park(park_id: str, version: str) -> int:
         if age_h > settings.PCN_MAX_ORIGIN_AGE_HOURS:
             logger.info("park %s: freshest slot %s is %.0fh stale (> %dh) — skip forecast",
                         park_id, latest, age_h, settings.PCN_MAX_ORIGIN_AGE_HOURS)
-            return 0
+            return _skip(skipped, park_id, "stale_origin")
 
     L, H = settings.PCN_INPUT_SIZE, settings.PCN_HORIZON
     if len(t.slots) <= L:
@@ -109,7 +126,7 @@ def forecast_park(park_id: str, version: str) -> int:
         if t is None or len(t.slots) <= L:
             logger.warning("park %s: only %d slots — need > L=%d, skip",
                            park_id, 0 if t is None else len(t.slots), L)
-            return 0
+            return _skip(skipped, park_id, "too_few_slots")
 
     # The net's node order is fixed at train time → align the tensor's ride axis to
     # it (tensor.align_ride_axis). Rides missing from the window become synthetic
@@ -123,7 +140,7 @@ def forecast_park(park_id: str, version: str) -> int:
         if not present.any():
             logger.warning("park %s: no trained ride present in the window — skip",
                            park_id)
-            return 0
+            return _skip(skipped, park_id, "no_trained_ride")
         if not present.all():
             logger.info("park %s: %d/%d trained rides in window (absent kept as "
                         "quiet nodes, not persisted)",
@@ -135,7 +152,7 @@ def forecast_park(park_id: str, version: str) -> int:
     if _written.get(park_id) == stamp:
         logger.debug("park %s: origin %s already forecast with this checkpoint — skip",
                      park_id, origin)
-        return 0
+        return _skip(skipped, park_id, "already_forecast")
     qpreds = model.predict_quantiles(t, np.array([base]), L, H)
     serve = set(settings.serve_quantiles)
     step = pd.Timedelta(minutes=settings.PCN_SLOT_MINUTES)
@@ -167,14 +184,20 @@ def forecast_all(version: str, park_ids: list[str] | None = None) -> dict:
     parks = pipeline.scope_park_ids(park_ids)
     t0 = time.time()
     total = 0
+    skipped: dict[str, str] = {}
     for pid in parks:
         try:
-            total += forecast_park(pid, version)
+            total += forecast_park(pid, version, skipped)
         except Exception as e:  # noqa: BLE001
             logger.warning("park %s forecast failed: %s", pid, e)
-    logger.info("forecast done: %d rows across %d parks in %.1fs",
-                total, len(parks), time.time() - t0)
-    return {"rows": total, "parks": len(parks), "version": version}
+            skipped[pid] = "failed"
+    blocked = {p: r for p, r in skipped.items() if r in BLOCKED_REASONS}
+    logger.info("forecast done: %d rows across %d parks in %.1fs (%d idle, %d blocked)",
+                total, len(parks), time.time() - t0,
+                len(skipped) - len(blocked), len(blocked))
+    return {"rows": total, "parks": len(parks), "version": version,
+            "skipped": {"idle": {p: r for p, r in skipped.items() if r in IDLE_REASONS},
+                        "blocked": blocked}}
 
 
 if __name__ == "__main__":

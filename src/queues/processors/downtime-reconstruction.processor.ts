@@ -5,6 +5,7 @@ import { DataSource } from "typeorm";
 import {
   OUTAGE_EXPOSURE_SQL,
   OUTAGE_FINGERPRINT_VERSION,
+  MAINTENANCE_INTERVALS_SQL,
   OUTAGE_INTERVALS_SQL,
   OUTAGE_SCAN_START_SQL,
 } from "../../analytics/utils/outage-reconstruction.sql";
@@ -97,7 +98,7 @@ export class DowntimeReconstructionProcessor {
    * The FIRST fill is a different job and is not this one: it needs the whole
    * history and belongs in 30-day stages, run by hand. It was run that way on
    * 2026-09-11 and reached `queue_data`'s own floor of 2025-12-24; see
-   * `docs/analytics/ride-downtime.md`, "The first production fill, staged".
+   * `docs/analytics/ride-downtime/reconstruction.md#the-first-production-fill-2026-09-11`.
    */
   private readonly DEFAULT_WINDOW_DAYS = 30;
 
@@ -224,6 +225,25 @@ export class DowntimeReconstructionProcessor {
       );
     }
 
+    // Fourth statement: REFURBISHMENT runs, stored as `maintenance`. Same shape
+    // as statement 1 over another status, and the same posture as the closure
+    // gaps: its failure costs this signal for the night, never the DOWN rows.
+    let maintenance: IntervalRow[] = [];
+    let maintenanceRead = true;
+    try {
+      maintenance = await queryWithLimits<IntervalRow[]>(
+        this.dataSource,
+        MAINTENANCE_INTERVALS_SQL,
+        [parkIds, scanStart, asOf, asOf],
+        readLimits,
+      );
+    } catch (error) {
+      maintenanceRead = false;
+      this.logger.warn(
+        `Maintenance reconstruction failed, DOWN intervals kept: ${message(error)}`,
+      );
+    }
+
     // Keyed on the interval's OPERATING day, which statement 1 resolves from the
     // window rather than from the calendar: a park closing at 02:00 files a
     // 00:30 outage under the previous operating day, and a calendar key would
@@ -286,6 +306,7 @@ export class DowntimeReconstructionProcessor {
         ...exposure.map((row) => row.attractionId),
         ...intervals.map((row) => row.attractionId),
         ...closureGaps.map((row) => row.attractionId),
+        ...maintenance.map((row) => row.attractionId),
       ]),
     ];
 
@@ -300,9 +321,17 @@ export class DowntimeReconstructionProcessor {
     //
     // Restricting the delete to `down` is exactly as wide as what this run can
     // rewrite, which is the rule the whole predicate follows.
-    const rewritableSignals = closureGapsRead
-      ? ""
-      : `\n            AND signal = 'down'`;
+    //
+    // The maintenance statement follows the same rule: a signal this run could
+    // not read keeps its stored rows.
+    const unreadSignals = [
+      ...(closureGapsRead ? [] : ["closed_gap"]),
+      ...(maintenanceRead ? [] : ["maintenance"]),
+    ];
+    const rewritableSignals =
+      unreadSignals.length === 0
+        ? ""
+        : `\n            AND signal NOT IN (${unreadSignals.map((sig) => `'${sig}'`).join(", ")})`;
 
     await this.dataSource.transaction(async (manager) => {
       await applyStatementLimits(manager, WRITE_LIMITS);
@@ -392,6 +421,40 @@ export class DowntimeReconstructionProcessor {
               heartbeatRows: 0,
               startCensored: false,
               signal: "closed_gap" as const,
+              fingerprintVersion: OUTAGE_FINGERPRINT_VERSION,
+              computedAt: asOf,
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
+
+      // Maintenance runs, measured by the same statement shape as the DOWN
+      // ones. Only a recovery is an observed end here: a run that turns into
+      // DOWN is the ride still not running, so its length is a lower bound.
+      for (const batch of chunked(maintenance, 500)) {
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into(AttractionOutage)
+          .values(
+            batch.map((row) => ({
+              attractionId: row.attractionId,
+              parkId: row.parkId,
+              startedAt: row.startedAt,
+              endedAt: row.endedAt,
+              operatingMinutes: row.operatingMinutes,
+              observedOperatingMinutes: row.observedOperatingMinutes,
+              wallMinutes: row.wallMinutes,
+              operatingDays: row.operatingDays,
+              endReason: row.endReason as AttractionOutage["endReason"],
+              durationUsable:
+                row.endReason === "recovered" && isDurationUsable(row),
+              likelyWorksPeriod: row.likelyWorksPeriod,
+              rowsInSpell: row.rowsInSpell,
+              heartbeatRows: row.heartbeatRows,
+              startCensored: row.startCensored,
+              signal: "maintenance" as const,
               fingerprintVersion: OUTAGE_FINGERPRINT_VERSION,
               computedAt: asOf,
             })),

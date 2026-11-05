@@ -3,6 +3,16 @@
  */
 
 /**
+ * `value` without its trailing slashes. A scan rather than `/\/+$/`, which
+ * backtracks quadratically on a long run of slashes in a caller's text.
+ */
+export function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
+/**
  * Interface for entities with geocoded slugs
  */
 export interface GeocodedEntity {
@@ -78,46 +88,6 @@ export function buildAttractionUrl(
   attraction: { slug: string },
 ): string | null {
   return buildGeocodedUrl(park, attraction.slug);
-}
-
-/**
- * Build geocoded URL for show within a park
- *
- * @param park - Park entity with geocoded slugs
- * @param show - Show entity with slug
- * @returns Geocoded URL or null
- */
-export function buildShowUrl(
-  park: GeocodedEntity,
-  show: { slug: string },
-): string | null {
-  // Validate all required slugs are present
-  if (!park.continentSlug || !park.countrySlug || !park.citySlug) {
-    return null;
-  }
-
-  const basePath = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
-  return `${basePath}/shows/${show.slug}`;
-}
-
-/**
- * Build geocoded URL for restaurant within a park
- *
- * @param park - Park entity with geocoded slugs
- * @param restaurant - Restaurant entity with slug
- * @returns Geocoded URL or null
- */
-export function buildRestaurantUrl(
-  park: GeocodedEntity,
-  restaurant: { slug: string },
-): string | null {
-  // Validate all required slugs are present
-  if (!park.continentSlug || !park.countrySlug || !park.citySlug) {
-    return null;
-  }
-
-  const basePath = `/v1/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
-  return `${basePath}/restaurants/${restaurant.slug}`;
 }
 
 /**

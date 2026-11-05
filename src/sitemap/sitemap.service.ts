@@ -142,8 +142,8 @@ export class SitemapService {
    *
    * Grouping is per park, on the resolved name trimmed by `nameDuplicateKey`
    * and on nothing else, because
-   * that is the payload's key (`docs/architecture/attraction-status-and-seasonality.md`
-   * §4a explains why it may not be the slug or the `externalId`). The winner is
+   * that is the payload's key (`docs/architecture/attraction-status/identity.md`
+   * explains why it may not be the slug or the `externalId`). The winner is
    * `chooseNameDuplicateWinner`, shared with the payload so there is one rule
    * and not two, and status-free so the surviving URL does not move with the
    * feed (PAR-498).

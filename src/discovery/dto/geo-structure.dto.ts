@@ -27,8 +27,8 @@ export class ParkReferenceDto {
   slug: string;
 
   @ApiProperty({
-    description: "Full URL path to park",
-    example: "/europe/germany/rust/europa-park",
+    description: "API path of the park payload (not a site path)",
+    example: "/v1/parks/europe/germany/rust/europa-park",
   })
   url: string;
 
@@ -55,10 +55,10 @@ export class ParkReferenceDto {
 
   @ApiProperty({
     description: "Park operating status",
-    enum: ["OPERATING", "CLOSED", "REFURBISHMENT"],
+    enum: ["OPERATING", "CLOSED"],
     example: "OPERATING",
   })
-  status: "OPERATING" | "CLOSED" | "REFURBISHMENT";
+  status: "OPERATING" | "CLOSED";
 
   @ApiProperty({
     description: "Whether the park provides an official operating schedule API",

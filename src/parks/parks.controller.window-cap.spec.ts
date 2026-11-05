@@ -116,4 +116,61 @@ describe("ParksController › schedule and weather window cap", () => {
       await expect(call(fn)).resolves.toBeDefined();
     });
   });
+
+  describe("weather without `to` (PAR-1136)", () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("defaults to the last 30 days up to the park's today", async () => {
+      jest.useFakeTimers({ now: new Date("2026-11-05T12:00:00Z") });
+
+      await call("getWeatherByGeographicPath");
+
+      const [, from, to] = weatherService.getWeatherData.mock.calls[0];
+      // Berlin is UTC+1 in November: 2026-10-06 00:00 to 2026-11-05 23:59:59.
+      expect(from.toISOString()).toBe("2026-10-05T22:00:00.000Z");
+      expect(to.toISOString()).toBe("2026-11-05T22:59:59.000Z");
+    });
+  });
+});
+
+describe("ParksController › yearly predictions during an ML outage (PAR-1136)", () => {
+  function yearly(modelVersion: string) {
+    const controller = Object.create(ParksController.prototype);
+    Object.assign(controller, {
+      parksService: {
+        findByGeographicPath: jest.fn().mockResolvedValue({
+          id: "p",
+          name: "P",
+          slug: "p",
+          timezone: "UTC",
+        }),
+      },
+      mlService: {
+        getParkPredictionsYearly: jest
+          .fn()
+          .mockResolvedValue({ predictions: [], count: 0, modelVersion }),
+      },
+      parkIntegrationService: {
+        aggregateDailyPredictions: jest.fn().mockResolvedValue([]),
+        getYearlyHolidays: jest.fn().mockResolvedValue(null),
+      },
+    });
+    return (controller as ParksController).getYearlyPredictionsByGeographicPath(
+      "e",
+      "c",
+      "c",
+      "p",
+    );
+  }
+
+  it("flags an unreadable forecast as degraded", async () => {
+    await expect(yearly("unavailable")).resolves.toMatchObject({
+      predictions: [],
+      isDegraded: true,
+    });
+  });
+
+  it("leaves a real (even empty) forecast unflagged", async () => {
+    expect(await yearly("serving-v1")).not.toHaveProperty("isDegraded");
+  });
 });

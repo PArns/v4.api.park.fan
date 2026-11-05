@@ -70,7 +70,9 @@ async function build(overrides: Record<string, unknown> = {}) {
 
   const sessions = new AdminSessionStore(new RedisMock() as never);
   const limiter = new AdminLoginRateLimitService(new RedisMock() as never);
-  const service = new AdminAuthService(users as never, sessions, limiter);
+  const service = new AdminAuthService(users as never, sessions, limiter, {
+    revokeAllForUser: async () => 0,
+  } as never);
   return { service, sessions, users, row };
 }
 

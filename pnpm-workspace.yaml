@@ -15,6 +15,7 @@ onlyBuiltDependencies:
   - esbuild
 overrides:
   qs: '>=6.16.0'
+  follow-redirects: '>=1.16.2'
   # @nestjs/platform-express pins multer exactly (12.2.0 pins `2.4.0`), so the
   # floor has to come from here. GHSA-q7qp-rjg7-q26m (a pending async
   # fileFilter after request teardown holds the request open, DoS) is fixed in

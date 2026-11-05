@@ -10,6 +10,7 @@ import { AdminContentModule } from "./content/admin-content.module";
 import { SystemHealthService } from "./system-health.service";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
 import { MlOverviewService } from "./ml-overview.service";
+import { AdminQueueStatusService } from "./admin-queue-status.service";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { MonitoringModule } from "../monitoring/monitoring.module";
 
@@ -36,12 +37,14 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "analytics" }),
     BullModule.registerQueue({ name: "pcn-shadow" }),
     BullModule.registerQueue({ name: "park-day-operation" }),
+    BullModule.registerQueue({ name: "search-console" }),
   ],
   controllers: [AdminController],
   providers: [
     SystemHealthService,
     DowntimeMeasurementService,
     MlOverviewService,
+    AdminQueueStatusService,
   ],
 })
 export class AdminModule {}

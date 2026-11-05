@@ -148,7 +148,8 @@ export interface OutageParkContext {
  * It also computes no duration, no rate and no history. A carried heartbeat row
  * is indistinguishable from an observed one apart from `lastUpdated`, so an
  * elapsed figure taken from this alone would be wrong upward exactly on the long
- * outages. The duration work needs the `is_heartbeat` column first.
+ * outages. Durations come from the nightly reconstruction, which reads
+ * `is_heartbeat` (docs/analytics/ride-downtime/reconstruction.md).
  *
  * ## Two refusals, both from configuration rather than from the result
  *
@@ -430,6 +431,54 @@ export class AttractionOutageService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+
+    // Maintenance: the same trailing-run question over REFURBISHMENT, answered
+    // from the `maintenance` curve. Its own try: a failure costs this line only.
+    const maintenanceIds = eligible
+      .filter((c) => c.effectiveStatus === "REFURBISHMENT")
+      .map((c) => c.id);
+    if (maintenanceIds.length > 0) {
+      try {
+        const rows: Array<{
+          attractionId: string;
+          startedAt: Date;
+          startObserved: boolean;
+          rowsInRun: number;
+          elapsedOperatingMinutes: number | string;
+          hasWindows: boolean;
+        }> = await queryWithLimits(
+          this.queueDataRepository.manager.connection,
+          trailingOutageWithElapsedSql("REFURBISHMENT"),
+          [[park.id], since, until, maintenanceIds],
+          REQUEST_READ_LIMITS,
+        );
+        const estimates = await this.estimatesFor(
+          park,
+          "maintenance",
+          rows.map((row) => ({
+            attractionId: row.attractionId,
+            elapsed: Number(row.elapsedOperatingMinutes),
+            hasWindows: row.hasWindows,
+          })),
+          asOf,
+        );
+        for (const row of rows) {
+          out.set(row.attractionId, {
+            startedAt: new Date(row.startedAt),
+            startObserved: row.startObserved === true,
+            rowsInRun: Number(row.rowsInRun) || 0,
+            signal: "maintenance",
+            estimate: estimates.get(row.attractionId),
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Current maintenance unavailable for park ${park.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     // Every ride the DOWN query did not place — which INCLUDES the rides that

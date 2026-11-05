@@ -4,7 +4,7 @@ import { TimescaleInitService } from "./timescale-init.service";
 
 /**
  * The two boot steps that keep TimescaleDB jobs from queueing readers behind an
- * ACCESS EXCLUSIVE lock (db-health-runbook §0b): removing the retention policy
+ * ACCESS EXCLUSIVE lock (docs/troubleshooting/timescaledb-lock-queues.md): removing the retention policy
  * that locked `attractions`, and making compression give up its truncate lock
  * instead of waiting for it. Both run against production on every boot, so the
  * properties pinned here are the ones that make that safe: a bounded lock wait,

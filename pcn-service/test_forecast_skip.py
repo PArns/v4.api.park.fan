@@ -91,3 +91,72 @@ def test_inputs_follow_the_checkpoints_target_mode(park, ckpt_mode):
     park.model.target_mode = ckpt_mode
     forecast.forecast_park("P", "v")
     assert park.state["in_force"] == [ckpt_mode == "in_force"]
+
+
+# --- Skip reasons in the job result (PAR-1120) ---------------------------------
+
+def _reason(pid="P"):
+    skipped = {}
+    assert forecast.forecast_park(pid, "v", skipped) == 0
+    return skipped.get(pid)
+
+
+def test_every_reason_is_in_exactly_one_group():
+    assert not forecast.IDLE_REASONS & forecast.BLOCKED_REASONS
+
+
+def test_no_fresh_data_is_idle(park, monkeypatch):
+    monkeypatch.setattr(forecast.db, "park_has_fresh_data", lambda pid, h: False)
+    assert _reason() == "no_fresh_data"
+
+
+def test_no_model_is_blocked(park, monkeypatch):
+    monkeypatch.setattr(forecast, "_load_model", lambda pid: None)
+    assert _reason() == "no_model"
+
+
+def test_no_panel_is_blocked(park, monkeypatch):
+    monkeypatch.setattr(forecast.pipeline, "build_park_tensor",
+                        lambda pid, window_days=None, in_force=None: None)
+    assert _reason() == "no_panel"
+
+
+def test_stale_origin_is_idle(park, monkeypatch):
+    monkeypatch.setattr(forecast.pipeline, "park_timezone", lambda pid: "UTC")
+    assert _reason() == "stale_origin"  # the fixture's slots end in October 2026
+
+
+def test_too_few_slots_is_blocked(park):
+    park.state["slots"] = park.state["slots"][:5]
+    assert _reason() == "too_few_slots"
+
+
+def test_no_trained_ride_is_blocked(park, monkeypatch):
+    park.model.ride_ids = ["other1", "other2"]
+    monkeypatch.setattr(forecast.tns, "align_ride_axis",
+                        lambda t, ids: (t, np.zeros(len(ids), dtype=bool)))
+    assert _reason() == "no_trained_ride"
+
+
+def test_already_forecast_is_idle(park):
+    forecast.forecast_park("P", "v")
+    assert _reason() == "already_forecast"
+
+
+def test_forecast_all_splits_idle_from_blocked(park, monkeypatch):
+    monkeypatch.setattr(forecast.pipeline, "scope_park_ids",
+                        lambda ids: ["A", "B", "C", "D"])
+    monkeypatch.setattr(forecast.db, "park_has_fresh_data", lambda pid, h: pid != "A")
+    monkeypatch.setattr(forecast, "_load_model",
+                        lambda pid: None if pid == "B" else park.model)
+
+    def build(pid, window_days=None, in_force=None):
+        if pid == "D":
+            raise RuntimeError("db down")
+        return types.SimpleNamespace(slots=park.state["slots"], ride_ids=["r1", "r2"])
+
+    monkeypatch.setattr(forecast.pipeline, "build_park_tensor", build)
+    res = forecast.forecast_all("v")
+    assert res["rows"] > 0  # C wrote
+    assert res["skipped"] == {"idle": {"A": "no_fresh_data"},
+                              "blocked": {"B": "no_model", "D": "failed"}}

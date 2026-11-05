@@ -683,8 +683,10 @@ export class WaitTimesProcessor {
 
   /**
    * Reverse-Reconciliation: close attractions that no upstream source
-   * reported for >24h. Writes a CLOSED queue_data entry so the seasonal
-   * detection job (detect-seasonal) can flag them afterwards.
+   * reported for >24h. Writes a CLOSED queue_data entry so the last OPERATING
+   * row stops being the ride's current status; readers serve such a ride as
+   * UNKNOWN (source-absent-status.util) and the outage reconstruction ends a
+   * run on it. detect-seasonal does not read it (observed rows only, PAR-32).
    *
    * Grace period: skip attractions younger than 24h (createdAt) — they may
    * simply not have been seen yet on their very first sync cycle.

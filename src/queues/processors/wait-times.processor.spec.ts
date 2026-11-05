@@ -28,6 +28,14 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
  * those two paths directly via the private methods so a regression in
  * either path shows up immediately on every PR.
  */
+/** Fakes the clock at `now` around each test of the enclosing block. */
+function pinClock(now: number): void {
+  beforeEach(() =>
+    jest.useFakeTimers({ now, doNotFake: ["nextTick", "setImmediate"] }),
+  );
+  afterEach(() => jest.useRealTimers());
+}
+
 describe("WaitTimesProcessor", () => {
   let processor: WaitTimesProcessor;
 
@@ -366,46 +374,52 @@ describe("WaitTimesProcessor", () => {
       expect(redisStore.get("downtime:start:a1")).toBeUndefined();
     });
 
-    it("DOWN → OPERATING: accumulates the daily-total and deletes the start key in one pipeline", async () => {
-      const tenMinAgo = Date.now() - 10 * 60 * 1000;
-      redisStore.set("downtime:status:a1", LiveStatus.DOWN);
-      redisStore.set("downtime:start:a1", tenMinAgo.toString());
-      // Date.now() will be ~now; using UTC the formatted day is today's.
-      // We can read the actual computed key from the pipeline ops.
+    describe("closing an outage", () => {
+      // Pinned clock: the start minutes ago and the recovery fall on one UTC
+      // day, which a real clock just after midnight does not give.
+      pinClock(new Date("2026-07-01T12:00:00Z").getTime());
 
-      await run(LiveStatus.OPERATING);
+      it("DOWN → OPERATING: accumulates the daily-total and deletes the start key in one pipeline", async () => {
+        const tenMinAgo = Date.now() - 10 * 60 * 1000;
+        redisStore.set("downtime:status:a1", LiveStatus.DOWN);
+        redisStore.set("downtime:start:a1", tenMinAgo.toString());
+        // Date.now() will be ~now; using UTC the formatted day is today's.
+        // We can read the actual computed key from the pipeline ops.
 
-      // Daily key written with at least 10 minutes added.
-      const dailyEntry = [...redisStore.entries()].find(([k]) =>
-        k.startsWith("downtime:daily:a1:"),
-      );
-      expect(dailyEntry).toBeDefined();
-      // Allow ±1 minute drift for clock movement during the test.
-      const value = parseInt(dailyEntry![1], 10);
-      expect(value).toBeGreaterThanOrEqual(9);
-      expect(value).toBeLessThanOrEqual(11);
-      // Start key cleared.
-      expect(redisStore.get("downtime:start:a1")).toBeUndefined();
-    });
+        await run(LiveStatus.OPERATING);
 
-    it("sums into an existing daily-total (multi-outage day)", async () => {
-      const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-      redisStore.set("downtime:status:a1", LiveStatus.DOWN);
-      redisStore.set("downtime:start:a1", fiveMinAgo.toString());
-      // Pre-existing 20 minutes for today.
-      // We pin the timezone to UTC so the test key matches the run.
-      const dayStr = new Date().toISOString().split("T")[0];
-      redisStore.set(`downtime:daily:a1:${dayStr}`, "20");
+        // Daily key written with at least 10 minutes added.
+        const dailyEntry = [...redisStore.entries()].find(([k]) =>
+          k.startsWith("downtime:daily:a1:"),
+        );
+        expect(dailyEntry).toBeDefined();
+        // Allow ±1 minute drift for clock movement during the test.
+        const value = parseInt(dailyEntry![1], 10);
+        expect(value).toBeGreaterThanOrEqual(9);
+        expect(value).toBeLessThanOrEqual(11);
+        // Start key cleared.
+        expect(redisStore.get("downtime:start:a1")).toBeUndefined();
+      });
 
-      await run(LiveStatus.OPERATING, "UTC");
+      it("sums into an existing daily-total (multi-outage day)", async () => {
+        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+        redisStore.set("downtime:status:a1", LiveStatus.DOWN);
+        redisStore.set("downtime:start:a1", fiveMinAgo.toString());
+        // Pre-existing 20 minutes for today.
+        // We pin the timezone to UTC so the test key matches the run.
+        const dayStr = new Date().toISOString().split("T")[0];
+        redisStore.set(`downtime:daily:a1:${dayStr}`, "20");
 
-      const newValue = parseInt(
-        redisStore.get(`downtime:daily:a1:${dayStr}`)!,
-        10,
-      );
-      // Original 20 + ~5 new ≈ 24-26.
-      expect(newValue).toBeGreaterThanOrEqual(24);
-      expect(newValue).toBeLessThanOrEqual(26);
+        await run(LiveStatus.OPERATING, "UTC");
+
+        const newValue = parseInt(
+          redisStore.get(`downtime:daily:a1:${dayStr}`)!,
+          10,
+        );
+        // Original 20 + ~5 new ≈ 24-26.
+        expect(newValue).toBeGreaterThanOrEqual(24);
+        expect(newValue).toBeLessThanOrEqual(26);
+      });
     });
 
     it("OPERATING → OPERATING (no change): only the status SET fires", async () => {
@@ -436,13 +450,7 @@ describe("WaitTimesProcessor", () => {
     describe("outages longer than the heartbeat gap", () => {
       // Pinned clock: the start and the recovery fall on one park-local day.
       const NOON = new Date("2026-07-01T12:00:00Z").getTime();
-      beforeEach(() =>
-        jest.useFakeTimers({
-          now: NOON,
-          doNotFake: ["nextTick", "setImmediate"],
-        }),
-      );
-      afterEach(() => jest.useRealTimers());
+      pinClock(NOON);
 
       it("counts a 90-minute outage: keys outlive the ~65-min gap between rows", async () => {
         redisStore.set("downtime:status:a1", LiveStatus.DOWN);

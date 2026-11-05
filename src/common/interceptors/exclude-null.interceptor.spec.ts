@@ -116,6 +116,16 @@ describe("ExcludeNullInterceptor", () => {
       expect(out).toEqual({ fields: [curatedField] });
     });
 
+    it("keeps nulls on an admin path written in capitals", async () => {
+      const out = await run(
+        interceptor,
+        { fields: [curatedField] },
+        {},
+        "/V1/ADMIN/content/attractions/abc",
+      );
+      expect(out).toEqual({ fields: [curatedField] });
+    });
+
     it("keeps a season's null `dates`, which means 'every day'", async () => {
       // Null here is not an absent field: it is the difference between a
       // season that runs daily and one that runs on listed days only.

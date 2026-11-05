@@ -8,7 +8,8 @@ import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
  *
  * ## Why this exists at all
  *
- * `docs/analytics/ride-downtime.md` §1 excludes `CLOSED` while the park is open,
+ * `docs/analytics/ride-downtime/reconstruction.md#what-does-not-count` excludes
+ * `CLOSED` while the park is open,
  * and that exclusion is right for the reason it gives: it is the class that
  * killed ML's `unexpected_closure`, where 534 of 602 anomalies were genuine
  * closures. But it was applied to a raw status, and a raw status is not what a
@@ -77,7 +78,7 @@ import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
  * closure, already found, already keyed on its operating day. The share is a
  * count over rows the statement holds, divided by the denominator the duty-cycle
  * test already reads. It is applied to the whole ride, gaps included, which is
- * what `todo.md` §2f asked for before anything published `closed_gap` history:
+ * what PAR-157 asked for before anything published `closed_gap` history:
  * the stored rows no longer carry the cinema noise the live line refuses to
  * show.
  *
@@ -187,6 +188,31 @@ export const MAX_SIMULTANEOUS_CLOSERS = 2;
  * unreliable ride is withheld rather than a timetable published as faults.
  * Applying it drops the 21-day population from 2817 to 1757 and leaves the
  * median untouched at 25 minutes.
+ *
+ * ## A known bias in the nightly denominator, kept on purpose (PAR-1093)
+ *
+ * The nightly `CLOSURE_GAP_INTERVALS_SQL` runs BEFORE its job rewrites
+ * `attraction_exposure_days`, so its `active` CTE (the `active_days`
+ * denominator) and `blind_parks` read the PREVIOUS run's rows, which end at that
+ * run's as-of. The numerator reads `queue_data` up to this run's as-of. The
+ * denominator therefore misses the newest operating day: about 1 day in 30
+ * (~3.3 %) on a nightly run, n days after n missed runs. That raises
+ * `gap_days / active_days`, the direction that withholds a real fault as a
+ * duty cycle, never the one that publishes a timetable as faults. The live
+ * statement is not affected (its denominator stops before today by design).
+ *
+ * The calibration above was taken on the stored record and so already contains
+ * this bias, and the 0.5 cut sits in the gap between the 0.4 and 0.5 buckets
+ * (see CYCLE_WINDOW_DAYS), so a ~3 % shift can only move rides already at the
+ * edge; how many has not been counted. The fixes were weighed and not taken: running the statement
+ * inside the write transaction costs 30.4 s under the delete locks every night
+ * (measured 2026-09-08), splitting the transaction costs the atomicity of the
+ * two tables, and passing this run's in-memory exposure rows into the statement
+ * means ~30 days of rows for every tracked ride as array parameters, merged
+ * with the table's older history for `blind_parks` (which sums all of it) and
+ * minus a delete set that depends on this statement's own output. On a first
+ * run against an empty table no park reaches `MIN_BLIND_EVIDENCE_HOURS`, so the
+ * statement returns nothing rather than running with the filter off.
  */
 export const MAX_GAP_DAY_SHARE = 0.5;
 
@@ -420,8 +446,13 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     -- The previous READING's status, so chg below can keep only the readings
     -- that change it.
     SELECT *,
-           lag(st) OVER (PARTITION BY aid ORDER BY ts) AS row_prev_st
+           lag(st) OVER w AS row_prev_st,
+           -- The previous reading's instant: on a status change out of
+           -- OPERATING it is the ride's last OPERATING reading, which the
+           -- pre-opening fallback in gap_edges places against night_mid.
+           lag(ts) OVER w AS row_prev_ts
       FROM src
+    WINDOW w AS (PARTITION BY aid ORDER BY ts)
   ),
   -- Status changes only: one row where each run of a status begins.
   --
@@ -437,7 +468,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- which is the whole of its cost: a running ride writes a row every time its
   -- wait moves, and none of those rows change its status.
   chg AS (
-    SELECT aid, pid, tz, ts, st,
+    SELECT aid, pid, tz, ts, st, row_prev_ts AS prev_reading_ts,
            lag(st)  OVER w AS prev_st,
            lead(st) OVER w AS next_st,
            lead(ts) OVER w AS next_ts
@@ -511,18 +542,57 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- whose op_day has always come from win, and this is the same quantity in
   -- the same units as that one. A calendar day here was a second notion of
   -- "the day of an outage" in a job that writes both.
+  --
+  -- ## A closure that began before the opening (PAR-1092)
+  --
+  -- The live run_window's rule, applied here so the page and the stored record
+  -- agree: a start outside every window belongs to the first window that opens
+  -- LATER ON THE SAME park-local day, and its start is clipped to that opening
+  -- (Phantasialand's Pferdekarussell, CLOSED from 08:55 in a park open from
+  -- 09:00). Two conditions the live statement gets from elsewhere are spelled
+  -- out on that arm:
+  --
+  -- - night_mid, on the ride's last OPERATING reading (prev_reading_ts): the
+  --   live open_today asks the same of the reading that makes it "ran earlier
+  --   today", so a reading the feed left standing after the close (OPERATING
+  --   01:00, CLOSED 01:50) stays the evening's and is not clipped into the
+  --   morning's opening.
+  -- - still CLOSED at the opening: live, the closure is standing by
+  --   construction. Here a pre-opening gap that ended before the park opened
+  --   would be clipped to a start after its own end.
+  --
+  -- A start after the day's last close still finds no window (the next one
+  -- opens on another date) and stays out, as it does live. DISTINCT ON picks
+  -- the containing window first and the earliest later one otherwise, as
+  -- run_window's ORDER BY opens_at does. ts leaves clipped, the instant the
+  -- row is stored and measured from; raw_ts keeps the minute the ride flipped,
+  -- which is what simultaneity counts.
+  win_prev AS (
+    SELECT w.park_id, w.opens_at, w.closes_at, w.op_day,
+           COALESCE(lag(w.closes_at) OVER pw
+                      + (w.opens_at - lag(w.closes_at) OVER pw) / 2,
+                    w.op_day::timestamp AT TIME ZONE w.tz) AS night_mid
+      FROM win w
+    WINDOW pw AS (PARTITION BY w.park_id ORDER BY w.opens_at)
+  ),
   gap_edges AS (
-    SELECT s.aid, s.pid, s.tz, s.ts, s.next_ts, s.next_st,
+    SELECT DISTINCT ON (s.aid, s.ts)
+           s.aid, s.pid, s.tz, s.ts AS raw_ts,
+           GREATEST(s.ts, wo.opens_at) AS ts,
+           s.next_ts, s.next_st,
            wo.closes_at AS window_closes_at,
            COALESCE(wo.op_day, (s.ts AT TIME ZONE s.tz)::date)
              AS start_op_day,
            COALESCE(wb.op_day, (s.next_ts AT TIME ZONE s.tz)::date)
              AS end_op_day
       FROM chg s
-      LEFT JOIN win wo
+      LEFT JOIN win_prev wo
         ON wo.park_id = s.pid
-       AND s.ts >= wo.opens_at
        AND s.ts <  wo.closes_at
+       AND (s.ts >= wo.opens_at
+            OR (wo.op_day = (s.ts AT TIME ZONE s.tz)::date
+                AND s.prev_reading_ts >= wo.night_mid
+                AND (s.next_ts IS NULL OR s.next_ts > wo.opens_at)))
       LEFT JOIN win wb
         ON wb.park_id = s.pid
        AND s.next_ts >= wb.opens_at
@@ -531,6 +601,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      -- is decided once, in closures below, from what this CTE carries.
      WHERE s.st = 'CLOSED'
        AND s.prev_st = 'OPERATING'
+     ORDER BY s.aid, s.ts, wo.opens_at
   ),
   -- Which of the two shapes a closure takes, as two flags computed once and read
   -- by both branches. Written out in each branch they would be two copies of one
@@ -569,6 +640,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   raw_gaps AS (
     SELECT aid, pid, tz,
            ts        AS started_at,
+           raw_ts    AS raw_started_at,
            next_ts   AS ended_at,
            start_op_day                              AS op_day,
            EXTRACT(HOUR FROM ts AT TIME ZONE tz)::int AS closed_hour
@@ -596,6 +668,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   raw_stands AS (
     SELECT aid, pid, tz,
            ts AS started_at,
+           raw_ts AS raw_started_at,
            CASE WHEN next_ts < ts + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
                 THEN next_ts END AS ended_at,
            CASE WHEN next_ts < ts + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
@@ -609,17 +682,18 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- where there is one, else the horizon, else the scan's own end for a closure
   -- that is still inside its horizon.
   cand AS (
-    SELECT aid, pid, tz, started_at, ended_at,
+    SELECT aid, pid, tz, started_at, raw_started_at, ended_at,
            COALESCE(ended_at,
                     LEAST(started_at + INTERVAL '${LIVE_LOOKBACK_HOURS} hours',
                           $3::timestamptz)) AS measured_until,
            end_st, op_day, closed_hour, kind
       FROM (
-        SELECT aid, pid, tz, started_at, ended_at, 'OPERATING'::text AS end_st,
+        SELECT aid, pid, tz, started_at, raw_started_at, ended_at,
+               'OPERATING'::text AS end_st,
                op_day, closed_hour, 'gap'::text AS kind
           FROM raw_gaps
         UNION ALL
-        SELECT aid, pid, tz, started_at, ended_at, end_st,
+        SELECT aid, pid, tz, started_at, raw_started_at, ended_at, end_st,
                op_day, closed_hour, 'stand'::text AS kind
           FROM raw_stands
       ) u
@@ -631,7 +705,9 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- as two faults. The live statement has always counted every CLOSED reading
   -- of the park (park_closers), which is the side this now matches.
   simultaneity AS (
-    SELECT pid, date_trunc('minute', ts) AS minute, count(*) AS closers
+    -- On the raw start: the minute the rides flipped, not the opening a
+    -- pre-opening closure is clipped to (the live statement does the same).
+    SELECT pid, date_trunc('minute', raw_ts) AS minute, count(*) AS closers
       FROM closures GROUP BY 1, 2
   ),
   -- Over both shapes, because the case it exists for is mostly the second: a
@@ -855,7 +931,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     JOIN cand_minutes m
       ON m.aid = g.aid AND m.started_at = g.started_at
     JOIN simultaneity s
-      ON s.pid = g.pid AND s.minute = date_trunc('minute', g.started_at)
+      ON s.pid = g.pid AND s.minute = date_trunc('minute', g.raw_started_at)
     JOIN regularity r
       ON r.aid = g.aid AND r.closed_hour = g.closed_hour
     JOIN cycle c ON c.aid = g.aid
@@ -986,7 +1062,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   --
   -- Read out of win rather than scanning schedule_entries a second time. That
   -- scan was the second of three hand-rolled copies of "when does this park's
-  -- day end" in this file (todo.md named all three); through win it inherits
+  -- day end" in this file; through win it inherits
   -- the closing-time repair it already did by hand, plus the disjoint-union
   -- flattening and the operating-day anchor it did not.
   --
@@ -1435,9 +1511,15 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- blind parks this statement serves, 2391 park-days carry an OPERATING entry
   -- and **none** of them has a null close or a close that stays at or before
   -- the opening after repair (2026-09-15). The two readings agree on every row
-  -- the statement can see, and the day the first one appears it will be a
-  -- measurement rather than a silent change -- nothing here pins it, which
-  -- todo.md now carries.
+  -- the statement can see. The day the first one appears, the data-quality
+  -- monitor names it (findBlindParkUnusableScheduleDays, PAR-1094), so it is a
+  -- warning rather than a silent change.
+  --
+  -- Still open under PAR-1094: early_end below joins the readings to win with
+  -- a LEFT JOIN, so an OPERATING reading after the close (feeds often leave
+  -- one) counts as the day's last_operating and a ride looks more punctual
+  -- than it is. An INNER JOIN would be more correct but moves last_operating
+  -- for every park; it waits for a before/after measurement.
   park_day_close AS (
     SELECT w.op_day AS d, max(w.closes_at) AS closes_at
       FROM win w
@@ -1545,7 +1627,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
    -- park_downtime_coverage.regime is rebuilt nightly and already applies both
    -- halves of the test (never-DOWN, and MIN_BLIND_EVIDENCE_HOURS of
    -- observation). Re-deriving it here meant two sources of truth for one
-   -- question, kept in step only by a comment — the shape CLAUDE.md §4 names.
+   -- question, kept in step only by a comment — the shape docs/rules/absent-facts.md names.
    --
    -- It used to be a CTE brought in with CROSS JOIN, and the service said
    -- beside the call site that this "costs one indexed lookup" in a park that

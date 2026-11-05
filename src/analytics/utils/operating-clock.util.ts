@@ -5,7 +5,8 @@
  * minutes: the recovery curve is built from `operating_minutes`, and
  * `trailingOutageWithElapsedSql()` reads the same clock backwards to say how
  * long a running outage has already lasted. Counting that way is what took
- * censoring from 68 % to 15.6 % (`docs/analytics/ride-downtime.md` §6a) — a
+ * censoring from 68 % to 15.6 %
+ * (`docs/analytics/ride-downtime/reconstruction.md#end-reasons-and-censoring`) — a
  * closed park is a pause and not an ending.
  *
  * The consequence is that a remaining figure off that curve is not a duration a

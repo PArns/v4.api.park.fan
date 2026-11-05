@@ -136,7 +136,8 @@ def train_step_size(name: str, n_series: int, n_cols: int, t_train: int,
     facts["sample_bytes"] = wbs * lh * n_cols * (n_series if spec.get("multivariate") else 1) * 4
     return s, facts
 
-# Model specs. Sizes were set on the subset run (see docs/ml/ml-bench.md, PAR-829).
+# Model specs. Sizes were set on the subset run
+# (see docs/ml/ml-bench/running.md#neuralforecast-precompute-par-829).
 SPECS: dict[str, dict] = {
     "nf_tide": dict(cls="TiDE", weather=False, kw=dict(
         hidden_size=256, decoder_output_dim=16, temporal_decoder_dim=64, num_encoder_layers=2,
@@ -472,7 +473,8 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
     # Provenance of the CACHE, not just of the scoring run: a cache built from a dirty or
     # pre-rebase tree makes every number scored from it incomparable, and the cache
     # outlives the container that wrote it. `git_sha` must be a real commit that contains
-    # the harness's plug-in coverage-parity fixes - see docs/ml/ml-bench.md.
+    # the harness's plug-in coverage-parity fixes - see
+    # docs/ml/ml-bench/running.md#sharing-the-gpu-with-production.
     # A resumed run keeps the blocks and the PROVENANCE of the earlier passes: a cache
     # whose blocks come from two different code versions is exactly the hazard here, and
     # it must be visible in the file rather than inferred from timestamps.

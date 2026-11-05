@@ -13,7 +13,7 @@
 # slots are only 39.9 % of May and 31.8 % of August — an August cell would be gated out
 # and the GPU time wasted. Scoring the full park set keeps the model and the baselines
 # on the same rows. A park subset needs the harness's --parks (PAR-828 adds it) so the
-# baselines are restricted too; see docs/ml/ml-bench.md.
+# baselines are restricted too; see docs/ml/ml-bench/running.md#build-and-run.
 #
 # Why two blocks and not nine: ~3 h of GPU budget. Each extra block is another fit plus
 # ~8 predict passes over every origin of the month.

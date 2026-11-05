@@ -639,7 +639,7 @@ sources stand. PortAventura's three rows are exactly that shape and are held
 by names of 0.1600–0.2000; a water park on its resort's point with a name like
 Legoland Windsor's (0.7429) would not be. That gate is PAR-247. Details and the
 measurement table:
-[Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
+[Attraction Status & Seasonality §5.5](architecture/attraction-status/README.md).
 
 ### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
 
@@ -1317,7 +1317,7 @@ A measurement trap that came with it, for anyone counting per park:
 grouped by slug the two add up to 54 and invent the only figure above 50 in the
 catalogue. Group by `parks.id`.
 
-Contract: [plan-day-endpoint.md §6](frontend/plan-day-endpoint.md).
+Contract: [plan-day-endpoint.md §6](frontend/plan-day/README.md).
 
 ### Fixed — `/plan/day` reads the works window, the live status and the hours it served
 
@@ -1358,7 +1358,7 @@ every hour the model spoke for lies below its own opening hour; the header then
 claimed `measured` over a response in which every hour was composed.
 
 `plan-day.service.spec.ts` 62 → 84 cases, 8 of which fail against the previous
-service. Contract: [plan-day-endpoint.md §6, §8](frontend/plan-day-endpoint.md).
+service. Contract: [plan-day-endpoint.md §6, §8](frontend/plan-day/README.md).
 
 ### Added — a per-park override for schedule sources that publish a 12-hour clock
 
@@ -1810,7 +1810,7 @@ Toverland's _Kletterparcours_ was retired with `retired_at = 2025-11-02`.
 
 The question they had been held on — how an operator's season becomes a month
 list — is answered once, in
-[Attraction Status & Seasonality §7a](architecture/attraction-status-and-seasonality.md),
+[Attraction Status & Seasonality §7a](architecture/attraction-status/README.md),
 which also spells out that the months go in `curated_season_months` and never in
 the detector's own `season_months`.
 
@@ -2088,7 +2088,7 @@ A ride reported `DOWN` now says what happened to outages that got this far:
 „Störungen wie diese dauerten meist noch 25 Min. bis 4:15 Std." — on the park
 page's ride card and on the ride's own page, from the same numbers.
 
-This is not the forecast [ride-downtime §6](analytics/ride-downtime.md#6-why-there-is-no-probability)
+This is not the forecast [ride-downtime §6](analytics/ride-downtime/refused.md#no-forecast-of-the-next-outage)
 refuses. That one is "when will this break next" at p ≈ 0.006, needing ~1300
 events per bin. This is conditioned on an outage that has already started:
 5900-128 000 intervals per bucket, out-of-sample calibration error **2.55
@@ -2163,7 +2163,7 @@ of min-to-max — the same answer for an ordinary park, `16 → 0` instead of
 `context.openHour` / `closeHour` keep the operator's own wall-clock numbers, so
 `10 → 0` still reads as published; `hours[].hour` continues past 23 instead of
 wrapping, so one operating day is one ascending series and 24 is its midnight.
-Contract and the sweep tables: [plan-day-endpoint.md §5](frontend/plan-day-endpoint.md).
+Contract and the sweep tables: [plan-day-endpoint.md §5](frontend/plan-day/README.md).
 
 Also in the same pass: the `/plan/day` spec measured its "today", "seven days
 ago" and lead-distance fixtures on the **UTC** clock while the service reads the
@@ -2207,8 +2207,8 @@ carry a start time from 2022, and filtering on the snapshot alone would fold a
 `GET …/plan/day?date=` returns an hourly wait curve per ride for one date, plus
 that day's own context. Alongside it `/v1/trips` (a plan that outlives one
 browser) and `/v1/push` (a notification before the next block). Details:
-[plan-day-endpoint.md](frontend/plan-day-endpoint.md) ·
-[trips-and-push.md](frontend/trips-and-push.md).
+[plan-day-endpoint.md](frontend/plan-day/README.md) ·
+[trips-and-push.md](frontend/push.md).
 
 The model's uncertainty now travels the whole way. CatBoost trains
 `MultiQuantile:alpha=0.5,0.8,0.95`, and `config.py` calls alpha=0.95 "the
@@ -3861,7 +3861,7 @@ Both seed services now report which parks they wrote into
 (`RideProfileSeedResult.touchedParks`, `ManualMetadataResult.touchedParks`);
 the metadata seed reports only rows that actually changed, so a no-op run
 evicts nothing. See
-[Caching Strategy](architecture/caching-strategy.md#1-integrated-responses).
+[Caching Strategy](architecture/caching-strategy.md#keys-and-ttls).
 
 ### Added — Hersheypark ride heights
 
@@ -3938,7 +3938,7 @@ lists the other rides that have one.
   confirmation step is not ceremony: the geo match proposed 4327 for Universal
   Orlando's Revenge of the Mummy, which is Singapore's ride (Orlando is 2232).
 
-→ [Ride ↔ Glossary link](docs/frontend/ride-glossary-link.md)
+→ [Ride ↔ Glossary link](frontend/ride-glossary-link.md)
 
 ### Fixed — Misdated closing times no longer make a park read CLOSED while it is open (2026-07-27)
 
@@ -4144,7 +4144,7 @@ crowd-FAQ / header-forecast content from the ~2.25 MB `/calendar` response (of w
 
 ### Fixed/Changed — PCN intraday review fixes (serving, scorers, ops) (2026-07-02)
 
-Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-review.md)
+Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn.md)
 (§8 has the full status table + the one-time board-reset SQL):
 
 - **Crowd-level quantile fix (serving):** the PCN champion-swap override now derives
@@ -4180,7 +4180,7 @@ Implements priorities 1–5 of [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-
 ### Added — PCN intraday model review (docs only) (2026-07-02)
 
 Full review of the new intraday stack (pcn-service, champion-swap serving path,
-shadow scorers, boards): [docs/ml/pcn-intraday-review.md](ml/pcn-intraday-review.md).
+shadow scorers, boards): [docs/ml/pcn-intraday-review.md](ml/pcn.md).
 Key findings — P0: crowd-level recomputed from PCN q0.5 instead of q0.8 in the
 serving override; rolling-window scorer overwrites matured board days (pcn + shape,
 visible as lead-bucket N > "all" N); park-curve/calendar/deviation consumers bypass
@@ -4301,7 +4301,7 @@ so these never gated — but the suite was misleading.
 - **New docs**: [`ml/quantile-serving-and-calibration.md`](ml/quantile-serving-and-calibration.md)
   (the full quantile→display/crowd mapping + the monotonic / `predicted_peak` /
   single-flight fixes) and
-  [`development/full-db-validation-checklist.md`](development/full-db-validation-checklist.md)
+  [`development/full-db-validation-checklist.md`](analytics/crowd-levels.md#checking-the-calibration-against-production)
   (the calibration invariants + SQL to verify against real parks, since the
   dev/CI container has no DB).
 - _(Deferred: switching `stats.service.ts` percentiles from nearest-rank to linear
@@ -4608,7 +4608,7 @@ Scheduled re-evaluation (due ~2026-06-14) run early; all gates passed decisively
   - Adding `avg_wait_same_dow_4w` (mean of last 4 same-day-of-week observations) for a stable historical reference
   - Lowering `VOLATILITY_CAP_STD_MINUTES` from 40 → 15 to reduce volatility dominance
   - All new features propagated to inference in `predict.py`
-  - Detailed analysis: [Prediction Quality Issues](ml/prediction-quality-issues.md)
+  - Detailed analysis: [Prediction Quality Issues](ml/catboost.md#traps)
 
 - **ML: Flat future predictions / hour importance 0.84%** (`features.py`, `db.py`, `predict.py`): `park_occupancy_pct` (15% importance) was broadcast from the current real-time value to ALL prediction rows — including rows 24h or 14 days in the future — causing flat, hour-invariant predictions. Fixed in two stages:
   - **Inference fix** (`db.py`, `features.py`): `fetch_historical_park_occupancy()` computes expected park occupancy by (DOW, hour) over the last 8 weeks (via `attractions` JOIN, since `queue_data` has no `parkId`). `add_park_occupancy_feature` now applies real-time occupancy only to rows within ±2h of base_time; future rows use the DOW×hour historical profile.

@@ -560,7 +560,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
           `🚨 ${result.overdue} prediction chunk(s) are more than ` +
             `${PREDICTION_CHUNK_RETENTION_DAYS + PREDICTION_CHUNK_OVERDUE_DAYS} days old and still ` +
             `not dropped: the lock on attractions was busy in all ${result.attempts} attempts ` +
-            `again tonight. See db-health-runbook §0b for who holds it.`,
+            `again tonight. See docs/troubleshooting/timescaledb-lock-queues.md for who holds it.`,
         );
       } else if (result.lockTimedOut) {
         this.logger.warn(

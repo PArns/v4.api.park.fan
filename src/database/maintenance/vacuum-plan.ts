@@ -158,7 +158,7 @@ export const TFT_PRUNE_CRON = "35 4 * * *";
  * 120 = the 107 of the forward archive plus a 13-day margin. ml-bench's
  * `export` is the one reader that wants more (every origin since 2026-03-01):
  * an export taken after this runs holds 120 days of TFT origins — see
- * docs/ml/ml-bench.md.
+ * docs/ml/ml-bench/harness.md#export.
  */
 export const TFT_FORECAST_RETENTION_DAYS = 120;
 

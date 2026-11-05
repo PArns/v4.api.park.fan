@@ -53,4 +53,38 @@ describe("redactUrl", () => {
   it("keeps the path when a redacted parameter was the only one", () => {
     expect(redactUrl("/v1/admin/x?pass=a")).toBe("/v1/admin/x?pass=***");
   });
+
+  it("hides OAuth secrets a client put in the query string", () => {
+    expect(
+      redactUrl(
+        "/v1/oauth/token?code=abc&code_verifier=def&refresh_token=pfr_x&client_id=pfc_1",
+      ),
+    ).toBe(
+      "/v1/oauth/token?code=***&code_verifier=***&refresh_token=***&client_id=pfc_1",
+    );
+    expect(redactUrl("/v1/mcp?access_token=pfo_x")).toBe(
+      "/v1/mcp?access_token=***",
+    );
+  });
+
+  it("hides the id of a pending OAuth request in the path", () => {
+    expect(redactUrl("/v1/admin/oauth/requests/AbC-123_xyz")).toBe(
+      "/v1/admin/oauth/requests/***",
+    );
+    expect(redactUrl("/v1/admin/oauth/requests/AbC-123_xyz/approve")).toBe(
+      "/v1/admin/oauth/requests/***/approve",
+    );
+    expect(redactUrl("/V1/ADMIN/OAUTH/REQUESTS/AbC/deny?pass=x")).toBe(
+      "/V1/ADMIN/OAUTH/REQUESTS/***/deny?pass=***",
+    );
+  });
+
+  it("hides an address named in the query string", () => {
+    expect(redactUrl("/v1/location/nearby?ip=203.0.113.47&radius=50")).toBe(
+      "/v1/location/nearby?ip=***&radius=50",
+    );
+    expect(redactUrl("/v1/favorites?IP=2001:db8::1")).toBe(
+      "/v1/favorites?IP=***",
+    );
+  });
 });

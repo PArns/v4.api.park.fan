@@ -162,8 +162,12 @@ export const GLOBAL_PARK_STATS_SQL = `
  * the same reason as `GLOBAL_PARK_STATS_SQL`: it is parameterless raw SQL.
  */
 export const OPEN_ATTRACTIONS_COUNT_SQL = `
+      WITH ${OPEN_PARKS_CTES}
       SELECT COUNT(DISTINCT a.id) as count
       FROM attractions a
+      -- Only rides of parks open now: a closed park's last OPERATING reading
+      -- stays inside the 24 h window for the whole night.
+      JOIN park_status ps ON ps."parkId" = a."parkId"
       JOIN LATERAL (
         SELECT qd.status
         FROM queue_data qd
@@ -3264,10 +3268,25 @@ export class AnalyticsService {
       totalRestaurantsCount,
       queueDataCount,
     ] = await Promise.all([
-      this.getCachedCount(this.parkRepository, "count:parks"),
-      this.getCachedCount(this.attractionRepository, "count:attractions"),
-      this.getCachedCount(this.showRepository, "count:shows"),
-      this.getCachedCount(this.restaurantRepository, "count:restaurants"),
+      // Retired rows are not the catalogue anymore (PAR-1131).
+      this.getCachedCount(this.parkRepository, "count:parks:v2", 3600, {
+        retiredAt: IsNull(),
+      }),
+      this.getCachedCount(
+        this.attractionRepository,
+        "count:attractions:v2",
+        3600,
+        { retiredAt: IsNull() },
+      ),
+      this.getCachedCount(this.showRepository, "count:shows:v2", 3600, {
+        retiredAt: IsNull(),
+      }),
+      this.getCachedCount(
+        this.restaurantRepository,
+        "count:restaurants:v2",
+        3600,
+        { retiredAt: IsNull() },
+      ),
       // Exact, but recounted only every six hours (PAR-872). The full count
       // reads all 293 chunks (~0.5 s, hourly before) to show a total that
       // grows ~0.4 % a day, so six hours of staleness is under 0.1 %.
@@ -3402,8 +3421,10 @@ export class AnalyticsService {
     const mostCrowdedParkDetails = mostCrowdedParkRow
       ? this.buildParkStatsItem(
           mostCrowdedParkRow,
+          // The rating calculateParkOccupancy already gated (thin park ->
+          // unknown), never re-derived from the raw percentage.
           mostCrowdedOccupancy
-            ? this.determineCrowdLevel(mostCrowdedOccupancy.current)
+            ? (mostCrowdedOccupancy.crowdLevel ?? "unknown")
             : null,
         )
       : null;
@@ -3411,8 +3432,10 @@ export class AnalyticsService {
     const leastCrowdedParkDetails = leastCrowdedParkRow
       ? this.buildParkStatsItem(
           leastCrowdedParkRow,
+          // The rating calculateParkOccupancy already gated (thin park ->
+          // unknown), never re-derived from the raw percentage.
           leastCrowdedOccupancy
-            ? this.determineCrowdLevel(leastCrowdedOccupancy.current)
+            ? (leastCrowdedOccupancy.crowdLevel ?? "unknown")
             : null,
         )
       : null;
@@ -3781,6 +3804,7 @@ export class AnalyticsService {
     repository: Repository<any>,
     cacheKey: string,
     ttl: number = 3600,
+    where?: Record<string, unknown>,
   ): Promise<number> {
     const cached = await this.redis.get(cacheKey);
     if (cached) {
@@ -3788,7 +3812,7 @@ export class AnalyticsService {
     }
 
     try {
-      const count = await repository.count();
+      const count = await repository.count(where ? { where } : undefined);
       await this.redis.set(cacheKey, count.toString(), "EX", ttl);
       return count;
     } catch (err) {
@@ -4594,8 +4618,8 @@ export class AnalyticsService {
    * Cache the park typical-day-peak baseline (Redis only — no schema change;
    * recomputed by the daily cron). 2-day TTL so a single missed cron run
    * still leaves a usable value. When it's absent (brand-new park with no
-   * baseline) callers fall through to the neutral 'moderate' default —
-   * there is deliberately NO fallback to the P90 baseline.
+   * baseline) callers rate `unknown` — there is deliberately NO fallback to
+   * the P90 baseline (docs/rules/crowd-levels.md).
    *
    * NOTE: `park:typicalpeak:` (no hyphen) holds the typical-day peak WAIT
    * (number) — distinct from `park:typical-peak:` (with hyphen) in

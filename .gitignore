@@ -46,11 +46,10 @@ scripts/*
 !scripts/python-deps/
 scripts/backup/*.env
 
-# Temporary markdown files (keep README.md and DEPLOYMENT.md)
+# Temporary markdown files (docs/ is re-included below)
 *.md
 !README.md
-!DEPLOYMENT.md
-!todo.md
+!CLAUDE.md
 
 # GeoIP (GeoLite2-City) – downloaded by geoip-update job
 /data/

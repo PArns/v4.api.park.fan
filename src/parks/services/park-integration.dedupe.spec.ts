@@ -29,7 +29,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
  * A slug is a frozen name — a rename updates `name` and deliberately leaves
  * `slug` alone so the public URL survives, and 281 rows carry a slug that no
  * longer matches. Identity is the `externalId`, resolved against the upstream
- * entity (`docs/architecture/attraction-status-and-seasonality.md` §4a), and
+ * entity (`docs/architecture/attraction-status/identity.md`), and
  * that column never reaches this DTO.
  *
  * Measured on 2026-09-20 over all 210 parks and 7300 rows: grouping by name

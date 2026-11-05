@@ -18,7 +18,8 @@ export const PCN_MAX_FORECAST_AGE_H = 3;
  * every 15 minutes including the slot that has just begun: measured on
  * production (2026-10-11, 261 419 rows over a day) the scored row's median lead
  * was −0.6 minutes. For CatBoost that was already a nowcast. For the served
- * value it would be worse than meaningless: at lead 0 the §7.7 blend serves the
+ * value it would be worse than meaningless: at lead 0 the persistence blend
+ * (docs/ml/intraday-serving.md) serves the
  * anchor — the wait read at that moment — and the comparison job scores it
  * against the queue reading nearest the slot, i.e. largely against itself. A
  * badge built from that would say "excellent" for every busy ride by

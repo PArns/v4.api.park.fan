@@ -37,6 +37,15 @@ export class ParkResponseDto {
   })
   nameArticleDe?: string | null;
 
+  @ApiProperty({
+    description:
+      "Abbreviations the park is searched by, from the curated column " +
+      '(Europa-Park: ["EP"]). Absent when there are none.',
+    required: false,
+    type: [String],
+  })
+  abbreviations?: string[];
+
   @ApiProperty({ description: "URL-friendly slug", example: "phantasialand" })
   slug: string;
 
@@ -214,6 +223,9 @@ export class ParkResponseDto {
       id: park.id,
       name: curated.name,
       nameArticleDe: curated.articleDe,
+      ...(curated.abbreviations.length > 0 && {
+        abbreviations: curated.abbreviations,
+      }),
       slug: park.slug,
       url: buildParkUrl(park),
 

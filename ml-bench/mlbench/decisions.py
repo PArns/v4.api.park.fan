@@ -1,6 +1,7 @@
 """Planner-optimiser simulation for D4 (frontend ``lib/planner/optimize.ts``).
 
-What is ported, and what is simplified (documented in docs/ml/ml-bench.md):
+What is ported, and what is simplified (documented in
+docs/ml/ml-bench/harness.md#decision-metrics-frontend-parkfan):
 
 * **Objective — ported:** ``cost = Σ wait + IDLE_WEIGHT · Σ idle`` with
   IDLE_WEIGHT = 0.5. Idle of a stop = its start minus the earliest start the

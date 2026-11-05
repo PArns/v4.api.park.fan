@@ -19,7 +19,15 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // path (PAR-822). See LiveCacheWarmupProcessor.
   { name: "live-cache-warmup" },
   { name: "park-metadata" },
-  { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
+  {
+    // Phase 6.2: Combined Attractions + Shows + Restaurants. The weekly
+    // sync-attraction-details runs ~4 h, so a deploy can stop it more than
+    // once; Bull's default of one stall failed it on 2026-10-25 after two
+    // (PAR-1183). It resumes after the last ride it finished, so a few more
+    // stalls cost minutes, not a restart.
+    name: "children-metadata",
+    settings: { maxStalledCount: 3 },
+  },
   { name: "six-flags-heights" }, // Ride heights the wiki does not carry
   { name: "ride-stats" }, // Speed/height/length from Wikidata
   { name: "manual-metadata" }, // Curated data (name is historical — see CuratedDataProcessor)
@@ -83,7 +91,7 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   },
   { name: "geoip-update" }, // GeoLite2-City every 48h
   { name: "nf-training" }, // TFT train (persists tft_forecasts)
-  { name: "pcn-shadow" }, // PCN intraday shadow: train + forecast + score
+  { name: "pcn-shadow" }, // PCN train + forecast + score ("shadow" is historical)
   {
     // Rope-drop: one LATERAL query per park over hourly-history slots +
     // pure aggregation. Lighter than p50-baseline (no fresh PERCENTILE
@@ -118,6 +126,19 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // than a second job on the push tick, because it is maintenance on a
   // table and has nothing to do with notifying anybody.
   { name: "trips" },
+  // Parky's chats: one nightly delete of the ones past their retention.
+  { name: "assistant" },
+  // The site statistic's nightly visitor snapshot (yesterday's HyperLogLogs
+  // into Postgres) and its retention prune. Two small statements a day.
+  { name: "site-analytics" },
+  // Google Search Console (PAR-1160): the nightly import of queries and pages,
+  // and its retention. A few hundred requests on the first run, a handful a
+  // night after.
+  { name: "search-console" },
+  // The audit log's address retention: one nightly sweep over a table of a
+  // few thousand rows. Its own queue, as the trips sweep has, because it is
+  // maintenance on one table and shares nothing with the jobs around it.
+  { name: "admin-audit" },
   // Showtime patterns: the nightly rebuild that lets a planned day show a
   // projected programme, since no feed publishes showtimes ahead of today.
   { name: "show-patterns" },

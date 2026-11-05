@@ -39,6 +39,18 @@ export function roleAtLeast(role: AdminRole, minimum: AdminRole): boolean {
 }
 
 /**
+ * The less privileged of two roles: what an API token may do, given its cap
+ * and its account's role. An unknown value counts as `viewer`, so a typo in a
+ * stored cap narrows a token rather than widening it.
+ */
+export function lesserRole(a: AdminRole, b: AdminRole): AdminRole {
+  const rank = (role: AdminRole): number => ADMIN_ROLE_RANK[role] ?? 0;
+  const known = (role: AdminRole): AdminRole =>
+    role in ADMIN_ROLE_RANK ? role : "viewer";
+  return rank(a) <= rank(b) ? known(a) : known(b);
+}
+
+/**
  * Admin User Entity
  *
  * An actual person with an actual account, which the admin surface did not
@@ -140,6 +152,14 @@ export class AdminUser {
    */
   @Column({ name: "totp_last_step", type: "bigint", nullable: true })
   totpLastStep: string | null;
+
+  /**
+   * When every way into the account was last ended (`signOutEverywhere`). An
+   * API token created before it, or an OAuth code approved before it, is
+   * refused even when its own row was written in the same instant.
+   */
+  @Column({ name: "tokens_revoked_at", type: "timestamptz", nullable: true })
+  tokensRevokedAt: Date | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

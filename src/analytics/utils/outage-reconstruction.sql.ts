@@ -3,6 +3,7 @@ import {
   MAX_CARRIED_HEARTBEATS,
   OUTAGE_QUEUE_TYPE,
   outageRunBreaks,
+  type OutageRunStatus,
 } from "../../common/utils/outage-rows.sql";
 import {
   overlapMinutesSql,
@@ -83,7 +84,7 @@ export const OUTAGE_STITCH_HOURS = 20;
  * Parameters: `$1` uuid[] park filter or NULL, `$2` scan_start, `$3` win_end,
  * `$4` as_of.
  */
-function sharedCtes(): string {
+function sharedCtes(status: OutageRunStatus = "DOWN"): string {
   return `
 ${parkOpenWindowCtes()},
   tracked AS (
@@ -112,7 +113,7 @@ ${parkOpenWindowCtes()},
              qd.is_heartbeat,
              qd."lastUpdated" IS NOT NULL AND qd."lastUpdated" = qd.timestamp
            ) AS is_hb,
-           ${outageRunBreaks("qd")} AS breaks
+           ${outageRunBreaks("qd", status)} AS breaks
       FROM tracked t
       JOIN queue_data qd ON qd."attractionId" = t.aid
      WHERE qd."queueType" = '${OUTAGE_QUEUE_TYPE}'
@@ -167,8 +168,9 @@ ${parkOpenWindowCtes()},
  * 3. **Carried heartbeats stop being evidence.** Past `MAX_CARRIED_HEARTBEATS`
  *    in a row the state is `unconfirmed` rather than extended.
  */
-export const OUTAGE_INTERVALS_SQL = `
-WITH ${sharedCtes()},
+function outageIntervalsSql(status: OutageRunStatus): string {
+  return `
+WITH ${sharedCtes(status)},
   marked AS (
     SELECT *,
            -- STRICTLY BEFORE. See point 1 above.
@@ -365,6 +367,16 @@ SELECT c.aid                                   AS "attractionId",
    )
  ORDER BY c.pid, c.aid, c.started_at
 `;
+}
+
+export const OUTAGE_INTERVALS_SQL = outageIntervalsSql("DOWN");
+
+/**
+ * The same statement over REFURBISHMENT runs, stored as the `maintenance`
+ * signal. Every rule above holds unchanged; a run that turns into DOWN ends as
+ * `closed` (censored), and one longer than `MAX_OUTAGE_DAYS` is a works period.
+ */
+export const MAINTENANCE_INTERVALS_SQL = outageIntervalsSql("REFURBISHMENT");
 
 /**
  * STATEMENT 2 — exposure, one row per (ride, park operating day).
@@ -462,6 +474,8 @@ export const OUTAGE_SCAN_START_SQL = `
      -- older than the window would pin the scan to the floor below, which is
      -- twice the window on every night after the first closure that never came
      -- back: the super-linear cost the 30-day default exists to avoid.
-     AND o.signal = 'down'
+     -- Maintenance spells are built by the same run rules, so an open one is
+     -- re-read from its start the same way; the floor bounds both.
+     AND o.signal IN ('down', 'maintenance')
      AND (o.ended_at IS NULL OR o.started_at >= $1::timestamptz)
 `;

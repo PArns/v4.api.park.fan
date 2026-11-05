@@ -79,7 +79,8 @@ export class TimescaleInitService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      // Compression must never queue an ACCESS EXCLUSIVE lock (runbook §0b)
+      // Compression must never queue an ACCESS EXCLUSIVE lock
+      // (docs/troubleshooting/timescaledb-lock-queues.md)
       this.runs.checkpoint();
       await this.setupCompressTruncateBehaviour();
 
@@ -87,7 +88,8 @@ export class TimescaleInitService implements OnModuleInit, OnModuleDestroy {
       this.runs.checkpoint();
       await this.setupCompressionPolicies();
 
-      // Retention is the cleanup-old job's, not a policy's (runbook §0b)
+      // Retention is the cleanup-old job's, not a policy's
+      // (docs/troubleshooting/timescaledb-lock-queues.md)
       this.runs.checkpoint();
       await this.setupRetentionPolicies();
 

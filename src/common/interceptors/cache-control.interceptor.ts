@@ -73,7 +73,14 @@ export class CacheControlInterceptor implements NestInterceptor {
     return null;
   }
 
-  private getCacheHeaderForPath(path: string, method: string): string | null {
+  private getCacheHeaderForPath(
+    rawPath: string,
+    method: string,
+  ): string | null {
+    // Express matches routes case-insensitively, so `/V1/ADMIN/…` reaches an
+    // admin handler; the policy must read the path the same way.
+    const path = rawPath.toLowerCase();
+
     // No caching for write operations
     if (method !== "GET" && method !== "HEAD") {
       return "no-store, no-cache, must-revalidate";
@@ -168,6 +175,12 @@ export class CacheControlInterceptor implements NestInterceptor {
     // Holidays - long cache (1 day)
     if (path.includes("/holidays")) {
       return "public, max-age=86400, s-maxage=86400, stale-while-revalidate=172800";
+    }
+
+    // Page-view rankings - 1 hour. A 7- or 30-day sum does not move in five
+    // minutes, and the frontend shows them as "most read", not as a ticker.
+    if (path.includes("/page-views/top")) {
+      return "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400";
     }
 
     // Stats/analytics - 5 min (live stats refresh on the 5-min sync cadence)

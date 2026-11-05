@@ -70,7 +70,14 @@ export const SYNTHETIC_SOURCES = [
 ] as const;
 
 /**
- * SQL: does this row end a `DOWN` run?
+ * The statuses a run can be built from: a reported fault (`DOWN`, stored as the
+ * `down` signal) or maintenance (`REFURBISHMENT`, stored as `maintenance`). The
+ * same run rules hold for both; only the status that keeps a run going differs.
+ */
+export type OutageRunStatus = "DOWN" | "REFURBISHMENT";
+
+/**
+ * SQL: does this row end a `DOWN` run (or a run of `status`)?
  *
  * True for anything that is not a `DOWN` reading, and for a `DOWN` that one of
  * our own writers put there. The caller supplies the alias its `queue_data` row
@@ -78,24 +85,30 @@ export const SYNTHETIC_SOURCES = [
  *
  * @param alias - Table alias the `queue_data` row carries in the caller's SQL.
  */
-export function outageRunBreaks(alias: string): string {
+export function outageRunBreaks(
+  alias: string,
+  status: OutageRunStatus = "DOWN",
+): string {
   const synthetic = SYNTHETIC_SOURCES.map((source) => `'${source}'`).join(", ");
   // COALESCE rather than a bare IN: the column carries a default and is not
   // nullable on the entity, but a NULL here would make the whole expression
   // NULL, and a NULL passes neither `breaks` nor `NOT breaks` — the row would
   // drop out of the run AND out of the boundary, silently.
   return (
-    `(${alias}.status <> 'DOWN'` +
+    `(${alias}.status <> '${status}'` +
     ` OR COALESCE(${alias}.data_source, '') IN (${synthetic}))`
   );
 }
 
 /** The TypeScript twin of {@link outageRunBreaks}. */
-export function rowBreaksOutageRun(row: {
-  status?: string | null;
-  dataSource?: string | null;
-}): boolean {
-  if (row.status !== "DOWN") return true;
+export function rowBreaksOutageRun(
+  row: {
+    status?: string | null;
+    dataSource?: string | null;
+  },
+  status: OutageRunStatus = "DOWN",
+): boolean {
+  if (row.status !== status) return true;
   return (SYNTHETIC_SOURCES as readonly string[]).includes(
     row.dataSource ?? "",
   );
@@ -184,13 +197,15 @@ export const TRAILING_OUTAGE_START_SQL = `
  * Parameters: `$1` uuid[] park filter, `$2` window start, `$3` window end,
  * `$4` uuid[] attraction ids.
  */
-export function trailingOutageWithElapsedSql(): string {
+export function trailingOutageWithElapsedSql(
+  status: OutageRunStatus = "DOWN",
+): string {
   return `
   WITH ${parkOpenWindowCtes({ wikiOnly: true })},
   marked AS (
     SELECT qd."attractionId" AS aid,
            qd.timestamp      AS ts,
-           ${outageRunBreaks("qd")} AS breaks
+           ${outageRunBreaks("qd", status)} AS breaks
       FROM queue_data qd
      WHERE qd."attractionId" = ANY($4::uuid[])
        AND qd."queueType" = '${OUTAGE_QUEUE_TYPE}'

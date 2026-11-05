@@ -1,176 +1,153 @@
-# Calendar, Schedule & ML Rules
+# Calendar, schedule and ML rules
 
-Single source of truth for how **status** (OPERATING / CLOSED / UNKNOWN), **crowd level**, and **schedule sync** behave in the API and how the **ML service** aligns with these rules.
+How the server decides a calendar day's `status` (OPERATING / CLOSED / UNKNOWN) and `crowdLevel`, when
+a measured past overrules the operator, and how the ML services and the API's own hourly gate follow
+the same schedule. Open this before changing `CalendarService`, the yearly predictions or the schedule
+handling in `ml-service`. What a client may conclude from these fields:
+[calendar status for clients](../frontend/calendar-schedule-status.md); how schedules are stored:
+[schedule sync](schedule-sync-and-calendar.md).
 
-Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Overview](../ml/model-overview.md), [Frontend: Calendar status](../frontend/calendar-schedule-status.md).
+## 1. The calendar
 
----
+`GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=` —
+`CalendarService.buildCalendarResponse()` → `buildCalendarDay()` (`src/parks/services/calendar.service.ts`).
 
-## 1. Calendar API Rules (Park has schedule in general)
+### 1.1 Status
 
-**Endpoint:** `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`
+| Day | Rule |
+| --- | --- |
+| future | from the schedule's day-status row: OPERATING → `OPERATING`, CLOSED → `CLOSED`, UNKNOWN or none → `UNKNOWN` |
+| past and today, park **without** any OPERATING entry (`hasOperatingSchedule` false) | `UNKNOWN` with a crowd level other than `closed` → `OPERATING` (status reconstructed from rides) |
+| past and today, park with OPERATING entries | a day without a schedule row stays `UNKNOWN` |
+| strictly past, measured activity on a CLOSED day | see §1.5 |
 
-**Source:** `CalendarService.buildCalendarResponse()` → `buildCalendarDay()` in `src/parks/services/calendar.service.ts`.
+The crowd level never changes the status. UNKNOWN means "opening hours not yet available", CLOSED means
+closed.
 
-### 1.1 Status (ParkStatus)
+### 1.2 Crowd level
 
-| Rule | Implementation |
-|------|----------------|
-| **Future:** OPEN/CLOSED from schedule | `status` comes from `schedule?.scheduleType`: OPERATING → `"OPERATING"`, CLOSED → `"CLOSED"`, UNKNOWN or no entry → `"UNKNOWN"`. |
-| **Future:** Days without schedule = UNKNOWN, but with crowd prediction | Future days without schedule keep `status: "UNKNOWN"`. They still get a **crowdLevel** (the headliner forecast, or `"unknown"` without one), not `"closed"`. |
-| **Past + Today:** With crowd level treated as OPEN | Only for Parks **without** OPERATING entries in `schedule_entries`: if `status === "UNKNOWN"` and crowd level ≠ `"closed"` → `status = "OPERATING"`. Parks with OPERATING schedules keep UNKNOWN for days without schedule (DB-check via `hasOperatingSchedule`). |
+- OPERATING, and UNKNOWN in the future: `inferredCrowdLevel`. A strictly past day reads its measured
+  level; today and future days the headliner forecast (`buildPredictedCrowdLevels`: average predicted
+  headliner wait ÷ typical-day-peak). With neither it is **`unknown`** — never one ride's own
+  `crowdLevel` and never a placeholder `moderate` (PAR-1028; [crowd-level rule](../rules/crowd-levels.md)).
+- CLOSED, or a past day without opening data: `closed`.
 
-### 1.2 Crowd Level
+### 1.3 Yearly predictions use the same closed rule
 
-- **OPERATING:** `crowdLevel = inferredCrowdLevel` (historical: Redis/Stats/Queue/Analytics; future: ML).
-- **UNKNOWN + future:** `crowdLevel = inferredCrowdLevel` – **not** `"closed"`.
-- **Where `inferredCrowdLevel` comes from (PAR-1028):** a strictly past day reads its measured level; otherwise, and for today and future days, the headliner forecast (`buildPredictedCrowdLevels`: average predicted headliner wait ÷ typical-day-peak). With neither it is **`"unknown"`** — never one ride's own `crowdLevel` (a ratio-vs-P50 on CatBoost rows, an unrated `"unknown"` on TFT rows) and never a placeholder `"moderate"`.
-- **CLOSED** or past without opening data: `crowdLevel = "closed"`.
+`GET /v1/parks/.../predictions/yearly` (`ParkIntegrationService.aggregateDailyPredictions`) asks the
+schedule the way the calendar does: a CLOSED entry, or a day with neither OPERATING nor CLOSED that
+`isClosedByOperatingRange()` (`src/parks/utils/schedule-closed-day.util.ts`) places strictly between the
+first and last OPERATING date, or outside that range for a seasonal park (`isParkSeasonal`), reads
+`crowdLevel: "closed"`, `recommendation: "closed"` and no `avgWaitTime`. A day rated `unknown` carries no
+`recommendation`. The response ends about 182 days out (the CatBoost daily horizon). Before PAR-410 the
+route never read the schedule and recommended 28 of the 49 days `/calendar` called CLOSED at Legoland
+Billund.
 
-### 1.3 Important
+It also carries `holidays` (PAR-1016): every public, school-break or bridge day in the park's region from
+its today through 364 days ahead, with English names (`ParkIntegrationService.getYearlyHolidays()` →
+`dayHolidayFlags()`, `src/common/utils/holiday.utils.ts`), as a list of its own because the forecast
+skips days and stops at ~182 days while next summer's break is already known. `isLocalHoliday` and
+`buildLocalHolidayMap` are the ones `CalendarService` reads. Unreadable holidays or a park without a
+country leave `holidays` out; an empty list means none. A row is keyed by the day it names
+(`holidayDay()`), never by noon UTC read in the park's zone, which put holidays a day late east of
+UTC+12.
 
-- **Crowd level does not influence status** (e.g. no override UNKNOWN → CLOSED just because crowdLevel is "closed"). Status comes from schedule or from the rule “past/today + crowd level = OPEN”.
-- **UNKNOWN** = “Opening hours not yet available” (frontend); **CLOSED** = “Closed”.
+### 1.4 Next schedule
 
-### 1.4 Yearly predictions use the same closed rule
-
-`GET /v1/parks/.../predictions/yearly` (`ParkIntegrationService.aggregateDailyPredictions`) asks the schedule the way the calendar does: a CLOSED entry, or a day with neither an OPERATING nor a CLOSED entry that `isClosedByOperatingRange()` (`src/parks/utils/schedule-closed-day.util.ts`) places strictly between the first and last OPERATING date, or outside that range for a seasonal park (`isParkSeasonal`). Such a day reads `crowdLevel: "closed"`, `recommendation: "closed"` and has no `avgWaitTime`. The calendar calls the same function, so the two endpoints cannot disagree on this. A day rated `unknown` carries no `recommendation`.
-
-Since PAR-1016 the yearly response also carries `holidays`: every day from the park's today through 364 days ahead that is a public holiday, a school-break day or a bridge day in the park's own region, with `holidayName` / `schoolVacationName` in English (`ParkIntegrationService.getYearlyHolidays()` → `dayHolidayFlags()` in `src/common/utils/holiday.utils.ts`). It is a list of its own, not flags on the forecast days, because the forecast skips days (Christmas Day at Phantasialand) and stops about 182 days out, while next summer's break is already known. The local-holiday test (`isLocalHoliday`) and the per-day map (`buildLocalHolidayMap`) are the ones `CalendarService` reads, so the two endpoints cannot disagree about a holiday either. Unreadable holidays, or a park without a country, leave `holidays` out; an empty list means the year has none. A holiday row is keyed by the day it names (`holidayDay()`), never by noon UTC read in the park's zone, which put every holiday a day late east of UTC+12.
-
-Before PAR-410 the yearly route never read the schedule: on 2026-09-22 it recommended 28 of the 49 days `/calendar` called CLOSED at Legoland Billund in an 89-day window, and all of February 2027 at Phantasialand. The response ends about 182 days out (the CatBoost daily horizon), not 365.
+The park payload, location/nearby and favorites carry `nextSchedule` from `ParksService.getNextSchedule`
+(batch: `getBatchSchedules`): the next **OPERATING** day with opening and closing time, from the park's
+tomorrow up to 365 days ahead. CLOSED and UNKNOWN days are skipped. The closed-park cache TTL is derived
+from it ([caching](caching-strategy.md)).
 
 ### 1.5 A past CLOSED day the measurement overrules (PAR-697)
 
-For a **strictly past** day, measured ride activity outranks the operator's own park-level `CLOSED` entry — in the calendar (`status: "OPERATING"`, `isEstimated: true`, the reconstructed hours) and in the four callers of the shut-day rule (`src/analytics/closed-park-days.sql.ts`), so the two cannot disagree about which days count. Today and every future day are unaffected: a future day has no measurement to weigh, and a day in progress has no shape to judge.
+For a **strictly past** day, measured ride activity outranks the operator's park-level `CLOSED` — in the
+calendar (`status: "OPERATING"`, `isEstimated: true`, reconstructed hours) and in the four callers of
+the shut-day rule (`src/analytics/closed-park-days.sql.ts`), so they cannot disagree. Today and the
+future are unaffected.
 
-**The rule** is `src/parks/utils/measured-operation.gate.ts`, four conditions over the day's qualifying raw readings, each with the production day it rejects:
+The gate is `src/parks/utils/measured-operation.gate.ts`, four conditions over the day's qualifying raw
+readings, each with the production day it rejects:
 
 | Condition | Rejects |
-|-----------|---------|
-| ≥ 3 different wait values across the day | a feed reporting one number on every ride (Walibi Holland 2026-09-11: 14 rides, same value, same minute) |
-| 4–14 h from the first qualifying reading to the last, both bounds inclusive | a burst (the same day was 55 minutes) and a reading that never stops |
-| no qualifying reading in 02:00–05:59 park-local | a feed stuck on its last value (352 of 551 candidate days carried waits through the night) |
-| `timestamp - "lastUpdated"` ≤ 60 min, and `observedReadingsSql` | a frozen upstream and our own bookkeeping (PAR-748: the night rows are 0 heartbeats, 46.7 % stale feed). `lastUpdated IS NULL` is rejected with them — undecidable, and a statement against the operator is not made on an undecidable row |
+| --- | --- |
+| ≥ 3 different wait values across the day | a feed reporting one number on every ride (Walibi Holland 2026-09-11) |
+| 4–14 h from the first qualifying reading to the last, inclusive | a burst (55 min) and a reading that never stops |
+| no qualifying reading 02:00–05:59 park-local | a feed stuck on its last value (352 of 551 candidate days) |
+| `timestamp - "lastUpdated"` ≤ 60 min, and `observedReadingsSql` | a frozen upstream and our own bookkeeping (PAR-748); `lastUpdated IS NULL` is rejected too |
 
-**The verdict is materialised, not computed per read.** The rule needs raw `queue_data` for the day it judges; evaluated in the read path it cost the ML-accuracy query 1.4 s → 7.4 s. `park_day_operations` holds one row per (park, park-local day): the verdict, the derived hours it was taken from, and when. Readers do a primary-key lookup (`measuredOperationDayExists`), and **a day with no row keeps the operator's entry** — the pre-PAR-697 rule, by construction rather than as a special case.
+**The verdict is materialised**: evaluated in the read path the rule took the ML-accuracy query from
+1.4 s to 7.4 s. `park_day_operations` holds one row per (park, park-local day) — verdict, derived hours,
+time — and readers do a primary-key lookup (`measuredOperationDayExists`). **A day with no row keeps the
+operator's entry**, by construction.
 
-**Who writes it:** queue `park-day-operation`.
+Written by queue `park-day-operation`:
 
-- `calculate-yesterday-park-day-operation`, daily at **4:45**, every park's own yesterday. After the 4:30 `attraction-hourly-history` rollup, because the stored hours are read from it; before the 5:00 downtime job, because both read the same `queue_data` chunks.
-- `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` — the one-time fill of the past after a deploy, and a re-judgement after a threshold change. Run it in portions: a Coolify deploy renews the Postgres container and ends whatever is writing, so the portion size is the damage radius. Queue it with `POST /v1/admin/backfill-park-day-operation` (owner) and a body `{ "fromDate": "2026-01-01", "toDate": "2026-01-31" }` — one call per month slice, the next one after the log line `✅ Fill complete` of the previous. Re-running a slice is harmless; the rows upsert on `(park_id, day)`.
+- `calculate-yesterday-park-day-operation`, daily 04:45 UTC, each park's own yesterday — after the 04:30
+  `attraction-hourly-history` rollup it reads, before the 05:00 downtime job that reads the same chunks.
+- `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` via
+  `POST /v1/admin/backfill-park-day-operation` (owner) — the fill after a deploy or a threshold change.
+  One month slice per call, the next after the log line `✅ Fill complete`; a Coolify deploy renews the
+  Postgres container and ends whatever is writing, so the slice is the damage radius. Rows upsert on
+  `(park_id, day)`.
 
-Both paths judge **finished** days only: `ParkDayOperationService.computeRange` clamps `toDate` to the park's last finished local day. A day in progress has no block length to judge, and a verdict for it would be honoured by the four statistics callers while the calendar refuses it — the two sides disagreeing about one day is what this rule exists to prevent.
+Both judge finished days only (`ParkDayOperationService.computeRange` clamps `toDate` to the park's last
+finished local day). Measured 2026-10-07 over 2025-12-24 … 2026-10-07: 6,174 park-level shut days, 1,238
+with any activity, **210 opened** across 27 parks (151 of those CLOSED rows came from the gap fill).
 
-Measured against production on 2026-10-07 over `2025-12-24` … `2026-10-07`: 6,174 park-level shut days, 1,238 of them with any measured activity, **210 opened by the gate** across 27 parks (151 of those `CLOSED` entries came from `fillScheduleGaps` rather than from the operator's feed).
+## 2. Schedule sync and gap fill
 
----
+Owned by [schedule sync](schedule-sync-and-calendar.md): the jobs, the day-status arbitration, the
+silent-park and withdrawn-day guards, and `fillScheduleGaps` (CLOSED strictly between the first and last
+operating day, UNKNOWN outside).
 
-## 2. Schedule Sync
+## 3. ML services and the schedule
 
-**Jobs:** `sync-park-schedule` (on-demand), `sync-schedules-only` (daily 15:00), `sync-all-parks` (daily 03:00).
+### 3.1 `ml-service`
 
-- **ThemeParks API:** The previous month plus 12 months ahead are requested (`getScheduleExtended`). All returned entries (OPERATING, CLOSED, …) are persisted.
-- **Normalisation:** In `ParksService.saveScheduleData()`, `entry.type` for **CLOSED** is normalised: `"Closed"` / `"CLOSED"` (case-insensitive) → `ScheduleType.CLOSED`, so off-season (e.g. Phantasialand February) is stored as CLOSED when the API provides it.
-- **Cleanup when saving from API:** Bidirectional: when we save **OPERATING** for a date, we delete any **CLOSED** row; when we save **CLOSED** for a date, we delete any **OPERATING** row. This ensures one **day-status** row per date — not one row: the event types stay beside it, see [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
-- **Gaps:** `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills **missing** days. Range: (today - lookBackDays) through (today + lookAheadDays). Defaults: 182 days each (~½ year). Park timezone. Holiday/bridge metadata and either **CLOSED** or **UNKNOWN**:
-  - **CLOSED:** There is at least one OPERATING day before and one after this date (in stored schedule) → gap is "in the middle", so we treat it as closed.
-  - **UNKNOWN:** No OPERATING for the park, or this date is before the first OPERATING (e.g. before we have data) or on/after the last OPERATING (schedule not yet published). So we keep "opening hours not yet available".
-  - **Demotion:** Gap-fill CLOSED (no opening/closing times) that is now after the last OPERATING gets demoted to UNKNOWN.
+| Component | Behaviour |
+| --- | --- |
+| `schedule_filter.py`, `filter_predictions_by_schedule` | Daily: keeps only days with an OPERATING entry; a park with no OPERATING entry at all keeps everything. Hourly: keeps only times inside opening hours |
+| `predict.py` | Skips inference for CLOSED and UNKNOWN rows. `featureContext.parkLiveStatus[parkId] === "OPERATING"` overrides UNKNOWN to `is_park_open = 1` and runs it; an explicit CLOSED is always respected |
 
-Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
+`parkLiveStatus` comes from `ParksService.getBatchParkStatus` (`isParkOpen`,
+`src/common/utils/status-calculator.util.ts`): an OPERATING window now is open; a park with OPERATING
+entries but no window now is closed; only a park with no OPERATING entry falls back to rides — open when
+any ride reported OPERATING with a wait above 0 in the last 30 min.
 
----
+So a future UNKNOWN day gets no daily prediction unless the park is confirmed open, and reads
+`crowdLevel: "unknown"` without a headliner forecast.
 
-## 3. Next Schedule (Park & Location APIs)
+### 3.2 The API's own hourly gate (PAR-1048)
 
-**Used by:** Park integrated response (`/v1/parks/.../integrated`), location/nearby, favorites.
-
-- **Source:** `ParksService.getNextSchedule(parkId)` (and batch `getBatchSchedules`).
-- **Behaviour:** Returns the **next OPERATING** day only: query filters by `scheduleType = OPERATING`, `openingTime IS NOT NULL`, `closingTime IS NOT NULL`, from park’s “tomorrow” up to 365 days ahead. **CLOSED** and **UNKNOWN** days are ignored.
-- **Result:** `dto.nextSchedule` (openingTime, closingTime, scheduleType) is always an operating day when present; no UNKNOWN/CLOSED in next schedule. TTL and dynamic TTL for closed parks (e.g. expire before next opening) use this next OPERATING entry.
-
----
-
-## 4. ML Service Rules & Alignment
-
-### 4.1 Where schedule matters
-
-| Component | File | Behaviour |
-|-----------|------|-----------|
-| **Schedule filter (after prediction)** | `ml-service/schedule_filter.py` | Filters predictions by `schedule_entries`. |
-| **Inference (features + output)** | `ml-service/predict.py` | Sets `is_park_open`, `status`; skips model inference for CLOSED/UNKNOWN rows (reduces load). |
-
-### 4.2 filter_predictions_by_schedule (schedule_filter.py)
-
-- **Daily predictions:** Only days with an **OPERATING** entry are kept. Days with only CLOSED or UNKNOWN (no OPERATING on that day) are **removed**.
-- **Fallback:** If the park has **no** schedule integration (no OPERATING entry in the query), **all** daily predictions are kept (“no schedule” → keep all).
-- **Hourly predictions:** Only times **within** operating hours (openingTime–closingTime) are kept; times outside or days without OPERATING with times are filtered out.
-
-**Effect on calendar:** For **future UNKNOWN days** the ML API returns **no** daily prediction (because the day is not OPERATING). Without a headliner forecast those days read `crowdLevel: "unknown"` (PAR-1028; until then they borrowed one ride's `crowdLevel` or a placeholder `"moderate"`). To show real ML predictions for UNKNOWN days, the ML filter would need to be extended to optionally return predictions for UNKNOWN days (for parks with schedule).
-
-### 4.2a The API's own hourly gate (PAR-1048)
-
-The ml-service's fallback ("no schedule → keep all") let a park without any
-OPERATING window publish forecasts round the clock: 20 parks / 491 rides held
-stored slots at 02:00–04:00 local, and Knoebels (schedule UNKNOWN) served 192
-`hourlyForecast` slots with 05:45 as its first "optimal" `bestVisitTimes` entry.
-
-`MLService.withinKnownOpeningHours` now gates every hourly answer before anyone
-reads it — inside `buildRawParkPredictions` (before the Redis write, so the park
-payload, favorites, calendar today, `/plan/day`, the forward archive and the
-stored `wait_time_predictions` rows all inherit it) and on the attraction
+The service's "no schedule → keep all" let parks without any OPERATING window publish forecasts round the
+clock (20 parks / 491 rides held slots at 02:00–04:00 local; Knoebels offered 05:45 as an "optimal"
+`bestVisitTimes` slot). `MLService.withinKnownOpeningHours` gates every hourly answer — inside
+`buildRawParkPredictions` before the Redis write (so the park payload, favorites, calendar today,
+`/plan/day`, the forward archive and stored `wait_time_predictions` inherit it) and on the attraction
 detail's live fallback (`getAttractionPredictions`). Per park-local day:
 
-- **OPERATING window that day** → the slots pass untouched.
-- **No OPERATING window** (UNKNOWN, missing, past the operator's horizon) →
-  only the hours the park's queues were measured in survive: `hours` of
-  `getParkHourlyProfile(park, 1, 60, 20)` — the `/stats/hourly` rule (an hour
-  needs 10 measured days) and the same cached profile `/plan/day` uses for
-  `hoursSource: "observed"`. Energylandia (open daily, no future schedule)
-  therefore keeps its daytime forecast.
-- **Frozen feed** → only the profile hours from the first to the last one in
-  which some ride's queue moved (P90 above P25) count; a flat hour inside that
-  span stays, because an opening window has no holes. A queue-times feed that
-  never closes (Beto Carrero, Cinecittà World, Le Parc du Petit Prince)
-  re-stamps its last snapshot all night and gives those parks a 0–23 profile
-  in which every ride is flat at night (`MLService.movingProfileHours`).
-  Measured on production 2026-10-24: Beto Carrero keeps 10–19, Petit Prince
-  9–16, Europa-Park all of 9–18, and Cinecittà World — 15 min in every cell
-  of every hour — keeps none. PAR-759 removes those night readings from the
-  published hourly values at the source; this gate keeps them out of
-  forecasts until it does.
-- **No measured hour** → no hourly slot that day.
-- **Profile cannot be read** (DB error, the fail-fast window after a failed
-  build) → the slots pass **ungated**. A trimmed answer would be cached for
-  30 min and the generator's replace mode would delete the stored rows of
-  those days, so an error never reads as "no measured hour".
+- **an OPERATING window** → slots pass untouched;
+- **no window** (UNKNOWN, missing, past the operator's horizon) → only the hours the park's queues were
+  measured in survive: `hours` of `getParkHourlyProfile(park, 1, 60, 20)` (an hour needs 10 measured
+  days; the same cached profile `/plan/day` uses for `hoursSource: "observed"`). Energylandia, open daily
+  with no future schedule, keeps its daytime forecast;
+- **a frozen feed** → only profile hours from the first to the last in which some ride's queue moved
+  (P90 above P25), `MLService.movingProfileHours`. Queue-Times feeds that never close (Beto Carrero,
+  Cinecittà World, Le Parc du Petit Prince) re-stamp their last snapshot all night; on 2026-10-24 Beto
+  Carrero kept 10–19, Petit Prince 9–16, Cinecittà none. PAR-759 would remove those night readings at
+  the source;
+- **no measured hour** → no hourly slot that day;
+- **profile unreadable** (DB error, fail-fast window) → slots pass **ungated**: a trimmed answer would be
+  cached for 30 min and the generator's replace mode would delete the stored rows.
 
-`bestVisitTimes` is computed from these slots and needs no gate of its own. The
-replace-mode diff write removes already-stored night slots on the generator's
-next run.
+`bestVisitTimes` is computed from these slots. The diff write removes stored night slots on the next run.
 
-### 4.3 predict.py (Inference)
+### 3.3 Summary
 
-- **Schedule features:** From `schedule_entries`, OPERATING/CLOSED/UNKNOWN are evaluated per park/date. A park with no OPERATING entry at all is treated as “no schedule” → predictions are kept.
-- **Inference skip for CLOSED/UNKNOWN:** Rows with `status === “CLOSED”` or `”UNKNOWN”` are **excluded before** model.predict by default. However, if `featureContext.parkLiveStatus[parkId] === “OPERATING”` (ride-based detection), UNKNOWN rows are overridden to `is_park_open=1` and inference IS run for those rows. Explicit CLOSED entries are always respected.
-- **`parkLiveStatus` context:** NestJS sends `featureContext.parkLiveStatus` with every prediction request. Derived from `getBatchParkStatus`: schedule-based first, then ride-heuristic fallback (≥3 attractions with data, ≥25% with `waitTime ≥ 10` in last 2h). Parks with explicit CLOSED schedule today are excluded from the heuristic.
-
-### 4.4 Summary: ML ↔ Calendar
-
-| Aspect | Calendar (API) | ML Service |
-|--------|----------------|------------|
-| CLOSED day | `status: “CLOSED”`, `crowdLevel: “closed”` | No inference run; filter_predictions_by_schedule removes anyway. |
-| UNKNOWN day (future) — park confirmed open via rides | `status: “UNKNOWN”`, `crowdLevel` = headliner forecast, else `unknown` | `parkLiveStatus=”OPERATING”` overrides `is_park_open=1` → real ML prediction returned. |
-| UNKNOWN day (future) — park not confirmed open | `status: “UNKNOWN”`, `crowdLevel` = `unknown` | Inference skipped; no forecast to show. |
-| Past/today without schedule | With crowd level → `status: “OPERATING”` | Independent; calendar derives status from crowd data. |
-
----
-
-## 5. Implementation checklist
-
-- [x] Calendar: Status only from schedule + rule “past/today + crowd level = OPEN”; no status override by crowdLevel.
-- [x] Calendar: Future UNKNOWN days always have a crowdLevel (headliner forecast or `unknown`), never blanket “closed”.
-- [x] Schedule sync: API type “Closed”/“CLOSED” is stored as `ScheduleType.CLOSED`.
-- [x] ML: Daily predictions only for OPERATING days (filter_predictions_by_schedule); fallback “no schedule integration” → keep all.
-- [x] ML: CLOSED/UNKNOWN in predict.py → `crowdLevel: "closed"` in response.
+| Day | Calendar | ML |
+| --- | --- | --- |
+| CLOSED | `CLOSED`, `crowdLevel: "closed"` | no inference; filtered anyway |
+| future UNKNOWN, park confirmed open by rides | `UNKNOWN`, headliner forecast or `unknown` | `parkLiveStatus` override → real prediction |
+| future UNKNOWN, not confirmed | `UNKNOWN`, `unknown` | inference skipped |
+| past or today without a schedule | with a crowd level → `OPERATING` | independent |

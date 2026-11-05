@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { truncateIp } from "../../common/utils/request.util";
 import { AdminAuditLog } from "./entities/admin-audit-log.entity";
 import type { AdminPrincipal } from "./admin-principal";
 
@@ -81,7 +82,9 @@ export class AdminAuditService {
         after: entry.after ?? null,
         reason: entry.reason ?? null,
         sourceUrl: entry.sourceUrl ?? null,
-        actorIp: entry.actor.ip ?? null,
+        // The network is what "did this come from somewhere new" needs; the
+        // address itself is never stored (docs/admin/authentication.md#the-audit-log).
+        actorIp: truncateIp(entry.actor.ip),
       });
       return await this.auditRepository.save(row);
     } catch (error) {

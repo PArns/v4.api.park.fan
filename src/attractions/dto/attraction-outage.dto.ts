@@ -82,7 +82,8 @@ export class RemainingQuartilesDto {
  *
  * ## What this is, and what it is not
  *
- * `docs/analytics/ride-downtime.md` §6 refuses "when will this ride break next,
+ * `docs/analytics/ride-downtime/refused.md#no-forecast-of-the-next-outage` refuses
+ * "when will this ride break next,
  * and for how long". This is the other question — *it is broken now; what
  * happened to outages that got this far* — and it survives the four objections
  * that sank the first one. The full argument is on `DowntimeRecoveryCurve`; the
@@ -224,7 +225,9 @@ export class AttractionOutageDto {
       "feed never emits DOWN (102 of 182 scheduled parks), where the " +
       "alternative is silence rather than a stronger signal. **A client MUST " +
       "word the two differently**: nobody reported a `closed_gap`, so no " +
-      "sentence built on it may say 'reported'.",
+      "sentence built on it may say 'reported'. `maintenance` is a ride the " +
+      "feed reports as under maintenance (REFURBISHMENT), with its own " +
+      "recovery curve; word it as maintenance, never as a fault.",
     enum: OUTAGE_SIGNALS,
     example: "down",
   })

@@ -1,4 +1,7 @@
-import type { CorsOptions } from "@nestjs/common/interfaces/external/cors-options.interface";
+import type {
+  CorsOptions,
+  CorsOptionsDelegate,
+} from "@nestjs/common/interfaces/external/cors-options.interface";
 
 /**
  * Browser origins allowed in production when `CORS_ORIGINS` is unset: the
@@ -80,4 +83,53 @@ export function buildCorsOptions(isProduction: boolean): CorsOptions {
     // (PAR-242).
     exposedHeaders: ["Retry-After"],
   };
+}
+
+/**
+ * The admin MCP's public surface: the MCP endpoint, the OAuth endpoints a
+ * client calls itself, and the discovery documents. A browser-based client
+ * (the MCP Inspector) calls them from whatever origin it runs on, and none of
+ * them reads a cookie — the credential is a bearer token or a PKCE verifier
+ * in the request — so every origin may. `/v1/oauth/authorize` is a page the
+ * browser navigates to, and the consent endpoints go through park.fan's
+ * proxy; neither needs CORS.
+ */
+const PUBLIC_CORS_PATH =
+  /^(?:\/v1\/mcp|\/v1\/oauth\/(?:register|token|revoke)|\/\.well-known\/oauth-(?:protected-resource|authorization-server)(?:\/.*)?)$/;
+
+export function isPublicCorsPath(url: string | undefined): boolean {
+  return PUBLIC_CORS_PATH.test((url ?? "").split("?")[0]);
+}
+
+export const PUBLIC_CORS_OPTIONS: CorsOptions = {
+  origin: "*",
+  credentials: false,
+  methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Authorization",
+    "Content-Type",
+    "Accept",
+    "Mcp-Protocol-Version",
+    "Mcp-Session-Id",
+    "Last-Event-ID",
+  ],
+  exposedHeaders: [
+    "WWW-Authenticate",
+    "Mcp-Protocol-Version",
+    "Mcp-Session-Id",
+    "Retry-After",
+  ],
+  maxAge: 7200,
+};
+
+/**
+ * What `src/main.ts` passes to `app.enableCors`: the public options above for
+ * the MCP surface, `buildCorsOptions` for everything else.
+ */
+export function buildCorsDelegate(
+  isProduction: boolean,
+): CorsOptionsDelegate<{ url?: string }> {
+  const site = buildCorsOptions(isProduction);
+  return (request, callback) =>
+    callback(null, isPublicCorsPath(request.url) ? PUBLIC_CORS_OPTIONS : site);
 }

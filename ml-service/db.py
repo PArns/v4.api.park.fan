@@ -74,7 +74,7 @@ engine = create_engine(
     connect_args={
         # Name the session (all services share the `parkfan` role) and end a
         # transaction left idle for 10 min, which would otherwise hold its
-        # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+        # locks indefinitely. See docs/troubleshooting/timescaledb-lock-queues.md.
         "application_name": "parkfan-ml-service",
         "options": "-c idle_in_transaction_session_timeout=600000",
     },
@@ -442,6 +442,25 @@ def fetch_park_influencing_countries() -> Dict[str, List[str]]:
         return {row.park_id: row.countries for row in result}
 
 
+def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
+    """Drop cache buckets older than `ttl`, tolerating concurrent mutation.
+
+    The cache is a module-level dict shared by the threadpool threads of one
+    worker process (sync `def predict` handlers). Two races follow from that:
+
+    - Iterating `cache.items()` while another thread inserts a bucket raised
+      "dictionary changed size during iteration" and failed the whole request
+      with an HTTP 500 (PAR-815). The iteration now runs over a snapshot taken
+      in one C-level call, and `_cached_read` holds `_recent_cache_lock` around
+      eviction and insertion.
+    - A key collected as expired can already be gone by the time we act on it;
+      `del` raised KeyError for the thread that lost that race (2026-08-31).
+      `pop(..., None)` makes losing it a no-op — the entry we wanted gone is gone.
+    """
+    for key in [k for k, (_, ts) in list(cache.items()) if now_ts - ts >= ttl]:
+        cache.pop(key, None)
+
+
 # Cache for holidays (never changes for past dates)
 _holidays_cache = {}
 _holidays_cache_ttl = 3600  # 1 hour in seconds
@@ -469,9 +488,11 @@ def fetch_holidays(
         f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
     )
 
-    # Check cache
-    if cache_key in _holidays_cache:
-        cached_data, cache_time = _holidays_cache[cache_key]
+    # Check cache. One .get(), never `in` then `[]`: another thread's write
+    # evicts expired keys between the two (PAR-1149).
+    cached = _holidays_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _holidays_cache_ttl:
@@ -504,10 +525,12 @@ def fetch_holidays(
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         df = convert_df_types(df)
 
-        # Update cache
+        # Update cache. Keys carry a date range, so evict on write (PAR-1149).
         import time
 
-        _holidays_cache[cache_key] = (df.copy(), time.time())
+        now = time.time()
+        _evict_expired_entries(_holidays_cache, now, _holidays_cache_ttl)
+        _holidays_cache[cache_key] = (df.copy(), now)
 
         return df
 
@@ -537,7 +560,9 @@ def fetch_school_holiday_coverage(country_codes: List[str]) -> pd.DataFrame:
     with get_db() as db:
         result = db.execute(query, {"countries": country_codes})
         df = pd.DataFrame(result.fetchall(), columns=["country", "region", "date"])
-    _holidays_cache[cache_key] = (df.copy(), time.time())
+    now = time.time()
+    _evict_expired_entries(_holidays_cache, now, _holidays_cache_ttl)
+    _holidays_cache[cache_key] = (df.copy(), now)
     return df
 
 
@@ -641,9 +666,11 @@ def fetch_park_schedules(
     # Create cache key from date range
     cache_key = f"{start_date.date()}:{end_date.date()}"
 
-    # Check cache
-    if cache_key in _schedules_cache:
-        cached_data, cache_time = _schedules_cache[cache_key]
+    # Check cache. One .get(), never `in` then `[]`: another thread's write
+    # evicts expired keys between the two (PAR-1149).
+    cached = _schedules_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _schedules_cache_ttl:
@@ -684,10 +711,12 @@ def fetch_park_schedules(
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         df = convert_df_types(df)
 
-        # Update cache
+        # Update cache. Keys carry a date range, so evict on write (PAR-1149).
         import time
 
-        _schedules_cache[cache_key] = (df.copy(), time.time())
+        now = time.time()
+        _evict_expired_entries(_schedules_cache, now, _schedules_cache_ttl)
+        _schedules_cache[cache_key] = (df.copy(), now)
 
         return df
 
@@ -842,12 +871,9 @@ def fetch_historical_park_occupancy(
         import time
 
         now = time.time()
-        for stale_key in [
-            k
-            for k, (_, t) in list(_historical_occupancy_cache.items())
-            if now - t >= _historical_occupancy_cache_ttl
-        ]:
-            _historical_occupancy_cache.pop(stale_key, None)
+        _evict_expired_entries(
+            _historical_occupancy_cache, now, _historical_occupancy_cache_ttl
+        )
         _historical_occupancy_cache[cache_key] = (occupancy_map, now)
 
         return occupancy_map

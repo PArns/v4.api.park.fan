@@ -21,6 +21,7 @@ import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
+  getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
 import {
   ATTRACTION_DEPENDENCIES,
@@ -388,6 +389,15 @@ describe("ParksService", () => {
       ["Asia/Tokyo", "positive UTC offset"],
     ] as const;
 
+    /** The row a method is asked about: tomorrow's for the batch's next half. */
+    const rowFor = (method: (typeof METHODS)[number], timezone: string) => ({
+      ...dbRow(timezone),
+      date:
+        "nextDay" in method
+          ? getTomorrowDateInTimezone(timezone)
+          : getCurrentDateInTimezone(timezone),
+    });
+
     /**
      * The row as TypeORM yields it: `date` a date-only string, the two
      * timestamps real `Date`s. Building the cached payload out of THIS, via
@@ -489,6 +499,8 @@ describe("ParksService", () => {
       {
         name: "getBatchSchedules (next)",
         cacheKey: "schedule:next",
+        // The batch drops rows before the park's own tomorrow (PAR-1154).
+        nextDay: true,
         serveFromCache: (payload: string) => {
           // An empty array is a hit for today, so this case measures the next
           // half without a rebuild running alongside it.
@@ -526,7 +538,7 @@ describe("ParksService", () => {
       it.each(METHODS.map((m) => [m.name, m] as const))(
         "%s: a cache hit answers with the same day as a cache miss",
         async (_name, method) => {
-          const row = dbRow(timezone);
+          const row = rowFor(method, timezone);
           arrange(timezone, [row]);
 
           // 1. Cache miss. This also produces the bytes Redis will hold.
@@ -553,7 +565,7 @@ describe("ParksService", () => {
       it.each(METHODS.map((m) => [m.name, m] as const))(
         "%s: the day a cached row reports is the day a reader asks about",
         async (_name, method) => {
-          const row = dbRow(timezone);
+          const row = rowFor(method, timezone);
           arrange(timezone, [row]);
           await method.call(timezone);
 
@@ -569,9 +581,7 @@ describe("ParksService", () => {
           // tomorrow's — and tomorrow's status, rope-drop window and closing
           // time are what the park page then shows. Only past the last
           // published row does the match come up empty.
-          expect(formatInParkTimezone(date as never, timezone)).toBe(
-            getCurrentDateInTimezone(timezone),
-          );
+          expect(formatInParkTimezone(date as never, timezone)).toBe(row.date);
         },
       );
     });
@@ -664,7 +674,10 @@ describe("ParksService", () => {
     });
 
     it("refetches the next opening from the database when its cached row names no day", async () => {
-      const row = dbRow("America/Los_Angeles");
+      const row = {
+        ...dbRow("America/Los_Angeles"),
+        date: getTomorrowDateInTimezone("America/Los_Angeles"),
+      };
       arrange("America/Los_Angeles", [row]);
       mockRedis.mget
         .mockResolvedValueOnce([JSON.stringify([row])])
@@ -678,6 +691,37 @@ describe("ParksService", () => {
           String(c[0]).startsWith("schedule:next:"),
         ),
       ).toBe(true);
+    });
+
+    it("starts each park's next opening at its own tomorrow, not the batch's earliest (PAR-1154)", async () => {
+      // One query serves the whole batch from its earliest "tomorrow" — Los
+      // Angeles'. For a park far east that is still its today, so its row of
+      // today came back as its "next" opening, hours after it had closed.
+      const eastId = "99999999-2222-3333-4444-555555555555";
+      const eastToday = getCurrentDateInTimezone("Australia/Brisbane");
+      const eastTomorrow = getTomorrowDateInTimezone("Australia/Brisbane");
+      const westTomorrow = getTomorrowDateInTimezone("America/Los_Angeles");
+      const row = (id: string, date: string) => ({
+        ...dbRow("UTC"),
+        id: `${id}-${date}`,
+        parkId: id,
+        date,
+      });
+      arrange("America/Los_Angeles", [
+        row(eastId, eastToday),
+        row(eastId, eastTomorrow),
+        row(parkId, westTomorrow),
+      ]);
+      mockParkRepository.find.mockResolvedValue([
+        { id: parkId, timezone: "America/Los_Angeles" },
+        { id: eastId, timezone: "Australia/Brisbane" },
+      ]);
+      mockRedis.mget.mockResolvedValue([null, null]);
+
+      const { next } = await service.getBatchSchedules([parkId, eastId]);
+
+      expect(next.get(eastId)?.date).toBe(eastTomorrow);
+      expect(next.get(parkId)?.date).toBe(westTomorrow);
     });
 
     it("keeps a cached `null` as the negative result it is, not as a corrupt entry", async () => {
@@ -1369,7 +1413,7 @@ describe("ParksService", () => {
    * `prediction_accuracy."attractionId"` (the column is `attraction_id`) and
    * neither block moves more than 3 of the 19 tables in
    * `ATTRACTION_DEPENDENCIES`, so the `DELETE FROM attractions` runs into the
-   * NO ACTION foreign keys. That is its own ticket; see todo.md.
+   * NO ACTION foreign keys.
    */
   describe("raw attraction merges stamp last_merged_at", () => {
     type Recorded = { sql: string; params?: unknown[] };

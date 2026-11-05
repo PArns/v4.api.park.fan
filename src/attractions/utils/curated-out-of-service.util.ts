@@ -133,7 +133,7 @@ export function isCuratedOutOfService(
  * Unlike that predicate this one takes the day as a parameter rather than
  * reading `NOW()`. A works period is a fact about a date range, so asking it
  * about a past day is meaningful and has to give the answer that day had.
- * `attractionIsOutOfSeason()` computes against `EXTRACT(MONTH FROM NOW())`,
+ * `attractionIsOutOfSeason()` computes against the park's month of `NOW()`,
  * which is why it may not be used on history at all: applied to 90 days it
  * deletes the July of a ride that leaves season in September.
  *

@@ -33,6 +33,10 @@ import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstru
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
+import { AssistantMaintenanceProcessor } from "./processors/assistant-maintenance.processor";
+import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
+import { SearchConsoleProcessor } from "./processors/search-console.processor";
+import { AdminAuditMaintenanceProcessor } from "./processors/admin-audit-maintenance.processor";
 import {
   ForecastArchiveProcessor,
   ForecastArchiveScoreProcessor,
@@ -84,6 +88,9 @@ import { AttractionP50Baseline } from "../analytics/entities/attraction-p50-base
 import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-baseline.entity";
 import { PushModule } from "../push/push.module";
 import { TripsModule } from "../trips/trips.module";
+import { AssistantModule } from "../assistant/assistant.module";
+import { SiteAnalyticsModule } from "../site-analytics/site-analytics.module";
+import { SearchConsoleModule } from "../search-console/search-console.module";
 import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
@@ -154,6 +161,9 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     PopularityModule,
     PushModule, // Web-push subscriptions and sending
     TripsModule, // The stored plans the notification job walks
+    AssistantModule, // Parky's chats, for their retention
+    SiteAnalyticsModule, // The site statistic's visitor snapshot and prune
+    SearchConsoleModule, // The Search Console import and its retention
     RideAlertsModule, // Wait-time alerts — checked from WaitTimesProcessor
     ShowFollowsModule, // Followed shows — the push-notifications job's other half
     RedisModule, // For cache warmup service
@@ -192,6 +202,10 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     RainSoonPushService, // …and its `rain-soon` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
+    AssistantMaintenanceProcessor, // Nightly retention of the assistant's chats
+    SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention
+    SearchConsoleProcessor, // Search Console: nightly import, retention
+    AdminAuditMaintenanceProcessor, // Audit log: nightly address retention
     ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
     ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue
     ShowPatternProcessor, // Nightly per-weekday showtime patterns

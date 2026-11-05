@@ -197,6 +197,25 @@ def build_panel(park_ids: list[str]):
     return panel, meta, holidays, weather, schedule
 
 
+def fit_frame(panel: pd.DataFrame) -> pd.DataFrame:
+    """The panel without series that cannot form a single training window.
+
+    A window needs an observed day in its input AND in its output part, so a
+    series with fewer than two observed days has none. A training batch drawn
+    only from such series raises "No windows available for training" and the
+    whole chunk is skipped; measured 2026-11-02, 10 one-day rides (new rides)
+    made the chunk with Magic Kingdom, Epic Universe and Hersheypark fail every
+    night since 2026-10-24. They still get a forecast: predict takes the full
+    panel, the model is global.
+    """
+    observed = (
+        panel["available_mask"] if "available_mask" in panel.columns
+        else pd.Series(1, index=panel.index)
+    )
+    counts = observed.groupby(panel["unique_id"]).transform("sum")
+    return panel[counts >= 2]
+
+
 def train_and_forecast(version: str) -> pd.DataFrame:
     """Train + forecast ITERATIVELY over park chunks, returning the concatenated
     forward forecast.
@@ -246,7 +265,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     except Exception:
         _mem0 = None
 
-    # Hyperparameters (the levers tuned for GPU — see tft-gpu-tuning-plan)
+    # Hyperparameters (the levers tuned for GPU — see docs/ml/tft.md#known-limits-and-open-work)
     logger.info("🤖 Model config:")
     logger.info("   Loss:               %s", settings.NF_LOSS)
     logger.info("   Horizon:            %d days", settings.NF_HORIZON)
@@ -296,7 +315,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
             nf = NeuralForecast(
                 models=_build_models(ci, len(chunks), stat_exog), freq="D"
             )
-            nf.fit(df=panel[cols], static_df=static_df)
+            nf.fit(df=fit_frame(panel)[cols], static_df=static_df)
             futr = db.build_future_frame(
                 panel, meta, holidays, settings.NF_HORIZON, weather, schedule
             )

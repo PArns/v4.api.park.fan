@@ -93,7 +93,7 @@ describe("MLDriftMonitoringService", () => {
       expect(result.trainingMae).toBe(5);
     });
 
-    it("splits drift by horizon: hourly tracked (= top-level), daily untracked (§6a-2)", async () => {
+    it("splits drift by horizon: hourly tracked (= top-level), daily untracked (docs/ml/intraday-serving.md)", async () => {
       mlModelRepo.findOne.mockResolvedValue({ mae: 5, isActive: true });
       accuracyRepo.createQueryBuilder.mockReturnValueOnce(
         stubQB(

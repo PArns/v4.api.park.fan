@@ -4,7 +4,7 @@
 #
 # forecast_archive_curves deletes a row 14 days past its TARGET date, so one export
 # only ever covers about two weeks of short-lead targets — too few for the served
-# arm's verdicts (docs/ml/ml-bench.md, "The served arm"). Rows are never updated
+# arm's verdicts (docs/ml/ml-bench/served-arm.md#the-window-and-the-weekly-accumulation). Rows are never updated
 # after their capture, so a complete UTC origin day exported once holds every row it
 # will ever hold: exporting each new day into ONE persistent directory accumulates
 # the window. `mlbench export` skips days already in that directory's manifest, so

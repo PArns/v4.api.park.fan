@@ -36,9 +36,28 @@ const REDACTED_PARAMS = new Set([
   "password",
   "secret",
   "endpoint",
+  // OAuth (docs/admin/mcp.md). None belongs in a URL this API is sent, but
+  // a confused client puts them there, and an error line is where it shows.
+  "code",
+  "code_verifier",
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  "state",
+  // `?ip=` on the location and favourites routes names the address to look up
+  // instead of the caller's own. It is still a visitor's address, and the
+  // privacy policy says no log line carries one.
+  "ip",
 ]);
 
-export function redactUrl(url: string): string {
+/**
+ * Path segments that are capabilities: the id of a pending OAuth request, which
+ * any admin session could answer while it lives (docs/admin/mcp.md).
+ */
+const REDACTED_PATH = /(\/admin\/oauth\/requests\/)[^/?#]+/i;
+
+export function redactUrl(rawUrl: string): string {
+  const url = rawUrl.replace(REDACTED_PATH, "$1***");
   const cut = url.indexOf("?");
   if (cut === -1) return url;
 

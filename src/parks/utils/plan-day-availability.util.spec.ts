@@ -99,7 +99,7 @@ describe("classifyPlanDayUnavailable", () => {
   it("does not call a park out of season on the word of a dead feed", () => {
     // `season_out_since` is written by a detector that reads the feed. With the
     // feed silent for months the note is our own bookkeeping, so the silence is
-    // reported instead — `claude.md` §4.
+    // reported instead — `docs/rules/absent-facts.md`.
     expect(of({ staleDays: 96, plannableRideCount: 0 })).toBe("feed_stale");
     // Live feed, same empty plannable set: now the note means what it says.
     expect(of({ staleDays: 1, plannableRideCount: 0 })).toBe(

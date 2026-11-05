@@ -21,7 +21,7 @@ import { createTestPark } from "../fixtures/park.fixtures";
 /**
  * A showtime belongs to the OPERATING day, not to the calendar date it falls on.
  *
- * §5 of `docs/frontend/plan-day-endpoint.md` unfolds a day that crosses
+ * `docs/frontend/plan-day/midnight.md` unfolds a day that crosses
  * midnight — La Ronde's `10 → 0` is one ascending run of hours, and the hour
  * after 23 is 24 rather than 0 of the next date. Showtimes were not unfolded
  * that way: the last performance of such a day landed on the morning after,

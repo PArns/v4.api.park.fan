@@ -1,6 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
-import { observedReadingsSql } from "../common/utils/closure-gap.sql";
+import {
+  CYCLE_WINDOW_DAYS,
+  observedReadingsSql,
+} from "../common/utils/closure-gap.sql";
+import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
@@ -8,6 +12,7 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { CronExpressionParser } from "cron-parser";
 import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
+import { newestSuccessByName, settledAt } from "../queues/queue-job-history";
 
 /**
  * Three detectors for the ways this system went quietly wrong for weeks.
@@ -94,6 +99,18 @@ export interface AbsenceRetiredUnreviewed {
   retiredAt: string;
   /** Park-local date of the last observed reading, or null if there is none. */
   lastReading: string | null;
+}
+
+/**
+ * A blind park's OPERATING schedule days that `parkOpenWindowCtes()` drops: no
+ * opening or closing time, or a close at or before the opening after repair
+ * (PAR-1094).
+ */
+export interface BlindParkUnusableScheduleDays {
+  parkId: string;
+  parkName: string;
+  /** Park-local dates, ascending. */
+  days: string[];
 }
 
 /** One row of a re-issue candidate pair, as the admin needs it to decide. */
@@ -263,6 +280,32 @@ export class DataQualityMonitorService {
     private readonly dataSource: DataSource,
     @InjectQueue("analytics") private readonly analyticsQueue: Queue,
   ) {}
+
+  /**
+   * The admin's data-quality report in one read: the four detectors the
+   * dashboard and the MCP server show side by side. `windowDays` bounds the
+   * cluster detector only.
+   */
+  async report(windowDays: number) {
+    const [
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    ] = await Promise.all([
+      this.findSilencedClusters(windowDays),
+      this.findFailingJobs(),
+      this.findAbsenceRetiredUnreviewed(),
+      this.findReissueCandidates(),
+    ]);
+    return {
+      windowDays,
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    };
+  }
 
   /**
    * Parks where a block of attractions stopped reporting on the same day.
@@ -514,6 +557,53 @@ export class DataQualityMonitorService {
       lastReading: r.last_reading,
       operatingDaysAhead: Number(r.days_ahead),
       lastScheduledDay: r.last_day,
+    }));
+  }
+
+  /**
+   * OPERATING days in a blind park that the closure statements cannot see
+   * (PAR-1094).
+   *
+   * `win` drops a schedule row without an opening or closing time, or whose
+   * close stays at or before the opening after `normalizedClosingSql()`. Since
+   * PAR-129 the live early-end filter takes its days from `win`, so such a day
+   * leaves its `days` denominator silently and a ride can slip under
+   * `MIN_DAYS_FOR_CYCLE_TEST`, switching the filter off. Measured 2026-09-15:
+   * none of 2391 blind-park days had one. This says so the day the first
+   * appears. Same span as that filter (`CYCLE_WINDOW_DAYS`), blind parks read
+   * from `park_downtime_coverage` as the live statement does.
+   */
+  async findBlindParkUnusableScheduleDays(
+    windowDays = CYCLE_WINDOW_DAYS,
+  ): Promise<BlindParkUnusableScheduleDays[]> {
+    const rows: Array<{ park_id: string; park_name: string; days: string[] }> =
+      await this.dataSource.query(
+        `
+      SELECT p.id AS park_id,
+             p.name AS park_name,
+             array_agg(DISTINCT se.date::text ORDER BY se.date::text) AS days
+        FROM schedule_entries se
+        JOIN parks p ON p.id = se."parkId"
+        JOIN park_downtime_coverage c ON c."parkId" = p.id
+       WHERE c.regime = 'never_reports'
+         AND se."attractionId" IS NULL
+         AND se."scheduleType" = 'OPERATING'
+         AND se.date >  (now() AT TIME ZONE p.timezone)::date - $1::int
+         AND se.date <= (now() AT TIME ZONE p.timezone)::date
+         AND (se."openingTime" IS NULL
+              OR se."closingTime" IS NULL
+              OR ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "p.timezone")}
+                 <= se."openingTime")
+       GROUP BY p.id, p.name
+       ORDER BY p.name
+      `,
+        [windowDays],
+      );
+
+    return rows.map((r) => ({
+      parkId: r.park_id,
+      parkName: r.park_name,
+      days: r.days,
     }));
   }
 
@@ -822,29 +912,15 @@ export class DataQualityMonitorService {
         // A later success clears the failure. Only completions newer than the
         // oldest reported failure can matter, so read just those.
         const earliest = Math.min(...newestFailure.values());
-        const completed: string[] = await client.zrangebyscore(
-          `${prefix}:${queueName}:completed`,
-          `(${earliest}`,
-          "+inf",
-          "WITHSCORES",
+        const newestSuccess = await newestSuccessByName(
+          client,
+          (typeOrId) => `${prefix}:${queueName}:${typeOrId}`,
+          earliest,
         );
-        const newestSuccess = new Map<string, number>();
-        for (let i = 0; i < completed.length; i += 2) {
-          const doneAt = Number(completed[i + 1]);
-          const [name] = await client.hmget(
-            `${prefix}:${queueName}:${completed[i]}`,
-            "name",
-          );
-          const jobName = name ?? "unknown";
-          newestSuccess.set(
-            jobName,
-            Math.max(newestSuccess.get(jobName) ?? 0, doneAt),
-          );
-        }
 
         for (const [jobName, job] of byJobName) {
           const failedAt = newestFailure.get(jobName) ?? 0;
-          if ((newestSuccess.get(jobName) ?? 0) > failedAt) continue;
+          if (settledAt(newestSuccess, jobName, failedAt) !== null) continue;
           results.push(job);
         }
       } catch (e) {

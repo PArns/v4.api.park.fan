@@ -21,7 +21,7 @@ export const SCORE_KEY_WIDTHS = {
  * so the board can pool any window of days by adding rows and dividing once —
  * the same "sum the minutes, then divide" rule the crowd levels follow. The
  * counter names are documented in `forecast-archive-scoring.util.ts` and
- * docs/ml/forward-archive.md.
+ * docs/ml/forward-archive/scoring.md#scores.
  *
  * `region` includes an explicit `ALL` row per key rather than leaving the board
  * to add the regions up: the cross-park pairwise counters (D6) are counted

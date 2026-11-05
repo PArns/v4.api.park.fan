@@ -1,5 +1,5 @@
 """Settings for the PCN service (Park-Crowd Nowcaster — see
-docs/ml/custom-intraday-model-design.md).
+docs/ml/pcn.md).
 
 Reuses the same DB_* env vars as ml-service / nf-service so it points at the same
 Postgres without extra config. Phase 0 only needs the DB + a handful of
@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     # wait ≥ PCN_MIN_WAIT, inside the published operating window (see
     # tensor.in_force_truth). Changes what the served model learns AND its inputs, so a
     # checkpoint must be served under the mode it was trained in: flip it right before
-    # a retrain, and only after the shadow comparison (docs/ml/pcn-intraday-review.md §12).
+    # a retrain, and only after the shadow comparison
+    # (docs/ml/pcn.md#targets-pcn_target_mode-par-1034).
     PCN_TARGET_MODE: str = "median"    # 'median' | 'in_force'
     # Residual head (PAR-1034): prediction = last context wait_ffill + the net's output,
     # so the net learns the CHANGE from the last observation instead of the absolute
@@ -97,7 +98,7 @@ class Settings(BaseSettings):
     # ML overview 2 days. 4 days covers the scorer with a day and a half to spare and
     # is the floor the owner set (PAR-873; it was 14, "for ad-hoc lead-curve analysis",
     # at 28 GB). An ad-hoc export over a longer window has to run within 4 days of
-    # its targets now — see docs/ml/pcn-intraday-review.md §9.
+    # its targets now — see docs/ml/pcn.md#retention-4-days.
     PCN_FORECAST_RETENTION_DAYS: int = 4
     # Graph WaveNet temporal depth: receptive field = 1 + sum(2^i) over layers (kernel 2)
     # → 2 layers = 4 slots (1h!), 6 = 64 slots (16h), 8 = 256 slots (64h > L). Flipped

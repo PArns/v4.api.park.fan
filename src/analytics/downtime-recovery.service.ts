@@ -202,8 +202,8 @@ const RECOVERY_CURVE_SQL = `
        --
        -- That biases exactly the wrong way. An outage still running at
        -- measurement time is disproportionately a LONG one, so dropping it
-       -- makes recovery look faster than it is — the failure §6a exists to
-       -- avoid.
+       -- makes recovery look faster than it is — the failure
+       -- docs/analytics/ride-downtime/recovery-estimate.md exists to avoid.
        --
        -- What is still excluded is the part about measurement quality rather
        -- than outcome: a works period is not an outage, a start-censored spell

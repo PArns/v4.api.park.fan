@@ -1,5 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { LocationService } from "./location.service";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -7,6 +8,8 @@ import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { ShowsService } from "../shows/shows.service";
+import { NearbyRidesDto } from "./dto/nearby-response.dto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
 /**
@@ -67,6 +70,16 @@ describe("LocationService", () => {
     recordParkHit: jest.fn().mockResolvedValue(undefined),
     recordParkHits: jest.fn().mockResolvedValue(undefined),
   };
+  const showsService = {
+    findByParkId: jest.fn().mockResolvedValue([]),
+    findCurrentStatusByPark: jest.fn().mockResolvedValue(new Map()),
+    getShowtimeInstantsOnDate: jest.fn().mockResolvedValue(new Map()),
+  };
+  const redis = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue(undefined),
+    mget: jest.fn().mockResolvedValue([]),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -80,15 +93,12 @@ describe("LocationService", () => {
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: ParksService, useValue: parksService },
         { provide: PopularityService, useValue: popularityService },
+        { provide: ShowsService, useValue: showsService },
         {
           // Empty GET/MGET → cache miss → exercises the DB + batch fallback
           // path these tests already mock (incl. the park-coordinate index).
           provide: REDIS_CLIENT,
-          useValue: {
-            get: jest.fn().mockResolvedValue(null),
-            set: jest.fn().mockResolvedValue(undefined),
-            mget: jest.fn().mockResolvedValue([]),
-          },
+          useValue: redis,
         },
       ],
     }).compile();
@@ -116,6 +126,101 @@ describe("LocationService", () => {
       expect(result.userLocation).toEqual({
         latitude: 50.7997,
         longitude: 6.8783,
+      });
+    });
+
+    it("loads only the park's non-retired rides for 'in_park'", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+      parkRepo.findOne.mockResolvedValue(phantasialand);
+
+      await service.findNearby(50.7997, 6.8783, 1000, 6);
+
+      expect(attractionRepo.find).toHaveBeenCalledWith({
+        where: { parkId: "p1", retiredAt: IsNull() },
+      });
+    });
+
+    describe("shows of the park the visitor is in", () => {
+      const far = {
+        id: "s-far",
+        name: "Far",
+        slug: "far",
+        latitude: 50.81,
+        longitude: 6.8783,
+        isSeasonal: false,
+        seasonMonths: null,
+      };
+      const near = {
+        ...far,
+        id: "s-near",
+        name: "Near",
+        slug: "near",
+        latitude: 50.8,
+      };
+      const noCoords = {
+        ...far,
+        id: "s-none",
+        name: "None",
+        slug: "none",
+        latitude: null,
+        longitude: null,
+        isSeasonal: true,
+        seasonMonths: [1],
+      };
+
+      beforeEach(() => {
+        parkRepo.find.mockResolvedValue([phantasialand]);
+        parkRepo.findOne.mockResolvedValue(phantasialand);
+        showsService.findByParkId.mockResolvedValueOnce([noCoords, far, near]);
+        showsService.findCurrentStatusByPark.mockResolvedValueOnce(
+          new Map([["s-near", { status: "OPERATING" }]]),
+        );
+        showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+          new Map([["s-near", ["2026-08-29T10:30:00.000Z"]]]),
+        );
+      });
+
+      it("lists every show nearest first, with today's showtimes", async () => {
+        parksService.getBatchParkStatus.mockResolvedValueOnce(
+          new Map([["p1", "OPERATING"]]),
+        );
+
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+        const shows = (result.data as NearbyRidesDto).shows as unknown as Array<
+          Record<string, unknown>
+        >;
+
+        expect(shows.map((s) => s.id)).toEqual(["s-near", "s-far", "s-none"]);
+        expect(shows[0]).toMatchObject({
+          status: "OPERATING",
+          showtimes: [{ startTime: "2026-08-29T10:30:00.000Z" }],
+          isCurrentlyInSeason: null,
+        });
+        expect(shows[1]).toMatchObject({ status: "CLOSED", showtimes: [] });
+        expect(shows[2].distance).toBeNull();
+        expect(typeof shows[2].isCurrentlyInSeason).toBe("boolean");
+        expect(showsService.getShowtimeInstantsOnDate).toHaveBeenCalledWith(
+          "p1",
+          "Europe/Berlin",
+          expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        );
+      });
+
+      it("reads every show CLOSED while the park is not open", async () => {
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+        const shows = (result.data as NearbyRidesDto).shows;
+
+        expect(shows.every((s) => s.status === "CLOSED")).toBe(true);
+      });
+
+      it("still answers the rides when the show lookup fails", async () => {
+        showsService.findByParkId.mockReset();
+        showsService.findByParkId.mockRejectedValueOnce(new Error("timeout"));
+
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+
+        expect(result.type).toBe("in_park");
+        expect((result.data as NearbyRidesDto).shows).toEqual([]);
       });
     });
 
@@ -151,6 +256,46 @@ describe("LocationService", () => {
       const result = await service.findNearby(50.85, 6.95, 1000, 6);
 
       expect(result.type).toBe("nearby_parks");
+    });
+
+    it("lists the short waits of a nearby park from its cached payload", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+      redis.mget.mockResolvedValueOnce([
+        JSON.stringify({
+          id: "p1",
+          slug: "phantasialand",
+          status: "OPERATING",
+          liveWaitTimes: { available: true, reason: null },
+          url: "/europe/germany/bruehl/phantasialand",
+          attractions: [
+            {
+              id: "taron",
+              name: "Taron",
+              slug: "taron",
+              effectiveStatus: "OPERATING",
+              queues: [{ queueType: "STANDBY", waitTime: 15 }],
+              baseline: 40,
+              comparison: "lower",
+              isHeadliner: true,
+              url: "/europe/germany/bruehl/phantasialand/taron",
+            },
+          ],
+        }),
+      ]);
+
+      const result = await service.findNearby(52.52, 13.405, 1000, 6);
+
+      expect(result.type).toBe("nearby_parks");
+      const data = result.data as { shortWaits: { id: string }[] };
+      expect(data.shortWaits.map((r) => r.id)).toEqual(["taron"]);
+    });
+
+    it("answers an empty shortWaits when no park payload is cached", async () => {
+      parkRepo.find.mockResolvedValue([phantasialand]);
+
+      const result = await service.findNearby(52.52, 13.405, 1000, 6);
+
+      expect((result.data as { shortWaits: unknown[] }).shortWaits).toEqual([]);
     });
 
     it("respects an enlarged radius (in-park threshold)", async () => {

@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     # detector. At 0.1, 1500 trees beat 0.03 × 2000 on every measure (hold-out MAE
     # 4.33 vs 4.36, busy MAE 15.17 vs 15.61, validation MAE 4.39 vs 4.55) with 25 %
     # fewer trees. Raise the cap only together with the training timeout: fit and
-    # refit each scale linearly with it. See docs/ml/model-overview.md.
+    # refit each scale linearly with it. See
+    # docs/ml/catboost-training.md#tree-count-and-early-stopping-par-902.
     CATBOOST_ITERATIONS: int = 1500
     CATBOOST_LEARNING_RATE: float = 0.1
     # od_wait: rounds without a new best validation loss before training stops.
@@ -109,7 +110,8 @@ class Settings(BaseSettings):
     #     busy massively (bias +16.5). So the crowd quantile is 0.8, NOT 0.95.
     # NOTE: the busy-tail MAE itself is inherent variance, not a bias a quantile can
     # fix — measured & rejected (q0.95 made busy worse; a CatBoost+TFT daily ensemble
-    # also lost to TFT alone). See docs/ml/tft-vs-catboost-clean-comparison.md.
+    # also lost to TFT alone). See
+    # docs/ml/quantile-serving-and-calibration.md#why-these-quantiles-measured.
     # Override to "Quantile:alpha=0.8" or "RMSEWithUncertainty" to revert.
     CATBOOST_LOSS_FUNCTION: str = "MultiQuantile:alpha=0.5,0.8,0.95"
     CATBOOST_POSTERIOR_SAMPLING: bool = True  # only used for RMSEWithUncertainty

@@ -1,162 +1,96 @@
 # Parks whose wait times we cannot read (`liveWaitTimes`)
 
-Some parks publish wait times in a place no server can reach. Hansa-Park serves
-them from its own app, only to devices on the park's WLAN; there is no public
-endpoint, and no amount of ingestion will produce a number.
+The curated flag that says a park publishes its wait times nowhere a server can
+read, what the API withholds for such parks (and for parks whose feed has gone
+silent), what a client still has to do, and when a single ride reads `UNKNOWN`.
+Open it before rendering any wait, count, average or crowd badge.
 
-That is not the same as a feed being down, and it is not something a client can
-work out for itself. From the outside, a park with no source and a park shut for
-the night look identical: zero rides operating, empty `queues`, an average of
-0 min. At 03:00 local **every** park in the catalog looks like Hansa-Park.
-
-So the API says which is which.
-
----
+From the outside a park with no source and a park shut for the night look
+identical — zero rides operating, empty `queues`, Ø 0 min; at 03:00 every park looks
+like that. Hansa-Park serves its wait times only from its own app on the park WLAN,
+so the API says which is which.
 
 ## The field
 
-`liveWaitTimes` rides on every response that carries a park:
-
 ```ts
-{
-  available: boolean; // false → no readable source
-  reason: "in_park_app_only" | "not_published" | null;
-}
+liveWaitTimes: { available: boolean; reason: "in_park_app_only" | "not_published" | null }
 ```
 
-| Where                                               | Field                    |
-| --------------------------------------------------- | ------------------------ |
-| `GET /v1/parks/{continent}/{country}/{city}/{park}` | `liveWaitTimes`          |
-| `GET /v1/parks/…/attractions/{attraction}`          | `park.liveWaitTimes`     |
-| `GET /v1/discovery/continents/*` (park cards)       | `liveWaitTimes` per park |
-| `GET /v1/discovery/nearby`, `/v1/favorites/*`       | `liveWaitTimes` per park |
+| Where                                               | Field                     |
+| --------------------------------------------------- | ------------------------- |
+| `GET /v1/parks/{continent}/{country}/{city}/{park}` | `liveWaitTimes`           |
+| `GET /v1/parks/…/attractions/{attraction}`          | `park.liveWaitTimes`      |
+| `GET /v1/parks/…/plan/day`                          | `context.liveWaitTimes`   |
+| `GET /v1/discovery/continents/*` (park cards)       | `liveWaitTimes` per park  |
+| `GET /v1/discovery/nearby`, `/v1/favorites/*`       | `liveWaitTimes` per park  |
 
-**`available: false` is permanent, not a freshness signal.** A park whose feed
-went silent this morning stays `true` — that case is handled by the staleness and
-movement rules in the live queries. This flag says the source does not exist.
+- **`available: false` is permanent, not a freshness signal.** A feed that went
+  silent this morning stays `true`.
+- `in_park_app_only`: the park publishes to its own app inside its own network;
+  `not_published`: nowhere at all. **The strings are contract.**
 
-`reason` distinguishes two situations a visitor experiences differently:
+## What the API withholds
 
-- **`in_park_app_only`** — the park does publish wait times, to its own app,
-  inside its own network. Someone standing in the park can see them; we cannot.
-- **`not_published`** — the park publishes them nowhere at all.
+For a park with `available: false` (the API emits `unknown` rather than a placeholder
+tier — [crowd levels](../rules/crowd-levels.md)):
 
-The strings are contract. Renaming one is a breaking change.
+|                                      | readable park                     | `available: false` |
+| ------------------------------------ | --------------------------------- | ------------------ |
+| ride `effectiveStatus`, park open    | the feed's, or `OPERATING` with no row (park payload; [effective status](./effective-status.md)) | **`UNKNOWN`** |
+| ride `crowdLevel`                    | rated against its P50             | **`unknown`**      |
+| park `statistics.crowdLevel`         | rated                             | **`unknown`**      |
+| `statistics.peakHour*`               | today's peak or a forecast        | **`null` / 0**     |
+| `statistics.avgWaitTime`, `avgWaitToday`, `peakWaitToday` | minutes      | **`null`**         |
+| `analytics.occupancy`, `analytics.percentiles` | present                 | **omitted**        |
+| `hourlyForecast`, `bestVisitTimes`   | ML predictions                    | **withheld**       |
 
-## What the API already suppresses
+- The aggregates read `null`, not 0, because 0 is what a division by the empty set
+  returns. `occupancy` is omitted rather than nulled: clients round it, and
+  `Math.round(null)` is 0 next to a "typical" verdict.
+- **The optimistic fallback is skipped.** It exists so a park whose feed drops one
+  row does not read "open, all rides closed"; for a park with no source it would
+  assert all 82 attractions running on the schedule alone. **Queue rows do not change
+  that**: Hansa-Park's upstream publishes a row per attraction, permanently `CLOSED`,
+  never a minute, and their number varies through the day — so for a listed park the
+  rows are dropped and `queues` comes back empty.
+- **A closed park still closes its rides**: `CLOSED` comes from the schedule, which
+  we can read. Only the open-park case becomes `UNKNOWN`.
 
-Everything derived from a wait time is unknowable for these parks, and this API's
-standing rule is to emit `unknown` rather than a placeholder tier (see
-`claude.md` → _No made-up ratings_). So:
-
-|                                    | Readable park                     | `available: false` |
-| ---------------------------------- | --------------------------------- | ------------------ |
-| Ride with no queue row, park open  | `OPERATING` (optimistic fallback) | **`UNKNOWN`**      |
-| Ride `crowdLevel`                  | rated against the P50 baseline    | **`unknown`**      |
-| Park `statistics.crowdLevel`       | rated                             | **`unknown`**      |
-| `statistics.peakHour*`             | today's peak or a forecast        | **`null` / 0**     |
-| `statistics.avgWaitTime`           | minutes right now                 | **`null`**         |
-| `statistics.avgWaitToday`          | minutes across today              | **`null`**         |
-| `statistics.peakWaitToday`         | today's highest wait              | **`null`**         |
-| `analytics.occupancy`              | % of a typical day, plus a verdict | **omitted**       |
-| `analytics.percentiles`            | today's distribution              | **omitted**        |
-| `hourlyForecast`, `bestVisitTimes` | ML predictions                    | **withheld**       |
-
-The three wait aggregates read `null` rather than 0 because 0 is what a division
-by the empty set returns, and a reader cannot tell it from a quiet Tuesday.
-`occupancy` goes away entirely instead of carrying nulls: its numbers get
-rounded and compared by the clients that read them, and `Math.round(null)` is 0
-— the wall of zeroes would be back, this time with `comparisonStatus: "typical"`
-beside it, which is a verdict about a park we have never had a wait time from.
-Absence is how this payload already says it about `percentiles`.
-
-**The same gate covers a park whose feed has gone quiet**, not only a park with
-no source: `ParkIntegrationService` reads
-`waitTimesKnowable = waitTimesReadable && parkObservedRecently`, the second half
-being `PARK_FEED_SILENT_DAYS` = 30 days without an observed reading (PAR-192).
-`liveWaitTimes.available` stays `true` for those parks, so **a client cannot
-derive this case** — it has to read the fields themselves.
-
-The optimistic fallback is the one worth understanding. It exists so a park whose
-feed drops a row does not read "open, all rides closed" — if the park is open and
-a ride is missing, the ride is assumed to be running. For a park with no source
-that would assert all 82 of Hansa-Park's attractions are operating on the strength
-of the schedule alone. It is skipped, and the rides read `UNKNOWN`.
-
-**A queue row does not change that.** These parks are not necessarily silent —
-Hansa-Park's upstream publishes a row per attraction, permanently `CLOSED` and never
-carrying a wait time, and how many of those rows are present varies through the day.
-Keying the treatment off "no row exists" therefore flipped the park from "82 running"
-to "82 closed" instead of fixing it. A row that has only ever said `CLOSED` and never
-a minute is not a statement about whether the ride is running, so for a park on the
-list the rows are dropped and `queues` comes back empty.
-
-**A closed park still closes its rides.** `CLOSED` comes from the schedule, which
-we _can_ read — that is a fact, not a gap, and it survives untouched. Only the
-open-park case becomes `UNKNOWN`.
+**The park payload withholds the same for a park whose feed has gone quiet** for
+`PARK_FEED_SILENT_DAYS` (30). `liveWaitTimes.available` stays `true` there, so a
+client cannot derive this case — it reads the withheld fields themselves. The gate,
+and the surfaces it does not cover:
+[status regimes §5](../architecture/attraction-status/status-regimes.md#5-a-whole-park-gone-silent).
 
 ## What the client still has to do
 
-The park payload now withholds the wait aggregates and the occupancy object
-itself, so the worst of this is closed at the source — but every other surface
-still carries the flag rather than a gap, and a client that ignores it renders an
-empty park as a quiet one. Check `liveWaitTimes.available` before showing:
-
-- wait times, or the absence of one as a walk-on
-- "x of y rides open" — the count is honest (none is _known_ to run) and reads as
-  a catastrophe
-- any average, peak or crowd badge
-- ride status as "closed"
-
-`totalAttractions` and the ride list itself stay meaningful — the catalog is
-real, only the live layer is missing. A park page can still show the rides,
-the schedule, the weather and the historical calendar; it just cannot say
-anything about queues.
+Every surface but the park payload carries the flag rather than a gap, and a client
+that ignores it renders an empty park as a quiet one. Check `liveWaitTimes.available`
+before showing a wait time (or its absence as a walk-on), "x of y rides open", any
+average, peak or crowd badge, or a ride as "closed". `totalAttractions`, the ride
+list, the schedule, the weather and the historical calendar stay meaningful. In
+park.fan this is `lib/utils/live-wait-times.ts` (its `docs/api/parks-without-wait-times.md`).
 
 ## Adding a park
 
-`src/parks/data/live-wait-time-sources.ts`, keyed by `citySlug` + `parkSlug`
-(park slugs are not globally unique — `disneyland-park` exists in Anaheim and in
-Paris). Every entry carries a `note` recording what established it, so a later
-reader can re-check rather than trust it. There is no admin endpoint and no
-database column: this is knowledge about where a park publishes, and it belongs
-in review alongside the code that acts on it.
+`PARKS_WITHOUT_LIVE_WAIT_TIMES` in `src/parks/data/live-wait-time-sources.ts`, keyed
+by `citySlug` + `parkSlug` (park slugs repeat: `disneyland-park` is Anaheim and
+Paris), each entry with a `note` recording what established it. No admin endpoint,
+no column: it is knowledge about where a park publishes, reviewed with the code.
+Rule out a broken ingestion mapping first; the signature is `/stats` at
+`totalSampleDays: 0` while the attraction list and the schedule feed work.
 
-Before adding one, rule out the alternatives — a broken ingestion mapping and a
-park that has genuinely stopped reporting both look the same from here. A park
-that has never had a single row in `/stats` (`totalSampleDays: 0`) while carrying
-a full attraction list and a working schedule feed is the signature.
+## A single ride can read `UNKNOWN`
 
-## A single ride can read `UNKNOWN` too (2026-08-15)
+In an otherwise readable, open park, a ride reads `UNKNOWN` when **every** current
+queue row was written by reverse reconciliation: no source has mentioned it for
+24 hours, which says our data stopped arriving, not that the operator closed it.
 
-`UNKNOWN` is no longer only a whole-park condition. An individual attraction now
-reads it when **every** current queue row was written by reverse-reconciliation
-— the job that stamps CLOSED on anything no upstream source has mentioned for
-24 hours — while its park is operating.
+- Render `UNKNOWN` as "no information", never as closed; `queues` is empty.
+- A free-flow attraction (`open_with_park`) stays `OPERATING`: its flag, not the
+  feed, makes it open.
+- An `UNKNOWN` ride is not counted as operating.
 
-That row records "our data stopped arriving", and it was being served as "the
-operator closed this ride". On 2026-06-07 ThemeParks.wiki dropped 44
-Europa-Park attractions and 18 Rulantica ones from its live feed. Ten weeks
-later the park page still showed a Ball Pool, a London Bus and a Dwarf City as
-closed, in August.
-
-The same signature — one date, a whole cluster of rides — shows up at a dozen
-more parks, and measuring it on 2026-09-11 cut it down (PAR-38): **125 rides
-across eleven parks are genuinely silent**, mostly the attractions of seasonal
-events that left the feed when the event ended. Three clusters that used to be
-counted here are not silent at all — both Wet'n'Wild records and Ocean Park are
-reported CLOSED by the feed every few minutes — Universal Studios Singapore's 17
-were recategorised upstream and still report, and Busch Gardens Tampa came back
-by itself after 65 days. "No Queue-Times mapping to fall back on" is not the
-tell either: 84 of the 204 rides in that cut carry one.
-
-For a client this means:
-
-- `status` can now be `UNKNOWN` on a ride in an otherwise perfectly readable
-  park. Render it as "no information", never as closed.
-- `queues` is emptied in that case, the same as for an unreadable park — there
-  is nothing to read a wait time off.
-- A free-flow attraction (`open_with_park`) still wins: its flag, not the feed,
-  is what makes it open, so it stays `OPERATING`.
-- The count of operating attractions is unaffected by design — an `UNKNOWN`
-  ride is not counted as operating, and it was not counted before either.
+Why, and which rides it catches:
+[status regimes §3](../architecture/attraction-status/status-regimes.md#3-no-source-reports-it--unknown),
+[feed drops](../architecture/attraction-status/feed-drops.md).

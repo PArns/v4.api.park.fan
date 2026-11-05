@@ -20,7 +20,8 @@ import {
  * ml:last-accuracy-check (job markers), ml:hourly-fresh:* (PAR-874 — the only
  * thing that makes a park's unchanged hourly rows servable; flushing it blanks
  * every intraday forecast until the generator's next run), geocoding:* (results
- * of a paid API that do not go stale).
+ * of a paid API that do not go stale), site-analytics:* (the site statistic's
+ * counts not yet written to Postgres, its visits and caps).
  */
 export const PARK_CACHE_FLUSH_PATTERNS: readonly string[] = [
   "schedule:*",

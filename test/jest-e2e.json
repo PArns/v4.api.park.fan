@@ -44,6 +44,7 @@
   ],
   "testTimeout": 60000,
   "maxWorkers": 1,
+  "workerIdleMemoryLimit": "1GB",
   "globalSetup": "<rootDir>/global-setup.ts",
   "globalTeardown": "<rootDir>/global-teardown.ts"
 }

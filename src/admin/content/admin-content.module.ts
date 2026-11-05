@@ -4,10 +4,14 @@ import { BullModule } from "@nestjs/bull";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { Park } from "../../parks/entities/park.entity";
+import { ParkSlugAlias } from "../../parks/entities/park-slug-alias.entity";
+import { AttractionSlugAlias } from "../../attractions/entities/attraction-slug-alias.entity";
 import { RedisModule } from "../../common/redis/redis.module";
 import { RevalidationModule } from "../../common/revalidation/revalidation.module";
 import { AdminContentController } from "./admin-content.controller";
 import { AdminCurationService } from "./admin-curation.service";
+import { AdminRedirectService } from "./admin-redirect.service";
+import { AdminRedirectsController } from "./admin-redirects.controller";
 import { AdminRideProfileService } from "./admin-ride-profile.service";
 import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 import { ParkSeasonsModule } from "../../parks/park-seasons.module";
@@ -23,7 +27,13 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Park, Attraction, AttractionRideProfile]),
+    TypeOrmModule.forFeature([
+      Park,
+      Attraction,
+      AttractionRideProfile,
+      ParkSlugAlias,
+      AttractionSlugAlias,
+    ]),
     RedisModule,
     RevalidationModule,
     // The queue CuratedDataProcessor already listens on for `revalidate-parks`.
@@ -32,9 +42,10 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
     BullModule.registerQueue({ name: "manual-metadata" }),
     ParkSeasonsModule,
   ],
-  controllers: [AdminContentController],
+  controllers: [AdminContentController, AdminRedirectsController],
   providers: [
     AdminCurationService,
+    AdminRedirectService,
     AdminRideProfileService,
     GlossaryTermIdsService,
   ],

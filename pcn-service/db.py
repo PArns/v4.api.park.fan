@@ -58,7 +58,7 @@ def get_engine():
         connect_args={
             # Name the session (all services share the `parkfan` role) and end a
             # transaction left idle for 10 min, which would otherwise hold its
-            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            # locks indefinitely. See docs/troubleshooting/timescaledb-lock-queues.md.
             "application_name": "parkfan-pcn-service",
             "options": "-c idle_in_transaction_session_timeout=600000",
         },
@@ -118,14 +118,17 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
 
 
 def park_has_fresh_data(park_id: str, max_age_hours: int) -> bool:
-    """Cheap staleness pre-check: does the park have ANY recent STANDBY row? Bounded to
-    the recency window so it's chunk-pruned (no full-history MAX scan). Lets the
-    forecast tick skip seasonally-closed/dead parks BEFORE paying the panel fetch."""
+    """Cheap staleness pre-check: does the park have a recent STANDBY wait the
+    forecast could use (OPERATING, at least PCN_MIN_WAIT)? Bounded to the recency
+    window so it's chunk-pruned (no full-history MAX scan). Lets the forecast tick
+    skip seasonally-closed/dead parks BEFORE paying the panel fetch — and the
+    status-only parks that never send a wait read idle, not blocked (PAR-1120)."""
     sql = text(
         f"""
         SELECT 1
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING' AND qd."waitTime" >= {int(settings.PCN_MIN_WAIT)}
           AND qd.timestamp >= NOW() - (:h || ' hours')::interval
           AND {NOT_HEARTBEAT}
         LIMIT 1
@@ -191,7 +194,7 @@ def fetch_cross_ride_panel(
 
 
 # --------------------------------------------------------------------------
-# Shadow producer + scorer (design doc §12). Mirrors nf-service's durable
+# Shadow producer + scorer (docs/ml/pcn.md#shadow-boards). Mirrors nf-service's durable
 # tft_forecasts snapshot + the (since retired, PAR-870) score-comparison job, at
 # 15-min intraday grain.
 # --------------------------------------------------------------------------
@@ -380,7 +383,7 @@ PRUNE_MAX_BATCHES = 50
 # THIS IS ONLY CORRECT WHILE pcn_forecasts IS A PLAIN TABLE. A ctid is unique
 # per table, not per partition: as a hypertable the same ctid exists in every
 # chunk, and the outer DELETE would match rows in chunks the SELECT never looked
-# at. `docs/ml/pcn-intraday-review.md` floats "hypertable + add_retention_policy"
+# at. `docs/ml/pcn.md#retention-4-days` floats "hypertable + add_retention_policy"
 # as a future option for this table — taking it means rewriting this statement
 # (and then the policy replaces it anyway).
 _PRUNE_PCN_FORECASTS = text(
@@ -565,7 +568,7 @@ def fetch_actuals_local(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS actual
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd.timestamp >= :lo AND qd.timestamp < :hi
-          AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY' AND qd."waitTime" >= 5
+          AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY' AND qd."waitTime" >= {int(settings.PCN_MIN_WAIT)}
           AND {NOT_HEARTBEAT}
         GROUP BY 1, 2 HAVING COUNT(*) >= 1
         """

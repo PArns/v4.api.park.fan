@@ -7,9 +7,12 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { timingSafeEqual } from "crypto";
-import { isIP } from "net";
 import { AdminSessionStore } from "./admin-session.store";
+import { constantTimeEquals } from "./token-hash.util";
+import {
+  getRateLimitIp,
+  type RequestLike,
+} from "../../common/utils/request.util";
 import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
 import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
 import {
@@ -17,16 +20,14 @@ import {
   ADMIN_LEGACY_ALLOWED_KEY,
   ADMIN_MIN_ROLE_KEY,
   ADMIN_PUBLIC_KEY,
+  ADMIN_TOKEN_ONLY_KEY,
 } from "./admin-auth.decorators";
+import { AdminApiTokenStore } from "./admin-api-token.store";
 import {
   getLegacyAdminPass,
   getLegacyAdminPassRole,
   isLegacyAdminPassEnabled,
 } from "../../config/admin-auth.config";
-import {
-  getThrottleBypassHeader,
-  getThrottleBypassKeys,
-} from "../../common/throttler/throttler.config";
 
 /**
  * The guard on every administrative endpoint.
@@ -47,6 +48,11 @@ import {
  *     Compared in constant time, logged on every use, granted a configurable
  *     role, and switchable off with one environment variable.
  *
+ * An endpoint marked `@AdminTokenOnly()` (the MCP server) has a third and
+ * accepts nothing else: `Authorization: Bearer pfa_…|pfo_…`, a personal access
+ * token or an OAuth access token, looked up in Postgres with its account and
+ * capped at the token's role.
+ *
  * Cloudflare's rule stays where it is. This is the second lock, on the inside
  * of the same door.
  */
@@ -58,6 +64,7 @@ export class AdminAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly sessions: AdminSessionStore,
+    private readonly apiTokens: AdminApiTokenStore,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -68,8 +75,14 @@ export class AdminAuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<RequestWithAdmin>();
-    const principal =
-      (await this.fromSession(request)) ?? this.fromLegacyPass(request);
+    const tokenOnly =
+      this.reflector.getAllAndOverride<boolean>(
+        ADMIN_TOKEN_ONLY_KEY,
+        targets,
+      ) === true;
+    const principal = tokenOnly
+      ? await this.fromApiToken(request)
+      : ((await this.fromSession(request)) ?? this.fromLegacyPass(request));
 
     if (!principal) {
       throw new UnauthorizedException(
@@ -121,14 +134,18 @@ export class AdminAuthGuard implements CanActivate {
     return true;
   }
 
+  private async fromApiToken(
+    request: RequestWithAdmin,
+  ): Promise<AdminPrincipal | null> {
+    const token = bearerToken(request);
+    if (!token) return null;
+    return this.apiTokens.resolvePrincipal(token, clientIp(request));
+  }
+
   private async fromSession(
     request: RequestWithAdmin,
   ): Promise<AdminPrincipal | null> {
-    const header = request.headers?.authorization;
-    const raw = Array.isArray(header) ? header[0] : header;
-    if (!raw || !raw.toLowerCase().startsWith("bearer ")) return null;
-
-    const token = raw.slice(7).trim();
+    const token = bearerToken(request);
     if (!token) return null;
 
     const session = await this.sessions.resolve(token);
@@ -140,6 +157,7 @@ export class AdminAuthGuard implements CanActivate {
       displayName: session.displayName,
       role: session.role,
       sessionToken: token,
+      sessionUserAgent: session.userAgent,
       legacy: false,
       ip: clientIp(request),
       mustChangePassword: session.mustChangePassword,
@@ -190,89 +208,27 @@ export class AdminAuthGuard implements CanActivate {
   }
 }
 
-/**
- * Whether this request came through our own frontend.
- *
- * The throttle-bypass key is the only thing that distinguishes it: it is a
- * shared secret configured on both sides, and the admin UI reaches this API
- * exclusively through the Next proxy that sends it. Not `CF_ORIGIN_SECRET`,
- * which defaults to empty and which the frontend never sends.
- */
-function isFromTrustedProxy(request: RequestWithAdmin): boolean {
-  const keys = getThrottleBypassKeys();
-  if (keys.length === 0) return false;
-  const provided = request.headers?.[getThrottleBypassHeader()];
-  const values = Array.isArray(provided) ? provided : [provided];
-  // Compared the same way as the shared pass below, and for the same reason:
-  // `keys.includes(value)` is JS string equality, which stops at the first
-  // differing byte. What this secret unlocks is not cosmetic — proving "this
-  // came through our own frontend" is what makes `clientIp` trust the caller's
-  // `x-forwarded-for`, and that address is the key every login rate-limit
-  // bucket is derived from.
-  return values.some(
-    (value) =>
-      typeof value === "string" &&
-      keys.some((key) => constantTimeEquals(value, key)),
-  );
-}
-
-/** Length-safe constant-time comparison. */
-function constantTimeEquals(a: string, b: string): boolean {
-  if (!a || !b) return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  // timingSafeEqual throws on a length mismatch, which would itself leak the
-  // length. Compare a fixed-size digest-shaped pair instead: pad both to the
-  // longer length so the comparison always runs.
-  const length = Math.max(bufA.length, bufB.length);
-  const paddedA = Buffer.alloc(length);
-  const paddedB = Buffer.alloc(length);
-  bufA.copy(paddedA);
-  bufB.copy(paddedB);
-  return timingSafeEqual(paddedA, paddedB) && bufA.length === bufB.length;
+/** The value of `Authorization: Bearer …`, or null. */
+export function bearerToken(request: RequestWithAdmin): string | null {
+  const header = request.headers?.authorization;
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw || !raw.toLowerCase().startsWith("bearer ")) return null;
+  const token = raw.slice(7).trim();
+  return token || null;
 }
 
 /**
- * The requesting address.
+ * The requesting address: `getRateLimitIp`, the same reading the throttler and
+ * every other limiter use (docs/deployment/edge-and-throttling.md).
  *
- * The order flips depending on who is calling, and that is the whole point.
- *
- * For a request that arrives through our own frontend — provable, because it
- * carries a configured throttle-bypass key, which is a shared secret the
- * frontend sends on every server-side call — the real administrator's address
- * is the one the frontend forwarded in `x-forwarded-for`. `cf-connecting-ip`
- * on that request is Cloudflare describing *its* client, which is the Vercel
- * function: one address for every administrator in the world. Preferring it
- * put every login failure into one bucket, so a spray was invisible and the
- * first person to mistype their password exhausted the limit for everyone.
- *
- * For anything else reaching the origin directly, Cloudflare's header is the
- * better answer and the order stays as it was.
- *
- * Both headers are forgeable, so an unvalidated value lets a caller send a
- * fresh garbage "address" per request: every failure lands in its own bucket
- * and each attempt leaves a Redis key alive for fifteen minutes. Requiring a
- * syntactically valid IP closes both — a forged but valid address is still one
- * of ~4 billion, not unbounded.
+ * A request carrying a throttle-bypass key comes from our own frontend, so the
+ * administrator's address is the first `x-forwarded-for` hop; its
+ * `cf-connecting-ip` is the Vercel function, one address for every
+ * administrator, which once put every login failure into one bucket. Anyone
+ * else is `cf-connecting-ip` only when `CF_ORIGIN_SECRET` vouches for it, else
+ * the socket. Every value is `isIP()`-checked, so a caller cannot open a fresh
+ * rate-limit bucket per request with garbage.
  */
 export function clientIp(request: RequestWithAdmin): string | null {
-  if (isFromTrustedProxy(request)) {
-    const forwarded = request.headers?.["x-forwarded-for"];
-    if (typeof forwarded === "string" && forwarded.length > 0) {
-      const first = forwarded.split(",")[0].trim();
-      if (isIP(first)) return first;
-    }
-  }
-
-  const cf = request.headers?.["cf-connecting-ip"];
-  if (typeof cf === "string" && isIP(cf)) return cf;
-
-  const forwarded = request.headers?.["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.length > 0) {
-    const first = forwarded.split(",")[0].trim();
-    if (isIP(first)) return first;
-  }
-
-  const direct = request.ip;
-  return typeof direct === "string" && isIP(direct) ? direct : null;
+  return getRateLimitIp(request as unknown as RequestLike);
 }

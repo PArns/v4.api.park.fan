@@ -6,7 +6,7 @@ import { SUPPORTED_CURRENCIES } from "../utils/fast-pass.util";
  *
  * Present only for rides where somebody has confirmed one exists. Absent covers
  * both "nobody has looked" and "we looked and there is none" — deliberately, and
- * for the reason CLAUDE.md §4 keeps repeating: our own bookkeeping must not
+ * for the reason docs/rules/absent-facts.md keeps repeating: our own bookkeeping must not
  * reach a visitor as the park's statement. A client rendering "kein Fastpass"
  * from an absent object would be doing exactly that.
  *

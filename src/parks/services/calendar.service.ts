@@ -426,7 +426,8 @@ export class CalendarService {
           );
           return null;
         });
-      // "unknown" means no usable baseline — an absent fact, not a rating (§3/§4).
+      // "unknown" means no usable baseline — an absent fact, not a rating
+      // (docs/rules/crowd-levels.md, docs/rules/absent-facts.md).
       if (
         todayRating?.hasData &&
         todayRating.crowdLevel !== "unknown" &&
@@ -718,8 +719,8 @@ export class CalendarService {
    * trigger a background schedule sync for this park so that when the source publishes
    * new opening hours, the next request can get them.
    * Rate-limited to once per 12h per park. Only triggers when the gap is at least SCHEDULE_REFRESH_GAP_DAYS.
-   * UNKNOWN entries (from fillScheduleGaps) count as "we have data until X" so we don't trigger
-   * when we already have holiday placeholders for the requested range.
+   * Only OPERATING and CLOSED entries count as "we have data until X": UNKNOWN placeholders from
+   * fillScheduleGaps and event rows do not, so a range covered only by gap-fill still triggers.
    */
   private async requestScheduleRefreshIfNeeded(
     park: Park,
@@ -896,7 +897,11 @@ export class CalendarService {
           });
         }
       } else {
-        // Influencing but not local
+        // Influencing only when its region is one of the park's configured
+        // influencing regions (rank < ∞): the holiday fetch covers the whole
+        // country, and a TN school day says nothing about a CA park (PAR-1075).
+        const priority = this.neighborHolidayPriority(park, h);
+        if (priority === Infinity) continue;
         const regionCode = h.region
           ? normalizeRegionCode(h.region.split("-").pop() ?? null)
           : null;
@@ -906,18 +911,15 @@ export class CalendarService {
           holidayType: h.holidayType,
         });
 
-        // Candidate for the neighbour marker — every CONFIGURED influencing
-        // region (rank < ∞). The final priority-aware selection (top domestic
-        // regions + all foreign countries) happens in selectNeighborHolidays.
-        const priority = this.neighborHolidayPriority(park, h);
-        if (priority < Infinity) {
-          neighborHolidaysRaw.push({
-            name: h.name,
-            source: { countryCode: h.country, regionCode },
-            holidayType: h.holidayType,
-            priority,
-          });
-        }
+        // Candidate for the neighbour marker. The final priority-aware
+        // selection (top domestic regions + all foreign countries) happens in
+        // selectNeighborHolidays.
+        neighborHolidaysRaw.push({
+          name: h.name,
+          source: { countryCode: h.country, regionCode },
+          holidayType: h.holidayType,
+          priority,
+        });
       }
     }
 

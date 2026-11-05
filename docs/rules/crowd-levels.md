@@ -1,21 +1,43 @@
-# Unified Crowd Levels (Typical-Day-Peak Daily / Ratio-vs-P50 Live)
+# Unified crowd levels (typical-day-peak daily, ratio-vs-P50 live)
 
-Moved out of the repo's `claude.md` so that a session reads an index first and opens only the pages its task needs. The wording is unchanged.
+Two crowd-level regimes exist and they never meet on one surface. Open this page before you add
+or change anything that rates a park or ride as quiet or busy. Formulas, thresholds, services and
+the calibration are in [Crowd levels](../analytics/crowd-levels.md).
 
-- **Detailed Guide**: [Typical-Day-Peak](docs/analytics/crowd-level-typical-day-peak.md) · [Crowd Levels](docs/analytics/crowd-levels.md)
-- **Boundary**: daily/historical aggregates compare a day's peak to a **typical day's peak**; point-in-time/live signals use **ratio-vs-P50**. Never mix the two on one surface.
-- **Calendar daily**: a day's value = **AVG across headliner rides** of each ride's daily P90; denominator = **typical-day-peak baseline** = the **median over operating days** of that same day value (548-day window, headliner-only). Future/predicted days use the same baseline (AVG of predicted headliner waits ÷ typical-day-peak).
-  - **Predicted-wait source (2026-05-24)**: those predicted headliner waits come from **TFT for days 1–30** (nf-service, ~2× better on busy peaks), **CatBoost for days 31–365** — merged in `MLService.getServingDailyPredictions` (serving only; the writer stays pure CatBoost). See [TFT vs CatBoost split](docs/ml/neuralforecast-tft-evaluation.md).
-  - **Formula**: `(day_value / typical_day_peak) * 100` — 100% = a statistically typical day = `moderate`; busy seasons (Wintertraum, Easter, promos) correctly read high/very_high/extreme. The pooled P90 baseline is NOT used (it's inflated by the busiest season and compresses the top).
-- **Live overview / `calculateParkOccupancy` (ratio-vs-P50)**: the **baseline-weighted mean** across headliners reporting in the last 60 min. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
-  - **Formula**: `Σ latest_wait / Σ attraction_p50 * 100` (`getHeadlinerLoad`). Falls back to `avg(latest) / park_p50 * 100` when no per-ride baselines exist.
-  - **The ML feature is a DIFFERENT function.** `park_occupancy_pct` comes from `getCurrentOccupancy`, which deliberately stays on the older park-wide `avg(latest) / park_p50 * 100` shape — trained models depend on that exact feature distribution, so moving it to the weighted mean needs a retrain cycle. Don't "unify" the two.
-  - **Sum the minutes, then divide — never average or take a percentile of the per-ride ratios.** A percentile across ratios is an extreme-value estimator: over a ten-ride headliner set its P90 is just the second-busiest ride, it can only push the reading up, and a 10-minute-baseline ride outvotes a marquee. That is what made Phantasialand read `high` (123%) with Taron at 20/45 min. Same rule applies to any new cross-ride aggregate.
-  - **`breakdown.typicalAvgWait`** must be the baseline of exactly the rides in `currentAvgWait`, so the displayed pair divides out to the displayed percentage.
-- **No made-up ratings**: anything that cannot rate against a real baseline emits **`unknown`**, never a placeholder `moderate` — `rateOrUnknown`, the `isParkRatable` gate, `getLoadRating(_, baseline<=0)`, `calculateParkOccupancy` with no live sample at all, and the callers of `getAttractionCrowdLevel`. A 0-minute wait against a real baseline is a walk-on, not missing data, and still rates (`very_low`) — only an _absent_ wait is "no data".
-  - Consumers must read the **gated** value (`occupancy.crowdLevel`), never re-derive a tier from `occupancy.current`: the recompute bypasses the ratability gate, and at `current = 0` it silently yields `very_low`.
-  - Every Swagger `enum:` for a crowd-level field comes from `CROWD_LEVEL_VALUES` / `CROWD_LEVEL_WITH_CLOSED_VALUES` (`common/types/crowd-level.type.ts`). Never hand-write the list — that drift is how `unknown` stayed out of the published contract while the API had been sending it for months.
-- **No calendar fallback**: typical-day-peak is written atomically with P50/P90 (`park_p50_baselines.typicalDayPeak` + Redis), so a missing value means no usable baseline → `unknown`. P50 stays load-bearing (live + ML feature); P90 is computed for free but no longer a calendar reference.
-- **Past and future days must carry the same statistic** where they share a response field. `headlinerForecast.avgWait` is a day-peak on both sides: forecasts come from a per-day MAX in `predict.py`, history from `getHeadlinerDailyPeaks` (per-ride day-P90). A mean on one side and a peak on the other reads as the park getting busier next week when only the statistic changed.
+## The rule
 
----
+- **Daily and historical aggregates (the calendar) compare a day's peak to a typical day's peak.**
+  `day_value` = the average over headliners of each ride's daily P90; the baseline is
+  `park_p50_baselines.typicalDayPeak`, the median `day_value` over operating days (548-day window).
+  100 % is a typical day, `moderate`. A future day uses the same baseline with predicted headliner
+  waits, which come from `MLService.getServingDailyPredictions`: TFT for days 1–60 (`tftDays`)
+  wherever it covers the ride, CatBoost beyond and for any ride-day TFT lacks. That merge is for
+  serving only; the prediction writer stores pure CatBoost.
+- **Point-in-time and live signals use ratio-vs-P50.** `calculateParkOccupancy` is
+  `Σ latest_wait ÷ Σ attraction_p50 × 100` over headliners reporting in the last 60 min
+  (`getHeadlinerLoad`), falling back to `avg(latest) ÷ park_p50` without per-ride baselines. The
+  calendar's "today" cell and the hourly predictions stay on P50 too.
+- **Sum the minutes, then divide.** Never average or take a percentile of per-ride ratios: over ten
+  headliners a P90 of ratios is the second-busiest ride, it only pushes upwards, and a
+  10-minute-baseline ride outvotes a marquee (Phantasialand read `high`, 123 %, with Taron at
+  20/45 min). `breakdown.typicalAvgWait` is the baseline of exactly the rides in
+  `currentAvgWait`, so the pair divides out to the displayed percentage.
+- **The ML feature is a different function on purpose.** `park_occupancy_pct` comes from
+  `getCurrentOccupancy` (`avg(latest) ÷ park_p50`); trained models depend on that distribution, so
+  moving it needs a retrain. Do not "unify" the two.
+- **No invented ratings.** Anything that cannot rate against a real baseline emits `unknown`, never a
+  placeholder `moderate` (`rateOrUnknown`, `isParkRatable`, `getLoadRating(_, baseline <= 0)`,
+  `calculateParkOccupancy` with no live sample, callers of `getAttractionCrowdLevel`). There is no
+  calendar fallback: a missing typical-day-peak means `unknown`. A 0-minute wait against a real
+  baseline is a walk-on and rates `very_low`; only an absent wait is "no data". This is the
+  [absent-facts rule](absent-facts.md) applied to crowd levels.
+- **Consumers read the gated value** (`occupancy.crowdLevel`), never re-derive a tier from
+  `occupancy.current`: that bypasses the ratability gate and turns `current = 0` into `very_low`.
+- **A Swagger `enum:` for a crowd level must come from `CROWD_LEVEL_VALUES` /
+  `CROWD_LEVEL_WITH_CLOSED_VALUES`** (`src/common/types/crowd-level.type.ts`). A hand-written list
+  kept `unknown` out of the published contract for months. One remains: `crowdLevel` in
+  `src/analytics/dto/ticker.dto.ts`, without `unknown`.
+- **Past and future days carry the same statistic where they share a field.**
+  `headlinerForecast.avgWait` is a day-peak on both sides: forecasts take the per-day MAX in
+  `predict.py`, history `getHeadlinerDailyPeaks` (per-ride day-P90). A mean on one side and a peak
+  on the other reads as the park getting busier when only the statistic changed.

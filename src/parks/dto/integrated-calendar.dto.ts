@@ -307,8 +307,8 @@ export class HeadlinerForecast {
  *
  * Distinct from the local `events`/holiday flags: these are holidays in a
  * NEIGHBOURING region whose day-trippers drive up local crowds. Pre-ranked and
- * capped so the default payload stays lean (the full, unranked list is still
- * available via `?include=influencingHolidays`).
+ * capped so the default payload stays lean (the full, unranked list of the
+ * park's influencing regions is still available via `?include=influencingHolidays`).
  */
 export class NeighborHoliday {
   @ApiProperty({ description: "English holiday name" })
@@ -437,7 +437,8 @@ export class CalendarDay {
     type: () => [InfluencingHoliday],
     required: false,
     description:
-      "Neighbouring-region holidays influencing this day's crowds. OMITTED by " +
+      "Holidays in the park's configured influencing regions on this day " +
+      "(other regions of the same country are not listed). OMITTED by " +
       "default (it was ~98% of the payload and no consumer reads it here) — " +
       "request it with `?include=influencingHolidays`.",
   })
