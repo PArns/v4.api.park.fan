@@ -397,8 +397,31 @@ export class DataQualityMonitorService {
          -- "season ends" button would leave the card standing (PAR-695).
          AND NOT COALESCE(a.curated_is_seasonal, a.is_seasonal)
          AND a.retired_at IS NULL
-       GROUP BY a."parkId", p.name, (act.last_op AT TIME ZONE p.timezone)::date
+       GROUP BY a."parkId", p.name, p.timezone, (act.last_op AT TIME ZONE p.timezone)::date
       HAVING count(*) >= $3::int
+         -- A park whose own schedule has decided the days since the silence and
+         -- opened on none of them is between seasons, not missing a feed. The
+         -- health gate above cannot tell: a frozen feed keeps "operating" rides
+         -- through a closed week (Energylandia, LEGOLAND Billund, 2026-11, PAR-1236).
+         -- A park without schedule rows for those days stays: nothing answers it.
+         AND NOT (
+           EXISTS (
+             SELECT 1 FROM schedule_entries s
+              WHERE s."parkId" = a."parkId"
+                AND s."attractionId" IS NULL
+                AND s."scheduleType" IN ('OPERATING', 'CLOSED')
+                AND s.date > (min(act.last_op) AT TIME ZONE p.timezone)::date
+                AND s.date <= (now() AT TIME ZONE p.timezone)::date
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM schedule_entries s
+              WHERE s."parkId" = a."parkId"
+                AND s."attractionId" IS NULL
+                AND s."scheduleType" = 'OPERATING'
+                AND s.date > (min(act.last_op) AT TIME ZONE p.timezone)::date
+                AND s.date <= (now() AT TIME ZONE p.timezone)::date
+           )
+         )
        ORDER BY count(*) DESC
       `,
       [windowDays, minDaysSilent, minClusterSize],

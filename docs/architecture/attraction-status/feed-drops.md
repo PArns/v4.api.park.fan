@@ -116,3 +116,19 @@ yesterday as still writing.
 exist, as which `entityType`, and is it listed? Check 1 separates C from the rest and nothing more;
 group A's rows look exactly like group B's in `queue_data`, because their data arrives in
 `show_live_data`. Only check 2 sees that.
+
+## A frozen feed on a closed day (PAR-1236, 2026-11-05)
+
+Queue-times and wartezeiten-app never see a park's calendar. On a closed day they can keep repeating
+the last open day's waits with fresh timestamps (Energylandia, 2026-11-05: 33 rides, one value each for
+12 hours), and the wiki keeps some entries on OPERATING for months (LEGOLAND Billund: source timestamp
+2026-04-06). The wait-times poll therefore asks the park's own schedule first
+(`src/common/utils/schedule-closed-now.util.ts`): while today's decisive rows say the park is closed
+now (no OPERATING window, an hour of grace on both sides), `ConflictResolverService`'s CLOSED→OPERATING
+override is taken back, an OPERATING from those two sources alone reads CLOSED, and so does one whose
+source timestamp is over a day old. A fresh wiki reading stays; without a decisive schedule row nothing
+changes.
+
+The same rows passed the cluster query's health gate, so parks between seasons were listed as silent
+feeds. The cluster query now drops a cluster when the park's schedule decided every day since the
+silence and opened on none of them; without schedule rows for those days the cluster stays.
