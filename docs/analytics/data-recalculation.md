@@ -8,16 +8,15 @@ after merging such a change.
 
 Per park and park-local day: P50, P90, maximum wait. The `stats` queue writes them:
 
-| Job                        | When (UTC)        | Does                                         |
-| -------------------------- | ----------------- | -------------------------------------------- |
-| `update-today-stats`       | hourly at :00     | today, every park                            |
-| `finalize-yesterday-stats` | 01:00             | yesterday, every park                        |
-| `backfill-stats`           | by hand           | `{ days = 30, parkId?, startDate? }`: `days` days back from `startDate` (default today), one park or all |
+| Job                        | When (UTC)    | Does                                                                                                     |
+| -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------- |
+| `update-today-stats`       | hourly at :00 | today, every park                                                                                        |
+| `finalize-yesterday-stats` | 01:00         | yesterday, every park                                                                                    |
+| `backfill-stats`           | by hand       | `{ days = 30, parkId?, startDate? }`: `days` days back from `startDate` (default today), one park or all |
 
 Stored days do not change on their own, so a logic change needs a `backfill-stats` run over the period it
-affects. `pnpm job:stats-backfill -- --days=365 --parkId=<uuid> --startDate=YYYY-MM-DD` enqueues it, but
-its script (`scripts/trigger-stats-backfill.ts`) is local-only and not in the repository
-([scripts](../development/scripts.md)); without it, add the job to the `stats` queue from Bull Board.
+affects: add `backfill-stats` with `{ "days": 365, "parkId": "<uuid>", "startDate": "YYYY-MM-DD" }` to the
+`stats` queue from Bull Board.
 
 ## Baselines
 

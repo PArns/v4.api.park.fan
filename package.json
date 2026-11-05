@@ -33,15 +33,7 @@
     "db:reset": "docker-compose down -v && docker-compose up -d postgres redis",
     "db:test:create": "docker exec -it parkfan_postgres psql -U parkfan -c 'CREATE DATABASE parkfan_test;'",
     "db:test:drop": "docker exec -it parkfan_postgres psql -U parkfan -c 'DROP DATABASE IF EXISTS parkfan_test;'",
-    "db:test:reset": "npm run db:test:drop && npm run db:test:create",
-    "clear-queues": "ts-node scripts/clear-queues.ts",
-    "job:ml-train": "ts-node scripts/trigger-ml-training.ts",
-    "job:stats-backfill": "ts-node scripts/trigger-stats-backfill.ts",
-    "job:baselines-recalc": "ts-node scripts/trigger-baseline-recalculation.ts",
-    "job:clear-calendar-cache": "ts-node scripts/clear-calendar-cache.ts",
-    "job:children-sync": "ts-node scripts/trigger-children-sync.ts",
-    "job:clear-cache": "ts-node scripts/clear-cache.ts",
-    "repair:schedule-dates": "ts-node scripts/repair-schedule-dates.ts"
+    "db:test:reset": "npm run db:test:drop && npm run db:test:create"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
