@@ -64,8 +64,12 @@ recovery curve built on it could only err towards "back soon".
 - **The live statement returns nothing outside a published `OPERATING` window**: a ride reading
   `CLOSED` in a shut park is a shut park.
 
-The nightly statement still requires the start inside a window, so pre-opening closures are shown live
-but not stored for the curve (the conservative direction).
+The nightly statement applies the same rule (PAR-1092): `gap_edges` places a start outside every
+window in the first window that opens later the same park-local day and clips it to that opening, so a
+pre-opening closure is stored as the page showed it. Two conditions keep it from inventing one: the
+ride's last `OPERATING` reading must lie after `night_mid` (the live `open_today` asks the same), and
+the ride must still be `CLOSED` at the opening (a pre-opening gap that ended before it is not an
+outage of the operating day). Simultaneity is still counted on the minute the ride flipped.
 
 ## Rides whose feed always reports 0 (measured, not filtered)
 

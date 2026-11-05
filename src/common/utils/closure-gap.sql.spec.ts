@@ -55,7 +55,11 @@ describe("closure-gap statements", () => {
       //    window comes from the shared builder rather than a second definition
       //    of "when is this park open".
       expect(sql).toContain("win AS (");
-      expect(body).toMatch(new RegExp(`LEFT JOIN win ${aliasStart}\\b`));
+      // The nightly start joins win through win_prev, which only adds
+      // night_mid for the pre-opening fallback (PAR-1092).
+      expect(body).toMatch(
+        new RegExp(`LEFT JOIN win(?:_prev)? ${aliasStart}\\b`),
+      );
       expect(body).toMatch(new RegExp(`LEFT JOIN win ${aliasEnd}\\b`));
 
       // 2. LEFT, with the calendar day as the fallback. An INNER join would
@@ -340,6 +344,30 @@ describe("closure-gap statements", () => {
     // Simultaneity stays on the minute the rides flipped.
     expect(cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today")).toContain(
       "date_trunc('minute', s.raw_started_at)",
+    );
+  });
+
+  it("the nightly statement places a pre-opening start the way run_window does (PAR-1092)", () => {
+    const edges = cteBody(CLOSURE_GAP_INTERVALS_SQL, "gap_edges");
+    // Clipped to the opening, keyed on the same park-local day, and only for a
+    // ride whose last OPERATING reading is past night_mid and which was still
+    // CLOSED when the park opened.
+    expect(edges).toContain("GREATEST(s.ts, wo.opens_at) AS ts");
+    expect(edges).toMatch(/wo\.op_day = \(s\.ts AT TIME ZONE s\.tz\)::date/);
+    expect(edges).toContain("s.prev_reading_ts >= wo.night_mid");
+    expect(edges).toContain("s.next_ts > wo.opens_at");
+    expect(edges).toMatch(/ORDER BY s\.aid, s\.ts, wo\.opens_at/);
+    // The same night_mid as the live statement: halfway through the night,
+    // or the window's park-local midnight with no previous window on file.
+    expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "win_prev")).toContain(
+      "w.op_day::timestamp AT TIME ZONE w.tz",
+    );
+    // Simultaneity stays on the minute the rides flipped.
+    expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "simultaneity")).toContain(
+      "date_trunc('minute', raw_ts)",
+    );
+    expect(CLOSURE_GAP_INTERVALS_SQL).toContain(
+      "date_trunc('minute', g.raw_started_at)",
     );
   });
 
