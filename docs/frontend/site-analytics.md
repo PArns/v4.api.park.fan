@@ -270,7 +270,7 @@ is kept.
   and nothing else. The same `snapshot-visitors` run inserts yesterday's into `site_bot_days`
   (`day`, `hits`; one row a day, kept), once; drop counts that are gone are skipped, drop counts
   without the field are a day without bots and written as zero. Today and, until then, yesterday are
-  read live. The overview returns the window's sum as `bots.hits`.
+  read live. The overview returns the window's sum as `bots.hits`, or `null` unless every day of the window was counted.
 - **Visitors by dimension**: a HyperLogLog cannot be intersected with another, so a filter has
   visitors only where its value was counted into a key of its own. Each page-view batch with a reader
   also adds the reader's pseudonym to one day HyperLogLog per value of `country`, `device`,
@@ -588,7 +588,7 @@ The other dimensions filter every kind of row. A direct visit has no referrer an
 `totals` and `previous`, and every point of its series. Beside them the overview carries
 `bots: { hits }`, the hits dropped as a bot's in the window (see Bots): page views, engagement pings
 and events alike, from every network whatever `datacenter` says, so `hits / (hits + pageviews)` is an
-upper bound of the bot share; `null` under a language or a filter, which a dropped hit never had. A breakdown by a page dimension lists, per
+upper bound of the bot share; `null` under a language or a filter, which a dropped hit never had, and `null` when any day of the window was not counted (before the counter existed, or drop counts gone before the snapshot), never a zero for an uncounted day. A breakdown by a page dimension lists, per
 value, `views`, `visits`, `share` and `avgTimeOnPageSeconds`; by `path` also `exits` (visits that
 ended there) and `exitRate` (`exits / views`, at most 1). A breakdown that counts visits lists
 `bounceRate` and `avgVisitSeconds` instead. `dim=exit` counts visits ended (`measure: "exits"`), per

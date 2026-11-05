@@ -336,7 +336,16 @@ export class SiteAnalyticsService {
    * `site_bot_days`, the ones the nightly snapshot has not written yet from
    * the day's drop counts in Redis (they outlive their day by a day).
    */
-  private async botHits(from: string, to: string, now: Date): Promise<number> {
+  /**
+   * Bot hits over `from`..`to`, or `null` when any day of the window was not
+   * counted (before the counter existed, or a day whose Redis hash is gone):
+   * an uncounted day is unknown, not zero (docs/rules/absent-facts.md).
+   */
+  private async botHits(
+    from: string,
+    to: string,
+    now: Date,
+  ): Promise<number | null> {
     const rows: Array<{ day: string; hits: Count }> = await this.runner.query(
       `SELECT to_char(day, 'YYYY-MM-DD') AS day, hits
          FROM site_bot_days
@@ -349,18 +358,27 @@ export class SiteAnalyticsService {
       (day) => day >= from && day <= to && !written.has(day),
     );
     let hits = rows.reduce((sum, row) => sum + num(row.hits), 0);
+    let counted = written.size;
     try {
       for (const day of live) {
-        hits += num(
-          (await this.redis.hget(KEYS.drops(day), DROP_REASONS.bot)) as Count,
-        );
+        const [present, value] = await Promise.all([
+          this.redis.exists(KEYS.drops(day)),
+          this.redis.hget(KEYS.drops(day), DROP_REASONS.bot),
+        ]);
+        if (!present) continue;
+        counted += 1;
+        hits += num(value as Count);
       }
     } catch (error) {
       this.logger.warn(
         `Live bot counts unavailable: ${(error as Error).message}`,
       );
+      return null;
     }
-    return hits;
+    const last = to < today ? to : today;
+    let days = 0;
+    for (let day = from; day <= last; day = addIsoDays(day, 1)) days += 1;
+    return counted >= days ? hits : null;
   }
 
   /**

@@ -309,7 +309,8 @@ export class LocationService {
       this.parksService.hasOperatingSchedule(parkId),
       this.analyticsService.getHeadlinerAttractionIds(parkId),
       this.analyticsService.isParkRatable(parkId),
-      this.findShowsInPark(park, userLocation),
+      // Shows are an extra: their failure must not take the rides down.
+      this.findShowsInPark(park, userLocation).catch(() => []),
     ]);
 
     const parkAnalytics = await this.analyticsService

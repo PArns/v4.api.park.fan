@@ -158,7 +158,7 @@ status file (`GET /status` → `forecast.result.skipped`) splits them in two:
 
 | Group     | Reason             | Meaning                                                           |
 | --------- | ------------------ | ----------------------------------------------------------------- |
-| `idle`    | `no_fresh_data`    | step 1: nothing in 36 h, the park is closed                       |
+| `idle`    | `no_fresh_data`    | step 1: no OPERATING STANDBY wait ≥ `PCN_MIN_WAIT` in 36 h: the park is closed, or it reports status only (zero-wait parks) |
 | `idle`    | `stale_origin`     | step 3: the grid's newest slot is older than 36 h                 |
 | `idle`    | `already_forecast` | step 5: origin and checkpoint unchanged                           |
 | `blocked` | `no_model`         | no checkpoint for the park; it needs `/train`                     |

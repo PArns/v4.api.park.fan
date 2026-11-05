@@ -118,14 +118,17 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
 
 
 def park_has_fresh_data(park_id: str, max_age_hours: int) -> bool:
-    """Cheap staleness pre-check: does the park have ANY recent STANDBY row? Bounded to
-    the recency window so it's chunk-pruned (no full-history MAX scan). Lets the
-    forecast tick skip seasonally-closed/dead parks BEFORE paying the panel fetch."""
+    """Cheap staleness pre-check: does the park have a recent STANDBY wait the
+    forecast could use (OPERATING, at least PCN_MIN_WAIT)? Bounded to the recency
+    window so it's chunk-pruned (no full-history MAX scan). Lets the forecast tick
+    skip seasonally-closed/dead parks BEFORE paying the panel fetch — and the
+    status-only parks that never send a wait read idle, not blocked (PAR-1120)."""
     sql = text(
         f"""
         SELECT 1
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd."queueType" = 'STANDBY'
+          AND qd.status = 'OPERATING' AND qd."waitTime" >= {int(settings.PCN_MIN_WAIT)}
           AND qd.timestamp >= NOW() - (:h || ' hours')::interval
           AND {NOT_HEARTBEAT}
         LIMIT 1

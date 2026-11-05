@@ -212,6 +212,16 @@ describe("LocationService", () => {
 
         expect(shows.every((s) => s.status === "CLOSED")).toBe(true);
       });
+
+      it("still answers the rides when the show lookup fails", async () => {
+        showsService.findByParkId.mockReset();
+        showsService.findByParkId.mockRejectedValueOnce(new Error("timeout"));
+
+        const result = await service.findNearby(50.7997, 6.8783, 1000, 6);
+
+        expect(result.type).toBe("in_park");
+        expect((result.data as NearbyRidesDto).shows).toEqual([]);
+      });
     });
 
     it("returns 'nearby_parks' when the user is far from every park", async () => {

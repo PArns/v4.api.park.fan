@@ -113,5 +113,9 @@ export const carriesCfOriginSecret = (
   if (!secret) return true;
   const provided = headers?.[getCfOriginSecretHeader()];
   const values = Array.isArray(provided) ? provided : [provided];
-  return values.some((value) => typeof value === "string" && value === secret);
+  // Constant time, like the bypass keys: this secret decides whether
+  // cf-connecting-ip is trusted, and so which bucket a login is counted in.
+  return values.some(
+    (value) => typeof value === "string" && constantTimeEquals(value, secret),
+  );
 };

@@ -196,7 +196,7 @@ def _run_job(kind: str, fn, **kwargs):
             # keeps only a short message — no stack-trace exposure to clients.
             logger.exception("%s job failed", kind)
             _write(path, {"running": False, "kind": kind, "status": "failed",
-                          "error": str(e)})
+                          "error": str(e), "result": prev.get("result")})
 
     threading.Thread(target=_go, daemon=True).start()
     return {"status": f"{kind}_started"}

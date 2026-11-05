@@ -15,6 +15,7 @@ import {
 
 describe("QueueDataService", () => {
   let service: QueueDataService;
+  let redisMock: { mget: jest.Mock };
 
   // Mock repositories
   const mockQueueDataRepository = {
@@ -118,6 +119,7 @@ describe("QueueDataService", () => {
     }).compile();
 
     service = module.get<QueueDataService>(QueueDataService);
+    redisMock = module.get(REDIS_CLIENT);
 
     jest.clearAllMocks();
 
@@ -624,6 +626,25 @@ describe("QueueDataService", () => {
       expect(sql).toContain("unnest($1::uuid[])");
       expect(sql).toContain("NOT EXISTS");
       expect(params).toEqual([[id]]);
+    });
+
+    it("answers cached rides from Redis and probes only the misses", async () => {
+      const other = "66666666-7777-8888-9999-000000000000";
+      const third = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+      redisMock.mget.mockResolvedValueOnce(["1", "0", null]);
+      mockQueueDataRepository.query.mockClear();
+      mockQueueDataRepository.query.mockResolvedValueOnce([]);
+
+      const result = await service.findNeverObservedAttractionIds([
+        id,
+        other,
+        third,
+      ]);
+
+      expect(result).toEqual(new Set([id]));
+      expect(mockQueueDataRepository.query).toHaveBeenCalledTimes(1);
+      expect(mockQueueDataRepository.query.mock.calls[0][1]).toEqual([[third]]);
     });
 
     it("asks nothing for an empty list", async () => {

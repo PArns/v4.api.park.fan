@@ -63,3 +63,24 @@ def test_weather_climatology_drops_an_expired_key(monkeypatch):
     predict.fetch_weather_climatology([park], [11])
 
     assert list(predict._weather_historical_cache) == [f"{park}:11"]
+
+
+class _EvictedBetween(dict):
+    """A cache whose key another thread evicts between `in` and `[]`."""
+
+    def __contains__(self, key):
+        return True
+
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+
+def test_reads_survive_a_key_evicted_by_another_thread(monkeypatch):
+    monkeypatch.setattr(db, "get_db", _fake_db)
+    monkeypatch.setattr(db, "_holidays_cache", _EvictedBetween())
+    monkeypatch.setattr(db, "_schedules_cache", _EvictedBetween())
+    day, next_day = datetime.datetime(2026, 11, 5), datetime.datetime(2026, 11, 6)
+
+    # Both read as a miss and query, instead of a KeyError (HTTP 500).
+    db.fetch_holidays(["US"], day, next_day)
+    db.fetch_park_schedules(day, next_day)

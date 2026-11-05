@@ -68,6 +68,9 @@ describe("SiteAnalyticsService", () => {
     hget: jest.fn(async (key: string) =>
       key === "site-analytics:drops:2026-10-28" ? "5" : null,
     ),
+    exists: jest.fn(async (key: string) =>
+      key === "site-analytics:drops:2026-10-28" ? 1 : 0,
+    ),
     mget: jest.fn(async (...keys: string[]) =>
       keys.map((key) => (key.includes("202610280712") ? "9" : null)),
     ),
@@ -206,6 +209,10 @@ describe("SiteAnalyticsService", () => {
           "FROM site_bot_days",
           [
             { day: "2026-10-22", hits: "40" },
+            { day: "2026-10-23", hits: "0" },
+            { day: "2026-10-24", hits: "0" },
+            { day: "2026-10-25", hits: "0" },
+            { day: "2026-10-26", hits: "0" },
             { day: "2026-10-27", hits: "7" },
           ],
         ],
@@ -224,6 +231,21 @@ describe("SiteAnalyticsService", () => {
         NOW,
       );
       expect(filtered.bots).toEqual({ hits: null });
+    });
+
+    it("reads the bot hits unknown when a day of the window was never counted", async () => {
+      // Only two of seven days written: before the counter existed, not zero bots.
+      routes = [
+        [
+          "FROM site_bot_days",
+          [
+            { day: "2026-10-26", hits: "3" },
+            { day: "2026-10-27", hits: "7" },
+          ],
+        ],
+      ];
+      const overview = await service.overview({ days: 7 }, NOW);
+      expect(overview.bots).toEqual({ hits: null });
     });
 
     it("gives no visitor count under a filter, and passes the filter to both tables", async () => {

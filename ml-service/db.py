@@ -488,9 +488,11 @@ def fetch_holidays(
         f"{','.join(sorted(country_codes))}:{start_date.date()}:{end_date.date()}"
     )
 
-    # Check cache
-    if cache_key in _holidays_cache:
-        cached_data, cache_time = _holidays_cache[cache_key]
+    # Check cache. One .get(), never `in` then `[]`: another thread's write
+    # evicts expired keys between the two (PAR-1149).
+    cached = _holidays_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _holidays_cache_ttl:
@@ -664,9 +666,11 @@ def fetch_park_schedules(
     # Create cache key from date range
     cache_key = f"{start_date.date()}:{end_date.date()}"
 
-    # Check cache
-    if cache_key in _schedules_cache:
-        cached_data, cache_time = _schedules_cache[cache_key]
+    # Check cache. One .get(), never `in` then `[]`: another thread's write
+    # evicts expired keys between the two (PAR-1149).
+    cached = _schedules_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _schedules_cache_ttl:

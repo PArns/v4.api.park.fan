@@ -370,6 +370,23 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       expect(dto.attractions?.[0].status).toBe("OPERATING");
     });
 
+    it("leaves an out-of-season ride out of the probe: it stays CLOSED", async () => {
+      const park = parkWith("ice-rink");
+      // Six months from now: out of season in every timezone.
+      const offMonth = ((new Date().getUTCMonth() + 6) % 12) + 1;
+      Object.assign(
+        (park as unknown as { attractions: object[] }).attractions[0],
+        { curatedIsSeasonal: true, curatedSeasonMonths: [offMonth] },
+      );
+
+      const dto = await buildResponse(park);
+
+      expect(
+        queueDataService.findNeverObservedAttractionIds,
+      ).toHaveBeenCalledWith([]);
+      expect(dto.attractions?.[0].status).toBe("CLOSED");
+    });
+
     it("keeps the fallback when the probe fails", async () => {
       queueDataService.findNeverObservedAttractionIds.mockRejectedValueOnce(
         new Error("db down"),

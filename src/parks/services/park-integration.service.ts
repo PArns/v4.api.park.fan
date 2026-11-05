@@ -693,7 +693,9 @@ export class ParkIntegrationService {
       // no source has EVER reported (PAR-1100). The fallback is written for one
       // ride going quiet at a working feed; a ride never seen at all is not
       // quiet, it is unknown. Free-flow rides are left out: they open with the
-      // park on a curated flag, not on a reading. Optimistic on failure.
+      // park on a curated flag, not on a reading. Out-of-season rides are left
+      // out too: their CLOSED comes from a curated fact, not from silence.
+      // Optimistic on failure.
       const neverObserved =
         waitTimesKnowable && dto.status === "OPERATING"
           ? await this.queueDataService
@@ -702,6 +704,7 @@ export class ParkIntegrationService {
                   .filter(
                     (a) =>
                       !openWithPark.has(a.id) &&
+                      a.isCurrentlyInSeason !== false &&
                       (queueDataMap.get(a.id) ?? []).length === 0,
                   )
                   .map((a) => a.id),

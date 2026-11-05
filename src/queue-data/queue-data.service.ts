@@ -1014,12 +1014,24 @@ export class QueueDataService {
    * history stops at its first row. A row we cannot classify counts as an
    * observation (`COALESCE(…, true)`), the optimistic direction
    * `hasObservedReadingWithin` takes too.
+   *
+   * The answer is cached per ride in Redis: the park payload is rebuilt every
+   * five minutes for every open park, and the unbounded probe can't prune a
+   * single chunk. "Observed" never reverts, so it is kept a day; "never" an
+   * hour, so a ride's first reading is honoured soon (it then has a live row
+   * and stops being asked about anyway).
    */
   async findNeverObservedAttractionIds(
     attractionIds: string[],
   ): Promise<Set<string>> {
     const ids = attractionIds.filter(isCanonicalUuid);
     if (ids.length === 0) return new Set();
+    const keys = ids.map((id) => `never-observed:v1:${id}`);
+    const cached = await this.redis.mget(...keys);
+    const never = new Set(ids.filter((_, i) => cached[i] === "1"));
+    const misses = ids.filter((_, i) => cached[i] == null);
+    if (misses.length === 0) return never;
+
     const rows: Array<{ id: string }> = await this.queueDataRepository.query(
       `SELECT id::text AS id
          FROM unnest($1::uuid[]) AS id
@@ -1028,9 +1040,22 @@ export class QueueDataService {
            WHERE qd."attractionId" = id
              AND COALESCE(${observedReadingsSql("qd")}, true)
         )`,
-      [ids],
+      [misses],
     );
-    return new Set(rows.map((r) => r.id));
+    const found = new Set(rows.map((r) => r.id));
+    const pipeline = this.redis.pipeline();
+    for (const id of misses) {
+      const isNever = found.has(id);
+      if (isNever) never.add(id);
+      pipeline.set(
+        `never-observed:v1:${id}`,
+        isNever ? "1" : "0",
+        "EX",
+        isNever ? 60 * 60 : 24 * 60 * 60,
+      );
+    }
+    await pipeline.exec();
+    return never;
   }
 
   /**

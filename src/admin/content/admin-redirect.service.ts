@@ -354,7 +354,15 @@ export class AdminRedirectService {
     await this.curation.publish(park.id, [alias.attractionId]);
   }
 
-  /** The unique index wins a race the checks above lost: still a 409. */
+  /**
+   * A unique index that wins a race the checks above lost turns into a 409.
+   * Only park aliases have one on the path (continent/country/city/slug).
+   * Ride aliases are unique per (attractionId, slug), not per (park, slug):
+   * two editors pointing the same dead ride path at two rides at the same
+   * moment both succeed, and the lookup answers with the newer row.
+   * shortcut: no lock for that race with a handful of admins; add a
+   * per-(park, slug) advisory lock if redirects are ever written in bulk.
+   */
   private async insert<T>(write: () => Promise<T>): Promise<T> {
     try {
       return await write();

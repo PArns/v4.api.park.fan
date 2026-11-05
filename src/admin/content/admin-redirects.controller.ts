@@ -91,10 +91,13 @@ export class AdminRedirectsController {
     description: "Recorded by a rename, merge or the sync; not removable here",
   })
   async remove(
-    @Query("fromPath") fromPath: string | undefined,
+    @Query("fromPath") fromPath: unknown,
     @CurrentAdmin() admin: AdminPrincipal,
   ): Promise<void> {
-    if (!fromPath) throw new BadRequestException("fromPath is required");
+    // A repeated ?fromPath= arrives as an array: a 400, not a TypeError's 500.
+    if (typeof fromPath !== "string" || !fromPath) {
+      throw new BadRequestException("fromPath is required, once");
+    }
     await this.redirects.remove(fromPath, admin);
   }
 }

@@ -61,8 +61,8 @@ const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
  * Redis rather than on a queue because this method already runs every five minutes: the cycle that
  * finds an entry due sends it along with whatever else changed, in the same POST.
  *
- * Between the transitions, an OPERATING park's tag is sent again about every 20 minutes (PAR-1103),
- * so a crawled park page shows waits at most ~20 minutes plus the edge window old instead of up to
+ * Between the transitions, an OPERATING park's tag is sent again about every 15 minutes (PAR-1103),
+ * so a crawled park page shows waits at most ~15 minutes plus the edge window old instead of up to
  * a day. Closed parks get no extra pings.
  */
 @Injectable()
@@ -129,7 +129,7 @@ export class ParkStatusRevalidationService {
         });
       }
       // The periodic refresh keeps the default stale-while-revalidate profile: the previous
-      // snapshot is merely 20 minutes behind, and no visitor should wait for the re-fetch.
+      // snapshot is merely 15 minutes behind, and no visitor should wait for the re-fetch.
       if (refresh.length > 0) {
         await this.revalidationService.revalidateTags(refresh);
       }
