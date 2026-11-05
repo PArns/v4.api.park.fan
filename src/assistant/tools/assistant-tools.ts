@@ -444,8 +444,10 @@ export const ASSISTANT_TOOLS = [
     status: "wait-times",
     description:
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
-      "average and peak waits today, weather now, the longest current standby waits, rides that " +
-      "are down and rides that have not run today, and the park's pageUrl.",
+      "average and peak waits today, weather now, only the 8 longest current standby waits, " +
+      "rides that are down and rides that have not run today, and the park's pageUrl. Not the " +
+      "shortest waits or one ride type: show_card kind rides order shortest (type coaster for " +
+      "coasters) has every waiting ride.",
     input: z.object({ park: parkRef }),
     run: async ({ park }, ctx) => {
       const live = (await getParkTool.handler(
@@ -463,7 +465,9 @@ export const ASSISTANT_TOOLS = [
     name: "find_rides",
     status: "rides",
     description:
-      "Find rides by name, optionally within one park. Returns ids for get_ride.",
+      "Find rides by name only (typo-tolerant), optionally within one park: id (for get_ride), " +
+      'name, park, status and standby wait, at most 5. Not by type or figure: for "the fastest ' +
+      'coaster" or "coasters in Germany" use compare_rides.',
     input: z.object({
       query: z.string().min(2).max(100).describe('Ride name, e.g. "taron"'),
       parkId: z
@@ -482,7 +486,8 @@ export const ASSISTANT_TOOLS = [
       "A park's restaurants, snack bars and food stands, optionally only those whose name or " +
       'cuisine contains query (e.g. "eis", "ice", "pizza"): name, status now where the park ' +
       "reports it, cuisine and reservation where known, land, and the park's pageUrl. For " +
-      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan.',
+      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan. No ' +
+      "menus, prices or opening hours.",
     input: z.object({
       park: parkRef,
       query: z.string().trim().min(2).max(60).optional(),
@@ -534,7 +539,7 @@ export const ASSISTANT_TOOLS = [
       "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
       "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
       '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
-      "Halloween as date.",
+      "Halloween as date. Only one year back, not other years or the days ahead.",
     input: z.object({
       park: parkRef,
       date: isoDay
@@ -582,7 +587,8 @@ export const ASSISTANT_TOOLS = [
       "One park's shows with their showtimes on a day (today by default), earliest first: " +
       "name, land, status now (today only, where the park reports it), every start time, the " +
       "duration where known, and season. Shows without a time that day are counted, not listed. " +
-      'For "when is the next show", "what\'s on today".',
+      'For "when is the next show", "what\'s on today". Parks seldom publish times beyond ' +
+      "today, so another day is often empty; no parades the park does not list as a show.",
     input: z.object({
       park: parkRef,
       date: isoDay
@@ -661,7 +667,8 @@ export const ASSISTANT_TOOLS = [
       "first unless order asc. type coaster keeps only roller coasters. With riderHeightCm only " +
       'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
       'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
-      "what it left out for lack of data.",
+      "what it left out for lack of data (say so when many are). No waits: those are show_card " +
+      "kind rides.",
     input: z.object({
       park: parkRef.optional(),
       country: z
@@ -809,8 +816,10 @@ export const ASSISTANT_TOOLS = [
       "the expected peak wait of the headliners, weather (basis climate_normal is the long-run " +
       "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
       "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
-      "forecast. Use it for special days and events too. Days after " +
-      "scheduleCoverage.to have no published hours yet: treat their status as unknown.",
+      "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
+      "only; never move it to another day. Use it for special days and events too. Days after " +
+      "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
+      "days: get_park_history.",
     input: z.object({
       park: parkRef,
       days: z
@@ -1082,7 +1091,8 @@ export const ASSISTANT_TOOLS = [
       "day's tiles: live today, else the forecast for date (kind tiles). Whenever the answer " +
       "lists rides with waits, show kind rides, and whenever it lists parks, show kind parks, " +
       "instead of writing the list as text; keep the text to a sentence and do not repeat the " +
-      "card's numbers.",
+      "card's numbers. Calendar and tiles reach 60 days ahead, never back; rankings by speed or " +
+      "height are compare_rides.",
     input: z.object({
       kind: z.enum(["park", "ride", "rides", "parks", "calendar", "tiles"]),
       from: isoDay
@@ -1380,7 +1390,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
-      "shopping, a photo stop or a meeting point. Only when the user asks.",
+      "shopping, a photo stop or a meeting point. Only when the user asks. A show's start time " +
+      "comes from get_shows, a food stop from find_restaurants.",
     input: z.object({
       park: parkRef,
       date: planDate,
