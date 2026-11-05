@@ -565,7 +565,7 @@ def fetch_actuals_local(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS actual
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd.timestamp >= :lo AND qd.timestamp < :hi
-          AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY' AND qd."waitTime" >= 5
+          AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY' AND qd."waitTime" >= {int(settings.PCN_MIN_WAIT)}
           AND {NOT_HEARTBEAT}
         GROUP BY 1, 2 HAVING COUNT(*) >= 1
         """

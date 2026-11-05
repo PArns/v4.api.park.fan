@@ -897,7 +897,11 @@ export class CalendarService {
           });
         }
       } else {
-        // Influencing but not local
+        // Influencing only when its region is one of the park's configured
+        // influencing regions (rank < ∞): the holiday fetch covers the whole
+        // country, and a TN school day says nothing about a CA park (PAR-1075).
+        const priority = this.neighborHolidayPriority(park, h);
+        if (priority === Infinity) continue;
         const regionCode = h.region
           ? normalizeRegionCode(h.region.split("-").pop() ?? null)
           : null;
@@ -907,18 +911,15 @@ export class CalendarService {
           holidayType: h.holidayType,
         });
 
-        // Candidate for the neighbour marker — every CONFIGURED influencing
-        // region (rank < ∞). The final priority-aware selection (top domestic
-        // regions + all foreign countries) happens in selectNeighborHolidays.
-        const priority = this.neighborHolidayPriority(park, h);
-        if (priority < Infinity) {
-          neighborHolidaysRaw.push({
-            name: h.name,
-            source: { countryCode: h.country, regionCode },
-            holidayType: h.holidayType,
-            priority,
-          });
-        }
+        // Candidate for the neighbour marker. The final priority-aware
+        // selection (top domestic regions + all foreign countries) happens in
+        // selectNeighborHolidays.
+        neighborHolidaysRaw.push({
+          name: h.name,
+          source: { countryCode: h.country, regionCode },
+          holidayType: h.holidayType,
+          priority,
+        });
       }
     }
 

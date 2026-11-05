@@ -1179,6 +1179,49 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     ]);
     expect(response.days.every((d) => d.isSchoolVacation === false)).toBe(true);
   });
+
+  it("lists only the park's influencing regions as influencing holidays (PAR-1075)", async () => {
+    const school = (region: string, name: string) => ({
+      date: "2099-11-11",
+      country: "US",
+      region,
+      name,
+      holidayType: "school",
+      isNationwide: false,
+    });
+    (service as any).holidaysService.getHolidays.mockResolvedValueOnce([
+      school("US-TN", "Veterans Day break"),
+      school("US-NC", "Veterans Day break"),
+      school("US-NV", "Nevada Day break"),
+    ]);
+    const { parseDateRange } =
+      await import("../../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange("2099-11-11", "2099-11-11", {
+      timezone: "America/Los_Angeles",
+    });
+    const response = await service.buildCalendarResponse(
+      {
+        id: "p1",
+        slug: "disneyland",
+        timezone: "America/Los_Angeles",
+        countryCode: "US",
+        regionCode: "CA",
+        influencingRegions: [{ countryCode: "US", regionCode: "NV" }],
+      } as any,
+      fromDate,
+      toDate,
+      "none",
+    );
+
+    const day = response.days[0];
+    expect(day.influencingHolidays).toEqual([
+      {
+        name: "Nevada Day break",
+        source: { countryCode: "US", regionCode: "NV" },
+        holidayType: "school",
+      },
+    ]);
+  });
   describe("event rows beside the day's status row (PAR-640)", () => {
     const at = (iso: string) => new Date(iso);
 

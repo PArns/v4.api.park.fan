@@ -4,6 +4,7 @@ import { REDIS_CLIENT } from "../redis/redis.module";
 import { RevalidationService } from "./revalidation.service";
 import {
   diffParkStatuses,
+  parkCacheTag,
   type ParkOperatingStatus,
   type TaggablePark,
 } from "./park-status-transitions";
@@ -17,6 +18,17 @@ const SNAPSHOT_KEY = "revalidate:park-status";
 
 /** The second round: `{ tag: dueAtMs }` for the transitions still inside the CDN window. */
 const PENDING_KEY = "revalidate:park-status:pending";
+
+/** `{ tag: sentAtMs }`: when each OPERATING park's tag was last sent, for the periodic refresh. */
+const REFRESHED_KEY = "revalidate:park-status:refreshed";
+
+/**
+ * How often an OPERATING park's tag is sent again (PAR-1103). The frontend keeps the park
+ * snapshot for a day, so a crawler read waits up to a day old; a ping every ~20 minutes keeps an
+ * open park's page fresh and leaves closed parks' write volume alone. 19 rather than 20: this runs
+ * on the 5-minute warmup, and a cycle a few seconds early must not push the ping to 25.
+ */
+const OPEN_PARK_REFRESH_MS = 19 * 60 * 1000;
 
 /** Long enough to survive a quiet night and any deploy; refreshed on every write anyway. */
 const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -56,6 +68,10 @@ const CDN_SETTLE_MS = 16 * 60 * 1000;
  * after the edge window has passed and is what bounds the damage to ~16 minutes. It is scheduled in
  * Redis rather than on a queue because this method already runs every five minutes: the cycle that
  * finds an entry due sends it along with whatever else changed, in the same POST.
+ *
+ * Between the transitions, an OPERATING park's tag is sent again about every 20 minutes (PAR-1103),
+ * so a crawled park page shows waits at most ~20 minutes plus the edge window old instead of up to
+ * a day. Closed parks get no extra pings.
  */
 @Injectable()
 export class ParkStatusRevalidationService {
@@ -99,7 +115,13 @@ export class ParkStatusRevalidationService {
       await this.writePending(stillPending);
 
       const toSend = [...new Set([...tags, ...due])];
-      if (toSend.length === 0) return 0;
+      const refresh = await this.openParksDueForRefresh(
+        parks,
+        statuses,
+        toSend,
+        now,
+      );
+      if (toSend.length === 0 && refresh.length === 0) return 0;
 
       if (tags.length > 0) {
         this.logger.log(
@@ -109,15 +131,64 @@ export class ParkStatusRevalidationService {
       // `immediate`: the next request must wait for the new data rather than be served the old
       // copy one more time. Under the default profile that copy goes to the first visitor after
       // the gates open, on the park's busiest page of the day.
-      await this.revalidationService.revalidateTags(toSend, {
-        immediate: true,
-      });
-      return toSend.length;
+      if (toSend.length > 0) {
+        await this.revalidationService.revalidateTags(toSend, {
+          immediate: true,
+        });
+      }
+      // The periodic refresh keeps the default stale-while-revalidate profile: the previous
+      // snapshot is merely 20 minutes behind, and no visitor should wait for the re-fetch.
+      if (refresh.length > 0) {
+        await this.revalidationService.revalidateTags(refresh);
+      }
+      return toSend.length + refresh.length;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Park status revalidation skipped: ${msg}`);
       return 0;
     }
+  }
+
+  /**
+   * Tags of the OPERATING parks whose last ping is at least {@link OPEN_PARK_REFRESH_MS} old, and
+   * the bookkeeping for the next cycle. A park seen open for the first time (cold Redis, deploy) is
+   * recorded, not sent, so a restart does not post every open park at once. A tag going out this
+   * cycle anyway (`alreadySent`) restarts its clock. Closed parks drop out of the record, so they
+   * cost nothing.
+   */
+  private async openParksDueForRefresh(
+    parks: TaggablePark[],
+    statuses: Map<string, ParkOperatingStatus>,
+    alreadySent: string[],
+    now: number,
+  ): Promise<string[]> {
+    const last = await this.readTimestamps(REFRESHED_KEY);
+    const sending = new Set(alreadySent);
+    const next: Record<string, number> = {};
+    const due: string[] = [];
+
+    for (const park of parks) {
+      if (statuses.get(park.id) !== "OPERATING") continue;
+      const tag = parkCacheTag(park);
+      if (!tag) continue;
+      const sentAt = last[tag];
+      if (sending.has(tag) || sentAt === undefined) {
+        next[tag] = now;
+      } else if (now - sentAt >= OPEN_PARK_REFRESH_MS) {
+        due.push(tag);
+        next[tag] = now;
+      } else {
+        next[tag] = sentAt;
+      }
+    }
+
+    await this.redis.set(
+      REFRESHED_KEY,
+      JSON.stringify(next),
+      "EX",
+      SNAPSHOT_TTL_SECONDS,
+    );
+    return due;
   }
 
   private async readSnapshot(): Promise<Record<string, ParkOperatingStatus>> {
@@ -146,8 +217,12 @@ export class ParkStatusRevalidationService {
     );
   }
 
-  private async readPending(): Promise<Record<string, number>> {
-    const raw = await this.redis.get(PENDING_KEY);
+  private readPending(): Promise<Record<string, number>> {
+    return this.readTimestamps(PENDING_KEY);
+  }
+
+  private async readTimestamps(key: string): Promise<Record<string, number>> {
+    const raw = await this.redis.get(key);
     if (!raw) return {};
     try {
       const parsed: unknown = JSON.parse(raw);
