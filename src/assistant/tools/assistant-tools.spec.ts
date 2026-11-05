@@ -4,6 +4,33 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
+import { AssistantPostsClient } from "./assistant-posts.client";
+
+describe("get_post", () => {
+  const providers = (post: jest.Mock) =>
+    new Map<unknown, unknown>([[AssistantPostsClient, { post }]]);
+
+  it("passes the question on for the matching sections", async () => {
+    const post = jest.fn(async () => ({ text: "…", sections: ["Tickets"] }));
+    await run(
+      "get_post",
+      { slug: "europa-park-guide", question: "fast pass worth it" },
+      providers(post),
+      "de",
+    );
+    expect(post).toHaveBeenCalledWith(
+      "de",
+      "europa-park-guide",
+      "fast pass worth it",
+    );
+  });
+
+  it("still takes a slug alone", async () => {
+    const post = jest.fn(async () => ({ text: "…" }));
+    await run("get_post", { slug: "europa-park-guide" }, providers(post));
+    expect(post).toHaveBeenCalledWith("en", "europa-park-guide", undefined);
+  });
+});
 
 describe("get_best_days", () => {
   it("ranks only rated open days, an unknown one never the quietest", async () => {

@@ -130,7 +130,9 @@ days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
 which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cached ten minutes in
-Redis; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
+Redis per full query; `get_post`'s optional `question` goes out as `q`, and the frontend then
+answers with the intro and the best-matching sections as `text`, every heading in `sections` and
+the ones left out in `omitted`, so the model can ask again for one of those; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`

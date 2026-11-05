@@ -268,6 +268,12 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("get_post with its slug");
   });
 
+  it("sends planning and news questions to park.fan's posts first", () => {
+    expect(SYSTEM_PROMPT).toContain("call search_posts first");
+    expect(SYSTEM_PROMPT).toContain("get_post with the slug and the question");
+    expect(SYSTEM_PROMPT).toContain("Not for live waits");
+  });
+
   it("answers in the visitor's language and switches the site when asked", () => {
     const context = chatContext({
       locale: "en",

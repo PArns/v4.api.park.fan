@@ -27,8 +27,13 @@ export class AssistantPostsClient {
     return this.get("assistant-posts", { locale, q: query, kind });
   }
 
-  post(locale: string, slug: string): Promise<unknown> {
-    return this.get("assistant-post", { locale, slug });
+  /** With a question, the frontend sends the intro and the sections that answer it best. */
+  post(locale: string, slug: string, question?: string): Promise<unknown> {
+    return this.get("assistant-post", {
+      locale,
+      slug,
+      ...(question ? { q: question } : {}),
+    });
   }
 
   /** Up to five glossary terms for a query, with their short definitions. */

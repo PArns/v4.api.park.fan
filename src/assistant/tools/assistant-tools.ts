@@ -1099,16 +1099,25 @@ export const ASSISTANT_TOOLS = [
     name: "get_post",
     status: "posts",
     description:
-      "The text of one park.fan post (shortened), by its slug from search_posts.",
+      "The text of one park.fan post, by its slug from search_posts. Long posts are shortened: " +
+      "with a question, text is the intro and the sections that answer it best. sections lists " +
+      "all the post's headings, omitted the ones left out; for an omitted one, call again with a " +
+      "question naming it.",
     input: z.object({
       slug: z
         .string()
         .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
         .max(160)
         .describe("Slug from search_posts"),
+      question: z
+        .string()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe("The user's question or its key words"),
     }),
-    run: ({ slug }, ctx) =>
-      ctx.get(AssistantPostsClient).post(ctx.locale, slug),
+    run: ({ slug, question }, ctx) =>
+      ctx.get(AssistantPostsClient).post(ctx.locale, slug, question),
   }),
   tool({
     name: "look_up_glossary",
