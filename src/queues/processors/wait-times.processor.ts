@@ -36,6 +36,10 @@ import {
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { isDecisiveScheduleRow } from "../../common/utils/schedule-window.sql";
 import { dedupePollEntities } from "../../common/utils/dedupe-poll-entities.util";
+import {
+  retractClosedParkOverrides,
+  scheduleSaysClosedNow,
+} from "../../common/utils/schedule-closed-now.util";
 import { RideAlertsService } from "../../ride-alerts/ride-alerts.service";
 import {
   LIVE_CACHE_WARMUP_JOB,
@@ -280,6 +284,23 @@ export class WaitTimesProcessor {
                 this.logger.warn(
                   `Dropped ${dupCount} duplicate live entit${dupCount === 1 ? "y" : "ies"} for park ${park.id} (same source+externalId in one poll)`,
                 );
+              }
+              // A park its own schedule calls closed right now cannot be open on
+              // the word of a feed that never sees that schedule (PAR-1236).
+              if (pollEntities.length > 0) {
+                const retracted = scheduleSaysClosedNow(
+                  await this.parksService
+                    .getTodaySchedule(park.id, park.timezone ?? undefined)
+                    .catch(() => null),
+                  new Date(),
+                )
+                  ? retractClosedParkOverrides(pollEntities, new Date())
+                  : 0;
+                if (retracted > 0) {
+                  this.logger.debug(
+                    `${park.name}: ${retracted} reading(s) read CLOSED, the schedule says the park is closed now`,
+                  );
+                }
               }
               if (pollEntities.length > 0) {
                 // Attractions are written as ONE batch per park: the upstream

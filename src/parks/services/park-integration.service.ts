@@ -51,7 +51,11 @@ import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.clie
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
-import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
+import {
+  readsUnknownFromAbsentSource,
+  readsUnknownFromSilentSource,
+  type SilentSourceFacts,
+} from "../../common/utils/source-absent-status.util";
 import {
   PARK_FEED_SILENT_DAYS,
   statusWithoutLiveData,
@@ -586,6 +590,9 @@ export class ParkIntegrationService {
     // Initialize counters for attraction status tracking
     let totalAttractionsCount = 0;
     let totalOperatingCount = 0;
+    // The rides no source can speak for. Neither operating nor closed, and
+    // `closedAttractions` below is the remainder of the other two.
+    let totalUnknownCount = 0;
 
     if (
       park.attractions &&
@@ -689,6 +696,21 @@ export class ParkIntegrationService {
           .map((a) => [a.id, resolveCuratedFacts(a).seasonMonths]),
       );
 
+      // The silent-source facts, for the same reason and off the same entity:
+      // `source_last_fresh_at` and the two hard markers are columns, not DTO
+      // fields. Resolved seasonality again, so a curated season governs this
+      // rule exactly as it governs the free-flow gate above.
+      const silentSourceFacts = new Map<string, SilentSourceFacts>(
+        (park.attractions ?? []).map((a) => [
+          a.id,
+          {
+            sourceLastFreshAt: a.sourceLastFreshAt,
+            retiredAt: a.retiredAt,
+            seasonOutSince: resolveCuratedFacts(a).seasonOutSince,
+          },
+        ]),
+      );
+
       // Rides that would reach the optimistic fallback below, narrowed to those
       // no source has EVER reported (PAR-1100). The fallback is written for one
       // ride going quiet at a working feed; a ride never seen at all is not
@@ -735,13 +757,30 @@ export class ParkIntegrationService {
           // at a working park and not for a park that has been quiet since June.
           attraction.queues = [];
           attraction.status = dto.status === "OPERATING" ? "UNKNOWN" : "CLOSED";
-        } else if (readsUnknownFromAbsentSource(queueData, dto.status)) {
+        } else if (
+          readsUnknownFromAbsentSource(queueData, dto.status) ||
+          readsUnknownFromSilentSource(
+            queueData,
+            silentSourceFacts.get(attraction.id) ?? {
+              sourceLastFreshAt: null,
+              retiredAt: null,
+              seasonOutSince: null,
+            },
+            dto.status,
+          )
+        ) {
           // Every reading here was written by reverse-reconciliation, which
           // stamps CLOSED on anything no source has mentioned for 24h. That is
           // our bookkeeping, not the operator's word: ThemeParks.wiki dropped
           // 44 Europa-Park attractions from its live feed on 2026-06-07 and the
           // park page called them closed for the next ten weeks, in August.
           // Say we do not know, and drop the rows that only carry our guess.
+          //
+          // The second condition is the other way a source stops speaking: it
+          // keeps delivering rows and stops measuring them. LEGOLAND Billund's
+          // feed answered for all 37 of its rides at 09:15 UTC on 2026-10-27
+          // carrying an April `lastUpdated` on every one, to the second, while
+          // the park was open — and all 37 read CLOSED as a fact.
           attraction.queues = [];
           attraction.status = "UNKNOWN";
         } else if (queueData.length > 0) {
@@ -824,6 +863,13 @@ export class ParkIntegrationService {
           totalAttractionsCount++;
           if (attraction.effectiveStatus === "OPERATING") {
             totalOperatingCount++;
+          } else if (attraction.effectiveStatus === "UNKNOWN") {
+            // Counted separately because it belongs in neither half, and
+            // `closedAttractions` is derived as the remainder. Without this a
+            // ride the two source rules just put on UNKNOWN would be served as
+            // unknown on the ride list and counted as closed in the headline
+            // beside it — the page contradicting itself in two places.
+            totalUnknownCount++;
           }
         }
 
@@ -1352,7 +1398,8 @@ export class ParkIntegrationService {
             crowdLevel: statistics.crowdLevel,
             totalAttractions: totalAttractionsCount,
             operatingAttractions: totalOperatingCount,
-            closedAttractions: totalAttractionsCount - totalOperatingCount,
+            closedAttractions:
+              totalAttractionsCount - totalOperatingCount - totalUnknownCount,
             timestamp:
               typeof statistics.timestamp === "string"
                 ? statistics.timestamp

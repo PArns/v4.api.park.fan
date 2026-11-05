@@ -40,7 +40,9 @@ neither, so one ride can read differently on the two. Why each case exists:
 
 ## What a client may not conclude
 
-- `UNKNOWN` is an absence of information, never a closure; render it apart from `CLOSED`.
+- `UNKNOWN` is an absence of information, never a closure; render it apart from `CLOSED`. It
+  also replaces a `CLOSED` whose source has not measured the ride for 14 days while the park is
+  open (PAR-1023). Such a ride counts as neither operating nor closed, and stays in the total.
 - `OPERATING` from the no-data fallback (park payload only) is a guess about a ride no source has
   mentioned recently, not an observation (PAR-1100 tracks the ride no source has ever reported).
 - Neither field says anything about a works period: read [`worksPeriod`](./works-period.md).
