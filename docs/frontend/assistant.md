@@ -268,7 +268,11 @@ on a ride open whenever its park is. `set_show_reminder` takes one of today's ve
 (`downSince`, `reportedByPark`, the outage estimate's `backWithin30MinutesPercent`,
 `backWithin60MinutesPercent`, `likelyBack`, and `typicalOutageMinutes`, the median of its
 outages), `works` (`closedUntil`, the works period's last closed day, null while unknown;
-`estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth`) or `unknown`.
+`estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth` in the park's
+month) or `unknown`. `works` and `season` also carry `reopensOn`: the first operating day of the
+park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query behind
+`nextSchedule`) after the last closed day or from the first of the next season month; null when
+the calendar has none yet, absent when nothing says when the closure ends.
 Parky words a breakdown as an estimate from past outages, never a promise.
 
 ### Favourites in the chat

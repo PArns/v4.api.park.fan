@@ -3,6 +3,7 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
+import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { AssistantPostsClient } from "./assistant-posts.client";
 
@@ -87,6 +88,7 @@ import {
   showsCard,
   showsOnDay,
   reopeningOf,
+  reopenSearchFrom,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { FavoritesService } from "../../favorites/favorites.service";
@@ -1432,5 +1434,145 @@ describe("favourites", () => {
     );
     expect(missing.isError).toBe(true);
     expect(missing.action).toBeUndefined();
+  });
+});
+
+describe("reopenSearchFrom", () => {
+  it("starts the day after a works period's last closed day", () => {
+    expect(
+      reopenSearchFrom(
+        { reason: "works", closedUntil: "2027-03-13" },
+        "2026-11-05",
+      ),
+    ).toBe("2027-03-14");
+  });
+
+  it("starts on the first of the next season month, next year once it has come round", () => {
+    const season = (next: number) => ({
+      reason: "season" as const,
+      seasonMonths: [4, 10],
+      nextSeasonMonth: next,
+    });
+    expect(reopenSearchFrom(season(4), "2026-11-05")).toBe("2027-04-01");
+    expect(reopenSearchFrom(season(12), "2026-11-05")).toBe("2026-12-01");
+  });
+
+  it("has nothing to search from without an end", () => {
+    expect(
+      reopenSearchFrom({ reason: "works", closedUntil: null }, "2026-11-05"),
+    ).toBeNull();
+    expect(
+      reopenSearchFrom({ reason: "unknown", status: "CLOSED" }, "2026-11-05"),
+    ).toBeNull();
+  });
+});
+
+describe("get_ride › reopening", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  const RIDE = "44444444-4444-4444-8444-444444444444";
+  const run = async (ride: Record<string, unknown>, opening: unknown) => {
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE,
+      name: "Chiapas",
+      park: { id: PARK_ID, name: "Phantasialand" },
+      facts: {},
+      ...ride,
+    });
+    const getFirstOperatingDayFrom = jest.fn(async () => opening);
+    const result = await runAssistantTool(
+      "get_ride",
+      { rideId: RIDE },
+      context(
+        new Map<unknown, unknown>([
+          [
+            ParksService,
+            {
+              findById: jest.fn(async () => ({ ...park })),
+              getFirstOperatingDayFrom,
+            },
+          ],
+        ]),
+      ),
+      jest.fn(),
+    );
+    return {
+      reopening: JSON.parse(result.content).reopening,
+      getFirstOperatingDayFrom,
+    };
+  };
+
+  it("finds the season month in the park's clock at a month's turn", async () => {
+    // 23:30 UTC on 31 March is already April in Brühl.
+    jest.useFakeTimers({ now: new Date("2027-03-31T23:30:00Z") });
+    const { reopening, getFirstOperatingDayFrom } = await run(
+      {
+        status: "CLOSED",
+        facts: { seasonMonths: [4, 10], isCurrentlyInSeason: false },
+      },
+      { date: "2027-10-02" },
+    );
+    expect(reopening).toMatchObject({
+      reason: "season",
+      nextSeasonMonth: 10,
+      reopensOn: "2027-10-02",
+    });
+    expect(getFirstOperatingDayFrom).toHaveBeenCalledWith(
+      PARK_ID,
+      "2027-10-01",
+    );
+  });
+
+  it("names the park's first open day after a works period", async () => {
+    const { reopening, getFirstOperatingDayFrom } = await run(
+      {
+        status: "REFURBISHMENT",
+        worksPeriod: {
+          to: "2099-03-13",
+          toUncertain: false,
+          runningToday: true,
+        },
+      },
+      { date: "2099-03-20" },
+    );
+    expect(reopening).toEqual({
+      reason: "works",
+      closedUntil: "2099-03-13",
+      reopensOn: "2099-03-20",
+    });
+    expect(getFirstOperatingDayFrom).toHaveBeenCalledWith(
+      PARK_ID,
+      "2099-03-14",
+    );
+  });
+
+  it("says null when the calendar has no opening yet, and looks nothing up without an end", async () => {
+    expect(
+      (
+        await run(
+          {
+            status: "REFURBISHMENT",
+            worksPeriod: {
+              to: "2099-03-13",
+              toUncertain: false,
+              runningToday: true,
+            },
+          },
+          null,
+        )
+      ).reopening.reopensOn,
+    ).toBeNull();
+    const open = await run(
+      {
+        status: "REFURBISHMENT",
+        worksPeriod: { to: null, toUncertain: false, runningToday: true },
+      },
+      null,
+    );
+    expect(open.reopening).toEqual({ reason: "works", closedUntil: null });
+    expect(open.getFirstOperatingDayFrom).not.toHaveBeenCalled();
   });
 });

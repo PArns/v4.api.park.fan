@@ -623,6 +623,26 @@ export function reopeningOf(ride: RideClosure, month: number) {
 }
 
 /**
+ * The park-local day to look for the park's next opening from: the day after a works period's
+ * last closed day, or the first of the next season month (next year when it has come round).
+ * Null when nothing says when the closure ends.
+ */
+export function reopenSearchFrom(
+  reopening: ReturnType<typeof reopeningOf>,
+  today: string,
+): string | null {
+  if (reopening?.reason === "works" && reopening.closedUntil) {
+    return addIsoDays(reopening.closedUntil, 1);
+  }
+  if (reopening?.reason === "season" && reopening.nextSeasonMonth) {
+    const [year, month] = today.split("-").map(Number);
+    const nextYear = reopening.nextSeasonMonth <= month ? year + 1 : year;
+    return `${nextYear}-${String(reopening.nextSeasonMonth).padStart(2, "0")}-01`;
+  }
+  return null;
+}
+
+/**
  * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
  * instant so it reaches the model in the visitor's clock. Status and duration come from a live
  * reading of the show only; without one they are null, never a guessed "closed".
@@ -1004,12 +1024,34 @@ export const ASSISTANT_TOOLS = [
           ([, value]) => value !== null,
         ),
       );
-      // shortcut: the UTC month, not the park's; off only for hours at a month's turn.
-      const reopening = reopeningOf(
-        ride as RideClosure,
-        new Date().getUTCMonth() + 1,
-      );
-      if (reopening) ride.reopening = reopening;
+      const parkId = (ride.park as { id?: string } | null)?.id;
+      const parks = ctx.get(ParksService);
+      const park = parkId ? await parks.findById(parkId) : null;
+      if (park) {
+        // The park's calendar month and day: the season and the opening calendar are park-local.
+        const today = getCurrentDateInTimezone(park.timezone);
+        const reopening = reopeningOf(
+          ride as RideClosure,
+          Number(today.slice(5, 7)),
+        );
+        if (reopening) {
+          const from = reopenSearchFrom(reopening, today);
+          const opening = from
+            ? await parks.getFirstOperatingDayFrom(park.id, from)
+            : null;
+          ride.reopening = {
+            ...reopening,
+            // The DATE column arrives as "YYYY-MM-DD" from the driver; a Date is its UTC day.
+            ...(from && {
+              reopensOn: opening
+                ? typeof opening.date === "string"
+                  ? (opening.date as string).slice(0, 10)
+                  : opening.date.toISOString().slice(0, 10)
+                : null,
+            }),
+          };
+        }
+      }
       return ride;
     },
   }),

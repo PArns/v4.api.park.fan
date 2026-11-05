@@ -2848,6 +2848,33 @@ export class ParksService {
    * Get next scheduled opening for a park.
    * "Tomorrow" is the next calendar day in the park's timezone; query uses date string for consistency.
    */
+  /**
+   * The park's first published operating day on or after `from` (park-local YYYY-MM-DD),
+   * looking a year ahead; null when the calendar has none.
+   */
+  async getFirstOperatingDayFrom(
+    parkId: string,
+    from: string,
+  ): Promise<ScheduleEntry | null> {
+    // The date string as lower bound, so the DB session's zone cannot shift it.
+    const lookAheadDate = new Date(from + "T12:00:00.000Z");
+    lookAheadDate.setDate(lookAheadDate.getDate() + 365);
+    return this.scheduleRepository
+      .createQueryBuilder("schedule")
+      .where("schedule.parkId = :parkId", { parkId })
+      .andWhere("schedule.date >= :from", { from })
+      .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
+      .andWhere("schedule.scheduleType = :type", {
+        type: ScheduleType.OPERATING,
+      })
+      .andWhere("schedule.openingTime IS NOT NULL")
+      .andWhere("schedule.closingTime IS NOT NULL")
+      .andWhere("schedule.attractionId IS NULL")
+      .orderBy("schedule.date", "ASC")
+      .limit(1)
+      .getOne();
+  }
+
   async getNextSchedule(parkId: string): Promise<ScheduleEntry | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -2874,24 +2901,10 @@ export class ParksService {
       }
     }
 
-    // Look ahead: from park's "tomorrow" up to 365 days (use date string for lower bound)
-    const lookAheadDate = new Date(tomorrowStr + "T12:00:00.000Z");
-    lookAheadDate.setDate(lookAheadDate.getDate() + 365);
-
-    const nextSchedule = await this.scheduleRepository
-      .createQueryBuilder("schedule")
-      .where("schedule.parkId = :parkId", { parkId })
-      .andWhere("schedule.date >= :tomorrowStr", { tomorrowStr })
-      .andWhere("schedule.date <= :lookAheadDate", { lookAheadDate })
-      .andWhere("schedule.scheduleType = :type", {
-        type: ScheduleType.OPERATING,
-      })
-      .andWhere("schedule.openingTime IS NOT NULL")
-      .andWhere("schedule.closingTime IS NOT NULL")
-      .andWhere("schedule.attractionId IS NULL")
-      .orderBy("schedule.date", "ASC")
-      .limit(1)
-      .getOne();
+    const nextSchedule = await this.getFirstOperatingDayFrom(
+      parkId,
+      tomorrowStr,
+    );
 
     // Cache result (1 hour TTL)
     await this.redis.set(

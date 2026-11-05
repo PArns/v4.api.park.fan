@@ -452,7 +452,9 @@ describe("request schemas", () => {
       '"needs-permission": say a tap on the bell',
     );
     expect(SYSTEM_PROMPT).toContain("never a promise");
-    expect(SYSTEM_PROMPT).toContain("unknown means no date is known");
+    expect(SYSTEM_PROMPT).toContain(
+      "unknown or nothing given means no date is known",
+    );
   });
 
   it("takes the favourites' ids and tells the model only how many there are", () => {
