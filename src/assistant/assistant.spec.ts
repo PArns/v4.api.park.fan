@@ -501,6 +501,15 @@ describe("request schemas", () => {
     expect(SYSTEM_PROMPT).toContain("set_favorite only under the action rule");
   });
 
+  it("ends a chat only for sustained abuse, after one warning, with a calm goodbye", () => {
+    expect(SYSTEM_PROMPT).toContain("Sustained abuse is different");
+    expect(SYSTEM_PROMPT).toContain("one friendly warning in character");
+    expect(SYSTEM_PROMPT).toContain("one short, calm sentence in character");
+    expect(SYSTEM_PROMPT).toContain(
+      "Never end a chat over criticism of park.fan or a park",
+    );
+  });
+
   it("takes the alerts snapshot and puts it in This chat as data", () => {
     const alerts = {
       push: "needs-permission",
@@ -650,6 +659,7 @@ describe("assistant tools", () => {
       "plan_share",
       "switch_language",
       "submit_feedback",
+      "end_chat",
     ]);
     for (const t of ASSISTANT_TOOL_PARAMS)
       expect(t.input_schema.type).toBe("object");

@@ -416,7 +416,9 @@ export type ClientAction =
   /** The same page in another of the site's languages, carried out once the answer is complete. */
   | { type: "switch_locale"; locale: AssistantLocale }
   /** Parky stored the visitor's feedback; the widget shows it under the answer. */
-  | { type: "feedback_sent" };
+  | { type: "feedback_sent" }
+  /** Parky closed the chat; the widget locks its input for `cooldownMinutes`. */
+  | { type: "chat_end"; cooldownMinutes: number };
 
 /** The trip planner's block icons (park.fan `PLANNER_BLOCK_ICONS`). */
 export const PLANNER_BLOCK_ICONS = [

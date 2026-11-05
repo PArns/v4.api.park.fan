@@ -65,7 +65,7 @@ export interface PreparedChat {
 
 /** Why a chat is refused before anything is streamed. */
 /** Why a question gets no answer; `junk` repeats the question just answered. */
-export type ChatRefusal = "off" | "not-found" | "limit" | "junk";
+export type ChatRefusal = "off" | "not-found" | "limit" | "junk" | "ended";
 
 interface Usage {
   input: number;
@@ -118,6 +118,8 @@ export class AssistantChatService {
       if (!conversation || conversation.sessionHash !== sessionHash) {
         return "not-found";
       }
+      // A chat Parky ended stays ended; the session's own ban runs out on its own.
+      if (conversation.endedAt) return "ended";
       const earlier = await this.messages.find({
         where: { conversationId: conversation.id },
         order: { createdAt: "DESC" },

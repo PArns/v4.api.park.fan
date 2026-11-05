@@ -89,9 +89,11 @@ import {
   showsOnDay,
   reopeningOf,
   reopenSearchFrom,
+  CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { FavoritesService } from "../../favorites/favorites.service";
+import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
 import { formatInTimeZone } from "date-fns-tz";
 import type { Show } from "../../shows/entities/show.entity";
@@ -1574,5 +1576,62 @@ describe("get_ride › reopening", () => {
     );
     expect(open.reopening).toEqual({ reason: "works", closedUntil: null });
     expect(open.getFirstOperatingDayFrom).not.toHaveBeenCalled();
+  });
+});
+
+describe("end_chat", () => {
+  const CHAT = "55555555-5555-4555-8555-555555555555";
+  const setup = (previousMessage: string | null) => {
+    const update = jest.fn(async () => ({ affected: 1 }));
+    const endChats = jest.fn(async () => undefined);
+    const ctx = {
+      ...context(
+        new Map<unknown, unknown>([
+          [DataSource, { getRepository: () => ({ update }) }],
+          [AssistantRateLimitService, { endChats }],
+        ]),
+      ),
+      chat: {
+        conversationId: CHAT,
+        pagePath: "/de",
+        session: "session-1",
+        sessionHash: "h",
+        message: "…",
+        previousMessage,
+      },
+      answer: { round: 0, done: new Set<string>() },
+    };
+    const call = (input: unknown) =>
+      runAssistantTool("end_chat", input, ctx, jest.fn());
+    return { call, update, endChats };
+  };
+
+  it("closes the chat, bans the session for the cooldown and tells the widget", async () => {
+    const { call, update, endChats } = setup("an earlier insult");
+    const result = await call({ reason: "slurs", note: "after a warning" });
+    expect(result.action).toEqual({
+      type: "chat_end",
+      cooldownMinutes: CHAT_END_COOLDOWN_MINUTES,
+    });
+    expect(update).toHaveBeenCalledWith(CHAT, {
+      endedAt: expect.any(Date),
+      endedReason: "slurs: after a warning",
+    });
+    expect(endChats).toHaveBeenCalledWith(
+      "session-1",
+      CHAT_END_COOLDOWN_MINUTES * 60,
+    );
+  });
+
+  it("refuses on a chat's first question, where no warning can have come before", async () => {
+    const { call, update } = setup(null);
+    const result = await call({ reason: "insults" });
+    expect(result.isError).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("takes no reason milder than abuse", async () => {
+    const { call } = setup("x");
+    expect((await call({ reason: "criticism" })).isError).toBe(true);
   });
 });

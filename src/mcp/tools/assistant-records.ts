@@ -21,6 +21,10 @@ export function chatSummary(chat: AssistantConversation) {
     tokens: chat.totalTokens,
     costUsd: Number(chat.costUsd),
     rating: chat.rating,
+    // Absent unless Parky closed the chat for abuse.
+    ...(chat.endedAt && {
+      endedByParky: { at: chat.endedAt, reason: chat.endedReason },
+    }),
     adminUrl: adminConversationUrl(chat.id),
   };
 }

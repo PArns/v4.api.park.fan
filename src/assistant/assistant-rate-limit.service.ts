@@ -139,7 +139,23 @@ export class AssistantRateLimitService {
     }
   }
 
-  private key(kind: "junk" | "cooldown", session: string): string {
+  /** Refuses the session's questions for `seconds` after Parky ended a chat (`end_chat`). */
+  async endChats(session: string, seconds: number): Promise<void> {
+    await this.redis.set(this.key("ended", session), "1", "EX", seconds);
+  }
+
+  /** Seconds left of a session's ban after an ended chat, 0 when it has none. */
+  async chatEndedFor(session: string): Promise<number> {
+    try {
+      const left = await this.redis.ttl(this.key("ended", session));
+      return left > 0 ? left : 0;
+    } catch (error) {
+      this.logger.warn(`Assistant chat ban unreadable: ${String(error)}`);
+      return 0;
+    }
+  }
+
+  private key(kind: "junk" | "cooldown" | "ended", session: string): string {
     return `assistant:${kind}:${hashRateLimitKey(`s:${session}`)}`;
   }
 }

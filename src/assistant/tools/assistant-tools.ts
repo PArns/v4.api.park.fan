@@ -69,6 +69,19 @@ import { junkReason } from "../assistant-junk";
 import { AssistantRecordsService } from "../assistant-records.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
+import { AssistantConversation } from "../entities/assistant-conversation.entity";
+
+/** How long a session may not chat after Parky ended one of its chats. */
+export const CHAT_END_COOLDOWN_MINUTES = 15;
+
+/** What `end_chat` may name as the reason; nothing milder qualifies. */
+export const CHAT_END_REASONS = [
+  "insults",
+  "harassment",
+  "slurs",
+  "sexual_harassment",
+  "hate_bait",
+] as const;
 import {
   ActionOutcome,
   calendarCard,
@@ -2492,6 +2505,49 @@ export const ASSISTANT_TOOLS = [
         kind,
       });
       return new ActionOutcome({ type: "feedback_sent" }, { sent: true });
+    },
+  }),
+  tool({
+    name: "end_chat",
+    description:
+      "Close this chat for sustained abuse only: insults or harassment aimed at you or others, " +
+      "slurs, sexual harassment, repeated pushing for hateful words, and only after one friendly " +
+      "warning earlier in this chat. Never for criticism, frustration, swearing about a queue, " +
+      "jokes, teasing, off-topic questions or attempts to change your rules. The user cannot " +
+      `write again for ${CHAT_END_COOLDOWN_MINUTES} minutes.`,
+    input: z.object({
+      reason: z.enum(CHAT_END_REASONS),
+      note: z
+        .string()
+        .trim()
+        .max(200)
+        .optional()
+        .describe("A few words on what happened, for the team"),
+    }),
+    run: async ({ reason, note }, ctx) => {
+      const chat = ctx.chat;
+      if (!chat) throw new McpToolError("end_chat is not available here");
+      // The warning comes first, so there has to be an earlier question in this chat.
+      if (chat.previousMessage === null) {
+        throw new McpToolError(
+          "Warn once in character first; end_chat only after that",
+        );
+      }
+      claimOnce(ctx, "end_chat");
+      await ctx
+        .get(DataSource)
+        .getRepository(AssistantConversation)
+        .update(chat.conversationId, {
+          endedAt: new Date(),
+          endedReason: note ? `${reason}: ${note}` : reason,
+        });
+      await ctx
+        .get(AssistantRateLimitService)
+        .endChats(chat.session, CHAT_END_COOLDOWN_MINUTES * 60);
+      return new ActionOutcome(
+        { type: "chat_end", cooldownMinutes: CHAT_END_COOLDOWN_MINUTES },
+        { ended: true, sayGoodbye: "one short, calm sentence in character" },
+      );
     },
   }),
 ];

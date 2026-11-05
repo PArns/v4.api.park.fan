@@ -289,6 +289,27 @@ up and answers `{ type: "favorite_set", entity, id, name, on }`; an id nobody ha
 kind is `entity` so it cannot clash with the action's `type`. `get_shows` and `find_restaurants`
 list each entry's `id` for it (the restaurants card leaves it out).
 
+### Parky ends a chat
+
+For sustained abuse only (insults or harassment aimed at Parky or others, slurs, sexual harassment,
+pushing again and again for hateful words), and only after one friendly warning earlier in the same
+chat, Parky calls `end_chat` (`reason`: `insults` | `harassment` | `slurs` | `sexual_harassment` |
+`hate_bait`, optional `note`) and says goodbye in one calm sentence. Criticism, frustration,
+swearing about a queue, jokes, teasing, off-topic questions and prompt injection never qualify;
+they stay the teasing and off-topic rules. The tool refuses on a chat's first question, where no
+warning can have come before, and runs once per answer.
+
+- The action is `{ type: "chat_end", cooldownMinutes }` (`CHAT_END_COOLDOWN_MINUTES`, 15); the
+  widget locks its input.
+- **The server enforces it:** the conversation gets `endedAt` and `endedReason` and takes no
+  further question (403), and the session that sent it is refused every question for the cooldown
+  (Redis `assistant:ended:<hash>`, `AssistantRateLimitService.endChats`).
+- **The refusal:** `403 { statusCode: 403, message: "chat_ended", retryAfterSeconds }` with
+  `Retry-After` while the session's ban runs; for the ended chat after that, the same body without
+  `retryAfterSeconds`. A new chat from the same session works once the cooldown is over.
+- The admin's chat list and chat view carry `endedAt` and `endedReason`; the admin MCP's
+  `assistant_conversations` and `assistant_conversation` show `endedByParky { at, reason }`.
+
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
