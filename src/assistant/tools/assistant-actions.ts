@@ -402,6 +402,14 @@ export type ClientAction =
       rideSlug?: string;
       showSlug?: string;
     }
+  /** `entity` is the kind, so it cannot clash with the action's own `type`. */
+  | {
+      type: "favorite_set";
+      entity: "park" | "attraction" | "show" | "restaurant";
+      id: string;
+      name: string;
+      on: boolean;
+    }
   | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
   | { type: "planner_undo"; park: PlannerPark; date: string }
   | { type: "planner_share" }

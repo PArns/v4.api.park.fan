@@ -89,6 +89,7 @@ import {
   reopeningOf,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { FavoritesService } from "../../favorites/favorites.service";
 import { ShowsService } from "../../shows/shows.service";
 import { formatInTimeZone } from "date-fns-tz";
 import type { Show } from "../../shows/entities/show.entity";
@@ -237,12 +238,14 @@ describe("get_shows", () => {
     expect(result).toEqual({
       shows: [
         {
+          id: "b",
           name: "Stunt Show",
           status: "OPERATING",
           showtimes: ["2026-11-05T10:00:00.000Z", "2026-11-05T14:00:00.000Z"],
           durationMinutes: 25,
         },
         {
+          id: "a",
           name: "Night Parade",
           land: "Main Street",
           status: null,
@@ -1330,5 +1333,104 @@ describe("reopeningOf", () => {
       status: "CLOSED",
     });
     expect(reopeningOf({ status: "OPERATING" }, 11)).toBeNull();
+  });
+});
+
+describe("favourites", () => {
+  const ID = "33333333-3333-4333-8333-333333333333";
+  const favorites = {
+    parks: [PARK_ID],
+    attractions: [ID],
+    shows: [],
+    restaurants: [],
+  };
+
+  it("get_favorites reads the ids the browser sent through /v1/favorites' service", async () => {
+    const getFavorites = jest.fn(async () => ({
+      parks: [
+        {
+          id: PARK_ID,
+          name: "Phantasialand",
+          status: "OPERATING",
+          analytics: { crowdLevel: "high", avgWaitTime: 32 },
+        },
+      ],
+      attractions: [
+        {
+          id: ID,
+          name: "Taron",
+          park: { name: "Phantasialand" },
+          status: "OPERATING",
+          queues: [{ queueType: "STANDBY", waitTime: 45 }],
+          crowdLevel: "high",
+        },
+      ],
+      shows: [],
+      restaurants: [],
+    }));
+    const result = await runAssistantTool(
+      "get_favorites",
+      {},
+      {
+        ...context(new Map([[FavoritesService, { getFavorites }]])),
+        favorites,
+      },
+      jest.fn(),
+    );
+    expect(getFavorites).toHaveBeenCalledWith([PARK_ID], [ID], [], []);
+    expect(JSON.parse(result.content)).toEqual({
+      parks: [
+        {
+          id: PARK_ID,
+          name: "Phantasialand",
+          status: "OPERATING",
+          crowdLevel: "high",
+          avgWaitMinutes: 32,
+        },
+      ],
+      rides: [
+        {
+          id: ID,
+          name: "Taron",
+          park: "Phantasialand",
+          status: "OPERATING",
+          waitMinutes: 45,
+          crowdLevel: "high",
+        },
+      ],
+      shows: [],
+      restaurants: [],
+    });
+  });
+
+  it("set_favorite names what it found, and refuses an id nobody has", async () => {
+    const providers = (row: unknown) =>
+      new Map<unknown, unknown>([
+        [
+          DataSource,
+          { getRepository: () => ({ findOne: jest.fn(async () => row) }) },
+        ],
+      ]);
+    const set = await runAssistantTool(
+      "set_favorite",
+      { entity: "attraction", id: ID, on: false },
+      context(providers({ id: ID, name: "Taron" })),
+      jest.fn(),
+    );
+    expect(set.action).toEqual({
+      type: "favorite_set",
+      entity: "attraction",
+      id: ID,
+      name: "Taron",
+      on: false,
+    });
+    const missing = await runAssistantTool(
+      "set_favorite",
+      { entity: "show", id: ID },
+      context(providers(null)),
+      jest.fn(),
+    );
+    expect(missing.isError).toBe(true);
+    expect(missing.action).toBeUndefined();
   });
 });

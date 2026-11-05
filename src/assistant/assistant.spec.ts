@@ -445,6 +445,46 @@ describe("request schemas", () => {
     expect(SYSTEM_PROMPT).toContain("unknown means no date is known");
   });
 
+  it("takes the favourites' ids and tells the model only how many there are", () => {
+    const base = {
+      locale: "en",
+      pagePath: "/en",
+      message: "hi",
+      sessionToken: "s1.1.n.sig",
+    };
+    const id = "33333333-3333-4333-8333-333333333333";
+    const parsed = chatRequestSchema.safeParse({
+      ...base,
+      favorites: { attractions: [id] },
+    });
+    expect(parsed.data?.favorites).toEqual({
+      parks: [],
+      attractions: [id],
+      shows: [],
+      restaurants: [],
+    });
+    expect(
+      chatRequestSchema.safeParse({ ...base, favorites: { parks: ["nope"] } })
+        .success,
+    ).toBe(false);
+    expect(
+      chatRequestSchema.safeParse({
+        ...base,
+        favorites: { parks: Array(51).fill(id) },
+      }).success,
+    ).toBe(false);
+    const context = chatContext({
+      locale: "en",
+      now: "2026-11-05 14:21",
+      timeZone: "Europe/Berlin",
+      pagePath: "/en",
+      favorites: parsed.data?.favorites,
+    });
+    expect(context).toContain("0 parks, 1 rides, 0 shows, 0 restaurants");
+    expect(context).not.toContain(id);
+    expect(SYSTEM_PROMPT).toContain("set_favorite only under the action rule");
+  });
+
   it("takes the alerts snapshot and puts it in This chat as data", () => {
     const alerts = {
       push: "needs-permission",
@@ -580,6 +620,8 @@ describe("assistant tools", () => {
       "set_ride_alert",
       "set_show_reminder",
       "remove_alert",
+      "get_favorites",
+      "set_favorite",
       "plan_set_party",
       "plan_mark_done",
       "plan_clear_day",

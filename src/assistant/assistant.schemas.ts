@@ -109,6 +109,26 @@ export const alertsSnapshotSchema = z.object({
 });
 export type AlertsSnapshot = z.infer<typeof alertsSnapshotSchema>;
 
+/** The kinds a visitor can favourite, as `set_favorite` and the snapshot name them. */
+export const FAVORITE_ENTITIES = [
+  "park",
+  "attraction",
+  "show",
+  "restaurant",
+] as const;
+export type FavoriteEntity = (typeof FAVORITE_ENTITIES)[number];
+
+const favoriteIds = z.array(z.uuid()).max(50).default([]);
+
+/** The ids of the visitor's favourites, as the browser stores them. */
+export const favoritesSnapshotSchema = z.object({
+  parks: favoriteIds,
+  attractions: favoriteIds,
+  shows: favoriteIds,
+  restaurants: favoriteIds,
+});
+export type FavoritesSnapshot = z.infer<typeof favoritesSnapshotSchema>;
+
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
 
@@ -149,6 +169,7 @@ export const chatRequestSchema = z.strictObject({
     .optional(),
   planner: plannerSnapshotSchema.optional(),
   alerts: alertsSnapshotSchema.optional(),
+  favorites: favoritesSnapshotSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

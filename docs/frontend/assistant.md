@@ -269,6 +269,20 @@ outages), `works` (`closedUntil`, the works period's last closed day, null while
 `estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth`) or `unknown`.
 Parky words a breakdown as an estimate from past outages, never a promise.
 
+### Favourites in the chat
+
+The chat request carries an optional `favorites` snapshot (`favoritesSnapshotSchema`): `{ parks,
+attractions, shows, restaurants }`, uuid lists of at most 50 each, a missing list read as empty.
+"This chat" names only how many there are; `get_favorites` resolves the ids through
+`FavoritesService.getFavorites`, the service behind [`/v1/favorites`](favorites.md) and its Redis
+cache, and returns per kind the id, name, park, status and, for rides, the standby wait and crowd
+level, for parks the crowd level and average wait, for shows today's times.
+
+`set_favorite` (`entity`: `park` | `attraction` | `show` | `restaurant`, `id`, `on`) looks the id
+up and answers `{ type: "favorite_set", entity, id, name, on }`; an id nobody has is refused. The
+kind is `entity` so it cannot clash with the action's `type`. `get_shows` and `find_restaurants`
+list each entry's `id` for it (the restaurants card leaves it out).
+
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a

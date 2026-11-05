@@ -32,7 +32,12 @@ import {
   addIsoDays,
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
-import { DataSource, In, IsNull } from "typeorm";
+import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
+import { Park } from "../../parks/entities/park.entity";
+import { Show as ShowEntity } from "../../shows/entities/show.entity";
+import { Restaurant } from "../../restaurants/entities/restaurant.entity";
+import { FavoritesService } from "../../favorites/favorites.service";
+import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
 import {
@@ -89,6 +94,9 @@ import {
   type PlannerDay,
   type PlannerSnapshot,
   type AlertsSnapshot,
+  FAVORITE_ENTITIES,
+  type FavoriteEntity,
+  type FavoritesSnapshot,
 } from "../assistant.schemas";
 
 /** The fields of `get_park`'s summary a card reads. */
@@ -200,6 +208,8 @@ export interface AssistantToolContext {
   planner?: PlannerSnapshot | null;
   /** The browser's push state and alerts as it sent them. */
   alerts?: AlertsSnapshot | null;
+  /** The ids of the favourites as the browser sent them. */
+  favorites?: FavoritesSnapshot | null;
   /**
    * The chat this answer belongs to, all of it from the request and the server's own records:
    * what `submit_feedback` stores comes from here, never from the model's input.
@@ -491,6 +501,56 @@ function pastDay(
 /** Most shows one answer lists. */
 const MAX_SHOWS = 30;
 
+/** The entity each favourite kind is looked up in. */
+const FAVORITE_TABLES: Record<
+  FavoriteEntity,
+  EntityTarget<{ id: string; name: string }>
+> = {
+  park: Park,
+  attraction: Attraction,
+  show: ShowEntity,
+  restaurant: Restaurant,
+};
+
+/**
+ * `/v1/favorites`' answer cut to what "how are my favourites doing" needs; show times stay
+ * instants, so they reach the model in the visitor's clock.
+ */
+export function favoritesSummary(found: FavoritesResponseDto) {
+  return {
+    parks: found.parks.map((park) => ({
+      id: park.id,
+      name: park.name,
+      status: park.status,
+      crowdLevel: park.analytics?.crowdLevel ?? null,
+      avgWaitMinutes: park.analytics?.avgWaitTime ?? null,
+    })),
+    rides: found.attractions.map((ride) => ({
+      id: ride.id,
+      name: ride.name,
+      park: ride.park?.name ?? null,
+      status: ride.effectiveStatus ?? ride.status ?? null,
+      waitMinutes:
+        ride.queues?.find((queue) => queue.queueType === "STANDBY")?.waitTime ??
+        null,
+      crowdLevel: ride.crowdLevel ?? null,
+    })),
+    shows: found.shows.map((show) => ({
+      id: show.id,
+      name: show.name,
+      park: show.park?.name ?? null,
+      status: show.status,
+      times: (show.showtimes ?? []).map((time) => time.startTime),
+    })),
+    restaurants: found.restaurants.map((restaurant) => ({
+      id: restaurant.id,
+      name: restaurant.name,
+      park: restaurant.park?.name ?? null,
+      status: restaurant.status,
+    })),
+  };
+}
+
 /** The fields of `get_attraction`'s answer that say why a ride is not running. */
 interface RideClosure {
   status?: string | null;
@@ -584,6 +644,7 @@ export function showsOnDay(
           )
         : NaN;
       return {
+        id: show.id,
         name: show.name,
         slug: show.slug,
         ...(show.landName && { land: show.landName }),
@@ -668,6 +729,7 @@ async function restaurantsOf(
     total: all.length,
     matched: matched.length,
     restaurants: matched.map((r) => ({
+      id: r.id,
       name: r.name,
       // Without a reading of its own the payload guesses from the park's status; that is
       // no statement about the stand (docs/rules/absent-facts.md).
@@ -1496,7 +1558,10 @@ export const ASSISTANT_TOOLS = [
           kind: "restaurants",
           park: found.park,
           url: found.pageUrl ? siteOnlyPath(found.pageUrl) : null,
-          restaurants: found.restaurants.slice(0, MAX_RESTAURANT_CARD),
+          // The id is for set_favorite, not part of the card.
+          restaurants: found.restaurants
+            .slice(0, MAX_RESTAURANT_CARD)
+            .map(({ id: _id, ...shown }) => shown),
         };
         return new ActionOutcome(
           { type: "card", card },
@@ -2124,6 +2189,52 @@ export const ASSISTANT_TOOLS = [
           ...(rideSlug ? { rideSlug } : { showSlug }),
         },
         { removed: held.name },
+      );
+    },
+  }),
+  tool({
+    name: "get_favorites",
+    status: "rides",
+    description:
+      "The user's favourite parks, rides, shows and restaurants right now: name, park, status, " +
+      "a ride's standby wait and crowd level, a park's crowd level and average wait, a show's " +
+      'times today. For "how are my favourites doing" or "which of my rides is shortest".',
+    input: z.object({}),
+    run: async (_input, ctx) => {
+      const ids = ctx.favorites;
+      if (!ids) throw new McpToolError("The user has no favourites yet");
+      const found = await ctx
+        .get(FavoritesService)
+        .getFavorites(ids.parks, ids.attractions, ids.shows, ids.restaurants);
+      return favoritesSummary(found);
+    },
+  }),
+  tool({
+    name: "set_favorite",
+    status: "rides",
+    description:
+      "Add a park, ride, show or restaurant to the user's favourites (on true) or remove it (on " +
+      "false). The id comes from search_parks, find_rides, get_shows or find_restaurants. Only " +
+      "when the user asks.",
+    input: z.object({
+      entity: z.enum(FAVORITE_ENTITIES),
+      id: z.string().uuid(),
+      on: z.boolean().default(true),
+    }),
+    run: async ({ entity, id, on }, ctx) => {
+      const repository = ctx
+        .get(DataSource)
+        .getRepository<{ id: string; name: string }>(FAVORITE_TABLES[entity]);
+      const row = await repository.findOne({
+        where: { id: id.toLowerCase() },
+        select: { id: true, name: true },
+      });
+      if (!row) {
+        throw new McpToolError(`No ${entity} with id ${id}; look it up first`);
+      }
+      return new ActionOutcome(
+        { type: "favorite_set", entity, id: row.id, name: row.name, on },
+        { [on ? "added" : "removed"]: row.name },
       );
     },
   }),

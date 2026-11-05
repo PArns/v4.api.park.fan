@@ -182,6 +182,7 @@ export class AssistantChatService {
           ),
           planner: request.planner,
           alerts: request.alerts,
+          favorites: request.favorites,
         }),
       },
     ];
@@ -199,6 +200,7 @@ export class AssistantChatService {
       timeZone,
       planner: request.planner ?? null,
       alerts: request.alerts ?? null,
+      favorites: request.favorites ?? null,
       chat: {
         conversationId: conversation.id,
         pagePath: request.pagePath,
