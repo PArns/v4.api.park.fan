@@ -217,8 +217,10 @@ The chat request carries an optional `planner` snapshot of the visitor's plan (`
 in `assistant.schemas.ts`): `{ active?: { park, date }, days: [{ park: { slug, name }, date,
 prefs?: { riderHeightCm?, avoidWet?, earlyEntry? }, entries: [{ id, kind: "ride" | "show" |
 "block", name, rideSlug?, start?: "HH:MM", durationMinutes?, done? }] }] }`, at most 6 days and 40
-entries a day. Below the top level unknown keys are dropped, never refused, so a planner field added
-later does not fail the chat. Names are cut to 80 characters on one line; the snapshot reaches the
+entries a day. **The snapshots never fail a chat** (`lenientList`, `lenient`): they come from the
+browser's own storage, so an unknown key, a bad day or entry, a bad optional value or a list that
+is not one is dropped, a list too long is cut, and a snapshot that is not an object counts as
+absent. The same holds for `alerts` and `favorites` below. Names are cut to 80 characters on one line; the snapshot reaches the
 model as JSON in "This chat", marked as data. Parky answers "what's next" from it without a tool.
 
 The planner tools check the park like the others (`planPark`) and refuse a day or an entry id the
@@ -246,7 +248,7 @@ showtimes that day; `get_shows` lists each show's `slug` for it.
 The chat request carries an optional `alerts` snapshot (`alertsSnapshotSchema`): `{ push: "ready" |
 "needs-permission" | "unavailable", rides: [{ park, rideSlug, name, kind: "wait_below" | "reopen",
 thresholdMinutes? }], shows: [{ park, showSlug, name, start? }] }`, at most 100 of each (the push
-endpoints' cap per browser), unknown keys below the top dropped. It reaches the model as JSON in
+endpoints' cap per browser); an unknown `push` reads as `unavailable`. It reaches the model as JSON in
 "This chat". The widget files the alerts through its own [push](push.md) endpoints, which check
 them again; the tools check first, so Parky never offers what those would refuse.
 
@@ -272,7 +274,7 @@ Parky words a breakdown as an estimate from past outages, never a promise.
 ### Favourites in the chat
 
 The chat request carries an optional `favorites` snapshot (`favoritesSnapshotSchema`): `{ parks,
-attractions, shows, restaurants }`, uuid lists of at most 50 each, a missing list read as empty.
+attractions, shows, restaurants }`, uuid lists of at most 50 each; a value that is not a uuid is dropped.
 "This chat" names only how many there are; `get_favorites` resolves the ids through
 `FavoritesService.getFavorites`, the service behind [`/v1/favorites`](favorites.md) and its Redis
 cache, and returns per kind the id, name, park, status and, for rides, the standby wait and crowd

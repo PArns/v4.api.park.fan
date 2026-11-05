@@ -380,24 +380,34 @@ describe("request schemas", () => {
       name: "Taron",
       start: "10:00",
     });
-    const refused = (planner: unknown) =>
-      chatRequestSchema.safeParse({ ...chat, planner }).success;
-    expect(refused({ days: Array(7).fill(day) })).toBe(false);
+    // A stale or tampered snapshot costs entries, never the chat.
+    const read = (planner: unknown) => {
+      const result = chatRequestSchema.safeParse({ ...chat, planner });
+      expect(result.success).toBe(true);
+      return result.data?.planner;
+    };
+    expect(read({ days: Array(7).fill(day) })?.days).toHaveLength(6);
     expect(
-      refused({
-        days: [{ ...day, entries: Array(41).fill(day.entries[0]) }],
-      }),
-    ).toBe(false);
-    expect(
-      refused({
-        days: [{ ...day, entries: [{ ...day.entries[0], id: "a b" }] }],
-      }),
-    ).toBe(false);
-    expect(
-      refused({
-        days: [{ ...day, entries: [{ ...day.entries[0], kind: "parade" }] }],
-      }),
-    ).toBe(false);
+      read({ days: [{ ...day, entries: Array(41).fill(day.entries[0]) }] })
+        ?.days[0].entries,
+    ).toHaveLength(40);
+    const entries = read({
+      days: [
+        {
+          ...day,
+          entries: [
+            { ...day.entries[0], id: "a b" },
+            { ...day.entries[0], kind: "parade" },
+            { ...day.entries[0], start: "25:99" },
+          ],
+        },
+      ],
+    })?.days[0].entries;
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0].start).toBeUndefined();
+    expect(read({ days: [{ date: "soon" }, day] })?.days).toHaveLength(1);
+    expect(read({ days: "lots" })?.days).toEqual([]);
+    expect(read("not a planner")).toBeUndefined();
   });
 
   it("puts the planner in This chat as quoted data, and nothing without one", () => {
@@ -463,16 +473,20 @@ describe("request schemas", () => {
       shows: [],
       restaurants: [],
     });
-    expect(
-      chatRequestSchema.safeParse({ ...base, favorites: { parks: ["nope"] } })
-        .success,
-    ).toBe(false);
-    expect(
-      chatRequestSchema.safeParse({
-        ...base,
-        favorites: { parks: Array(51).fill(id) },
-      }).success,
-    ).toBe(false);
+    // The cookie holds any string: bad ids are dropped, long lists cut, never a 400.
+    const read = (favorites: unknown) => {
+      const result = chatRequestSchema.safeParse({ ...base, favorites });
+      expect(result.success).toBe(true);
+      return result.data?.favorites;
+    };
+    expect(read({ parks: ["nope", id, 7] })?.parks).toEqual([id]);
+    expect(read({ parks: Array(51).fill(id) })?.parks).toHaveLength(50);
+    expect(read({ parks: "x", shows: { a: 1 } })).toEqual({
+      parks: [],
+      attractions: [],
+      shows: [],
+      restaurants: [],
+    });
     const context = chatContext({
       locale: "en",
       now: "2026-11-05 14:21",
@@ -508,21 +522,25 @@ describe("request schemas", () => {
       alerts,
     });
     expect(parsed.success).toBe(true);
-    const bad = (value: unknown) =>
-      chatRequestSchema.safeParse({
+    const read = (value: unknown) => {
+      const result = chatRequestSchema.safeParse({
         locale: "en",
         pagePath: "/en",
         message: "hi",
         sessionToken: "s1.1.n.sig",
         alerts: value,
-      }).success;
-    expect(bad({ ...alerts, push: "maybe" })).toBe(false);
+      });
+      expect(result.success).toBe(true);
+      return result.data?.alerts;
+    };
+    // An unknown push state offers nothing; a bad threshold is dropped, a bad entry too.
+    expect(read({ ...alerts, push: "maybe" })?.push).toBe("unavailable");
     expect(
-      bad({
+      read({
         ...alerts,
-        rides: [{ ...alerts.rides[0], thresholdMinutes: 500 }],
-      }),
-    ).toBe(false);
+        rides: [{ ...alerts.rides[0], thresholdMinutes: 500 }, { park: 1 }],
+      })?.rides,
+    ).toEqual([alerts.rides[0]]);
     expect(
       chatContext({
         locale: "en",
