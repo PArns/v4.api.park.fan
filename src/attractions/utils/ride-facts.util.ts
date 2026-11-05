@@ -89,9 +89,15 @@ export type RideRanking = (typeof RIDE_RANKINGS)[number];
 
 /**
  * The ride types a comparison can be narrowed to, read off the profile's glossary type ids:
- * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`).
+ * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`). No
+ * "show": three profiles carry `live-show`, and shows are their own records (`get_shows`).
  */
-export const RIDE_TYPE_FILTERS = ["coaster"] as const;
+export const RIDE_TYPE_FILTERS = [
+  "coaster",
+  "dark_ride",
+  "water",
+  "family",
+] as const;
 
 export type RideTypeFilter = (typeof RIDE_TYPE_FILTERS)[number];
 
@@ -108,17 +114,58 @@ const COASTER_TYPE_IDS: ReadonlySet<string> = new Set([
   "slc",
 ]);
 
+/**
+ * The other filters' glossary type ids (`category: 'attractions'` in the same file). A dark ride
+ * is any indoor themed ride system, simulators included, because that is what a visitor asking
+ * for immersion means; a plain `boat-ride` is not wet (It's a Small World), so it is not water.
+ */
+const TYPE_IDS: Record<
+  Exclude<RideTypeFilter, "coaster">,
+  ReadonlySet<string>
+> = {
+  dark_ride: new Set([
+    "dark-ride",
+    "suspended-dark-ride",
+    "interactive-dark-ride",
+    "trackless-ride",
+    "omnimover",
+    "motion-simulator",
+    "flying-theater",
+    "4d-cinema",
+    "madhouse",
+  ]),
+  water: new Set([
+    "water-ride",
+    "log-flume",
+    "river-rapids",
+    "shoot-the-chute",
+    "water-coaster",
+  ]),
+  family: new Set([
+    "family-coaster",
+    "carousel",
+    "teacups",
+    "ferris-wheel",
+    "bumper-cars",
+    "swing-ride",
+    "people-mover",
+    "park-railway",
+    "monorail",
+    "sky-ride",
+  ]),
+};
+
 /** Whether a ride's glossary type ids make it a ride of `type`. */
 export function isRideOfType(
   types: readonly string[],
   type: RideTypeFilter,
 ): boolean {
-  switch (type) {
-    case "coaster":
-      return types.some(
-        (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),
-      );
+  if (type === "coaster") {
+    return types.some(
+      (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),
+    );
   }
+  return types.some((id) => TYPE_IDS[type].has(id));
 }
 
 /** One ride of a park with what is known about it, for {@link compareRides}. */
