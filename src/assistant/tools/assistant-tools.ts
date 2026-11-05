@@ -46,6 +46,7 @@ import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
 import {
   ActionOutcome,
   clockTime,
+  localizePageUrls,
   parkRides,
   planDate,
   PLANNER_BLOCK_ICONS,
@@ -1284,6 +1285,13 @@ export function toolStatus(name: string): AssistantToolStatus | null {
 const MAX_RESULT_CHARS = 12_000;
 
 /**
+ * Said with every card and page change: the visitor already reads the text the model wrote
+ * before the call, and the chat streams every round's text, so a repeat is shown twice.
+ */
+const ALREADY_SHOWN =
+  "The user already sees the card or page and any text you wrote before this call; do not repeat it, add at most one new sentence.";
+
+/**
  * Runs one tool call and returns what goes back to the model. A wrong name or
  * input, or a failing tool, becomes an error result the model can read; the
  * message of an unexpected error stays in the log.
@@ -1307,11 +1315,13 @@ export async function runAssistantTool(
     const outcome = await definition.run(input.data, ctx);
     const action =
       outcome instanceof ActionOutcome ? outcome.action : undefined;
+    const plain = outcome instanceof ActionOutcome ? outcome.result : outcome;
+    const shown =
+      action?.type === "card" || action?.type === "navigate"
+        ? { ...(plain as object), alreadyShown: ALREADY_SHOWN }
+        : plain;
     const result = JSON.stringify(
-      localizeTimes(
-        outcome instanceof ActionOutcome ? outcome.result : outcome,
-        ctx.timeZone ?? "UTC",
-      ),
+      localizeTimes(localizePageUrls(shown, ctx.locale), ctx.timeZone ?? "UTC"),
     );
     return {
       content:

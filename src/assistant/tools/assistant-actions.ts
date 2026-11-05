@@ -5,7 +5,7 @@ import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
-import type { AssistantLocale } from "../system-prompt";
+import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
 
 /**
  * Parky's actions on the page: what the browser does for it, never the API. A tool returns an
@@ -143,6 +143,32 @@ export function siteOnlyPath(url: string): string | null {
   if (parsed.search || parsed.username || parsed.password) return null;
   const path = parsed.pathname.toLowerCase();
   return PAGE_PATH.test(path) && path.length <= 300 ? path : null;
+}
+
+/**
+ * Every park and ride page url in `value`, at any depth, in the chat's language: the handlers
+ * build `https://park.fan/parks/…`, which would link a Dutch answer to the English page. Only
+ * `/parks/` is rewritten; its localized subpages (the calendar's `calendrier-temps-attente`)
+ * are not built here. Cards carry site-only paths, which the widget localizes itself.
+ */
+export function localizePageUrls(value: unknown, locale: string): unknown {
+  if (!(ASSISTANT_LOCALES as readonly string[]).includes(locale)) return value;
+  const parks = `${getFrontendUrl()}/parks/`;
+  const visit = (item: unknown): unknown => {
+    if (typeof item === "string") {
+      return item.startsWith(parks)
+        ? `${getFrontendUrl()}/${locale}/parks/${item.slice(parks.length)}`
+        : item;
+    }
+    if (Array.isArray(item)) return item.map(visit);
+    if (item && typeof item === "object") {
+      return Object.fromEntries(
+        Object.entries(item).map(([key, entry]) => [key, visit(entry)]),
+      );
+    }
+    return item;
+  };
+  return visit(value);
 }
 
 /** A day as the planner keys it, YYYY-MM-DD, no further back than yesterday and within a year. */

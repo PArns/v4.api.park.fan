@@ -4,6 +4,30 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { foldText, runAssistantTool } from "./assistant-tools";
+import { localizePageUrls } from "./assistant-actions";
+import { getFrontendUrl } from "../../config/oauth.config";
+
+describe("page urls in the chat's language", () => {
+  it("prefixes the locale to park and ride pages only, once", () => {
+    const site = getFrontendUrl();
+    const result = localizePageUrls(
+      {
+        pageUrl: `${site}/parks/europe/germany/bruehl/phantasialand/taron`,
+        rides: [{ url: `${site}/parks/europe/germany/bruehl/phantasialand` }],
+        post: `${site}/fr/news/x`,
+        other: "https://evil.example/parks/x",
+      },
+      "fr",
+    );
+    expect(result).toEqual({
+      pageUrl: `${site}/fr/parks/europe/germany/bruehl/phantasialand/taron`,
+      rides: [{ url: `${site}/fr/parks/europe/germany/bruehl/phantasialand` }],
+      post: `${site}/fr/news/x`,
+      other: "https://evil.example/parks/x",
+    });
+    expect(localizePageUrls(`${site}/parks/x`, "pt")).toBe(`${site}/parks/x`);
+  });
+});
 
 const PARK_ID = "11111111-1111-4111-8111-111111111111";
 const park = {
@@ -24,12 +48,13 @@ async function run(
   name: string,
   input: unknown,
   providers: Map<unknown, unknown>,
+  locale = "en",
 ) {
   const onError = jest.fn();
   const result = await runAssistantTool(
     name,
     input,
-    context(providers),
+    context(providers, locale),
     onError,
   );
   expect(onError).not.toHaveBeenCalled();
@@ -118,6 +143,18 @@ describe("find_restaurants", () => {
       status: null,
       requiresReservation: true,
     });
+  });
+
+  it("links the park page in the chat's language", async () => {
+    const { json } = await run(
+      "find_restaurants",
+      { park: PARK_ID },
+      providers,
+      "nl",
+    );
+    expect(json.pageUrl).toBe(
+      `${getFrontendUrl()}/nl/parks/europe/germany/bruehl/phantasialand`,
+    );
   });
 
   it("folds case and accents for the query", () => {
@@ -288,5 +325,17 @@ describe("show_card kind rides with a type", () => {
       card: { kind: "rides", rides: [{ name: "Raik" }, { name: "Taron" }] },
     });
     expect(json.shown).toBe("2 coasters of Phantasialand");
+  });
+});
+
+describe("display tools", () => {
+  it("tell the model its text is shown already, so it does not write it twice", async () => {
+    const { json } = await run(
+      "open_page",
+      { url: "https://park.fan/de/news/taron-neu" },
+      new Map(),
+    );
+    expect(json.opened).toBe(true);
+    expect(json.alreadyShown).toMatch(/do not repeat/);
   });
 });
