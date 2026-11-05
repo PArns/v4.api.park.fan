@@ -426,10 +426,12 @@ export const ASSISTANT_TOOLS = [
     status: "rides",
     description:
       "One ride now: status, every queue with its wait, crowd level and trend, a running outage, " +
-      "facts (minimum height in cm, gets you wet, single rider, indoor/outdoor, season), its " +
-      "profile where park.fan has one (type, track figures in order, launches, inversions, " +
-      "manufacturer, model, opening year, top speed, height, length, duration), typical waits, " +
-      "reliability, and its pageUrl.",
+      "facts (minimum height in cm, gets you wet, single rider, indoor/outdoor, season, land, " +
+      "the paid fast pass, headliner), its profile where park.fan has one (type, track figures " +
+      "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
+      "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
+      "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
+      "best visit times, and its pageUrl.",
     input: z.object({
       rideId: z
         .string()
