@@ -88,6 +88,8 @@ import {
   showsOnDay,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { ShowsService } from "../../shows/shows.service";
+import { formatInTimeZone } from "date-fns-tz";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 
@@ -934,5 +936,155 @@ describe("calendar and tiles cards", () => {
       expect(result.isError).toBe(true);
       expect(result.action).toBeUndefined();
     }
+  });
+});
+
+describe("planner tools", () => {
+  const dayAhead = (days: number) =>
+    new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  const DATE = dayAhead(3);
+  const SHOW_INSTANT = `${DATE}T13:30:00.000Z`;
+  // The park's clock for that instant, whichever side of a DST switch the test runs on.
+  const SHOW_START = formatInTimeZone(
+    new Date(SHOW_INSTANT),
+    "Europe/Berlin",
+    "HH:mm",
+  );
+  const planner = {
+    days: [
+      {
+        park: { slug: "phantasialand", name: "Phantasialand" },
+        date: DATE,
+        entries: [
+          { id: "r1", kind: "ride" as const, name: "Taron", rideSlug: "taron" },
+          { id: "b1", kind: "block" as const, name: "Lunch", start: "12:00" },
+        ],
+      },
+    ],
+  };
+  const providers = new Map<unknown, unknown>([
+    [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+    [
+      ShowsService,
+      {
+        findByParkId: jest.fn(async () => [
+          { id: "s1", slug: "stunt-show", name: "Stunt Show" },
+        ]),
+        getShowtimeInstantsOnDate: jest.fn(
+          async () => new Map([["s1", [SHOW_INSTANT]]]),
+        ),
+      },
+    ],
+  ]);
+  const call = (
+    name: string,
+    input: Record<string, unknown>,
+    plan: typeof planner | { days: [] } | null = planner,
+  ) =>
+    runAssistantTool(
+      name,
+      { park: PARK_ID, date: DATE, ...input },
+      { ...context(providers), planner: plan },
+      jest.fn(),
+    );
+  const plannerPark = {
+    slug: "phantasialand",
+    name: "Phantasialand",
+    geo: { continent: "europe", country: "germany", city: "bruehl" },
+    timezone: "Europe/Berlin",
+  };
+
+  it.each([
+    [
+      "plan_remove",
+      { entryIds: ["r1"] },
+      { type: "planner_remove", entryIds: ["r1"] },
+    ],
+    [
+      "plan_move",
+      { entryId: "b1", toIndex: 0 },
+      { type: "planner_move", entryId: "b1", toIndex: 0 },
+    ],
+    [
+      "plan_update_block",
+      { entryId: "b1", start: "12:30", durationMinutes: 45 },
+      {
+        type: "planner_update_block",
+        entryId: "b1",
+        start: "12:30",
+        durationMinutes: 45,
+      },
+    ],
+    [
+      "plan_add_show",
+      { showSlug: "stunt-show", start: SHOW_START },
+      { type: "planner_add_show", showSlug: "stunt-show", start: SHOW_START },
+    ],
+    [
+      "plan_set_party",
+      { prefs: { riderHeightCm: 120, avoidWet: true } },
+      {
+        type: "planner_set_prefs",
+        prefs: { riderHeightCm: 120, avoidWet: true },
+      },
+    ],
+    [
+      "plan_mark_done",
+      { entryIds: ["r1"] },
+      { type: "planner_mark_done", entryIds: ["r1"], done: true },
+    ],
+    ["plan_clear_day", { confirmed: true }, { type: "planner_clear_day" }],
+    ["plan_undo", {}, { type: "planner_undo" }],
+  ])("%s asks the planner for its change", async (name, input, action) => {
+    const result = await call(name, input);
+    expect(result.isError).toBeFalsy();
+    expect(result.action).toEqual({ park: plannerPark, date: DATE, ...action });
+  });
+
+  it("plan_trip reserves each day once, in order", async () => {
+    const later = dayAhead(5);
+    const result = await call("plan_trip", { dates: [later, DATE, later] });
+    expect(result.action).toEqual({
+      type: "planner_reserve_days",
+      park: plannerPark,
+      dates: [DATE, later],
+    });
+  });
+
+  it("plan_share needs a plan", async () => {
+    expect((await call("plan_share", {})).action).toEqual({
+      type: "planner_share",
+    });
+    expect((await call("plan_share", {}, { days: [] })).isError).toBe(true);
+  });
+
+  it.each([
+    ["an entry id the plan does not hold", "plan_remove", { entryIds: ["x9"] }],
+    ["a day that is not planned", "plan_undo", { date: dayAhead(9) }],
+    ["a ride as a block", "plan_update_block", { entryId: "r1", label: "x" }],
+    ["a block with nothing to change", "plan_update_block", { entryId: "b1" }],
+    ["a place past the end", "plan_move", { entryId: "r1", toIndex: 2 }],
+    [
+      "a time the show does not start",
+      "plan_add_show",
+      { showSlug: "stunt-show", start: "15:00" },
+    ],
+    [
+      "an unknown show",
+      "plan_add_show",
+      { showSlug: "parade", start: SHOW_START },
+    ],
+    ["clearing without a yes", "plan_clear_day", {}],
+    ["empty prefs", "plan_set_party", { prefs: {} }],
+  ])("refuses %s", async (_case, name, input) => {
+    const result = await call(name, input);
+    expect(result.isError).toBe(true);
+    expect(result.action).toBeUndefined();
+  });
+
+  it("refuses a change without a planner snapshot", async () => {
+    expect(
+      (await call("plan_remove", { entryIds: ["r1"] }, null)).isError,
+    ).toBe(true);
   });
 });

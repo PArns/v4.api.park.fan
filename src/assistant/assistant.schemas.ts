@@ -7,6 +7,67 @@ const pagePath = z
   .max(300)
   .regex(/^\/[a-z0-9\-/]*$/, "must be a path of slugs");
 
+const slug = z
+  .string()
+  .max(160)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+/** A name the browser typed or stored, on one line: it reaches the model as data. */
+const plannerName = z
+  .string()
+  .max(80)
+  .transform((value) => value.replace(/\s+/g, " ").trim());
+
+/** A planner entry's id, as the browser made it. */
+export const plannerEntryId = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+/** HH:MM on the park's clock, as the planner stores it. */
+export const plannerClock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+
+/** What the planner knows about the party, per day. */
+export const plannerPrefs = z.object({
+  riderHeightCm: z.number().int().min(50).max(250).optional(),
+  avoidWet: z.boolean().optional(),
+  earlyEntry: z.boolean().optional(),
+});
+
+/**
+ * The visitor's trip planner as the browser holds it, sent with every question so Parky can read
+ * and change it. Not strict below the top: a field the planner adds later must not fail the chat;
+ * unknown keys are dropped.
+ */
+export const plannerSnapshotSchema = z.object({
+  active: z.object({ park: slug, date: z.iso.date() }).optional(),
+  days: z
+    .array(
+      z.object({
+        park: z.object({ slug, name: plannerName }),
+        date: z.iso.date(),
+        prefs: plannerPrefs.optional(),
+        entries: z
+          .array(
+            z.object({
+              id: plannerEntryId,
+              kind: z.enum(["ride", "show", "block"]),
+              name: plannerName,
+              rideSlug: slug.optional(),
+              start: plannerClock.optional(),
+              durationMinutes: z.number().int().min(1).max(720).optional(),
+              done: z.boolean().optional(),
+            }),
+          )
+          .max(40),
+      }),
+    )
+    .max(6),
+});
+export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
+export type PlannerDay = PlannerSnapshot["days"][number];
+
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
 
@@ -45,6 +106,7 @@ export const chatRequestSchema = z.strictObject({
       lng: Math.round(lng * 100) / 100,
     }))
     .optional(),
+  planner: plannerSnapshotSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

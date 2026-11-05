@@ -72,10 +72,18 @@ import {
   planDate,
   PLANNER_BLOCK_ICONS,
   planPark,
+  plannerPark,
   siteOnlyPath,
   type AssistantCard,
   type ClientAction,
 } from "./assistant-actions";
+import {
+  plannerClock,
+  plannerEntryId,
+  plannerPrefs,
+  type PlannerDay,
+  type PlannerSnapshot,
+} from "../assistant.schemas";
 
 /** The fields of `get_park`'s summary a card reads. */
 type ParkSummary =
@@ -182,6 +190,8 @@ export interface AssistantToolContext {
   location?: { lat: number; lng: number } | null;
   /** The browser's IANA zone; every instant in a result is shown in it. */
   timeZone?: string;
+  /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
+  planner?: PlannerSnapshot | null;
   /**
    * The chat this answer belongs to, all of it from the request and the server's own records:
    * what `submit_feedback` stores comes from here, never from the model's input.
@@ -285,6 +295,36 @@ function tool<Shape extends z.ZodRawShape>(
 
 function mcp(ctx: AssistantToolContext): McpToolContext {
   return { admin: PARKY, get: ctx.get.bind(ctx) };
+}
+
+/** A day of the visitor's plan, the park checked; the planner snapshot is the only source. */
+async function plannedDay(
+  ctx: AssistantToolContext,
+  reference: string,
+  date: string,
+) {
+  const park = await planPark(mcp(ctx), reference);
+  if ("ambiguous" in park) return park;
+  const day = ctx.planner?.days.find(
+    (planned) => planned.park.slug === park.slug && planned.date === date,
+  );
+  if (!day) {
+    throw new McpToolError(`${park.name} on ${date} is not in the user's plan`);
+  }
+  return { park, day };
+}
+
+/** The entries by id, in the order asked; an id the plan does not hold is refused, never guessed. */
+function plannedEntries(day: PlannerDay, ids: readonly string[]) {
+  return ids.map((id) => {
+    const entry = day.entries.find((planned) => planned.id === id);
+    if (!entry) {
+      throw new McpToolError(
+        `Entry ${id} is not in this day's plan; take ids from the plan in This chat`,
+      );
+    }
+    return entry;
+  });
 }
 
 /** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
@@ -426,6 +466,7 @@ export function showsOnDay(
         : NaN;
       return {
         name: show.name,
+        slug: show.slug,
         ...(show.landName && { land: show.landName }),
         status: reading?.status ?? null,
         showtimes: starts.get(show.id) as string[],
@@ -1674,6 +1715,271 @@ export const ASSISTANT_TOOLS = [
         { type: "planner_optimize", park, date, mode },
         { optimizing: park.name, date, mode },
       );
+    },
+  }),
+  tool({
+    name: "plan_remove",
+    status: "planner",
+    description:
+      "Remove entries from one planned day. Entry ids from the plan in This chat. Only when " +
+      "the user asks.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryIds: z.array(plannerEntryId).min(1).max(40),
+    }),
+    run: async ({ park: reference, date, entryIds }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const entries = plannedEntries(day, entryIds);
+      return new ActionOutcome(
+        { type: "planner_remove", park, date, entryIds },
+        { removed: entries.map((entry) => entry.name), park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_move",
+    status: "planner",
+    description:
+      "Move one entry of a planned day to another place in its order, toIndex counting from 0. " +
+      "Only when the user asks.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryId: plannerEntryId,
+      toIndex: z.number().int().min(0).max(39),
+    }),
+    run: async ({ park: reference, date, entryId, toIndex }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const [entry] = plannedEntries(day, [entryId]);
+      if (toIndex >= day.entries.length) {
+        throw new McpToolError(
+          `The day has ${day.entries.length} entries; toIndex is at most ${day.entries.length - 1}`,
+        );
+      }
+      return new ActionOutcome(
+        { type: "planner_move", park, date, entryId, toIndex },
+        { moved: entry.name, toIndex, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_update_block",
+    status: "planner",
+    description:
+      "Change a block of the user's own (a break, a meal, a stop) in a planned day: its label, " +
+      "start or length. Blocks only, not rides or shows. Only when the user asks.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryId: plannerEntryId,
+      label: z.string().trim().min(1).max(40).optional(),
+      start: plannerClock
+        .optional()
+        .describe("New start in the park's local time, HH:MM"),
+      durationMinutes: z.number().int().min(10).max(240).optional(),
+    }),
+    run: async (
+      { park: reference, date, entryId, label, start, durationMinutes },
+      ctx,
+    ) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const [entry] = plannedEntries(day, [entryId]);
+      if (entry.kind !== "block") {
+        throw new McpToolError(
+          `${entry.name} is a ${entry.kind}, not a block; only blocks change here`,
+        );
+      }
+      if (label === undefined && start === undefined && !durationMinutes) {
+        throw new McpToolError("Give a label, a start or a length to change");
+      }
+      return new ActionOutcome(
+        {
+          type: "planner_update_block",
+          park,
+          date,
+          entryId,
+          ...(label !== undefined && { label }),
+          ...(start !== undefined && { start }),
+          ...(durationMinutes !== undefined && { durationMinutes }),
+        },
+        { updated: entry.name, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_add_show",
+    status: "planner",
+    description:
+      "Add one of a park's shows to the user's trip planner at one of its times that day. The " +
+      "show's slug and times come from get_shows; start is the park's local time, HH:MM. Only " +
+      "when the user asks.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      showSlug: z
+        .string()
+        .max(160)
+        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+        .describe("Slug from get_shows"),
+      start: plannerClock.describe("Start in the park's local time, HH:MM"),
+    }),
+    run: async ({ park: reference, date, showSlug, start }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const park = plannerPark(found);
+      const shows = ctx.get(ShowsService);
+      const [all, starts] = await Promise.all([
+        shows.findByParkId(found.id),
+        shows.getShowtimeInstantsOnDate(found.id, found.timezone, date),
+      ]);
+      const show = all.find((candidate) => candidate.slug === showSlug);
+      if (!show) {
+        throw new McpToolError(
+          `${park.name} has no show ${showSlug}; use get_shows`,
+        );
+      }
+      const times = (starts.get(show.id) ?? []).map((instant) =>
+        formatInTimeZone(new Date(instant), found.timezone, "HH:mm"),
+      );
+      if (!times.includes(start)) {
+        throw new McpToolError(
+          times.length
+            ? `${show.name} starts at ${times.join(", ")} that day, park time`
+            : `${show.name} has no published time that day`,
+        );
+      }
+      return new ActionOutcome(
+        { type: "planner_add_show", park, date, showSlug, start },
+        { added: show.name, start, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_set_party",
+    status: "planner",
+    description:
+      "Tell the trip planner about the party for one planned day: the smallest rider's height " +
+      "in cm, whether to stay dry, whether they have early entry. The planner then flags rides " +
+      "that do not fit. Only when the user asks or tells you.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      prefs: plannerPrefs,
+    }),
+    run: async ({ park: reference, date, prefs }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park } = found;
+      if (Object.keys(prefs).length === 0) {
+        throw new McpToolError("Give a height, avoidWet or earlyEntry");
+      }
+      return new ActionOutcome(
+        { type: "planner_set_prefs", park, date, prefs },
+        { set: prefs, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_mark_done",
+    status: "planner",
+    description:
+      "Tick entries of a planned day off as done (or back, done false). Only when the user says " +
+      "they did them or asks.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryIds: z.array(plannerEntryId).min(1).max(40),
+      done: z.boolean().default(true),
+    }),
+    run: async ({ park: reference, date, entryIds, done }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const entries = plannedEntries(day, entryIds);
+      return new ActionOutcome(
+        { type: "planner_mark_done", park, date, entryIds, done },
+        { marked: entries.map((entry) => entry.name), done, park: park.name },
+      );
+    },
+  }),
+  tool({
+    name: "plan_clear_day",
+    status: "planner",
+    description:
+      "Empty one planned day completely. Only after you asked and the user said yes in this " +
+      "chat; the planner keeps an undo.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      confirmed: z
+        .literal(true)
+        .describe("true only once the user said yes to clearing this day"),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      return new ActionOutcome(
+        { type: "planner_clear_day", park, date },
+        { cleared: park.name, date, entries: day.entries.length },
+      );
+    },
+  }),
+  tool({
+    name: "plan_trip",
+    status: "planner",
+    description:
+      "Reserve several days at one park in the trip planner at once (a trip), empty days the " +
+      "user fills later. Only when the user asks.",
+    input: z.object({
+      park: parkRef,
+      dates: z.array(planDate).min(1).max(6),
+    }),
+    run: async ({ park: reference, dates }, ctx) => {
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      const unique = [...new Set(dates)].sort();
+      return new ActionOutcome(
+        { type: "planner_reserve_days", park, dates: unique },
+        { reserved: unique, park: park.name },
+      );
+    },
+  }),
+  tool({
+    name: "plan_undo",
+    status: "planner",
+    description:
+      "Undo the planner's last change to one planned day. Only when the user asks.",
+    input: z.object({ park: parkRef, date: planDate }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park } = found;
+      return new ActionOutcome(
+        { type: "planner_undo", park, date },
+        { undoing: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_share",
+    status: "planner",
+    description:
+      "Open the planner's share dialog for the user's plan (a link to send). Only when the user " +
+      "asks.",
+    input: z.object({}),
+    run: async (_input, ctx) => {
+      if (!ctx.planner?.days.length) {
+        throw new McpToolError("The user has nothing planned to share yet");
+      }
+      return new ActionOutcome({ type: "planner_share" }, { sharing: true });
     },
   }),
   tool({

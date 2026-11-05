@@ -327,6 +327,59 @@ export type ClientAction =
       date: string;
       mode: "order" | "headliners";
     }
+  /** Entry ids are always ones the browser sent in the chat's planner snapshot. */
+  | {
+      type: "planner_remove";
+      park: PlannerPark;
+      date: string;
+      entryIds: string[];
+    }
+  | {
+      type: "planner_move";
+      park: PlannerPark;
+      date: string;
+      entryId: string;
+      toIndex: number;
+    }
+  | {
+      type: "planner_update_block";
+      park: PlannerPark;
+      date: string;
+      entryId: string;
+      label?: string;
+      /** HH:MM, the park's clock. */
+      start?: string;
+      durationMinutes?: number;
+    }
+  | {
+      type: "planner_add_show";
+      park: PlannerPark;
+      date: string;
+      showSlug: string;
+      /** HH:MM, the park's clock, one of the show's times that day. */
+      start: string;
+    }
+  | {
+      type: "planner_set_prefs";
+      park: PlannerPark;
+      date: string;
+      prefs: {
+        riderHeightCm?: number;
+        avoidWet?: boolean;
+        earlyEntry?: boolean;
+      };
+    }
+  | {
+      type: "planner_mark_done";
+      park: PlannerPark;
+      date: string;
+      entryIds: string[];
+      done: boolean;
+    }
+  | { type: "planner_clear_day"; park: PlannerPark; date: string }
+  | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
+  | { type: "planner_undo"; park: PlannerPark; date: string }
+  | { type: "planner_share" }
   /** The same page in another of the site's languages, carried out once the answer is complete. */
   | { type: "switch_locale"; locale: AssistantLocale }
   /** Parky stored the visitor's feedback; the widget shows it under the answer. */

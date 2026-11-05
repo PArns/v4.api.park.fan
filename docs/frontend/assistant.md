@@ -211,6 +211,36 @@ buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_bloc
 (`switch_locale` with the locale; the widget carries it out once the answer is complete) and
 `submit_feedback` (`feedback_sent`, a chip under the answer).
 
+### The trip planner in the chat
+
+The chat request carries an optional `planner` snapshot of the visitor's plan (`plannerSnapshotSchema`
+in `assistant.schemas.ts`): `{ active?: { park, date }, days: [{ park: { slug, name }, date,
+prefs?: { riderHeightCm?, avoidWet?, earlyEntry? }, entries: [{ id, kind: "ride" | "show" |
+"block", name, rideSlug?, start?: "HH:MM", durationMinutes?, done? }] }] }`, at most 6 days and 40
+entries a day. Below the top level unknown keys are dropped, never refused, so a planner field added
+later does not fail the chat. Names are cut to 80 characters on one line; the snapshot reaches the
+model as JSON in "This chat", marked as data. Parky answers "what's next" from it without a tool.
+
+The planner tools check the park like the others (`planPark`) and refuse a day or an entry id the
+snapshot does not hold, so no id is ever guessed. Every `park` below is the `PlannerPark` the other
+planner actions carry; times are `HH:MM` on the park's clock.
+
+| Tool                | Action                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `plan_remove`       | `{ type: "planner_remove", park, date, entryIds }`                                         |
+| `plan_move`         | `{ type: "planner_move", park, date, entryId, toIndex }` (0-based, within the day)         |
+| `plan_update_block` | `{ type: "planner_update_block", park, date, entryId, label?, start?, durationMinutes? }`  |
+| `plan_add_show`     | `{ type: "planner_add_show", park, date, showSlug, start }` (one of the show's times then) |
+| `plan_set_party`    | `{ type: "planner_set_prefs", park, date, prefs }`                                         |
+| `plan_mark_done`    | `{ type: "planner_mark_done", park, date, entryIds, done }`                                |
+| `plan_clear_day`    | `{ type: "planner_clear_day", park, date }` (input `confirmed: true`, after a yes)         |
+| `plan_trip`         | `{ type: "planner_reserve_days", park, dates }` (1 to 6, deduplicated, sorted)             |
+| `plan_undo`         | `{ type: "planner_undo", park, date }`                                                     |
+| `plan_share`        | `{ type: "planner_share" }` (refused with nothing planned)                                 |
+
+`plan_update_block` changes blocks only. `plan_add_show` checks the time against the show's
+showtimes that day; `get_shows` lists each show's `slug` for it.
+
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
