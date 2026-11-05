@@ -38,6 +38,15 @@ Carried rows are excluded by `is_heartbeat` with the `"lastUpdated" = timestamp`
 `data_source` alone failed: the heartbeat copies the previous row's `data_source`, and one carried row
 in an `OPERATING/CLOSED/OPERATING` triple dropped the gap, which silently cut every gap over ~65 minutes.
 
+**Known bias in the nightly denominator (PAR-1093, accepted).** The nightly statement runs before its
+job rewrites `attraction_exposure_days`, so `active_days` (and the evidence hours of `blind_parks`)
+come from the previous run's rows and miss the newest operating day: ~1 day in 30 (3.3 %), n days
+after n missed runs. That raises the gap share towards `MAX_GAP_DAY_SHARE`, which withholds a real
+fault rather than publishing a timetable as one, and the calibration of 0.5 was taken on the record
+that carries it. Moving the statement inside the write transaction costs 30.4 s under the delete locks
+every night (2026-09-08); passing the in-memory exposure rows in costs ~30 days of rows per tracked
+ride as parameters plus a merge with older history. The reasoning sits at `MAX_GAP_DAY_SHARE`.
+
 Free-flow rides (`open_with_park`) are excluded from both closure statements: the flag says their
 `CLOSED` readings are not evidence, and the page showed such a ride as open by the flag and standing
 still from the same rows (PAR-913).
@@ -64,8 +73,12 @@ recovery curve built on it could only err towards "back soon".
 - **The live statement returns nothing outside a published `OPERATING` window**: a ride reading
   `CLOSED` in a shut park is a shut park.
 
-The nightly statement still requires the start inside a window, so pre-opening closures are shown live
-but not stored for the curve (the conservative direction).
+The nightly statement applies the same rule (PAR-1092): `gap_edges` places a start outside every
+window in the first window that opens later the same park-local day and clips it to that opening, so a
+pre-opening closure is stored as the page showed it. Two conditions keep it from inventing one: the
+ride's last `OPERATING` reading must lie after `night_mid` (the live `open_today` asks the same), and
+the ride must still be `CLOSED` at the opening (a pre-opening gap that ended before it is not an
+outage of the operating day). Simultaneity is still counted on the minute the ride flipped.
 
 ## Rides whose feed always reports 0 (measured, not filtered)
 
@@ -76,5 +89,15 @@ stored closures in 60 days, and those parks publish status and nothing else. Rid
 
 **Known limit:** whether those closures are real has no ground truth yet; the closed_gap hand check
 (PAR-1095) decides whether a track-record gate on that share is needed.
+
+## Days the window builder cannot use (PAR-1094)
+
+Both statements take a park's days from `parkOpenWindowCtes()`, which drops an `OPERATING` row with no
+opening or closing time, or a close at or before the opening after repair. Such a day leaves the live
+early-end denominator silently. None existed when measured (2026-09-15); the nightly
+`monitor-data-quality` sweep warns per blind park when one appears
+(`findBlindParkUnusableScheduleDays`). Still open: `early_end` joins its readings to the window with a
+LEFT JOIN, so an `OPERATING` reading after the close counts as the day's last; an INNER JOIN waits for a
+before/after measurement.
 
 Cases are pinned in `test/e2e/closure-standing.e2e-spec.ts` and `closure-gap-operating-day.e2e-spec.ts`.
