@@ -42,20 +42,21 @@ real), and that query alone was ~2/3 of all Postgres execution time.
 
 | Cache | Where | TTL |
 |---|---|---|
-| holidays | `db.py` | 1 h |
+| holidays (and school-holiday coverage) | `db.py` | 1 h, expired entries evicted on write |
 | parks metadata | `db.py` | 5 min |
-| schedules | `db.py` | 5 min |
+| schedules | `db.py` | 5 min, expired entries evicted on write |
 | historical park occupancy (weekday × hour) | `db.py` | 1 h, expired entries evicted |
-| weather climatology | `predict.py` | 1 h |
+| weather climatology | `predict.py` | 1 h, expired entries evicted on write |
 | recent wait times, recent rolling stats | `predict.py` | 15 min; the end time is floored to the 15-min window, so one key and one SQL bound per window; expired entries evicted on write |
 
 Every cache hands out `.copy()`, so prediction code cannot mutate a cached frame. TTLs are
 time-based, not event-based: a holiday or a weather average changes rarely, a schedule a little
-more often. The holidays, schedules and weather caches check the TTL on read but never evict, and
-their keys carry date ranges and park sets; when no cache evicted, the 2 gunicorn workers grew to
-~15 GiB over ~25 h. `gunicorn.conf.py` recycles a
-worker after `ML_MAX_REQUESTS` (1000, jitter 200) requests, which caps that growth; bounding the
-remaining caches is the real fix (PAR-1149).
+more often. Every cache whose key carries a date range, a park set or a time bucket drops its
+expired entries on each write (`db._evict_expired_entries`, PAR-1149), so a cache holds at most one
+TTL's worth of keys. When no cache evicted, the 2 gunicorn workers grew to ~15 GiB over ~25 h.
+`gunicorn.conf.py` still recycles a worker after `ML_MAX_REQUESTS` (1000, jitter 200) requests as the
+safety net; whether it can go needs a worker's RSS measured over a day without recycling, which has
+not been done yet.
 
 ## Connection pool
 
