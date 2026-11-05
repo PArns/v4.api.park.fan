@@ -219,6 +219,11 @@ describe("SiteAnalyticsSeoService", () => {
       },
     ]);
     expect(calls[0][1]).toContain("not_found");
+    // A path a slug alias answers now redirects (PAR-1233): it leaves the
+    // list in the same statement, so the limit still counts dead paths only.
+    expect(calls[0][0]).toMatch(
+      /AND substring\(path from 4\) NOT IN \([\s\S]*park_slug_aliases[\s\S]*attraction_slug_aliases/,
+    );
     // Only a visit that entered on the dead address names a referrer: a
     // broken link inside the site leaves no visit row there.
     expect(calls[1][0]).toContain("SUM(visits)");

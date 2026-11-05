@@ -18,15 +18,15 @@ tall" with "needs an adult below this") were the first two. The general form:
 
 ### Attractions
 
-| Curated column | Corrects | Synced by |
-| --- | --- | --- |
-| `curated_name` | `name` | ThemeParks.wiki sync |
-| `curated_land_name` | `land_name` | Queue-Times sync |
-| `curated_attraction_type` | `attraction_type` | sync |
-| `curated_minimum_height`, `curated_maximum_height` | `minimum_height`, `maximum_height` | children metadata / `six-flags-heights` |
-| `curated_may_get_wet` | `may_get_wet` | children metadata |
-| `curated_is_seasonal`, `curated_season_months` | `is_seasonal`, `season_months` | `detect-seasonal` ([seasonality](../architecture/attraction-status/seasonality.md)) |
-| `attraction_ride_profiles.curated_stats` | `attraction_ride_profiles.stats` | `ride-stats` (Wikidata importer) |
+| Curated column                                     | Corrects                           | Synced by                                                                           |
+| -------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------- |
+| `curated_name`                                     | `name`                             | ThemeParks.wiki sync                                                                |
+| `curated_land_name`                                | `land_name`                        | Queue-Times sync                                                                    |
+| `curated_attraction_type`                          | `attraction_type`                  | sync                                                                                |
+| `curated_minimum_height`, `curated_maximum_height` | `minimum_height`, `maximum_height` | children metadata / `six-flags-heights`                                             |
+| `curated_may_get_wet`                              | `may_get_wet`                      | children metadata                                                                   |
+| `curated_is_seasonal`, `curated_season_months`     | `is_seasonal`, `season_months`     | `detect-seasonal` ([seasonality](../architecture/attraction-status/seasonality.md)) |
+| `attraction_ride_profiles.curated_stats`           | `attraction_ride_profiles.stats`   | `ride-stats` (Wikidata importer)                                                    |
 
 Human-only, nothing syncs them: `attraction_kind` ([attraction kind](../frontend/attraction-kind.md)),
 `indoor_outdoor` ([indoor/outdoor](../frontend/indoor-outdoor.md)), `has_single_rider`,
@@ -51,17 +51,17 @@ paid window and a free type have the paid product recorded nowhere (PAR-539).
 
 ### Parks
 
-| Group | Columns |
-| --- | --- |
-| Corrections of a synced column | `curated_name`, `curated_park_type` |
-| Behaviour | `curated_no_wait_times_reason` ([parks we cannot read](../frontend/live-wait-times-availability.md)), `curated_uses_twelve_hour_clock` (below) |
-| Early entry | `curated_has_early_entry`, `curated_early_entry_minutes_peak`, `curated_early_entry_minutes_off_peak` |
-| Fast pass | `curated_fast_pass_name`, `curated_fast_pass_price_from`, `curated_currency`, `curated_fast_pass_term_id` |
-| Links | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url` |
-| Contact, facts | `curated_street_address`, `curated_postal_code`, `curated_phone`, `curated_opened_year`, `curated_area_hectares` |
-| Grammar | `curated_article_de` (German nominative article; another language gets its own column) |
-| Search names | `curated_abbreviations` (comma separated, „EP, PHL“; served as `abbreviations: string[]`, at most five of up to 12 characters, for the park page's H1, its meta description and `alternateName`; the editor refuses anything it would not serve as typed) |
-| Internal | `curation_note` |
+| Group                          | Columns                                                                                                                                                                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Corrections of a synced column | `curated_name`, `curated_park_type`                                                                                                                                                                                                                       |
+| Behaviour                      | `curated_no_wait_times_reason` ([parks we cannot read](../frontend/live-wait-times-availability.md)), `curated_uses_twelve_hour_clock` (below)                                                                                                            |
+| Early entry                    | `curated_has_early_entry`, `curated_early_entry_minutes_peak`, `curated_early_entry_minutes_off_peak`                                                                                                                                                     |
+| Fast pass                      | `curated_fast_pass_name`, `curated_fast_pass_price_from`, `curated_currency`, `curated_fast_pass_term_id`                                                                                                                                                 |
+| Links                          | `curated_website`, `curated_tickets_url`, `curated_wikipedia_url`, `curated_instagram_url`, `curated_facebook_url`, `curated_youtube_url`                                                                                                                 |
+| Contact, facts                 | `curated_street_address`, `curated_postal_code`, `curated_phone`, `curated_opened_year`, `curated_area_hectares`                                                                                                                                          |
+| Grammar                        | `curated_article_de` (German nominative article; another language gets its own column)                                                                                                                                                                    |
+| Search names                   | `curated_abbreviations` (comma separated, „EP, PHL“; served as `abbreviations: string[]`, at most five of up to 12 characters, for the park page's H1, its meta description and `alternateName`; the editor refuses anything it would not serve as typed) |
+| Internal                       | `curation_note`                                                                                                                                                                                                                                           |
 
 Human-only columns still carry the `curated_` prefix because the park column list, the merge and the
 editor key on it.
@@ -106,15 +106,15 @@ rows.
 
 No feed publishes queue-jump products, and the parts sit on different rows on purpose:
 
-| Column | Row | Holds |
-| --- | --- | --- |
-| `parks.curated_fast_pass_name` | park | the brand (QuickPass, Express Pass) |
-| `parks.curated_fast_pass_price_from` | park | the floor of a park-wide pass ("ab 25 €") — most parks sell one pass per visit |
-| `parks.curated_currency` | park | ISO 4217 |
-| `parks.curated_fast_pass_term_id` | park | the glossary entry explaining the product |
-| `attractions.has_fast_pass` | attraction | whether this ride sells one |
-| `attractions.fast_pass_name` | attraction | override for the one ride named apart (Lightning Lane Single Pass) |
-| `attractions.fast_pass_price` | attraction | the per-ride price |
+| Column                               | Row        | Holds                                                                          |
+| ------------------------------------ | ---------- | ------------------------------------------------------------------------------ |
+| `parks.curated_fast_pass_name`       | park       | the brand (QuickPass, Express Pass)                                            |
+| `parks.curated_fast_pass_price_from` | park       | the floor of a park-wide pass ("ab 25 €") — most parks sell one pass per visit |
+| `parks.curated_currency`             | park       | ISO 4217                                                                       |
+| `parks.curated_fast_pass_term_id`    | park       | the glossary entry explaining the product                                      |
+| `attractions.has_fast_pass`          | attraction | whether this ride sells one                                                    |
+| `attractions.fast_pass_name`         | attraction | override for the one ride named apart (Lightning Lane Single Pass)             |
+| `attractions.fast_pass_price`        | attraction | the per-ride price                                                             |
 
 Read through `resolveFastPass(attraction, park)`, the only merge across two entities. **The price has three
 states:** empty is unknown (and stays empty where the operator prices per day), **0 is free** (a claim, like
@@ -213,7 +213,7 @@ than none.
 
 Measurements, stricter, because a number looks equally authoritative checked or not:
 
-- Join sources on the **RCDB id**, never the name; confirm the source describes *our* installation
+- Join sources on the **RCDB id**, never the name; confirm the source describes _our_ installation
   (our own id pointed at a predecessor ride for four coasters).
 - Found by name, the article must name the ride **and one park** — a search for
   "Winja's Force Phantasialand" returns Taron.
@@ -265,6 +265,42 @@ UPDATE attractions SET slug = '<new slug>' WHERE id = '<attraction id>';
 For parks, changing the address is `ParkRenameService`'s job (it writes `park_slug_aliases`). The name
 itself comes from the operator, never a translation
 ([upstream identity rule §4](../rules/automated-retirement-and-identity.md#4-names-come-from-the-operator-never-from-a-translation)).
+
+## Redirects from a dead path
+
+`POST /v1/admin/redirects` (editor) turns a dead park or ride URL from the not-found report
+(`/admin/traffic/seo`) into a 301, by writing the same alias tables the rename, the merges and the sync
+write, so the park and ride lookups answer it without a change of their own (PAR-1233).
+
+```json
+{
+  "fromPath": "/de/parks/europe/germany/bruehl/phantasialand/old-ride",
+  "target": { "kind": "attraction", "id": "<uuid>" }
+}
+```
+
+- **`fromPath`** is a frontend path, locale optional: `/parks/<continent>/<country>/<city>/<park>` for
+  `kind: "park"` (a row in `park_slug_aliases`), the same plus `/<ride>` for `kind: "attraction"` (a row
+  in `attraction_slug_aliases`). A ride alias must sit under the ride's **current** park path, because
+  the lookup reads an alias through the ride's park; anything else is a 400.
+- **`target.id`** must be a canonical uuid of a park or ride that exists (404 otherwise) and is not
+  retired (400).
+- **409** when `fromPath` is a live page (a park at that path, a ride with that slug in the park, or
+  one of the park's own sub-pages `wait-time-calendar`, `with-kids`, `average-wait-times`) or already
+  redirects to another park or ride. The same alias to the same target answers **200** with the
+  existing row and writes nothing; a new one **201**. Both return
+  `{ id, kind, fromPath, toPath, targetId, createdBy, createdAt }`, paths without locale.
+
+`DELETE /v1/admin/redirects?fromPath=<path>` (editor) removes one: 204, 404 when no alias answers the
+path. Each alias row carries `createdBy`, the admin's email for a hand-made row and null for every row
+the rename, a merge or the sync recorded; those are refused with 409, because they are the only trace of
+a URL that was live and nothing would write them again.
+
+Both are published outside-in through `AdminCurationService.publish` (the frontend holds the old 404
+under the `parks` and `attractions` tags) and audited as `redirect.create` / `redirect.delete`.
+`GET /v1/admin/analytics/seo/not-found` leaves out every path an alias answers, park aliases and ride
+aliases under the ride's current park path; a ride path under a renamed park's old path stays listed.
+Blog posts and arbitrary paths have no redirect table yet.
 
 ## Undo
 
