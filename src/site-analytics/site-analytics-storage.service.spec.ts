@@ -545,6 +545,32 @@ describe("SiteAnalyticsStorageService", () => {
     });
   });
 
+  describe("snapshotBots", () => {
+    it("writes yesterday's bot hits once, a day with drops but no bot as zero", async () => {
+      redis.hashes.set(
+        KEYS.drops("2026-10-27"),
+        new Map([[DROP_REASONS.bot, "17"]]),
+      );
+      await expect(service.snapshotBots(NOW)).resolves.toBe(false);
+      const [sql, params] = statements[0];
+      expect(sql).toContain("INSERT INTO site_bot_days");
+      expect(sql).toContain("ON CONFLICT (day) DO NOTHING");
+      expect(params).toEqual(["2026-10-27", 17]);
+
+      redis.hashes.set(
+        KEYS.drops("2026-10-27"),
+        new Map([[DROP_REASONS.window, "3"]]),
+      );
+      await service.snapshotBots(NOW);
+      expect(statements[1][1]).toEqual(["2026-10-27", 0]);
+    });
+
+    it("never writes a day whose drop counts are gone", async () => {
+      await expect(service.snapshotBots(NOW)).resolves.toBe(false);
+      expect(statements).toEqual([]);
+    });
+  });
+
   describe("snapshotVisitorDims", () => {
     const hll = (
       scope: string,

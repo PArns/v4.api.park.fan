@@ -733,6 +733,25 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   }
 
   /**
+   * Writes yesterday's bot hits (`site_bot_days`) from the day's drop counts,
+   * once: a day already written stays. A day whose drop counts are gone is
+   * skipped; one whose counts have no bot field had no bot and is written as
+   * zero. Runs with {@link snapshotVisitors}. Returns whether a row was written.
+   */
+  async snapshotBots(now = new Date()): Promise<boolean> {
+    const day = addIsoDays(utcDay(now), -1);
+    const drops = await this.redis.hgetall(KEYS.drops(day));
+    if (Object.keys(drops).length === 0) return false;
+    const inserted: unknown[] = await this.dataSource.query(
+      `INSERT INTO site_bot_days (day, hits) VALUES ($1::date, $2::int)
+       ON CONFLICT (day) DO NOTHING
+       RETURNING day`,
+      [day, Number(drops[DROP_REASONS.bot] ?? 0)],
+    );
+    return inserted.length > 0;
+  }
+
+  /**
    * Rolls the finished days up into the daily tables (`site_pageviews_daily`,
    * `site_events_daily`), oldest first, for every cuboid of a day that has no
    * marker yet: the first run backfills what the hourly tables hold, later

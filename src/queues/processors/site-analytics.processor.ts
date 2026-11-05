@@ -48,6 +48,7 @@ export class SiteAnalyticsProcessor {
     const { found, written, hoursWritten } =
       await this.storage.snapshotVisitors();
     const dims = await this.storage.snapshotVisitorDims();
+    await this.storage.snapshotBots();
     // A day of traffic leaves seven HyperLogLogs; none means Redis lost them.
     if (found === 0) {
       this.logger.warn("No visitor HyperLogLog found for yesterday");

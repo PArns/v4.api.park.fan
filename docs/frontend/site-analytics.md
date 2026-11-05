@@ -141,8 +141,8 @@ request.
 
 ## Privacy
 
-- **Not counted at all**: bots (`isBotUserAgent`, as for page views, a missing User-Agent included),
-  `DNT: 1`, `Sec-GPC: 1`. In production only a request whose `Origin` (or `Referer`) is
+- **Not counted at all**: bots (`isBotUserAgent`, as for page views, a missing User-Agent included;
+  only the number of their hits is kept, as `dropped:bot`, see Bots below), `DNT: 1`, `Sec-GPC: 1`. In production only a request whose `Origin` (or `Referer`) is
   `https://park.fan` or `https://www.park.fan` (`isFromSite`); a preview, a local build or a script
   without one is answered 204 and not counted. The frontend asks for none of this to be bypassed: it
   sends nothing under Do Not Track, GPC, the privacy page's opt-out, or off the production hosts.
@@ -265,6 +265,12 @@ is kept.
   comes back on another day counts again, so a window's visitors are the sum of its days, and one who
   comes back in another hour counts in each, so the hours of a day do not add up to its visitors.
   HyperLogLog's standard error is 0.81 %.
+- **Bots** (PAR-1234): a request whose User-Agent `isBotUserAgent` calls a bot's adds its hits (the
+  well-formed ones) to the `dropped:bot` field of the day's drop counts (`site-analytics:drops:<day>`)
+  and nothing else. The same `snapshot-visitors` run inserts yesterday's into `site_bot_days`
+  (`day`, `hits`; one row a day, kept), once; drop counts that are gone are skipped, drop counts
+  without the field are a day without bots and written as zero. Today and, until then, yesterday are
+  read live. The overview returns the window's sum as `bots.hits`.
 - **Visitors by dimension**: a HyperLogLog cannot be intersected with another, so a filter has
   visitors only where its value was counted into a key of its own. Each page-view batch with a reader
   also adds the reader's pseudonym to one day HyperLogLog per value of `country`, `device`,
@@ -579,7 +585,10 @@ The other dimensions filter every kind of row. A direct visit has no referrer an
 
 **The figures.** `pageviews`, `visits` (started), `visitors`, `events`, `viewsPerVisit`,
 `bounceRate`, `avgVisitSeconds` and `avgTimeOnPageSeconds` (see Visits) make up the overview's
-`totals` and `previous`, and every point of its series. A breakdown by a page dimension lists, per
+`totals` and `previous`, and every point of its series. Beside them the overview carries
+`bots: { hits }`, the hits dropped as a bot's in the window (see Bots): page views, engagement pings
+and events alike, from every network whatever `datacenter` says, so `hits / (hits + pageviews)` is an
+upper bound of the bot share; `null` under a language or a filter, which a dropped hit never had. A breakdown by a page dimension lists, per
 value, `views`, `visits`, `share` and `avgTimeOnPageSeconds`; by `path` also `exits` (visits that
 ended there) and `exitRate` (`exits / views`, at most 1). A breakdown that counts visits lists
 `bounceRate` and `avgVisitSeconds` instead. `dim=exit` counts visits ended (`measure: "exits"`), per
@@ -671,7 +680,7 @@ which reads Redis only, is outside it. The admin's MCP tools answer a 503 as any
 | Endpoint                                                          | Answers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /v1/analytics/collect`                                      | the beacon (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `GET /v1/admin/analytics/overview`                                | the figures above for the window and the one before; a series with all of them; realtime                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `GET /v1/admin/analytics/overview`                                | the figures above for the window and the one before; a series with all of them; realtime; `bots.hits`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /v1/admin/analytics/breakdown?dim=&limit=`                   | views, visits or exits (`measure`) per value of one dimension, share, time on page, exits on a path, bounce and average visit when counting visits, and `visitors` per value of a country, device, browser, OS or channel breakdown (above); `dim=exit` the last pages                                                                                                                                                                                                                                                                                                                         |
 | `GET /v1/admin/analytics/crosstab?row=&col=&metric=`              | page views or visits by two dimensions (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `GET /v1/admin/analytics/live?locale=`                            | the last half hour from Redis (above)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
