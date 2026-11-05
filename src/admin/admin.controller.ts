@@ -434,6 +434,7 @@ export class AdminController {
    * run, which has no history to be incremental about.
    */
   @Post("rebuild-downtime")
+  @AdminMinRole("editor")
   @ApiOperation({
     summary: "Run the downtime reconstruction now",
     description:
