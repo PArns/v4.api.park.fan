@@ -701,9 +701,10 @@ export const ASSISTANT_TOOLS = [
     name: "get_best_days",
     status: "forecast",
     description:
-      "The quietest upcoming open days of one park in the next 90 days (or a range you give), " +
-      "best first, and the typical crowd per weekday from history (dayOfWeek 0 = Sunday, lower " +
-      'avgCrowdScore = quieter). Use for "when should I go".',
+      "The 10 quietest rated open days of one park in the next 90 days (or a range you give), " +
+      "quietest first, and the typical crowd per weekday from history (dayOfWeek 0 = Sunday, " +
+      "lower avgCrowdScore = quieter). Only the quietest ten, not a ranking of every day: a day " +
+      'missing from the list is not a day to avoid. Use for "when should I go".',
     input: z.object({
       park: parkRef,
       from: z
@@ -724,11 +725,14 @@ export const ASSISTANT_TOOLS = [
         .get(BestDaysService)
         .getBestDays(found, from, to);
       const open = result.days.filter((day) => day.crowdLevel !== "closed");
+      // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
+      const rated = open.filter((day) => CROWD_ORDER.includes(day.crowdLevel));
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
         window: { from: result.meta.windowFrom, to: result.meta.windowTo },
         openDays: open.length,
-        quietestDays: open
+        unratedOpenDays: open.length - rated.length,
+        tenQuietestOpenDays: rated
           .map((day) => ({
             date: day.date,
             crowdLevel: day.crowdLevel,

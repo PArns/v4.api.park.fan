@@ -3,6 +3,55 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
+import { BestDaysService } from "../../parks/services/best-days.service";
+
+describe("get_best_days", () => {
+  it("ranks only rated open days, an unknown one never the quietest", async () => {
+    const day = (date: string, crowdLevel: string) => ({
+      date,
+      crowdLevel,
+      isHoliday: false,
+      isSchoolVacation: false,
+    });
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            id: "11111111-1111-4111-8111-111111111111",
+            name: "Phantasialand",
+          })),
+        },
+      ],
+      [
+        BestDaysService,
+        {
+          getBestDays: jest.fn(async () => ({
+            meta: { windowFrom: "2026-11-05", windowTo: "2026-11-10" },
+            days: [
+              day("2026-11-05", "unknown"),
+              day("2026-11-06", "high"),
+              day("2026-11-07", "closed"),
+              day("2026-11-08", "low"),
+            ],
+          })),
+        },
+      ],
+    ]);
+    const result = await runAssistantTool(
+      "get_best_days",
+      { park: "11111111-1111-4111-8111-111111111111" },
+      { get: <T>(token: unknown) => providers.get(token) as T, locale: "en" },
+      jest.fn(),
+    );
+    const json = JSON.parse(result.content);
+    expect(json.openDays).toBe(3);
+    expect(json.unratedOpenDays).toBe(1);
+    expect(
+      json.tenQuietestOpenDays.map((d: { date: string }) => d.date),
+    ).toEqual(["2026-11-08", "2026-11-06"]);
+  });
+});
 import { foldText, runAssistantTool } from "./assistant-tools";
 import {
   calendarCard,
