@@ -26,10 +26,11 @@
  *
  * ## Which clock
  *
- * `NOW()`, the server's, exactly like the `new Date()` its twin defaults to.
- * Park-local would be more correct for both and is wrong for at most a few hours
- * a year at a month boundary; what matters far more is that the two agree, so
- * they are changed together or not at all.
+ * `NOW()` read as the park's wall clock (`parks.timezone`, UTC when unset),
+ * exactly like its twin, which reads the month in the park's timezone. Around a
+ * month boundary the server's month is the wrong one for a park far from UTC
+ * (PAR-1109); what matters as much is that the two agree, so they are changed
+ * together or not at all.
  */
 
 /**
@@ -60,11 +61,18 @@ export function attractionIsOutOfSeason(alias: string): string {
              '[]'::jsonb
            )`;
 
+  // The park's month, not the server's. A PK lookup per row; correlated so no
+  // caller has to join `parks` for it.
+  const parkMonth = `EXTRACT(MONTH FROM NOW() AT TIME ZONE COALESCE(
+             (SELECT p.timezone FROM parks p WHERE p.id = ${alias}."parkId"),
+             'UTC'
+           ))::int`;
+
   return `(
            (${isSeasonal})
            AND CASE
                  WHEN jsonb_array_length(${months}) > 0
-                   THEN NOT (${months} @> to_jsonb(EXTRACT(MONTH FROM NOW())::int))
+                   THEN NOT (${months} @> to_jsonb(${parkMonth}))
                  ELSE NOT ${curated} AND ${alias}.season_out_since IS NOT NULL
                END
          )`;

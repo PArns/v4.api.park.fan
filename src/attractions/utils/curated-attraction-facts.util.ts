@@ -1,3 +1,5 @@
+import { formatInParkTimezone } from "../../common/utils/date.util";
+
 /**
  * Merges the hand-curated attraction facts over the synced ones.
  *
@@ -226,17 +228,25 @@ export function resolveCuratedFacts(
  * Null stays for the case it was written for: seasonal, and nothing else known.
  * That must not collapse into "not running", which would hide a ride we have
  * simply not understood yet.
+ *
+ * "This month" is the park's month (`timezone`), not the server's: on the 31st
+ * at 22:00 UTC it is already the next month in Tokyo and still this one in
+ * Orlando. A missing timezone falls back to UTC, as `isInSeason` does.
  */
 export function isCurrentlyInSeason(
   facts: Pick<
     ResolvedCuratedFacts,
     "isSeasonal" | "seasonMonths" | "seasonOutSince"
   >,
+  timezone: string | null | undefined,
   now: Date = new Date(),
 ): boolean | null {
   if (!facts.isSeasonal) return null;
   if (facts.seasonMonths && facts.seasonMonths.length > 0) {
-    return facts.seasonMonths.includes(now.getMonth() + 1);
+    const month = Number(
+      formatInParkTimezone(now, timezone || "UTC").slice(5, 7),
+    );
+    return facts.seasonMonths.includes(month);
   }
   return facts.seasonOutSince ? false : null;
 }

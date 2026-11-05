@@ -352,6 +352,7 @@ export class RideAlertsService {
         reopenStatus,
         nowMs,
         parkClosed,
+        park.timezone,
       );
 
       const readings = RideAlertsService.buildEligibleReadings(
@@ -359,6 +360,7 @@ export class RideAlertsService {
         attractionById,
         statusByAttraction,
         nowMs,
+        park.timezone,
       );
       if (readings.length === 0 && reopenTriggers.length === 0) return;
 
@@ -465,6 +467,7 @@ export class RideAlertsService {
     statusByAttraction: Map<string, QueueData[]>,
     nowMs: number,
     parkClosed: boolean,
+    timezone: string,
   ): Promise<SweepTrigger[]> {
     if (reopenAlerts.length === 0) return [];
     const readings: ReopenReading[] = [];
@@ -474,6 +477,7 @@ export class RideAlertsService {
       const outOfSeason =
         isCurrentlyInSeason(
           resolveCuratedFacts(attraction),
+          timezone,
           new Date(nowMs),
         ) === false;
       const standby = (statusByAttraction.get(id) ?? []).find(
@@ -518,6 +522,7 @@ export class RideAlertsService {
     attractionById: Map<string, Attraction>,
     statusByAttraction: Map<string, QueueData[]>,
     nowMs: number,
+    timezone: string,
   ): RideReading[] {
     const readings: RideReading[] = [];
     for (const id of watchedIds) {
@@ -530,6 +535,7 @@ export class RideAlertsService {
       if (
         isCurrentlyInSeason(
           resolveCuratedFacts(attraction),
+          timezone,
           new Date(nowMs),
         ) === false
       ) {

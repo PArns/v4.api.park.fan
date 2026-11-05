@@ -47,7 +47,6 @@ Built in `ParkIntegrationService.buildIntegratedResponse`; the show rows come fr
 
 - `isSeasonal` and `seasonMonths` come from the show row, set by the nightly `detect-seasonal` job from
   how long a show's feed stopped updating. Shows have no curated columns, so no editor can correct them.
-- **`isCurrentlyInSeason` is computed from the server's UTC month** (`ParkWithAttractionsDto`), not the
-  park's, so around a month boundary it can be a day off for parks far from UTC. It is absent for a
+- **`isCurrentlyInSeason` reads the park's month** (`park.timezone`), like the rides'. It is null for a
   show that is not seasonal and for a seasonal one without months.
 - A show out of season is still listed when it has times today: the times win.

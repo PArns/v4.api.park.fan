@@ -327,13 +327,6 @@ export class LocationService {
       userLocation,
     );
 
-    // "Which month is it" is a park-local question, so the resolver below is
-    // handed a date positioned on the park's own day rather than the server's.
-    // Noon, so no timezone the server might be in can push it over a boundary.
-    const parkLocalNow = new Date(
-      `${getCurrentDateInTimezone(park.timezone || "UTC")}T12:00:00`,
-    );
-
     // Build ride DTOs (no async needed inside map)
     const rides: RideWithDistanceDto[] = attractionsWithDistance
       .map((attraction) => {
@@ -380,7 +373,7 @@ export class LocationService {
         const seasonMonths = curated.seasonMonths;
         const isCurrentlyInSeason = isCurrentlyInSeasonFor(
           curated,
-          parkLocalNow,
+          park.timezone,
         );
 
         return {

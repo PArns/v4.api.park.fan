@@ -308,6 +308,7 @@ export class RainSoonPushService {
       indoorOutdoor: attraction.indoorOutdoor,
       isCurrentlyInSeason: isCurrentlyInSeason(
         resolveCuratedFacts(attraction),
+        park.timezone,
         new Date(nowMs),
       ),
     }));
