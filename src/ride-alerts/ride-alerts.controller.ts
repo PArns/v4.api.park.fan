@@ -200,7 +200,7 @@ export class RideAlertsController {
       // a winter ride in August, ahead of a trip) — see `create`'s own
       // comment. Surfaced here so the caller can say so rather than let a
       // dormant alert look identical to a live one.
-      outOfSeason: isCurrentlyInSeason(facts) === false,
+      outOfSeason: isCurrentlyInSeason(facts, park?.timezone) === false,
       // A ride retired AFTER this alert was created — `findAttractionForAlert`
       // refuses a NEW alert on one already retired, but nothing removes an
       // existing alert when its ride is retired later, and the FK cascade

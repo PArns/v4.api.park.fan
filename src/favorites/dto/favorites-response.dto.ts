@@ -60,7 +60,8 @@ export class ShowWithDistanceDto {
   }> | null;
 
   @ApiProperty({
-    description: "Frontend URL to show",
+    description:
+      "API path of the show's park (`/v1/parks/…/<park>`); shows have no route of their own",
     nullable: true,
   })
   url: string | null;
@@ -120,7 +121,8 @@ export class RestaurantWithDistanceDto {
   cuisineType: string | null;
 
   @ApiProperty({
-    description: "Frontend URL to restaurant",
+    description:
+      "API path of the restaurant's park (`/v1/parks/…/<park>`); restaurants have no route of their own",
     nullable: true,
   })
   url: string | null;

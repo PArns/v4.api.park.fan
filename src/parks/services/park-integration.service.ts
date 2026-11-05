@@ -223,6 +223,8 @@ export class ParkIntegrationService {
   ): Promise<ParkWithAttractionsDto> {
     // Start with base DTO
     const dto = ParkWithAttractionsDto.fromEntity(park);
+    // Stamped before the live reads below: the payload's data is at least this fresh.
+    dto.dataTimestamp = new Date().toISOString();
 
     // Fetch weather, schedule, queue data, and ML predictions in parallel
     // These all only depend on park.id so they can run simultaneously
@@ -687,6 +689,26 @@ export class ParkIntegrationService {
           .map((a) => [a.id, resolveCuratedFacts(a).seasonMonths]),
       );
 
+      // Rides that would reach the optimistic fallback below, narrowed to those
+      // no source has EVER reported (PAR-1100). The fallback is written for one
+      // ride going quiet at a working feed; a ride never seen at all is not
+      // quiet, it is unknown. Free-flow rides are left out: they open with the
+      // park on a curated flag, not on a reading. Optimistic on failure.
+      const neverObserved =
+        waitTimesKnowable && dto.status === "OPERATING"
+          ? await this.queueDataService
+              .findNeverObservedAttractionIds(
+                dto.attractions
+                  .filter(
+                    (a) =>
+                      !openWithPark.has(a.id) &&
+                      (queueDataMap.get(a.id) ?? []).length === 0,
+                  )
+                  .map((a) => a.id),
+              )
+              .catch(() => new Set<string>())
+          : new Set<string>();
+
       for (const attraction of dto.attractions) {
         // Get current queue data for this attraction from the bulk result
         const queueData = queueDataMap.get(attraction.id) || [];
@@ -749,10 +771,9 @@ export class ParkIntegrationService {
           // Except for a ride the season has already answered for — see the util
           // for the ice rink this list served as "geöffnet, sehr wenig los" in
           // August while the ride's own page said CLOSED off the same silence.
-          attraction.status = statusWithoutLiveData(
-            dto.status,
-            attraction.isCurrentlyInSeason,
-          );
+          attraction.status = neverObserved.has(attraction.id)
+            ? "UNKNOWN"
+            : statusWithoutLiveData(dto.status, attraction.isCurrentlyInSeason);
         }
 
         // A free-flow attraction is open whenever the park is. Applied after the

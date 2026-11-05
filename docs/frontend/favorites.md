@@ -35,8 +35,8 @@ GET /v1/favorites?parkIds=…&attractionIds=…&showIds=…&restaurantIds=…&la
 | `restaurants` | `status`, `waitTime`, `cuisineType`, `park` | a 0-minute wait arrives absent, like no wait |
 
 `url` on every entry is the **API** path (`/v1/parks/<continent>/<country>/<city>/<park>[…]`), absent when
-a geo slug is missing. A show's and a restaurant's point at `…/shows/<slug>` and
-`…/restaurants/<slug>`, routes this API does not serve.
+a geo slug is missing. A show's and a restaurant's is their park's path: neither has a route of its
+own, and the park payload lists both.
 
 ## Caching
 

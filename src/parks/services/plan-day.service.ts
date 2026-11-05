@@ -2644,7 +2644,9 @@ export class PlanDayService {
     return (
       isCurrentlyInSeason(
         nearHorizon ? facts : { ...facts, seasonOutSince: null },
-        PlanDayService.localNoonOf(dateStr),
+        // The planned date's own month: noon UTC of that date, read in UTC.
+        "UTC",
+        new Date(`${dateStr}T12:00:00Z`),
       ) === false
     );
   }
@@ -2683,19 +2685,6 @@ export class PlanDayService {
       PlanDayService.outOfSeasonOn(attraction, dateStr, nearHorizon) ||
       isCuratedOutOfService(attraction, timezone, dateStr)
     );
-  }
-
-  /**
-   * A `YYYY-MM-DD` as a `Date` in the running process's own zone, at midday.
-   *
-   * Built from the parts rather than parsed: `new Date("2026-12-20")` is UTC
-   * midnight, and `getMonth()` on it answers November anywhere west of
-   * Greenwich. Midday rather than midnight because a few zones have no 00:00 on
-   * a DST day.
-   */
-  private static localNoonOf(dateStr: string): Date {
-    const [year, month, day] = dateStr.split("-").map(Number);
-    return new Date(year, month - 1, day, 12);
   }
 
   /**

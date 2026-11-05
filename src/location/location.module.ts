@@ -8,6 +8,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { ParksModule } from "../parks/parks.module";
 import { QueueDataModule } from "../queue-data/queue-data.module";
 import { PopularityModule } from "../popularity/popularity.module";
+import { ShowsModule } from "../shows/shows.module";
 
 /**
  * Location Module
@@ -21,6 +22,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParksModule,
     QueueDataModule,
     PopularityModule,
+    ShowsModule,
   ],
   controllers: [LocationController],
   providers: [LocationService],

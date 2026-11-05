@@ -29,8 +29,9 @@ months for anything watched under 330 days. **Every predicate is `!== false`, ne
 `=== true`.** The TypeScript rule is `isCurrentlyInSeason()`
 (`src/attractions/utils/curated-attraction-facts.util.ts`).
 
-Both this and its SQL twin read the **server's** month, not the park's — wrong for
-at most a few hours a year at a month boundary, and kept so the two agree.
+Both this and its SQL twin (`attractionIsOutOfSeason`) read the **park's** month
+(`park.timezone`), so on the 31st at 23:30 UTC a park in Tokyo is already in the
+next month and one in New York is not.
 
 ## What the API does with it
 

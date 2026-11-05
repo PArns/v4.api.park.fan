@@ -712,7 +712,10 @@ export class AttractionResponseDto {
         : null,
       retiredReason: attraction.retiredReason ?? null,
       retiredKind: retiredKindOf(attraction),
-      isCurrentlyInSeason: isCurrentlyInSeason(curated),
+      isCurrentlyInSeason: isCurrentlyInSeason(
+        curated,
+        attraction.park?.timezone,
+      ),
     };
   }
 

@@ -823,6 +823,17 @@ export class ParkWithAttractionsDto {
   retiredReason?: string | null;
 
   @ApiProperty({
+    description:
+      "When this payload's live data was read (ISO 8601, UTC): the build time " +
+      "of the cached park payload, not the newest queue reading. Use it for " +
+      "the page's data-as-of line.",
+    type: String,
+    required: false,
+    example: "2026-08-29T10:35:00.000Z",
+  })
+  dataTimestamp?: string;
+
+  @ApiProperty({
     description: "Current operating status",
     enum: ["OPERATING", "CLOSED"],
     required: false,
@@ -996,7 +1007,7 @@ export class ParkWithAttractionsDto {
               seasonMonths: curated.seasonMonths,
               // Seasonal but unknown when → null, deliberately: it must not
               // collapse into "not running", which would hide the ride.
-              isCurrentlyInSeason: isCurrentlyInSeason(curated),
+              isCurrentlyInSeason: isCurrentlyInSeason(curated, park.timezone),
               minimumHeight: curated.minimumHeight,
               minimumHeightUnit: curated.minimumHeightUnit,
               maximumHeight: curated.maximumHeight,
@@ -1020,14 +1031,6 @@ export class ParkWithAttractionsDto {
         ? park.shows.map((show) => {
             const isSeasonal = show.isSeasonal || false;
             const seasonMonths = show.seasonMonths || null;
-            let isCurrentlyInSeason: boolean | null = null;
-            if (isSeasonal) {
-              const currentMonth = new Date().getMonth() + 1;
-              isCurrentlyInSeason =
-                seasonMonths !== null && seasonMonths.length > 0
-                  ? seasonMonths.includes(currentMonth)
-                  : null;
-            }
             return {
               id: show.id,
               name: show.name,
@@ -1037,7 +1040,11 @@ export class ParkWithAttractionsDto {
               longitude: show.longitude !== undefined ? show.longitude : null,
               isSeasonal,
               seasonMonths,
-              isCurrentlyInSeason,
+              // Shows have no `seasonOutSince`: without months it stays null.
+              isCurrentlyInSeason: isCurrentlyInSeason(
+                { isSeasonal, seasonMonths, seasonOutSince: null },
+                park.timezone,
+              ),
             };
           })
         : [],
