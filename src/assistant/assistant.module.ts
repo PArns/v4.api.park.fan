@@ -41,6 +41,6 @@ import { SiteFeedback } from "./entities/site-feedback.entity";
     AssistantChallengeService,
     AssistantPostsClient,
   ],
-  exports: [AssistantRecordsService],
+  exports: [AssistantRecordsService, AssistantSettingsService],
 })
 export class AssistantModule {}

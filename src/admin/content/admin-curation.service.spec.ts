@@ -2,6 +2,10 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { AdminCurationService } from "./admin-curation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import type { AdminPrincipal } from "../auth/admin-principal";
+import {
+  FUN_FACT_TRANSLATOR,
+  TRANSLATE_FUN_FACTS_JOB,
+} from "./fun-fact-translation.constants";
 
 // ts-jest hoists this above the imports, so the binding above is the mock.
 jest.mock("../../common/cache/park-cache-invalidation", () => ({
@@ -1312,5 +1316,57 @@ describe("AdminCurationService", () => {
         /only available for curation entries/,
       );
     });
+  });
+});
+
+describe("AdminCurationService › fun facts after a save", () => {
+  const park = () => ({
+    id: "park-1",
+    name: "Phantasialand",
+    curatedFunFactsEn: null,
+    curatedFunFactsDe: "maschinell",
+    funFactsMachine: {
+      de: { from: "en", sourceHash: "h" },
+      nl: { from: "en", sourceHash: "h" },
+    },
+  });
+  const translateJobs = (queue: { add: jest.Mock }) =>
+    queue.add.mock.calls.filter(([name]) => name === TRANSLATE_FUN_FACTS_JOB);
+
+  it("queues a translation from the saved locale, English first", async () => {
+    const { service, queue } = build(null, park());
+    await service.curatePark(
+      "park-1",
+      { fields: { curatedFunFactsEn: "One\nTwo", curatedFunFactsFr: "Un" } },
+      ACTOR,
+    );
+    expect(translateJobs(queue)).toHaveLength(1);
+    expect(translateJobs(queue)[0][1]).toEqual({
+      parkId: "park-1",
+      source: "en",
+    });
+  });
+
+  it("makes a locale an editor saved theirs, removing its machine mark", async () => {
+    const { service, parks } = build(null, park());
+    await service.curatePark(
+      "park-1",
+      { fields: { curatedFunFactsDe: "Von Hand" } },
+      ACTOR,
+    );
+    expect(parks.update).toHaveBeenLastCalledWith("park-1", {
+      funFactsMachine: { nl: { from: "en", sourceHash: "h" } },
+    });
+  });
+
+  it("neither queues nor unmarks for the translator's own write", async () => {
+    const { service, queue, parks } = build(null, park());
+    await service.curatePark(
+      "park-1",
+      { fields: { curatedFunFactsDe: "Neu übersetzt" } },
+      FUN_FACT_TRANSLATOR,
+    );
+    expect(translateJobs(queue)).toHaveLength(0);
+    expect(parks.update).toHaveBeenCalledTimes(1);
   });
 });

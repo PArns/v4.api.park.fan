@@ -16,6 +16,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
 import { Restaurant } from "../../restaurants/entities/restaurant.entity";
 import { generateSlug } from "../../common/utils/slug.util";
+import type { FunFactsMachineMarks } from "../utils/curated-park-facts.util";
 
 /**
  * Park Entity
@@ -271,6 +272,15 @@ export class Park {
 
   @Column({ name: "curated_fun_facts_it", type: "text", nullable: true })
   curatedFunFactsIt: string | null;
+
+  /**
+   * Which fun-fact locales a machine translated, from which locale and which
+   * text (`FunFactTranslationService`). A locale missing here was typed by a
+   * human and is never overwritten; an editor's save removes its entry.
+   * Bookkeeping, not curation: no editor field, no `curated_` prefix.
+   */
+  @Column({ name: "fun_facts_machine", type: "jsonb", nullable: true })
+  funFactsMachine: FunFactsMachineMarks | null;
 
   // Timezone is deliberately NOT curated here, and the reason is worth writing
   // down so it does not get "fixed" later. `timezone` is read at 206 call

@@ -30,5 +30,28 @@ hand-written facts about the park for Parky to tell. No feed carries them and no
 Six `longtext` fields in the park editor (`/admin`, group „Fun Facts“): `curated_fun_facts_<locale>`,
 one fact per line; blank lines and surrounding spaces are dropped. Written through
 `PATCH /v1/admin/content/parks/:id` like every curated park column
-([curation](../admin/curation.md)), so a save evicts the cache and revalidates the frontend. There is
-no automatic translation: each language is typed into its own field.
+([curation](../admin/curation.md)), so a save evicts the cache and revalidates the frontend.
+
+## Machine translation
+
+A save of any locale queues `translate-fun-facts` on the `manual-metadata` queue (3 attempts,
+exponential backoff from a minute), so the save never waits. `FunFactTranslationService` translates
+the saved locale (English when several were saved) into every other locale that is **empty or was
+machine-translated** from another locale or another version of this text, in one call to Parky's
+model (`ASSISTANT_MODEL`) with his stored key, counted against his daily token budget.
+
+- **A locale typed by hand is never overwritten.** `parks.fun_facts_machine` (jsonb) records per
+  machine locale `{ from, sourceHash }`; an editor's save of a locale removes its entry, so the field
+  is theirs from then on. The editor's hint for a machine locale says so ("Maschinell übersetzt aus
+  …").
+- **Checked before saving:** the answer is JSON, one array per locale with exactly as many facts as
+  the source has lines, each a single line of at most 300 characters, at most 2,000 per locale. A
+  locale that fails is logged and dropped; the others are saved.
+- **Written like an editor's save**, through `AdminCurationService.curatePark` with the actor
+  `translator@park.fan` and the reason „Automatic translation from en (model)“: an audit row, undo,
+  cache eviction and revalidation, so the payload and the chat see it. The park is read again
+  first, so a locale an editor typed or a source changed meanwhile is left alone.
+- **An emptied source** takes the machine text made from it along; hand-typed text stays.
+- No key stored: logged, nothing translated. Budget spent: the job throws and the queue retries.
+- A machine mark is not on the merge list, so after a park merge an inherited translation counts as
+  hand-typed. An undo of a fun-fact change neither re-translates nor clears marks.

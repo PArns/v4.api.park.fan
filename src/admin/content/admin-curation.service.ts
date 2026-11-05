@@ -20,7 +20,15 @@ import {
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
-import { abbreviationsProblem } from "../../parks/utils/curated-park-facts.util";
+import {
+  abbreviationsProblem,
+  funFactLocaleOf,
+  type FunFactLocale,
+} from "../../parks/utils/curated-park-facts.util";
+import {
+  FUN_FACT_TRANSLATOR,
+  TRANSLATE_FUN_FACTS_JOB,
+} from "./fun-fact-translation.constants";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import {
   AdminAuditService,
@@ -439,7 +447,50 @@ export class AdminCurationService {
     const attractionIds = await this.attractionIdsOf(park.id);
     await this.publish(park.id, attractionIds);
 
+    if (actor.email !== FUN_FACT_TRANSLATOR.email) {
+      await this.afterHumanFunFacts(park, changed);
+    }
+
     return { entity: park, changed, auditId: auditRow?.id ?? null };
+  }
+
+  /**
+   * A locale an editor saved is theirs from now on, so its machine mark goes; and the other
+   * locales are translated from it in the background (`FunFactTranslationService`). English
+   * leads when several were saved at once. Never throws: the save already happened.
+   */
+  private async afterHumanFunFacts(park: Park, changed: string[]) {
+    const locales = changed
+      .map(funFactLocaleOf)
+      .filter((locale): locale is FunFactLocale => locale !== null);
+    if (locales.length === 0) return;
+    try {
+      const marks = { ...(park.funFactsMachine ?? {}) };
+      if (locales.some((locale) => marks[locale])) {
+        for (const locale of locales) delete marks[locale];
+        park.funFactsMachine = Object.keys(marks).length > 0 ? marks : null;
+        await this.parks.update(park.id, {
+          funFactsMachine: park.funFactsMachine,
+        } as never);
+      }
+      const source = locales.includes("en") ? "en" : locales[0];
+      await this.curationQueue.add(
+        TRANSLATE_FUN_FACTS_JOB,
+        { parkId: park.id, source },
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Fun-fact translation for park ${park.id} not queued: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

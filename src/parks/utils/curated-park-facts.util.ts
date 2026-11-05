@@ -337,6 +337,19 @@ export type FunFactLocale = keyof typeof FUN_FACT_COLUMNS;
 /** A park's fun facts by locale; a locale nobody wrote is absent. */
 export type FunFacts = Partial<Record<FunFactLocale, string[]>>;
 
+/** Per machine-translated locale: the locale it came from and a hash of that text. */
+export type FunFactsMachineMarks = Partial<
+  Record<FunFactLocale, { from: FunFactLocale; sourceHash: string }>
+>;
+
+/** The locale a fun-fact column holds, or null for any other column. */
+export function funFactLocaleOf(column: string): FunFactLocale | null {
+  const found = Object.entries(FUN_FACT_COLUMNS).find(
+    ([, name]) => name === column,
+  );
+  return found ? (found[0] as FunFactLocale) : null;
+}
+
 /**
  * The curated fun facts, one per non-blank line, or null when no locale has
  * any. Null for the same reason as {@link resolveParkInfo}: the interceptor

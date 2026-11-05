@@ -4,6 +4,7 @@ import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-
 import {
   FUN_FACT_COLUMNS,
   type FunFactLocale,
+  type FunFactsMachineMarks,
   resolveCuratedPark,
 } from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
@@ -70,6 +71,11 @@ export interface CuratedFieldSpec {
    * ride in the catalogue shows a "curated" badge it never earned.
    */
   defaultValue?: unknown;
+  /**
+   * A hint about this row's value, shown instead of `hint` when it returns text: that a fun-fact
+   * locale was machine-translated. A function, so `/content/fields` (JSON) never serves it.
+   */
+  entityHint?: (entity: Record<string, unknown>) => string | null;
 }
 
 /**
@@ -645,9 +651,19 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       hint:
         locale === "en"
           ? "Ein Fakt pro Zeile, kurz genug für Parkys Sprechblase. Nur, was " +
-            "eine Quelle belegt. Jede Sprache hat ihr eigenes Feld; was dort " +
-            "fehlt, sieht ein Besucher in dieser Sprache nicht."
+            "eine Quelle belegt. Nach dem Speichern füllt eine Maschine die " +
+            "leeren Sprachen; was du selbst tippst, überschreibt sie nie."
           : undefined,
+      entityHint: (park) => {
+        const mark = (park.funFactsMachine as FunFactsMachineMarks | null)?.[
+          locale as FunFactLocale
+        ];
+        return mark
+          ? `Maschinell übersetzt aus ${FUN_FACT_LANGUAGE_LABELS[mark.from]}. ` +
+              "Bearbeitest du das Feld, gehört es dir und wird nicht mehr " +
+              "überschrieben."
+          : null;
+      },
     }),
   ),
   {
@@ -735,7 +751,9 @@ function buildViews(
       ...(spec.min !== undefined ? { min: spec.min } : {}),
       ...(spec.max !== undefined ? { max: spec.max } : {}),
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
-      ...(spec.hint ? { hint: spec.hint } : {}),
+      ...((spec.entityHint?.(entity) ?? spec.hint)
+        ? { hint: spec.entityHint?.(entity) ?? spec.hint }
+        : {}),
     };
   });
 }
