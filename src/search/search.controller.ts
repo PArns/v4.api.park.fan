@@ -11,13 +11,13 @@ export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
   @Get()
-  @UseInterceptors(new HttpCacheInterceptor(60)) // 1 minute - matches Redis TTL
+  @UseInterceptors(new HttpCacheInterceptor(60)) // edge: 1 minute; Redis keeps 5 minutes (SearchService.CACHE_TTL)
   @ApiOperation({
     summary: "Intelligent search across all entities",
     description:
       "Search parks, attractions, shows, and restaurants by name, city, country, or continent. " +
       "Returns enriched results with coordinates, wait times, park hours, show times, and more. " +
-      "Cached for 1 minute for optimal performance.",
+      "Cached for 1 minute at the edge and 5 minutes in Redis.",
   })
   @ApiQuery({
     name: "q",

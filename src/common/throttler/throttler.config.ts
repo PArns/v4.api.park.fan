@@ -1,4 +1,5 @@
 import { ThrottlerModuleOptions } from "@nestjs/throttler";
+import { constantTimeEquals } from "../../admin/auth/token-hash.util";
 
 /**
  * Origin rate-limit configuration.
@@ -75,7 +76,11 @@ export const carriesThrottleBypassKey = (
   const provided = headers?.[getThrottleBypassHeader()];
   const values = Array.isArray(provided) ? provided : [provided];
   return values.some(
-    (value) => typeof value === "string" && keys.includes(value),
+    // Constant time: this key also vouches for `x-forwarded-for`, the address
+    // every admin-login and rate-limit bucket is keyed on.
+    (value) =>
+      typeof value === "string" &&
+      keys.some((key) => constantTimeEquals(value, key)),
   );
 };
 
@@ -108,5 +113,9 @@ export const carriesCfOriginSecret = (
   if (!secret) return true;
   const provided = headers?.[getCfOriginSecretHeader()];
   const values = Array.isArray(provided) ? provided : [provided];
-  return values.some((value) => typeof value === "string" && value === secret);
+  // Constant time, like the bypass keys: this secret decides whether
+  // cf-connecting-ip is trusted, and so which bucket a login is counted in.
+  return values.some(
+    (value) => typeof value === "string" && constantTimeEquals(value, secret),
+  );
 };

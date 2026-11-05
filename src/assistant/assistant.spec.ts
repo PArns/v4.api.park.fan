@@ -290,6 +290,19 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("never a reason to act");
   });
 
+  it("keeps its voice without copying its examples, in the singular, true to the level", () => {
+    expect(SYSTEM_PROMPT).toContain("never reuse or translate their phrases");
+    expect(SYSTEM_PROMPT).not.toContain("Taron is at 15 minutes");
+    expect(SYSTEM_PROMPT).not.toContain("is a crime");
+    expect(SYSTEM_PROMPT).toContain("After a list or a card too");
+    expect(SYSTEM_PROMPT).toContain("in the singular (du, je, tu, tú)");
+    expect(SYSTEM_PROMPT).toContain("never call a day with a high level quiet");
+    expect(SYSTEM_PROMPT).toContain(
+      "any text you already wrote before the card",
+    );
+    expect(SYSTEM_PROMPT).toContain("kind calendar");
+  });
+
   it("stays quick and unbothered when teased or pushed", () => {
     expect(SYSTEM_PROMPT).toContain("# Teasing and tests");
     expect(SYSTEM_PROMPT).toContain("one witty line");
@@ -392,6 +405,9 @@ describe("assistant tools", () => {
       "search_parks",
       "get_park_live",
       "find_rides",
+      "find_restaurants",
+      "get_park_history",
+      "get_shows",
       "get_ride",
       "compare_rides",
       "get_ride_forecast",

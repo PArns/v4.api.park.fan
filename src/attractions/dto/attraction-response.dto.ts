@@ -596,6 +596,16 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "Whether `GET …/stats/day?attraction=<slug>` answers for this ride's `slug` (it is one of the " +
+      "park's eight day-curve candidates). Read from the cached hourly profile, never computed for " +
+      "this payload; absent while that cache is cold, which means unknown, not false.",
+    required: false,
+    example: true,
+  })
+  hasDayCurve?: boolean;
+
+  @ApiProperty({
+    description:
       "Curated ride profile: the track figures in ride order, the ride type, " +
       "manufacturer and opening year. Every id is a glossary term id. " +
       "Absent for rides that have not been curated yet.",
@@ -702,7 +712,10 @@ export class AttractionResponseDto {
         : null,
       retiredReason: attraction.retiredReason ?? null,
       retiredKind: retiredKindOf(attraction),
-      isCurrentlyInSeason: isCurrentlyInSeason(curated),
+      isCurrentlyInSeason: isCurrentlyInSeason(
+        curated,
+        attraction.park?.timezone,
+      ),
     };
   }
 

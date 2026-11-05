@@ -36,6 +36,24 @@ import type {
   SiteUncoveredDto,
 } from "./dto/site-analytics.dto";
 
+/**
+ * Every frontend path a slug alias answers with a 301 today, unprefixed like
+ * `frontendParkPath`. The not-found report leaves these out (PAR-1233): a dead
+ * URL somebody has since redirected is done, and would otherwise stay listed
+ * until its views age out of the window. `concat_ws` never yields NULL, which
+ * `NOT IN` needs. Rides only under their park's current path, where
+ * `resolveSlugAlias` answers first; a ride under a renamed park's old path
+ * still lists.
+ */
+const ALIASED_PATHS_SQL = `
+  SELECT concat_ws('/', '/parks', a."continentSlug", a."countrySlug", a."citySlug", a.slug)
+    FROM park_slug_aliases a
+  UNION ALL
+  SELECT concat_ws('/', '/parks', p."continentSlug", p."countrySlug", p."citySlug", p.slug, s.slug)
+    FROM attraction_slug_aliases s
+    JOIN attractions t ON t.id = s."attractionId"
+    JOIN parks p ON p.id = t."parkId"`;
+
 /** How many referrers each landing page or missing page lists. */
 const SOURCES_PER_ITEM = 5;
 
@@ -191,6 +209,7 @@ export class SiteAnalyticsSeoService {
          FROM ${source.from}
         WHERE ${source.where}
           AND page_type = ${params.add(NOT_FOUND_PAGE_TYPE)}
+          AND substring(path from 4) NOT IN (${ALIASED_PATHS_SQL})
         GROUP BY path
         HAVING SUM(views) > 0
         ORDER BY 2 DESC, 1 ASC

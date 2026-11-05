@@ -220,6 +220,11 @@ export const KNOWN_MEMBER_HEADROOM = 2;
  * which the system-health report shows.
  */
 export const DROP_REASONS = {
+  /**
+   * A bot's hit (an empty user agent counts as one). The nightly snapshot
+   * keeps a finished day's count in `site_bot_days` for the overview's `bots`.
+   */
+  bot: "dropped:bot",
   /** Past {@link MAX_HITS_PER_ADDRESS_PER_DAY}. */
   address: "dropped:address",
   /** Past {@link MAX_HITS_PER_WINDOW}. */
@@ -560,6 +565,12 @@ export const SITE_ANALYTICS_KEYS = {
   openVisits: "site-analytics:visits:open",
   /** Hits dropped or stored under an overflow value, per reason, per UTC day. */
   drops: (day: string) => `site-analytics:drops:${day}`,
+  /**
+   * The UTC day the first bot hit was counted (PAR-1234), set once. That day
+   * is only partly counted, so only the days after it are; no TTL, like the
+   * buffers, so `volatile-lru` never evicts it.
+   */
+  botsSince: "site-analytics:bots-since",
   /**
    * One flush window's counts: a hash of row → count. No TTL on purpose:
    * this Redis runs `volatile-lru`, which only evicts keys that have one.

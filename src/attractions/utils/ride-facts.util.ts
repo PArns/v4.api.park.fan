@@ -87,10 +87,46 @@ export const RIDE_RANKINGS = [
 
 export type RideRanking = (typeof RIDE_RANKINGS)[number];
 
+/**
+ * The ride types a comparison can be narrowed to, read off the profile's glossary type ids:
+ * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`).
+ */
+export const RIDE_TYPE_FILTERS = ["coaster"] as const;
+
+export type RideTypeFilter = (typeof RIDE_TYPE_FILTERS)[number];
+
+/**
+ * The coaster terms of park.fan's glossary (`category: 'coasters'` in the frontend's
+ * `lib/glossary/data.ts`) that do not end in "-coaster"; every "-coaster" id is one too.
+ */
+const COASTER_TYPE_IDS: ReadonlySet<string> = new Set([
+  "boomerang",
+  "euro-fighter",
+  "mine-train",
+  "wild-mouse",
+  "out-and-back",
+  "slc",
+]);
+
+/** Whether a ride's glossary type ids make it a ride of `type`. */
+export function isRideOfType(
+  types: readonly string[],
+  type: RideTypeFilter,
+): boolean {
+  switch (type) {
+    case "coaster":
+      return types.some(
+        (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),
+      );
+  }
+}
+
 /** One ride of a park with what is known about it, for {@link compareRides}. */
 export interface ComparedRide extends Omit<RideFacts, "elements" | "model"> {
   id: string;
   name: string;
+  /** The ride's park, when the attractions came with it (a country's rides). */
+  park?: string;
   /** Minimum rider height in cm; absent when park.fan does not know one. */
   minimumHeightCm?: number;
   maximumHeightCm?: number;
@@ -103,6 +139,7 @@ export interface ComparedRide extends Omit<RideFacts, "elements" | "model"> {
  * serves them (`chooseNameDuplicateWinner`), with the curated heights and the
  * profile's facts. The track figures and the model stay out: a ranking never
  * needs them, and `get_attraction` has them for the one ride asked about.
+ * Names are told apart per park, so two parks' "Pirates of the Caribbean" both stay.
  */
 export function comparedRides(
   attractions: readonly Attraction[],
@@ -116,7 +153,8 @@ export function comparedRides(
     const name = nameDuplicateKey(resolveCuratedFacts(attraction).name);
     if (!name) continue;
     const row = { slug: attraction.slug, name, attraction };
-    groups.set(name, [...(groups.get(name) ?? []), row]);
+    const key = `${attraction.parkId}:${name}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
   }
   return [...groups.values()].map((rows) => {
     const { attraction } = chooseNameDuplicateWinner(rows)!;
@@ -126,6 +164,7 @@ export function comparedRides(
     return {
       id: attraction.id,
       name: facts.name,
+      ...(attraction.park?.name && { park: attraction.park.name }),
       ...(facts.minimumHeight !== null && {
         minimumHeightCm: facts.minimumHeight,
       }),
@@ -161,6 +200,8 @@ export interface RideComparison {
   heightUnknown?: number;
   /** With a rider height: rides the rider is too small or too tall for. */
   notAllowed?: number;
+  /** With a type: rides left out because park.fan does not know their type. */
+  typeUnknown?: number;
 }
 
 /**
@@ -169,17 +210,26 @@ export interface RideComparison {
  * With `riderHeightCm` only the rides a rider that tall may ride are ranked:
  * the minimum height must be known and met, and a maximum, where there is one,
  * not exceeded. A ride with no known minimum is counted apart rather than
- * passed, because an unknown limit is not the same as none.
+ * passed, because an unknown limit is not the same as none. With `type` only
+ * the rides of that type are ranked, and those of unknown type counted apart.
  */
 export function compareRides(
-  rides: readonly ComparedRide[],
+  all: readonly ComparedRide[],
   params: {
     by: RideRanking;
     order?: "asc" | "desc";
     riderHeightCm?: number;
+    type?: RideTypeFilter;
     limit: number;
   },
 ): RideComparison {
+  const type = params.type;
+  const typeUnknown = type
+    ? all.filter((ride) => !ride.types?.length).length
+    : 0;
+  const rides = type
+    ? all.filter((ride) => isRideOfType(ride.types ?? [], type))
+    : all;
   const rider = params.riderHeightCm;
   let heightUnknown = 0;
   let notAllowed = 0;
@@ -213,5 +263,6 @@ export function compareRides(
     ranked: ranked.length,
     withoutValue: allowed.length - withValue.length,
     ...(rider !== undefined && { heightUnknown, notAllowed }),
+    ...(type && { typeUnknown }),
   };
 }

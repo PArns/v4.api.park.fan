@@ -101,7 +101,7 @@ never tighter than the gaps measured on production.
 
 | id | Source of `lastRunAt` | Expected | Late after | Timing on prod (2026-10-11) |
 | --- | --- | --- | --- | --- |
-| `pcn` | `pcn_forecasts` newest `created_at`, last 2 days (`idx_pcn_forecasts_created_at`) + pcn-service `/train/status` | every 15 min | 45 min | 5.7 ms |
+| `pcn` | `pcn_forecasts` newest `created_at`, last 2 days (`idx_pcn_forecasts_created_at`) + pcn-service `/train/status` and `/status` | every 15 min | 45 min | 5.7 ms |
 | `tft` | `tft_forecasts`: per ride its newest forecast for the day after tomorrow (PK lookup) + nf `/train/status` | daily 03:00 UTC | 30 h | 20–28 ms warm, 372–728 ms cold |
 | `catboost` | `ml_models` active `trainedAt` + ml-service `/train/status` | daily 06:00 UTC | 30 h | 0.6 ms |
 | `chronos` | archive surfaces 6/7 + the last Chronos run summary + nf `/chronos/status` | hourly at :05 UTC (every 2 h per open park) | 4 h | shared with archive |
@@ -117,6 +117,10 @@ never tighter than the gaps measured on production.
 - **PCN training** (PAR-1053): PCN keeps writing forecasts from the previous model when training
   fails, so the row also reads pcn-service `GET /train/status` (unreachable → ignored):
   `status: "failed"` → `failed` with the error in the note, `is_training` adds "trainiert gerade".
+- **PCN skipped parks** (PAR-1120): the row also reads pcn-service `GET /status` and lists the
+  parks the last forecast tick should have covered and did not as `blockedParks`
+  (`{ parkId, reason }`), counted in the note ("2 Parks ohne PCN-Prognose: …"). Closed parks and
+  unchanged origins are not listed ([reasons](pcn.md#the-forecast-tick)). The status does not change.
   The status file has no finish time, so a failure stands until the next run replaces it.
 - **Chronos warming.** `ChronosShadowService` counts calls / ok / warming per archive run and the
   capture writes that summary to Redis (`forecast-archive:chronos:last-run`, 2 days). Younger than 4 h

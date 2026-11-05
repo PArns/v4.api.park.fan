@@ -35,12 +35,12 @@ GET /v1/favorites?parkIds=…&attractionIds=…&showIds=…&restaurantIds=…&la
 | `restaurants` | `status`, `waitTime`, `cuisineType`, `park` | a 0-minute wait arrives absent, like no wait |
 
 `url` on every entry is the **API** path (`/v1/parks/<continent>/<country>/<city>/<park>[…]`), absent when
-a geo slug is missing. A show's and a restaurant's point at `…/shows/<slug>` and
-`…/restaurants/<slug>`, routes this API does not serve.
+a geo slug is missing. A show's and a restaurant's is their park's path: neither has a route of its
+own, and the park payload lists both.
 
 ## Caching
 
 `private, no-store` at the edge (`NoCdnCacheInterceptor`: the answer depends on the caller). In
 Redis the whole answer is cached for 5 minutes per set of ids and position (rounded to three
 decimals, about 100 m), and refreshed in the background once less than a minute is left, so a list
-can be up to five minutes old. Swagger's "2 minutes" is out of date.
+can be up to five minutes old.

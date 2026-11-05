@@ -34,7 +34,17 @@ export interface E2eContainers {
 
 export const E2E_CONTAINERS = Symbol.for("parkfan.e2e.containers");
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(globalConfig?: {
+  maxWorkers?: number;
+}): Promise<void> {
+  // The suites share one Postgres and one Redis and reset both between tests,
+  // so two at once flake. `--runInBand` used to force this; since PAR-1162 only
+  // `maxWorkers: 1` in jest-e2e.json does, and a CLI `--maxWorkers=2` beats it.
+  if ((globalConfig?.maxWorkers ?? 1) > 1) {
+    throw new Error(
+      `e2e suites share one database and must run one at a time; drop --maxWorkers (got ${globalConfig?.maxWorkers})`,
+    );
+  }
   // Load .env.test BEFORE any other module reads config
   dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
   process.env.NODE_ENV = "test";

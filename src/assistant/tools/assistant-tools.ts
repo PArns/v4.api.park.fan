@@ -7,21 +7,38 @@ import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
-import { parkForecastTool } from "../../mcp/tools/park-forecast.tool";
+import {
+  compactDay,
+  parkForecastTool,
+} from "../../mcp/tools/park-forecast.tool";
+import { CalendarService } from "../../parks/services/calendar.service";
+import { parseDateRange } from "../../common/utils/date-parsing.util";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import { BestDaysService } from "../../parks/services/best-days.service";
+import { ParksService } from "../../parks/parks.service";
+import { ShowsService } from "../../shows/shows.service";
+import type { Show } from "../../shows/entities/show.entity";
+import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
+import { isCurrentlyInSeason } from "../../attractions/utils/curated-attraction-facts.util";
+import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
-import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+} from "../../common/utils/date.util";
 import { DataSource, In, IsNull } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import {
   compareRides,
   comparedRides,
+  isRideOfType,
   RIDE_RANKINGS,
+  RIDE_TYPE_FILTERS,
 } from "../../attractions/utils/ride-facts.util";
+import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import { AssistantPostsClient } from "./assistant-posts.client";
 import { getFrontendUrl } from "../../config/oauth.config";
 import {
@@ -40,7 +57,13 @@ import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
 import {
   ActionOutcome,
+  calendarCard,
   clockTime,
+  parkInstant,
+  tilesCard,
+  type ForecastSummary,
+  type LiveParkSummary,
+  localizePageUrls,
   parkRides,
   planDate,
   PLANNER_BLOCK_ICONS,
@@ -64,8 +87,36 @@ type ParkSummary =
       nextSchedule?: unknown;
       rides?: {
         longestWaits?: Array<{ id: string; name: string; waitMinutes: number }>;
+        down?: Array<{ id: string; name: string }>;
       };
     };
+
+/**
+ * The ride card's optional badges: each key only when it is true or known, so an absent one
+ * means "nobody said", never "no" (docs/rules/absent-facts.md).
+ */
+export function rideBadges(ride: RideSummary) {
+  const facts = ride.facts ?? {};
+  const fastPass = facts.fastPass as { price?: number | null } | null;
+  const worksPeriod = ride.worksPeriod as { runningToday?: boolean } | null;
+  return {
+    ...(ride.ropeDrop?.worth && {
+      ropeDrop: {
+        strength: ride.ropeDrop.strength,
+        savings: ride.ropeDrop.savingsMinutes,
+      },
+    }),
+    ...(facts.hasSingleRider === true && { singleRider: true as const }),
+    ...(facts.hasVirtualLine === true && { virtualLine: true as const }),
+    // A price of 0 is a free product (Europa-Park's Virtual Line), not a paid lane.
+    ...(fastPass && fastPass.price !== 0 && { paidExpress: true as const }),
+    ...(worksPeriod?.runningToday === true && { worksPeriod: true as const }),
+    ...(facts.isCurrentlyInSeason === false && { outOfSeason: true as const }),
+  };
+}
+
+/** Most rides that are down a rides card lists after the waits. */
+const MAX_DOWN_ROWS = 3;
 
 /** The fields of `get_attraction`'s answer a card reads. */
 interface RideSummary {
@@ -76,6 +127,18 @@ interface RideSummary {
   crowdLevel?: string | null;
   pageUrl?: string | null;
   queues?: Array<{ type: string; waitMinutes: number | null }>;
+  worksPeriod?: unknown;
+  facts?: {
+    hasSingleRider?: boolean | null;
+    hasVirtualLine?: boolean | null;
+    fastPass?: unknown;
+    isCurrentlyInSeason?: boolean | null;
+  };
+  ropeDrop?: {
+    worth: boolean;
+    strength: "high" | "moderate" | null;
+    savingsMinutes: number;
+  } | null;
 }
 
 /**
@@ -230,6 +293,271 @@ const parkRef = z
   .max(120)
   .describe('Park id from search_parks, or its slug like "phantasialand"');
 
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** How far `park_forecast` looks ahead, today included. */
+const FORECAST_DAYS = 60;
+
+/** Days from `from` to `to`, both YYYY-MM-DD: calendar days, no clock involved. */
+function daysBetween(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+      86_400_000,
+  );
+}
+
+/** The calendar or tiles card of one park, from `park_forecast` and, live, `get_park`. */
+async function dayCard(
+  ctx: AssistantToolContext,
+  reference: string,
+  kind: "calendar" | "tiles",
+  start: string | undefined,
+  days: number,
+): Promise<unknown> {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const today = getCurrentDateInTimezone(found.timezone);
+  const first = start ?? today;
+  const count = kind === "calendar" ? days : 1;
+  const ahead = daysBetween(today, first);
+  if (ahead < 0 || ahead + count > FORECAST_DAYS) {
+    throw new McpToolError(
+      `Pick days from ${today} up to ${FORECAST_DAYS} days ahead`,
+    );
+  }
+  const live = kind === "tiles" && first === today;
+  const [forecast, summary] = await Promise.all([
+    parkForecastTool.handler(
+      { park: found.id, days: ahead + count },
+      mcp(ctx),
+    ) as Promise<ForecastSummary>,
+    live
+      ? (getParkTool.handler(
+          { park: found.id, longestWaits: 0 },
+          mcp(ctx),
+        ) as Promise<LiveParkSummary>)
+      : null,
+  ]);
+  if (kind === "calendar") {
+    const card = calendarCard(forecast, first, count);
+    const open = card.days.filter((day) => day.status === "OPERATING").length;
+    return new ActionOutcome(
+      { type: "card", card },
+      {
+        shown: `${card.days.length} days of ${card.park} from ${first}, ${open} open`,
+      },
+    );
+  }
+  const card = tilesCard(forecast, first, summary);
+  const { url: _url, ...shown } = card;
+  return new ActionOutcome({ type: "card", card }, { shown });
+}
+
+/**
+ * The days a year before `date` (YYYY-MM-DD) worth comparing: the same date (29 February becomes
+ * the 28th), and the day of the same weekday nearest to it, at most three days off, because a
+ * Saturday says more about a Saturday than the date does. Calendar days only, no clock.
+ */
+export function lastYearDays(date: string): {
+  sameDate: string;
+  sameWeekday: string;
+} {
+  const [year, month, day] = date.split("-");
+  const sameDate = `${Number(year) - 1}-${month}-${month === "02" && day === "29" ? "28" : day}`;
+  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+  const ahead = (weekday(date) - weekday(sameDate) + 7) % 7;
+  return {
+    sameDate,
+    sameWeekday: addIsoDays(sameDate, ahead > 3 ? ahead - 7 : ahead),
+  };
+}
+
+/** One past day for `get_park_history` as the calendar serves it, or null without one. */
+function pastDay(
+  day: ReturnType<typeof compactDay> | undefined,
+): Record<string, unknown> | null {
+  if (!day) return null;
+  return {
+    date: day.date,
+    weekday: formatInTimeZone(new Date(`${day.date}T12:00:00Z`), "UTC", "EEEE"),
+    status: day.status,
+    opens: day.opens,
+    closes: day.closes,
+    // A past day's level counts only where it was measured: the calendar falls back to a stored
+    // prediction, which a year back is a forecast, not what happened (docs/rules/absent-facts.md).
+    crowdLevel: day.forecastIsActual ? day.crowdLevel : "unknown",
+    // The recorded peak of the headliners, only where it was measured.
+    headlinerPeakWaitMinutes: day.forecastIsActual
+      ? (day.expectedPeakWaitMinutes ?? null)
+      : null,
+    holiday: day.holiday,
+    schoolVacation: day.schoolVacation,
+    events: day.events,
+  };
+}
+
+/** Most shows one answer lists. */
+const MAX_SHOWS = 30;
+
+/**
+ * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
+ * instant so it reaches the model in the visitor's clock. Status and duration come from a live
+ * reading of the show only; without one they are null, never a guessed "closed".
+ */
+export function showsOnDay(
+  shows: readonly Show[],
+  live: ReadonlyMap<string, ShowLiveData>,
+  starts: ReadonlyMap<string, string[]>,
+  timezone: string,
+) {
+  const listed = shows
+    .filter((show) => starts.get(show.id)?.length)
+    .map((show) => {
+      const reading = live.get(show.id);
+      const timed = reading?.showtimes?.find((t) => t.startTime && t.endTime);
+      const minutes = timed
+        ? Math.round(
+            (Date.parse(timed.endTime!) - Date.parse(timed.startTime)) / 60_000,
+          )
+        : NaN;
+      return {
+        name: show.name,
+        ...(show.landName && { land: show.landName }),
+        status: reading?.status ?? null,
+        showtimes: starts.get(show.id) as string[],
+        ...(minutes > 0 && minutes < 600 && { durationMinutes: minutes }),
+        ...(show.isSeasonal && {
+          seasonMonths: show.seasonMonths,
+          inSeasonNow: isCurrentlyInSeason(
+            {
+              isSeasonal: true,
+              seasonMonths: show.seasonMonths,
+              seasonOutSince: null,
+            },
+            timezone,
+          ),
+        }),
+      };
+    })
+    .sort((a, b) => a.showtimes[0].localeCompare(b.showtimes[0]));
+  return {
+    shows: listed.slice(0, MAX_SHOWS),
+    withShowtimes: listed.length,
+    withoutShowtimes: shows.length - listed.length,
+  };
+}
+
+/** One park's shows on a day (default the park's today), for `get_shows` and its card. */
+async function showsOf(
+  ctx: AssistantToolContext,
+  reference: string,
+  date: string | undefined,
+) {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const shows = ctx.get(ShowsService);
+  const today = getCurrentDateInTimezone(found.timezone);
+  const day = date ?? today;
+  const [all, live, starts] = await Promise.all([
+    shows.findByParkId(found.id),
+    day === today
+      ? shows.findCurrentStatusByPark(found.id)
+      : Promise.resolve(new Map<string, ShowLiveData>()),
+    shows.getShowtimeInstantsOnDate(found.id, found.timezone, day),
+  ]);
+  return {
+    park: found,
+    date: day,
+    ...showsOnDay(all, live, starts, found.timezone),
+  };
+}
+
+/**
+ * A park's restaurants as the park page shows them (deduplicated by name, with live status),
+ * optionally only those whose name or cuisine holds `query`. Absent facts stay null.
+ */
+async function restaurantsOf(
+  ctx: AssistantToolContext,
+  reference: string,
+  query: string | undefined,
+) {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const park = await ctx.get(ParksService).loadParkRelations(found);
+  const dto = await ctx
+    .get(ParkIntegrationService)
+    .buildIntegratedResponse(park, false, false);
+  const lands = new Map(
+    (park.restaurants ?? []).map((r) => [r.id, r.landName || null]),
+  );
+  const all = dto.restaurants ?? [];
+  const needle = query ? foldText(query) : null;
+  const matched = needle
+    ? all.filter((r) =>
+        foldText(`${r.name} ${r.cuisineType ?? ""}`).includes(needle),
+      )
+    : all;
+  return {
+    park: park.name,
+    parkStatus: dto.status ?? null,
+    pageUrl: parkPageUrl(park),
+    total: all.length,
+    matched: matched.length,
+    restaurants: matched.map((r) => ({
+      name: r.name,
+      // Without a reading of its own the payload guesses from the park's status; that is
+      // no statement about the stand (docs/rules/absent-facts.md).
+      status: r.lastUpdated ? (r.status ?? null) : null,
+      land: lands.get(r.id) ?? null,
+      cuisine: r.cuisineType || null,
+      requiresReservation: r.requiresReservation ?? null,
+    })),
+  };
+}
+
+/** Most shows and restaurants a card lists. */
+const MAX_SHOW_CARD = 10;
+const MAX_RESTAURANT_CARD = 12;
+
+/**
+ * The shows card: at most ten, by each show's next start (shows that are over for the day last),
+ * every time with the park's offset. Shows have no page of their own.
+ */
+export function showsCard(
+  park: { name: string; timezone: string; pageUrl: string | null },
+  date: string,
+  shows: Array<{ name: string; status: string | null; showtimes: string[] }>,
+  now: number,
+): Extract<AssistantCard, { kind: "shows" }> {
+  const next = (times: string[]) =>
+    times.map(Date.parse).find((at) => at >= now) ?? Number.POSITIVE_INFINITY;
+  return {
+    kind: "shows",
+    park: park.name,
+    url: park.pageUrl ? siteOnlyPath(park.pageUrl) : null,
+    date,
+    shows: [...shows]
+      .sort((a, b) => next(a.showtimes) - next(b.showtimes))
+      .slice(0, MAX_SHOW_CARD)
+      .map((show) => ({
+        name: show.name,
+        status: show.status,
+        times: show.showtimes
+          .map((at) => parkInstant(at, park.timezone))
+          .filter((at): at is string => at !== null),
+        url: null,
+      })),
+  };
+}
+
+/** Most restaurants one answer lists; Phantasialand has 46. */
+const MAX_RESTAURANTS = 25;
+
+/** Lower case without accents, so "eis" finds "Eiscafé" and "creme" finds "Crème". */
+export function foldText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 const CROWD_ORDER = [
   "very_low",
   "low",
@@ -262,8 +590,10 @@ export const ASSISTANT_TOOLS = [
     status: "wait-times",
     description:
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
-      "average and peak waits today, weather now, the longest current standby waits, rides that " +
-      "are down and rides that have not run today, and the park's pageUrl.",
+      "average and peak waits today, weather now, only the 8 longest current standby waits, " +
+      "rides that are down and rides that have not run today, and the park's pageUrl. Not the " +
+      "shortest waits or one ride type: show_card kind rides order shortest (type coaster for " +
+      "coasters) has every waiting ride.",
     input: z.object({ park: parkRef }),
     run: async ({ park }, ctx) => {
       const live = (await getParkTool.handler(
@@ -281,7 +611,9 @@ export const ASSISTANT_TOOLS = [
     name: "find_rides",
     status: "rides",
     description:
-      "Find rides by name, optionally within one park. Returns ids for get_ride.",
+      "Find rides by name only (typo-tolerant), optionally within one park: id (for get_ride), " +
+      'name, park, status and standby wait, at most 5. Not by type or figure: for "the fastest ' +
+      'coaster" or "coasters in Germany" use compare_rides.',
     input: z.object({
       query: z.string().min(2).max(100).describe('Ride name, e.g. "taron"'),
       parkId: z
@@ -294,14 +626,118 @@ export const ASSISTANT_TOOLS = [
       findAttractionsTool.handler({ query, parkId, limit: 5 }, mcp(ctx)),
   }),
   tool({
+    name: "find_restaurants",
+    status: "parks",
+    description:
+      "A park's restaurants, snack bars and food stands, optionally only those whose name or " +
+      'cuisine contains query (e.g. "eis", "ice", "pizza"): name, status now where the park ' +
+      "reports it, cuisine and reservation where known, land, and the park's pageUrl. For " +
+      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan. No ' +
+      "menus, prices or opening hours.",
+    input: z.object({
+      park: parkRef,
+      query: z.string().trim().min(2).max(60).optional(),
+    }),
+    run: async ({ park: reference, query }, ctx) => {
+      const found = await restaurantsOf(ctx, reference, query);
+      if ("ambiguous" in found) return found;
+      return {
+        ...found,
+        restaurants: found.restaurants.slice(0, MAX_RESTAURANTS).map((r) => ({
+          name: r.name,
+          status: r.status,
+          ...(r.cuisine && { cuisine: r.cuisine }),
+          ...(r.requiresReservation !== null && {
+            requiresReservation: r.requiresReservation,
+          }),
+          ...(r.land && { land: r.land }),
+        })),
+      };
+    },
+  }),
+  tool({
+    name: "get_park_history",
+    status: "forecast",
+    description:
+      "How a park's day went one year earlier, as park.fan's calendar recorded it: the same " +
+      "date last year and the nearest day of the same weekday (weekday matters more), each " +
+      "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
+      "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
+      '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
+      "Halloween as date. Only one year back, not other years or the days ahead.",
+    input: z.object({
+      park: parkRef,
+      date: isoDay
+        .optional()
+        .describe(
+          "The day to look a year back from, YYYY-MM-DD; default the park's today",
+        ),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const today = getCurrentDateInTimezone(found.timezone);
+      const day = date ?? today;
+      const { sameDate, sameWeekday } = lastYearDays(day);
+      if (sameDate >= today) {
+        throw new McpToolError("That day a year back has not happened yet");
+      }
+      const past = [sameDate, sameWeekday].filter((d) => d < today).sort();
+      const [from, to] = [past[0], past[past.length - 1]];
+      // The calendar's own history path: a handful of past days, each cached for a day.
+      const { fromDate, toDate } = parseDateRange(from, to, {
+        timezone: found.timezone,
+      });
+      const calendar = await ctx
+        .get(CalendarService)
+        .buildCalendarResponse(found, fromDate, toDate, "none");
+      const days = new Map(
+        calendar.days.map((d) => [d.date, compactDay(d, found.timezone)]),
+      );
+      return {
+        park: found.name,
+        askedAbout: day,
+        sameDateLastYear: pastDay(days.get(sameDate)),
+        ...(sameWeekday !== sameDate &&
+          sameWeekday < today && {
+            sameWeekdayLastYear: pastDay(days.get(sameWeekday)),
+          }),
+      };
+    },
+  }),
+  tool({
+    name: "get_shows",
+    status: "rides",
+    description:
+      "One park's shows with their showtimes on a day (today by default), earliest first: " +
+      "name, land, status now (today only, where the park reports it), every start time, the " +
+      "duration where known, and season. Shows without a time that day are counted, not listed. " +
+      'For "when is the next show", "what\'s on today". Parks seldom publish times beyond ' +
+      "today, so another day is often empty; no parades the park does not list as a show.",
+    input: z.object({
+      park: parkRef,
+      date: isoDay
+        .optional()
+        .describe("YYYY-MM-DD in the park's calendar; default today"),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await showsOf(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, ...rest } = found;
+      return { park: park.name, ...rest };
+    },
+  }),
+  tool({
     name: "get_ride",
     status: "rides",
     description:
       "One ride now: status, every queue with its wait, crowd level and trend, a running outage, " +
-      "facts (minimum height in cm, gets you wet, single rider, indoor/outdoor, season), its " +
-      "profile where park.fan has one (type, track figures in order, launches, inversions, " +
-      "manufacturer, model, opening year, top speed, height, length, duration), typical waits, " +
-      "reliability, and its pageUrl.",
+      "facts (minimum height in cm, gets you wet, single rider, indoor/outdoor, season, land, " +
+      "the paid fast pass, headliner), its profile where park.fan has one (type, track figures " +
+      "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
+      "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
+      "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
+      "best visit times, and its pageUrl.",
     input: z.object({
       rideId: z
         .string()
@@ -338,34 +774,78 @@ export const ASSISTANT_TOOLS = [
     name: "compare_rides",
     status: "rides",
     description:
-      "One park's rides ranked by a fact: top speed, height, length, duration, inversions, " +
-      "launches, opening year or minimum rider height (cm), highest first unless order asc. With " +
-      'riderHeightCm only the rides someone that tall may ride. For "the fastest ride in X", ' +
-      '"the newest coaster", "what can my 1 m child ride". Counts what it left out for lack of data.',
+      "The rides of one park, or of every park in a country, ranked by a fact: top speed, height, " +
+      "length, duration, inversions, launches, opening year or minimum rider height (cm), highest " +
+      "first unless order asc. type coaster keeps only roller coasters. With riderHeightCm only " +
+      'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
+      'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
+      "what it left out for lack of data (say so when many are). No waits: those are show_card " +
+      "kind rides.",
     input: z.object({
-      park: parkRef,
+      park: parkRef.optional(),
+      country: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .optional()
+        .describe('Instead of park: a country, "Germany" or its code "DE"'),
       by: z.enum(RIDE_RANKINGS),
       order: z.enum(["desc", "asc"]).default("desc"),
+      type: z.enum(RIDE_TYPE_FILTERS).optional(),
       riderHeightCm: z.number().int().min(50).max(250).optional(),
       limit: z.number().int().min(1).max(15).default(5),
     }),
-    run: async ({ park: reference, by, order, riderHeightCm, limit }, ctx) => {
-      const park = await resolvePark(mcp(ctx), reference);
-      if (isAmbiguous(park)) return park;
-      const attractions = await ctx
-        .get(DataSource)
-        .getRepository(Attraction)
-        .find({ where: { parkId: park.id, retiredAt: IsNull() } });
+    run: async (
+      { park: reference, country, by, order, type, riderHeightCm, limit },
+      ctx,
+    ) => {
+      if (!reference === !country) {
+        throw new McpToolError("Give either park or country");
+      }
+      const attractions = ctx.get(DataSource).getRepository(Attraction);
+      let scope: { park: string } | { country: string; parks: number };
+      let found: Attraction[];
+      if (reference) {
+        const park = await resolvePark(mcp(ctx), reference);
+        if (isAmbiguous(park)) return park;
+        scope = { park: park.name };
+        found = await attractions.find({
+          where: { parkId: park.id, retiredAt: IsNull() },
+        });
+      } else {
+        // One query for the whole country, its parks joined for their names.
+        const code = getCountryISOCode(country as string);
+        found = await attractions
+          .createQueryBuilder("attraction")
+          .innerJoinAndSelect("attraction.park", "park")
+          .where("attraction.retiredAt IS NULL")
+          .andWhere("park.retiredAt IS NULL")
+          .andWhere(
+            "(park.countryCode = :code OR lower(park.country) = lower(:country))",
+            { code: code ?? "", country },
+          )
+          .getMany();
+        if (found.length === 0) {
+          throw new McpToolError(`No parks in "${country}"; try search_parks`);
+        }
+        scope = {
+          country: found[0].park.country,
+          parks: new Set(found.map((ride) => ride.parkId)).size,
+        };
+      }
       const profiles = await ctx
         .get(RideProfileService)
-        .findByAttractions(attractions.map((attraction) => attraction.id));
+        .findByAttractions(found.map((attraction) => attraction.id));
       return {
-        park: park.name,
+        ...scope,
         by,
         order,
-        ...compareRides(comparedRides(attractions, profiles), {
+        ...(type && { type }),
+        ...compareRides(comparedRides(found, profiles), {
           by,
           order,
+          type,
           riderHeightCm,
           limit,
         }),
@@ -448,8 +928,10 @@ export const ASSISTANT_TOOLS = [
       "the expected peak wait of the headliners, weather (basis climate_normal is the long-run " +
       "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
       "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
-      "forecast. Use it for special days and events too. Days after " +
-      "scheduleCoverage.to have no published hours yet: treat their status as unknown.",
+      "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
+      "only; never move it to another day. Use it for special days and events too. Days after " +
+      "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
+      "days: get_park_history.",
     input: z.object({
       park: parkRef,
       days: z
@@ -530,9 +1012,10 @@ export const ASSISTANT_TOOLS = [
     name: "get_best_days",
     status: "forecast",
     description:
-      "The quietest upcoming open days of one park in the next 90 days (or a range you give), " +
-      "best first, and the typical crowd per weekday from history (dayOfWeek 0 = Sunday, lower " +
-      'avgCrowdScore = quieter). Use for "when should I go".',
+      "The 10 quietest rated open days of one park in the next 90 days (or a range you give), " +
+      "quietest first, and the typical crowd per weekday from history (dayOfWeek 0 = Sunday, " +
+      "lower avgCrowdScore = quieter). Only the quietest ten, not a ranking of every day: a day " +
+      'missing from the list is not a day to avoid. Use for "when should I go".',
     input: z.object({
       park: parkRef,
       from: z
@@ -553,11 +1036,14 @@ export const ASSISTANT_TOOLS = [
         .get(BestDaysService)
         .getBestDays(found, from, to);
       const open = result.days.filter((day) => day.crowdLevel !== "closed");
+      // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
+      const rated = open.filter((day) => CROWD_ORDER.includes(day.crowdLevel));
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
         window: { from: result.meta.windowFrom, to: result.meta.windowTo },
         openDays: open.length,
-        quietestDays: open
+        unratedOpenDays: open.length - rated.length,
+        tenQuietestOpenDays: rated
           .map((day) => ({
             date: day.date,
             crowdLevel: day.crowdLevel,
@@ -712,11 +1198,48 @@ export const ASSISTANT_TOOLS = [
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
       "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
       "level), a park's rides with their current waits (kind rides, longest or shortest " +
-      "first), or several parks to click (kind parks). Whenever the answer lists rides with " +
-      "waits, show kind rides, and whenever it lists parks, show kind parks, instead of writing " +
-      "the list as text; keep the text to a sentence and do not repeat the card's numbers.",
+      "first, then rides that are down; type coaster for coasters only), several parks to click " +
+      "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
+      "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
+      "a park's shows with their times on a day (kind shows), or its restaurants and food " +
+      "stands, optionally matching query (kind restaurants). Whenever the answer lists rides " +
+      "with waits, parks, shows or places to eat, show the matching kind instead of writing " +
+      "the list as text; keep the text to a sentence and do not repeat the card's numbers. " +
+      "Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
+      "compare_rides.",
     input: z.object({
-      kind: z.enum(["park", "ride", "rides", "parks"]),
+      kind: z.enum([
+        "park",
+        "ride",
+        "rides",
+        "parks",
+        "calendar",
+        "tiles",
+        "shows",
+        "restaurants",
+      ]),
+      query: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .optional()
+        .describe(
+          'For kind restaurants: only names or cuisines with this, e.g. "eis"',
+        ),
+      from: isoDay
+        .optional()
+        .describe("For kind calendar: first day; default the park's today"),
+      days: z
+        .number()
+        .int()
+        .min(7)
+        .max(42)
+        .default(14)
+        .describe("For kind calendar: how many days"),
+      date: isoDay
+        .optional()
+        .describe("For kind tiles: the day; default today, live"),
       parks: z
         .array(parkRef)
         .min(1)
@@ -725,15 +1248,83 @@ export const ASSISTANT_TOOLS = [
         .describe("For kind parks: park ids or slugs, in the order to show"),
       park: parkRef
         .optional()
-        .describe("For kind park or rides: park id or slug"),
+        .describe("For kind park, rides, calendar or tiles: park id or slug"),
       order: z
         .enum(["longest", "shortest"])
         .default("longest")
         .describe("For kind rides: longest or shortest waits first"),
+      type: z
+        .enum(RIDE_TYPE_FILTERS)
+        .optional()
+        .describe("For kind rides: only rides of this type"),
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
-    run: async ({ kind, park, parks, rideId, order, limit }, ctx) => {
+    run: async (
+      {
+        kind,
+        park,
+        parks,
+        rideId,
+        order,
+        type,
+        limit,
+        from,
+        days,
+        date,
+        query,
+      },
+      ctx,
+    ) => {
+      if (kind === "shows") {
+        if (!park) throw new McpToolError("kind shows needs park");
+        const found = await showsOf(ctx, park, date);
+        if ("ambiguous" in found) return found;
+        const card = showsCard(
+          {
+            name: found.park.name,
+            timezone: found.park.timezone,
+            pageUrl: parkPageUrl(found.park),
+          },
+          found.date,
+          found.shows,
+          Date.now(),
+        );
+        return new ActionOutcome(
+          { type: "card", card },
+          {
+            shown: `${card.shows.length} shows of ${card.park} on ${card.date}`,
+            withoutShowtimes: found.withoutShowtimes,
+          },
+        );
+      }
+      if (kind === "restaurants") {
+        if (!park) throw new McpToolError("kind restaurants needs park");
+        const found = await restaurantsOf(ctx, park, query);
+        if ("ambiguous" in found) return found;
+        const card: AssistantCard = {
+          kind: "restaurants",
+          park: found.park,
+          url: found.pageUrl ? siteOnlyPath(found.pageUrl) : null,
+          restaurants: found.restaurants.slice(0, MAX_RESTAURANT_CARD),
+        };
+        return new ActionOutcome(
+          { type: "card", card },
+          {
+            shown: `${card.restaurants.length} of ${found.matched} places to eat at ${found.park}`,
+          },
+        );
+      }
+      if (kind === "calendar" || kind === "tiles") {
+        if (!park) throw new McpToolError(`kind ${kind} needs park`);
+        return dayCard(
+          ctx,
+          park,
+          kind,
+          kind === "calendar" ? from : date,
+          days,
+        );
+      }
       if (kind === "parks") {
         if (!parks?.length) throw new McpToolError("kind parks needs parks");
         // Each row with its live state, as the park cards on the site show it.
@@ -774,16 +1365,46 @@ export const ASSISTANT_TOOLS = [
       if (kind === "rides") {
         if (!park) throw new McpToolError("kind rides needs park");
         // Every operating ride with a posted wait, longest first, so both ends can be cut.
+        // With a type every waiting ride, so a coaster further down the list is not cut.
         const live = (await getParkTool.handler(
-          { park, longestWaits: 30 },
+          { park, longestWaits: type ? 500 : 30 },
           mcp(ctx),
         )) as ParkSummary;
         if ("ambiguous" in live) return live;
-        const all = live.rides?.longestWaits ?? [];
-        const picked = (order === "shortest" ? [...all].reverse() : all).slice(
+        let all = live.rides?.longestWaits ?? [];
+        let down = live.rides?.down ?? [];
+        if (type) {
+          const profiles = await ctx
+            .get(RideProfileService)
+            .findByAttractions([...all, ...down].map((ride) => ride.id));
+          const ofType = (ride: { id: string }) =>
+            isRideOfType(profiles.get(ride.id)?.types ?? [], type);
+          all = all.filter(ofType);
+          down = down.filter(ofType);
+        }
+        const waiting = (order === "shortest" ? [...all].reverse() : all).slice(
           0,
           limit,
         );
+        // Rides down right now follow the waits; a full "shortest" list has no room for them.
+        const room =
+          order === "shortest"
+            ? Math.min(MAX_DOWN_ROWS, limit - waiting.length)
+            : MAX_DOWN_ROWS;
+        const picked: Array<{
+          id: string;
+          name: string;
+          waitMinutes: number | null;
+          status: string;
+        }> = [
+          ...waiting.map((ride) => ({ ...ride, status: "OPERATING" })),
+          ...down.slice(0, Math.max(0, room)).map((ride) => ({
+            id: ride.id,
+            name: ride.name,
+            waitMinutes: null,
+            status: "DOWN",
+          })),
+        ];
         // Each row links its own ride page, built from the ride's park and slug.
         const found = await ctx
           .get(DataSource)
@@ -802,6 +1423,7 @@ export const ASSISTANT_TOOLS = [
         );
         const rides = picked.map((ride) => ({
           name: ride.name,
+          status: ride.status,
           waitMinutes: ride.waitMinutes,
           url: pages.get(ride.id) ?? null,
         }));
@@ -814,7 +1436,9 @@ export const ASSISTANT_TOOLS = [
         };
         return new ActionOutcome(
           { type: "card", card },
-          { shown: `${rides.length} rides of ${live.name}` },
+          {
+            shown: `${rides.length} ${type ? `${type}s` : "rides"} of ${live.name}`,
+          },
         );
       }
       if (kind === "park") {
@@ -865,6 +1489,7 @@ export const ASSISTANT_TOOLS = [
         crowdLevel: ride.crowdLevel ?? null,
         waitMinutes: standby?.waitMinutes ?? null,
         url: ride.pageUrl ? siteOnlyPath(ride.pageUrl) : null,
+        ...rideBadges(ride),
       };
       const { url: _url, ...shown } = card;
       return new ActionOutcome({ type: "card", card }, { shown });
@@ -971,7 +1596,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
-      "shopping, a photo stop or a meeting point. Only when the user asks.",
+      "shopping, a photo stop or a meeting point. Only when the user asks. A show's start time " +
+      "comes from get_shows, a food stop from find_restaurants.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -1163,6 +1789,13 @@ export function toolStatus(name: string): AssistantToolStatus | null {
 const MAX_RESULT_CHARS = 12_000;
 
 /**
+ * Said with every card and page change: the visitor already reads the text the model wrote
+ * before the call, and the chat streams every round's text, so a repeat is shown twice.
+ */
+const ALREADY_SHOWN =
+  "The user already sees the card or page and any text you wrote before this call; do not repeat it, add at most one new sentence.";
+
+/**
  * Runs one tool call and returns what goes back to the model. A wrong name or
  * input, or a failing tool, becomes an error result the model can read; the
  * message of an unexpected error stays in the log.
@@ -1186,11 +1819,13 @@ export async function runAssistantTool(
     const outcome = await definition.run(input.data, ctx);
     const action =
       outcome instanceof ActionOutcome ? outcome.action : undefined;
+    const plain = outcome instanceof ActionOutcome ? outcome.result : outcome;
+    const shown =
+      action?.type === "card" || action?.type === "navigate"
+        ? { ...(plain as object), alreadyShown: ALREADY_SHOWN }
+        : plain;
     const result = JSON.stringify(
-      localizeTimes(
-        outcome instanceof ActionOutcome ? outcome.result : outcome,
-        ctx.timeZone ?? "UTC",
-      ),
+      localizeTimes(localizePageUrls(shown, ctx.locale), ctx.timeZone ?? "UTC"),
     );
     return {
       content:

@@ -20,8 +20,8 @@ fresh and moving waits. That is why the hero badge, the map and the ticker agree
 | Field | Is |
 | --- | --- |
 | `counts.openParks` | open parks with at least one `OPERATING` standby reading in the last 24 h |
-| `counts.parks`, `attractions`, `shows`, `restaurants` | rows in each table, **retired rows included** (cached 1 h) |
-| `counts.openAttractions` | non-retired rides whose newest reading of the last 24 h is `OPERATING`, **in any park**, open or not |
+| `counts.parks`, `attractions`, `shows`, `restaurants` | non-retired rows in each table (cached 1 h) |
+| `counts.openAttractions` | non-retired rides of open parks whose newest reading of the last 24 h is `OPERATING` |
 | `counts.queueDataRecords` | exact, recounted every 6 h |
 | `counts.totalWaitTime` | sum of the newest wait of every `OPERATING` ride in an open park, counting waits of 10–360 min only |
 | `mostCrowdedPark`, `leastCrowdedPark` | the open parks with the highest and lowest `averageWaitTime` |
@@ -31,8 +31,8 @@ What a client may not conclude:
 
 - **`averageWaitTime` on a park is a P90**, the 90th percentile of its rides' newest standby waits,
   rounded to 5. It is not a mean, and it ranks the two parks; the crowd level does not.
-- **The parks' `crowdLevel` is re-derived from `occupancy.current`**, not the gated level the park
-  payload serves, so it can read `very_low` where the park page says `unknown`.
+- The parks' `crowdLevel` is the gated live level the park payload serves: `unknown` for a park
+  without enough history, never re-derived from `occupancy.current`.
 - **`shortestWaitRide` is never under 10 minutes**: shorter waits are left out of the comparison.
 - All four extremes are absent while no park is open. A zero board (no parks, no rides) is not cached.
 

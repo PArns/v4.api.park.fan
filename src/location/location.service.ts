@@ -13,6 +13,7 @@ import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParksService } from "../parks/parks.service";
 import { PopularityService } from "../popularity/popularity.service";
+import { ShowsService } from "../shows/shows.service";
 import {
   calculateHaversineDistance,
   sortByDistance,
@@ -26,6 +27,7 @@ import {
   NearbyParksDto,
   RideWithDistanceDto,
   NearbyParkInfoDto,
+  InParkShowDto,
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { pickShortWaits } from "./short-waits.util";
@@ -79,6 +81,7 @@ export class LocationService {
     private readonly analyticsService: AnalyticsService,
     private readonly parksService: ParksService,
     private readonly popularityService: PopularityService,
+    private readonly showsService: ShowsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -267,7 +270,9 @@ export class LocationService {
     // Fetch park and attractions in parallel
     const [park, attractions] = await Promise.all([
       this.parkRepository.findOne({ where: { id: parkId } }),
-      this.attractionRepository.find({ where: { parkId } }),
+      this.attractionRepository.find({
+        where: { parkId, retiredAt: IsNull() },
+      }),
     ]);
 
     if (!park) {
@@ -291,6 +296,7 @@ export class LocationService {
       parkHasOperatingSchedule,
       headlinerIds,
       parkRatable,
+      shows,
     ] = await Promise.all([
       this.parksService.getBatchParkStatus([parkId]),
       this.analyticsService.getEffectiveStartTime(park.id, park.timezone),
@@ -303,6 +309,8 @@ export class LocationService {
       this.parksService.hasOperatingSchedule(parkId),
       this.analyticsService.getHeadlinerAttractionIds(parkId),
       this.analyticsService.isParkRatable(parkId),
+      // Shows are an extra: their failure must not take the rides down.
+      this.findShowsInPark(park, userLocation).catch(() => []),
     ]);
 
     const parkAnalytics = await this.analyticsService
@@ -323,13 +331,6 @@ export class LocationService {
         longitude: Number(a.longitude),
       })),
       userLocation,
-    );
-
-    // "Which month is it" is a park-local question, so the resolver below is
-    // handed a date positioned on the park's own day rather than the server's.
-    // Noon, so no timezone the server might be in can push it over a boundary.
-    const parkLocalNow = new Date(
-      `${getCurrentDateInTimezone(park.timezone || "UTC")}T12:00:00`,
     );
 
     // Build ride DTOs (no async needed inside map)
@@ -378,7 +379,7 @@ export class LocationService {
         const seasonMonths = curated.seasonMonths;
         const isCurrentlyInSeason = isCurrentlyInSeasonFor(
           curated,
-          parkLocalNow,
+          park.timezone,
         );
 
         return {
@@ -439,10 +440,78 @@ export class LocationService {
       nextSchedule: formatNextSchedule(nextSchedule),
     };
 
+    // Same rule as the park payload: a show reads CLOSED while its park is not open.
+    if (parkStatus !== "OPERATING") {
+      for (const show of shows) show.status = "CLOSED";
+    }
+
     return {
       park: parkInfo,
       rides,
+      shows,
     };
+  }
+
+  /**
+   * Every non-retired show of the park with its distance, its newest status and
+   * today's (park-local) showtimes, nearest first. Not cut to a radius: the
+   * frontend picks the next performance itself.
+   */
+  private async findShowsInPark(
+    park: Park,
+    userLocation: GeoCoordinate,
+  ): Promise<InParkShowDto[]> {
+    const timezone = park.timezone || "UTC";
+    const [shows, liveData, instants] = await Promise.all([
+      this.showsService.findByParkId(park.id),
+      this.showsService.findCurrentStatusByPark(park.id),
+      this.showsService.getShowtimeInstantsOnDate(
+        park.id,
+        timezone,
+        getCurrentDateInTimezone(timezone),
+      ),
+    ]);
+    const url = buildParkUrl(park);
+
+    return shows
+      .map((show) => {
+        const isSeasonal = show.isSeasonal || false;
+        const seasonMonths = show.seasonMonths || null;
+        return {
+          id: show.id,
+          name: show.name,
+          slug: show.slug,
+          distance:
+            show.latitude && show.longitude
+              ? Math.round(
+                  calculateHaversineDistance(
+                    userLocation,
+                    {
+                      latitude: Number(show.latitude),
+                      longitude: Number(show.longitude),
+                    },
+                    "m",
+                  ),
+                )
+              : null,
+          status: liveData.get(show.id)?.status || "CLOSED",
+          showtimes: (instants.get(show.id) ?? []).map((startTime) => ({
+            startTime,
+          })),
+          isSeasonal,
+          seasonMonths,
+          isCurrentlyInSeason: isCurrentlyInSeasonFor(
+            { isSeasonal, seasonMonths, seasonOutSince: null },
+            timezone,
+          ),
+          url,
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.distance ?? Number.POSITIVE_INFINITY) -
+          (b.distance ?? Number.POSITIVE_INFINITY),
+      );
   }
 
   /**

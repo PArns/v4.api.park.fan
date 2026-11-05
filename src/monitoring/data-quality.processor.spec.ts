@@ -24,6 +24,8 @@ describe("DataQualityProcessor", () => {
         monitor.findAbsenceRetiredUnreviewed ?? jest.fn(async () => []),
       findReissueCandidates:
         monitor.findReissueCandidates ?? jest.fn(async () => []),
+      findBlindParkUnusableScheduleDays:
+        monitor.findBlindParkUnusableScheduleDays ?? jest.fn(async () => []),
     } as never);
 
   let warn: jest.SpyInstance;
@@ -127,6 +129,31 @@ describe("DataQualityProcessor", () => {
       );
       expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
     });
+  });
+
+  it("warns about a blind park's OPERATING day without usable hours, outside the clean count (PAR-1094)", async () => {
+    await build({
+      findBlindParkUnusableScheduleDays: jest.fn(async () => [
+        { parkId: "p1", parkName: "Phantasialand", days: ["2026-11-01"] },
+      ]),
+    }).handleMonitorDataQuality({} as never);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^🕳️ Phantasialand: 1 OPERATING day\(s\).*2026-11-01/,
+      ),
+    );
+
+    // A throw is an error line and leaves the four counted checks clean.
+    await build({
+      findBlindParkUnusableScheduleDays: jest.fn(async () => {
+        throw new Error("statement timeout");
+      }),
+    }).handleMonitorDataQuality({} as never);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("statement timeout"),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
   });
 
   it("names unreviewed absence retirements once per park, not once per ride (PAR-684)", async () => {

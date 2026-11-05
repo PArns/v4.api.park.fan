@@ -1,11 +1,12 @@
 import { DataSource, In } from "typeorm";
+import { formatInTimeZone } from "date-fns-tz";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
-import type { AssistantLocale } from "../system-prompt";
+import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
 
 /**
  * Parky's actions on the page: what the browser does for it, never the API. A tool returns an
@@ -43,14 +44,55 @@ export type AssistantCard =
       crowdLevel: string | null;
       waitMinutes: number | null;
       url: string | null;
+      /** Each badge only when true or known; absent never means "no". */
+      ropeDrop?: { strength: "high" | "moderate" | null; savings: number };
+      singleRider?: true;
+      virtualLine?: true;
+      paidExpress?: true;
+      /** In a curated works period today. */
+      worksPeriod?: true;
+      outOfSeason?: true;
     }
   | {
       kind: "rides";
       /** The park the list belongs to, its page the card's link. */
       park: string;
       order: "longest" | "shortest";
-      rides: Array<{ name: string; waitMinutes: number; url: string | null }>;
+      /** The waiting rides, then up to 3 that are DOWN (waitMinutes null). */
+      rides: Array<{
+        name: string;
+        status: string | null;
+        waitMinutes: number | null;
+        url: string | null;
+      }>;
       url: string | null;
+    }
+  | {
+      kind: "shows";
+      park: string;
+      url: string | null;
+      /** YYYY-MM-DD, park-local. */
+      date: string;
+      /** At most 10, by next time; times with the park's offset, never Z. */
+      shows: Array<{
+        name: string;
+        status: string | null;
+        times: string[];
+        url: string | null;
+      }>;
+    }
+  | {
+      kind: "restaurants";
+      park: string;
+      url: string | null;
+      /** At most 12. */
+      restaurants: Array<{
+        name: string;
+        status: string | null;
+        land: string | null;
+        cuisine: string | null;
+        requiresReservation: boolean | null;
+      }>;
     }
   | {
       kind: "parks";
@@ -62,7 +104,200 @@ export type AssistantCard =
         crowdLevel: string | null;
         avgWaitMinutes: number | null;
       }>;
+    }
+  | {
+      kind: "calendar";
+      park: string;
+      /** The park's page; the widget appends its localized calendar subpage. */
+      url: string | null;
+      /** Consecutive park-local days, 7 to 42. */
+      days: CalendarCardDay[];
+    }
+  | {
+      kind: "tiles";
+      park: string;
+      url: string | null;
+      /** The park-local day the tiles describe. */
+      date: string;
+      /** True: right now, today. False: the forecast for `date`. */
+      live: boolean;
+      crowdLevel: string | null;
+      /** Live only. */
+      avgWaitMinutes: number | null;
+      /** Live: the peak so far today. Forecast: the expected headliner peak. */
+      peakWaitMinutes: number | null;
+      /** Live only. */
+      openRides: number | null;
+      /** Live only. */
+      totalRides: number | null;
+      opens: string | null;
+      closes: string | null;
+      weather: {
+        condition: string | null;
+        /** The WMO code. */
+        weatherCode: number | null;
+        tempMin: number | null;
+        tempMax: number | null;
+        climateNormal: boolean;
+      } | null;
     };
+
+export interface CalendarCardDay {
+  /** YYYY-MM-DD, park-local. */
+  date: string;
+  status: "OPERATING" | "CLOSED" | "UNKNOWN";
+  /** The calendar's level, `unknown` included; null when closed. */
+  crowdLevel: string | null;
+  /** ISO 8601 with the park's offset. */
+  opens: string | null;
+  closes: string | null;
+  /** A public or school holiday the calendar counts for this park. */
+  holiday: boolean;
+}
+
+/** The fields of `park_forecast`'s answer the calendar and tiles cards read. */
+export interface ForecastSummary {
+  park: { name: string; pageUrl: string | null; timezone: string };
+  scheduleCoverage: { from: string | null; to: string | null };
+  days: Array<{
+    date: string;
+    status: string;
+    opens: string | null;
+    closes: string | null;
+    crowdLevel: string;
+    expectedPeakWaitMinutes?: number;
+    holiday?: boolean;
+    schoolVacation?: boolean;
+    weather?: {
+      basis?: string;
+      condition?: string | null;
+      weatherCode?: number | null;
+      tempMin?: number | null;
+      tempMax?: number | null;
+    } | null;
+  }>;
+}
+
+/**
+ * One forecast day as the cards show it. Past the published schedule the status is the calendar's
+ * guess, so it reads UNKNOWN and carries no hours (docs/rules/absent-facts.md).
+ */
+function cardDay(
+  day: ForecastSummary["days"][number],
+  coverage: ForecastSummary["scheduleCoverage"],
+  timezone: string,
+): CalendarCardDay {
+  const published = coverage.to !== null && day.date <= coverage.to;
+  const status = !published
+    ? "UNKNOWN"
+    : day.status === "OPERATING" || day.status === "CLOSED"
+      ? day.status
+      : "UNKNOWN";
+  return {
+    date: day.date,
+    status,
+    crowdLevel:
+      status === "CLOSED" || day.crowdLevel === "closed"
+        ? null
+        : day.crowdLevel,
+    opens: published ? parkInstant(day.opens, timezone) : null,
+    closes: published ? parkInstant(day.closes, timezone) : null,
+    holiday: !!(day.holiday || day.schoolVacation),
+  };
+}
+
+/**
+ * An instant with the park's own UTC offset (`+00:00`, never `Z`): the widget reads the park's
+ * wall clock off the offset.
+ */
+export function parkInstant(
+  value: string | null | undefined,
+  timezone: string,
+): string | null {
+  if (!value) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime())
+    ? null
+    : formatInTimeZone(at, timezone, "yyyy-MM-dd'T'HH:mm:ssxxx");
+}
+
+/** The calendar card: `count` days of the forecast from `from` on. */
+export function calendarCard(
+  forecast: ForecastSummary,
+  from: string,
+  count: number,
+): Extract<AssistantCard, { kind: "calendar" }> {
+  return {
+    kind: "calendar",
+    park: forecast.park.name,
+    url: forecast.park.pageUrl ? siteOnlyPath(forecast.park.pageUrl) : null,
+    days: forecast.days
+      .filter((day) => day.date >= from)
+      .slice(0, count)
+      .map((day) =>
+        cardDay(day, forecast.scheduleCoverage, forecast.park.timezone),
+      ),
+  };
+}
+
+/** The fields of `get_park`'s summary the live tiles read. */
+export interface LiveParkSummary {
+  crowd?: {
+    level?: string | null;
+    avgWaitMinutes?: number | null;
+    peakWaitTodayMinutes?: number | null;
+  } | null;
+  scheduleToday?: Array<{ opens?: string | null; closes?: string | null }>;
+  rides?: { total?: number; byStatus?: Record<string, number> };
+}
+
+/**
+ * The tiles card for `date`: the live state when `live` is given (today), else the forecast.
+ * Levels are passed on as the calendar or the live reading serves them, never re-derived.
+ */
+export function tilesCard(
+  forecast: ForecastSummary,
+  date: string,
+  live: LiveParkSummary | null,
+): Extract<AssistantCard, { kind: "tiles" }> {
+  const found = forecast.days.find((day) => day.date === date);
+  const timezone = forecast.park.timezone;
+  const day = found
+    ? cardDay(found, forecast.scheduleCoverage, timezone)
+    : null;
+  const weather = found?.weather;
+  const minutes = (value: number | null | undefined) =>
+    value != null ? Math.round(value) : null;
+  const today = live?.scheduleToday?.[0];
+  return {
+    kind: "tiles",
+    park: forecast.park.name,
+    url: forecast.park.pageUrl ? siteOnlyPath(forecast.park.pageUrl) : null,
+    date,
+    live: live !== null,
+    crowdLevel: live ? (live.crowd?.level ?? null) : (day?.crowdLevel ?? null),
+    avgWaitMinutes: live ? minutes(live.crowd?.avgWaitMinutes) : null,
+    peakWaitMinutes: live
+      ? minutes(live.crowd?.peakWaitTodayMinutes)
+      : day?.crowdLevel != null
+        ? minutes(found?.expectedPeakWaitMinutes)
+        : null,
+    openRides:
+      live?.rides?.total != null ? (live.rides.byStatus?.OPERATING ?? 0) : null,
+    totalRides: live?.rides?.total ?? null,
+    opens: live ? parkInstant(today?.opens, timezone) : (day?.opens ?? null),
+    closes: live ? parkInstant(today?.closes, timezone) : (day?.closes ?? null),
+    weather: weather
+      ? {
+          condition: weather.condition ?? null,
+          weatherCode: weather.weatherCode ?? null,
+          tempMin: weather.tempMin ?? null,
+          tempMax: weather.tempMax ?? null,
+          climateNormal: weather.basis === "climate_normal",
+        }
+      : null,
+  };
+}
 
 export type ClientAction =
   | { type: "navigate"; path: string }
@@ -143,6 +378,38 @@ export function siteOnlyPath(url: string): string | null {
   if (parsed.search || parsed.username || parsed.password) return null;
   const path = parsed.pathname.toLowerCase();
   return PAGE_PATH.test(path) && path.length <= 300 ? path : null;
+}
+
+/**
+ * Every park and ride page url in `value`, at any depth, in the chat's language: the handlers
+ * build `https://park.fan/parks/…`, which would link a Dutch answer to the English page. Only
+ * `/parks/` is rewritten; its localized subpages (the calendar's `calendrier-temps-attente`)
+ * are not built here. Cards carry site-only paths, which the widget localizes itself.
+ */
+export function localizePageUrls(value: unknown, locale: string): unknown {
+  if (!(ASSISTANT_LOCALES as readonly string[]).includes(locale)) return value;
+  const parks = `${getFrontendUrl()}/parks/`;
+  // LocationService hands out API paths (`/v1/parks/<geo>/<park>[/<ride>]`), which mirror the
+  // page paths one to one; as they stand the model would link the JSON.
+  const apiParks = "/v1/parks/";
+  const visit = (item: unknown): unknown => {
+    if (typeof item === "string") {
+      if (item.startsWith(parks)) {
+        return `${getFrontendUrl()}/${locale}/parks/${item.slice(parks.length)}`;
+      }
+      return item.startsWith(apiParks)
+        ? `${getFrontendUrl()}/${locale}/parks/${item.slice(apiParks.length)}`
+        : item;
+    }
+    if (Array.isArray(item)) return item.map(visit);
+    if (item && typeof item === "object") {
+      return Object.fromEntries(
+        Object.entries(item).map(([key, entry]) => [key, visit(entry)]),
+      );
+    }
+    return item;
+  };
+  return visit(value);
 }
 
 /** A day as the planner keys it, YYYY-MM-DD, no further back than yesterday and within a year. */

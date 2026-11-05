@@ -16,9 +16,7 @@ GET /v1/search?q=taron&type=park,attraction&limit=5
 - `type`: comma-separated, any of `park`, `attraction`, `show`, `restaurant`, `location` (the last is
   missing from the Swagger enum). Without it, all five.
 - `limit`: 1–20 per type, default 5.
-- **The cache key leaves `limit` out.** Redis keeps an answer for 5 minutes under type and query
-  only, so a request with another `limit` within that time gets the first one's list. The edge caches
-  for 1 minute.
+- Redis keeps an answer for 5 minutes under type, `limit` and query; the edge caches for 1 minute.
 
 ## The results
 
@@ -40,9 +38,8 @@ GET /v1/search?q=taron&type=park,attraction&limit=5
 
 For an attraction:
 
-- **`slug` and `url` lose a trailing `-<digits>`** (`cleanSlugSuffix`): a ride stored as `apollo-13`
-  is returned as `apollo`. Resolve the ride by `id`, or by the slug the park payload serves, never by
-  this one.
+- `slug` and `url` carry the slug as stored, a trailing `-<digits>` included (`apollo-13`, a `-2`
+  twin).
 - **Its `latitude`/`longitude` are its park's**, not the ride's.
 - **`status` reads `CLOSED` whenever the park is not open**, and also when an open park has no reading
   for the ride. It is not `effectiveStatus` and never reads `UNKNOWN` ([effective status](./effective-status.md)).

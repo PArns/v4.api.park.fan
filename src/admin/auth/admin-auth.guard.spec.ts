@@ -523,6 +523,29 @@ describe("clientIp", () => {
     ).toBe("203.0.113.9");
   });
 
+  it("believes cf-connecting-ip only with CF_ORIGIN_SECRET, like the throttler", () => {
+    delete process.env.THROTTLE_BYPASS_KEYS;
+    process.env.CF_ORIGIN_SECRET = "edge-secret";
+    try {
+      const headers = {
+        "cf-connecting-ip": "203.0.113.9",
+        "x-forwarded-for": "198.51.100.7",
+      };
+      const direct = {
+        headers,
+        socket: { remoteAddress: "10.0.0.2" },
+      } as unknown as RequestWithAdmin;
+      expect(clientIp(direct)).toBe("10.0.0.2");
+      expect(
+        clientIp({
+          headers: { ...headers, "x-cf-origin-secret": "edge-secret" },
+        } as unknown as RequestWithAdmin),
+      ).toBe("203.0.113.9");
+    } finally {
+      delete process.env.CF_ORIGIN_SECRET;
+    }
+  });
+
   it("has nothing to say when no header carries an address", () => {
     delete process.env.THROTTLE_BYPASS_KEYS;
     expect(clientIp(request({}))).toBeNull();

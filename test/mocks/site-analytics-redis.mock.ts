@@ -29,6 +29,7 @@ export class SiteAnalyticsRedisMock {
     "incrby",
     "expire",
     "get",
+    "set",
     "del",
     "hget",
     "hset",
@@ -82,6 +83,12 @@ export class SiteAnalyticsRedisMock {
         if (!this.has(key) || (mode === "NX" && this.ttls.has(key))) return 0;
         this.ttls.set(key, ttl);
         return 1;
+      }
+      case "set": {
+        // Only the NX form is used in a transaction: set once, never overwrite.
+        if (this.strings.has(key)) return null;
+        this.strings.set(key, String(args[0]));
+        return "OK";
       }
       case "get":
         return this.counters.has(key)

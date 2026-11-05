@@ -1,6 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
-import { observedReadingsSql } from "../common/utils/closure-gap.sql";
+import {
+  CYCLE_WINDOW_DAYS,
+  observedReadingsSql,
+} from "../common/utils/closure-gap.sql";
+import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
@@ -95,6 +99,18 @@ export interface AbsenceRetiredUnreviewed {
   retiredAt: string;
   /** Park-local date of the last observed reading, or null if there is none. */
   lastReading: string | null;
+}
+
+/**
+ * A blind park's OPERATING schedule days that `parkOpenWindowCtes()` drops: no
+ * opening or closing time, or a close at or before the opening after repair
+ * (PAR-1094).
+ */
+export interface BlindParkUnusableScheduleDays {
+  parkId: string;
+  parkName: string;
+  /** Park-local dates, ascending. */
+  days: string[];
 }
 
 /** One row of a re-issue candidate pair, as the admin needs it to decide. */
@@ -541,6 +557,53 @@ export class DataQualityMonitorService {
       lastReading: r.last_reading,
       operatingDaysAhead: Number(r.days_ahead),
       lastScheduledDay: r.last_day,
+    }));
+  }
+
+  /**
+   * OPERATING days in a blind park that the closure statements cannot see
+   * (PAR-1094).
+   *
+   * `win` drops a schedule row without an opening or closing time, or whose
+   * close stays at or before the opening after `normalizedClosingSql()`. Since
+   * PAR-129 the live early-end filter takes its days from `win`, so such a day
+   * leaves its `days` denominator silently and a ride can slip under
+   * `MIN_DAYS_FOR_CYCLE_TEST`, switching the filter off. Measured 2026-09-15:
+   * none of 2391 blind-park days had one. This says so the day the first
+   * appears. Same span as that filter (`CYCLE_WINDOW_DAYS`), blind parks read
+   * from `park_downtime_coverage` as the live statement does.
+   */
+  async findBlindParkUnusableScheduleDays(
+    windowDays = CYCLE_WINDOW_DAYS,
+  ): Promise<BlindParkUnusableScheduleDays[]> {
+    const rows: Array<{ park_id: string; park_name: string; days: string[] }> =
+      await this.dataSource.query(
+        `
+      SELECT p.id AS park_id,
+             p.name AS park_name,
+             array_agg(DISTINCT se.date::text ORDER BY se.date::text) AS days
+        FROM schedule_entries se
+        JOIN parks p ON p.id = se."parkId"
+        JOIN park_downtime_coverage c ON c."parkId" = p.id
+       WHERE c.regime = 'never_reports'
+         AND se."attractionId" IS NULL
+         AND se."scheduleType" = 'OPERATING'
+         AND se.date >  (now() AT TIME ZONE p.timezone)::date - $1::int
+         AND se.date <= (now() AT TIME ZONE p.timezone)::date
+         AND (se."openingTime" IS NULL
+              OR se."closingTime" IS NULL
+              OR ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "p.timezone")}
+                 <= se."openingTime")
+       GROUP BY p.id, p.name
+       ORDER BY p.name
+      `,
+        [windowDays],
+      );
+
+    return rows.map((r) => ({
+      parkId: r.park_id,
+      parkName: r.park_name,
+      days: r.days,
     }));
   }
 

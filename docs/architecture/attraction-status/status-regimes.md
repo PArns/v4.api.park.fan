@@ -51,7 +51,8 @@ The park's ride list has one branch that invents an answer: an open park whose r
 row at all serves it as `OPERATING` (`statusWithoutLiveData`,
 `src/common/utils/no-live-data-status.util.ts`), so a feed going quiet mid-day does not produce
 "park open, every ride closed". A ride the season rules out (`isCurrentlyInSeason === false`) never
-takes it, and neither does a ride of a silent park (§5).
+takes it, a ride no source has ever reported does not (below), and neither does a ride of a silent
+park (§5).
 
 **"No current row" is a query decision.** `QueueDataService.findCurrentStatusByPark` reads the latest
 row per attraction since a cutoff. A `queue_data` row is written only on change plus an hourly
@@ -61,9 +62,15 @@ running until the 09:23 poll, among them two ice rinks the wiki had called CLOSE
 cutoff is therefore the **earlier** of today's opening and the `maxAgeMinutes` fallback (6 h): the
 last word the feed said is the answer; the fallback is for silence, not for "unchanged".
 
-**Still open (PAR-1100):** a ride no source has *ever* reported, in a park whose feed works, still
-reads OPERATING through this branch (Disneyland's *Main Street Pumpkin Festival*). A park whose whole
-feed is silent no longer reaches it (§5).
+**A ride never reported reads `UNKNOWN` (PAR-1100).** The fallback is for a ride going quiet, and a
+ride without a single observed row in `queue_data` (heartbeats and reconciliation do not count,
+`observedReadingsSql`) has nothing to go quiet from: Disneyland's *Main Street Pumpkin Festival* read
+OPERATING here; 64 such rows sat in parks with a working feed on 2026-09-28 (PAR-37).
+`QueueDataService.findNeverObservedAttractionIds` asks, unbounded in time, only about the rides that
+reached this branch, and only while the park is `OPERATING` and readable; a failed probe keeps the
+fallback. Free-flow rides (`open_with_park`) are not asked: they open with the park on a curated flag.
+The ride's own page still says `CLOSED` for the same absence (`livePlaceholders()`). A park whose
+whole feed is silent never reaches this branch (§5).
 
 ## 5. A whole park gone silent
 

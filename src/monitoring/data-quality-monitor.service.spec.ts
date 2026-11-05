@@ -7,6 +7,8 @@ import {
   failureWindowStarts,
 } from "./data-quality-monitor.service";
 import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
+import { CYCLE_WINDOW_DAYS } from "../common/utils/closure-gap.sql";
+import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 
 /**
@@ -339,6 +341,49 @@ describe("DataQualityMonitorService", () => {
 
       const [row] = await build(query).findScheduledButSilentParks();
       expect(row.lastReading).toBeNull();
+    });
+  });
+
+  describe("findBlindParkUnusableScheduleDays (PAR-1094)", () => {
+    it("reads blind parks' own OPERATING days over the early-end span", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findBlindParkUnusableScheduleDays();
+
+      const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+      expect(params).toEqual([CYCLE_WINDOW_DAYS]);
+      expect(sql).toContain("c.regime = 'never_reports'");
+      expect(sql).toContain('se."attractionId" IS NULL');
+      expect(sql).toContain(`se."scheduleType" = 'OPERATING'`);
+    });
+
+    it("flags exactly the rows win drops: a missing time, or a close at/before the opening after repair", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findBlindParkUnusableScheduleDays();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toContain('se."openingTime" IS NULL');
+      expect(sql).toContain('se."closingTime" IS NULL');
+      // The window builder's own repair, not a raw comparison: a past-midnight
+      // close is a usable day, not a finding.
+      expect(sql).toContain(
+        normalizedClosingSql(
+          'se."openingTime"',
+          'se."closingTime"',
+          "p.timezone",
+        ),
+      );
+    });
+
+    it("maps a row into something a warning can name", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValue([
+          { park_id: "p1", park_name: "Phantasialand", days: ["2026-11-01"] },
+        ]);
+      expect(await build(query).findBlindParkUnusableScheduleDays(7)).toEqual([
+        { parkId: "p1", parkName: "Phantasialand", days: ["2026-11-01"] },
+      ]);
+      expect(query.mock.calls[0][1]).toEqual([7]);
     });
   });
 

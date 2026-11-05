@@ -216,28 +216,33 @@ describe("resolveCuratedFacts", () => {
       expect(
         isCurrentlyInSeason(
           facts({ isSeasonal: true, seasonMonths: [7, 8] }),
+          "UTC",
           july,
         ),
       ).toBe(true);
       expect(
         isCurrentlyInSeason(
           facts({ isSeasonal: true, seasonMonths: [1, 2] }),
+          "UTC",
           july,
         ),
       ).toBe(false);
     });
 
     it("is null for a non-seasonal ride", () => {
-      expect(isCurrentlyInSeason(facts({}), july)).toBeNull();
+      expect(isCurrentlyInSeason(facts({}), "UTC", july)).toBeNull();
     });
 
     it("is null — not false — when nothing at all is known about when", () => {
       // "Seasonal, but we do not know when" must not collapse into "closed",
       // which would hide a ride we have simply not understood yet.
-      expect(isCurrentlyInSeason(facts({ isSeasonal: true }), july)).toBeNull();
+      expect(
+        isCurrentlyInSeason(facts({ isSeasonal: true }), "UTC", july),
+      ).toBeNull();
       expect(
         isCurrentlyInSeason(
           facts({ isSeasonal: true, seasonMonths: [] }),
+          "UTC",
           july,
         ),
       ).toBeNull();
@@ -252,9 +257,26 @@ describe("resolveCuratedFacts", () => {
       expect(
         isCurrentlyInSeason(
           facts({ isSeasonal: true, seasonOutSince: "2026-01-25" }),
+          "UTC",
           july,
         ),
       ).toBe(false);
+    });
+
+    it("reads the month in the park's timezone, not the server's", () => {
+      // 2026-07-31 23:30 UTC: still July in New York (19:30), already August
+      // in Tokyo (08:30 on the 1st).
+      const monthEnd = new Date("2026-07-31T23:30:00Z");
+      const august = facts({ isSeasonal: true, seasonMonths: [8] });
+      expect(isCurrentlyInSeason(august, "America/New_York", monthEnd)).toBe(
+        false,
+      );
+      expect(isCurrentlyInSeason(august, "Asia/Tokyo", monthEnd)).toBe(true);
+      const july = facts({ isSeasonal: true, seasonMonths: [7] });
+      expect(isCurrentlyInSeason(july, "America/New_York", monthEnd)).toBe(
+        true,
+      );
+      expect(isCurrentlyInSeason(july, "Asia/Tokyo", monthEnd)).toBe(false);
     });
 
     it("still prefers the months when there are any", () => {
@@ -265,6 +287,7 @@ describe("resolveCuratedFacts", () => {
             seasonMonths: [7],
             seasonOutSince: "2026-01-25",
           }),
+          "UTC",
           july,
         ),
       ).toBe(true);

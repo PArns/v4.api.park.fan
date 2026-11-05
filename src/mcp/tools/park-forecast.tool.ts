@@ -20,7 +20,7 @@ function localTime(value: string | undefined, timezone: string) {
     : formatInTimeZone(at, timezone, LOCAL_ISO);
 }
 
-function compactDay(day: CalendarDay, timezone: string) {
+export function compactDay(day: CalendarDay, timezone: string) {
   const weather = day.weather;
   return {
     date: day.date,
@@ -35,6 +35,8 @@ function compactDay(day: CalendarDay, timezone: string) {
     weather: weather && {
       basis: weather.basis,
       condition: weather.condition,
+      // The WMO code, as get_park_weather names it.
+      weatherCode: weather.icon ?? null,
       tempMin: weather.tempMin,
       tempMax: weather.tempMax,
       precipitationMm: weather.precipitationMm ?? weather.rainChance,

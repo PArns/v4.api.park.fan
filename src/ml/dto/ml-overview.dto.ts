@@ -173,6 +173,17 @@ export interface MlComponentDto {
   status: MlComponentStatus;
   /** Plain German, e.g. "Version v20261011_0600". */
   note: string | null;
+  /**
+   * PCN only (PAR-1120): parks the last forecast tick should have covered and
+   * did not, with pcn-service's reason. They are served CatBoost instead.
+   */
+  blockedParks?: MlBlockedParkDto[];
+}
+
+export interface MlBlockedParkDto {
+  parkId: string;
+  /** `no_model` | `no_panel` | `too_few_slots` | `no_trained_ride` | `failed` */
+  reason: string;
 }
 
 export interface MlOverviewDto {

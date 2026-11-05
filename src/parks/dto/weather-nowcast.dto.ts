@@ -79,14 +79,14 @@ export class WeatherNowcastDto {
 
   @ApiProperty({
     description:
-      "ISO timestamp when the upstream forecast was last fetched. Acts as the data-freshness indicator.",
+      "ISO timestamp of this request: the snapshot is re-derived against it on every read. Not when the upstream forecast was fetched.",
     example: "2026-05-21T13:58:12.000Z",
   })
   observedAt: string;
 
   @ApiProperty({
     description:
-      "ISO timestamp when the next nowcast refresh is expected (observedAt + cache TTL of 15 minutes).",
+      "ISO timestamp of the next quarter-hour mark (:00, :15, :30, :45) after observedAt; the response's max-age runs exactly to it.",
     example: "2026-05-21T14:13:12.000Z",
   })
   nextUpdateAt: string;

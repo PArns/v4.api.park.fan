@@ -163,13 +163,9 @@ export class ShowsService {
    * @returns Array of shows in this park
    */
   async findByParkId(parkId: string): Promise<Show[]> {
+    // No relations: the one caller (in-park nearby) already holds the park.
     return this.showRepository.find({
       where: { parkId, retiredAt: IsNull() },
-      relations: {
-        park: {
-          destination: true,
-        },
-      },
       order: { name: "ASC" },
     });
   }

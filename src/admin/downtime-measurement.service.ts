@@ -49,11 +49,11 @@ const COUNT_LIMITS: StatementLimits = {
  * ## Why this is not the reconstruction
  *
  * It deliberately stops short of exposure. Normalising by operating minutes
- * needs the flattened park windows, the 70-minute carry cap and the
- * `is_heartbeat` column, none of which exist yet; a rate computed without them
- * would be the very "confident number the data does not support" the plan is
- * written to avoid. Counts and raw durations need none of it, and they are what
- * the thresholds are made of.
+ * (the flattened park windows, the 70-minute carry cap, `is_heartbeat`) is the
+ * nightly reconstruction's job (`outage-reconstruction.sql.ts`,
+ * docs/analytics/ride-downtime/reconstruction.md). This read stays on raw
+ * counts and durations, because they are what the thresholds are made of and
+ * what the reconstruction is checked against.
  */
 @Injectable()
 export class DowntimeMeasurementService {
@@ -289,10 +289,10 @@ export class DowntimeMeasurementService {
    * about what an outage is.
    *
    * A gap-based end is deliberately NOT applied here. The 70-minute carry cap
-   * belongs to the exposure model and needs `is_heartbeat`; without it a capped
-   * end would be a guess, and this is the measurement the guesses are supposed
-   * to be replaced by. What is reported instead is `rowsInRun`, which says how
-   * much evidence each interval rests on.
+   * belongs to the exposure model in the nightly reconstruction; this is the
+   * raw measurement that model is checked against, so it must not borrow the
+   * model's ends. What is reported instead is `rowsInRun`, which says how much
+   * evidence each interval rests on.
    */
   private async outageEvents(
     parkSlugs: string[],

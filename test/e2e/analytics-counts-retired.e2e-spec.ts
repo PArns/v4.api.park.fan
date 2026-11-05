@@ -261,11 +261,12 @@ describe("Analytics counters — retired attractions (E2E)", () => {
       const [open, neighbour] = seeded.attractions.filter(
         (a) => a.parkId === park.id,
       );
+      await openParkNow(park.id);
       await addReading(open.id, LiveStatus.OPERATING);
       await addReading(neighbour.id, LiveStatus.OPERATING);
 
-      // Reachable (G-44). This counter is global and has no park filter, so
-      // the number is over the whole seeded database, not over one park.
+      // Reachable (G-44). This counter is global over the open parks, so the
+      // park is opened first and the number is over every open seeded park.
       const count = async () =>
         Number((await dataSource.query(OPEN_ATTRACTIONS_COUNT_SQL))[0].count);
       expect(await count()).toBe(2);

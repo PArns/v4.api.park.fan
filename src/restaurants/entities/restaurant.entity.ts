@@ -79,8 +79,13 @@ export class Restaurant {
   @Column({ type: "text", array: true, nullable: true })
   cuisines: string[];
 
-  @Column({ type: "boolean", default: false })
-  requiresReservation: boolean; // If reservation is required/recommended
+  /**
+   * Whether a table needs (or should have) a reservation. NULL = no source
+   * says: ThemeParks.wiki sends nothing for it, and `false` would be an
+   * invented "walk in" (docs/rules/absent-facts.md).
+   */
+  @Column({ type: "boolean", nullable: true })
+  requiresReservation: boolean | null;
 
   /**
    * When this restaurant stopped existing. Null means it is still around.

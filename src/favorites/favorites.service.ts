@@ -40,12 +40,7 @@ import {
   calculateHaversineDistance,
   GeoCoordinate,
 } from "../common/utils/distance.util";
-import {
-  buildParkUrl,
-  buildAttractionUrl,
-  buildShowUrl,
-  buildRestaurantUrl,
-} from "../common/utils/url.util";
+import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { ParkWithAttractionsDto } from "../parks/dto/park-with-attractions.dto";
 import {
@@ -91,7 +86,7 @@ export class FavoritesService {
    *
    * Uses Redis caching for performance:
    * - Cache key based on sorted IDs + location hash
-   * - TTL: 2 minutes (matches HTTP cache)
+   * - TTL: 5 minutes (HTTP is `no-store`)
    * - Stale-while-revalidate: refreshes in background if TTL < 1 minute
    *
    * @param parkIds - Array of park IDs
@@ -1009,7 +1004,8 @@ export class FavoritesService {
             : null,
         status: liveData?.status || "CLOSED",
         showtimes: liveData?.showtimes || null,
-        url: show.park ? buildShowUrl(show.park, show) || null : null,
+        // Shows have no route of their own; the park payload lists them.
+        url: show.park ? buildParkUrl(show.park) : null,
         park: show.park
           ? {
               id: show.park.id,
@@ -1066,9 +1062,8 @@ export class FavoritesService {
         status: liveData?.status || "CLOSED",
         waitTime: liveData?.waitTime || null,
         cuisineType: restaurant.cuisineType || null,
-        url: restaurant.park
-          ? buildRestaurantUrl(restaurant.park, restaurant) || null
-          : null,
+        // Restaurants have no route of their own; point at their park.
+        url: restaurant.park ? buildParkUrl(restaurant.park) : null,
         park: restaurant.park
           ? {
               id: restaurant.park.id,

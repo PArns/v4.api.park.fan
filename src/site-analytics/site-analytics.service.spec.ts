@@ -65,6 +65,15 @@ describe("SiteAnalyticsService", () => {
       return chain;
     },
     pfcount: jest.fn(async () => 4),
+    hget: jest.fn(async (key: string) =>
+      key === "site-analytics:drops:2026-10-28" ? "5" : null,
+    ),
+    get: jest.fn(async (key: string) =>
+      key === "site-analytics:bots-since" ? "2026-10-20" : null,
+    ),
+    exists: jest.fn(async (key: string) =>
+      key === "site-analytics:drops:2026-10-28" ? 1 : 0,
+    ),
     mget: jest.fn(async (...keys: string[]) =>
       keys.map((key) => (key.includes("202610280712") ? "9" : null)),
     ),
@@ -76,6 +85,7 @@ describe("SiteAnalyticsService", () => {
     routes = [];
     calls = [];
     blocked = new Set();
+    redis.hget.mockClear();
     pfcounts = new Map();
     rolled = new Set();
     resolve = jest.fn(async () => new Map());
@@ -194,6 +204,51 @@ describe("SiteAnalyticsService", () => {
         minute: "2026-10-28T07:12:00Z",
         pageviews: 9,
       });
+    });
+
+    it("sums the bot hits of the window: written days from the table, the others from Redis", async () => {
+      routes = [
+        [
+          "FROM site_bot_days",
+          [
+            { day: "2026-10-22", hits: "40" },
+            { day: "2026-10-23", hits: "0" },
+            { day: "2026-10-24", hits: "0" },
+            { day: "2026-10-25", hits: "0" },
+            { day: "2026-10-26", hits: "0" },
+            { day: "2026-10-27", hits: "7" },
+          ],
+        ],
+      ];
+      const overview = await service.overview({ days: 7 }, NOW);
+      expect(overview.bots).toEqual({ hits: 52 });
+      expect(sqlOf("FROM site_bot_days")[1]).toEqual([
+        "2026-10-22",
+        "2026-10-28",
+      ]);
+      // Yesterday is written, so only today is read live.
+      expect(redis.hget).toHaveBeenCalledTimes(1);
+
+      const filtered = await service.overview(
+        { days: 7, filter: ["country:nl"] },
+        NOW,
+      );
+      expect(filtered.bots).toEqual({ hits: null });
+    });
+
+    it("reads the bot hits unknown when a day of the window was never counted", async () => {
+      // Only two of seven days written: before the counter existed, not zero bots.
+      routes = [
+        [
+          "FROM site_bot_days",
+          [
+            { day: "2026-10-26", hits: "3" },
+            { day: "2026-10-27", hits: "7" },
+          ],
+        ],
+      ];
+      const overview = await service.overview({ days: 7 }, NOW);
+      expect(overview.bots).toEqual({ hits: null });
     });
 
     it("gives no visitor count under a filter, and passes the filter to both tables", async () => {

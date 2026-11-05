@@ -88,7 +88,7 @@ describe("attractionIsCuratedOutOfService", () => {
   });
 
   it("takes the day as a parameter instead of reading NOW()", () => {
-    // attractionIsOutOfSeason() computes against EXTRACT(MONTH FROM NOW()),
+    // attractionIsOutOfSeason() computes against the park's month of NOW(),
     // which is exactly why it may not be applied to history: over 90 days it
     // deletes the July of a ride that leaves season in September. A works
     // period is a fact about a date range, so a past day must get the answer

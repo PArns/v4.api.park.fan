@@ -200,6 +200,35 @@ describe("SearchService", () => {
       expect(mockParksService.getBatchParkStatus).not.toHaveBeenCalled();
     });
 
+    it("keys the cache on limit, so limit=5 never reads limit=20's list", async () => {
+      await service.search({ q: "Disney", type: ["park"], limit: 20 });
+      await service.search({ q: "disney", type: ["park"] });
+
+      const keys = mockRedis.get.mock.calls.map(([key]) => key);
+      expect(keys).toContain("search:fuzzy:v2:park:20:disney");
+      expect(keys).toContain("search:fuzzy:v2:park:5:disney");
+    });
+
+    it("returns an attraction's slug as stored, a trailing number included", async () => {
+      attractionQB.getMany.mockResolvedValueOnce([
+        {
+          id: "a1",
+          name: "Apollo 13",
+          slug: "apollo-13",
+          landName: null,
+          park: park(),
+        },
+      ]);
+
+      const result = await service.search({
+        q: "apollo",
+        type: ["attraction"],
+      });
+
+      expect(result.results[0].slug).toBe("apollo-13");
+      expect(result.results[0].url).toMatch(/\/apollo-13$/);
+    });
+
     it("deduplicates same-named attractions under the same park and only enriches survivors", async () => {
       const parkRef = park();
       attractionQB.getMany.mockResolvedValueOnce([

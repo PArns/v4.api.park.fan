@@ -42,7 +42,7 @@ find what runs when, or before adding a queue or a cron.
 | `wartezeiten-schedule` / `fetch-opening-times` | 06:00 | Opening times for wartezeiten parks without a wiki schedule |
 | `analytics` / `calculate-percentiles` | 02:00 | `queue_data_aggregates` (P25…P99 per hour) |
 | `analytics` / `detect-seasonal` | 02:30 | [Seasonality](attraction-status/seasonality.md) and the [maze rule](attraction-status/maze-rule.md) |
-| `analytics` / `monitor-data-quality` | 06:45 | Silenced clusters, silent parks, failing jobs (below) |
+| `analytics` / `monitor-data-quality` | 06:45 | Silenced clusters, silent parks, failing jobs (below), blind-park days without usable hours (PAR-1094) |
 | `stats` / `update-today-stats`, `finalize-yesterday-stats` | hourly; 01:00 | `park_daily_stats` |
 | `stats` / `plan-day-coverage` | 09:00 | `/plan/day` coverage measurement |
 | `p50-baseline` / `calculate-park-baselines`, `calculate-attraction-baselines` | 03:00; 04:00 | P50 + P90 (548 days) and typical-day-peak ([crowd levels](../analytics/crowd-levels.md)) |

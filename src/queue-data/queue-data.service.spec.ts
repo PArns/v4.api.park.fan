@@ -15,6 +15,7 @@ import {
 
 describe("QueueDataService", () => {
   let service: QueueDataService;
+  let redisMock: { mget: jest.Mock };
 
   // Mock repositories
   const mockQueueDataRepository = {
@@ -118,6 +119,7 @@ describe("QueueDataService", () => {
     }).compile();
 
     service = module.get<QueueDataService>(QueueDataService);
+    redisMock = module.get(REDIS_CLIENT);
 
     jest.clearAllMocks();
 
@@ -603,6 +605,58 @@ describe("QueueDataService", () => {
           QueueType.RETURN_TIME,
         ),
       ).toBe(false);
+    });
+  });
+  describe("findNeverObservedAttractionIds (PAR-1100)", () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+
+    it("binds only canonical uuids, cast on the parameter", async () => {
+      mockQueueDataRepository.query.mockResolvedValueOnce([{ id }]);
+
+      const result = await service.findNeverObservedAttractionIds([
+        id,
+        "not-a-uuid",
+      ]);
+
+      expect(result).toEqual(new Set([id]));
+      const [sql, params] =
+        mockQueueDataRepository.query.mock.calls[
+          mockQueueDataRepository.query.mock.calls.length - 1
+        ];
+      expect(sql).toContain("unnest($1::uuid[]) AS u(id)");
+      // A bare `id` in the subquery would bind to queue_data.id, never match,
+      // and scan the whole table.
+      expect(sql).toContain('qd."attractionId" = u.id');
+      expect(sql).toContain("NOT EXISTS");
+      expect(params).toEqual([[id]]);
+    });
+
+    it("answers cached rides from Redis and probes only the misses", async () => {
+      const other = "66666666-7777-8888-9999-000000000000";
+      const third = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+      redisMock.mget.mockResolvedValueOnce(["1", "0", null]);
+      mockQueueDataRepository.query.mockClear();
+      mockQueueDataRepository.query.mockResolvedValueOnce([]);
+
+      const result = await service.findNeverObservedAttractionIds([
+        id,
+        other,
+        third,
+      ]);
+
+      expect(result).toEqual(new Set([id]));
+      expect(mockQueueDataRepository.query).toHaveBeenCalledTimes(1);
+      expect(mockQueueDataRepository.query.mock.calls[0][1]).toEqual([[third]]);
+    });
+
+    it("asks nothing for an empty list", async () => {
+      mockQueueDataRepository.query.mockClear();
+
+      await expect(service.findNeverObservedAttractionIds([])).resolves.toEqual(
+        new Set(),
+      );
+      expect(mockQueueDataRepository.query).not.toHaveBeenCalled();
     });
   });
 });

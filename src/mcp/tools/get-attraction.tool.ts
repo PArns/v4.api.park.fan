@@ -5,6 +5,18 @@ import { attractionPageUrl } from "./links";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { rideFacts } from "../../attractions/utils/ride-facts.util";
+import { AnalyticsService } from "../../analytics/analytics.service";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+
+/** Whether `day` lies inside a works window; an open end runs on. */
+function inWindow(
+  window: { from?: string | null; to?: string | null },
+  day: string,
+): boolean {
+  return (
+    (!window.from || window.from <= day) && (!window.to || window.to >= day)
+  );
+}
 
 export const getAttractionTool = defineMcpTool({
   name: "get_attraction",
@@ -13,7 +25,9 @@ export const getAttractionTool = defineMcpTool({
     "One ride as park.fan shows it now: status and effective status, every queue (standby, single " +
     "rider, virtual queue …) with its wait, live crowd level and trend against its baseline, a " +
     "running outage, whether it has run today, works periods, the curated facts (minimum height, " +
-    "gets you wet, single rider, indoor/outdoor, season months), the ride profile where one is " +
+    "gets you wet, single rider, indoor/outdoor, season months, land, the paid fast pass, " +
+    "headliner), the rope-drop recommendation and today's best visit times where computed, " +
+    "the ride profile where one is " +
     "curated (type, track figures in order, launches, inversions, manufacturer, model, opening " +
     "year, top speed, height, length, duration), typical waits, downtime reliability and, if " +
     "retired, when and why. Optionally the daily history of the last days. Get the id from " +
@@ -45,9 +59,17 @@ export const getAttractionTool = defineMcpTool({
     }
 
     // The site's own 30-day variant, which is usually cached already.
-    const dto = await ctx
-      .get(AttractionIntegrationService)
-      .buildIntegratedResponse(attraction, 30, false);
+    const [dto, headliners] = await Promise.all([
+      ctx
+        .get(AttractionIntegrationService)
+        .buildIntegratedResponse(attraction, 30, false),
+      // The same set the park payload's `isHeadliner` reads.
+      ctx
+        .get(AnalyticsService)
+        .getHeadlinerAttractionIds(attraction.parkId)
+        .catch(() => null),
+    ]);
+    const ropeDrop = dto.ropeDrop;
 
     return {
       id: dto.id,
@@ -67,7 +89,16 @@ export const getAttractionTool = defineMcpTool({
       baselineMinutes: dto.baseline ?? null,
       outage: dto.outage ?? null,
       notRunToday: dto.notRunToday ?? null,
-      worksPeriod: dto.worksPeriod ?? null,
+      // The window's days are park-local, so "running today" is the park's today.
+      worksPeriod: dto.worksPeriod
+        ? {
+            ...dto.worksPeriod,
+            runningToday: inWindow(
+              dto.worksPeriod,
+              getCurrentDateInTimezone(attraction.park.timezone),
+            ),
+          }
+        : null,
       facts: {
         kind: dto.attractionKind ?? null,
         indoorOutdoor: dto.indoorOutdoor ?? null,
@@ -80,7 +111,27 @@ export const getAttractionTool = defineMcpTool({
         isSeasonal: dto.isSeasonal ?? null,
         seasonMonths: dto.seasonMonths ?? null,
         isCurrentlyInSeason: dto.isCurrentlyInSeason ?? null,
+        land: dto.land ?? null,
+        // Absent is "nobody checked or none sold", never "no fast pass".
+        fastPass: dto.fastPass ?? null,
+        headliner: headliners ? headliners.has(attraction.id) : null,
       },
+      // Whether arriving at opening pays off; times are instants of the next operating day.
+      ropeDrop: ropeDrop
+        ? {
+            worth: ropeDrop.worth,
+            strength: ropeDrop.strength,
+            confidence: ropeDrop.confidence,
+            openWaitMinutes: ropeDrop.openWait,
+            busyPeakMinutes: ropeDrop.busyPeak,
+            savingsMinutes: ropeDrop.savings,
+            rideBy: ropeDrop.rideByUtc,
+            bestSlot: ropeDrop.bestSlotUtc,
+            bestSlotWaitMinutes: ropeDrop.bestSlotWait,
+            betterLateInTheDay: ropeDrop.endOfDayWorth,
+          }
+        : null,
+      bestVisitTimesToday: dto.bestVisitTimes ?? null,
       profile: rideFacts(dto.rideProfile),
       statistics: dto.statistics ?? null,
       typicalWaits: dto.typicalWaits

@@ -93,8 +93,7 @@ the host's own network reaches it directly and may name any address; only the se
 | Reader                                                                                | Request with a bypass key                                                                                                                                | May name its address                                                                                      | May not    |
 | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- |
 | `CfThrottlerGuard.getTracker`                                                         | not counted                                                                                                                                              | `CF-Connecting-IP`, else the first `X-Forwarded-For` hop, else the socket                                 | the socket |
-| `getRateLimitIp` (`src/common/utils/request.util.ts`): trips, push writes, page views | the first `X-Forwarded-For` hop (the visitor the frontend forwards)                                                                                      | `CF-Connecting-IP`, else the socket                                                                       | the socket |
-| `clientIp` (`src/admin/auth/admin-auth.guard.ts`): admin login, sessions, audit       | the first `X-Forwarded-For` hop                                                                                                                          | `CF-Connecting-IP`, else the first `X-Forwarded-For` hop, else `req.ip`, whatever `CF_ORIGIN_SECRET` says | same       |
+| `getRateLimitIp` (`src/common/utils/request.util.ts`): trips, push writes, page views, and `clientIp` (`admin-auth.guard.ts`): admin login, sessions, audit | the first `X-Forwarded-For` hop (the visitor the frontend forwards)                                                                                      | `CF-Connecting-IP`, else the socket                                                                       | the socket |
 | `getClientIp` (`request.util.ts`): GeoIP for favorites and nearby only                | first `X-Forwarded-For` hop, then `CF-Connecting-IP` and three more headers, unvalidated ([location resolution](../architecture/location-resolution.md)) | same                                                                                                      | same       |
 
 Every limiter key must pass `isIP()`: an unvalidated header lets a caller send a fresh string per
@@ -116,8 +115,9 @@ The traps:
   address (park.fan: `getForwardedForHeaders` in `lib/api/relay.ts`), or all its users share one
   bucket. A leaked key skips the throttler and the admin login's Turnstile and can name any address;
   rotate it through `THROTTLE_BYPASS_KEYS`, where old and new keys can overlap.
-- **The admin login ignores `CF_ORIGIN_SECRET`.** `clientIp` believes forwarded headers from anyone;
-  Turnstile is the gate for callers outside the frontend ([admin authentication](../admin/authentication.md)).
+- **The admin login reads the address like every limiter.** `clientIp` is `getRateLimitIp`, so it
+  honours `CF_ORIGIN_SECRET` too; Turnstile stays the gate for callers outside the frontend
+  ([admin authentication](../admin/authentication.md)).
 
 ## What this means for the per-feature limiters
 

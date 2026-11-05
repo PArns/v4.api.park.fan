@@ -67,8 +67,10 @@ stolen session plus the password needed ~333k unthrottled requests to strip the 
 
 **The address counted.** `clientIp` prefers the forwarded address over `cf-connecting-ip` only for a
 request carrying a valid bypass key: api.park.fan is itself behind Cloudflare, so on the admin UI's
-requests `cf-connecting-ip` is the Vercel function, which put every administrator in one bucket. Both
-headers are `isIP()`-validated, bounding the Redis key space.
+requests `cf-connecting-ip` is the Vercel function, which put every administrator in one bucket. It is
+`getRateLimitIp`, the throttler's reading: `cf-connecting-ip` only where `CF_ORIGIN_SECRET` allows it,
+else the socket ([edge and throttling](../deployment/edge-and-throttling.md#which-address-a-request-is)).
+Every value is `isIP()`-validated, bounding the Redis key space.
 
 ## Turnstile on the login
 

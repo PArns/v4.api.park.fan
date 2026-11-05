@@ -19,7 +19,6 @@ import {
   buildCityDiscoveryUrl,
 } from "../common/utils/url.util";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
-import { cleanSlugSuffix } from "../common/utils/slug.util";
 import { ParksService } from "../parks/parks.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
@@ -281,7 +280,7 @@ export class SearchService implements OnModuleInit {
 
     // Build cache key
     const typeKey = type && type.length > 0 ? type.join(",") : "all";
-    const cacheKey = `search:fuzzy:v1:${typeKey}:${q.toLowerCase()}`;
+    const cacheKey = `search:fuzzy:v2:${typeKey}:${limit}:${q.toLowerCase()}`;
 
     // Try cache first
     const cachedResponse = safeJsonParse<SearchResultDto>(
@@ -1366,11 +1365,11 @@ export class SearchService implements OnModuleInit {
         type: "attraction" as const,
         id: attraction.id,
         name: resolveCuratedFacts(attraction).name,
-        slug: cleanSlugSuffix(attraction.slug),
+        // As stored: stripping `-<digits>` made `apollo-13` read `apollo` and
+        // sent a `-2` twin's hit to the other ride.
+        slug: attraction.slug,
         url: attraction.park
-          ? buildAttractionUrl(attraction.park, {
-              slug: cleanSlugSuffix(attraction.slug),
-            })
+          ? buildAttractionUrl(attraction.park, { slug: attraction.slug })
           : null,
         latitude: attraction.park?.latitude
           ? Number(attraction.park.latitude)
@@ -2706,7 +2705,8 @@ export class SearchService implements OnModuleInit {
         const batch = terms.slice(i, i + batchSize);
         await Promise.all(
           batch.map((term) =>
-            this.search({ q: term, limit: 10 } as any).catch(() => null),
+            // The default limit: the one park.fan sends, so the warm key is the one it reads.
+            this.search({ q: term } as any).catch(() => null),
           ),
         );
         // Small pause between batches

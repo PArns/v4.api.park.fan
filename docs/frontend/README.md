@@ -27,6 +27,7 @@ page for the field or endpoint you are reading or changing.
 | [yearly-predictions](./yearly-predictions.md)                     | `/predictions/yearly`: crowd outlook per day of the year                                                        |
 | [park-seasons](./park-seasons.md)                                 | `/seasons`: a park's named seasons and events                                                                   |
 | [shows](./shows.md)                                               | shows on the park payload: status, today's showtimes, season                                                    |
+| [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                       |
 | [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`                                                             |
 | [trips](./trips.md)                                               | `/v1/trips`: stored plans, the id as credential, write limits                                                   |
 | [assistant](./assistant.md)                                       | `/v1/assistant/*`: Parky's chat, tools, limits, the sealed Claude key, site feedback                            |
@@ -48,6 +49,7 @@ page for the field or endpoint you are reading or changing.
 | [works-period](./works-period.md)                                 | `worksPeriod`: a curated rebuild window                                                                         |
 | [not-run-today](./not-run-today.md)                               | `notRunToday`: a ride that has not run yet today                                                                |
 | [retired-parks](./retired-parks.md)                               | `retiredAt` on a park                                                                                           |
+| [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                          |
 | [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                |
 | [indoor-outdoor](./indoor-outdoor.md)                             | `indoorOutdoor`                                                                                                 |
 | [fast-pass](./fast-pass.md)                                       | `fastPass`                                                                                                      |

@@ -53,5 +53,6 @@ the same daily forecast the calendar serves.
 
 - **`generatedAt` is when this response was built**, not when the forecast was computed.
 - **An empty `predictions` can be an outage.** When the forecast cannot be read the endpoint answers
-  `predictions: []`, and the edge keeps that for 24 hours like any other answer (the route has no
-  degraded-body check). Redis keeps only a real forecast, for 13 hours per park and park-local day.
+  `predictions: []` with `isDegraded: true`, sent `no-store`, so the edge does not keep it; retry
+  shortly. Without `isDegraded` an empty list is a real answer, cached 24 hours like any other. Redis
+  keeps only a real forecast, for 13 hours per park and park-local day.

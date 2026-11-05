@@ -42,6 +42,15 @@ export class AttractionSlugAlias {
   @Column()
   slug: string;
 
+  /**
+   * The admin (email) who added this alias by hand through
+   * `POST /v1/admin/redirects` (PAR-1233); null for the rows the sync, a merge
+   * or a location correction record. Only a hand-made alias may be deleted
+   * through the admin, the others are the history of a URL that was live.
+   */
+  @Column({ type: "varchar", length: 320, nullable: true })
+  createdBy: string | null;
+
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 }
