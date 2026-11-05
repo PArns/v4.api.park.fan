@@ -348,9 +348,13 @@ describe("SiteAnalyticsCollectService", () => {
       ).resolves.toBe(0);
     }
     expect(drops()).toEqual({ [DROP_REASONS.bot]: "6" });
-    expect(redis.commands.every(([, key]) => key === KEYS.drops(DAY))).toBe(
-      true,
-    );
+    expect(
+      redis.commands.every(
+        ([, key]) => key === KEYS.drops(DAY) || key === KEYS.botsSince,
+      ),
+    ).toBe(true);
+    // The first counted day is kept once, so a partial day is never a figure.
+    expect(await redis.get(KEYS.botsSince)).toBe(DAY);
   });
 
   it("drops a malformed hit alone and a blocked event name", async () => {

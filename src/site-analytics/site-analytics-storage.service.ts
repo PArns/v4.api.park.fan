@@ -740,6 +740,9 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
    */
   async snapshotBots(now = new Date()): Promise<boolean> {
     const day = addIsoDays(utcDay(now), -1);
+    // The day bots were first counted is partial, and every day before it uncounted.
+    const since = await this.redis.get(KEYS.botsSince);
+    if (!since || day <= since) return false;
     const drops = await this.redis.hgetall(KEYS.drops(day));
     if (Object.keys(drops).length === 0) return false;
     const inserted: unknown[] = await this.dataSource.query(

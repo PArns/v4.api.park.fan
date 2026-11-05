@@ -27,7 +27,7 @@ import {
   NearbyParksDto,
   RideWithDistanceDto,
   NearbyParkInfoDto,
-  ShowWithDistanceDto,
+  InParkShowDto,
 } from "./dto/nearby-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { pickShortWaits } from "./short-waits.util";
@@ -460,7 +460,7 @@ export class LocationService {
   private async findShowsInPark(
     park: Park,
     userLocation: GeoCoordinate,
-  ): Promise<ShowWithDistanceDto[]> {
+  ): Promise<InParkShowDto[]> {
     const timezone = park.timezone || "UTC";
     const [shows, liveData, instants] = await Promise.all([
       this.showsService.findByParkId(park.id),

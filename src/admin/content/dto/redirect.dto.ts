@@ -1,6 +1,12 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { Type } from "class-transformer";
-import { IsIn, IsString, MaxLength, ValidateNested } from "class-validator";
+import {
+  IsDefined,
+  IsIn,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from "class-validator";
 
 export const REDIRECT_KINDS = ["park", "attraction"] as const;
 export type RedirectKind = (typeof REDIRECT_KINDS)[number];
@@ -28,6 +34,8 @@ export class CreateRedirectDto {
   fromPath: string;
 
   @ApiProperty({ type: RedirectTargetDto })
+  // Without it a missing target passes ValidateNested and fails later as a 500.
+  @IsDefined()
   @ValidateNested()
   @Type(() => RedirectTargetDto)
   target: RedirectTargetDto;

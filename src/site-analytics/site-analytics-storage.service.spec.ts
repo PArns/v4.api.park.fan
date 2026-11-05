@@ -547,6 +547,7 @@ describe("SiteAnalyticsStorageService", () => {
 
   describe("snapshotBots", () => {
     it("writes yesterday's bot hits once, a day with drops but no bot as zero", async () => {
+      await redis.set(KEYS.botsSince, "2026-10-20");
       redis.hashes.set(
         KEYS.drops("2026-10-27"),
         new Map([[DROP_REASONS.bot, "17"]]),
@@ -566,7 +567,22 @@ describe("SiteAnalyticsStorageService", () => {
     });
 
     it("never writes a day whose drop counts are gone", async () => {
+      await redis.set(KEYS.botsSince, "2026-10-20");
       await expect(service.snapshotBots(NOW)).resolves.toBe(false);
+      expect(statements).toEqual([]);
+    });
+
+    it("never writes the day bots were first counted, nor one before it", async () => {
+      redis.hashes.set(
+        KEYS.drops("2026-10-27"),
+        new Map([[DROP_REASONS.bot, "17"]]),
+      );
+      // Counting began on yesterday itself: a partial day, so not a figure.
+      await redis.set(KEYS.botsSince, "2026-10-27");
+      await service.snapshotBots(NOW);
+      // Nothing counted yet at all.
+      await redis.del(KEYS.botsSince);
+      await service.snapshotBots(NOW);
       expect(statements).toEqual([]);
     });
   });

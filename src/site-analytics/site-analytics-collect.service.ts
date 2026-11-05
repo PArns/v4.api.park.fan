@@ -1002,6 +1002,7 @@ export class SiteAnalyticsCollectService
     if (drops.size === 0) return;
     const key = KEYS.drops(day);
     for (const [reason, count] of drops) tx.hincrby(key, reason, count);
+    if (drops.has(DROP_REASONS.bot)) tx.set(KEYS.botsSince, day, "NX");
     tx.expire(key, secondsUntilUtcDayEnds(now, GUARD_SET_GRACE_SECONDS), "NX");
   }
 

@@ -286,7 +286,8 @@ write, so the park and ride lookups answer it without a change of their own (PAR
 - **`target.id`** must be a canonical uuid of a park or ride that exists (404 otherwise) and is not
   retired (400).
 - **409** when `fromPath` is a live page (a park at that path, a ride with that slug in the park, or
-  one of the park's own sub-pages `wait-time-calendar`, `with-kids`, `average-wait-times`) or already
+  one of the park's own sub-pages: the crowd calendar, the wait-time record or the kids page, in any of
+  the six spellings the frontend rewrites, e.g. `wait-time-calendar`, `mit-kindern`) or already
   redirects to another park or ride. The same alias to the same target answers **200** with the
   existing row and writes nothing; a new one **201**. Both return
   `{ id, kind, fromPath, toPath, targetId, createdBy, createdAt }`, paths without locale.

@@ -68,6 +68,9 @@ describe("SiteAnalyticsService", () => {
     hget: jest.fn(async (key: string) =>
       key === "site-analytics:drops:2026-10-28" ? "5" : null,
     ),
+    get: jest.fn(async (key: string) =>
+      key === "site-analytics:bots-since" ? "2026-10-20" : null,
+    ),
     exists: jest.fn(async (key: string) =>
       key === "site-analytics:drops:2026-10-28" ? 1 : 0,
     ),

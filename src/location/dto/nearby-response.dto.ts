@@ -192,15 +192,15 @@ export class NearbyRidesDto {
   @ApiProperty({
     description:
       "Every show of the park (not cut to any radius), nearest first; shows without coordinates last",
-    type: () => [ShowWithDistanceDto],
+    type: () => [InParkShowDto],
   })
-  shows: ShowWithDistanceDto[];
+  shows: InParkShowDto[];
 }
 
 /**
  * A show of the park the visitor is in, with today's programme
  */
-export class ShowWithDistanceDto {
+export class InParkShowDto {
   @ApiProperty({ description: "Show ID" })
   id: string;
 

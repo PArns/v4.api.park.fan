@@ -30,12 +30,32 @@ const LOCALES = new Set(["en", "de", "nl", "fr", "es", "it"]);
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /**
  * Pages of the frontend that sit where a ride slug would
- * (`app/[locale]/parks/.../[park]/<segment>`); an alias there never answers.
+ * (`app/[locale]/parks/.../[park]/<segment>`), in all six spellings the
+ * frontend rewrites (park.fan `next.config.ts`): an alias there would shadow
+ * the page in one language and answer in the others.
  */
 const PARK_SUBPAGES = new Set([
+  // the crowd calendar
   "wait-time-calendar",
-  "with-kids",
+  "wartezeiten-kalender",
+  "calendrier-temps-attente",
+  "calendario-tempi-attesa",
+  "wachttijden-kalender",
+  "calendario-tiempos-espera",
+  // the wait-time record
   "average-wait-times",
+  "durchschnittliche-wartezeiten",
+  "temps-attente-moyens",
+  "tempi-di-attesa-medi",
+  "gemiddelde-wachttijden",
+  "tiempos-de-espera-medios",
+  // with kids
+  "with-kids",
+  "mit-kindern",
+  "avec-enfants",
+  "con-bambini",
+  "met-kinderen",
+  "con-ninos",
 ]);
 
 export interface RedirectPath extends ParkGeoPath {

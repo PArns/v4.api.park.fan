@@ -332,14 +332,12 @@ export class SiteAnalyticsService {
   }
 
   /**
-   * The hits dropped as a bot's from `from` to `to`: the finished days from
-   * `site_bot_days`, the ones the nightly snapshot has not written yet from
-   * the day's drop counts in Redis (they outlive their day by a day).
-   */
-  /**
-   * Bot hits over `from`..`to`, or `null` when any day of the window was not
-   * counted (before the counter existed, or a day whose Redis hash is gone):
-   * an uncounted day is unknown, not zero (docs/rules/absent-facts.md).
+   * Bot hits over `from`..`to`: the finished days from `site_bot_days`, the
+   * ones the nightly snapshot has not written yet from the day's drop counts
+   * in Redis. `null` when any day of the window was not counted: before or on
+   * the first day bots were counted (`botsSince`, a partial day), or a day
+   * whose Redis hash is gone. An uncounted day is unknown, not zero
+   * (docs/rules/absent-facts.md).
    */
   private async botHits(
     from: string,
@@ -360,7 +358,9 @@ export class SiteAnalyticsService {
     let hits = rows.reduce((sum, row) => sum + num(row.hits), 0);
     let counted = written.size;
     try {
+      const since = await this.redis.get(KEYS.botsSince);
       for (const day of live) {
+        if (!since || day <= since) continue;
         const [present, value] = await Promise.all([
           this.redis.exists(KEYS.drops(day)),
           this.redis.hget(KEYS.drops(day), DROP_REASONS.bot),
