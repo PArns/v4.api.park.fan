@@ -91,7 +91,7 @@ export class FavoritesService {
    *
    * Uses Redis caching for performance:
    * - Cache key based on sorted IDs + location hash
-   * - TTL: 2 minutes (matches HTTP cache)
+   * - TTL: 5 minutes (HTTP is `no-store`)
    * - Stale-while-revalidate: refreshes in background if TTL < 1 minute
    *
    * @param parkIds - Array of park IDs

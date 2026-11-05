@@ -52,7 +52,7 @@ function build(verdict: { success: boolean; reason?: string }) {
 }
 
 const request = (headers: Record<string, string>) =>
-  ({ headers, ip: "198.51.100.7" }) as never;
+  ({ headers, socket: { remoteAddress: "198.51.100.7" } }) as never;
 
 const credentials = (extra: Record<string, unknown> = {}) =>
   ({

@@ -10,7 +10,22 @@ Optional `?attraction=<slug>` pins a ride. Without it the endpoint picks the
 park's busiest ride **that actually reported today** — see below, it is the
 point of the route.
 
-~1 KB. Cached 5 minutes. `404` when the park has no readable curve.
+~1 KB. Cached 5 minutes. `404` when the park has no readable curve, and when
+`?attraction=` names a ride outside the park's eight day-curve candidates.
+
+## Ask only when the ride has one: `hasDayCurve`
+
+The attraction detail (`GET …/attractions/:slug`) carries `hasDayCurve`:
+
+- `true`: `/stats/day?attraction=<that payload's slug>` answers.
+- `false`: it would answer `404`; do not ask. Most rides are here (34 of 454 had
+  a curve in one sample).
+- **absent: unknown**, because the profile the flag is read from was not in
+  Redis when the detail was built. Ask as before.
+
+The flag is read from the cached hourly profile (`park:hourly-profile:v7:<park>:1:8:20`)
+and never computed for the detail, so it can lag a profile rebuild by the
+detail's own cache window (up to 5 minutes).
 
 ## Shape
 

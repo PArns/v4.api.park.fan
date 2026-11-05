@@ -26,7 +26,7 @@ its `docs/architecture/caching-strategy.md`.
 | `analytics:headliners:{parkId}` | 6 h | `getHeadlinerAttractions`, read-through |
 | `park:opdaterange:{parkId}` | 1 h | `ParksService.getOperatingDateRange` (MIN/MAX OPERATING date), read on every calendar build and gap fill |
 | `holiday:year:{country}:{year}` | 24 h, plus a 10-min in-process memo | `HolidaysService.getHolidays` caches whole years, so any range is served from them |
-| `search:index:v1:*`, `search:fuzzy:v1:{type}:{q}` | 2 h, 5 min | [Search](search.md) |
+| `search:index:v1:*`, `search:fuzzy:v2:{type}:{limit}:{q}` | 2 h, 5 min | [Search](search.md) |
 | `weather:*` | per surface | [Weather](weather.md#call-cadence-per-surface) |
 | `popularity:parks`, `popularity:attractions` | sorted sets, decayed daily | `ZINCRBY` from `PopularityInterceptor` on successful GETs; feeds warmup priority |
 | `site-analytics:*` | buffers `buf:*` none (parked ones 7 days); a visit until the flush ends it, at most 40 min after its last hit, and its place in `visits:open` at most 2 h; caps to the end of the UTC day + 1 min; day visitors, also by country, device, browser, OS and channel, to its end + 1 h; guard sets and drop counts to the end of the next day; realtime and live view minutes 35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#privacy)'s counts until the flusher writes them, its visits, caps, guards, HyperLogLogs and the live view's minutes. Keys standing for a reader are HMACs under the UTC day's key |

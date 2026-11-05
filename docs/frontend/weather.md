@@ -25,10 +25,9 @@ the licence requires it.
 
 - `dataType`: `historical` for past days, `current` for the park's today, `forecast` after it. Units:
   °C, mm, cm, km/h; `weatherCode` is WMO.
-- `/weather`: `from` and `to` are park-local `YYYY-MM-DD`; **send both**. `from` defaults to 30 days
-  ago, but a missing `to` becomes `from` itself (`parseDateRange` adds the endpoint's 0 days to
-  `from`), so a bare request returns one day a month back, not the month Swagger describes. More than
-  90 days, `to` before `from`, or a day the month does not have answer 400.
+- `/weather`: `from` and `to` are park-local `YYYY-MM-DD`. `from` defaults to 30 days ago and `to`
+  to the park's today, so a bare request returns the last month. More than 90 days, `to` before
+  `from` (also a future `from` without `to`), or a day the month does not have answer 400.
 - `/weather/forecast`: only `forecast` rows, so **today is not in it**; up to 15 days after today.
 - A day without a row is simply missing, and a park without coordinates answers `weather: []`.
 - The live fields (current temperature, humidity, `isDay`) are not on these endpoints: they are on the
@@ -37,8 +36,7 @@ the licence requires it.
 
 ## The nowcast
 
-- **`observedAt` is the time of the request**, not when the forecast was fetched; Swagger says
-  otherwise. The upstream window behind it is refetched every 30 minutes while the park is open or
+- **`observedAt` is the time of the request**, not when the forecast was fetched. The upstream window behind it is refetched every 30 minutes while the park is open or
   opens within the hour, and up to every 3 hours while it is closed
   ([call cadence](../architecture/weather.md#call-cadence-per-surface)); each read re-derives the
   snapshot against now.
@@ -55,4 +53,4 @@ the licence requires it.
 - **`steps[].time` is park-local without an offset** (`"2026-10-27T14:15"`), as Open-Meteo sends it,
   and the list includes the slots of the cached window that are already past. Read it in the park's
   `timezone`.
-- No coordinates, or an upstream failure, answer **404**, not the 503 Swagger names.
+- No coordinates, or an upstream failure, answer **404**.

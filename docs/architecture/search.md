@@ -18,7 +18,7 @@ too much or too little. The frontend's palette and post search are in the fronte
    `initializeFuzzySearchIndices()` (declared `{ synchronize: false }` on the entities,
    [the entities are the schema](../rules/the-entities-are-the-schema.md)).
 
-Redis never matches anything: it caches the per-query result (`search:fuzzy:v1:{type}:{q}`,
+Redis never matches anything: it caches the per-query result (`search:fuzzy:v2:{type}:{limit}:{q}`,
 `CACHE_TTL` 5 min) and the index.
 
 ## Ranking (`scoreEntryPre`)
