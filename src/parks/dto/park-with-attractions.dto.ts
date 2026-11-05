@@ -450,8 +450,13 @@ export class ParkRestaurantDto {
   @ApiProperty({ description: "Cuisine type", required: false, nullable: true })
   cuisineType: string | null;
 
-  @ApiProperty({ description: "Requires reservation" })
-  requiresReservation: boolean;
+  @ApiProperty({
+    description:
+      "Whether a reservation is required or recommended. null (absent) = no source says; not false",
+    required: false,
+    nullable: true,
+  })
+  requiresReservation: boolean | null;
 
   @ApiProperty({ description: "Status", required: false })
   status?: string;
@@ -1052,7 +1057,7 @@ export class ParkWithAttractionsDto {
             longitude:
               restaurant.longitude !== undefined ? restaurant.longitude : null,
             cuisineType: restaurant.cuisineType || null,
-            requiresReservation: restaurant.requiresReservation,
+            requiresReservation: restaurant.requiresReservation ?? null,
           }))
         : [],
     };

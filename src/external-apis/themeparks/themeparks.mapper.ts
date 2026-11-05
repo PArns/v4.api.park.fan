@@ -139,7 +139,8 @@ export class ThemeParksMapper {
       // Restaurant-specific fields
       cuisineType: apiData.cuisines ? apiData.cuisines.join(", ") : undefined,
       cuisines: apiData.cuisines ? apiData.cuisines : undefined,
-      requiresReservation: false, // Default to false
+      // The source never says; null is "unknown", never a claimed walk-in.
+      requiresReservation: null,
     };
   }
 }

@@ -27,6 +27,7 @@ page for the field or endpoint you are reading or changing.
 | [yearly-predictions](./yearly-predictions.md)                     | `/predictions/yearly`: crowd outlook per day of the year                                                        |
 | [park-seasons](./park-seasons.md)                                 | `/seasons`: a park's named seasons and events                                                                   |
 | [shows](./shows.md)                                               | shows on the park payload: status, today's showtimes, season                                                    |
+| [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                       |
 | [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`                                                             |
 | [trips](./trips.md)                                               | `/v1/trips`: stored plans, the id as credential, write limits                                                   |
 | [assistant](./assistant.md)                                       | `/v1/assistant/*`: Parky's chat, tools, limits, the sealed Claude key, site feedback                            |
