@@ -392,6 +392,7 @@ describe("assistant tools", () => {
       "search_parks",
       "get_park_live",
       "find_rides",
+      "find_restaurants",
       "get_ride",
       "compare_rides",
       "get_ride_forecast",

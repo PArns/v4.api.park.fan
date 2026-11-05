@@ -11,6 +11,8 @@ import { parkForecastTool } from "../../mcp/tools/park-forecast.tool";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import { BestDaysService } from "../../parks/services/best-days.service";
+import { ParksService } from "../../parks/parks.service";
+import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
@@ -20,8 +22,11 @@ import { RideProfileService } from "../../attractions/services/ride-profile.serv
 import {
   compareRides,
   comparedRides,
+  isRideOfType,
   RIDE_RANKINGS,
+  RIDE_TYPE_FILTERS,
 } from "../../attractions/utils/ride-facts.util";
+import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import { AssistantPostsClient } from "./assistant-posts.client";
 import { getFrontendUrl } from "../../config/oauth.config";
 import {
@@ -230,6 +235,14 @@ const parkRef = z
   .max(120)
   .describe('Park id from search_parks, or its slug like "phantasialand"');
 
+/** Most restaurants one answer lists; Phantasialand has 46. */
+const MAX_RESTAURANTS = 25;
+
+/** Lower case without accents, so "eis" finds "Eiscafé" and "creme" finds "Crème". */
+export function foldText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 const CROWD_ORDER = [
   "very_low",
   "low",
@@ -294,6 +307,56 @@ export const ASSISTANT_TOOLS = [
       findAttractionsTool.handler({ query, parkId, limit: 5 }, mcp(ctx)),
   }),
   tool({
+    name: "find_restaurants",
+    status: "parks",
+    description:
+      "A park's restaurants, snack bars and food stands, optionally only those whose name or " +
+      'cuisine contains query (e.g. "eis", "ice", "pizza"): name, status now where the park ' +
+      "reports it, cuisine and reservation where known, land, and the park's pageUrl. For " +
+      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan.',
+    input: z.object({
+      park: parkRef,
+      query: z.string().trim().min(2).max(60).optional(),
+    }),
+    run: async ({ park: reference, query }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const park = await ctx.get(ParksService).loadParkRelations(found);
+      // The payload the park page shows: deduplicated by name, with each stand's live status.
+      const dto = await ctx
+        .get(ParkIntegrationService)
+        .buildIntegratedResponse(park, false, false);
+      const lands = new Map(
+        (park.restaurants ?? []).map((r) => [r.id, r.landName || null]),
+      );
+      const all = dto.restaurants ?? [];
+      const needle = query ? foldText(query) : null;
+      const matched = needle
+        ? all.filter((r) =>
+            foldText(`${r.name} ${r.cuisineType ?? ""}`).includes(needle),
+          )
+        : all;
+      return {
+        park: park.name,
+        parkStatus: dto.status ?? null,
+        pageUrl: parkPageUrl(park),
+        total: all.length,
+        matched: matched.length,
+        restaurants: matched.slice(0, MAX_RESTAURANTS).map((r) => ({
+          name: r.name,
+          // Without a reading of its own the payload guesses from the park's status; that is
+          // no statement about the stand (docs/rules/absent-facts.md).
+          status: r.lastUpdated ? (r.status ?? null) : null,
+          ...(r.cuisineType && { cuisine: r.cuisineType }),
+          ...(r.requiresReservation != null && {
+            requiresReservation: r.requiresReservation,
+          }),
+          ...(lands.get(r.id) && { land: lands.get(r.id) }),
+        })),
+      };
+    },
+  }),
+  tool({
     name: "get_ride",
     status: "rides",
     description:
@@ -338,34 +401,77 @@ export const ASSISTANT_TOOLS = [
     name: "compare_rides",
     status: "rides",
     description:
-      "One park's rides ranked by a fact: top speed, height, length, duration, inversions, " +
-      "launches, opening year or minimum rider height (cm), highest first unless order asc. With " +
-      'riderHeightCm only the rides someone that tall may ride. For "the fastest ride in X", ' +
-      '"the newest coaster", "what can my 1 m child ride". Counts what it left out for lack of data.',
+      "The rides of one park, or of every park in a country, ranked by a fact: top speed, height, " +
+      "length, duration, inversions, launches, opening year or minimum rider height (cm), highest " +
+      "first unless order asc. type coaster keeps only roller coasters. With riderHeightCm only " +
+      'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
+      'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
+      "what it left out for lack of data.",
     input: z.object({
-      park: parkRef,
+      park: parkRef.optional(),
+      country: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .optional()
+        .describe('Instead of park: a country, "Germany" or its code "DE"'),
       by: z.enum(RIDE_RANKINGS),
       order: z.enum(["desc", "asc"]).default("desc"),
+      type: z.enum(RIDE_TYPE_FILTERS).optional(),
       riderHeightCm: z.number().int().min(50).max(250).optional(),
       limit: z.number().int().min(1).max(15).default(5),
     }),
-    run: async ({ park: reference, by, order, riderHeightCm, limit }, ctx) => {
-      const park = await resolvePark(mcp(ctx), reference);
-      if (isAmbiguous(park)) return park;
-      const attractions = await ctx
-        .get(DataSource)
-        .getRepository(Attraction)
-        .find({ where: { parkId: park.id, retiredAt: IsNull() } });
+    run: async (
+      { park: reference, country, by, order, type, riderHeightCm, limit },
+      ctx,
+    ) => {
+      if (!reference === !country) {
+        throw new McpToolError("Give either park or country");
+      }
+      const attractions = ctx.get(DataSource).getRepository(Attraction);
+      let scope: { park: string } | { country: string; parks: number };
+      let found: Attraction[];
+      if (reference) {
+        const park = await resolvePark(mcp(ctx), reference);
+        if (isAmbiguous(park)) return park;
+        scope = { park: park.name };
+        found = await attractions.find({
+          where: { parkId: park.id, retiredAt: IsNull() },
+        });
+      } else {
+        // One query for the whole country, its parks joined for their names.
+        const code = getCountryISOCode(country as string);
+        found = await attractions
+          .createQueryBuilder("attraction")
+          .innerJoinAndSelect("attraction.park", "park")
+          .where("attraction.retiredAt IS NULL")
+          .andWhere("park.retiredAt IS NULL")
+          .andWhere(
+            "(park.countryCode = :code OR lower(park.country) = lower(:country))",
+            { code: code ?? "", country },
+          )
+          .getMany();
+        if (found.length === 0) {
+          throw new McpToolError(`No parks in "${country}"; try search_parks`);
+        }
+        scope = {
+          country: found[0].park.country,
+          parks: new Set(found.map((ride) => ride.parkId)).size,
+        };
+      }
       const profiles = await ctx
         .get(RideProfileService)
-        .findByAttractions(attractions.map((attraction) => attraction.id));
+        .findByAttractions(found.map((attraction) => attraction.id));
       return {
-        park: park.name,
+        ...scope,
         by,
         order,
-        ...compareRides(comparedRides(attractions, profiles), {
+        ...(type && { type }),
+        ...compareRides(comparedRides(found, profiles), {
           by,
           order,
+          type,
           riderHeightCm,
           limit,
         }),
@@ -730,10 +836,14 @@ export const ASSISTANT_TOOLS = [
         .enum(["longest", "shortest"])
         .default("longest")
         .describe("For kind rides: longest or shortest waits first"),
+      type: z
+        .enum(RIDE_TYPE_FILTERS)
+        .optional()
+        .describe("For kind rides: only rides of this type"),
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
-    run: async ({ kind, park, parks, rideId, order, limit }, ctx) => {
+    run: async ({ kind, park, parks, rideId, order, type, limit }, ctx) => {
       if (kind === "parks") {
         if (!parks?.length) throw new McpToolError("kind parks needs parks");
         // Each row with its live state, as the park cards on the site show it.
@@ -774,12 +884,21 @@ export const ASSISTANT_TOOLS = [
       if (kind === "rides") {
         if (!park) throw new McpToolError("kind rides needs park");
         // Every operating ride with a posted wait, longest first, so both ends can be cut.
+        // With a type every waiting ride, so a coaster further down the list is not cut.
         const live = (await getParkTool.handler(
-          { park, longestWaits: 30 },
+          { park, longestWaits: type ? 500 : 30 },
           mcp(ctx),
         )) as ParkSummary;
         if ("ambiguous" in live) return live;
-        const all = live.rides?.longestWaits ?? [];
+        let all = live.rides?.longestWaits ?? [];
+        if (type) {
+          const profiles = await ctx
+            .get(RideProfileService)
+            .findByAttractions(all.map((ride) => ride.id));
+          all = all.filter((ride) =>
+            isRideOfType(profiles.get(ride.id)?.types ?? [], type),
+          );
+        }
         const picked = (order === "shortest" ? [...all].reverse() : all).slice(
           0,
           limit,
@@ -814,7 +933,9 @@ export const ASSISTANT_TOOLS = [
         };
         return new ActionOutcome(
           { type: "card", card },
-          { shown: `${rides.length} rides of ${live.name}` },
+          {
+            shown: `${rides.length} ${type ? `${type}s` : "rides"} of ${live.name}`,
+          },
         );
       }
       if (kind === "park") {

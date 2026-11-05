@@ -137,6 +137,13 @@ export function getCountryISOCode(country: string): string | null {
     return trimmed.toUpperCase();
   }
 
-  // 2. Check mapping for full names or aliases
-  return COUNTRY_NAME_TO_ISO_CODE[trimmed] || null;
+  // 2. Check mapping for full names or aliases, then the same ignoring case ("deutschland")
+  const lower = trimmed.toLowerCase();
+  return (
+    COUNTRY_NAME_TO_ISO_CODE[trimmed] ||
+    Object.entries(COUNTRY_NAME_TO_ISO_CODE).find(
+      ([name]) => name.toLowerCase() === lower,
+    )?.[1] ||
+    null
+  );
 }

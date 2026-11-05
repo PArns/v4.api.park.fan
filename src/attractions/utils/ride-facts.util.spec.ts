@@ -1,6 +1,7 @@
 import {
   compareRides,
   comparedRides,
+  isRideOfType,
   rideFacts,
   type ComparedRide,
 } from "./ride-facts.util";
@@ -123,6 +124,37 @@ describe("compareRides", () => {
     });
     expect(tall.rides.map((ride) => ride.name)).not.toContain("Kiddie Coaster");
   });
+
+  it("keeps only coasters with type, the rides of unknown type counted apart", () => {
+    const typed: ComparedRide[] = [
+      { id: "a", name: "Taron", topSpeedKmh: 117, types: ["launch-coaster"] },
+      { id: "b", name: "Raik", topSpeedKmh: 40, types: ["boomerang"] },
+      { id: "c", name: "River Quest", topSpeedKmh: 30, types: ["rapids"] },
+      { id: "d", name: "Mystery", topSpeedKmh: 120 },
+    ];
+    const slowest = compareRides(typed, {
+      by: "topSpeed",
+      order: "asc",
+      type: "coaster",
+      limit: 5,
+    });
+    expect(slowest.rides.map((ride) => ride.name)).toEqual(["Raik", "Taron"]);
+    expect(slowest.typeUnknown).toBe(1);
+    expect(
+      compareRides(typed, { by: "topSpeed", limit: 5 }),
+    ).not.toHaveProperty("typeUnknown");
+  });
+});
+
+describe("isRideOfType", () => {
+  it("reads every -coaster term and the glossary's other coaster terms as a coaster", () => {
+    for (const types of [["wooden-coaster"], ["wild-mouse"], ["slc"]]) {
+      expect(isRideOfType(types, "coaster")).toBe(true);
+    }
+    for (const types of [[], ["dark-ride"], ["log-flume"]]) {
+      expect(isRideOfType(types, "coaster")).toBe(false);
+    }
+  });
 });
 
 describe("comparedRides", () => {
@@ -190,6 +222,27 @@ describe("comparedRides", () => {
         minimumHeightCm: 132,
         heightUnit: "in",
       },
+    ]);
+  });
+
+  it("keeps one name in two parks apart, each with its park", () => {
+    const pirates = (id: string, parkId: string, park: string) =>
+      attraction({
+        id,
+        parkId,
+        name: "Pirates of the Caribbean",
+        park: { name: park } as Attraction["park"],
+      });
+    const rows = comparedRides(
+      [
+        pirates("a", "p1", "Magic Kingdom"),
+        pirates("b", "p2", "Disneyland Park"),
+      ],
+      new Map(),
+    );
+    expect(rows.map((row) => row.park)).toEqual([
+      "Magic Kingdom",
+      "Disneyland Park",
     ]);
   });
 });
