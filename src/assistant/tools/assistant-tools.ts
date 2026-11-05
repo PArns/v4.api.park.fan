@@ -383,7 +383,9 @@ function pastDay(
     status: day.status,
     opens: day.opens,
     closes: day.closes,
-    crowdLevel: day.crowdLevel,
+    // A past day's level counts only where it was measured: the calendar falls back to a stored
+    // prediction, which a year back is a forecast, not what happened (docs/rules/absent-facts.md).
+    crowdLevel: day.forecastIsActual ? day.crowdLevel : "unknown",
     // The recorded peak of the headliners, only where it was measured.
     headlinerPeakWaitMinutes: day.forecastIsActual
       ? (day.expectedPeakWaitMinutes ?? null)

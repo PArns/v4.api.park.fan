@@ -130,6 +130,47 @@ describe("the same day last year", () => {
       schoolVacation: true,
     });
   });
+
+  it("reads a past day's level unknown where nothing was measured, not the stored forecast", async () => {
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [
+        CalendarService,
+        {
+          buildCalendarResponse: jest.fn(async () => ({
+            days: [
+              {
+                date: "2025-11-07",
+                status: "OPERATING",
+                crowdLevel: "low",
+                isHoliday: false,
+                isBridgeDay: false,
+                isSchoolVacation: false,
+                headlinerForecast: { avgWait: 30, rides: [], actual: false },
+              },
+            ],
+          })),
+        },
+      ],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, date: "2026-11-07" },
+      providers,
+    );
+    expect(json.sameDateLastYear).toMatchObject({
+      crowdLevel: "unknown",
+      headlinerPeakWaitMinutes: null,
+    });
+  });
 });
 
 describe("get_shows", () => {
@@ -211,6 +252,18 @@ describe("page urls in the chat's language", () => {
       other: "https://evil.example/parks/x",
     });
     expect(localizePageUrls(`${site}/parks/x`, "pt")).toBe(`${site}/parks/x`);
+  });
+
+  it("turns the API paths find_parks_nearby hands out into page urls", () => {
+    const site = getFrontendUrl();
+    expect(
+      localizePageUrls(
+        { url: "/v1/parks/europe/germany/bruehl/phantasialand/taron" },
+        "de",
+      ),
+    ).toEqual({
+      url: `${site}/de/parks/europe/germany/bruehl/phantasialand/taron`,
+    });
   });
 });
 

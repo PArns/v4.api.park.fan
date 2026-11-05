@@ -389,10 +389,16 @@ export function siteOnlyPath(url: string): string | null {
 export function localizePageUrls(value: unknown, locale: string): unknown {
   if (!(ASSISTANT_LOCALES as readonly string[]).includes(locale)) return value;
   const parks = `${getFrontendUrl()}/parks/`;
+  // LocationService hands out API paths (`/v1/parks/<geo>/<park>[/<ride>]`), which mirror the
+  // page paths one to one; as they stand the model would link the JSON.
+  const apiParks = "/v1/parks/";
   const visit = (item: unknown): unknown => {
     if (typeof item === "string") {
-      return item.startsWith(parks)
-        ? `${getFrontendUrl()}/${locale}/parks/${item.slice(parks.length)}`
+      if (item.startsWith(parks)) {
+        return `${getFrontendUrl()}/${locale}/parks/${item.slice(parks.length)}`;
+      }
+      return item.startsWith(apiParks)
+        ? `${getFrontendUrl()}/${locale}/parks/${item.slice(apiParks.length)}`
         : item;
     }
     if (Array.isArray(item)) return item.map(visit);
