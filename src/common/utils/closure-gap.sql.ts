@@ -188,6 +188,31 @@ export const MAX_SIMULTANEOUS_CLOSERS = 2;
  * unreliable ride is withheld rather than a timetable published as faults.
  * Applying it drops the 21-day population from 2817 to 1757 and leaves the
  * median untouched at 25 minutes.
+ *
+ * ## A known bias in the nightly denominator, kept on purpose (PAR-1093)
+ *
+ * The nightly `CLOSURE_GAP_INTERVALS_SQL` runs BEFORE its job rewrites
+ * `attraction_exposure_days`, so its `active` CTE (the `active_days`
+ * denominator) and `blind_parks` read the PREVIOUS run's rows, which end at that
+ * run's as-of. The numerator reads `queue_data` up to this run's as-of. The
+ * denominator therefore misses the newest operating day: about 1 day in 30
+ * (~3.3 %) on a nightly run, n days after n missed runs. That raises
+ * `gap_days / active_days`, the direction that withholds a real fault as a
+ * duty cycle, never the one that publishes a timetable as faults. The live
+ * statement is not affected (its denominator stops before today by design).
+ *
+ * The calibration above was taken on the stored record and so already contains
+ * this bias, and the 0.5 cut sits in the gap between the 0.4 and 0.5 buckets
+ * (see CYCLE_WINDOW_DAYS), so a ~3 % shift can only move rides already at the
+ * edge; how many has not been counted. The fixes were weighed and not taken: running the statement
+ * inside the write transaction costs 30.4 s under the delete locks every night
+ * (measured 2026-09-08), splitting the transaction costs the atomicity of the
+ * two tables, and passing this run's in-memory exposure rows into the statement
+ * means ~30 days of rows for every tracked ride as array parameters, merged
+ * with the table's older history for `blind_parks` (which sums all of it) and
+ * minus a delete set that depends on this statement's own output. On a first
+ * run against an empty table no park reaches `MIN_BLIND_EVIDENCE_HOURS`, so the
+ * statement returns nothing rather than running with the filter off.
  */
 export const MAX_GAP_DAY_SHARE = 0.5;
 

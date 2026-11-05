@@ -38,6 +38,15 @@ Carried rows are excluded by `is_heartbeat` with the `"lastUpdated" = timestamp`
 `data_source` alone failed: the heartbeat copies the previous row's `data_source`, and one carried row
 in an `OPERATING/CLOSED/OPERATING` triple dropped the gap, which silently cut every gap over ~65 minutes.
 
+**Known bias in the nightly denominator (PAR-1093, accepted).** The nightly statement runs before its
+job rewrites `attraction_exposure_days`, so `active_days` (and the evidence hours of `blind_parks`)
+come from the previous run's rows and miss the newest operating day: ~1 day in 30 (3.3 %), n days
+after n missed runs. That raises the gap share towards `MAX_GAP_DAY_SHARE`, which withholds a real
+fault rather than publishing a timetable as one, and the calibration of 0.5 was taken on the record
+that carries it. Moving the statement inside the write transaction costs 30.4 s under the delete locks
+every night (2026-09-08); passing the in-memory exposure rows in costs ~30 days of rows per tracked
+ride as parameters plus a merge with older history. The reasoning sits at `MAX_GAP_DAY_SHARE`.
+
 Free-flow rides (`open_with_park`) are excluded from both closure statements: the flag says their
 `CLOSED` readings are not evidence, and the page showed such a ride as open by the flag and standing
 still from the same rows (PAR-913).
