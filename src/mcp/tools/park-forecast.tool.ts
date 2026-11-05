@@ -20,7 +20,7 @@ function localTime(value: string | undefined, timezone: string) {
     : formatInTimeZone(at, timezone, LOCAL_ISO);
 }
 
-function compactDay(day: CalendarDay, timezone: string) {
+export function compactDay(day: CalendarDay, timezone: string) {
   const weather = day.weather;
   return {
     date: day.date,

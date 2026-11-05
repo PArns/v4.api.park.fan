@@ -7,15 +7,27 @@ import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
-import { parkForecastTool } from "../../mcp/tools/park-forecast.tool";
+import {
+  compactDay,
+  parkForecastTool,
+} from "../../mcp/tools/park-forecast.tool";
+import { CalendarService } from "../../parks/services/calendar.service";
+import { parseDateRange } from "../../common/utils/date-parsing.util";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { ParksService } from "../../parks/parks.service";
+import { ShowsService } from "../../shows/shows.service";
+import type { Show } from "../../shows/entities/show.entity";
+import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
+import { isCurrentlyInSeason } from "../../attractions/utils/curated-attraction-facts.util";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
-import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+} from "../../common/utils/date.util";
 import { DataSource, In, IsNull } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
@@ -300,6 +312,98 @@ async function dayCard(
   return new ActionOutcome({ type: "card", card }, { shown });
 }
 
+/**
+ * The days a year before `date` (YYYY-MM-DD) worth comparing: the same date (29 February becomes
+ * the 28th), and the day of the same weekday nearest to it, at most three days off, because a
+ * Saturday says more about a Saturday than the date does. Calendar days only, no clock.
+ */
+export function lastYearDays(date: string): {
+  sameDate: string;
+  sameWeekday: string;
+} {
+  const [year, month, day] = date.split("-");
+  const sameDate = `${Number(year) - 1}-${month}-${month === "02" && day === "29" ? "28" : day}`;
+  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+  const ahead = (weekday(date) - weekday(sameDate) + 7) % 7;
+  return {
+    sameDate,
+    sameWeekday: addIsoDays(sameDate, ahead > 3 ? ahead - 7 : ahead),
+  };
+}
+
+/** One past day for `get_park_history` as the calendar serves it, or null without one. */
+function pastDay(
+  day: ReturnType<typeof compactDay> | undefined,
+): Record<string, unknown> | null {
+  if (!day) return null;
+  return {
+    date: day.date,
+    weekday: formatInTimeZone(new Date(`${day.date}T12:00:00Z`), "UTC", "EEEE"),
+    status: day.status,
+    opens: day.opens,
+    closes: day.closes,
+    crowdLevel: day.crowdLevel,
+    // The recorded peak of the headliners, only where it was measured.
+    headlinerPeakWaitMinutes: day.forecastIsActual
+      ? (day.expectedPeakWaitMinutes ?? null)
+      : null,
+    holiday: day.holiday,
+    schoolVacation: day.schoolVacation,
+    events: day.events,
+  };
+}
+
+/** Most shows one answer lists. */
+const MAX_SHOWS = 30;
+
+/**
+ * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
+ * instant so it reaches the model in the visitor's clock. Status and duration come from a live
+ * reading of the show only; without one they are null, never a guessed "closed".
+ */
+export function showsOnDay(
+  shows: readonly Show[],
+  live: ReadonlyMap<string, ShowLiveData>,
+  starts: ReadonlyMap<string, string[]>,
+  timezone: string,
+) {
+  const listed = shows
+    .filter((show) => starts.get(show.id)?.length)
+    .map((show) => {
+      const reading = live.get(show.id);
+      const timed = reading?.showtimes?.find((t) => t.startTime && t.endTime);
+      const minutes = timed
+        ? Math.round(
+            (Date.parse(timed.endTime!) - Date.parse(timed.startTime)) / 60_000,
+          )
+        : NaN;
+      return {
+        name: show.name,
+        ...(show.landName && { land: show.landName }),
+        status: reading?.status ?? null,
+        showtimes: starts.get(show.id) as string[],
+        ...(minutes > 0 && minutes < 600 && { durationMinutes: minutes }),
+        ...(show.isSeasonal && {
+          seasonMonths: show.seasonMonths,
+          inSeasonNow: isCurrentlyInSeason(
+            {
+              isSeasonal: true,
+              seasonMonths: show.seasonMonths,
+              seasonOutSince: null,
+            },
+            timezone,
+          ),
+        }),
+      };
+    })
+    .sort((a, b) => a.showtimes[0].localeCompare(b.showtimes[0]));
+  return {
+    shows: listed.slice(0, MAX_SHOWS),
+    withShowtimes: listed.length,
+    withoutShowtimes: shows.length - listed.length,
+  };
+}
+
 /** Most restaurants one answer lists; Phantasialand has 46. */
 const MAX_RESTAURANTS = 25;
 
@@ -418,6 +522,90 @@ export const ASSISTANT_TOOLS = [
           }),
           ...(lands.get(r.id) && { land: lands.get(r.id) }),
         })),
+      };
+    },
+  }),
+  tool({
+    name: "get_park_history",
+    status: "forecast",
+    description:
+      "How a park's day went one year earlier, as park.fan's calendar recorded it: the same " +
+      "date last year and the nearest day of the same weekday (weekday matters more), each " +
+      "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
+      "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
+      '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
+      "Halloween as date.",
+    input: z.object({
+      park: parkRef,
+      date: isoDay
+        .optional()
+        .describe(
+          "The day to look a year back from, YYYY-MM-DD; default the park's today",
+        ),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const today = getCurrentDateInTimezone(found.timezone);
+      const day = date ?? today;
+      const { sameDate, sameWeekday } = lastYearDays(day);
+      if (sameDate >= today) {
+        throw new McpToolError("That day a year back has not happened yet");
+      }
+      const past = [sameDate, sameWeekday].filter((d) => d < today).sort();
+      const [from, to] = [past[0], past[past.length - 1]];
+      // The calendar's own history path: a handful of past days, each cached for a day.
+      const { fromDate, toDate } = parseDateRange(from, to, {
+        timezone: found.timezone,
+      });
+      const calendar = await ctx
+        .get(CalendarService)
+        .buildCalendarResponse(found, fromDate, toDate, "none");
+      const days = new Map(
+        calendar.days.map((d) => [d.date, compactDay(d, found.timezone)]),
+      );
+      return {
+        park: found.name,
+        askedAbout: day,
+        sameDateLastYear: pastDay(days.get(sameDate)),
+        ...(sameWeekday !== sameDate &&
+          sameWeekday < today && {
+            sameWeekdayLastYear: pastDay(days.get(sameWeekday)),
+          }),
+      };
+    },
+  }),
+  tool({
+    name: "get_shows",
+    status: "rides",
+    description:
+      "One park's shows with their showtimes on a day (today by default), earliest first: " +
+      "name, land, status now (today only, where the park reports it), every start time, the " +
+      "duration where known, and season. Shows without a time that day are counted, not listed. " +
+      'For "when is the next show", "what\'s on today".',
+    input: z.object({
+      park: parkRef,
+      date: isoDay
+        .optional()
+        .describe("YYYY-MM-DD in the park's calendar; default today"),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const shows = ctx.get(ShowsService);
+      const today = getCurrentDateInTimezone(found.timezone);
+      const day = date ?? today;
+      const [all, live, starts] = await Promise.all([
+        shows.findByParkId(found.id),
+        day === today
+          ? shows.findCurrentStatusByPark(found.id)
+          : Promise.resolve(new Map<string, ShowLiveData>()),
+        shows.getShowtimeInstantsOnDate(found.id, found.timezone, day),
+      ]);
+      return {
+        park: found.name,
+        date: day,
+        ...showsOnDay(all, live, starts, found.timezone),
       };
     },
   }),
