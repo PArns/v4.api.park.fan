@@ -2,7 +2,6 @@ import { Test } from "@nestjs/testing";
 import { getDataSourceToken, getRepositoryToken } from "@nestjs/typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
-import { SiteAnalyticsCollectService } from "../site-analytics/site-analytics-collect.service";
 import { PageViewsService } from "./page-views.service";
 import { isBotUserAgent } from "./bot-user-agent.util";
 
@@ -15,9 +14,7 @@ const PARK_ID = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 
 /**
  * The "most read" rankings, served from the site statistic's `page_read`
- * events. What is pinned: the deprecated write records a `page_read` with the
- * post's key or the park's id, through the collector that holds the guards;
- * every ranking is per language, the admin's optionally; a window of N days
+ * events. What is pinned: every ranking is per language, the admin's optionally; a window of N days
  * is N UTC days with today among them; a merged park's reads count under the
  * survivor (the SQL joins `site_entity_merges`).
  */
@@ -26,13 +23,11 @@ describe("PageViewsService", () => {
   let query: jest.Mock;
   let parksFindBy: jest.Mock;
   let attractionsFind: jest.Mock;
-  let record: jest.Mock;
 
   beforeEach(async () => {
     query = jest.fn().mockResolvedValue([]);
     parksFindBy = jest.fn().mockResolvedValue([]);
     attractionsFind = jest.fn().mockResolvedValue([]);
-    record = jest.fn().mockResolvedValue(1);
     const moduleRef = await Test.createTestingModule({
       providers: [
         PageViewsService,
@@ -45,73 +40,9 @@ describe("PageViewsService", () => {
           provide: getRepositoryToken(Attraction),
           useValue: { find: attractionsFind },
         },
-        { provide: SiteAnalyticsCollectService, useValue: { record } },
       ],
     }).compile();
     service = moduleRef.get(PageViewsService);
-  });
-
-  describe("record", () => {
-    it("records a post's read as page_read with its key, through the collector's guards", async () => {
-      await expect(
-        service.record(
-          {
-            kind: "news",
-            key: "europa-park-voltron-2026",
-            locale: "de",
-            ip: "203.0.113.7",
-            userAgent: BROWSER,
-          },
-          NOW,
-        ),
-      ).resolves.toBe(true);
-      const [[hit], ip, userAgent, now] = record.mock.calls[0];
-      expect(hit).toMatchObject({
-        t: "event",
-        name: "page_read",
-        locale: "de",
-        pageType: "news",
-        props: { key: "europa-park-voltron-2026", kind: "news" },
-        propsKey: "key=europa-park-voltron-2026&kind=news",
-        entity: null,
-      });
-      expect([ip, userAgent, now]).toEqual(["203.0.113.7", BROWSER, NOW]);
-    });
-
-    it("records a park's read with its id as the entity", async () => {
-      await service.record(
-        {
-          kind: "park",
-          key: PARK_ID,
-          locale: "nl",
-          ip: null,
-          userAgent: PHONE,
-        },
-        NOW,
-      );
-      expect(record.mock.calls[0][0][0]).toMatchObject({
-        props: { kind: "park" },
-        propsKey: "kind=park",
-        entity: PARK_ID,
-      });
-    });
-
-    it("answers false for a read the collector did not count", async () => {
-      record.mockResolvedValueOnce(0);
-      await expect(
-        service.record(
-          {
-            kind: "article",
-            key: "a-guide",
-            locale: "en",
-            ip: null,
-            userAgent: BROWSER,
-          },
-          NOW,
-        ),
-      ).resolves.toBe(false);
-      expect(record.mock.calls[0][0][0].pageType).toBe("guide");
-    });
   });
 
   describe("top", () => {

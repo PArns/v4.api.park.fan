@@ -1,4 +1,8 @@
-import { REFERRER_RULES, classifyReferrer } from "./referrer.util";
+import {
+  AI_SOURCE_HOSTS,
+  REFERRER_RULES,
+  classifyReferrer,
+} from "./referrer.util";
 
 /**
  * Where a visit came from. What is pinned: a site is one name across its
@@ -60,6 +64,12 @@ describe("classifyReferrer", () => {
   it("names every site in lowercase, the way it is stored", () => {
     for (const rule of REFERRER_RULES) {
       expect(rule.site).toMatch(/^[a-z0-9.-]+$/);
+    }
+  });
+
+  it("files every `source` the beacon may send under the ai channel", () => {
+    for (const host of AI_SOURCE_HOSTS) {
+      expect(classifyReferrer(host).channel).toBe("ai");
     }
   });
 });

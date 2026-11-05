@@ -114,6 +114,25 @@ describe("validateHit", () => {
     }
   });
 
+  it("takes an AI assistant's `source` when no referrer came, and nothing else", () => {
+    expect(validateHit(pageview({ source: "chatgpt.com" }))).toMatchObject({
+      referrer: "chatgpt.com",
+    });
+    // The browser's own referrer wins.
+    expect(
+      validateHit(pageview({ referrer: "google.de", source: "chatgpt.com" })),
+    ).toMatchObject({ referrer: "google.de" });
+    for (const source of ["newsletter", "example.com", "ChatGPT.com", 7]) {
+      expect(validateHit(pageview({ source }))).toMatchObject({
+        referrer: null,
+      });
+    }
+    // The old shape, the AI host in `referrer`, still counts for one release.
+    expect(validateHit(pageview({ referrer: "chatgpt.com" }))).toMatchObject({
+      referrer: "chatgpt.com",
+    });
+  });
+
   it("counts a hit that still carries `viewport` or `campaign`, and keeps neither", () => {
     const stale = { viewport: "mobile", campaign: "summer-2026" };
     expect(validateHit(pageview({ ...stale, referrer: "google.com" }))).toEqual(

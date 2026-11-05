@@ -1120,9 +1120,12 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
    * Copies `page_view_days` (the most-read counter before it moved onto this
    * pipeline) into `site_events` as `page_read` rows, one per page, language
    * and day, once: the marker in `site_analytics_imports` is written in the
-   * same transaction, and a second instance waits on it and then skips. The
-   * old table stays until a later release drops it. A copied row has no path
-   * or device (`''`, `unknown`, `zz`), only what the old table knew.
+   * same transaction, and a second instance waits on it and then skips. A
+   * copied row has no path or device (`''`, `unknown`, `zz`), only what the
+   * old table knew. The table has no entity since PAR-1158; without it this
+   * returns 0.
+   * shortcut: kept only as the retry should the marker be missing; delete it
+   * once the owner has dropped the table (docs/troubleshooting/db-health-runbook.md).
    */
   async importPageViewDays(): Promise<number> {
     const exists: Array<{ table: string | null }> = await this.dataSource.query(

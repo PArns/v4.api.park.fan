@@ -12,6 +12,7 @@ import {
   isLocationDerivedEvent,
   type SiteLocale,
 } from "./site-analytics.constants";
+import { AI_SOURCE_HOSTS } from "./referrer.util";
 
 /**
  * What a hit may look like. There is no event schema: a new event, property
@@ -66,7 +67,10 @@ interface ValidHitBase {
 
 export interface ValidPageviewHit extends ValidHitBase {
   t: "pageview";
-  /** Counted only when this page view opens a visit. */
+  /**
+   * The external host the page view came from, else the AI assistant its
+   * `source` names. Counted only when this page view opens a visit.
+   */
   referrer: string | null;
 }
 
@@ -188,7 +192,8 @@ export function validateHit(raw: unknown): ValidHit | null {
   const base = { locale, path, pageType };
 
   if (t === "pageview") {
-    return { t, ...base, referrer: validReferrer(raw.referrer) };
+    const referrer = validReferrer(raw.referrer) ?? validSource(raw.source);
+    return { t, ...base, referrer };
   }
   if (t === "engagement") {
     const { seconds } = raw;
@@ -248,7 +253,15 @@ function pageRead(
  */
 function validReferrer(value: unknown): string | null {
   if (typeof value !== "string" || !REFERRER_PATTERN.test(value)) return null;
+  // shortcut: a dotless value is taken for a `utm_source` an older beacon put
+  // in `referrer`, and dropped; remove this rule one release after park.fan
+  // sends `source` instead (PAR-1158), when `referrer` is only ever a host.
   if (!value.includes(".")) return null;
   if (value === "park.fan" || value.endsWith(".park.fan")) return null;
   return value;
+}
+
+/** An AI assistant's host from `utm_source` ({@link AI_SOURCE_HOSTS}), or null. */
+function validSource(value: unknown): string | null {
+  return typeof value === "string" && AI_SOURCE_HOSTS.has(value) ? value : null;
 }

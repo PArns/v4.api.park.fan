@@ -29,6 +29,7 @@ refuses text. Body at most 16 KiB, as text or JSON (413), `{ v: 1, hits: [...] }
 | `path`     | all        | `^/(en\|de\|nl\|fr\|es\|it)(/[a-z0-9][a-z0-9._~-]{0,99}){0,8}$`, first segment = `locale`                                                    | hit dropped       |
 | `pageType` | all        | `^[a-z][a-z0-9_]{0,31}$`                                                                                                                     | hit dropped       |
 | `referrer` | page view  | `^[a-z0-9][a-z0-9.-]{0,99}$` with a dot in it, not park.fan: the host of an external referrer                                                | referrer dropped  |
+| `source`   | page view  | one of the AI assistants' hosts in `AI_SOURCE_HOSTS` (`referrer.util.ts`), read only without a `referrer`                                    | source dropped    |
 | `name`     | event      | `^[a-z][a-z0-9_]{1,47}$`                                                                                                                     | hit dropped       |
 | `props`    | event      | up to 8 in key order; key `^[a-z][a-z0-9_]{0,31}$`; value a finite number, a boolean or a string `^[\p{L}\p{N}][\p{L}\p{N} ._:/+#-]{0,119}$` | that prop dropped |
 | `entity`   | event      | lowercase UUID of a park, ride, show or restaurant                                                                                           | entity dropped    |
@@ -43,10 +44,14 @@ page's row (`seconds`) and, while the visit's key knows how the visit began, to 
 only. The browser sends no time: the seconds land in the hour the report arrives in.
 
 A hit carries no device class and no window width. `referrer` is the external host of
-`document.referrer`; without one, the beacon reads `utm_source` and sends it as `referrer` only when
-it is the host of an AI assistant that `REFERRER_RULES` puts in the `ai` channel (`chatgpt.com`,
-`perplexity.ai`, …; the frontend's `AI_SOURCE_HOSTS`), because ChatGPT tags its links that way and
-often sends no referrer. No other query parameter is read, `utm_campaign` included. The beacon sends
+`document.referrer`. `source` is the page's `utm_source`, sent only when it is the host of an AI
+assistant that `REFERRER_RULES` puts in the `ai` channel (`chatgpt.com`, `perplexity.ai`, …; the
+API's and the frontend's `AI_SOURCE_HOSTS`, kept equal), because ChatGPT tags its links that way and
+often sends no referrer. The visit is classified by `referrer` and, without one, by `source`; any other
+`source` is dropped and the page view kept. No other query parameter is read, `utm_campaign` included.
+Until park.fan sends `source` (PAR-1158), its beacon puts that host in `referrer`, which classifies the
+same; a `referrer` without a dot is taken for a stray `utm_source` and dropped. That rule goes one
+release after the frontend switched (a `shortcut:` in `validReferrer`). The beacon sends
 a page view only once the page is on screen (not a background tab, not prerendered), and nothing at
 all for a load nobody looked at or for a tab whose User-Agent names iOS or Android while
 `navigator.userAgentData` reports another system. A field the table does not list is ignored, so a tab that still runs an older script and
@@ -815,8 +820,8 @@ its window once, so a year's took about four times the 90-day figure.
   A row written to the hourly tables after its day was rolled up is not in the daily rows.
 - Hours of the days before `site_visitor_hours` existed have `visitors: null`.
 - Page views and events cannot be filtered by how their visit began (see Reports).
-- The referrer is the host the browser reports, or an AI assistant's host from `utm_source` when the
-  browser reports none. Other `utm_` values are not read, so a newsletter or an ad is a `referral`
+- The referrer is the host the browser reports, or an AI assistant's host from `source`
+  (`utm_source`) when the browser reports none. Other `utm_` values are not read, so a newsletter or an ad is a `referral`
   under its own host, or `direct` when the mail client or the app sends none.
 - With Redis down the guards, visits and visitors are off and an instance holds at most 5000 fields in
   memory; past that, hits are dropped and counted.
