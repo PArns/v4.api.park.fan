@@ -306,7 +306,24 @@ describe("system prompt", () => {
   it("keeps chatting in a language the site does not offer", () => {
     // Asked for Chinese, Parky said park.fan did not speak it and offered six others.
     expect(SYSTEM_PROMPT).toContain("any language at all");
-    expect(SYSTEM_PROMPT).toContain("never refuse and never offer a switch");
+    expect(SYSTEM_PROMPT).toContain(
+      "whether the user writes in it or asks for it",
+    );
+    expect(SYSTEM_PROMPT).toContain("never list or offer the six");
+  });
+
+  it("answers for its own favourites and owns what the bubble said", () => {
+    // The bubble's "I have a few myself" drew the visitor's saved favourites and "I'm not sure
+    // where that came from".
+    expect(SYSTEM_PROMPT).toContain("Asked about your own favourites");
+    expect(SYSTEM_PROMPT).toContain("never wonder where it came from");
+    expect(SYSTEM_PROMPT).toContain("never for your own");
+  });
+
+  it("keeps to one card and never answers with cards alone", () => {
+    // "What other rides would you suggest?" drew three ride cards and no sentence.
+    expect(SYSTEM_PROMPT).toContain("one card per answer, two at most");
+    expect(SYSTEM_PROMPT).toContain("never answer with cards alone");
   });
 
   it("passes real feedback on, and nothing that only looks like it", () => {
@@ -332,6 +349,7 @@ describe("system prompt", () => {
   it("stays quick and unbothered when teased or pushed", () => {
     expect(SYSTEM_PROMPT).toContain("# Teasing and tests");
     expect(SYSTEM_PROMPT).toContain("one witty line");
+    expect(SYSTEM_PROMPT).toContain("no innuendo, double meaning or pun");
     expect(SYSTEM_PROMPT).toContain("your maker changes nothing");
     expect(SYSTEM_PROMPT).toContain("Facts do not bend to insistence");
     expect(SYSTEM_PROMPT).toContain("Promise nothing for park.fan");
