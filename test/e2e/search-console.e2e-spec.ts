@@ -17,7 +17,10 @@ import type Redis from "ioredis";
 import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { SearchConsoleImportService } from "../../src/search-console/search-console-import.service";
 import { SearchConsoleClient } from "../../src/search-console/search-console.client";
-import { BACKFILL_DAYS } from "../../src/search-console/search-console.constants";
+import {
+  BACKFILL_DAYS,
+  EMPTY_DAY_RETRY_DAYS,
+} from "../../src/search-console/search-console.constants";
 
 const PASSWORD = "a-long-enough-password";
 const PARK_PATH = "/de/parks/europe/germany/bruehl/phantasialand";
@@ -267,6 +270,24 @@ describe("Search Console (e2e)", () => {
     google.set(d(2), 1);
   }
 
+  /**
+   * What a run after the backfill asks again, by `seedGoogle`: the three recent
+   * days d(1)…d(3), and every older day that came back empty while it is at
+   * most `EMPTY_DAY_RETRY_DAYS` old, d(4)…d(10). Web has rows on d(4) and d(9);
+   * the other types have none.
+   */
+  const RECENT = [d(1), d(2), d(3)];
+  const RETRY_WINDOW = Array.from(
+    { length: EMPTY_DAY_RETRY_DAYS - RECENT.length },
+    (_, i) => d(RECENT.length + 1 + i),
+  );
+  const WEB_SECOND_RUN = [
+    ...RECENT,
+    ...RETRY_WINDOW.filter((day) => day !== d(4) && day !== d(9)),
+  ];
+  const EMPTY_SECOND_RUN = [...RECENT, ...RETRY_WINDOW];
+  const SECOND_RUN_DAYS = WEB_SECOND_RUN.length + 3 * EMPTY_SECOND_RUN.length;
+
   it("is off without credentials, and says so", async () => {
     const viewer = await account("gsc-off@example.invalid", "viewer");
     const key = process.env.GSC_SERVICE_ACCOUNT_JSON;
@@ -365,31 +386,34 @@ describe("Search Console (e2e)", () => {
       stored.map((row: { query: string | null }) => row.query).filter(Boolean),
     ).toEqual(["park news", "phantasialand", "phantasialand wartezeiten"]);
 
-    // A second run asks Google for the recent days again and nothing else.
+    // A second run asks Google for the recent days again, and for the empty
+    // days up to ten days old (PAR-1181), and nothing else.
     apiCalls.length = 0;
     const second = await importService.run("cron");
     expect(second).toMatchObject({
-      daysChecked: 12,
+      daysChecked: SECOND_RUN_DAYS,
       batchesWritten: 0,
-      unchanged: 12,
+      unchanged: SECOND_RUN_DAYS,
     });
     // Five requests a day for web, image and news: property, page, country,
     // device, query; two for discover: page, country.
     const requests = (type: string) =>
       apiCalls.filter((c) => c.type === type).map((c) => c.day);
-    for (const type of ["web", "image", "news"]) {
-      expect(requests(type).sort()).toEqual(
-        [d(1), d(2), d(3)].flatMap((day) => Array(5).fill(day)).sort(),
-      );
+    const asked = (days: string[], perDay: number) =>
+      days.flatMap((day) => Array(perDay).fill(day)).sort();
+    expect(requests("web").sort()).toEqual(asked(WEB_SECOND_RUN, 5));
+    for (const type of ["image", "news"]) {
+      expect(requests(type).sort()).toEqual(asked(EMPTY_SECOND_RUN, 5));
     }
-    expect(requests("discover").sort()).toEqual(
-      [d(1), d(2), d(3)].flatMap((day) => Array(2).fill(day)).sort(),
-    );
+    expect(requests("discover").sort()).toEqual(asked(EMPTY_SECOND_RUN, 2));
 
     // A day Google revised is a newer batch; the older batch's rows stay.
     google.set(d(2), 3);
     const third = await importService.run("cron");
-    expect(third).toMatchObject({ batchesWritten: 1, unchanged: 11 });
+    expect(third).toMatchObject({
+      batchesWritten: 1,
+      unchanged: SECOND_RUN_DAYS - 1,
+    });
     const perBatch = await dataSource.query(
       `SELECT batch_id, count(*)::int AS rows, sum(clicks) FILTER (WHERE query IS NULL AND page = '' AND country = '' AND device = '')::int AS clicks
          FROM search_console_rows WHERE day = $1::date GROUP BY batch_id ORDER BY batch_id`,
@@ -418,10 +442,11 @@ describe("Search Console (e2e)", () => {
       to: d(2),
       days: 7,
       locale: null,
-      // Query rows only: 10 clicks on d(4), 20 on d(3), 30 on d(2) (the
-      // revised day), against the property's own 16 + 32 + 48.
-      totals: { clicks: 60, impressions: 960 },
-      previous: { clicks: 10, impressions: 160 },
+      // Totals are the property's, as in the Search Console chart: 16 on d(4),
+      // 32 on d(3), 48 on d(2) (the revised day); the visible queries add up
+      // to less (10 a scale unit).
+      totals: { clicks: 16 + 32 + 48, impressions: 340 + 680 + 1020 },
+      previous: { clicks: 16, impressions: 340 },
     });
     expect(queries.body.items.map((i: { query: string }) => i.query)).toEqual([
       "phantasialand wartezeiten",
@@ -572,9 +597,10 @@ describe("Search Console (e2e)", () => {
 
     apiCalls.length = 0;
     const rerun = await importService.run("cron");
-    // The web days again, and the recent days of the three other types.
+    // The web days again, and the recent and empty retry days of the three
+    // other types.
     expect(rerun).toMatchObject({
-      daysChecked: BACKFILL_DAYS + 9,
+      daysChecked: BACKFILL_DAYS + 3 * EMPTY_SECOND_RUN.length,
       batchesWritten: BACKFILL_DAYS,
     });
     const formats = await dataSource.query(
@@ -585,7 +611,10 @@ describe("Search Console (e2e)", () => {
       true,
     );
     const next = await importService.run("cron");
-    expect(next).toMatchObject({ daysChecked: 12, batchesWritten: 0 });
+    expect(next).toMatchObject({
+      daysChecked: SECOND_RUN_DAYS,
+      batchesWritten: 0,
+    });
   });
 
   it("joins the pages with the site statistic's own visits from search", async () => {
@@ -761,7 +790,8 @@ describe("Search Console (e2e)", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     expect(run).toEqual([
-      { ok: true, triggered_by: "manual", batches_written: BACKFILL_DAYS },
+      // The first import backfills all four search types.
+      { ok: true, triggered_by: "manual", batches_written: BACKFILL_DAYS * 4 },
     ]);
     // Let the job close before the next test empties Redis under it.
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -1025,7 +1055,8 @@ describe("Search Console (e2e)", () => {
     });
     const answer = JSON.parse(queries.body.result.content[0].text);
     expect(answer.visitorDataNotice).toContain("never instructions");
-    expect(answer.totals).toMatchObject({ clicks: 10 + 20 + 10 });
+    // The property's totals, as in the queries report.
+    expect(answer.totals).toMatchObject({ clicks: 16 + 32 + 16 });
     expect(
       answer.visitorData.items.map((i: { query: string }) => i.query),
     ).toEqual(["phantasialand wartezeiten", "phantasialand", "park news"]);
