@@ -21,6 +21,8 @@ export function chatSummary(chat: AssistantConversation) {
     tokens: chat.totalTokens,
     costUsd: Number(chat.costUsd),
     rating: chat.rating,
+    // Absent for chats from before the version was stored.
+    ...(chat.promptVersion !== null && { promptVersion: chat.promptVersion }),
     // Absent unless Parky closed the chat for abuse.
     ...(chat.endedAt && {
       endedByParky: { at: chat.endedAt, reason: chat.endedReason },
@@ -50,6 +52,9 @@ export function chatMessage(message: AssistantMessage) {
         cacheRead: message.cacheReadTokens,
       },
       costUsd: Number(message.costUsd),
+      ...(message.promptVersion !== null && {
+        promptVersion: message.promptVersion,
+      }),
     }),
     ...(message.rating !== null && { rating: message.rating }),
   };

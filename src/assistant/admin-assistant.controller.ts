@@ -43,6 +43,7 @@ const listQuery = z.object({
   page: z.coerce.number().int().min(1).max(1000).default(1),
   rating: z.coerce.number().int().min(-1).max(1).optional(),
   q: z.string().trim().min(2).max(100).optional(),
+  promptVersion: z.coerce.number().int().min(1).max(32767).optional(),
   status: z.enum(FEEDBACK_STATUSES).optional(),
 });
 
@@ -139,8 +140,8 @@ export class AdminAssistantController {
   @Get("conversations")
   @ApiOperation({ summary: "Stored chats, newest first" })
   conversations(@Query() query: unknown) {
-    const { page, rating, q } = parse(listQuery, query);
-    return this.records.listConversations({ page, rating, q });
+    const { page, rating, q, promptVersion } = parse(listQuery, query);
+    return this.records.listConversations({ page, rating, q, promptVersion });
   }
 
   @Get("conversations/:id")

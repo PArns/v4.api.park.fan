@@ -47,6 +47,10 @@ export class AssistantConversation {
   @Column({ type: "smallint", default: 0 })
   rating: number;
 
+  /** The prompt version of the chat's latest answer, so the list can filter by it. */
+  @Column({ type: "smallint", nullable: true })
+  promptVersion: number | null;
+
   /** When Parky closed the chat for sustained abuse (`end_chat`); it takes no question after. */
   @Column({ type: "timestamptz", nullable: true })
   endedAt: Date | null;
