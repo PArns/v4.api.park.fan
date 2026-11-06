@@ -464,8 +464,12 @@ makes the stored key unreadable: enter it again.
 
 Chats (`assistant_conversations`, `assistant_messages`) keep no address. `visitorKey` is a hash of
 the address with the day and the master key, which tells one visitor's chats of a day apart and
-nothing more. They are deleted after 90 days by the nightly `assistant` queue job
-(`prune-conversations`, 04:50). Feedback (`site_feedback`) is kept until it is deleted by hand,
+nothing more. They are deleted after 7 days (`CONVERSATION_RETENTION_DAYS`), ended chats included,
+by the nightly `assistant` queue job (`prune-conversations`, 04:50), in batches of 2,000. Each
+batch first adds what it deletes to `assistant_day_stats`: per UTC day only counts of chats,
+messages, tokens, cost and thumbs up and down, no text and no visitor key, so `GET
+/v1/admin/assistant/stats` still covers 30 days (live rows plus those sums). The daily token budget
+lives in Redis and reads no chat row. Feedback (`site_feedback`) is kept until it is deleted by hand,
 e-mail included; its link to a chat leads nowhere once the chat is pruned. `source` says whether
 the visitor sent it from the form (`form`, every row from before the column) or Parky filed it from
 the chat (`chat`, with `kind`). The admin, park.fan's pages and the admin MCP show every text of a

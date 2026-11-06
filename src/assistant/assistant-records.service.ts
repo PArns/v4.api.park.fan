@@ -11,7 +11,10 @@ import {
 } from "./entities/site-feedback.entity";
 
 /** How long chats are kept; feedback is kept until it is deleted by hand. */
-export const CONVERSATION_RETENTION_DAYS = 90;
+export const CONVERSATION_RETENTION_DAYS = 7;
+
+/** Chats one prune transaction deletes. */
+const PRUNE_BATCH = 2000;
 
 /** Rows per page of the admin's lists; the MCP tools ask for fewer. */
 export const RECORDS_PAGE_SIZE = 50;
@@ -190,24 +193,45 @@ export class AssistantRecordsService {
     return (result.affected ?? 0) > 0;
   }
 
-  /** Chats, cost and ratings of the last 30 days, per UTC day, and open feedback. */
+  /**
+   * Chats, cost and ratings of the last 30 days, per UTC day, and open feedback: the live rows of
+   * the last week plus the daily sums `pruneConversations` kept of the deleted ones.
+   */
   async stats() {
     const [days, ratings, openFeedback] = await Promise.all([
       this.conversations.query(
-        `SELECT to_char(date_trunc('day', "createdAt" AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
-                count(*)::int AS chats,
-                coalesce(sum("messageCount"), 0)::int AS messages,
-                coalesce(sum("totalTokens"), 0)::bigint::text AS tokens,
-                coalesce(sum("costUsd"), 0)::float AS "costUsd"
-           FROM assistant_conversations
-          WHERE "createdAt" > now() - interval '30 days'
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day,
+                sum(chats)::int AS chats,
+                sum(messages)::int AS messages,
+                sum(tokens)::bigint::text AS tokens,
+                sum(cost)::float AS "costUsd"
+           FROM (
+             SELECT ("createdAt" AT TIME ZONE 'UTC')::date AS day, count(*) AS chats,
+                    coalesce(sum("messageCount"), 0) AS messages,
+                    coalesce(sum("totalTokens"), 0) AS tokens,
+                    coalesce(sum("costUsd"), 0) AS cost
+               FROM assistant_conversations
+              WHERE "createdAt" > now() - interval '30 days'
+              GROUP BY 1
+             UNION ALL
+             SELECT day, chats, messages, tokens, "costUsd"
+               FROM assistant_day_stats
+              WHERE day > (now() AT TIME ZONE 'UTC')::date - 30 AND chats > 0
+           ) AS both_halves
           GROUP BY 1 ORDER BY 1`,
       ),
       this.messages.query(
-        `SELECT count(*) FILTER (WHERE rating = 1)::int AS up,
-                count(*) FILTER (WHERE rating = -1)::int AS down
-           FROM assistant_messages
-          WHERE "createdAt" > now() - interval '30 days'`,
+        `SELECT sum(up)::int AS up, sum(down)::int AS down
+           FROM (
+             SELECT count(*) FILTER (WHERE rating = 1) AS up,
+                    count(*) FILTER (WHERE rating = -1) AS down
+               FROM assistant_messages
+              WHERE "createdAt" > now() - interval '30 days'
+             UNION ALL
+             SELECT coalesce(sum(up), 0), coalesce(sum(down), 0)
+               FROM assistant_day_stats
+              WHERE day > (now() AT TIME ZONE 'UTC')::date - 30
+           ) AS both_halves`,
       ),
       this.feedback.countBy({ status: "new" }),
     ]);
@@ -227,15 +251,62 @@ export class AssistantRecordsService {
     return (result.affected ?? 0) > 0;
   }
 
-  /** Deletes chats past the retention; their messages go with them. */
+  /**
+   * Deletes chats past the retention, ended ones included; their messages go with them (the
+   * foreign key cascades) and feedback keeps its link as it is. Each batch first adds what it
+   * deletes to `assistant_day_stats`, in the same transaction, so the 30-day statistic neither
+   * loses nor double-counts a chat. Batches keep the first run after a shorter retention, weeks
+   * of chats at once, from holding one long lock.
+   */
   async pruneConversations(): Promise<number> {
-    const result = await this.conversations
-      .createQueryBuilder()
-      .delete()
-      .where(`"createdAt" < now() - make_interval(days => :days)`, {
-        days: CONVERSATION_RETENTION_DAYS,
-      })
-      .execute();
-    return result.affected ?? 0;
+    let removed = 0;
+    for (;;) {
+      const batch = await this.conversations.manager.transaction(
+        async (manager) => {
+          const rows: Array<{ id: string }> = await manager.query(
+            `SELECT id FROM assistant_conversations
+              WHERE "createdAt" < now() - make_interval(days => $1)
+              ORDER BY "createdAt" LIMIT $2
+              FOR UPDATE SKIP LOCKED`,
+            [CONVERSATION_RETENTION_DAYS, PRUNE_BATCH],
+          );
+          if (rows.length === 0) return 0;
+          const ids = rows.map((row) => row.id);
+          await manager.query(
+            `INSERT INTO assistant_day_stats (day, chats, messages, tokens, "costUsd")
+             SELECT ("createdAt" AT TIME ZONE 'UTC')::date, count(*),
+                    coalesce(sum("messageCount"), 0), coalesce(sum("totalTokens"), 0),
+                    coalesce(sum("costUsd"), 0)
+               FROM assistant_conversations WHERE id = ANY($1::uuid[])
+              GROUP BY 1
+             ON CONFLICT (day) DO UPDATE SET
+               chats = assistant_day_stats.chats + EXCLUDED.chats,
+               messages = assistant_day_stats.messages + EXCLUDED.messages,
+               tokens = assistant_day_stats.tokens + EXCLUDED.tokens,
+               "costUsd" = assistant_day_stats."costUsd" + EXCLUDED."costUsd"`,
+            [ids],
+          );
+          await manager.query(
+            `INSERT INTO assistant_day_stats (day, up, down)
+             SELECT ("createdAt" AT TIME ZONE 'UTC')::date,
+                    count(*) FILTER (WHERE rating = 1), count(*) FILTER (WHERE rating = -1)
+               FROM assistant_messages
+              WHERE "conversationId" = ANY($1::uuid[]) AND rating IS NOT NULL
+              GROUP BY 1
+             ON CONFLICT (day) DO UPDATE SET
+               up = assistant_day_stats.up + EXCLUDED.up,
+               down = assistant_day_stats.down + EXCLUDED.down`,
+            [ids],
+          );
+          await manager.query(
+            `DELETE FROM assistant_conversations WHERE id = ANY($1::uuid[])`,
+            [ids],
+          );
+          return ids.length;
+        },
+      );
+      removed += batch;
+      if (batch < PRUNE_BATCH) return removed;
+    }
   }
 }
