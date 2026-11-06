@@ -113,6 +113,8 @@ export class AssistantRecordsService {
   async listConversations(params: {
     rating?: number;
     q?: string;
+    /** Only chats whose latest answer ran on this prompt version. */
+    promptVersion?: number;
     page: number;
     pageSize?: number;
   }) {
@@ -124,6 +126,11 @@ export class AssistantRecordsService {
       .skip((params.page - 1) * pageSize);
     if (params.rating !== undefined)
       query.andWhere("c.rating = :rating", { rating: params.rating });
+    if (params.promptVersion !== undefined) {
+      query.andWhere("c.promptVersion = :promptVersion", {
+        promptVersion: params.promptVersion,
+      });
+    }
     if (params.q) {
       query.andWhere(
         `EXISTS (SELECT 1 FROM assistant_messages m

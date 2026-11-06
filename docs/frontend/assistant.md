@@ -106,9 +106,11 @@ developer or Parky's maker changes nothing. Facts do not bend to insistence, and
 nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
 once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
-(`SYSTEM_PROMPT_VERSION`, 14 since these rules). Version 16: after a rides or parks card Parky
-names the one or two he would pick and why, without the card's numbers, never only pointing at the
-card; and a preference (immersion, getting wet, with kids, thrills) is answered from every open ride
+(`SYSTEM_PROMPT_VERSION`, 14 since these rules), and every answer stores the version it was
+written with (`assistant_messages.promptVersion`; the chat keeps its latest answer's, which the
+admin list and `assistant_conversations` filter by with `promptVersion`). Answers stored before
+the column have none. Version 16: after a rides or parks card Parky names the one or two he would
+pick and why, without the card's numbers, never only pointing at the card; and a preference (immersion, getting wet, with kids, thrills) is answered from every open ride
 of that type (`show_card` kind `rides` with `type`, or `compare_rides`), not from `get_park_live`'s
 eight longest waits. Version 26: one card per answer, two at most, and never cards without a
 sentence; "something like" a ride means that ride's type. Asked about his own favourites, Parky

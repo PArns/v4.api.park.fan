@@ -17,6 +17,7 @@ import { AssistantPageService } from "./assistant-page.service";
 import {
   chatContext,
   SYSTEM_PROMPT,
+  SYSTEM_PROMPT_VERSION,
   type LookedUpEntity,
 } from "./system-prompt";
 import { repeatsLastQuestion } from "./assistant-junk";
@@ -418,6 +419,7 @@ export class AssistantChatService {
         outputTokens: usage.output,
         cacheReadTokens: usage.cacheRead,
         costUsd: cost.toFixed(6),
+        promptVersion: SYSTEM_PROMPT_VERSION,
       }),
     );
     await this.conversations
@@ -427,6 +429,7 @@ export class AssistantChatService {
         messageCount: () => `"messageCount" + 2`,
         totalTokens: () => `"totalTokens" + ${tokens}`,
         costUsd: () => `"costUsd" + ${cost.toFixed(6)}`,
+        promptVersion: SYSTEM_PROMPT_VERSION,
       })
       .where("id = :id", { id: conversation.id })
       .execute();

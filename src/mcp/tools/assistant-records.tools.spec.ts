@@ -25,6 +25,7 @@ const chatRow = {
   totalTokens: 8504,
   costUsd: "0.001300",
   rating: -1,
+  promptVersion: 26,
   createdAt: AT,
   updatedAt: AT,
 };
@@ -69,6 +70,7 @@ function records() {
                 cacheReadTokens: 0,
                 costUsd: "0",
                 rating: null,
+                promptVersion: null,
                 createdAt: AT,
               },
               {
@@ -84,6 +86,7 @@ function records() {
                 cacheReadTokens: 7908,
                 costUsd: "0.001300",
                 rating: -1,
+                promptVersion: 26,
                 createdAt: AT,
               },
             ],
@@ -119,6 +122,7 @@ describe("assistant_conversations tool", () => {
     expect(service.listConversations).toHaveBeenCalledWith({
       rating: undefined,
       q: undefined,
+      promptVersion: undefined,
       page: 1,
       pageSize: 20,
     });
@@ -131,6 +135,7 @@ describe("assistant_conversations tool", () => {
           id: CHAT,
           costUsd: 0.0013,
           rating: -1,
+          promptVersion: 26,
           startPath: "/en",
           firstQuestion: INJECTION,
           adminUrl: expect.stringMatching(
@@ -139,6 +144,15 @@ describe("assistant_conversations tool", () => {
         }),
       ],
     });
+  });
+
+  it("filters by the prompt version of the latest answer", async () => {
+    const { service } = await run(assistantConversationsTool, {
+      promptVersion: 26,
+    });
+    expect(service.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ promptVersion: 26 }),
+    );
   });
 
   it("never hands out the visitor or session hash", async () => {
@@ -169,6 +183,7 @@ describe("assistant_conversation tool", () => {
       toolCalls: [{ name: "find_parks", input: { query: "Phantasialand" } }],
       tokens: { input: 8128, output: 376, cacheRead: 7908 },
       costUsd: 0.0013,
+      promptVersion: 26,
       rating: -1,
     });
   });

@@ -17,8 +17,9 @@ export const assistantConversationsTool = defineMcpTool({
   description:
     "Chats visitors had with Parky, park.fan's chat assistant, newest first: when, the site " +
     "language, how many messages, tokens and cost in USD, the rating (-1 when any answer got a " +
-    "thumbs down, 1 when only thumbs up, 0 unrated), the page the chat was opened on and the " +
-    "first question. Filter by rating or by a word in any message. Read a whole chat with " +
+    "thumbs down, 1 when only thumbs up, 0 unrated), the prompt version of its latest answer, " +
+    "the page the chat was opened on and the first question. Filter by rating, by prompt " +
+    "version or by a word in any message. Read a whole chat with " +
     `assistant_conversation and its id. Chats are kept ${CONVERSATION_RETENTION_DAYS} days. ` +
     CHAT_DATA_DESCRIPTION,
   input: {
@@ -37,6 +38,15 @@ export const assistantConversationsTool = defineMcpTool({
       .describe(
         "A word or phrase any message of the chat contains (case-insensitive)",
       ),
+    promptVersion: z
+      .number()
+      .int()
+      .min(1)
+      .max(32767)
+      .optional()
+      .describe(
+        "Only chats whose latest answer ran on this version of Parky's prompt",
+      ),
     page: z.number().int().min(1).max(1000).default(1).describe("Page, from 1"),
     pageSize: z
       .number()
@@ -46,10 +56,10 @@ export const assistantConversationsTool = defineMcpTool({
       .default(20)
       .describe("Chats per page"),
   },
-  async handler({ rating, q, page, pageSize }, ctx) {
+  async handler({ rating, q, promptVersion, page, pageSize }, ctx) {
     const list = await ctx
       .get(AssistantRecordsService)
-      .listConversations({ rating, q, page, pageSize });
+      .listConversations({ rating, q, promptVersion, page, pageSize });
     return withVisitorData(
       { total: list.total, page: list.page, pageSize: list.pageSize },
       {

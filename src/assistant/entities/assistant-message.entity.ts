@@ -56,6 +56,10 @@ export class AssistantMessage {
   @Column({ type: "smallint", nullable: true })
   rating: number | null;
 
+  /** The `SYSTEM_PROMPT_VERSION` an answer was written with; null on questions and older answers. */
+  @Column({ type: "smallint", nullable: true })
+  promptVersion: number | null;
+
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;
 }

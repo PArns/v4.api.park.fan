@@ -56,7 +56,11 @@ import {
   lookedUpIds,
   type ChatEvent,
 } from "./assistant-chat.service";
-import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import {
+  chatContext,
+  SYSTEM_PROMPT,
+  SYSTEM_PROMPT_VERSION,
+} from "./system-prompt";
 
 function repository<T extends object>(saved: Partial<T>) {
   return {
@@ -81,11 +85,13 @@ describe("AssistantChatService.answer", () => {
     } as unknown as AssistantSettingsService;
     const posts = { post: jest.fn().mockResolvedValue({ title: "A post" }) };
     const moduleRef = { get: () => posts } as unknown as ModuleRef;
+    const messages = repository<AssistantMessage>({ id: "message-1" });
+    const saveMessage = jest.spyOn(messages, "save");
     const service = new AssistantChatService(
       settings,
       moduleRef,
       repository<AssistantConversation>({}),
-      repository<AssistantMessage>({ id: "message-1" }),
+      messages,
       {
         subject: () => Promise.resolve(null),
       } as unknown as AssistantPageService,
@@ -125,6 +131,13 @@ describe("AssistantChatService.answer", () => {
       messageId: "message-1",
     });
     expect(settings.addTokens).toHaveBeenCalledWith(440, "session-hash");
+    // The admin tells answers of one prompt from another's by it.
+    expect(saveMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "assistant",
+        promptVersion: SYSTEM_PROMPT_VERSION,
+      }),
+    );
 
     // One breakpoint per request, on the last block, so each round reads the one before cached.
     for (const request of requests) {
