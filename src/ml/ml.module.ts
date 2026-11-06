@@ -11,6 +11,7 @@ import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
 import { MLAlertService } from "./services/ml-alert.service";
 import { MLAnomalyDetectionService } from "./services/ml-anomaly-detection.service";
 import { PredictionLeadSnapshotService } from "./services/prediction-lead-snapshot.service";
+import { HourlyLeadSnapshotService } from "./services/hourly-lead-snapshot.service";
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { MLController } from "./controllers/ml.controller";
 import { MLHealthController } from "./controllers/ml-health.controller";
@@ -21,6 +22,7 @@ import {
   ParkOccupancy,
   PredictionAccuracy,
   PredictionLeadSnapshot,
+  HourlyLeadSnapshot,
 } from "./entities";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { AttractionAccuracyStats } from "./entities/attraction-accuracy-stats.entity";
@@ -54,6 +56,7 @@ import { BullModule } from "@nestjs/bull";
       ParkOccupancy,
       PredictionAccuracy,
       PredictionLeadSnapshot,
+      HourlyLeadSnapshot,
       ForecastAccuracyProfile,
       AttractionAccuracyStats,
       MLFeatureStats,
@@ -78,6 +81,7 @@ import { BullModule } from "@nestjs/bull";
     MLAlertService,
     MLAnomalyDetectionService,
     PredictionLeadSnapshotService,
+    HourlyLeadSnapshotService,
     ForecastAccuracyService,
     ForecastErrorBreakdownService,
   ],

@@ -13,6 +13,7 @@ import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.e
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { HourlyLeadSnapshotService } from "./hourly-lead-snapshot.service";
 
 /**
  * Coverage for PredictionAccuracyService — drives the
@@ -74,6 +75,8 @@ describe("PredictionAccuracyService", () => {
     del: jest.fn(),
   };
 
+  const hourlyLeadSnapshots = { record: jest.fn().mockResolvedValue(0) };
+
   beforeEach(async () => {
     redisStore.clear();
     jest.clearAllMocks();
@@ -96,6 +99,10 @@ describe("PredictionAccuracyService", () => {
         },
         { provide: getRepositoryToken(QueueData), useValue: queueDataRepo },
         { provide: REDIS_CLIENT, useValue: redis },
+        {
+          provide: HourlyLeadSnapshotService,
+          useValue: hourlyLeadSnapshots,
+        },
       ],
     }).compile();
 
@@ -347,6 +354,27 @@ describe("PredictionAccuracyService", () => {
       expect(options).toMatchObject({
         conflictPaths: ["attractionId", "targetTime"],
       });
+    });
+
+    it("hands the same rows to the hourly lead snapshot, and survives its failure (PAR-658)", async () => {
+      const prediction = {
+        attractionId: "a-1",
+        createdAt: new Date(),
+        predictedTime: new Date(),
+        predictedWaitTime: 30,
+        modelVersion: "v1",
+        predictionType: "hourly",
+      } as unknown as WaitTimePrediction;
+      const served = [{ wait: 40, source: "pcn" as const }];
+      hourlyLeadSnapshots.record.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(
+        service.recordPredictions([prediction], served),
+      ).resolves.toBe(1);
+      expect(hourlyLeadSnapshots.record).toHaveBeenCalledWith(
+        [prediction],
+        served,
+      );
     });
 
     it("stores the served value and its source beside the raw one (PAR-854)", async () => {

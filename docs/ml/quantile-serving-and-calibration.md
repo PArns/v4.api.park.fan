@@ -274,7 +274,8 @@ baseline, only when it is > 0. Rules: [Unified crowd levels](../rules/crowd-leve
 ## Known limits
 
 - **Known limit:** the `h2-6` bucket never gets a factor and the longer buckets stay raw, because
-  `prediction_accuracy` keeps only the last writer per slot; the lead-preserving source is PAR-658.
+  `prediction_accuracy` keeps only the last writer per slot. The lead-preserving source is
+  [hourly lead snapshots](hourly-lead-snapshots.md) (PAR-658); the fit does not read it yet.
 - **Known limit:** at ≥ 12 h lead the median itself runs −37.5 min on mid and −63.4 min on busy
   slots, a level error the clamped factor no longer hides (PAR-1140).
 - The daily band seam at day 60 is PAR-167, above.

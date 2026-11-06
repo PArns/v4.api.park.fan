@@ -46,9 +46,9 @@ flag; an entity table never gets it (a missing one is a bug, and skipping it wou
 
 ## Hypertables come from one list
 
-Production has ten compressed hypertables. The merge writes to seven of them: `queue_data`,
+Production has eleven compressed hypertables. The merge writes to eight of them: `queue_data`,
 `forecast_data`, `weather_data`, `show_live_data`, `restaurant_live_data`, `queue_data_aggregates`,
-`wait_time_predictions`. The site statistic's three (`site_pageviews`, `site_events`,
+`wait_time_predictions`, `hourly_lead_snapshots`. The site statistic's three (`site_pageviews`, `site_events`,
 `site_analytics_flushes`) are insert-only: a merge records `loser → winner` in the plain table
 `site_entity_merges` and the reports resolve it when they read
 ([site statistic](../frontend/site-analytics.md#storage-insert-only-no-dead-tuples)).
@@ -71,8 +71,9 @@ Two consequences that are easy to miss:
    `timescaledb_information.dimensions` (name, column, interval compared in Postgres) and the list's own
    length first.
 
-Compression settings are fields on the same constant: only `wait_time_predictions` has a `segmentBy`,
-as in production. Segmenting by a column the merge rewrites would make the test easier than production.
+Compression settings are fields on the same constant: among the merge's tables only
+`wait_time_predictions` (`attractionId`) and `hourly_lead_snapshots` (`attraction_id`) have a
+`segmentBy`, as in production. Segmenting by a column the merge rewrites would make the test easier than production.
 
 ## Guards a new dependency must pass
 

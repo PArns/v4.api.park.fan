@@ -114,5 +114,6 @@ At short lead "the wait now" predicts the wait an hour from now better than the 
 
 ## Known limits
 
-- **Known limit:** CatBoost keeps only the newest hourly row per slot, so it cannot be compared
-  with PCN at longer leads; a forward-written per-origin record is PAR-658.
+- **Known limit:** `prediction_accuracy` keeps only the newest hourly row per slot, so CatBoost
+  and PCN at longer leads are compared from [hourly lead snapshots](hourly-lead-snapshots.md)
+  (PAR-658), which record both at 6 h, 24 h and 36 h from their deploy on. No reader does yet.
