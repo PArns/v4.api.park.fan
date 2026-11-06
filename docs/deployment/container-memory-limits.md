@@ -13,7 +13,7 @@ The production host (celestrial) has 29 GB RAM and 32 GB swap.
 | `nf-service`                              | 14 g             | ">10 g at dataset build" for the full panel; the chunked fit (10 parks) is ~1–2 GB              |
 | `pcn-service`                             | 8 g              | not measured                                                                                     |
 | `postgres`                                | none             | 0.51 GB private RSS at the 2026-10-12 OOM, plus shared buffers                                   |
-| `api`                                     | none             | V8 heap 6 GB: the Dockerfile's `--max-old-space-size=6144` overrides the compose `NODE_OPTIONS` 4096 |
+| `api`                                     | none             | V8 heap capped at 6 GB by `NODE_OPTIONS` in the compose file, the only heap setting |
 | `redis`                                   | none             | `maxmemory 2gb` + overhead                                                                       |
 | Linear runner (host systemd user unit)    | `MemoryMax=18G`  | 15.3 GB (28 jest workers)                                                                        |
 
@@ -37,7 +37,14 @@ done
 
 `memory.peak` is the high-water mark since the container started.
 
+The API's heap is set in one place, `NODE_OPTIONS=--max-old-space-size=6144` in
+`docker-compose.production.yml`. Node lets a command-line flag override `NODE_OPTIONS`, so a
+`--max-old-space-size` in the Dockerfile's `CMD` would silently win again; it used to (6144 over the
+compose file's 4096). 6 GB is the value that has run in production since 2026-04, so the change moved
+no limit. The container has no `mem_limit`. One added later needs about 2 GB above the heap for
+buffers, compiled code and thread stacks, so 8 g for a 6 GB heap; at 6 g the cgroup kills the process
+before V8 reports a heap error.
+
 Open work: new limits from one night of `memory.peak` readings (measured peak + ~25 %, Postgres
-reserved rather than capped, the API's two heap settings reconciled) are PAR-1148, which holds the
-recommended values and the options. Even with them, the time separation stays the real protection;
+reserved rather than capped) are PAR-1148, which holds the recommended values and the options. Even with them, the time separation stays the real protection;
 limits only decide which container dies.

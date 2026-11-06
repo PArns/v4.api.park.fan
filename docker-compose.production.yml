@@ -28,6 +28,25 @@ services:
       # (docs/troubleshooting/timescaledb-lock-queues.md).
       - "-c"
       - "log_lock_waits=on"
+      # The server log goes to files in $PGDATA/log, on the bind mount, so it
+      # outlives the container; docker logs keeps only the startup lines and
+      # is gone with the container. One file per weekday and hour, each
+      # truncated when the name comes round again a week later: Postgres never
+      # deletes a log file, so the cycling names are what bound the disk use
+      # to one week of output (docs/deployment/coolify.md#the-postgres-server-log).
+      - "-c"
+      - "logging_collector=on"
+      - "-c"
+      - "log_directory=log"
+      - "-c"
+      - "log_filename=postgresql-%a-%H.log"
+      - "-c"
+      - "log_rotation_age=1h"
+      # Size rotation would reopen the same hour's file and cap nothing.
+      - "-c"
+      - "log_rotation_size=0"
+      - "-c"
+      - "log_truncate_on_rotation=on"
     ports:
       - "${DB_PORT:-5433}:5432"
     environment:
@@ -294,7 +313,10 @@ services:
       # users; "false" stops the API calling nf-service /chronos/forecast at all.
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}
       - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=4096
+      # The API's only heap setting: a node flag in the Dockerfile's CMD would
+      # override it. api has no mem_limit; one added later needs ~2 GB above the
+      # heap for buffers and native memory (docs/deployment/container-memory-limits.md).
+      - NODE_OPTIONS=--max-old-space-size=6144
       # Always use volume path so .env cannot override with ./data/... (which is not mounted)
       - GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
       - GEOIP_MAXMIND_ACCOUNT_ID=${GEOIP_MAXMIND_ACCOUNT_ID}

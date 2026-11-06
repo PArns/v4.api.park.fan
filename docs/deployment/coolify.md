@@ -20,12 +20,12 @@ deploy. Open it before changing the compose file, an environment variable or the
 
 | Service       | Image / build                       | Limits and settings                                                                                                                                       | Port                    |
 | ------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `postgres`    | `timescale/timescaledb:latest-pg18` | `shm_size: 512m` (parallel-query shared memory), `max_parallel_workers_per_gather=2`, `log_lock_waits=on`                                                  | `${DB_PORT:-5433}:5432` |
+| `postgres`    | `timescale/timescaledb:latest-pg18` | `shm_size: 512m` (parallel-query shared memory), `max_parallel_workers_per_gather=2`, `log_lock_waits=on`, server log to files in `$PGDATA/log` ([below](#the-postgres-server-log)) | `${DB_PORT:-5433}:5432` |
 | `redis`       | `redis:8.4-alpine`                  | `--maxmemory 2gb --maxmemory-policy volatile-lru`, AOF on, RDB snapshots off                                                                              | internal                |
 | `ml-service`  | `./ml-service` (CatBoost)           | `mem_limit: 20g`, `ML_WORKERS` default 2 (each extra worker eats the 06:00 training margin)                                                               | 8000 internal           |
 | `nf-service`  | `./nf-service` (TFT, Chronos)       | `mem_limit: 14g`, `shm_size: 2gb`; never trigger its `/train` during ml-service's 06:00 training                                                          | 8000 internal           |
 | `pcn-service` | [`./pcn-service`](../../pcn-service/README.md) (intraday nowcast) | `mem_limit: 8g`, `shm_size: 2gb`; trains 08:30 UTC so GPU peaks do not overlap                                                                             | 8000 internal           |
-| `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB (the Dockerfile's `--max-old-space-size=6144` overrides the compose `NODE_OPTIONS` 4096); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
+| `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB, set only by `NODE_OPTIONS=--max-old-space-size=6144` (a flag in the Dockerfile's `CMD` would override it); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
 | `bull-board`  | `venatum/bull-board:latest`         | Reads Bull keys under `BULL_PREFIX` (default `parkfan`)                                                                                                    | `3001:3000`             |
 
 Those limits only fit the host because the nightly peaks are spaced in time
@@ -82,6 +82,36 @@ address is set outside this repo. What the containers log, and through which dri
 docker inspect -f '{{.HostConfig.LogConfig}}' <api-container>
 docker ps --format '{{.Names}}\t{{.Command}}' | grep -iE 'cloudflared|proxy|traefik'
 ```
+
+## The Postgres server log
+
+Postgres writes its server log (slow statements over 500 ms, lock waits, errors) through
+`logging_collector` into `$PGDATA/log`, which is `/data/parkfan/postgres/18/docker/log` on the host. The
+directory sits on the bind mount, so a deploy that replaces the container keeps it. `docker logs` on
+the postgres container shows only the lines before the collector starts.
+
+| Setting                    | Value                  | Effect                                                    |
+| -------------------------- | ---------------------- | --------------------------------------------------------- |
+| `log_filename`             | `postgresql-%a-%H.log` | one file per weekday and hour, 168 names                  |
+| `log_rotation_age`         | `1h`                   | a new file every hour                                     |
+| `log_truncate_on_rotation` | `on`                   | the file a week old is emptied when its name comes round |
+| `log_rotation_size`        | `0`                    | no size rotation: it would reopen the same hour's file    |
+
+Postgres never deletes a log file, so the cycling names are the bound: the log reaches back seven days
+and holds one week of output. At the rate measured on 2026-10-11 (30 MB in 7 h 27 min, about 4 MB an
+hour) that is about 0.7 GB. A burst only fills the hour's file; it never adds files. The directory lies
+inside `$PGDATA`, so `pg_basebackup` copies it into the nightly backup ([backups](backup.md)), compressed.
+A restart or a new container appends to the current hour's file, so the previous container's last lines
+stay in it.
+
+```bash
+pg=$(docker ps --format '{{.Names}}' | grep postgres | grep -v coolify)
+docker exec "$pg" sh -c 'ls -lt $PGDATA/log | head'
+docker exec "$pg" sh -c 'ls -tr $PGDATA/log/postgresql-*.log | xargs cat' | grep -A1 'duration:' | tail -100
+```
+
+The settings are `-c` flags on the postgres `command:`, so changing them recreates the Postgres
+container on the next deploy.
 
 ## Environment
 

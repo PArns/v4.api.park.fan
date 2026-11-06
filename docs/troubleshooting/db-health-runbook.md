@@ -207,8 +207,12 @@ Since the 2026-10 incidents each service also sets `application_name` (`parkfan-
 `log_lock_waits=on` logs every lock wait over 1 s with both pids.
 
 ```bash
-docker logs "$(docker ps --format '{{.Names}}' | grep postgres | grep -v coolify)" 2>&1 | grep -A1 'duration:' | tail -100
+pg=$(docker ps --format '{{.Names}}' | grep postgres | grep -v coolify)
+docker exec "$pg" sh -c 'ls -tr $PGDATA/log/postgresql-*.log | xargs cat' | grep -A1 'duration:' | tail -100
 ```
+
+The log lives in files under `$PGDATA/log` and reaches back seven days, across deploys
+([the Postgres server log](../deployment/coolify.md#the-postgres-server-log)).
 
 Change the threshold without a restart: `ALTER SYSTEM SET log_min_duration_statement = 1000; SELECT
 pg_reload_conf();` (`-1` disables it).

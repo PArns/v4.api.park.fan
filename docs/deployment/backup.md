@@ -16,7 +16,7 @@ it also runs while app containers are down.
 | PostgreSQL (`/data/parkfan/postgres`) | `pg_basebackup -Ft -z -Xs` of the whole cluster, run inside the postgres container, streamed as `parkfan/db/<date>/parkfan_<datetime>.tar.gz` | `BACKUP_RETENTION_DAYS` (7) days |
 | CatBoost models (`/data/parkfan/ml-models`) | the newest `catboost_<version>.cbm` + `metadata_<version>.pkl` pairs, chosen by version name, plus `active_version.txt` | `BACKUP_ML_MODELS_KEEP` (7) versions |
 | nf-service models (`/data/parkfan/nf-models`) | the whole directory as `parkfan/nf-models/nf_models_<datetime>.tar.gz`                 | 3 archives                 |
-| pcn-service models (`/data/parkfan/pcn-models`) | **not backed up**                                                                   | —                          |
+| pcn-service models (`/data/parkfan/pcn-models`) | the whole directory (`pcn_<park>.pt` per park, overwritten by each 08:30 UTC training) as `parkfan/pcn-models/pcn_models_<datetime>.tar.gz` | 3 archives |
 | Redis, GeoIP, logs                    | not backed up: cache and state rebuilt by the app, GeoLite2 is downloaded again, logs are ephemeral | —              |
 
 CatBoost versions are pruned by name (`vYYYYMMDD_HHMM` sorts chronologically), not by mtime: on the NAS
@@ -37,7 +37,7 @@ echo "0 3 * * * root /opt/parkfan/backup.sh >> /var/log/parkfan-backup.log 2>&1"
 
 `backup.env` sets the NAS (`BACKUP_NAS_HOST`, `_SHARE`, `_USER`, `_PASSWORD`) and the database role
 (`DB_USERNAME`, `DB_PASSWORD`; `DB_HOST`, `DB_PORT` (default 5433), `DB_DATABASE` are optional). Paths and
-retention have defaults (`POSTGRES_DATA_DIR`, `ML_MODELS_DIR`, `NF_MODELS_DIR`, `BACKUP_RETENTION_DAYS`,
+retention have defaults (`POSTGRES_DATA_DIR`, `ML_MODELS_DIR`, `NF_MODELS_DIR`, `PCN_MODELS_DIR`, `BACKUP_RETENTION_DAYS`,
 `BACKUP_ML_MODELS_KEEP`). Another job that needs the NAS (the TFT forecast export in
 [nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#tft-retention)) mounts it the same way
 with these credentials.
@@ -64,3 +64,8 @@ rehearsed.
 **CatBoost model.** Copy `catboost_<version>.cbm` and `metadata_<version>.pkl` back to
 `/data/parkfan/ml-models/` and write the version into `active_version.txt`; ml-service workers load it on
 their next request.
+
+**nf-service and pcn-service models.** Extract the newest `nf_models_<datetime>.tar.gz` into
+`/data/parkfan/nf-models/` (then restart nf-service) or `pcn_models_<datetime>.tar.gz` into
+`/data/parkfan/pcn-models/` (pcn-service reads a park's model file at each forecast). Not rehearsed either; a restore drill on a throwaway instance is open work in
+PAR-1111.
