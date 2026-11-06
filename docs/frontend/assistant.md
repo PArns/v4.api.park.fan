@@ -110,7 +110,12 @@ once. Answers open differently each time, never with "Ha". The prompt's version 
 names the one or two he would pick and why, without the card's numbers, never only pointing at the
 card; and a preference (immersion, getting wet, with kids, thrills) is answered from every open ride
 of that type (`show_card` kind `rides` with `type`, or `compare_rides`), not from `get_park_live`'s
-eight longest waits.
+eight longest waits. Version 26: one card per answer, two at most, and never cards without a
+sentence; "something like" a ride means that ride's type. Asked about his own favourites, Parky
+answers in character and leaves `get_favorites` to the visitor's saved ones; a line the visitor
+quotes from the bubble on the page ("I have a few myself"), which the chat never sees, he owns
+instead of wondering where it came from. A sexual remark gets no innuendo or pun, only a plain line
+back to parks.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -119,7 +124,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 34 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 37 short chats (`assistant-eval.fixtures.ts`: page, planner,
 alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -141,7 +146,9 @@ else in the page's. Asked for the site in another of them, or after a yes to his
 to switch, he calls `switch_language`: the widget opens the same page in that language with the
 chat open, and the answer is written in it. The server allows it only to one of the six other than
 the page's, once per answer and only in the first round, before any tool result was read, so a post,
-a glossary entry or a name from a lookup cannot ask for it.
+a glossary entry or a name from a lookup cannot ask for it. In a language the site lacks (Chinese,
+Polish …), written or asked for, Parky chats in it from then on and says once that the pages stay in
+the page's language and the browser can translate them, with no apology and no list of the six.
 
 Real feedback about park.fan (a bug, a wrong figure, a missing park or ride, a feature wish, praise
 or criticism with substance) Parky passes on with `submit_feedback` and says so in a sentence. The
