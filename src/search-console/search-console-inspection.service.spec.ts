@@ -24,6 +24,15 @@ describe("normalizeInspectionUrl", () => {
     expect(normalizeInspectionUrl("park.fan/en")).toBe("https://park.fan/en");
   });
 
+  it("drops a trailing slash, so /x/ and /x are one cache entry", () => {
+    expect(normalizeInspectionUrl("https://www.park.fan/de/parks/")).toBe(
+      "https://park.fan/de/parks",
+    );
+    expect(normalizeInspectionUrl("https://park.fan/")).toBe(
+      "https://park.fan/",
+    );
+  });
+
   it("refuses another host and text that is not a URL", () => {
     expect(() => normalizeInspectionUrl("https://example.com/de")).toThrow(
       InspectionInputError,

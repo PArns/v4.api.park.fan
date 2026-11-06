@@ -453,6 +453,7 @@ describe("DataQualityMonitorService", () => {
         .mockImplementation((key: string) =>
           Promise.resolve(hash[key] ?? [null, null, null]),
         ),
+      hgetall: jest.fn().mockResolvedValue({}),
     });
 
     it("groups a queue's failures by job name and keeps the newest reason", async () => {

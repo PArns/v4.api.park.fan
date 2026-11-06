@@ -13,6 +13,29 @@ export interface JobHistoryClient {
     withScores: "WITHSCORES",
   ): Promise<string[]>;
   hmget(key: string, ...fields: string[]): Promise<Array<string | null>>;
+  hgetall(key: string): Promise<Record<string, string>>;
+}
+
+/**
+ * A queue's hash of job name → when a run of that name last completed (ms),
+ * kept by {@link recordSuccess}. Bull's `completed` set keeps only the last 100
+ * runs of a queue, so a daily job sharing a queue with a 15-minute one drops
+ * out of it within a day and its last failure read as open again.
+ */
+export const LAST_SUCCESS_KEY = "last-success";
+
+/** Notes a completed run in {@link LAST_SUCCESS_KEY}; never throws. */
+export async function recordSuccess(
+  client: { hset(key: string, field: string, value: string): Promise<unknown> },
+  key: QueueKey,
+  name: string,
+  finishedAt: number,
+): Promise<void> {
+  try {
+    await client.hset(key(LAST_SUCCESS_KEY), name, String(finishedAt));
+  } catch {
+    // Only the open-failure count reads it; the completed set still answers.
+  }
 }
 
 /** Where one queue keeps its sets and job hashes: `<prefix>:<queue>:<type or id>`. */
@@ -55,9 +78,8 @@ export async function recentFailures(
 
 /**
  * When each job name of a queue last completed after `after` (ms), read off
- * Bull's `completed` ZSET (scored by the finish time). The set keeps the last
- * 100 runs per queue, so on a busy queue an old success may be gone; that
- * errs towards a failure counting as open, never towards hiding one.
+ * Bull's `completed` ZSET (scored by the finish time) and the queue's
+ * {@link LAST_SUCCESS_KEY} hash, which still knows a run the set has trimmed.
  */
 export async function newestSuccessByName(
   client: JobHistoryClient,
@@ -76,6 +98,13 @@ export async function newestSuccessByName(
     const [name] = await client.hmget(key(completed[i]), "name");
     const jobName = name ?? "unknown";
     newest.set(jobName, Math.max(newest.get(jobName) ?? 0, doneAt));
+  }
+  const recorded = await client.hgetall(key(LAST_SUCCESS_KEY));
+  for (const [name, value] of Object.entries(recorded ?? {})) {
+    const doneAt = Number(value);
+    if (doneAt > after) {
+      newest.set(name, Math.max(newest.get(name) ?? 0, doneAt));
+    }
   }
   return newest;
 }
