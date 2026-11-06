@@ -16,7 +16,11 @@ interface Run {
  * by finish time, a hash per job holding its name, and `getFailed` newest
  * first, as Bull answers it.
  */
-function fakeQueue(failed: Run[] = [], completed: Run[] = []): Queue {
+function fakeQueue(
+  failed: Run[] = [],
+  completed: Run[] = [],
+  lastSuccess: Record<string, string> = {},
+): Queue {
   const prefix = "parkfan:q";
   const byScore = (runs: Run[]) => [...runs].sort((a, b) => a.at - b.at);
   const jobs = new Map(
@@ -42,6 +46,9 @@ function fakeQueue(failed: Run[] = [], completed: Run[] = []): Queue {
           .flatMap((run) => [run.id, String(run.at)]);
       }),
       hmget: jest.fn(async (key: string) => [jobs.get(key)?.name ?? null]),
+      hgetall: jest.fn(async (key: string) =>
+        key === `${prefix}:last-success` ? lastSuccess : {},
+      ),
     },
     getActiveCount: jest.fn().mockResolvedValue(0),
     getWaitingCount: jest.fn().mockResolvedValue(0),
@@ -144,6 +151,24 @@ describe("AdminQueueStatusService", () => {
       failedOpen: 1,
     });
     expect(of("wait-times")).toMatchObject({ failed: 0, failedOpen: 0 });
+  });
+
+  it("settles a failure by the recorded last success when Bull trimmed that run from its completed set", async () => {
+    // pcn-shadow: the daily training's success is pushed out of the last 100
+    // completed runs by the 15-minute forecast within a day.
+    const trainedAt = NOW - 20 * 60 * 60 * 1000;
+    const pcn = fakeQueue(
+      [{ id: "f9", name: "train-pcn", at: NOW - 6 * DAY }],
+      [{ id: "c9", name: "forecast-pcn", at: NOW - 60 * 1000 }],
+      { "train-pcn": String(trainedAt) },
+    );
+    const counts = await build(pcn).counts();
+    expect(counts.find((q) => q.name === "holidays")).toMatchObject({
+      failed: 1,
+      failedOpen: 0,
+    });
+    const [settled] = (await build(pcn).failures("holidays", 1)) ?? [];
+    expect(settled.succeededSince).toBe(new Date(trainedAt).toISOString());
   });
 
   it("says when a job failed and since when it has run again", async () => {
