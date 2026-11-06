@@ -342,6 +342,29 @@ export type FunFactsMachineMarks = Partial<
   Record<FunFactLocale, { from: FunFactLocale; sourceHash: string }>
 >;
 
+/**
+ * The winner's machine marks after a merge inherited `columns` from the loser: each inherited
+ * fun-fact locale takes the loser's mark along, so a translation stays a translation. Null when
+ * nothing changes.
+ */
+export function inheritedMachineMarks(
+  winner: FunFactsMachineMarks | null | undefined,
+  loser: FunFactsMachineMarks | null | undefined,
+  columns: readonly string[],
+): FunFactsMachineMarks | null {
+  const marks: FunFactsMachineMarks = { ...(winner ?? {}) };
+  let changed = false;
+  for (const column of columns) {
+    const locale = funFactLocaleOf(column);
+    const mark = locale ? loser?.[locale] : undefined;
+    if (locale && mark) {
+      marks[locale] = mark;
+      changed = true;
+    }
+  }
+  return changed ? marks : null;
+}
+
 /** The locale a fun-fact column holds, or null for any other column. */
 export function funFactLocaleOf(column: string): FunFactLocale | null {
   const found = Object.entries(FUN_FACT_COLUMNS).find(

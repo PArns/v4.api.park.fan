@@ -53,5 +53,5 @@ model (`ASSISTANT_MODEL`) with his stored key, counted against his daily token b
   first, so a locale an editor typed or a source changed meanwhile is left alone.
 - **An emptied source** takes the machine text made from it along; hand-typed text stays.
 - No key stored: logged, nothing translated. Budget spent: the job throws and the queue retries.
-- A machine mark is not on the merge list, so after a park merge an inherited translation counts as
-  hand-typed. An undo of a fun-fact change neither re-translates nor clears marks.
+- A park merge that inherits a fun-fact locale takes its machine mark along
+  (`inheritedMachineMarks`). An undo of a fun-fact change neither re-translates nor clears marks.

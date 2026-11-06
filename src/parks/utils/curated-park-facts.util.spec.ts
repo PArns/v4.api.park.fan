@@ -2,6 +2,7 @@ import {
   abbreviationsProblem,
   CURATED_PARK_COLUMNS,
   CURATED_PARK_DB_COLUMNS,
+  inheritedMachineMarks,
   resolveCuratedPark,
   resolveEarlyEntry,
   resolveNoWaitTimesReason,
@@ -366,5 +367,26 @@ describe("resolveEarlyEntry", () => {
         curatedEarlyEntryMinutesOffPeak: 7.5,
       }),
     ).toEqual({ hasEarlyEntry: true });
+  });
+});
+
+describe("inheritedMachineMarks", () => {
+  const mark = (from: "en" | "de") => ({ from, sourceHash: "h" });
+
+  it("carries the loser's mark with each fun-fact locale the merge inherited", () => {
+    expect(
+      inheritedMachineMarks(
+        { nl: mark("en") },
+        { de: mark("en"), fr: mark("en") },
+        ["curatedFunFactsDe", "curatedWebsite"],
+      ),
+    ).toEqual({ nl: mark("en"), de: mark("en") });
+  });
+
+  it("changes nothing when no inherited locale was the machine's", () => {
+    expect(
+      inheritedMachineMarks(null, { fr: mark("en") }, ["curatedFunFactsDe"]),
+    ).toBeNull();
+    expect(inheritedMachineMarks(null, null, [])).toBeNull();
   });
 });
