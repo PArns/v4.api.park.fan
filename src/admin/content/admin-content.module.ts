@@ -15,6 +15,9 @@ import { AdminRedirectsController } from "./admin-redirects.controller";
 import { AdminRideProfileService } from "./admin-ride-profile.service";
 import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 import { ParkSeasonsModule } from "../../parks/park-seasons.module";
+import { AssistantModule } from "../../assistant/assistant.module";
+import { FunFactTranslationService } from "./fun-fact-translation.service";
+import { FunFactTranslationProcessor } from "./fun-fact-translation.processor";
 
 /**
  * The editing half of the admin.
@@ -41,6 +44,8 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
     // keys repeatable jobs by queue name.
     BullModule.registerQueue({ name: "manual-metadata" }),
     ParkSeasonsModule,
+    // Parky's key, model and daily budget, for the fun-fact translation.
+    AssistantModule,
   ],
   controllers: [AdminContentController, AdminRedirectsController],
   providers: [
@@ -48,6 +53,8 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
     AdminRedirectService,
     AdminRideProfileService,
     GlossaryTermIdsService,
+    FunFactTranslationService,
+    FunFactTranslationProcessor,
   ],
   exports: [AdminCurationService],
 })

@@ -13,6 +13,10 @@ import {
 } from "class-validator";
 import { RIDE_ALERT_KIND_REOPEN } from "../entities/ride-alert.entity";
 
+/** The wait a wait alert may watch for, in minutes; Parky's `set_ride_alert` checks the same. */
+export const RIDE_ALERT_THRESHOLD_MIN = 1;
+export const RIDE_ALERT_THRESHOLD_MAX = 240;
+
 /**
  * Every field carries a class-validator decorator for the same reason as
  * `PushSubscribeDto` — the global `ValidationPipe({ whitelist: true,
@@ -54,13 +58,13 @@ export class CreateRideAlertDto {
       "Re-sending for an attraction already watched replaces the threshold " +
       "and re-arms the alert — a changed number is a fresh ask, not a no-op.",
     example: 20,
-    minimum: 1,
-    maximum: 240,
+    minimum: RIDE_ALERT_THRESHOLD_MIN,
+    maximum: RIDE_ALERT_THRESHOLD_MAX,
   })
   @ValidateIf((o: CreateRideAlertDto) => o.kind !== RIDE_ALERT_KIND_REOPEN)
   @IsInt()
-  @Min(1)
-  @Max(240)
+  @Min(RIDE_ALERT_THRESHOLD_MIN)
+  @Max(RIDE_ALERT_THRESHOLD_MAX)
   thresholdMinutes?: number;
 }
 

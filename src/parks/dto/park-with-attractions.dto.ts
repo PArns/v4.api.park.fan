@@ -38,7 +38,9 @@ import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
 import { resolveWorksPeriod } from "../../attractions/utils/curated-out-of-service.util";
 import {
   resolveCuratedPark,
+  resolveFunFacts,
   resolveParkInfo,
+  type FunFacts,
   type ParkInfo,
 } from "../utils/curated-park-facts.util";
 import type { Attraction } from "../../attractions/entities/attraction.entity";
@@ -770,6 +772,18 @@ export class ParkWithAttractionsDto {
   })
   info: ParkInfo | null;
 
+  @ApiProperty({
+    description:
+      "Hand-curated fun facts for Parky to tell, keyed by locale (en, de, nl, " +
+      "fr, es, it), each a list of short sentences in that language. A locale " +
+      "nobody wrote is absent, never filled from another language; the whole " +
+      "field is absent when no locale has any.",
+    required: false,
+    nullable: true,
+    example: { en: ["…"], de: ["…"] },
+  })
+  funFacts: FunFacts | null;
+
   @ApiProperty({ description: "Country name", required: false, nullable: true })
   country: string | null;
 
@@ -971,6 +985,7 @@ export class ParkWithAttractionsDto {
       slug: park.slug,
       url: buildParkUrl(park),
       info: resolveParkInfo(park),
+      funFacts: resolveFunFacts(park),
 
       country: park.country || null,
       city: park.city || null,

@@ -3,7 +3,35 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
+import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
+import { AssistantPostsClient } from "./assistant-posts.client";
+
+describe("get_post", () => {
+  const providers = (post: jest.Mock) =>
+    new Map<unknown, unknown>([[AssistantPostsClient, { post }]]);
+
+  it("passes the question on for the matching sections", async () => {
+    const post = jest.fn(async () => ({ text: "…", sections: ["Tickets"] }));
+    await run(
+      "get_post",
+      { slug: "europa-park-guide", question: "fast pass worth it" },
+      providers(post),
+      "de",
+    );
+    expect(post).toHaveBeenCalledWith(
+      "de",
+      "europa-park-guide",
+      "fast pass worth it",
+    );
+  });
+
+  it("still takes a slug alone", async () => {
+    const post = jest.fn(async () => ({ text: "…" }));
+    await run("get_post", { slug: "europa-park-guide" }, providers(post));
+    expect(post).toHaveBeenCalledWith("en", "europa-park-guide", undefined);
+  });
+});
 
 describe("get_best_days", () => {
   it("ranks only rated open days, an unknown one never the quietest", async () => {
@@ -59,8 +87,16 @@ import {
   runAssistantTool,
   showsCard,
   showsOnDay,
+  reopeningOf,
+  reopenSearchFrom,
+  storedToolInput,
+  CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { FavoritesService } from "../../favorites/favorites.service";
+import { AssistantRateLimitService } from "../assistant-rate-limit.service";
+import { ShowsService } from "../../shows/shows.service";
+import { formatInTimeZone } from "date-fns-tz";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 
@@ -207,12 +243,14 @@ describe("get_shows", () => {
     expect(result).toEqual({
       shows: [
         {
+          id: "b",
           name: "Stunt Show",
           status: "OPERATING",
           showtimes: ["2026-11-05T10:00:00.000Z", "2026-11-05T14:00:00.000Z"],
           durationMinutes: 25,
         },
         {
+          id: "a",
           name: "Night Parade",
           land: "Main Street",
           status: null,
@@ -550,6 +588,48 @@ describe("compare_rides across a country", () => {
   });
 });
 
+describe("get_park_live › funFacts", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const withFacts = (funFacts: unknown) =>
+    jest
+      .spyOn(getParkTool, "handler")
+      .mockResolvedValue({ name: "Efteling", funFacts });
+
+  it("hands the model the chat language's list", async () => {
+    withFacts({ en: ["English fact"], nl: ["Nederlands feitje"] });
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "nl",
+    );
+    expect(json.funFacts).toEqual(["Nederlands feitje"]);
+  });
+
+  it("falls back to English when that language has none", async () => {
+    withFacts({ en: ["English fact"] });
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "de",
+    );
+    expect(json.funFacts).toEqual(["English fact"]);
+  });
+
+  it("leaves the key out when the park has none", async () => {
+    withFacts(null);
+    const { json } = await run(
+      "get_park_live",
+      { park: PARK_ID },
+      new Map(),
+      "de",
+    );
+    expect("funFacts" in json).toBe(false);
+  });
+});
+
 describe("show_card kind rides with a type", () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -865,5 +945,713 @@ describe("calendar and tiles cards", () => {
       expect(result.isError).toBe(true);
       expect(result.action).toBeUndefined();
     }
+  });
+});
+
+describe("planner tools", () => {
+  const dayAhead = (days: number) =>
+    new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  const DATE = dayAhead(3);
+  const SHOW_INSTANT = `${DATE}T13:30:00.000Z`;
+  // The park's clock for that instant, whichever side of a DST switch the test runs on.
+  const SHOW_START = formatInTimeZone(
+    new Date(SHOW_INSTANT),
+    "Europe/Berlin",
+    "HH:mm",
+  );
+  const planner = {
+    days: [
+      {
+        park: { slug: "phantasialand", name: "Phantasialand" },
+        date: DATE,
+        entries: [
+          { id: "r1", kind: "ride" as const, name: "Taron", rideSlug: "taron" },
+          { id: "b1", kind: "block" as const, name: "Lunch", start: "12:00" },
+        ],
+      },
+    ],
+  };
+  const providers = new Map<unknown, unknown>([
+    [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+    [
+      ShowsService,
+      {
+        findByParkId: jest.fn(async () => [
+          { id: "s1", slug: "stunt-show", name: "Stunt Show" },
+        ]),
+        getShowtimeInstantsOnDate: jest.fn(
+          async () => new Map([["s1", [SHOW_INSTANT]]]),
+        ),
+      },
+    ],
+  ]);
+  const call = (
+    name: string,
+    input: Record<string, unknown>,
+    plan: typeof planner | { days: [] } | null = planner,
+  ) =>
+    runAssistantTool(
+      name,
+      { park: PARK_ID, date: DATE, ...input },
+      { ...context(providers), planner: plan },
+      jest.fn(),
+    );
+  const plannerPark = {
+    slug: "phantasialand",
+    name: "Phantasialand",
+    geo: { continent: "europe", country: "germany", city: "bruehl" },
+    timezone: "Europe/Berlin",
+  };
+
+  it.each([
+    [
+      "plan_remove",
+      { entryIds: ["r1"] },
+      { type: "planner_remove", entryIds: ["r1"] },
+    ],
+    [
+      "plan_move",
+      { entryId: "b1", toIndex: 0 },
+      { type: "planner_move", entryId: "b1", toIndex: 0 },
+    ],
+    [
+      "plan_update_block",
+      { entryId: "b1", start: "12:30", durationMinutes: 45 },
+      {
+        type: "planner_update_block",
+        entryId: "b1",
+        start: "12:30",
+        durationMinutes: 45,
+      },
+    ],
+    [
+      "plan_add_show",
+      { showSlug: "stunt-show", start: SHOW_START },
+      { type: "planner_add_show", showSlug: "stunt-show", start: SHOW_START },
+    ],
+    [
+      "plan_set_party",
+      { prefs: { riderHeightCm: 120, avoidWet: true } },
+      {
+        type: "planner_set_prefs",
+        prefs: { riderHeightCm: 120, avoidWet: true },
+      },
+    ],
+    [
+      "plan_mark_done",
+      { entryIds: ["r1"] },
+      { type: "planner_mark_done", entryIds: ["r1"], done: true },
+    ],
+    ["plan_clear_day", { confirmed: true }, { type: "planner_clear_day" }],
+    ["plan_undo", {}, { type: "planner_undo" }],
+  ])("%s asks the planner for its change", async (name, input, action) => {
+    const result = await call(name, input);
+    expect(result.isError).toBeFalsy();
+    expect(result.action).toEqual({ park: plannerPark, date: DATE, ...action });
+  });
+
+  it("plan_trip reserves each day once, in order", async () => {
+    const later = dayAhead(5);
+    const result = await call("plan_trip", { dates: [later, DATE, later] });
+    expect(result.action).toEqual({
+      type: "planner_reserve_days",
+      park: plannerPark,
+      dates: [DATE, later],
+    });
+  });
+
+  it("plan_share needs a plan", async () => {
+    expect((await call("plan_share", {})).action).toEqual({
+      type: "planner_share",
+    });
+    expect((await call("plan_share", {}, { days: [] })).isError).toBe(true);
+  });
+
+  it.each([
+    ["an entry id the plan does not hold", "plan_remove", { entryIds: ["x9"] }],
+    ["a day that is not planned", "plan_undo", { date: dayAhead(9) }],
+    ["a ride as a block", "plan_update_block", { entryId: "r1", label: "x" }],
+    ["a block with nothing to change", "plan_update_block", { entryId: "b1" }],
+    ["a place past the end", "plan_move", { entryId: "r1", toIndex: 2 }],
+    [
+      "a time the show does not start",
+      "plan_add_show",
+      { showSlug: "stunt-show", start: "15:00" },
+    ],
+    [
+      "an unknown show",
+      "plan_add_show",
+      { showSlug: "parade", start: SHOW_START },
+    ],
+    ["clearing without a yes", "plan_clear_day", {}],
+    ["empty prefs", "plan_set_party", { prefs: {} }],
+  ])("refuses %s", async (_case, name, input) => {
+    const result = await call(name, input);
+    expect(result.isError).toBe(true);
+    expect(result.action).toBeUndefined();
+  });
+
+  it("refuses a change without a planner snapshot", async () => {
+    expect(
+      (await call("plan_remove", { entryIds: ["r1"] }, null)).isError,
+    ).toBe(true);
+  });
+});
+
+describe("alert tools", () => {
+  const RIDE_ID = "22222222-2222-4222-8222-222222222222";
+  const ride = (openWithPark = false, parkSlug = "phantasialand") => ({
+    id: RIDE_ID,
+    slug: "taron",
+    name: "Taron",
+    openWithPark,
+    park: { ...park, slug: parkSlug },
+  });
+  const today = formatInTimeZone(new Date(), "Europe/Berlin", "yyyy-MM-dd");
+  const instant = `${today}T23:59:00.000Z`;
+  const start = formatInTimeZone(new Date(instant), "Europe/Berlin", "HH:mm");
+  const providers = (found: unknown) =>
+    new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+      [
+        DataSource,
+        { getRepository: () => ({ findOne: jest.fn(async () => found) }) },
+      ],
+      [
+        ShowsService,
+        {
+          findByParkId: jest.fn(async () => [
+            { id: "s1", slug: "stunt-show", name: "Stunt Show" },
+          ]),
+          getShowtimeInstantsOnDate: jest.fn(
+            async () => new Map([["s1", [instant]]]),
+          ),
+        },
+      ],
+    ]);
+  const alerts = {
+    push: "ready" as const,
+    rides: [
+      {
+        park: "phantasialand",
+        rideSlug: "taron",
+        name: "Taron",
+        kind: "reopen" as const,
+      },
+    ],
+    shows: [],
+  };
+  const call = (
+    name: string,
+    input: Record<string, unknown>,
+    found: unknown = ride(),
+    held: typeof alerts | null = alerts,
+  ) =>
+    runAssistantTool(
+      name,
+      { park: PARK_ID, ...input },
+      { ...context(providers(found)), alerts: held },
+      jest.fn(),
+    );
+  const plannerPark = {
+    slug: "phantasialand",
+    name: "Phantasialand",
+    geo: { continent: "europe", country: "germany", city: "bruehl" },
+    timezone: "Europe/Berlin",
+  };
+
+  it("sets a wait alert and a reopen alert on a ride of the park", async () => {
+    expect(
+      (
+        await call("set_ride_alert", {
+          rideId: RIDE_ID,
+          kind: "wait_below",
+          thresholdMinutes: 20,
+        })
+      ).action,
+    ).toEqual({
+      type: "alert_ride_set",
+      park: plannerPark,
+      rideId: RIDE_ID,
+      rideSlug: "taron",
+      rideName: "Taron",
+      kind: "wait_below",
+      thresholdMinutes: 20,
+    });
+    expect(
+      (
+        await call("set_ride_alert", {
+          rideId: RIDE_ID,
+          kind: "reopen",
+          thresholdMinutes: 20,
+        })
+      ).action,
+    ).not.toHaveProperty("thresholdMinutes");
+  });
+
+  it("sets a show reminder for one of today's performances", async () => {
+    const result = await call("set_show_reminder", {
+      showSlug: "stunt-show",
+      start,
+    });
+    expect(result.action).toEqual({
+      type: "alert_show_set",
+      park: plannerPark,
+      showId: "s1",
+      showSlug: "stunt-show",
+      showName: "Stunt Show",
+      start: parkInstant(instant, "Europe/Berlin"),
+    });
+  });
+
+  it("removes an alert the browser holds", async () => {
+    expect((await call("remove_alert", { rideSlug: "taron" })).action).toEqual({
+      type: "alert_remove",
+      park: plannerPark,
+      rideSlug: "taron",
+    });
+  });
+
+  it.each([
+    [
+      "a ride of another park",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(false, "efteling"),
+    ],
+    [
+      "a wait alert without a threshold",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "wait_below" },
+      ride(),
+    ],
+    [
+      "a threshold over the push limit",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "wait_below", thresholdMinutes: 241 },
+      ride(),
+    ],
+    [
+      "a reopen alert on a ride open with the park",
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(true),
+    ],
+    [
+      "a reminder at a time the show does not start",
+      "set_show_reminder",
+      { showSlug: "stunt-show", start: "03:07" },
+      ride(),
+    ],
+    [
+      "removing an alert the browser does not hold",
+      "remove_alert",
+      { showSlug: "stunt-show" },
+      ride(),
+    ],
+    ["removing without saying which", "remove_alert", {}, ride()],
+  ])("refuses %s", async (_case, name, input, found) => {
+    const result = await call(name, input, found);
+    expect(result.isError).toBe(true);
+    expect(result.action).toBeUndefined();
+  });
+
+  it("offers nothing where the browser cannot receive push", async () => {
+    const result = await call(
+      "set_ride_alert",
+      { rideId: RIDE_ID, kind: "reopen" },
+      ride(),
+      { ...alerts, push: "unavailable" as never },
+    );
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("reopeningOf", () => {
+  it("names a breakdown's start and how such outages ended before", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "DOWN",
+          outage: {
+            startedAt: "2026-11-05T10:00:00.000Z",
+            signal: "down",
+            estimate: {
+              recoveryWithin30: 0.4,
+              recoveryWithin60: 0.6,
+              recoveryWindow: { from: "2026-11-05T10:40:00.000Z" },
+            },
+          },
+          downtime: { kind: "figures", medianMinutes: 35 },
+        },
+        11,
+      ),
+    ).toEqual({
+      reason: "breakdown",
+      downSince: "2026-11-05T10:00:00.000Z",
+      reportedByPark: true,
+      backWithin30MinutesPercent: 0.4,
+      backWithin60MinutesPercent: 0.6,
+      likelyBack: { from: "2026-11-05T10:40:00.000Z" },
+      typicalOutageMinutes: 35,
+    });
+  });
+
+  it("names a works period's last closed day, and says when that is our guess", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "REFURBISHMENT",
+          worksPeriod: {
+            to: "2027-03-13",
+            toUncertain: true,
+            runningToday: true,
+          },
+        },
+        11,
+      ),
+    ).toEqual({
+      reason: "works",
+      closedUntil: "2027-03-13",
+      estimatedByParkFan: true,
+    });
+  });
+
+  it("names the next season month out of season", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "CLOSED",
+          facts: {
+            seasonMonths: [4, 5, 6, 7, 8, 9, 10],
+            isCurrentlyInSeason: false,
+          },
+        },
+        11,
+      ),
+    ).toMatchObject({ reason: "season", nextSeasonMonth: 4 });
+  });
+
+  it("says unknown without data, and nothing while the ride runs", () => {
+    expect(reopeningOf({ status: "CLOSED" }, 11)).toEqual({
+      reason: "unknown",
+      status: "CLOSED",
+    });
+    expect(reopeningOf({ status: "OPERATING" }, 11)).toBeNull();
+  });
+});
+
+describe("favourites", () => {
+  const ID = "33333333-3333-4333-8333-333333333333";
+  const favorites = {
+    parks: [PARK_ID],
+    attractions: [ID],
+    shows: [],
+    restaurants: [],
+  };
+
+  it("get_favorites reads the ids the browser sent through /v1/favorites' service", async () => {
+    const getFavorites = jest.fn(async () => ({
+      parks: [
+        {
+          id: PARK_ID,
+          name: "Phantasialand",
+          status: "OPERATING",
+          analytics: { crowdLevel: "high", avgWaitTime: 32 },
+        },
+      ],
+      attractions: [
+        {
+          id: ID,
+          name: "Taron",
+          park: { name: "Phantasialand" },
+          status: "OPERATING",
+          queues: [{ queueType: "STANDBY", waitTime: 45 }],
+          crowdLevel: "high",
+        },
+      ],
+      shows: [],
+      restaurants: [],
+    }));
+    const result = await runAssistantTool(
+      "get_favorites",
+      {},
+      {
+        ...context(new Map([[FavoritesService, { getFavorites }]])),
+        favorites,
+      },
+      jest.fn(),
+    );
+    expect(getFavorites).toHaveBeenCalledWith([PARK_ID], [ID], [], []);
+    expect(JSON.parse(result.content)).toEqual({
+      parks: [
+        {
+          id: PARK_ID,
+          name: "Phantasialand",
+          status: "OPERATING",
+          crowdLevel: "high",
+          avgWaitMinutes: 32,
+        },
+      ],
+      rides: [
+        {
+          id: ID,
+          name: "Taron",
+          park: "Phantasialand",
+          status: "OPERATING",
+          waitMinutes: 45,
+          crowdLevel: "high",
+        },
+      ],
+      shows: [],
+      restaurants: [],
+    });
+  });
+
+  it("set_favorite names what it found, and refuses an id nobody has", async () => {
+    const providers = (row: unknown) =>
+      new Map<unknown, unknown>([
+        [
+          DataSource,
+          { getRepository: () => ({ findOne: jest.fn(async () => row) }) },
+        ],
+      ]);
+    const set = await runAssistantTool(
+      "set_favorite",
+      { entity: "attraction", id: ID, on: false },
+      context(providers({ id: ID, name: "Taron" })),
+      jest.fn(),
+    );
+    expect(set.action).toEqual({
+      type: "favorite_set",
+      entity: "attraction",
+      id: ID,
+      name: "Taron",
+      on: false,
+    });
+    const missing = await runAssistantTool(
+      "set_favorite",
+      { entity: "show", id: ID },
+      context(providers(null)),
+      jest.fn(),
+    );
+    expect(missing.isError).toBe(true);
+    expect(missing.action).toBeUndefined();
+  });
+});
+
+describe("reopenSearchFrom", () => {
+  it("starts the day after a works period's last closed day", () => {
+    expect(
+      reopenSearchFrom(
+        { reason: "works", closedUntil: "2027-03-13" },
+        "2026-11-05",
+      ),
+    ).toBe("2027-03-14");
+  });
+
+  it("starts on the first of the next season month, next year once it has come round", () => {
+    const season = (next: number) => ({
+      reason: "season" as const,
+      seasonMonths: [4, 10],
+      nextSeasonMonth: next,
+    });
+    expect(reopenSearchFrom(season(4), "2026-11-05")).toBe("2027-04-01");
+    expect(reopenSearchFrom(season(12), "2026-11-05")).toBe("2026-12-01");
+  });
+
+  it("has nothing to search from without an end", () => {
+    expect(
+      reopenSearchFrom({ reason: "works", closedUntil: null }, "2026-11-05"),
+    ).toBeNull();
+    expect(
+      reopenSearchFrom({ reason: "unknown", status: "CLOSED" }, "2026-11-05"),
+    ).toBeNull();
+  });
+});
+
+describe("get_ride › reopening", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  const RIDE = "44444444-4444-4444-8444-444444444444";
+  const run = async (ride: Record<string, unknown>, opening: unknown) => {
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE,
+      name: "Chiapas",
+      park: { id: PARK_ID, name: "Phantasialand" },
+      facts: {},
+      ...ride,
+    });
+    const getFirstOperatingDayFrom = jest.fn(async () => opening);
+    const result = await runAssistantTool(
+      "get_ride",
+      { rideId: RIDE },
+      context(
+        new Map<unknown, unknown>([
+          [
+            ParksService,
+            {
+              findById: jest.fn(async () => ({ ...park })),
+              getFirstOperatingDayFrom,
+            },
+          ],
+        ]),
+      ),
+      jest.fn(),
+    );
+    return {
+      reopening: JSON.parse(result.content).reopening,
+      getFirstOperatingDayFrom,
+    };
+  };
+
+  it("finds the season month in the park's clock at a month's turn", async () => {
+    // 23:30 UTC on 31 March is already April in Brühl.
+    jest.useFakeTimers({ now: new Date("2027-03-31T23:30:00Z") });
+    const { reopening, getFirstOperatingDayFrom } = await run(
+      {
+        status: "CLOSED",
+        facts: { seasonMonths: [4, 10], isCurrentlyInSeason: false },
+      },
+      { date: "2027-10-02" },
+    );
+    expect(reopening).toMatchObject({
+      reason: "season",
+      nextSeasonMonth: 10,
+      reopensOn: "2027-10-02",
+    });
+    expect(getFirstOperatingDayFrom).toHaveBeenCalledWith(
+      PARK_ID,
+      "2027-10-01",
+    );
+  });
+
+  it("names the park's first open day after a works period", async () => {
+    const { reopening, getFirstOperatingDayFrom } = await run(
+      {
+        status: "REFURBISHMENT",
+        worksPeriod: {
+          to: "2099-03-13",
+          toUncertain: false,
+          runningToday: true,
+        },
+      },
+      { date: "2099-03-20" },
+    );
+    expect(reopening).toEqual({
+      reason: "works",
+      closedUntil: "2099-03-13",
+      reopensOn: "2099-03-20",
+    });
+    expect(getFirstOperatingDayFrom).toHaveBeenCalledWith(
+      PARK_ID,
+      "2099-03-14",
+    );
+  });
+
+  it("says null when the calendar has no opening yet, and looks nothing up without an end", async () => {
+    expect(
+      (
+        await run(
+          {
+            status: "REFURBISHMENT",
+            worksPeriod: {
+              to: "2099-03-13",
+              toUncertain: false,
+              runningToday: true,
+            },
+          },
+          null,
+        )
+      ).reopening.reopensOn,
+    ).toBeNull();
+    const open = await run(
+      {
+        status: "REFURBISHMENT",
+        worksPeriod: { to: null, toUncertain: false, runningToday: true },
+      },
+      null,
+    );
+    expect(open.reopening).toEqual({ reason: "works", closedUntil: null });
+    expect(open.getFirstOperatingDayFrom).not.toHaveBeenCalled();
+  });
+});
+
+describe("end_chat", () => {
+  const CHAT = "55555555-5555-4555-8555-555555555555";
+  const setup = (previousMessage: string | null) => {
+    const update = jest.fn(async () => ({ affected: 1 }));
+    const endChats = jest.fn(async () => undefined);
+    const ctx = {
+      ...context(
+        new Map<unknown, unknown>([
+          [DataSource, { getRepository: () => ({ update }) }],
+          [AssistantRateLimitService, { endChats }],
+        ]),
+      ),
+      chat: {
+        conversationId: CHAT,
+        pagePath: "/de",
+        session: "session-1",
+        sessionHash: "h",
+        message: "…",
+        previousMessage,
+      },
+      answer: { round: 0, done: new Set<string>() },
+    };
+    const call = (input: unknown) =>
+      runAssistantTool("end_chat", input, ctx, jest.fn());
+    return { call, update, endChats };
+  };
+
+  it("closes the chat, bans the session for the cooldown and tells the widget", async () => {
+    const { call, update, endChats } = setup("an earlier insult");
+    const result = await call({ reason: "slurs", note: "after a warning" });
+    expect(result.action).toEqual({
+      type: "chat_end",
+      cooldownMinutes: CHAT_END_COOLDOWN_MINUTES,
+    });
+    expect(update).toHaveBeenCalledWith(CHAT, {
+      endedAt: expect.any(Date),
+      endedReason: "slurs: after a warning",
+    });
+    expect(endChats).toHaveBeenCalledWith(
+      "session-1",
+      CHAT_END_COOLDOWN_MINUTES * 60,
+    );
+  });
+
+  it("refuses on a chat's first question, where no warning can have come before", async () => {
+    const { call, update } = setup(null);
+    const result = await call({ reason: "insults" });
+    expect(result.isError).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("takes no reason milder than abuse", async () => {
+    const { call } = setup("x");
+    expect((await call({ reason: "criticism" })).isError).toBe(true);
+  });
+});
+
+describe("storedToolInput", () => {
+  it("keeps which party details were set, never their values", () => {
+    expect(
+      storedToolInput({
+        park: "phantasialand",
+        prefs: { riderHeightCm: 112, avoidWet: true },
+      }),
+    ).toEqual({ park: "phantasialand", prefs: ["riderHeightCm", "avoidWet"] });
+    expect(
+      storedToolInput({
+        park: "phantasialand",
+        by: "speed",
+        riderHeightCm: 112,
+      }),
+    ).toEqual({ park: "phantasialand", by: "speed", riderHeightCm: "set" });
+    expect(storedToolInput({ rideId: "x" })).toEqual({ rideId: "x" });
   });
 });

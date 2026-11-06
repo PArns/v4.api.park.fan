@@ -5,6 +5,10 @@ import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
+import type {
+  FunFactLocale,
+  FunFacts,
+} from "../../parks/utils/curated-park-facts.util";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import {
@@ -28,8 +32,18 @@ import {
   addIsoDays,
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
-import { DataSource, In, IsNull } from "typeorm";
+import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
+import { Park } from "../../parks/entities/park.entity";
+import { Show as ShowEntity } from "../../shows/entities/show.entity";
+import { Restaurant } from "../../restaurants/entities/restaurant.entity";
+import { FavoritesService } from "../../favorites/favorites.service";
+import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
+import {
+  RIDE_ALERT_THRESHOLD_MAX,
+  RIDE_ALERT_THRESHOLD_MIN,
+} from "../../ride-alerts/dto/ride-alert.dto";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import {
   compareRides,
@@ -55,6 +69,19 @@ import { junkReason } from "../assistant-junk";
 import { AssistantRecordsService } from "../assistant-records.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
+import { AssistantConversation } from "../entities/assistant-conversation.entity";
+
+/** How long a session may not chat after Parky ended one of its chats. */
+export const CHAT_END_COOLDOWN_MINUTES = 15;
+
+/** What `end_chat` may name as the reason; nothing milder qualifies. */
+export const CHAT_END_REASONS = [
+  "insults",
+  "harassment",
+  "slurs",
+  "sexual_harassment",
+  "hate_bait",
+] as const;
 import {
   ActionOutcome,
   calendarCard,
@@ -68,10 +95,22 @@ import {
   planDate,
   PLANNER_BLOCK_ICONS,
   planPark,
+  plannerPark,
   siteOnlyPath,
   type AssistantCard,
   type ClientAction,
 } from "./assistant-actions";
+import {
+  plannerClock,
+  plannerEntryId,
+  plannerPrefs,
+  type PlannerDay,
+  type PlannerSnapshot,
+  type AlertsSnapshot,
+  FAVORITE_ENTITIES,
+  type FavoriteEntity,
+  type FavoritesSnapshot,
+} from "../assistant.schemas";
 
 /** The fields of `get_park`'s summary a card reads. */
 type ParkSummary =
@@ -178,6 +217,12 @@ export interface AssistantToolContext {
   location?: { lat: number; lng: number } | null;
   /** The browser's IANA zone; every instant in a result is shown in it. */
   timeZone?: string;
+  /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
+  planner?: PlannerSnapshot | null;
+  /** The browser's push state and alerts as it sent them. */
+  alerts?: AlertsSnapshot | null;
+  /** The ids of the favourites as the browser sent them. */
+  favorites?: FavoritesSnapshot | null;
   /**
    * The chat this answer belongs to, all of it from the request and the server's own records:
    * what `submit_feedback` stores comes from here, never from the model's input.
@@ -281,6 +326,76 @@ function tool<Shape extends z.ZodRawShape>(
 
 function mcp(ctx: AssistantToolContext): McpToolContext {
   return { admin: PARKY, get: ctx.get.bind(ctx) };
+}
+
+/** A day of the visitor's plan, the park checked; the planner snapshot is the only source. */
+async function plannedDay(
+  ctx: AssistantToolContext,
+  reference: string,
+  date: string,
+) {
+  const park = await planPark(mcp(ctx), reference);
+  if ("ambiguous" in park) return park;
+  const day = ctx.planner?.days.find(
+    (planned) => planned.park.slug === park.slug && planned.date === date,
+  );
+  if (!day) {
+    throw new McpToolError(`${park.name} on ${date} is not in the user's plan`);
+  }
+  return { park, day };
+}
+
+/** The entries by id, in the order asked; an id the plan does not hold is refused, never guessed. */
+function plannedEntries(day: PlannerDay, ids: readonly string[]) {
+  return ids.map((id) => {
+    const entry = day.entries.find((planned) => planned.id === id);
+    if (!entry) {
+      throw new McpToolError(
+        `Entry ${id} is not in this day's plan; take ids from the plan in This chat`,
+      );
+    }
+    return entry;
+  });
+}
+
+/**
+ * One performance of a park's show: the show by slug, `start` (HH:MM, the park's clock) one of
+ * its verified times that day. A refusal names the real times, so the model can correct itself.
+ */
+async function showPerformance(
+  ctx: AssistantToolContext,
+  reference: string,
+  date: string,
+  showSlug: string,
+  start: string,
+) {
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const park = plannerPark(found);
+  const shows = ctx.get(ShowsService);
+  const [all, starts] = await Promise.all([
+    shows.findByParkId(found.id),
+    shows.getShowtimeInstantsOnDate(found.id, found.timezone, date),
+  ]);
+  const show = all.find((candidate) => candidate.slug === showSlug);
+  if (!show) {
+    throw new McpToolError(
+      `${park.name} has no show ${showSlug}; use get_shows`,
+    );
+  }
+  const instants = starts.get(show.id) ?? [];
+  const times = instants.map((instant) =>
+    formatInTimeZone(new Date(instant), found.timezone, "HH:mm"),
+  );
+  const at = times.indexOf(start);
+  if (at < 0) {
+    throw new McpToolError(
+      times.length
+        ? `${show.name} starts at ${times.join(", ")} that day, park time`
+        : `${show.name} has no published time that day`,
+    );
+  }
+  return { park, show, timezone: found.timezone, instant: instants[at] };
 }
 
 /** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
@@ -399,6 +514,147 @@ function pastDay(
 /** Most shows one answer lists. */
 const MAX_SHOWS = 30;
 
+/** The entity each favourite kind is looked up in. */
+const FAVORITE_TABLES: Record<
+  FavoriteEntity,
+  EntityTarget<{ id: string; name: string }>
+> = {
+  park: Park,
+  attraction: Attraction,
+  show: ShowEntity,
+  restaurant: Restaurant,
+};
+
+/**
+ * `/v1/favorites`' answer cut to what "how are my favourites doing" needs; show times stay
+ * instants, so they reach the model in the visitor's clock.
+ */
+export function favoritesSummary(found: FavoritesResponseDto) {
+  return {
+    parks: found.parks.map((park) => ({
+      id: park.id,
+      name: park.name,
+      status: park.status,
+      crowdLevel: park.analytics?.crowdLevel ?? null,
+      avgWaitMinutes: park.analytics?.avgWaitTime ?? null,
+    })),
+    rides: found.attractions.map((ride) => ({
+      id: ride.id,
+      name: ride.name,
+      park: ride.park?.name ?? null,
+      status: ride.effectiveStatus ?? ride.status ?? null,
+      waitMinutes:
+        ride.queues?.find((queue) => queue.queueType === "STANDBY")?.waitTime ??
+        null,
+      crowdLevel: ride.crowdLevel ?? null,
+    })),
+    shows: found.shows.map((show) => ({
+      id: show.id,
+      name: show.name,
+      park: show.park?.name ?? null,
+      status: show.status,
+      times: (show.showtimes ?? []).map((time) => time.startTime),
+    })),
+    restaurants: found.restaurants.map((restaurant) => ({
+      id: restaurant.id,
+      name: restaurant.name,
+      park: restaurant.park?.name ?? null,
+      status: restaurant.status,
+    })),
+  };
+}
+
+/** The fields of `get_attraction`'s answer that say why a ride is not running. */
+interface RideClosure {
+  status?: string | null;
+  effectiveStatus?: string | null;
+  outage?: {
+    startedAt: string;
+    signal: string;
+    estimate?: {
+      recoveryWithin30?: number;
+      recoveryWithin60?: number;
+      recoveryWindow?: { from: string; to?: string } | null;
+    };
+  } | null;
+  worksPeriod?: {
+    to: string | null;
+    toUncertain: boolean;
+    runningToday: boolean;
+  } | null;
+  facts?: {
+    seasonMonths?: number[] | null;
+    isCurrentlyInSeason?: boolean | null;
+  };
+  downtime?: { kind: string; medianMinutes?: number } | null;
+}
+
+/**
+ * Why a ride is not running and what is known about its return, so "when does it reopen" is
+ * answered from data: a breakdown (since when, how such outages ended before), a works period
+ * (its last closed day, when the park named one), out of season (the next season month), or
+ * `unknown`. Null while the ride runs.
+ */
+export function reopeningOf(ride: RideClosure, month: number) {
+  const status = ride.effectiveStatus ?? ride.status ?? null;
+  if (status === "OPERATING") return null;
+  if (ride.worksPeriod?.runningToday) {
+    return {
+      reason: "works" as const,
+      closedUntil: ride.worksPeriod.to,
+      ...(ride.worksPeriod.toUncertain && { estimatedByParkFan: true }),
+    };
+  }
+  if (ride.facts?.isCurrentlyInSeason === false) {
+    const months = ride.facts.seasonMonths ?? [];
+    const next =
+      months.find((candidate) => candidate > month) ?? months[0] ?? null;
+    return {
+      reason: "season" as const,
+      seasonMonths: months,
+      nextSeasonMonth: next,
+    };
+  }
+  if (status === null) return null;
+  if (status === "DOWN" && ride.outage) {
+    const estimate = ride.outage.estimate;
+    return {
+      reason: "breakdown" as const,
+      downSince: ride.outage.startedAt,
+      reportedByPark: ride.outage.signal === "down",
+      ...(estimate && {
+        backWithin30MinutesPercent: estimate.recoveryWithin30,
+        backWithin60MinutesPercent: estimate.recoveryWithin60,
+        ...(estimate.recoveryWindow && { likelyBack: estimate.recoveryWindow }),
+      }),
+      ...(ride.downtime?.kind === "figures" && {
+        typicalOutageMinutes: ride.downtime.medianMinutes,
+      }),
+    };
+  }
+  return { reason: "unknown" as const, status };
+}
+
+/**
+ * The park-local day to look for the park's next opening from: the day after a works period's
+ * last closed day, or the first of the next season month (next year when it has come round).
+ * Null when nothing says when the closure ends.
+ */
+export function reopenSearchFrom(
+  reopening: ReturnType<typeof reopeningOf>,
+  today: string,
+): string | null {
+  if (reopening?.reason === "works" && reopening.closedUntil) {
+    return addIsoDays(reopening.closedUntil, 1);
+  }
+  if (reopening?.reason === "season" && reopening.nextSeasonMonth) {
+    const [year, month] = today.split("-").map(Number);
+    const nextYear = reopening.nextSeasonMonth <= month ? year + 1 : year;
+    return `${nextYear}-${String(reopening.nextSeasonMonth).padStart(2, "0")}-01`;
+  }
+  return null;
+}
+
 /**
  * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
  * instant so it reaches the model in the visitor's clock. Status and duration come from a live
@@ -421,7 +677,9 @@ export function showsOnDay(
           )
         : NaN;
       return {
+        id: show.id,
         name: show.name,
+        slug: show.slug,
         ...(show.landName && { land: show.landName }),
         status: reading?.status ?? null,
         showtimes: starts.get(show.id) as string[],
@@ -504,6 +762,7 @@ async function restaurantsOf(
     total: all.length,
     matched: matched.length,
     restaurants: matched.map((r) => ({
+      id: r.id,
       name: r.name,
       // Without a reading of its own the payload guesses from the park's status; that is
       // no statement about the stand (docs/rules/absent-facts.md).
@@ -591,7 +850,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
       "average and peak waits today, weather now, only the 8 longest current standby waits, " +
-      "rides that are down and rides that have not run today, and the park's pageUrl. Not the " +
+      "rides that are down and rides that have not run today, the park's pageUrl and the " +
+      "editors' funFacts about it. Not the " +
       "shortest waits or one ride type: show_card kind rides order shortest (type coaster for " +
       "coasters) has every waiting ride.",
     input: z.object({ park: parkRef }),
@@ -602,8 +862,17 @@ export const ASSISTANT_TOOLS = [
       )) as Record<string, unknown>;
       // Every time reaches the model in the visitor's clock, so the park's own clock and zone
       // only cost tokens.
-      const { localTime: _localTime, timezone: _timezone, ...rest } = live;
+      const {
+        localTime: _localTime,
+        timezone: _timezone,
+        funFacts,
+        ...rest
+      } = live;
       if (rest.retiredAt === null) delete rest.retiredAt;
+      // English stands in for an untranslated locale: the model retells it in the chat's language.
+      const facts = funFacts as FunFacts | null;
+      const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
+      if (told) rest.funFacts = told;
       return rest;
     },
   }),
@@ -737,7 +1006,8 @@ export const ASSISTANT_TOOLS = [
       "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
       "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
       "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
-      "best visit times, and its pageUrl.",
+      "best visit times, its pageUrl and, while it is not running, reopening: why (breakdown, " +
+      "works, season or unknown) and what is known about its return.",
     input: z.object({
       rideId: z
         .string()
@@ -767,6 +1037,34 @@ export const ASSISTANT_TOOLS = [
           ([, value]) => value !== null,
         ),
       );
+      const parkId = (ride.park as { id?: string } | null)?.id;
+      const parks = ctx.get(ParksService);
+      const park = parkId ? await parks.findById(parkId) : null;
+      if (park) {
+        // The park's calendar month and day: the season and the opening calendar are park-local.
+        const today = getCurrentDateInTimezone(park.timezone);
+        const reopening = reopeningOf(
+          ride as RideClosure,
+          Number(today.slice(5, 7)),
+        );
+        if (reopening) {
+          const from = reopenSearchFrom(reopening, today);
+          const opening = from
+            ? await parks.getFirstOperatingDayFrom(park.id, from)
+            : null;
+          ride.reopening = {
+            ...reopening,
+            // The DATE column arrives as "YYYY-MM-DD" from the driver; a Date is its UTC day.
+            ...(from && {
+              reopensOn: opening
+                ? typeof opening.date === "string"
+                  ? (opening.date as string).slice(0, 10)
+                  : opening.date.toISOString().slice(0, 10)
+                : null,
+            }),
+          };
+        }
+      }
       return ride;
     },
   }),
@@ -929,7 +1227,7 @@ export const ASSISTANT_TOOLS = [
       "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
       "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
       "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
-      "only; never move it to another day. Use it for special days and events too. Days after " +
+      "only; never move it to another day. Days after " +
       "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
       "days: get_park_history.",
     input: z.object({
@@ -1085,16 +1383,25 @@ export const ASSISTANT_TOOLS = [
     name: "get_post",
     status: "posts",
     description:
-      "The text of one park.fan post (shortened), by its slug from search_posts.",
+      "The text of one park.fan post, by its slug from search_posts. Long posts are shortened: " +
+      "with a question, text is the intro and the sections that answer it best. sections lists " +
+      "all the post's headings, omitted the ones left out; for an omitted one, call again with a " +
+      "question naming it.",
     input: z.object({
       slug: z
         .string()
         .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
         .max(160)
         .describe("Slug from search_posts"),
+      question: z
+        .string()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe("The user's question or its key words"),
     }),
-    run: ({ slug }, ctx) =>
-      ctx.get(AssistantPostsClient).post(ctx.locale, slug),
+    run: ({ slug, question }, ctx) =>
+      ctx.get(AssistantPostsClient).post(ctx.locale, slug, question),
   }),
   tool({
     name: "look_up_glossary",
@@ -1202,10 +1509,7 @@ export const ASSISTANT_TOOLS = [
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), or its restaurants and food " +
-      "stands, optionally matching query (kind restaurants). Whenever the answer lists rides " +
-      "with waits, parks, shows or places to eat, show the matching kind instead of writing " +
-      "the list as text; keep the text to a sentence and do not repeat the card's numbers. " +
-      "Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
+      "stands, optionally matching query (kind restaurants). Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
       "compare_rides.",
     input: z.object({
       kind: z.enum([
@@ -1306,7 +1610,10 @@ export const ASSISTANT_TOOLS = [
           kind: "restaurants",
           park: found.park,
           url: found.pageUrl ? siteOnlyPath(found.pageUrl) : null,
-          restaurants: found.restaurants.slice(0, MAX_RESTAURANT_CARD),
+          // The id is for set_favorite, not part of the card.
+          restaurants: found.restaurants
+            .slice(0, MAX_RESTAURANT_CARD)
+            .map(({ id: _id, ...shown }) => shown),
         };
         return new ActionOutcome(
           { type: "card", card },
@@ -1498,8 +1805,7 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "open_page",
     description:
-      "Take the user to a park.fan page in their browser, only when they ask to go to, see or " +
-      "open it, or say yes when you offered to. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
+      "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
       "glossary term (its url from search_posts or look_up_glossary). The page address is " +
       "built from the park.fan data, never typed by you.",
     input: z.object({
@@ -1552,9 +1858,8 @@ export const ASSISTANT_TOOLS = [
     name: "plan_day",
     status: "planner",
     description:
-      "Open a day at one park in the user's trip planner (it opens beside the page). Only when " +
-      "the user asks to plan a visit, or says yes when you offered to. The plan lives in their " +
-      "browser.",
+      "Open a day at one park in the user's trip planner (it opens beside the page). The plan " +
+      "lives in their browser.",
     input: z.object({ park: parkRef, date: planDate }),
     run: async ({ park: reference, date }, ctx) => {
       const park = await planPark(mcp(ctx), reference);
@@ -1570,7 +1875,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add rides to the user's trip planner for one park and day, in the order given; the " +
-      "planner places them after what is already planned. Only when the user asks. Ride ids " +
+      "planner places them after what is already planned. Ride ids " +
       "come from find_rides or get_park_live and must belong to the park.",
     input: z.object({
       park: parkRef,
@@ -1596,7 +1901,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
-      "shopping, a photo stop or a meeting point. Only when the user asks. A show's start time " +
+      "shopping, a photo stop or a meeting point. A show's start time " +
       "comes from get_shows, a food stop from find_restaurants.",
     input: z.object({
       park: parkRef,
@@ -1638,7 +1943,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Let the trip planner sort one planned day for the shortest waits (mode order), or first " +
       "add the park's headliners that are missing and then sort (mode headliners). The planner " +
-      "shows the result and an undo. Only when the user asks.",
+      "shows the result and an undo.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -1654,11 +1959,454 @@ export const ASSISTANT_TOOLS = [
     },
   }),
   tool({
+    name: "plan_remove",
+    status: "planner",
+    description:
+      "Remove entries from one planned day. Entry ids from the plan in This chat.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryIds: z.array(plannerEntryId).min(1).max(40),
+    }),
+    run: async ({ park: reference, date, entryIds }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const entries = plannedEntries(day, entryIds);
+      return new ActionOutcome(
+        { type: "planner_remove", park, date, entryIds },
+        { removed: entries.map((entry) => entry.name), park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_move",
+    status: "planner",
+    description:
+      "Move one entry of a planned day to another place in its order, toIndex counting from 0.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryId: plannerEntryId,
+      toIndex: z.number().int().min(0).max(39),
+    }),
+    run: async ({ park: reference, date, entryId, toIndex }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const [entry] = plannedEntries(day, [entryId]);
+      if (toIndex >= day.entries.length) {
+        throw new McpToolError(
+          `The day has ${day.entries.length} entries; toIndex is at most ${day.entries.length - 1}`,
+        );
+      }
+      return new ActionOutcome(
+        { type: "planner_move", park, date, entryId, toIndex },
+        { moved: entry.name, toIndex, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_update_block",
+    status: "planner",
+    description:
+      "Change a block of the user's own (a break, a meal, a stop) in a planned day: its label, " +
+      "start or length. Blocks only, not rides or shows.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryId: plannerEntryId,
+      label: z.string().trim().min(1).max(40).optional(),
+      start: plannerClock
+        .optional()
+        .describe("New start in the park's local time, HH:MM"),
+      durationMinutes: z.number().int().min(10).max(240).optional(),
+    }),
+    run: async (
+      { park: reference, date, entryId, label, start, durationMinutes },
+      ctx,
+    ) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const [entry] = plannedEntries(day, [entryId]);
+      if (entry.kind !== "block") {
+        throw new McpToolError(
+          `${entry.name} is a ${entry.kind}, not a block; only blocks change here`,
+        );
+      }
+      if (label === undefined && start === undefined && !durationMinutes) {
+        throw new McpToolError("Give a label, a start or a length to change");
+      }
+      return new ActionOutcome(
+        {
+          type: "planner_update_block",
+          park,
+          date,
+          entryId,
+          ...(label !== undefined && { label }),
+          ...(start !== undefined && { start }),
+          ...(durationMinutes !== undefined && { durationMinutes }),
+        },
+        { updated: entry.name, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_add_show",
+    status: "planner",
+    description:
+      "Add one of a park's shows to the user's trip planner at one of its times that day. The " +
+      "show's slug and times come from get_shows; start is the park's local time, HH:MM.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      showSlug: z
+        .string()
+        .max(160)
+        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+        .describe("Slug from get_shows"),
+      start: plannerClock.describe("Start in the park's local time, HH:MM"),
+    }),
+    run: async ({ park: reference, date, showSlug, start }, ctx) => {
+      const found = await showPerformance(
+        ctx,
+        reference,
+        date,
+        showSlug,
+        start,
+      );
+      if ("ambiguous" in found) return found;
+      const { park, show } = found;
+      return new ActionOutcome(
+        { type: "planner_add_show", park, date, showSlug, start },
+        { added: show.name, start, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "set_ride_alert",
+    status: "planner",
+    description:
+      "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
+      "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
+      "find_rides or get_park_live. One alert per ride, a new one replaces it.",
+    input: z.object({
+      park: parkRef,
+      rideId: z.string().uuid(),
+      kind: z.enum(["wait_below", "reopen"]),
+      thresholdMinutes: z
+        .number()
+        .int()
+        .min(RIDE_ALERT_THRESHOLD_MIN)
+        .max(RIDE_ALERT_THRESHOLD_MAX)
+        .optional()
+        .describe("For wait_below: notify under this many minutes"),
+    }),
+    run: async ({ park: reference, rideId, kind, thresholdMinutes }, ctx) => {
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      if (ctx.alerts?.push === "unavailable") {
+        throw new McpToolError("This browser cannot receive push messages");
+      }
+      if (kind === "wait_below" && thresholdMinutes === undefined) {
+        throw new McpToolError("A wait_below alert needs thresholdMinutes");
+      }
+      const ride = await ctx
+        .get(DataSource)
+        .getRepository(Attraction)
+        .findOne({
+          where: { id: rideId.toLowerCase() },
+          relations: { park: true },
+        });
+      if (!ride || ride.park?.slug !== park.slug) {
+        throw new McpToolError(
+          `Ride ${rideId} is not in this park; use find_rides`,
+        );
+      }
+      // The push endpoint's own refusals, checked first so Parky never offers what it rejects.
+      const unreadable = getNoLiveWaitTimesReason(
+        ride.park.citySlug,
+        ride.park.slug,
+      );
+      if (unreadable) {
+        throw new McpToolError(
+          `${park.name}'s wait times cannot be read (${unreadable}); no alert would fire`,
+        );
+      }
+      if (kind === "reopen" && ride.openWithPark) {
+        throw new McpToolError(`${ride.name} is open whenever the park is`);
+      }
+      return new ActionOutcome(
+        {
+          type: "alert_ride_set",
+          park,
+          rideId: ride.id,
+          rideSlug: ride.slug,
+          rideName: ride.name,
+          kind,
+          ...(kind === "wait_below" && { thresholdMinutes }),
+        },
+        {
+          alert: kind,
+          ride: ride.name,
+          ...(kind === "wait_below" && { thresholdMinutes }),
+          push: ctx.alerts?.push ?? null,
+        },
+      );
+    },
+  }),
+  tool({
+    name: "set_show_reminder",
+    status: "planner",
+    description:
+      "Have park.fan remind the user by push before one of today's performances of a show. Slug " +
+      "and times from get_shows; start is the park's local time, HH:MM.",
+    input: z.object({
+      park: parkRef,
+      showSlug: z
+        .string()
+        .max(160)
+        .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+        .describe("Slug from get_shows"),
+      start: plannerClock.describe("Start in the park's local time, HH:MM"),
+    }),
+    run: async ({ park: reference, showSlug, start }, ctx) => {
+      if (ctx.alerts?.push === "unavailable") {
+        throw new McpToolError("This browser cannot receive push messages");
+      }
+      const resolved = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(resolved)) return resolved;
+      const today = getCurrentDateInTimezone(resolved.timezone);
+      const found = await showPerformance(
+        ctx,
+        resolved.id,
+        today,
+        showSlug,
+        start,
+      );
+      if ("ambiguous" in found) return found;
+      const { park, show, timezone, instant } = found;
+      return new ActionOutcome(
+        {
+          type: "alert_show_set",
+          park,
+          showId: show.id,
+          showSlug,
+          showName: show.name,
+          start: parkInstant(instant, timezone) as string,
+        },
+        { reminder: show.name, start, push: ctx.alerts?.push ?? null },
+      );
+    },
+  }),
+  tool({
+    name: "remove_alert",
+    status: "planner",
+    description:
+      "Remove one of the user's push alerts: a ride's (rideSlug) or a show reminder (showSlug), " +
+      "as listed in This chat.",
+    input: z.object({
+      park: parkRef,
+      rideSlug: z.string().max(160).optional(),
+      showSlug: z.string().max(160).optional(),
+    }),
+    run: async ({ park: reference, rideSlug, showSlug }, ctx) => {
+      if (!rideSlug === !showSlug) {
+        throw new McpToolError("Give either rideSlug or showSlug");
+      }
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      const held = rideSlug
+        ? ctx.alerts?.rides.find(
+            (alert) => alert.park === park.slug && alert.rideSlug === rideSlug,
+          )
+        : ctx.alerts?.shows.find(
+            (alert) => alert.park === park.slug && alert.showSlug === showSlug,
+          );
+      if (!held) {
+        throw new McpToolError("The user has no such alert; see This chat");
+      }
+      return new ActionOutcome(
+        {
+          type: "alert_remove",
+          park,
+          ...(rideSlug ? { rideSlug } : { showSlug }),
+        },
+        { removed: held.name },
+      );
+    },
+  }),
+  tool({
+    name: "get_favorites",
+    status: "rides",
+    description:
+      "The user's favourite parks, rides, shows and restaurants right now: name, park, status, " +
+      "a ride's standby wait and crowd level, a park's crowd level and average wait, a show's " +
+      'times today. For "how are my favourites doing" or "which of my rides is shortest".',
+    input: z.object({}),
+    run: async (_input, ctx) => {
+      const ids = ctx.favorites;
+      if (!ids) throw new McpToolError("The user has no favourites yet");
+      const found = await ctx
+        .get(FavoritesService)
+        .getFavorites(ids.parks, ids.attractions, ids.shows, ids.restaurants);
+      return favoritesSummary(found);
+    },
+  }),
+  tool({
+    name: "set_favorite",
+    status: "rides",
+    description:
+      "Add a park, ride, show or restaurant to the user's favourites (on true) or remove it (on " +
+      "false). The id comes from search_parks, find_rides, get_shows or find_restaurants.",
+    input: z.object({
+      entity: z.enum(FAVORITE_ENTITIES),
+      id: z.string().uuid(),
+      on: z.boolean().default(true),
+    }),
+    run: async ({ entity, id, on }, ctx) => {
+      const repository = ctx
+        .get(DataSource)
+        .getRepository<{ id: string; name: string }>(FAVORITE_TABLES[entity]);
+      const row = await repository.findOne({
+        where: { id: id.toLowerCase() },
+        select: { id: true, name: true },
+      });
+      if (!row) {
+        throw new McpToolError(`No ${entity} with id ${id}; look it up first`);
+      }
+      return new ActionOutcome(
+        { type: "favorite_set", entity, id: row.id, name: row.name, on },
+        { [on ? "added" : "removed"]: row.name },
+      );
+    },
+  }),
+  tool({
+    name: "plan_set_party",
+    status: "planner",
+    description:
+      "Tell the trip planner about the party for one planned day: the smallest rider's height " +
+      "in cm, whether to stay dry, whether they have early entry. The planner then flags rides " +
+      "that do not fit.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      prefs: plannerPrefs,
+    }),
+    run: async ({ park: reference, date, prefs }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park } = found;
+      if (Object.keys(prefs).length === 0) {
+        throw new McpToolError("Give a height, avoidWet or earlyEntry");
+      }
+      return new ActionOutcome(
+        { type: "planner_set_prefs", park, date, prefs },
+        { set: prefs, park: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_mark_done",
+    status: "planner",
+    description:
+      "Tick entries of a planned day off as done (or back, done false).",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      entryIds: z.array(plannerEntryId).min(1).max(40),
+      done: z.boolean().default(true),
+    }),
+    run: async ({ park: reference, date, entryIds, done }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      const entries = plannedEntries(day, entryIds);
+      return new ActionOutcome(
+        { type: "planner_mark_done", park, date, entryIds, done },
+        { marked: entries.map((entry) => entry.name), done, park: park.name },
+      );
+    },
+  }),
+  tool({
+    name: "plan_clear_day",
+    status: "planner",
+    description:
+      "Empty one planned day completely, only after the user said yes to your question in this " +
+      "chat; the planner keeps an undo.",
+    input: z.object({
+      park: parkRef,
+      date: planDate,
+      confirmed: z
+        .literal(true)
+        .describe("true only once the user said yes to clearing this day"),
+    }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park, day } = found;
+      return new ActionOutcome(
+        { type: "planner_clear_day", park, date },
+        { cleared: park.name, date, entries: day.entries.length },
+      );
+    },
+  }),
+  tool({
+    name: "plan_trip",
+    status: "planner",
+    description:
+      "Reserve several days at one park in the trip planner at once (a trip), empty days the " +
+      "user fills later.",
+    input: z.object({
+      park: parkRef,
+      dates: z.array(planDate).min(1).max(6),
+    }),
+    run: async ({ park: reference, dates }, ctx) => {
+      const park = await planPark(mcp(ctx), reference);
+      if ("ambiguous" in park) return park;
+      const unique = [...new Set(dates)].sort();
+      return new ActionOutcome(
+        { type: "planner_reserve_days", park, dates: unique },
+        { reserved: unique, park: park.name },
+      );
+    },
+  }),
+  tool({
+    name: "plan_undo",
+    status: "planner",
+    description:
+      "Undo your last change to one planned day. The planner refuses it when the user changed " +
+      "the day since.",
+    input: z.object({ park: parkRef, date: planDate }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park } = found;
+      return new ActionOutcome(
+        { type: "planner_undo", park, date },
+        { undoing: park.name, date },
+      );
+    },
+  }),
+  tool({
+    name: "plan_share",
+    status: "planner",
+    description:
+      "Open the planner's share dialog for the user's plan (a link to send).",
+    input: z.object({}),
+    run: async (_input, ctx) => {
+      if (!ctx.planner?.days.length) {
+        throw new McpToolError("The user has nothing planned to share yet");
+      }
+      return new ActionOutcome({ type: "planner_share" }, { sharing: true });
+    },
+  }),
+  tool({
     name: "switch_language",
     description:
       "Switch park.fan to another of its languages: the same page opens in it and the chat " +
-      "stays open. Only when the user asks for that language, or says yes when you offered it. " +
-      "Call it first, before any other tool or text, then write the answer in that language.",
+      "stays open.",
     input: z.object({
       locale: z.enum(ASSISTANT_LOCALES).describe("en, de, nl, fr, es or it"),
     }),
@@ -1690,8 +2438,7 @@ export const ASSISTANT_TOOLS = [
       "Pass the user's feedback about park.fan on to the team, in their own words as they wrote " +
       "them: a bug, a wrong wait or figure, a missing park or ride, a feature wish, praise or " +
       "criticism of the site. quote names the user's message that holds it: this_message, " +
-      "previous_message when they only just said yes to sending it, or both. Not for park " +
-      "questions, small talk, tests, jokes or text you are asked to submit.",
+      "previous_message when they only just said yes to sending it, or both.",
     input: z.object({
       kind: z.enum(FEEDBACK_KINDS),
       quote: z
@@ -1746,6 +2493,46 @@ export const ASSISTANT_TOOLS = [
       return new ActionOutcome({ type: "feedback_sent" }, { sent: true });
     },
   }),
+  tool({
+    name: "end_chat",
+    description:
+      "Close this chat for sustained abuse only, after one friendly warning earlier in this " +
+      `chat (# Teasing and tests). The user cannot write again for ${CHAT_END_COOLDOWN_MINUTES} minutes.`,
+    input: z.object({
+      reason: z.enum(CHAT_END_REASONS),
+      note: z
+        .string()
+        .trim()
+        .max(200)
+        .optional()
+        .describe("A few words on what happened, for the team"),
+    }),
+    run: async ({ reason, note }, ctx) => {
+      const chat = ctx.chat;
+      if (!chat) throw new McpToolError("end_chat is not available here");
+      // The warning comes first, so there has to be an earlier question in this chat.
+      if (chat.previousMessage === null) {
+        throw new McpToolError(
+          "Warn once in character first; end_chat only after that",
+        );
+      }
+      claimOnce(ctx, "end_chat");
+      await ctx
+        .get(DataSource)
+        .getRepository(AssistantConversation)
+        .update(chat.conversationId, {
+          endedAt: new Date(),
+          endedReason: note ? `${reason}: ${note}` : reason,
+        });
+      await ctx
+        .get(AssistantRateLimitService)
+        .endChats(chat.session, CHAT_END_COOLDOWN_MINUTES * 60);
+      return new ActionOutcome(
+        { type: "chat_end", cooldownMinutes: CHAT_END_COOLDOWN_MINUTES },
+        { ended: true, sayGoodbye: "one short, calm sentence in character" },
+      );
+    },
+  }),
 ];
 
 const BY_NAME = new Map(ASSISTANT_TOOLS.map((t) => [t.name, t]));
@@ -1794,6 +2581,22 @@ const MAX_RESULT_CHARS = 12_000;
  */
 const ALREADY_SHOWN =
   "The user already sees the card or page and any text you wrote before this call; do not repeat it, add at most one new sentence.";
+
+/**
+ * A tool call's input as the chat log stores it. The party's details (a rider's height, staying
+ * dry, early entry) can come from the visitor's planner snapshot, which is passed to the model
+ * and never stored, so the log keeps only which of them were set.
+ */
+export function storedToolInput(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const { riderHeightCm, prefs, ...rest } = input as Record<string, unknown>;
+  return {
+    ...rest,
+    ...(riderHeightCm !== undefined && { riderHeightCm: "set" }),
+    ...(prefs !== null &&
+      typeof prefs === "object" && { prefs: Object.keys(prefs) }),
+  };
+}
 
 /**
  * Runs one tool call and returns what goes back to the model. A wrong name or

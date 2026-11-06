@@ -27,6 +27,12 @@ export interface CuratedParkSource {
   curatedParkType?: string | null;
   curatedArticleDe?: string | null;
   curatedAbbreviations?: string | null;
+  curatedFunFactsEn?: string | null;
+  curatedFunFactsDe?: string | null;
+  curatedFunFactsNl?: string | null;
+  curatedFunFactsFr?: string | null;
+  curatedFunFactsEs?: string | null;
+  curatedFunFactsIt?: string | null;
   citySlug?: string | null;
   slug?: string | null;
   curatedNoWaitTimesReason?: string | null;
@@ -150,6 +156,12 @@ export const CURATED_PARK_COLUMNS = [
   "curatedParkType",
   "curatedArticleDe",
   "curatedAbbreviations",
+  "curatedFunFactsEn",
+  "curatedFunFactsDe",
+  "curatedFunFactsNl",
+  "curatedFunFactsFr",
+  "curatedFunFactsEs",
+  "curatedFunFactsIt",
   "curatedNoWaitTimesReason",
   "curatedUsesTwelveHourClock",
   "curatedHasEarlyEntry",
@@ -308,6 +320,74 @@ export function resolveParkInfo(park: CuratedParkSource): ParkInfo | null {
   };
 
   return Object.values(info).some((value) => value !== null) ? info : null;
+}
+
+/** The column each locale's fun facts live in. */
+export const FUN_FACT_COLUMNS = {
+  en: "curatedFunFactsEn",
+  de: "curatedFunFactsDe",
+  nl: "curatedFunFactsNl",
+  fr: "curatedFunFactsFr",
+  es: "curatedFunFactsEs",
+  it: "curatedFunFactsIt",
+} as const satisfies Record<string, keyof CuratedParkSource>;
+
+export type FunFactLocale = keyof typeof FUN_FACT_COLUMNS;
+
+/** A park's fun facts by locale; a locale nobody wrote is absent. */
+export type FunFacts = Partial<Record<FunFactLocale, string[]>>;
+
+/** Per machine-translated locale: the locale it came from and a hash of that text. */
+export type FunFactsMachineMarks = Partial<
+  Record<FunFactLocale, { from: FunFactLocale; sourceHash: string }>
+>;
+
+/**
+ * The winner's machine marks after a merge inherited `columns` from the loser: each inherited
+ * fun-fact locale takes the loser's mark along, so a translation stays a translation. Null when
+ * nothing changes.
+ */
+export function inheritedMachineMarks(
+  winner: FunFactsMachineMarks | null | undefined,
+  loser: FunFactsMachineMarks | null | undefined,
+  columns: readonly string[],
+): FunFactsMachineMarks | null {
+  const marks: FunFactsMachineMarks = { ...(winner ?? {}) };
+  let changed = false;
+  for (const column of columns) {
+    const locale = funFactLocaleOf(column);
+    const mark = locale ? loser?.[locale] : undefined;
+    if (locale && mark) {
+      marks[locale] = mark;
+      changed = true;
+    }
+  }
+  return changed ? marks : null;
+}
+
+/** The locale a fun-fact column holds, or null for any other column. */
+export function funFactLocaleOf(column: string): FunFactLocale | null {
+  const found = Object.entries(FUN_FACT_COLUMNS).find(
+    ([, name]) => name === column,
+  );
+  return found ? (found[0] as FunFactLocale) : null;
+}
+
+/**
+ * The curated fun facts, one per non-blank line, or null when no locale has
+ * any. Null for the same reason as {@link resolveParkInfo}: the interceptor
+ * strips it, and a client reads "absent" instead of testing for `{}`.
+ */
+export function resolveFunFacts(park: CuratedParkSource): FunFacts | null {
+  const facts: FunFacts = {};
+  for (const [locale, column] of Object.entries(FUN_FACT_COLUMNS)) {
+    const lines = (park[column] ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length > 0) facts[locale as FunFactLocale] = lines;
+  }
+  return Object.keys(facts).length > 0 ? facts : null;
 }
 
 /** What the API serves of a park's early entry. Only ever built for `true`. */

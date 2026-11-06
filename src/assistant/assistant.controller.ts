@@ -127,6 +127,13 @@ export class AssistantController {
       "`unclear`: junk (no words, one key held down, a run of letters without a vowel, or the " +
       "question just answered asked again). The third in a row pauses the session.",
   })
+  @ApiResponse({
+    status: 403,
+    description:
+      "`chat_ended`: Parky closed a chat of this session for sustained abuse. While the " +
+      "session's ban runs (CHAT_END_COOLDOWN_MINUTES) the body carries `retryAfterSeconds` and " +
+      "the `Retry-After` header; the ended chat itself never takes another question.",
+  })
   @ApiResponse({ status: 503, description: "The assistant is switched off." })
   async ask(
     @Body() body: unknown,
@@ -146,6 +153,11 @@ export class AssistantController {
     const pause = await this.rateLimit.cooldown(session);
     if (pause > 0) {
       tooManyQuestions(response, pause);
+      return;
+    }
+    const banned = await this.rateLimit.chatEndedFor(session);
+    if (banned > 0) {
+      chatEnded(response, banned);
       return;
     }
     const verdict = await this.rateLimit.check(
@@ -169,6 +181,10 @@ export class AssistantController {
       return;
     }
     await this.rateLimit.clearStrikes(session);
+    if (prepared === "ended") {
+      chatEnded(response, null);
+      return;
+    }
     if (typeof prepared === "string") {
       const status = {
         off: HttpStatus.SERVICE_UNAVAILABLE,
@@ -279,6 +295,25 @@ function refuseOverLimit(verdict: RateLimitVerdict): void {
     },
     HttpStatus.TOO_MANY_REQUESTS,
   );
+}
+
+/**
+ * 403 `chat_ended`: Parky closed a chat of this session for abuse. With `Retry-After` while the
+ * session's ban runs; without it for the ended chat itself, which never reopens.
+ */
+function chatEnded(response: Response, retryAfterSeconds: number | null): void {
+  if (retryAfterSeconds !== null) {
+    response.setHeader("Retry-After", String(retryAfterSeconds));
+  }
+  response
+    .status(HttpStatus.FORBIDDEN)
+    .setHeader("Cache-Control", "no-store")
+    .json({
+      statusCode: 403,
+      message: "chat_ended",
+      code: "chat_ended",
+      ...(retryAfterSeconds !== null && { retryAfterSeconds }),
+    });
 }
 
 function tooManyQuestions(response: Response, retryAfterSeconds: number): void {

@@ -1,11 +1,169 @@
 import { z } from "zod";
 import { ASSISTANT_LOCALES } from "./system-prompt";
+import {
+  RIDE_ALERT_THRESHOLD_MAX,
+  RIDE_ALERT_THRESHOLD_MIN,
+} from "../ride-alerts/dto/ride-alert.dto";
 
 /** A park.fan path: slug segments only, no query, host or scheme. */
 const pagePath = z
   .string()
   .max(300)
   .regex(/^\/[a-z0-9\-/]*$/, "must be a path of slugs");
+
+const slug = z
+  .string()
+  .max(160)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+/** A name the browser typed or stored, on one line and cut short: it reaches the model as data. */
+const plannerName = z
+  .string()
+  .max(2000)
+  .transform((value) => value.replace(/\s+/g, " ").trim().slice(0, 80));
+
+/**
+ * The browser's snapshots come from its own storage (a cookie, localStorage), which an old
+ * version or a hand-edited value fills with anything. A bad entry is dropped and a long list cut,
+ * so a stale cookie costs Parky one entry, never the whole chat.
+ */
+function lenientList<T extends z.ZodType>(item: T, max: number) {
+  // Optional first, so a missing list reaches the transform and comes out empty.
+  return z
+    .unknown()
+    .optional()
+    .transform((value): z.output<T>[] =>
+      (Array.isArray(value) ? value : [])
+        .map((entry) => item.safeParse(entry))
+        .filter((parsed) => parsed.success)
+        .map((parsed) => parsed.data as z.output<T>)
+        .slice(0, max),
+    );
+}
+
+/** A value that does not parse counts as absent instead of failing the request. */
+function lenient<T extends z.ZodType>(schema: T) {
+  return (
+    z
+      .unknown()
+      .transform((value): z.output<T> | undefined => {
+        const parsed = schema.safeParse(value);
+        return parsed.success ? (parsed.data as z.output<T>) : undefined;
+      })
+      // Optional, so the key is optional in the parsed type as well.
+      .optional()
+  );
+}
+
+/** A planner entry's id, as the browser made it. */
+export const plannerEntryId = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+/** HH:MM on the park's clock, as the planner stores it. */
+export const plannerClock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+
+/** What the planner knows about the party, per day. */
+export const plannerPrefs = z.object({
+  riderHeightCm: z.number().int().min(50).max(250).optional(),
+  avoidWet: z.boolean().optional(),
+  earlyEntry: z.boolean().optional(),
+});
+
+/**
+ * The visitor's trip planner as the browser holds it, sent with every question so Parky can read
+ * and change it. Unknown keys are dropped, a bad day or entry too (see {@link lenientList}); at
+ * most 6 days of 40 entries.
+ */
+export const plannerSnapshotSchema = z.object({
+  active: lenient(z.object({ park: slug, date: z.iso.date() })),
+  days: lenientList(
+    z.object({
+      park: z.object({ slug, name: plannerName }),
+      date: z.iso.date(),
+      prefs: lenient(plannerPrefs),
+      entries: lenientList(
+        z.object({
+          id: plannerEntryId,
+          kind: z.enum(["ride", "show", "block"]),
+          name: plannerName,
+          rideSlug: lenient(slug),
+          start: lenient(plannerClock),
+          durationMinutes: lenient(z.number().int().min(1).max(720)),
+          done: lenient(z.boolean()),
+        }),
+        40,
+      ),
+    }),
+    6,
+  ),
+});
+export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
+export type PlannerDay = PlannerSnapshot["days"][number];
+
+/**
+ * The browser's push state and the alerts it holds, sent with every question. Lenient like the
+ * planner; at most 100 of each, the push endpoints' own cap per browser. An unknown push state
+ * reads as "unavailable", so Parky offers nothing it cannot deliver.
+ */
+export const alertsSnapshotSchema = z.object({
+  push: z
+    .unknown()
+    .optional()
+    .transform((value) =>
+      value === "ready" || value === "needs-permission"
+        ? value
+        : ("unavailable" as const),
+    ),
+  rides: lenientList(
+    z.object({
+      park: slug,
+      rideSlug: slug,
+      name: plannerName,
+      kind: z.enum(["wait_below", "reopen"]),
+      thresholdMinutes: lenient(
+        z
+          .number()
+          .int()
+          .min(RIDE_ALERT_THRESHOLD_MIN)
+          .max(RIDE_ALERT_THRESHOLD_MAX),
+      ),
+    }),
+    100,
+  ),
+  shows: lenientList(
+    z.object({
+      park: slug,
+      showSlug: slug,
+      name: plannerName,
+      start: lenient(z.string().max(40)),
+    }),
+    100,
+  ),
+});
+export type AlertsSnapshot = z.infer<typeof alertsSnapshotSchema>;
+
+/** The kinds a visitor can favourite, as `set_favorite` and the snapshot name them. */
+export const FAVORITE_ENTITIES = [
+  "park",
+  "attraction",
+  "show",
+  "restaurant",
+] as const;
+export type FavoriteEntity = (typeof FAVORITE_ENTITIES)[number];
+
+const favoriteIds = lenientList(z.uuid(), 50);
+
+/** The ids of the visitor's favourites, as the browser's cookie holds them; lenient like the rest. */
+export const favoritesSnapshotSchema = z.object({
+  parks: favoriteIds,
+  attractions: favoriteIds,
+  shows: favoriteIds,
+  restaurants: favoriteIds,
+});
+export type FavoritesSnapshot = z.infer<typeof favoritesSnapshotSchema>;
 
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
@@ -45,6 +203,9 @@ export const chatRequestSchema = z.strictObject({
       lng: Math.round(lng * 100) / 100,
     }))
     .optional(),
+  planner: lenient(plannerSnapshotSchema),
+  alerts: lenient(alertsSnapshotSchema),
+  favorites: lenient(favoritesSnapshotSchema),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

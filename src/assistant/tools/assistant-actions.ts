@@ -327,10 +327,98 @@ export type ClientAction =
       date: string;
       mode: "order" | "headliners";
     }
+  /** Entry ids are always ones the browser sent in the chat's planner snapshot. */
+  | {
+      type: "planner_remove";
+      park: PlannerPark;
+      date: string;
+      entryIds: string[];
+    }
+  | {
+      type: "planner_move";
+      park: PlannerPark;
+      date: string;
+      entryId: string;
+      toIndex: number;
+    }
+  | {
+      type: "planner_update_block";
+      park: PlannerPark;
+      date: string;
+      entryId: string;
+      label?: string;
+      /** HH:MM, the park's clock. */
+      start?: string;
+      durationMinutes?: number;
+    }
+  | {
+      type: "planner_add_show";
+      park: PlannerPark;
+      date: string;
+      showSlug: string;
+      /** HH:MM, the park's clock, one of the show's times that day. */
+      start: string;
+    }
+  | {
+      type: "planner_set_prefs";
+      park: PlannerPark;
+      date: string;
+      prefs: {
+        riderHeightCm?: number;
+        avoidWet?: boolean;
+        earlyEntry?: boolean;
+      };
+    }
+  | {
+      type: "planner_mark_done";
+      park: PlannerPark;
+      date: string;
+      entryIds: string[];
+      done: boolean;
+    }
+  | { type: "planner_clear_day"; park: PlannerPark; date: string }
+  /** The widget files these through its own push endpoints, which check them again. */
+  | {
+      type: "alert_ride_set";
+      park: PlannerPark;
+      rideId: string;
+      rideSlug: string;
+      rideName: string;
+      kind: "wait_below" | "reopen";
+      thresholdMinutes?: number;
+    }
+  | {
+      type: "alert_show_set";
+      park: PlannerPark;
+      showId: string;
+      showSlug: string;
+      showName: string;
+      /** The performance, ISO 8601 with the park's offset (the follow's `startTime`). */
+      start: string;
+    }
+  | {
+      type: "alert_remove";
+      park: PlannerPark;
+      rideSlug?: string;
+      showSlug?: string;
+    }
+  /** `entity` is the kind, so it cannot clash with the action's own `type`. */
+  | {
+      type: "favorite_set";
+      entity: "park" | "attraction" | "show" | "restaurant";
+      id: string;
+      name: string;
+      on: boolean;
+    }
+  | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
+  | { type: "planner_undo"; park: PlannerPark; date: string }
+  | { type: "planner_share" }
   /** The same page in another of the site's languages, carried out once the answer is complete. */
   | { type: "switch_locale"; locale: AssistantLocale }
   /** Parky stored the visitor's feedback; the widget shows it under the answer. */
-  | { type: "feedback_sent" };
+  | { type: "feedback_sent" }
+  /** Parky closed the chat; the widget locks its input for `cooldownMinutes`. */
+  | { type: "chat_end"; cooldownMinutes: number };
 
 /** The trip planner's block icons (park.fan `PLANNER_BLOCK_ICONS`). */
 export const PLANNER_BLOCK_ICONS = [

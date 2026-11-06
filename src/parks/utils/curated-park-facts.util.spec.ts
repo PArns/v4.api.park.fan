@@ -2,6 +2,7 @@ import {
   abbreviationsProblem,
   CURATED_PARK_COLUMNS,
   CURATED_PARK_DB_COLUMNS,
+  inheritedMachineMarks,
   resolveCuratedPark,
   resolveEarlyEntry,
   resolveNoWaitTimesReason,
@@ -185,6 +186,12 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
       "curated_park_type",
       "curated_article_de",
       "curated_abbreviations",
+      "curated_fun_facts_en",
+      "curated_fun_facts_de",
+      "curated_fun_facts_nl",
+      "curated_fun_facts_fr",
+      "curated_fun_facts_es",
+      "curated_fun_facts_it",
       "curated_no_wait_times_reason",
       "curated_uses_twelve_hour_clock",
       "curated_has_early_entry",
@@ -360,5 +367,26 @@ describe("resolveEarlyEntry", () => {
         curatedEarlyEntryMinutesOffPeak: 7.5,
       }),
     ).toEqual({ hasEarlyEntry: true });
+  });
+});
+
+describe("inheritedMachineMarks", () => {
+  const mark = (from: "en" | "de") => ({ from, sourceHash: "h" });
+
+  it("carries the loser's mark with each fun-fact locale the merge inherited", () => {
+    expect(
+      inheritedMachineMarks(
+        { nl: mark("en") },
+        { de: mark("en"), fr: mark("en") },
+        ["curatedFunFactsDe", "curatedWebsite"],
+      ),
+    ).toEqual({ nl: mark("en"), de: mark("en") });
+  });
+
+  it("changes nothing when no inherited locale was the machine's", () => {
+    expect(
+      inheritedMachineMarks(null, { fr: mark("en") }, ["curatedFunFactsDe"]),
+    ).toBeNull();
+    expect(inheritedMachineMarks(null, null, [])).toBeNull();
   });
 });

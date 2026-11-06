@@ -117,6 +117,7 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
     },
     shows: (dto.shows ?? []).length,
     restaurants: (dto.restaurants ?? []).length,
+    funFacts: dto.funFacts ?? null,
   };
 }
 
@@ -128,8 +129,8 @@ export const getParkTool = defineMcpTool({
     "park's timezone, crowd level and average/peak waits, current weather, ride counts by status, " +
     "the longest standby waits, rides that are down (since when, and whether the park reported it " +
     "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
-    "(since when) and rides that have not run " +
-    "today. Pass the park id from find_parks, or its slug when that is unambiguous.",
+    "(since when), rides that have not run today, and the editors' fun facts about the park " +
+    "per locale. Pass the park id from find_parks, or its slug when that is unambiguous.",
   input: {
     park: z
       .string()

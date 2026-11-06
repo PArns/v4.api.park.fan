@@ -1,7 +1,12 @@
 import type { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
-import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
+import {
+  FUN_FACT_COLUMNS,
+  type FunFactLocale,
+  type FunFactsMachineMarks,
+  resolveCuratedPark,
+} from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
@@ -66,6 +71,11 @@ export interface CuratedFieldSpec {
    * ride in the catalogue shows a "curated" badge it never earned.
    */
   defaultValue?: unknown;
+  /**
+   * A hint about this row's value, shown instead of `hint` when it returns text: that a fun-fact
+   * locale was machine-translated. A function, so `/content/fields` (JSON) never serves it.
+   */
+  entityHint?: (entity: Record<string, unknown>) => string | null;
 }
 
 /**
@@ -336,6 +346,15 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "zeigte sonst auf eine andere Bahn, und der Wikidata-Import joint darauf.",
   },
 ];
+
+const FUN_FACT_LANGUAGE_LABELS: Record<FunFactLocale, string> = {
+  en: "Englisch",
+  de: "Deutsch",
+  nl: "Niederländisch",
+  fr: "Französisch",
+  es: "Spanisch",
+  it: "Italienisch",
+};
 
 export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   {
@@ -620,6 +639,33 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "express-pass, lightning-lane. Damit verlinkt der Chip auf der Bahnseite " +
       "ins Glossar. Eine unbekannte Id wird beim Speichern abgelehnt.",
   },
+  ...Object.entries(FUN_FACT_COLUMNS).map(
+    ([locale, key]): CuratedFieldSpec => ({
+      key,
+      label: `Fun Facts (${FUN_FACT_LANGUAGE_LABELS[locale as FunFactLocale]})`,
+      type: "longtext",
+      syncedKey: null,
+      resolvedKey: null,
+      group: "Fun Facts",
+      maxLength: 2000,
+      hint:
+        locale === "en"
+          ? "Ein Fakt pro Zeile, kurz genug für Parkys Sprechblase. Nur, was " +
+            "eine Quelle belegt. Nach dem Speichern füllt eine Maschine die " +
+            "leeren Sprachen; was du selbst tippst, überschreibt sie nie."
+          : undefined,
+      entityHint: (park) => {
+        const mark = (park.funFactsMachine as FunFactsMachineMarks | null)?.[
+          locale as FunFactLocale
+        ];
+        return mark
+          ? `Maschinell übersetzt aus ${FUN_FACT_LANGUAGE_LABELS[mark.from]}. ` +
+              "Bearbeitest du das Feld, gehört es dir und wird nicht mehr " +
+              "überschrieben."
+          : null;
+      },
+    }),
+  ),
   {
     key: "curationNote",
     label: "Notiz",
@@ -705,7 +751,9 @@ function buildViews(
       ...(spec.min !== undefined ? { min: spec.min } : {}),
       ...(spec.max !== undefined ? { max: spec.max } : {}),
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
-      ...(spec.hint ? { hint: spec.hint } : {}),
+      ...((spec.entityHint?.(entity) ?? spec.hint)
+        ? { hint: spec.entityHint?.(entity) ?? spec.hint }
+        : {}),
     };
   });
 }

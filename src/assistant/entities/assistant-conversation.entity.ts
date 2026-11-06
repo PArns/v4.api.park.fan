@@ -47,6 +47,14 @@ export class AssistantConversation {
   @Column({ type: "smallint", default: 0 })
   rating: number;
 
+  /** When Parky closed the chat for sustained abuse (`end_chat`); it takes no question after. */
+  @Column({ type: "timestamptz", nullable: true })
+  endedAt: Date | null;
+
+  /** The kind of abuse Parky named, and his short note on it. */
+  @Column({ type: "varchar", length: 240, nullable: true })
+  endedReason: string | null;
+
   @OneToMany(() => AssistantMessage, (message) => message.conversation)
   messages: AssistantMessage[];
 

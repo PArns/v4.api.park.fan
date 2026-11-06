@@ -26,7 +26,10 @@ import {
   calculateParkPriority as _calculateParkPriority,
   hasScheduleData as _hasScheduleData,
 } from "../utils/park-merge.util";
-import { CURATED_PARK_COLUMNS } from "../utils/curated-park-facts.util";
+import {
+  CURATED_PARK_COLUMNS,
+  inheritedMachineMarks,
+} from "../utils/curated-park-facts.util";
 
 export interface MergeResult {
   success: boolean;
@@ -681,6 +684,17 @@ export class ParkMergeService {
         row[column] = theirs;
         inherited.push(column);
       }
+    }
+    // An inherited fun-fact locale keeps its machine mark, or the next save
+    // would take the loser's translation for one an editor typed.
+    const carried = inheritedMachineMarks(
+      winner.funFactsMachine,
+      loser.funFactsMachine,
+      inherited,
+    );
+    if (carried) {
+      updates.funFactsMachine = carried;
+      winner.funFactsMachine = carried;
     }
     if (inherited.length > 0) {
       this.logger.log(

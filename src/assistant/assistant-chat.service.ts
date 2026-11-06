@@ -18,6 +18,7 @@ import type { ChatRequest } from "./assistant.schemas";
 import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
+  storedToolInput,
   toolStatus,
   type AnswerState,
   type AssistantToolContext,
@@ -65,7 +66,7 @@ export interface PreparedChat {
 
 /** Why a chat is refused before anything is streamed. */
 /** Why a question gets no answer; `junk` repeats the question just answered. */
-export type ChatRefusal = "off" | "not-found" | "limit" | "junk";
+export type ChatRefusal = "off" | "not-found" | "limit" | "junk" | "ended";
 
 interface Usage {
   input: number;
@@ -118,6 +119,8 @@ export class AssistantChatService {
       if (!conversation || conversation.sessionHash !== sessionHash) {
         return "not-found";
       }
+      // A chat Parky ended stays ended; the session's own ban runs out on its own.
+      if (conversation.endedAt) return "ended";
       const earlier = await this.messages.find({
         where: { conversationId: conversation.id },
         order: { createdAt: "DESC" },
@@ -180,6 +183,9 @@ export class AssistantChatService {
             request.pagePath,
             request.locale,
           ),
+          planner: request.planner,
+          alerts: request.alerts,
+          favorites: request.favorites,
         }),
       },
     ];
@@ -195,6 +201,9 @@ export class AssistantChatService {
       ip,
       location: request.location ?? null,
       timeZone,
+      planner: request.planner ?? null,
+      alerts: request.alerts ?? null,
+      favorites: request.favorites ?? null,
       chat: {
         conversationId: conversation.id,
         pagePath: request.pagePath,
@@ -277,7 +286,7 @@ export class AssistantChatService {
             if (result.action) emit({ type: "action", action: result.action });
             toolCalls.push({
               name: call.name,
-              input: call.input,
+              input: storedToolInput(call.input),
               ...(result.isError && { error: true }),
             });
             return {

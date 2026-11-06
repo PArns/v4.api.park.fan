@@ -103,6 +103,28 @@ true bit of lore instead of describing the gap; asked to entertain, he tells a t
 once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
 (`SYSTEM_PROMPT_VERSION`, 14 since these rules).
 
+The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
+page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
+safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
+does, and when Parky may call it is the prompt's action rule.
+
+### The prompt eval
+
+`src/assistant/assistant-eval.ts` sends 34 short chats (`assistant-eval.fixtures.ts`: page, planner,
+alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
+before it, or a tool that must not be called (canned results stand in for a second step). It prints
+the prompt's tokens alone and with the tools, then a pass/fail table:
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval
+ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval --prompt-ref origin/main   # another commit's prompt, this checkout's tools
+```
+
+It reads the key from the environment only and costs a few cents a run. `--only <case id>` runs one
+case. The model answers differently from run to run, so a single failure is worth a second run
+before it is worth a rule.
+
 ## Language and feedback from the chat
 
 Parky answers in the language the visitor writes in when it is one of the six (`ASSISTANT_LOCALES`),
@@ -130,7 +152,9 @@ days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
 which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cached ten minutes in
-Redis; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
+Redis per full query; `get_post`'s optional `question` goes out as `q`, and the frontend then
+answers with the intro and the best-matching sections as `text`, every heading in `sections` and
+the ones left out in `omitted`, so the model can ask again for one of those; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
@@ -208,6 +232,109 @@ buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_bloc
 `plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner"), `switch_language`
 (`switch_locale` with the locale; the widget carries it out once the answer is complete) and
 `submit_feedback` (`feedback_sent`, a chip under the answer).
+
+### The trip planner in the chat
+
+The chat request carries an optional `planner` snapshot of the visitor's plan (`plannerSnapshotSchema`
+in `assistant.schemas.ts`): `{ active?: { park, date }, days: [{ park: { slug, name }, date,
+prefs?: { riderHeightCm?, avoidWet?, earlyEntry? }, entries: [{ id, kind: "ride" | "show" |
+"block", name, rideSlug?, start?: "HH:MM", durationMinutes?, done? }] }] }`, at most 6 days and 40
+entries a day. **The snapshots never fail a chat** (`lenientList`, `lenient`): they come from the
+browser's own storage, so an unknown key, a bad day or entry, a bad optional value or a list that
+is not one is dropped, a list too long is cut, and a snapshot that is not an object counts as
+absent. The same holds for `alerts` and `favorites` below. Names are cut to 80 characters on one line; the snapshot reaches the
+model as JSON in "This chat", marked as data. Parky answers "what's next" from it without a tool.
+
+The planner tools check the park like the others (`planPark`) and refuse a day or an entry id the
+snapshot does not hold, so no id is ever guessed. Every `park` below is the `PlannerPark` the other
+planner actions carry; times are `HH:MM` on the park's clock.
+
+| Tool                | Action                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `plan_remove`       | `{ type: "planner_remove", park, date, entryIds }`                                         |
+| `plan_move`         | `{ type: "planner_move", park, date, entryId, toIndex }` (0-based, within the day)         |
+| `plan_update_block` | `{ type: "planner_update_block", park, date, entryId, label?, start?, durationMinutes? }`  |
+| `plan_add_show`     | `{ type: "planner_add_show", park, date, showSlug, start }` (one of the show's times then) |
+| `plan_set_party`    | `{ type: "planner_set_prefs", park, date, prefs }`                                         |
+| `plan_mark_done`    | `{ type: "planner_mark_done", park, date, entryIds, done }`                                |
+| `plan_clear_day`    | `{ type: "planner_clear_day", park, date }` (input `confirmed: true`, after a yes)         |
+| `plan_trip`         | `{ type: "planner_reserve_days", park, dates }` (1 to 6, deduplicated, sorted)             |
+| `plan_undo`         | `{ type: "planner_undo", park, date }`                                                     |
+| `plan_share`        | `{ type: "planner_share" }` (refused with nothing planned)                                 |
+
+`plan_update_block` changes blocks only. `plan_add_show` checks the time against the show's
+showtimes that day; `get_shows` lists each show's `slug` for it. `plan_undo` takes back Parky's
+own last change to the day, and the widget refuses it when the visitor changed the day since; Parky sees only the snapshot, so when a visitor says the
+undo did not work he says the day changed since and offers to make the change by hand.
+
+### Push alerts in the chat
+
+The chat request carries an optional `alerts` snapshot (`alertsSnapshotSchema`): `{ push: "ready" |
+"needs-permission" | "unavailable", rides: [{ park, rideSlug, name, kind: "wait_below" | "reopen",
+thresholdMinutes? }], shows: [{ park, showSlug, name, start? }] }`, at most 100 of each (the push
+endpoints' cap per browser); an unknown `push` reads as `unavailable`. It reaches the model as JSON in
+"This chat". The widget files the alerts through its own [push](push.md) endpoints, which check
+them again; the tools check first, so Parky never offers what those would refuse.
+
+| Tool                | Action                                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `set_ride_alert`    | `{ type: "alert_ride_set", park, rideId, rideSlug, rideName, kind, thresholdMinutes? }`              |
+| `set_show_reminder` | `{ type: "alert_show_set", park, showId, showSlug, showName, start }` (`start` the follow's instant) |
+| `remove_alert`      | `{ type: "alert_remove", park, rideSlug? \| showSlug? }` (one held in the snapshot)                  |
+
+`set_ride_alert` refuses a ride of another park, a `wait_below` without a threshold or outside
+1–240 minutes (`RIDE_ALERT_THRESHOLD_*`), a park whose wait times cannot be read and a reopen alert
+on a ride open whenever its park is. `set_show_reminder` takes one of today's verified showtimes, as
+`HH:MM` on the park's clock, and sends it as an instant with the park's offset. With push
+`unavailable` both refuse.
+
+`get_ride` carries `reopening` while a ride is not running (`reopeningOf`): `breakdown`
+(`downSince`, `reportedByPark`, the outage estimate's `backWithin30MinutesPercent`,
+`backWithin60MinutesPercent`, `likelyBack`, and `typicalOutageMinutes`, the median of its
+outages), `works` (`closedUntil`, the works period's last closed day, null while unknown;
+`estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth` in the park's
+month) or `unknown`. `works` and `season` also carry `reopensOn`: the first operating day of the
+park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query behind
+`nextSchedule`) after the last closed day or from the first of the next season month; null when
+the calendar has none yet, absent when nothing says when the closure ends.
+Parky words a breakdown as an estimate from past outages, never a promise.
+
+### Favourites in the chat
+
+The chat request carries an optional `favorites` snapshot (`favoritesSnapshotSchema`): `{ parks,
+attractions, shows, restaurants }`, uuid lists of at most 50 each; a value that is not a uuid is dropped.
+"This chat" names only how many there are; `get_favorites` resolves the ids through
+`FavoritesService.getFavorites`, the service behind [`/v1/favorites`](favorites.md) and its Redis
+cache, and returns per kind the id, name, park, status and, for rides, the standby wait and crowd
+level, for parks the crowd level and average wait, for shows today's times.
+
+`set_favorite` (`entity`: `park` | `attraction` | `show` | `restaurant`, `id`, `on`) looks the id
+up and answers `{ type: "favorite_set", entity, id, name, on }`; an id nobody has is refused. The
+kind is `entity` so it cannot clash with the action's `type`. `get_shows` and `find_restaurants`
+list each entry's `id` for it (the restaurants card leaves it out).
+
+### Parky ends a chat
+
+For sustained abuse only (insults or harassment aimed at Parky or others, slurs, sexual harassment,
+pushing again and again for hateful words), and only after one friendly warning earlier in the same
+chat, Parky calls `end_chat` (`reason`: `insults` | `harassment` | `slurs` | `sexual_harassment` |
+`hate_bait`, optional `note`) and says goodbye in one calm sentence. Criticism, frustration,
+swearing about a queue, jokes, teasing, off-topic questions and prompt injection never qualify;
+they stay the teasing and off-topic rules. The tool refuses on a chat's first question, where no
+warning can have come before, and runs once per answer.
+
+- The action is `{ type: "chat_end", cooldownMinutes }` (`CHAT_END_COOLDOWN_MINUTES`, 15); the
+  widget locks its input.
+- **The server enforces it:** the conversation gets `endedAt` and `endedReason` and takes no
+  further question (403), and the session that sent it is refused every question for the cooldown
+  (Redis `assistant:ended:<hash>`, `AssistantRateLimitService.endChats`).
+- **The refusal:** `403 { statusCode: 403, message: "chat_ended", code: "chat_ended", retryAfterSeconds }` with
+  `Retry-After` while the session's ban runs; for the ended chat after that, the same body without
+  `retryAfterSeconds`. A new chat from the same session works once the cooldown is over. A stream
+  is never refused midway: the answer that ends the chat streams to its end and carries the
+  `chat_end` action; only the next question gets the 403.
+- The admin's chat list and chat view carry `endedAt` and `endedReason`; the admin MCP's
+  `assistant_conversations` and `assistant_conversation` show `endedByParky { at, reason }`.
 
 ### Card shapes
 
@@ -361,8 +488,12 @@ makes the stored key unreadable: enter it again.
 
 Chats (`assistant_conversations`, `assistant_messages`) keep no address. `visitorKey` is a hash of
 the address with the day and the master key, which tells one visitor's chats of a day apart and
-nothing more. They are deleted after 90 days by the nightly `assistant` queue job
-(`prune-conversations`, 04:50). Feedback (`site_feedback`) is kept until it is deleted by hand,
+nothing more. They are deleted after 7 days (`CONVERSATION_RETENTION_DAYS`), ended chats included,
+by the nightly `assistant` queue job (`prune-conversations`, 04:50), in batches of 2,000. Each
+batch first adds what it deletes to `assistant_day_stats`: per UTC day only counts of chats,
+messages, tokens, cost and thumbs up and down, no text and no visitor key, so `GET
+/v1/admin/assistant/stats` still covers 30 days (live rows plus those sums). The daily token budget
+lives in Redis and reads no chat row. Feedback (`site_feedback`) is kept until it is deleted by hand,
 e-mail included; its link to a chat leads nowhere once the chat is pruned. `source` says whether
 the visitor sent it from the form (`form`, every row from before the column) or Parky filed it from
 the chat (`chat`, with `kind`). The admin, park.fan's pages and the admin MCP show every text of a

@@ -112,6 +112,63 @@ describe("AssistantController.ask, junk and pauses", () => {
   });
 });
 
+describe("AssistantController.ask, after Parky ended a chat", () => {
+  function setup(prepared: unknown = "off") {
+    const rateLimit = new AssistantRateLimitService(fakeRedis() as never);
+    jest
+      .spyOn(rateLimit, "check")
+      .mockResolvedValue({ allowed: true, retryAfterSeconds: 0 });
+    const chat = {
+      prepare: jest.fn().mockResolvedValue(prepared),
+    } as unknown as AssistantChatService;
+    const controller = new AssistantController(
+      {} as AssistantSettingsService,
+      chat,
+      {} as AssistantRecordsService,
+      rateLimit,
+      { session: () => "session-1" } as unknown as AssistantChallengeService,
+    );
+    const ask = async () => {
+      const { response, sent } = fakeResponse();
+      await controller.ask(
+        { locale: "de", pagePath: "/de", message: "Hallo", sessionToken: "t" },
+        { headers: {}, socket: {} } as unknown as Request,
+        response,
+      );
+      return sent;
+    };
+    return { ask, chat, rateLimit };
+  }
+
+  it("refuses the session with 403 chat_ended for the cooldown, without asking the model", async () => {
+    const { ask, chat, rateLimit } = setup();
+    await rateLimit.endChats("session-1", 15 * 60);
+    const refused = await ask();
+    expect(refused.status).toBe(403);
+    expect(refused.body).toEqual({
+      statusCode: 403,
+      message: "chat_ended",
+      code: "chat_ended",
+      retryAfterSeconds: 900,
+    });
+    expect(refused.headers["Retry-After"]).toBe("900");
+    expect(chat.prepare).not.toHaveBeenCalled();
+  });
+
+  it("asks again once the cooldown is over, and keeps the ended chat itself closed", async () => {
+    const { ask, chat } = setup("ended");
+    const refused = await ask();
+    expect(chat.prepare).toHaveBeenCalledTimes(1);
+    expect(refused.status).toBe(403);
+    expect(refused.body).toEqual({
+      statusCode: 403,
+      message: "chat_ended",
+      code: "chat_ended",
+    });
+    expect(refused.headers["Retry-After"]).toBeUndefined();
+  });
+});
+
 describe("AssistantRateLimitService, feedback", () => {
   it("takes five an hour per session and twenty a day per address", async () => {
     const limiter = new AssistantRateLimitService(fakeRedis() as never);
