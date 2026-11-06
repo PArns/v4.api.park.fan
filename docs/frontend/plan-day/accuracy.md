@@ -48,10 +48,12 @@ The measured MAE of the **served** daily number (TFT for headliners over days 1â
 CatBoost where TFT has nothing) at this distance
 (`PredictionLeadSnapshotService.getLeadTimeMae`;
 [reader-facing accuracy](../../ml/reader-facing-accuracy.md#leadtimemae)). It reads
-the nearest sampled bucket **at or below** `leadDays` (`LEAD_BUCKETS`
-1/3/7/14/30/60): a 20-day question gets the 14-day figure.
+the nearest published bucket **at or below** `leadDays` (`LEAD_BUCKETS`
+1/3/7/14/30/60/90): a 20-day question gets the 14-day figure, and a 120-day question
+gets the 60-day figure until the 90-day bucket has filled.
 
-Absent while that bucket has fewer than `MIN_SCORED` scored served rows (when each
-fills: [the snapshot archive](../../ml/long-range-forecasting.md#6-the-lead-time-snapshot-archive)).
+A bucket publishes once it has `MIN_SCORED` scored served rows (when each fills:
+[the snapshot archive](../../ml/long-range-forecasting.md#6-the-lead-time-snapshot-archive)).
+Absent while no bucket at or below `leadDays` has.
 **Absent is the honest answer**: widen a band with distance without attaching a
 figure rather than invent one. Absent on a `climatology` day and for `leadDays â‰¤ 0`.
