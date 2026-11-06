@@ -1,4 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
+import { getQueueToken } from "@nestjs/bull";
+import type { Queue } from "bull";
 import { INestApplication, ValidationPipe } from "@nestjs/common";
 import request from "supertest";
 import { DataSource } from "typeorm";
@@ -768,6 +770,8 @@ describe("Search Console (e2e)", () => {
       .expect(403);
 
     seedGoogle();
+    // setup-e2e.ts keeps every queue paused, and this import needs its worker.
+    await app.get<Queue>(getQueueToken("search-console")).resume();
     const queued = await request(app.getHttpServer())
       .post("/v1/admin/search-console/import")
       .set("Authorization", `Bearer ${editor.session}`)
