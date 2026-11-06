@@ -33,7 +33,10 @@ window whatever the day, exactly as before the list existed. The choice is made 
 payload is built and the payload is cached, so it can lag a window boundary by the cache
 lifetime — still compare its dates yourself (next sections) before saying "running now".
 
-Curated by hand under `/admin/attractions/<id>`, in the group "Umbaupause". No
+Curated by hand under `/admin/attractions/<id>`, in the group "Umbaupause", and for
+Efteling also written weekly from the park's own maintenance calendar
+([Efteling sync](../admin/efteling-maintenance-sync.md)); which writer owns a window is
+stored beside it and not served — both kinds look the same here. No live
 feed carries it — ThemeParks.wiki passes `REFURBISHMENT` through with no start,
 no end and no announcement, and does not use it for every closure that really is
 planned work.

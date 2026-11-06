@@ -19,6 +19,7 @@ import {
 } from "../../common/revalidation/revalidation.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import {
+  keepWindowSources,
   normalizeWorksPeriod,
   resolveWorksPeriods,
   type WorksPeriod,
@@ -249,6 +250,14 @@ export class AdminCurationService {
       ATTRACTION_CURATED_KEYS,
       CURATED_FIELD_SPEC_BY_KEY.attraction,
     );
+    // An admin save sends no `source`; an automated window it left alone
+    // stays the sync's (PAR-1245).
+    if (Array.isArray(changes.curatedOutOfServicePeriods)) {
+      changes.curatedOutOfServicePeriods = keepWindowSources(
+        changes.curatedOutOfServicePeriods as WorksPeriod[],
+        resolveWorksPeriods(attraction),
+      );
+    }
 
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};
@@ -998,7 +1007,7 @@ function parseWorksPeriod(label: string, entry: unknown): WorksPeriod {
       `${label} must be an object with from, to and toUncertain`,
     );
   }
-  const { from, to, toUncertain } = entry as Record<string, unknown>;
+  const { from, to, toUncertain, source } = entry as Record<string, unknown>;
   const first = parseParkLocalDate(`${label} "from"`, from);
   const last = parseParkLocalDate(`${label} "to"`, to);
   if (!first && !last) {
@@ -1026,7 +1035,22 @@ function parseWorksPeriod(label: string, entry: unknown): WorksPeriod {
       `${label} marks its end as an estimate but has no last day`,
     );
   }
-  return normalizeWorksPeriod({ from: first, to: last, toUncertain });
+  // The owner marker an automated writer sets (PAR-1245); a short slug.
+  if (
+    source !== undefined &&
+    source !== null &&
+    (typeof source !== "string" || !/^[a-z0-9-]{1,64}$/.test(source))
+  ) {
+    throw new BadRequestException(
+      `${label} "source" must be a short lower-case slug`,
+    );
+  }
+  return normalizeWorksPeriod({
+    from: first,
+    to: last,
+    toUncertain,
+    source: source as string | null | undefined,
+  });
 }
 
 function describeWindow(window: WorksPeriod): string {

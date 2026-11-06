@@ -61,6 +61,7 @@ dates ISO strings or null. `redirectHost` is the redirect URI's host, with its p
 | POST | `enrich-parks` | editor | job `park-enrichment` / `enrich-all` |
 | POST | `import-ride-stats` | editor | job `ride-stats` / `import-stats` (Wikidata), body `{ limit? }` |
 | POST | `sync-six-flags-heights` | editor | job `six-flags-heights` / `sync-heights` |
+| POST | `sync-efteling-maintenance` | editor | job `manual-metadata` / `sync-efteling-maintenance`, body `{ dryRun? }` ([Efteling sync](efteling-maintenance-sync.md)) |
 | POST | `publish-ride-profiles` | editor | job `manual-metadata` / `publish-ride-profiles`, body `{ sinceHours? }` ([ride profiles](curation.md#ride-profiles)) |
 | POST | `detect-seasonal` | editor | job `analytics` / `detect-seasonal` ([seasonality](../architecture/attraction-status/seasonality.md)) |
 | POST | `aggregate-accuracy-stats` | editor | job `prediction-accuracy` / `aggregate-stats` |

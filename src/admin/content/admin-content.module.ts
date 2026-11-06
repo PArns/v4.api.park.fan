@@ -18,6 +18,7 @@ import { ParkSeasonsModule } from "../../parks/park-seasons.module";
 import { AssistantModule } from "../../assistant/assistant.module";
 import { FunFactTranslationService } from "./fun-fact-translation.service";
 import { FunFactTranslationProcessor } from "./fun-fact-translation.processor";
+import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.processor";
 
 /**
  * The editing half of the admin.
@@ -55,6 +56,7 @@ import { FunFactTranslationProcessor } from "./fun-fact-translation.processor";
     GlossaryTermIdsService,
     FunFactTranslationService,
     FunFactTranslationProcessor,
+    EftelingMaintenanceSyncProcessor,
   ],
   exports: [AdminCurationService],
 })

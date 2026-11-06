@@ -61,6 +61,13 @@ export interface WorksPeriod {
   to: string | null;
   /** Whether `to` is our estimate rather than a date the park published. */
   toUncertain: boolean;
+  /**
+   * Which automated writer owns this window, e.g.
+   * `"efteling-maintenance-calendar"` (PAR-1245); absent on a hand-written
+   * one. Stored and shown to the admin, never served: public payloads go
+   * through {@link publicWorksPeriod}.
+   */
+  source?: string;
 }
 
 export type WorksPeriodSource = CuratedOutOfServiceSource;
@@ -86,13 +93,44 @@ export function normalizeWorksPeriod(period: {
   from?: string | null;
   to?: string | null;
   toUncertain?: boolean | null;
+  source?: string | null;
 }): WorksPeriod {
   const to = period.to ?? null;
   return {
     from: period.from ?? null,
     to,
     toUncertain: to !== null && period.toUncertain === true,
+    ...(period.source ? { source: period.source } : {}),
   };
+}
+
+/** A window as a payload serves it: the owner marker is the admin's business. */
+export function publicWorksPeriod(window: WorksPeriod): WorksPeriod {
+  return { from: window.from, to: window.to, toUncertain: window.toUncertain };
+}
+
+/**
+ * `next` with each source-less window given the `source` of the `current`
+ * window with the same `from` and `to`.
+ *
+ * The admin form sends windows without `source`, and a save that left an
+ * automated window's dates alone must not turn it into a hand-written one —
+ * the next sync would then refuse to touch it and report it as a clash. A
+ * window whose dates the editor changed becomes theirs.
+ */
+export function keepWindowSources(
+  next: readonly WorksPeriod[],
+  current: readonly WorksPeriod[],
+): WorksPeriod[] {
+  return next.map((window) => {
+    if (window.source) return window;
+    const owner = current.find(
+      (c) => c.source && c.from === window.from && c.to === window.to,
+    );
+    return owner
+      ? normalizeWorksPeriod({ ...window, source: owner.source })
+      : window;
+  });
 }
 
 /**
@@ -136,7 +174,7 @@ export function resolveWorksPeriods(source: WorksPeriodSource): WorksPeriod[] {
 export function worksPeriodsOf(source: WorksPeriodSource): {
   worksPeriods?: WorksPeriod[];
 } {
-  const worksPeriods = resolveWorksPeriods(source);
+  const worksPeriods = resolveWorksPeriods(source).map(publicWorksPeriod);
   return worksPeriods.length > 0 ? { worksPeriods } : {};
 }
 
@@ -190,14 +228,14 @@ export function resolveWorksPeriod(
   const day = onDate ?? (timezone ? safeToday(timezone) : null);
   // shortcut: no park timezone means no "today"; the first window is the
   // honest single answer for the one or two rides that carry several.
-  if (!day) return windows[0];
+  if (!day) return publicWorksPeriod(windows[0]);
 
-  return (
+  return publicWorksPeriod(
     windows.find((window) => covers(window, day)) ??
-    windows.find((window) => window.from !== null && window.from > day) ??
-    windows.reduce((latest, window) =>
-      (window.to ?? "") > (latest.to ?? "") ? window : latest,
-    )
+      windows.find((window) => window.from !== null && window.from > day) ??
+      windows.reduce((latest, window) =>
+        (window.to ?? "") > (latest.to ?? "") ? window : latest,
+      ),
   );
 }
 
