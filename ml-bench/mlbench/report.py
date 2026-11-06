@@ -1263,12 +1263,17 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
             sum(cl_f__wt_med + cl_nf__wt_med) not_operated_ride_days
             FROM openness GROUP BY L ORDER BY L""")
     seasons = pd.DataFrame()
+    weekdays = pd.DataFrame()
     if "slot" in d.tables:
         models = [c[3:] for c in d.cols("slot") if c.startswith("n__")]
         agg = ", ".join(f"sum(sae__{m}) / nullif(sum(n__{m}), 0) AS \"{m}\"" for m in models)
         seasons = d.df(f"""SELECT L, CASE WHEN month(date) IN (12,1,2) THEN 'winter' WHEN month(date) IN (3,4,5)
                    THEN 'spring' WHEN month(date) IN (6,7,8) THEN 'summer' ELSE 'autumn' END season,
                    sum(n_truth) n, {agg} FROM slot WHERE L IN (0, 1, 3, 7, 14, 30) GROUP BY ALL ORDER BY L, season""")
+        # By TARGET weekday: an origin set locked to one weekday locks each lead to one
+        # target weekday, and this table is where that shows (harness.md, "Weekday aliasing").
+        weekdays = d.df(f"""SELECT L, isodow(date) isodow, dayname(date) weekday, sum(n_truth) n, {agg}
+                   FROM slot WHERE L IN (0, 1, 3, 7, 14, 30) GROUP BY ALL ORDER BY L, isodow""")
 
     uh = usable_horizon(C, order, cfg)
     ho = handover(C, cfg)
@@ -1277,7 +1282,7 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
                     ("d6_cross_park_ordering", d6x), ("d7_tie_rate", d7t), ("d7_star", d7s),
                     ("d8_quantile_coverage", d8q), ("d8_production_expected_error", d8p),
                     ("d8_trailing28", d8t), ("d9_openness", opn), ("d9_level_coverage", cov_lvl),
-                    ("mae_by_season", seasons)):
+                    ("mae_by_season", seasons), ("mae_by_weekday", weekdays)):
         t.to_csv(tdir / f"{name}.csv", index=False)
     C[(C["metric"] == "MAE") & (C["region"] == "all")].to_csv(tdir / "horizon_curve_mae.csv", index=False)
     C[C["metric"] != "MAE"].to_csv(tdir / "decision_metrics.csv", index=False)
