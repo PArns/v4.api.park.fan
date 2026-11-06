@@ -72,6 +72,15 @@ fallback. Free-flow rides (`open_with_park`) are not asked: they open with the p
 The ride's own page still says `CLOSED` for the same absence (`livePlaceholders()`). A park whose
 whole feed is silent never reaches this branch (§5).
 
+**A ride whose source stopped measuring it reads `UNKNOWN` too (PAR-1023)** — the case with a
+current row: the feed keeps delivering a CLOSED row with a real `dataSource` and a `lastUpdated`
+that stopped moving. `readsUnknownFromSilentSource` retracts that CLOSED when
+`attractions.source_last_fresh_at` is older than `SOURCE_SILENT_DAYS` (14), the park is `OPERATING`
+and neither `retired_at` nor `seasonOutSince` is set; a current `OPERATING` row is left alone
+(PAR-759). It runs on the park, ride and favourites payloads and never meets the never-observed rule
+above on one ride, because that one only sees rides without a row.
+[Feed drops](feed-drops.md#a-source-that-still-answers-and-has-stopped-measuring-par-1023-measured-2026-10-27).
+
 ## 5. A whole park gone silent
 
 The fallback above is written for one ride going quiet at a park whose feed works. A park where

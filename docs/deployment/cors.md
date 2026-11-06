@@ -36,8 +36,7 @@ statistic's beacon (`POST /v1/analytics/collect`) sends its JSON as
 `text/plain` through `navigator.sendBeacon`, a simple request without a
 preflight; it reads no answer, so it needs no CORS header either. It does
 need `Cross-Origin-Resource-Policy: cross-origin` on its answer, which the
-collect route and the deprecated `POST /v1/page-views` send in place of
-helmet's `same-origin`: a no-cors request whose answer that policy refuses
+collect route sends in place of helmet's `same-origin`: a no-cors request whose answer that policy refuses
 counts, and still shows as a blocked request in the browser. The origin check
 that keeps previews and scripts out of its counts is the collector's own
 ([site statistic](../frontend/site-analytics.md#privacy)), not CORS.

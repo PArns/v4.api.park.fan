@@ -56,7 +56,7 @@ page for the field or endpoint you are reading or changing.
 | [park-fun-facts](./park-fun-facts.md)                             | `funFacts`: Parky's curated park facts, per locale                                                              |
 | [ride-glossary-link](./ride-glossary-link.md)                     | `rideProfile` and the glossary → rides lookup                                                                   |
 | [weather-warnings](./weather-warnings.md)                         | `weather.warnings`                                                                                              |
-| [page-views](./page-views.md)                                     | `/v1/page-views`: the most-read counter                                                                         |
+| [page-views](./page-views.md)                                     | `/v1/page-views/top`: the most-read rankings                                                                    |
 | [site-analytics](./site-analytics.md)                             | `/v1/analytics/collect` and `/v1/admin/analytics/*`: the site statistic, its events and reports                 |
 | [search-console](./search-console.md)                             | `/v1/admin/search-console/*`: Google Search Console's queries, pages and series, joined with the site statistic |
 | [cpu-temperature](./cpu-temperature.md)                           | `/v1/admin/system-health`: the host's one CPU temperature and its limits, counted down from TjMax               |

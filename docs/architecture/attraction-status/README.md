@@ -40,7 +40,7 @@ The released changelog (`docs/changelog.md`) cites this subject as
 | 4a | [identity.md](identity.md) |
 | 4b | [review-marks.md](review-marks.md) |
 | 5.1 | [seasonality.md](seasonality.md#running-and-changing-the-detector) |
-| 5.2, 5.2a | [feed-drops.md](feed-drops.md) |
+| 5.2, 5.2a, 5.2b | [feed-drops.md](feed-drops.md) |
 | 5.3–5.5b | [duplicates.md](duplicates.md) |
 | 5.6, 5.7, 5.9, 5.9a | [reclassification-and-absence.md](reclassification-and-absence.md) |
 | 5.8 | [status-regimes.md](status-regimes.md#5-a-whole-park-gone-silent) |

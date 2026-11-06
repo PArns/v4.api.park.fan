@@ -11,6 +11,13 @@ below shipped once the other way.
   records that our data stopped arriving, not that the operator shut the ride (Europa-Park's
   attractions dropped from the feed read "closed" for ten weeks, in August).
   [Status regimes](../architecture/attraction-status/status-regimes.md).
+- **A ride whose source stopped measuring it reads `UNKNOWN` too**, a different signal: the feed
+  keeps answering with a real `dataSource` and its `lastUpdated` stops moving (LEGOLAND Billund, all
+  37 rides stamped April while open in October). The threshold is on the silence
+  (`SOURCE_SILENT_DAYS` = 14 via `attractions.source_last_fresh_at`), never on the current row's
+  feed age, which encodes the time of day and would take 80.6 % of every `CLOSED` in an open park.
+  `retired_at`, the resolved `seasonOutSince` and a live `OPERATING` row step in front of it.
+  [Feed drops](../architecture/attraction-status/feed-drops.md#a-source-that-still-answers-and-has-stopped-measuring-par-1023-measured-2026-10-27).
 - **An observation is read through `observedReadingsSql()`** (`closure-gap.sql.ts`), never a
   hand-rolled predicate: reconciliation and heartbeat rows are our bookkeeping, not readings. Three
   readers differ on purpose: `truthRowsSql` (forecast scoring drops heartbeats only), `isSourceAbsent`

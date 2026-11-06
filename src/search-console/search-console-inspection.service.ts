@@ -71,7 +71,10 @@ export function normalizeInspectionUrl(input: string): string {
       `"${url.hostname}" is not park.fan: only the property's own pages can be inspected`,
     );
   }
-  return `${INSPECTION_ORIGIN}${url.pathname}`;
+  // The site serves no trailing slash (Next.js redirects `/x/` to `/x`), so both are one URL.
+  const path =
+    url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
+  return `${INSPECTION_ORIGIN}${path}`;
 }
 
 const text = (value: string | undefined): string | null => value ?? null;

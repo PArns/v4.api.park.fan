@@ -1,93 +1,28 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Header,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-  UseInterceptors,
-} from "@nestjs/common";
+import { Controller, Get, Query, UseGuards } from "@nestjs/common";
 import {
   ApiOperation,
   ApiResponse,
   ApiSecurity,
   ApiTags,
 } from "@nestjs/swagger";
-import { Request } from "express";
-import { getRateLimitIp } from "../common/utils/request.util";
-import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
-import {
-  BEACON_RESOURCE_POLICY,
-  isFromSite,
-} from "../site-analytics/from-site.util";
 import { PageViewsService } from "./page-views.service";
 import {
   AdminPageViewsQueryDto,
   AdminPageViewsResponseDto,
-  RecordPageViewDto,
   TopPageViewsQueryDto,
   TopPageViewsResponseDto,
 } from "./dto/page-view.dto";
 
 /**
- * The public half: the rankings the frontend renders, and the old beacon's
- * write, now an alias that records a `page_read` in the site statistic.
- *
- * The browser sends the write straight here, never through the frontend's
- * relay, so its own address and User-Agent are the request's. The write
- * answers 204 whether or not the view was counted: a caller that could tell a
- * counted view from a refused one could probe the cap and the bot rule, and
- * nothing the beacon does depends on the answer. A browser that sends Do Not
- * Track or Global Privacy Control is not counted even if a page's beacon
- * failed to ask first, and in production neither is a request from anywhere
- * but park.fan, as on the collect endpoint.
+ * The public half: the rankings the frontend renders. A read is counted as a
+ * `page_read` sent to `POST /v1/analytics/collect`; the old beacon's
+ * `POST /v1/page-views` is gone (PAR-1158).
  */
 @ApiTags("page-views")
 @Controller("page-views")
 export class PageViewsController {
   constructor(private readonly pageViews: PageViewsService) {}
-
-  @Post()
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @Header("Cross-Origin-Resource-Policy", BEACON_RESOURCE_POLICY)
-  @UseInterceptors(new NoCdnCacheInterceptor())
-  @ApiOperation({
-    deprecated: true,
-    summary:
-      "Count one page view (deprecated: send `page_read` to /v1/analytics/collect)",
-    description:
-      "Kept for one release while the frontend moves its beacon to the " +
-      "site statistic; records the same `page_read` event. Bots, `DNT: 1`, " +
-      "`Sec-GPC: 1` and, in production, other origins than park.fan are not " +
-      "counted; one reader counts a page at most three times a day, one " +
-      "address ten times a day and 200 reads in all. Always 204.",
-  })
-  @ApiResponse({ status: 204 })
-  @ApiResponse({
-    status: 400,
-    description:
-      "Unknown kind or locale, or a key that is neither a `translationKey` " +
-      "(posts) nor a UUID (parks, attractions).",
-  })
-  async record(
-    @Body() body: RecordPageViewDto,
-    @Req() request: Request,
-  ): Promise<void> {
-    if (request.get("dnt") === "1" || request.get("sec-gpc") === "1") return;
-    if (!isFromSite(request, process.env.NODE_ENV === "production")) return;
-    await this.pageViews.record({
-      kind: body.kind,
-      key: body.key,
-      locale: body.locale,
-      ip: getRateLimitIp(request),
-      userAgent: request.get("user-agent") ?? null,
-    });
-  }
 
   @Get("top")
   @ApiOperation({

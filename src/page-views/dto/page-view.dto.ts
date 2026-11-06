@@ -1,57 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  Max,
-  Min,
-  Validate,
-  ValidatorConstraint,
-  type ValidationArguments,
-  type ValidatorConstraintInterface,
-} from "class-validator";
+import { IsIn, IsInt, IsOptional, Max, Min } from "class-validator";
 import {
   MAX_ADMIN_WINDOW_DAYS,
   MAX_TOP_LIMIT,
   PAGE_VIEW_KINDS,
   PAGE_VIEW_LOCALES,
   TOP_WINDOW_DAYS,
-  isPageKeyFor,
   type PageViewKind,
   type PageViewLocale,
 } from "../page-view.constants";
-
-/** The key has to fit the kind beside it, see `isPageKeyFor`. */
-@ValidatorConstraint({ name: "pageKeyForKind" })
-class PageKeyForKind implements ValidatorConstraintInterface {
-  validate(key: unknown, args: ValidationArguments): boolean {
-    return isPageKeyFor((args.object as RecordPageViewDto).kind, key);
-  }
-
-  defaultMessage(): string {
-    return "key must be a translationKey, or a UUID for a park or an attraction";
-  }
-}
-
-/** One view, as the frontend's beacon sends it. */
-export class RecordPageViewDto {
-  @ApiProperty({ enum: PAGE_VIEW_KINDS, example: "news" })
-  @IsIn(PAGE_VIEW_KINDS)
-  kind: PageViewKind;
-
-  @ApiProperty({
-    example: "europa-park-voltron-nevera-2026",
-    description:
-      "The post's `translationKey`, or the park's or attraction's UUID.",
-  })
-  @Validate(PageKeyForKind)
-  key: string;
-
-  @ApiProperty({ enum: PAGE_VIEW_LOCALES, example: "de" })
-  @IsIn(PAGE_VIEW_LOCALES)
-  locale: PageViewLocale;
-}
 
 /** `GET /v1/page-views/top`. */
 export class TopPageViewsQueryDto {

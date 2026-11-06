@@ -4,6 +4,7 @@ import { ConfigModule } from "@nestjs/config";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { getRedisConfig } from "../config/redis.config";
 import { BULL_QUEUE_REGISTRATIONS, bullPrefix } from "./queue-registrations";
+import { QueueSuccessRecorderService } from "./services/queue-success-recorder.service";
 import { QueueBootstrapService } from "./services/queue-bootstrap.service";
 import { QueueSchedulerService } from "./services/queue-scheduler.service";
 import { CacheWarmupService } from "./services/cache-warmup.service";
@@ -172,6 +173,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
   ],
   providers: [
     QueueBootstrapService,
+    QueueSuccessRecorderService,
     QueueSchedulerService,
     CacheWarmupService, // Cache warmup service
     ParkMetadataProcessor,

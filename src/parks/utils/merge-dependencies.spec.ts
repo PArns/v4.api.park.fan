@@ -98,7 +98,6 @@ describe("merge dependency tables", () => {
     "forecast_data",
     "headliner_attractions",
     "ml_prediction_anomalies",
-    "page_view_days",
     "pcn_forecasts",
     "park_seasons",
     "prediction_accuracy",
@@ -162,7 +161,6 @@ describe("merge dependency tables", () => {
     "external_entity_mapping",
     "headliner_attractions",
     "ml_prediction_anomalies",
-    "page_view_days",
     "park_daily_stats",
     "park_day_operations",
     "park_downtime_coverage",
@@ -343,29 +341,6 @@ describe("merge dependency tables", () => {
     });
   });
 
-  it("moves a merged park's and ride's page views onto the survivor, adding up shared days", async () => {
-    for (const [list, kind] of [
-      [ATTRACTION_DEPENDENCIES, "attraction"],
-      [PARK_DEPENDENCIES, "park"],
-    ] as const) {
-      const entry = list.find((d) => d.table === "page_view_days");
-      expect(entry?.strategy).toBe("custom");
-      const calls: Array<[string, unknown[] | undefined]> = [];
-      await entry!.apply!(
-        { query: async (sql, params) => calls.push([sql, params]) },
-        "winner",
-        "loser",
-      );
-      expect(calls[0][0]).toMatch(/^INSERT INTO page_view_days/);
-      expect(calls[0][0]).toContain(
-        "DO UPDATE SET views = page_view_days.views + EXCLUDED.views",
-      );
-      expect(calls[0][1]).toEqual(["loser", "winner", kind]);
-      expect(calls[1][0]).toMatch(/^DELETE FROM page_view_days/);
-      expect(calls[1][1]).toEqual(["loser", kind]);
-    }
-  });
-
   it("records a merged park's, ride's, show's or restaurant's survivor for the site statistic", async () => {
     for (const list of [
       ATTRACTION_DEPENDENCIES,
@@ -397,7 +372,7 @@ describe("merge dependency tables", () => {
   });
 
   it("hands attraction_review_marks to a function of its own", () => {
-    // One of five `custom` entries, and the bar is the table's shape: two
+    // One of four `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
     // `column` and `conflictColumns` can express it. The three generic
     // statements each name exactly one column.
@@ -424,14 +399,6 @@ describe("merge dependency tables", () => {
     const aggregates = ATTRACTION_DEPENDENCIES.find(
       (d) => d.table === "queue_data_aggregates",
     );
-    // The last two file the ride's or park's id in `key` beside a `kind`, and
-    // add the views up where both entities have a row for the same day.
-    const rideViews = ATTRACTION_DEPENDENCIES.find(
-      (d) => d.table === "page_view_days",
-    );
-    const parkViews = PARK_DEPENDENCIES.find(
-      (d) => d.table === "page_view_days",
-    );
     // The site statistic's merge record, one entry shared by all four kinds.
     const siteEvents = PARK_DEPENDENCIES.find(
       (d) => d.table === "site_entity_merges",
@@ -440,9 +407,7 @@ describe("merge dependency tables", () => {
       aggregates,
       marks,
       seasons,
-      rideViews,
       siteEvents,
-      parkViews,
       siteEvents,
       siteEvents,
       siteEvents,

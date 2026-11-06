@@ -50,6 +50,20 @@ describe("DataQualityMonitorService", () => {
       expect(sql).not.toMatch(/0\.7/);
     });
 
+    it("drops a cluster whose park the schedule kept closed since the silence (PAR-1236)", async () => {
+      // A frozen feed keeps rides "operating" through a closed week, so the
+      // health gate passes; the park's own schedule is what tells a season
+      // break from a dropped feed. Without schedule rows the cluster stays.
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findSilencedClusters();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(
+        /AND NOT \(\s*EXISTS[\s\S]*?"scheduleType" IN \('OPERATING', 'CLOSED'\)[\s\S]*?AND NOT EXISTS[\s\S]*?"scheduleType" = 'OPERATING'/,
+      );
+      expect(sql).toContain("(min(act.last_op) AT TIME ZONE p.timezone)::date");
+    });
+
     it("requires rows to still be arriving, so a silence is not a deletion", async () => {
       const query = jest.fn().mockResolvedValue([]);
       await build(query).findSilencedClusters();
@@ -439,6 +453,7 @@ describe("DataQualityMonitorService", () => {
         .mockImplementation((key: string) =>
           Promise.resolve(hash[key] ?? [null, null, null]),
         ),
+      hgetall: jest.fn().mockResolvedValue({}),
     });
 
     it("groups a queue's failures by job name and keeps the newest reason", async () => {
