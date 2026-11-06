@@ -25,7 +25,7 @@ deploy. Open it before changing the compose file, an environment variable or the
 | `ml-service`  | `./ml-service` (CatBoost)           | `mem_limit: 20g`, `ML_WORKERS` default 2 (each extra worker eats the 06:00 training margin)                                                               | 8000 internal           |
 | `nf-service`  | `./nf-service` (TFT, Chronos)       | `mem_limit: 14g`, `shm_size: 2gb`; never trigger its `/train` during ml-service's 06:00 training                                                          | 8000 internal           |
 | `pcn-service` | [`./pcn-service`](../../pcn-service/README.md) (intraday nowcast) | `mem_limit: 8g`, `shm_size: 2gb`; trains 08:30 UTC so GPU peaks do not overlap                                                                             | 8000 internal           |
-| `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB (the Dockerfile's `--max-old-space-size=6144` overrides the compose `NODE_OPTIONS` 4096); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
+| `api`         | `./Dockerfile` (NestJS, Node 26)    | `stop_grace_period: 30s`; heap 6 GB, set only by `NODE_OPTIONS=--max-old-space-size=6144` (a flag in the Dockerfile's `CMD` would override it); healthcheck `GET /v1/health/ready`                                                    | `${PORT:-3000}:3000`    |
 | `bull-board`  | `venatum/bull-board:latest`         | Reads Bull keys under `BULL_PREFIX` (default `parkfan`)                                                                                                    | `3001:3000`             |
 
 Those limits only fit the host because the nightly peaks are spaced in time

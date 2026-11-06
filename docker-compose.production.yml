@@ -294,7 +294,10 @@ services:
       # users; "false" stops the API calling nf-service /chronos/forecast at all.
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}
       - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=4096
+      # The API's only heap setting: a node flag in the Dockerfile's CMD would
+      # override it. api has no mem_limit; one added later needs ~2 GB above the
+      # heap for buffers and native memory (docs/deployment/container-memory-limits.md).
+      - NODE_OPTIONS=--max-old-space-size=6144
       # Always use volume path so .env cannot override with ./data/... (which is not mounted)
       - GEOIP_DATABASE_PATH=/app/geoip/GeoLite2-City.mmdb
       - GEOIP_MAXMIND_ACCOUNT_ID=${GEOIP_MAXMIND_ACCOUNT_ID}
