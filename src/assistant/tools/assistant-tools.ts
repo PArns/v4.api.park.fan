@@ -2600,6 +2600,22 @@ const ALREADY_SHOWN =
   "The user already sees the card or page and any text you wrote before this call; do not repeat it, add at most one new sentence.";
 
 /**
+ * A tool call's input as the chat log stores it. The party's details (a rider's height, staying
+ * dry, early entry) can come from the visitor's planner snapshot, which is passed to the model
+ * and never stored, so the log keeps only which of them were set.
+ */
+export function storedToolInput(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const { riderHeightCm, prefs, ...rest } = input as Record<string, unknown>;
+  return {
+    ...rest,
+    ...(riderHeightCm !== undefined && { riderHeightCm: "set" }),
+    ...(prefs !== null &&
+      typeof prefs === "object" && { prefs: Object.keys(prefs) }),
+  };
+}
+
+/**
  * Runs one tool call and returns what goes back to the model. A wrong name or
  * input, or a failing tool, becomes an error result the model can read; the
  * message of an unexpected error stays in the log.

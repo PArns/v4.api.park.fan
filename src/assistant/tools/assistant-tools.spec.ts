@@ -89,6 +89,7 @@ import {
   showsOnDay,
   reopeningOf,
   reopenSearchFrom,
+  storedToolInput,
   CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
 import { CalendarService } from "../../parks/services/calendar.service";
@@ -1633,5 +1634,24 @@ describe("end_chat", () => {
   it("takes no reason milder than abuse", async () => {
     const { call } = setup("x");
     expect((await call({ reason: "criticism" })).isError).toBe(true);
+  });
+});
+
+describe("storedToolInput", () => {
+  it("keeps which party details were set, never their values", () => {
+    expect(
+      storedToolInput({
+        park: "phantasialand",
+        prefs: { riderHeightCm: 112, avoidWet: true },
+      }),
+    ).toEqual({ park: "phantasialand", prefs: ["riderHeightCm", "avoidWet"] });
+    expect(
+      storedToolInput({
+        park: "phantasialand",
+        by: "speed",
+        riderHeightCm: 112,
+      }),
+    ).toEqual({ park: "phantasialand", by: "speed", riderHeightCm: "set" });
+    expect(storedToolInput({ rideId: "x" })).toEqual({ rideId: "x" });
   });
 });

@@ -18,6 +18,7 @@ import type { ChatRequest } from "./assistant.schemas";
 import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
+  storedToolInput,
   toolStatus,
   type AnswerState,
   type AssistantToolContext,
@@ -285,7 +286,7 @@ export class AssistantChatService {
             if (result.action) emit({ type: "action", action: result.action });
             toolCalls.push({
               name: call.name,
-              input: call.input,
+              input: storedToolInput(call.input),
               ...(result.isError && { error: true }),
             });
             return {
