@@ -37,8 +37,13 @@ Built in `ParkIntegrationService.buildIntegratedResponse`; the show rows come fr
 - **Every time of the day is listed, past ones included.** Compare with the clock yourself.
 - **Parse `startTime`, never cut the clock time out of the string.** It is ISO 8601 as the feed sent it,
   or in UTC (`…Z`) once `ShowsService.projectShowtimesToToday` has moved it onto today.
-- On this payload a showtime has `startTime` only; `type` and `endTime` are dropped. The favorites list
-  keeps them ([favorites](./favorites.md)).
+- On this payload a showtime has `startTime` and, when the feed's end is believable, `endTime`; `type`
+  is dropped. `endTime` is sent only when it is after `startTime` and at most three hours later
+  (`showtimeEndTime`): feeds send an end equal to the start as a placeholder (every Universal park,
+  most of Disney US), some Disney entries span 3–9 hours, and LEGOLAND, Universal Japan and Beijing
+  send none. On 2026-11-06 that left an end on 31 % of showtimes. A missing `endTime` says nothing
+  about how long a show runs. Same rule on the favorites list ([favorites](./favorites.md)), which
+  also keeps `type`.
 - The list is day-scoped data inside a payload the frontend keeps for 24 hours, so the API sends a
   revalidation when a park opens or closes
   ([caching](../architecture/caching-strategy.md#park-opening-and-closing-parkstatusrevalidationservice)).
