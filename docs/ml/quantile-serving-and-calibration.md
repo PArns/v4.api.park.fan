@@ -186,9 +186,17 @@ faithfully reported, and its magnitude lands on the MAE row rather than the q0.9
 **So the calendar steps down at day 60** (quiet ~38 → ~11). The step is two statistics meeting,
 not the near term being less certain. Do not close it by narrowing the measured side; the fix is
 to put CatBoost's side on the same empirical basis, and that is not possible yet — its error past
-60 days has never been measurable (`deduplicatePredictions` again), and
-`prediction_lead_snapshots` cannot report the `d60` bucket before **2026-11-02**. Tracked as
-PAR-167.
+60 days has never been measurable (`deduplicatePredictions` again). Tracked as PAR-167.
+
+**Path A becomes measurable after about three months.** The TFT serves target days up to
+forecast day + 59, so the `d60` and `d90` buckets of `prediction_lead_snapshots` (`LEAD_BUCKETS`)
+hold CatBoost's served level for headliners, with its `uncertainty_minutes` beside it. `d60` is the
+seam itself and reports from about 2026-12-12 (sourced rows began with PAR-854); `d90` was added
+for PAR-167 so the band can be checked beyond the seam as well, and its first rows are scored about
+92 nights after the deploy that added it (90 days to the target day, two more for the UTC−12
+cutoff). One night of headliners already clears `MIN_SCORED`, but read coverage per predicted band
+only once a few weeks have been scored: the first target days are all winter days. Until then the
+only CatBoost daily measurement is the lead-1 one above.
 
 **`confidence` moved too.** The TFT path emitted a flat `0.7` — invented, and on the wrong scale
 (`predict.py` emits 30–100). It now runs CatBoost's formula (60 % distance term, 40 % spread term,
@@ -266,7 +274,8 @@ baseline, only when it is > 0. Rules: [Unified crowd levels](../rules/crowd-leve
 ## Known limits
 
 - **Known limit:** the `h2-6` bucket never gets a factor and the longer buckets stay raw, because
-  `prediction_accuracy` keeps only the last writer per slot; the lead-preserving source is PAR-658.
+  `prediction_accuracy` keeps only the last writer per slot. The lead-preserving source is
+  [hourly lead snapshots](hourly-lead-snapshots.md) (PAR-658); the fit does not read it yet.
 - **Known limit:** at ≥ 12 h lead the median itself runs −37.5 min on mid and −63.4 min on busy
   slots, a level error the clamped factor no longer hides (PAR-1140).
 - The daily band seam at day 60 is PAR-167, above.

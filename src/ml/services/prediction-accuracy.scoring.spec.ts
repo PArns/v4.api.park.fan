@@ -9,6 +9,7 @@ import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.e
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { HourlyLeadSnapshotService } from "./hourly-lead-snapshot.service";
 import {
   PredictionAccuracyService,
   classifyComparison,
@@ -207,6 +208,7 @@ describe("PAR-912 — which compared slot is a forecast error", () => {
           },
           { provide: getRepositoryToken(WaitTimePrediction), useValue: {} },
           { provide: getRepositoryToken(QueueData), useValue: {} },
+          { provide: HourlyLeadSnapshotService, useValue: {} },
           {
             provide: REDIS_CLIENT,
             useValue: {

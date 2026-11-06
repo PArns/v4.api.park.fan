@@ -165,7 +165,8 @@ ride-day; walking from coordinates, else 3 / 8 min (`lib/planner/leg.ts`).
   absolute values are not comparable with the rest of the column.
 - `usable_horizon.csv` (with `leads_tested`, `not_tested_because`) and `handover.csv` (both CIs,
   `park_day_unit_agrees`).
-- `mae_by_season.csv` (unpaired, each model on its own coverage) and the per-question tables.
+- `mae_by_season.csv` and `mae_by_weekday.csv` (unpaired, each model on its own coverage) and the
+  per-question tables.
 - `report --vs <model>` adds `cells_vs_<model>.csv` from the paired sums `run --pair-with` wrote
   (`pn__a__b`, `psm__a__b`, `psr__a__b`). Pairs exist only **inside one run**; two runs share no
   paired column, so a difference of two runs' MAEs is not a paired comparison.
@@ -220,14 +221,17 @@ window. Both are needed to read a horizon curve honestly (see "Confounds" below)
   comes from autumn origins and d90 from summer ones. The full period has the mirror problem
   (lead L starts at first origin + L). Use `--origin-from/--origin-to` as a third view, read
   `mae_by_season.csv`, and treat every lead boundary as a band.
-- **Weekday aliasing.** No output table carries a weekday column. A `--shard i/n` with `n` a
+- **Weekday aliasing.** Only `mae_by_weekday.csv` carries a weekday column. A `--shard i/n` with `n` a
   multiple of 7 puts every origin on one weekday, which locks every planner lead to one target
   weekday (PAR-828's first Chronos-2 run: all origins Thursdays, so "d2" was Saturday). The
   runner now records an `origin_weekdays` census and `origin_weekday_distinct` in `run-*.json`
   and **refuses** such an origin set (n multiple of 7, or > 7 origins on ≤ 2 weekdays) unless
   `--allow-weekday-alias` states that the shards' union is complete
-  (`test_weekday_aliasing_is_refused_and_the_census_is_recorded`). A `mae_by_weekday` split is
-  PAR-1142.
+  (`test_weekday_aliasing_is_refused_and_the_census_is_recorded`). `mae_by_weekday.csv` (PAR-1142)
+  splits slot MAE by lead (0, 1, 3, 7, 14, 30) and TARGET weekday (`isodow`, `weekday`), like
+  `mae_by_season.csv`; a lead whose rows sit on one or two weekdays is aliased
+  (`test_mae_by_weekday_splits_slot_mae_by_target_weekday`). The tables of `20261009-baselines-v2`
+  predate it.
 
 ## Known defects
 

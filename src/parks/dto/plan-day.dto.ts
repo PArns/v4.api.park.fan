@@ -860,14 +860,14 @@ export class PlanDayDto {
     description:
       "Measured mean absolute error for predictions made this far ahead, in " +
       "minutes, from the lead-time archive (`prediction_lead_snapshots`): the " +
-      "nearest sampled lead distance at or below `leadDays`, over scored " +
-      "headliner days. It is the error of the SERVED daily number (TFT where " +
-      "it covers the ride and day, CatBoost elsewhere), not of CatBoost's raw " +
-      "answer. Absent until that distance has enough scored rows — " +
-      "the 60-day bucket says nothing until the archive has been running 60 " +
-      "days — and absent is the honest answer, because nothing measures how " +
-      "wrong the model is at this distance yet. A caller should widen the band " +
-      "with distance WITHOUT attaching a figure rather than invent one.",
+      "nearest sampled lead distance at or below `leadDays` that has enough " +
+      "scored headliner days (a bucket says nothing until the archive has " +
+      "been running that many days). It is the error of the SERVED daily " +
+      "number (TFT where it covers the ride and day, CatBoost elsewhere), not " +
+      "of CatBoost's raw answer. Absent while no such bucket exists, and " +
+      "absent is the honest answer, because nothing measures how wrong the " +
+      "model is at this distance yet. A caller should widen the band with " +
+      "distance WITHOUT attaching a figure rather than invent one.",
   })
   leadTimeMae?: number | null;
 

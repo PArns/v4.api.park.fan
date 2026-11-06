@@ -101,14 +101,17 @@ CatBoost's daily accuracy beyond one day cannot be measured retrospectively: `de
 rewrites a day's prediction on every nightly run, so of its rows for passed target dates 72,795 sat
 at lead 1 and 179 at 8–30 days. `prediction_lead_snapshots`
 (`src/ml/entities/prediction-lead-snapshot.entity.ts`, `PredictionLeadSnapshotService`) records the
-served daily level forward at lead buckets 1/3/7/14/30/60 (`LEAD_BUCKETS`) and backs `/plan/day`'s
-`leadTimeMae` once a bucket has `MIN_SCORED` = 100 scored rows; since PAR-854 it snapshots the
+served daily level forward at lead buckets 1/3/7/14/30/60/90 (`LEAD_BUCKETS`) and backs `/plan/day`'s
+`leadTimeMae` once a bucket has `MIN_SCORED` = 100 scored rows (an unfilled bucket falls back to the
+nearest published one below it). `d60` and `d90` lie past the TFT horizon (forecast day + 59), so
+they record CatBoost's own error (PAR-167, [the seam](quantile-serving-and-calibration.md)); since PAR-854 it snapshots the
 **served** level (TFT or CatBoost, `source`) — [reader-facing accuracy](reader-facing-accuracy.md).
 Rows written before PAR-854 (2026-10-11) carry no source and count for nothing, so a bucket at
 lead *L* reports about *L* + 2 nights after that deploy — d60 not before ~2026-12-12; an empty far
 bucket is the designed answer, not a fault. Its near buckets score the daily serving path over headliners, so
 they are not comparable line for line with §2. The 15-minute curve's equivalent is the
-[forward archive](forward-archive/README.md).
+[forward archive](forward-archive/README.md); the raw hourly forecast's is
+[hourly lead snapshots](hourly-lead-snapshots.md).
 
 ## 7. The served error grid
 

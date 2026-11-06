@@ -921,16 +921,39 @@ export class ShowsService {
           CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
           WHERE l.timestamp > now() - ($1 || ' days')::interval
             AND l.status = 'OPERATING'
+       ), shifted AS (
+         -- A park day the feed published with the wrong UTC offset. Universal
+         -- Studios Japan served its whole programme nine hours early from
+         -- 2026-09-07 to 09-27 (12:10 arrived as 03:10+09:00), and the most
+         -- recent matching day then kept "02:00" shows in the projection for
+         -- weeks. Real late shows never make up most of a day: over 56 days of
+         -- production (2026-11-06) the most a correct day held before 06:00
+         -- was 10 of its times, always the minority; every shifted day had
+         -- 15+ and a majority. The floor of 5 keeps a lone 00:30 performance,
+         -- which is the whole of its calendar date, out of this rule.
+         SELECT park_id, (st AT TIME ZONE tz)::date AS cal_day
+           FROM times
+          WHERE st > now() - ($1 || ' days')::interval
+          GROUP BY 1, 2
+         HAVING count(DISTINCT (show_id, st))
+                  FILTER (WHERE (st AT TIME ZONE tz)::time < TIME '06:00') >= 5
+            AND 2 * count(DISTINCT (show_id, st))
+                  FILTER (WHERE (st AT TIME ZONE tz)::time < TIME '06:00')
+                > count(DISTINCT (show_id, st))
        ), local AS (
          SELECT show_id,
                 ${ShowsService.operatingDaySql("st", "park_id", "tz")} AS day,
                 to_char(st AT TIME ZONE tz, 'HH24:MI')           AS hhmm,
                 st,
                 tz
-           FROM times
+           FROM times t
           -- The showtime itself has to be recent: the feed serves years-old ones.
           WHERE st > now() - ($1 || ' days')::interval
             AND st < now() + INTERVAL '2 days'
+            AND NOT EXISTS (
+                  SELECT 1 FROM shifted x
+                   WHERE x.park_id = t.park_id
+                     AND x.cal_day = (t.st AT TIME ZONE t.tz)::date)
        ), keyed AS (
          -- The weekday follows the OPERATING DAY, not the wall clock: a
          -- performance at 00:00 on a day that opened the previous morning runs

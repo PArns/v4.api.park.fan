@@ -65,6 +65,7 @@ Start at the first page: which model serves which surface today.
 - [performance-optimizations](ml/performance-optimizations.md) — ml-service query performance: the uuid-cast rule for every service, recent-history reads, caches
 - [accuracy-scoring-rule](ml/accuracy-scoring-rule.md) — Which prediction_accuracy slot counts as an error (score_class, scoredSlotSql), stored quantiles, readers
 - [reader-facing-accuracy](ml/reader-facing-accuracy.md) — Badge, leadTimeMae and day-curve forecastError: which model each measures and how it is scored
+- [hourly-lead-snapshots](ml/hourly-lead-snapshots.md) — hourly_lead_snapshots: the hourly forecast at fixed leads (PAR-658), sampling, volume, retention, how to read it
 - [long-range-forecasting](ml/long-range-forecasting.md) — Measured forecast horizons per model, TFT lead-time error, outcome-conditioning trap, served error grid
 - [level-drivers](ml/level-drivers.md) — What explains the daily level: driver analysis, covariates TFT lacks, driver_level results and its prod shadow
 - [ml-overview](ml/ml-overview.md) — Admin ML overview: switch decisions and evaluateOn, frozen decision reports, component status, drift watch

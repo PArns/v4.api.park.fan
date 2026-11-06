@@ -603,6 +603,28 @@ def test_end_to_end_report(synth_export, tmp_path):
     assert np.allclose(both["h5"], both["lvlh5_tft"])
 
 
+def test_mae_by_weekday_splits_slot_mae_by_target_weekday(synth_export, tmp_path):
+    """PAR-1142: one row per (lead, target weekday), each model's slot MAE in it."""
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-20")).run()
+    tdir = build_report(out, reps=50)
+
+    wd = pd.read_csv(tdir / "mae_by_weekday.csv")
+    assert not wd.duplicated(["L", "isodow"]).any()
+    # twenty consecutive origins reach every weekday at every lead
+    assert set(wd[wd["L"] == 1]["isodow"]) == set(range(1, 8))
+    assert set(wd["weekday"]) == {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+
+    # the split is the slot table regrouped, not a new statistic: recompute h5 from parts/
+    direct = duckdb.sql(f"""SELECT L, isodow(date) isodow, sum(sae__h5) / sum(n__h5) h5
+        FROM read_parquet('{out}/parts/slot/*.parquet') WHERE L = 1 GROUP BY ALL ORDER BY isodow""").df()
+    got = wd[wd["L"] == 1].sort_values("isodow")
+    assert np.allclose(got["h5"].to_numpy(), direct["h5"].to_numpy())
+
+
 def test_reference_run_refuses_unknown_provenance(synth_export, tmp_path, monkeypatch):
     from mlbench.runner import add_args, main
 

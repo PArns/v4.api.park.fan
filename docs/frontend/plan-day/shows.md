@@ -6,14 +6,22 @@ and show positions. Part of the [`/plan/day` contract](./README.md). Code:
 `PlanDayService.buildShows`, `ShowsService` (`src/shows/shows.service.ts`).
 
 ```jsonc
-{ "showSlug": "big-moments", "showName": "Big Moments", "latitude": 48.266, "longitude": 7.722,
-  "times": ["12:30", "14:30", "17:45"], "source": "projected", "observedOn": "2026-08-29", "sampleDays": 7 }
+{
+  "showSlug": "big-moments",
+  "showName": "Big Moments",
+  "latitude": 48.266,
+  "longitude": 7.722,
+  "times": ["12:30", "14:30", "17:45"],
+  "source": "projected",
+  "observedOn": "2026-08-29",
+  "sampleDays": 7,
+}
 ```
 
-| source      | what it is                                                                                                       |
-| ----------- | ---------------------------------------------------------------------------------------------------------------- |
-| `scheduled` | the operator's own times for that day. Today and past days, never a future one                                   |
-| `projected` | the times the show ran at on the most recent day with the **same weekday**, with `observedOn` and `sampleDays`   |
+| source      | what it is                                                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------- |
+| `scheduled` | the operator's own times for that day. Today and past days, never a future one                                 |
+| `projected` | the times the show ran at on the most recent day with the **same weekday**, with `observedOn` and `sampleDays` |
 
 Render `projected` differently from `scheduled`: it is what the show did, not a
 promise. Entries are sorted by first time, on the unfolded day.
@@ -38,6 +46,13 @@ more than once (`MIN_PATTERN_DAYS` = 2 — a one-off Thursday concert would othe
 be promised every Thursday), and within the last 28 days **measured against today**,
 not the date asked about (`MAX_PATTERN_AGE_DAYS`). Patterns come from a 56-day window
 (`PATTERN_WINDOW_DAYS`, `rebuildSchedulePatterns`).
+
+**A day with the wrong offset is skipped.** From 2026-09-07 to 09-27 ThemeParks.wiki
+served Universal Studios Japan's programme nine hours early (12:10 as `03:10+09:00`),
+and those days seeded "02:00" patterns. The rebuild now leaves out a park day on which
+at least 5 times and more than half of all times fall before 06:00 park time. Over 56
+days of production (2026-11-06) that matched exactly those 15 USJ days; a correct day
+held at most 10 times before 06:00 (Halloween nights), never the majority.
 
 **No month filter.** A projection is not filtered by `shows.season_months`: no sync
 field supplies it (on 2026-10-02 none of 1,414 seasonal shows carried months,
@@ -75,7 +90,7 @@ last, not the next day's first. It reads a published window, never the clock:
 - **Universal's late programme does not move**: no Universal park publishes an
   `OPERATING` day across midnight (Halloween Horror Nights is a `TICKETED_EVENT`), so
   its 00:30 performances stay on the following date. A snapshot taken today can
-  therefore give *tomorrow* a lone `scheduled` 04:30 entry for a show whose real
+  therefore give _tomorrow_ a lone `scheduled` 04:30 entry for a show whose real
   programme is unknown, and because `buildShows` prefers `scheduled` it suppresses
   that show's projection (109 entries in nine months).
 - A blanket "before 06:00 belongs to yesterday" would be wrong the other way:

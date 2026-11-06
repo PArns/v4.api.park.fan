@@ -96,16 +96,17 @@ export class PredictionLeadSnapshotService {
    *
    * Chosen to be dense where the curve is expected to move and sparse where it
    * probably flattens: the interesting question is whether a week out is
-   * materially worse than tomorrow, not whether day 58 differs from day 59. Six
-   * buckets also keep the table at roughly 1,000 headliners × 6 rows a night.
+   * materially worse than tomorrow, not whether day 58 differs from day 59. Seven
+   * buckets keep the table at roughly 1,000 headliners × 7 rows a night.
    *
-   * 60 is the last one, and it is a sampling choice rather than a limit: the
-   * daily run answers as far ahead as the park has published a schedule (181 to
-   * 362 days across the live parks), so a 120-day bucket would be written
-   * fine — it would simply say nothing for its first 120 days. Sixty is where
-   * the curve is still worth watching against a cost of ~1,000 rows a night.
+   * The TFT serves up to forecast day + 59, so d60 and d90 hold CatBoost's
+   * error alone; d90 is there so PAR-167 can calibrate CatBoost's daily band
+   * beyond the seam, not only at it. The daily run answers as far ahead
+   * as the park has published a schedule (181 to 362 days across the live
+   * parks, `DAILY_PREDICTIONS` = 365), so the row is there to copy; the bucket
+   * simply says nothing for its first ~90 days.
    */
-  static readonly LEAD_BUCKETS = [1, 3, 7, 14, 30, 60] as const;
+  static readonly LEAD_BUCKETS = [1, 3, 7, 14, 30, 60, 90] as const;
 
   /**
    * Scored rows a bucket needs before its mean is worth publishing.
@@ -131,24 +132,34 @@ export class PredictionLeadSnapshotService {
    * The measured mean absolute error for predictions made `leadDays` ahead.
    *
    * The buckets are sampled, not continuous, so this answers with the nearest
-   * one AT OR BELOW the distance asked about: a 20-day question is answered by
-   * the 14-day bucket, never by the 30-day one, because overstating the
-   * distance understates the error. Past the last bucket the last bucket is the
-   * answer — it is the furthest thing anybody has measured, and saying "at
-   * least this wrong" is honest where interpolating into unmeasured distance is
-   * not.
+   * PUBLISHED one AT OR BELOW the distance asked about: a 20-day question is
+   * answered by the 14-day bucket, never by the 30-day one, because overstating
+   * the distance understates the error. Past the furthest published bucket that
+   * bucket is the answer — it is the furthest thing anybody has measured, and
+   * saying "at least this wrong" is honest where interpolating into unmeasured
+   * distance is not. So a far bucket that has not filled yet (d90, for its
+   * first ~90 days) leaves the answer at d60 instead of blanking it.
    *
-   * Null when that bucket has fewer than {@link MIN_SCORED} scored rows, which
-   * is the normal state for the far buckets until the archive has been running
-   * that many days. Null is the answer the DTO promises there.
+   * Null when no bucket at or below has {@link MIN_SCORED} scored rows, which
+   * is the normal state until the archive has been running that many days.
+   * Null is the answer the DTO promises there.
    *
    * Counts SERVED snapshots only (`source IS NOT NULL`, PAR-854): the error of
    * what a reader was shown at that distance, whichever model produced it.
    */
   async getLeadTimeMae(leadDays: number): Promise<number | null> {
-    const bucket = PredictionLeadSnapshotService.bucketFor(leadDays);
-    if (bucket === null) return null;
+    const eligible = PredictionLeadSnapshotService.LEAD_BUCKETS.filter(
+      (b) => b <= leadDays,
+    ).reverse();
+    for (const bucket of eligible) {
+      const mae = await this.bucketMae(bucket);
+      if (mae !== null) return mae;
+    }
+    return null;
+  }
 
+  /** One bucket's published mean, null below {@link MIN_SCORED}; cached either way. */
+  private async bucketMae(bucket: number): Promise<number | null> {
     // `v2`: the figure changed meaning in PAR-854 (served model, not raw
     // CatBoost). The old key would otherwise go on answering for up to six hours
     // after a deploy with a number this method no longer computes.
@@ -203,15 +214,6 @@ export class PredictionLeadSnapshotService {
    */
   static sourceOf(p: PredictionDto): LeadSnapshotSource {
     return p.modelVersion === "tft" ? "tft" : "catboost";
-  }
-
-  /** The largest sampled lead distance at or below `leadDays`. */
-  private static bucketFor(leadDays: number): number | null {
-    const eligible = PredictionLeadSnapshotService.LEAD_BUCKETS.filter(
-      (b) => b <= leadDays,
-    );
-    if (eligible.length === 0) return null;
-    return Math.max(...eligible);
   }
 
   /**

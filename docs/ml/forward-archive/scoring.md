@@ -44,7 +44,7 @@ whole date's insert.
 | UC3 | `d0` … `d7`, `d10`, `d14`, `d21`, `d30`, `d45`, `d60`, `d90` | slot MAE/bias; D3 per ride-day; dayPeak MAE and bias vs truth P90; D8 (below); park-day dayPeak rank Spearman and pairwise ordering (pairs ≥ 5 min apart) |
 | UC3S | as UC3 | the composer shadow (slot MAE/bias, best-time regret, Spearman) |
 | D1 | `h0-2` and the later hour's `h0-1` / `h1-2` × source | next-best ride, the frontend rule ported as `nextRideLater` (below) |
-| D6 | UC3 leads | exact / ±1 bucket, busy-day (high+) recall and precision, `unknownPred`, cross-park ordering on a date, by source |
+| D6 | UC3 leads | exact / ±1 bucket, busy-day (high+) recall and precision, `unknownPred`, cross-park ordering on a date, by source and by the level source behind the calendar level |
 | D9 | UC3 leads, source = plan tier | rides that operated that the plan offered; offered rides that never operated; park-days with operating rides but an empty plan (incl. `capture_error`) |
 
 - **D1** follows `park.fan/lib/planner/next-best-ride.ts`: "later" = the maximum of today's
@@ -59,15 +59,21 @@ whole date's insert.
 - **D6 sources:** `predicted` (calendar `predictedCrowdLevel`), `plan_day` (the planner's
   `crowdLevel` where the calendar had a forecast), `plan_day_live` (d0, live-overridden),
   `fallback` (no calendar forecast — `unknown` since PAR-1028, counted in `unknownPred`; older rows
-  hold the ML crowd or a placeholder `moderate`). Never scored as a forecast.
+  hold the ML crowd or a placeholder `moderate`). Never scored as a forecast. The `predicted`
+  bucket is written again under `level_<tft|catboost|climatology|mixed|none>`, the park-day's
+  `level_source`, so a model change at the d60 boundary can be told apart; `mixed` is a park-day
+  whose rides were levelled by more than one model. These rows repeat `predicted`, never add to
+  it, and their cross-park pairs compare only parks with the same level source. Park-days written
+  before `level_source` existed have no split row.
 - **D8 bands.** On `park_hourly`: `truth ≤ pred + band` per slot (the q95 upper side; CatBoost's
   band covers 53–57 %, see [quantile serving](../quantile-serving-and-calibration.md)). On
   `plan_day`: truth P90 − dayPeak ≤ band per ride-day, also one-sided. Never pooled. Plus stated
   `expectedError` vs realised |dayPeak error| on the same ride-days, and the share of ride-days
   carrying each field.
-- **Level-source split.** UC3 and D9 rows are also written under
+- **Level-source split.** UC3, D6 and D9 rows are also written under
   `source = level_<tft|catboost|climatology|mixed|none>`, but only for numbers that come from the
-  level (composed / climatology hours and dayPeak); a measured hour is the hourly model's.
+  level (composed / climatology hours, dayPeak and the calendar's crowd bucket); a measured hour
+  is the hourly model's.
   `composed_h5_tft` counts as level-derived, `composed_h5` does not.
 - **Unpaired board, rounding.** The per-source MAEs in `forecast_archive_scores`
   (`ScoreAccumulator`) are unrounded; the paired rows round both arms (see
@@ -96,5 +102,9 @@ surface (`surfaceName`) and origin kind, the first origin, and the `chronos` sec
   rides.
 - **Known limit:** the unpaired scores carry no confidence interval; the raw curves (kept 14 days
   past target) let the bench compute one.
-- Open work: D4 optimiser regret, and D6 split by level source (`predictedCrowdLevel` mixes both
-  models within a park-day), PAR-1143.
+- Open work: D4 optimiser regret (PAR-1143). Only its ordering half is scored (the dayPeak pairs
+  above). The full score needs the frontend's day-plan optimiser (`park.fan/lib/planner/`) run
+  twice on each archived park-day, once on the archived curves and once on the truth slots, with
+  the regret being how much worse the first plan does when walked on the truth. That means either
+  porting the optimiser like `nextRideLater` for D1 or an offline run over the raw curves while
+  they are kept (14 days past target).

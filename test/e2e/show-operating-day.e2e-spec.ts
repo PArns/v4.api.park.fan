@@ -594,5 +594,65 @@ describe("Showtimes follow the operating day (E2E)", () => {
       expect(patterns).toHaveLength(1);
       expect(patterns[0].times).toEqual(["22:00", "00:30"]);
     });
+
+    it("skips a park day the feed published with the wrong offset", async () => {
+      // Universal Studios Japan, September 2026: the whole programme arrived
+      // nine hours early, so a day of 09:00–21:00 shows read as 00:00–12:00.
+      // Six of those times before 06:00 are a majority of the day and over the
+      // floor, so the day must seed no pattern; the ordinary day beside it,
+      // on another weekday, still does.
+      const parkRepo = dataSource.getRepository(Park);
+      const showRepo = dataSource.getRepository(Show);
+      const liveRepo = dataSource.getRepository(ShowLiveData);
+
+      const park = await parkRepo.save(
+        createTestPark({
+          externalId: "test-park-shifted",
+          name: "Test Shifted Park",
+          slug: "test-shifted-park",
+          timezone: "UTC",
+        }),
+      );
+      const show = await showRepo.save(
+        showRepo.create({
+          externalId: "test-show-shifted",
+          name: "Test Shifted Show",
+          slug: "test-shifted-show",
+          parkId: park.id,
+        }),
+      );
+
+      const dayAt = (daysAgo: number, hours: number[]) => {
+        const d = new Date();
+        d.setUTCDate(d.getUTCDate() - daysAgo);
+        return hours.map((h) => {
+          const t = new Date(d);
+          t.setUTCHours(h, 0, 0, 0);
+          return { startTime: t.toISOString(), type: "Operating" };
+        });
+      };
+      const shiftedDay = dayAt(6, [0, 1, 2, 3, 4, 5, 9, 10]);
+      const normalDay = dayAt(8, [10, 12, 14, 16]);
+
+      for (const showtimes of [shiftedDay, normalDay]) {
+        await liveRepo.save(
+          liveRepo.create({
+            showId: show.id,
+            status: LiveStatus.OPERATING,
+            timestamp: new Date(showtimes[0].startTime),
+            showtimes,
+          }),
+        );
+      }
+
+      await shows.rebuildSchedulePatterns();
+
+      const patterns = await dataSource
+        .getRepository(ShowSchedulePattern)
+        .find({ where: { showId: show.id } });
+
+      expect(patterns).toHaveLength(1);
+      expect(patterns[0].times).toEqual(["10:00", "12:00", "14:00", "16:00"]);
+    });
   });
 });

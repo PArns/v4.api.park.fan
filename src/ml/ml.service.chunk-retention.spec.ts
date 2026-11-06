@@ -121,7 +121,8 @@ describe("MLService — prediction chunk retention", () => {
       overdue: 0,
     });
     expect(outer).toHaveLength(1);
-    expect(outer[0]).toContain("show_chunks('wait_time_predictions'");
+    expect(outer[0]).toContain("show_chunks($2::regclass");
+    expect(outerParams[0]).toEqual(["90 days", "wait_time_predictions"]);
     expect(inner).toHaveLength(0);
   });
 
@@ -144,8 +145,19 @@ describe("MLService — prediction chunk retention", () => {
     // on a pooled connection.
     expect(inner[0].sql).toContain("set_config('lock_timeout', $1, true)");
     expect(inner[0].params).toEqual(["1500ms"]);
-    expect(inner[1].sql).toContain("drop_chunks('wait_time_predictions'");
-    expect(inner[1].params).toEqual(["90 days"]);
+    expect(inner[1].sql).toContain("drop_chunks($2::regclass");
+    expect(inner[1].params).toEqual(["90 days", "wait_time_predictions"]);
+  });
+
+  it("drops the chunks of the table it is given", async () => {
+    dueChunks = [CHUNK];
+
+    await service.dropExpiredPredictionChunks(90, {
+      table: "hourly_lead_snapshots",
+    });
+
+    expect(outerParams[0]).toEqual(["90 days", "hourly_lead_snapshots"]);
+    expect(dropCalls()[0].params).toEqual(["90 days", "hourly_lead_snapshots"]);
   });
 
   it("retries after a lock timeout and succeeds once the lock is free", async () => {
@@ -209,7 +221,10 @@ describe("MLService — prediction chunk retention", () => {
     });
     expect(dropCalls()).toHaveLength(4);
     // The overdue probe looks 90 + 14 days back.
-    expect(outerParams[outerParams.length - 1]).toEqual(["104 days"]);
+    expect(outerParams[outerParams.length - 1]).toEqual([
+      "104 days",
+      "wait_time_predictions",
+    ]);
   });
 
   it("reports zero overdue while the misses are recent", async () => {

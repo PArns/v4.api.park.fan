@@ -31,6 +31,8 @@ describe("PredictionLeadSnapshotService", () => {
   let headliners: { attractionId: string }[];
   /** The aggregate the read path runs, so a test can hand back a row. */
   let aggregate: { mae: string | null; scored: string };
+  /** A bucket's own row, where a test needs buckets to differ. */
+  let aggregateByBucket: Map<number, { mae: string | null; scored: string }>;
   let redis: { store: Map<string, string> };
   /** Every condition the read path added, so a test can pin the filter. */
   let conditions: string[];
@@ -52,6 +54,7 @@ describe("PredictionLeadSnapshotService", () => {
     };
 
     aggregate = { mae: null, scored: "0" };
+    aggregateByBucket = new Map();
     redis = { store: new Map<string, string>() };
     conditions = [];
     peaks = new Map();
@@ -64,18 +67,22 @@ describe("PredictionLeadSnapshotService", () => {
     // The read path chains select/addSelect/where/andWhere and ends in
     // getRawOne; the write path chains insert/into/values/orIgnore/execute.
     // One object answering both keeps the fake to a dozen lines.
+    let askedBucket: number | undefined;
     const readBuilder = {
       select: () => readBuilder,
       addSelect: () => readBuilder,
-      where: (c: string) => {
+      where: (c: string, p?: { bucket?: number }) => {
         conditions.push(c);
+        askedBucket = p?.bucket;
         return readBuilder;
       },
       andWhere: (c: string) => {
         conditions.push(c);
         return readBuilder;
       },
-      getRawOne: async () => aggregate,
+      getRawOne: async () =>
+        (askedBucket !== undefined && aggregateByBucket.get(askedBucket)) ||
+        aggregate,
     };
     Object.assign(insertBuilder, readBuilder);
 
@@ -287,12 +294,32 @@ describe("PredictionLeadSnapshotService", () => {
     });
   });
 
-  it("samples out to sixty days", () => {
-    // A sampling choice, not a limit: the daily run answers as far ahead as the
-    // park has published a schedule (181-362 days across the live parks), so a
-    // longer bucket would be written fine — it would simply say nothing for its
-    // first 120 days.
-    expect(Math.max(...PredictionLeadSnapshotService.LEAD_BUCKETS)).toBe(60);
+  it("samples out to ninety days, so CatBoost's error beyond the seam is recorded", () => {
+    // PAR-167: the d90 row is CatBoost's alone, one of the measurements its
+    // daily band needs to be calibrated on.
+    expect(Math.max(...PredictionLeadSnapshotService.LEAD_BUCKETS)).toBe(90);
+  });
+
+  it("snapshots the 90-day row", async () => {
+    headliners = [{ attractionId: "taron" }];
+    const now = new Date("2026-11-06T01:00:00Z");
+    await service.snapshotPark(
+      park,
+      [
+        {
+          attractionId: "taron",
+          predictedTime: "2027-02-04T13:00:00.000Z",
+          predictionType: "daily",
+          predictedWaitTime: 25,
+          uncertaintyMinutes: 12,
+          modelVersion: "catboost-v1",
+        } as PredictionDto,
+      ],
+      now,
+    );
+    expect(inserted.map((r) => [r.leadDays, r.source])).toEqual([
+      [90, "catboost"],
+    ]);
   });
 
   // ── Reading the curve back ─────────────────────────────────────────────────
@@ -327,7 +354,17 @@ describe("PredictionLeadSnapshotService", () => {
       // The furthest thing anybody has measured. "At least this wrong" is
       // honest where interpolating into unmeasured distance is not.
       await expect(service.getLeadTimeMae(300)).resolves.toBe(11);
-      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:60"]);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:90"]);
+    });
+
+    it("keeps answering with d60 while d90 has not filled", async () => {
+      // A new far bucket must not blank a figure the 60-day bucket already gave.
+      aggregate = { mae: "11.0", scored: enough };
+      aggregateByBucket.set(90, { mae: "30.0", scored: "4" });
+
+      await expect(service.getLeadTimeMae(120)).resolves.toBe(11);
+      expect(redis.store.get("ml:lead-mae:v2:90")).toBe("none");
+      expect(redis.store.get("ml:lead-mae:v2:60")).toBe("11");
     });
 
     it("says nothing about today, which no bucket covers", async () => {

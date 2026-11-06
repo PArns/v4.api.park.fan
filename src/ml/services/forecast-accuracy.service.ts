@@ -6,11 +6,12 @@ import { ForecastAccuracyProfile } from "../entities/forecast-accuracy-profile.e
 /**
  * The lead buckets, as upper edges in days. `null` means past the last one.
  *
- * The same six distances `PredictionLeadSnapshotService.LEAD_BUCKETS` samples
- * forward, and for the same reason: dense where the curve moves, sparse where it
- * flattens. They were four here (`d1/d7/d30/d60`) while the forward archive
- * already used six, so one question had two answers depending on which table was
- * asked — `d3` and `d14` close that.
+ * The same distances `PredictionLeadSnapshotService.LEAD_BUCKETS` samples
+ * forward up to 60, and for the same reason: dense where the curve moves, sparse
+ * where it flattens. They were four here (`d1/d7/d30/d60`) while the forward
+ * archive already used six, so one question had two answers depending on which
+ * table was asked — `d3` and `d14` close that. The archive's `d90` has no column
+ * here: this grid is measured on `tft_forecasts`, which stops at 60 days.
  *
  * Adding them costs nothing but resolution. Measured over the 45-day window on
  * 2026-09-11, every one of the 18 cells clears {@link MIN_SAMPLE} by an order of

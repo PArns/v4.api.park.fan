@@ -9,6 +9,7 @@ import {
 import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
+import { HourlyLeadSnapshotService } from "./hourly-lead-snapshot.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
@@ -419,6 +420,7 @@ export class PredictionAccuracyService {
     @InjectRepository(QueueData)
     private queueDataRepository: Repository<QueueData>,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly hourlyLeadSnapshotService: HourlyLeadSnapshotService,
   ) {}
 
   /**
@@ -527,6 +529,15 @@ export class PredictionAccuracyService {
         }
       }
     });
+
+    // The upsert above keeps only the newest run per slot; the lead curve
+    // needs a forward copy at fixed leads (PAR-658). Its failure must not
+    // cost the accuracy rows their count.
+    await this.hourlyLeadSnapshotService
+      .record(predictions, served)
+      .catch((error: Error) =>
+        this.logger.warn(`Hourly lead snapshot failed: ${error.message}`),
+      );
 
     return withServed.length + withoutServed.length;
   }

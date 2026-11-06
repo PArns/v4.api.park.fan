@@ -34,11 +34,11 @@
  * {@link scorePairedShadows} adds the paired per-park comparison against the
  * served curve, persistence and H5 that the board's bootstrap reads.
  *
- * UC3 and D9 rows are also written under `level_<tft|catboost|climatology|
+ * UC3, D6 and D9 rows are also written under `level_<tft|catboost|climatology|
  * mixed|none>`, the model behind the day level, so the board can split the
  * horizon by level source — but only for numbers that come from the level:
- * composed / climatology hours, and dayPeak. A `measured` hour is the hourly
- * model's, whatever the day level was.
+ * composed / climatology hours, dayPeak, and the calendar's crowd bucket. A
+ * `measured` hour is the hourly model's, whatever the day level was.
  */
 import { determineCrowdLevel } from "../../common/utils/crowd-level.util";
 import { addIsoDays } from "../../common/utils/date.util";
@@ -890,10 +890,19 @@ export function scoreParkDay(
         : parkDay.leadDays === 0
           ? "plan_day_live"
           : "plan_day";
-      for (const [source, value] of [
+      const rows: [string, string | null][] = [
         ["predicted", parkDay.predictedCrowdLevel],
         [planSource, parkDay.crowdLevel],
-      ] as const) {
+      ];
+      // The calendar level again under the model behind it, so a model change
+      // (TFT → CatBoost at d60) shows up in D6; a park-day with both is `mixed`.
+      if (parkDay.levelSource) {
+        rows.push([
+          `level_${parkDay.levelSource}`,
+          parkDay.predictedCrowdLevel,
+        ]);
+      }
+      for (const [source, value] of rows) {
         const predOrd = crowdOrdinal(value);
         if (predOrd === null) {
           acc.add(region, "D6", lead, source, "all", { unknownPred: 1 });

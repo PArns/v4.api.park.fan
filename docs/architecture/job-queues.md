@@ -53,7 +53,7 @@ find what runs when, or before adding a queue or a cron.
 | `rope-drop` / `calculate-rope-drop`; `typical-waits` / `calculate-typical-waits` | 05:15; 05:30 | Per-ride rope-drop and P50/P90 stats |
 | `predictions` / `generate-hourly` | every 15 min | CatBoost 15-min slots over the next 48 h, diff-written ([schema](../database/schema.md#write-path-par-874)) |
 | `predictions` / `generate-daily` | 01:00 | CatBoost daily predictions |
-| `predictions` / `score-lead-snapshots`, `rebuild-accuracy-profile`, `cleanup-old` | 03:00, 03:10, 03:30 | Lead-time accuracy; prediction retention ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#predictionscleanup-old-and-compressed-chunks-par-900)) |
+| `predictions` / `score-lead-snapshots`, `rebuild-accuracy-profile`, `cleanup-old` | 03:00, 03:10, 03:30 | Lead-time accuracy; prediction and `hourly_lead_snapshots` chunk retention ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#predictionscleanup-old-and-compressed-chunks-par-900)) |
 | `prediction-accuracy` / `compare-accuracy`, `aggregate-stats` | every 15 min; hourly | Scores past predictions |
 | `prediction-accuracy` / `cleanup-old`, `calibrate-bands` | 04:00; 04:20 | Retention; band calibration |
 | `ml-training` / `train-model`, `cleanup-models` | 06:00; 07:00 | CatBoost training (35–70 min, ~13 GB peak) |
