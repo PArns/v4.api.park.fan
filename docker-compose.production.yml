@@ -28,6 +28,25 @@ services:
       # (docs/troubleshooting/timescaledb-lock-queues.md).
       - "-c"
       - "log_lock_waits=on"
+      # The server log goes to files in $PGDATA/log, on the bind mount, so it
+      # outlives the container; docker logs keeps only the startup lines and
+      # is gone with the container. One file per weekday and hour, each
+      # truncated when the name comes round again a week later: Postgres never
+      # deletes a log file, so the cycling names are what bound the disk use
+      # to one week of output (docs/deployment/coolify.md#the-postgres-server-log).
+      - "-c"
+      - "logging_collector=on"
+      - "-c"
+      - "log_directory=log"
+      - "-c"
+      - "log_filename=postgresql-%a-%H.log"
+      - "-c"
+      - "log_rotation_age=1h"
+      # Size rotation would reopen the same hour's file and cap nothing.
+      - "-c"
+      - "log_rotation_size=0"
+      - "-c"
+      - "log_truncate_on_rotation=on"
     ports:
       - "${DB_PORT:-5433}:5432"
     environment:
