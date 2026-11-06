@@ -126,6 +126,7 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     curatedOutOfServiceFrom: null,
     curatedOutOfServiceTo: null,
     curatedOutOfServiceToUncertain: null,
+    curatedOutOfServicePeriods: null,
     openWithPark: false,
     rcdbId: null,
     ...overrides,
@@ -805,6 +806,178 @@ describe("AdminCurationService", () => {
         unknown
       >;
       expect(saved.curatedMinimumHeight).toBeNull();
+    });
+  });
+
+  describe("the works-period list (PAR-1246)", () => {
+    const spring = { from: "2026-01-16", to: "2026-03-03", toUncertain: false };
+    const autumn = { from: "2026-11-02", to: null, toUncertain: false };
+
+    async function write(
+      periods: unknown,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const { service, attractions, audit } = build(anAttraction(overrides));
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServicePeriods: periods } },
+        ACTOR,
+      );
+      const saved = attractions.update.mock.calls[0]?.[1] as
+        Record<string, unknown> | undefined;
+      return { result, saved, audit };
+    }
+
+    it("stores the list sorted by start", async () => {
+      const { saved } = await write([autumn, spring]);
+      expect(saved).toEqual({ curatedOutOfServicePeriods: [spring, autumn] });
+    });
+
+    it("stores an empty list as null", async () => {
+      const { saved } = await write([], {
+        curatedOutOfServicePeriods: [spring],
+      });
+      expect(saved).toEqual({ curatedOutOfServicePeriods: null });
+    });
+
+    it("clears the old single window in the same write, and audits it", async () => {
+      const { saved, result, audit } = await write([spring, autumn], {
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: false,
+      });
+      expect(saved).toEqual({
+        curatedOutOfServicePeriods: [spring, autumn],
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+      });
+      expect(result.changed).toEqual(
+        expect.arrayContaining([
+          "curatedOutOfServicePeriods",
+          "curatedOutOfServiceFrom",
+        ]),
+      );
+      const row = (audit.record.mock.calls[0] as unknown[])[0] as {
+        before: Record<string, unknown>;
+        after: Record<string, unknown>;
+      };
+      expect(row.before.curatedOutOfServicePeriods).toBeNull();
+      expect(row.after.curatedOutOfServicePeriods).toEqual([spring, autumn]);
+      expect(row.before.curatedOutOfServiceFrom).toBe("2026-01-16");
+    });
+
+    it("clears the old window even when the list itself is unchanged", async () => {
+      // The editor deleted the old window from the list it was shown.
+      const { saved } = await write([autumn], {
+        curatedOutOfServicePeriods: [autumn],
+        curatedOutOfServiceFrom: "2026-01-16",
+      });
+      expect(saved).toEqual({ curatedOutOfServiceFrom: null });
+    });
+
+    it.each([
+      ["not a list", { from: "2026-01-01" }, /must be a list of windows/],
+      [
+        "an entry that is no object",
+        ["2026-01-01"],
+        /window 1 must be an object/,
+      ],
+      [
+        "a window with no bound",
+        [{ from: null, to: null, toUncertain: false }],
+        /window 1 needs a first or a last day/,
+      ],
+      [
+        "a malformed date",
+        [{ from: "16.01.2026", to: null }],
+        /window 1 "from" must be a date in YYYY-MM-DD form/,
+      ],
+      [
+        "an impossible date",
+        [{ from: "2026-02-30", to: null }],
+        /window 1 "from" is not a real date/,
+      ],
+      [
+        "an inverted window",
+        [{ from: "2026-03-03", to: "2026-01-16" }],
+        /window 1 ends 2026-01-16 and starts 2026-03-03/,
+      ],
+      [
+        "an estimate flag without an end",
+        [{ from: "2026-03-03", to: null, toUncertain: true }],
+        /window 1 marks its end as an estimate but has no last day/,
+      ],
+      [
+        "a flag that is no boolean",
+        [{ from: "2026-03-03", to: "2026-03-04", toUncertain: "yes" }],
+        /"toUncertain" must be true or false/,
+      ],
+      [
+        "overlapping windows",
+        [spring, { from: "2026-03-03", to: "2026-03-10", toUncertain: false }],
+        /window 1 \(2026-01-16 – 2026-03-03\) overlaps window 2 \(2026-03-03 – 2026-03-10\)/,
+      ],
+      [
+        "more than twenty windows",
+        Array.from({ length: 21 }, (_, i) => ({
+          from: `2026-01-${String(i + 1).padStart(2, "0")}`,
+          to: `2026-01-${String(i + 1).padStart(2, "0")}`,
+        })),
+        /at most 20 windows/,
+      ],
+    ])("refuses %s", async (_, periods, message) => {
+      await expect(write(periods)).rejects.toThrow(message);
+    });
+
+    it("lets back-to-back windows stand", async () => {
+      const next = { from: "2026-03-04", to: "2026-03-10", toUncertain: true };
+      const { saved } = await write([next, spring]);
+      expect(saved).toEqual({ curatedOutOfServicePeriods: [spring, next] });
+    });
+
+    it("is accepted by the bulk endpoint", async () => {
+      const { service, attractions } = build(anAttraction());
+      await service.curateAttractionsBulk(
+        "park-1",
+        [{ id: "ride-1", fields: { curatedOutOfServicePeriods: [spring] } }],
+        ACTOR,
+      );
+      expect(attractions.update.mock.calls[0][1]).toEqual({
+        curatedOutOfServicePeriods: [spring],
+      });
+    });
+
+    it("undoes the write by putting the old window back", async () => {
+      const { service, attractions, audit } = build(
+        anAttraction({ curatedOutOfServicePeriods: [spring] }),
+      );
+      audit.findOne.mockResolvedValue({
+        id: "audit-p",
+        action: "attraction.curate",
+        entityType: "attraction",
+        entityId: "ride-1",
+        revertedBy: null,
+        createdAt: new Date("2026-11-06T10:00:00Z"),
+        before: {
+          curatedOutOfServicePeriods: null,
+          curatedOutOfServiceFrom: "2026-01-16",
+          curatedOutOfServiceTo: "2026-03-03",
+        },
+        after: {
+          curatedOutOfServicePeriods: [spring],
+          curatedOutOfServiceFrom: null,
+          curatedOutOfServiceTo: null,
+        },
+      });
+
+      await service.revert("audit-p", ACTOR);
+
+      expect(attractions.update.mock.calls[0][1]).toEqual({
+        curatedOutOfServicePeriods: null,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+      });
     });
   });
 

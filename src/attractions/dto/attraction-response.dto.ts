@@ -35,7 +35,10 @@ import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
 import { WorksPeriodDto } from "./works-period.dto";
-import { resolveWorksPeriod } from "../utils/curated-out-of-service.util";
+import {
+  resolveWorksPeriod,
+  worksPeriodsOf,
+} from "../utils/curated-out-of-service.util";
 import { FastPassDto } from "./fast-pass.dto";
 import { resolveFastPass } from "../utils/fast-pass.util";
 import {
@@ -234,14 +237,28 @@ export class AttractionResponseDto {
       "curated one, which is the state of nearly every ride. Deliberately " +
       "beside `outage` rather than inside it: an outage is a fault the site " +
       "noticed, this is planned work, and inside this window the API reports " +
-      "no outage at all. Both dates are park-local and inclusive, and the " +
-      "block says nothing about whether the window is running today — compare " +
-      "them in `park.timezone`, never against the reader's own clock.",
+      "no outage at all. Both dates are park-local and inclusive. With " +
+      "several windows (`worksPeriods`) this is the one running on the " +
+      "park's today, else the next to start, else the most recent past one; " +
+      "it carries no running flag — compare the dates in `park.timezone`, " +
+      "never against the reader's own clock.",
     required: false,
     nullable: true,
     type: WorksPeriodDto,
   })
   worksPeriod?: WorksPeriodDto | null;
+
+  @ApiProperty({
+    description:
+      "Every curated works period of this ride, sorted by `from` (an open " +
+      "start first). Same item shape as `worksPeriod`; windows never " +
+      "overlap. Absent when none is curated. `worksPeriod` is the one of " +
+      "these running on the park's today, else the next to start, else the " +
+      "most recent past one.",
+    required: false,
+    type: [WorksPeriodDto],
+  })
+  worksPeriods?: WorksPeriodDto[];
 
   @ApiProperty({
     description:
@@ -701,7 +718,8 @@ export class AttractionResponseDto {
       hasVirtualLine: attraction.hasVirtualLine ?? null,
       // Null for nearly every ride, so it is one absent key rather than a
       // block of nulls on every attraction of every park payload.
-      worksPeriod: resolveWorksPeriod(attraction),
+      worksPeriod: resolveWorksPeriod(attraction, attraction.park?.timezone),
+      ...worksPeriodsOf(attraction),
       // The name lives on the park row, so this is the one resolver that needs
       // both entities. A projection that did not join the park still resolves —
       // it just falls back to the neutral name and withholds the price.

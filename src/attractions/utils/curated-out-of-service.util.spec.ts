@@ -2,7 +2,10 @@ import {
   attractionIsCuratedOutOfService,
   isCuratedOutOfService,
   resolveWorksPeriod,
+  resolveWorksPeriods,
   worksPeriodEndsBeforeItBegins,
+  worksPeriodsOf,
+  worksPeriodsOverlap,
 } from "./curated-out-of-service.util";
 
 /** Collapses the SQL's formatting so assertions can match on wording alone. */
@@ -226,6 +229,207 @@ describe("worksPeriodEndsBeforeItBegins", () => {
       from: "2026-03-01",
       to: "2026-01-20",
       toUncertain: false,
+    });
+  });
+});
+
+describe("several works periods (PAR-1246)", () => {
+  const TZ = "Europe/Berlin";
+  const spring = { from: "2026-01-16", to: "2026-03-03", toUncertain: false };
+  const autumn = { from: "2026-11-02", to: "2026-11-20", toUncertain: true };
+  const openEnded = { from: "2027-01-10", to: null, toUncertain: false };
+
+  describe("resolveWorksPeriods", () => {
+    it("is empty when nothing is curated, in either place", () => {
+      expect(resolveWorksPeriods({})).toEqual([]);
+      expect(
+        resolveWorksPeriods({
+          curatedOutOfServicePeriods: null,
+          curatedOutOfServiceFrom: null,
+        }),
+      ).toEqual([]);
+      expect(worksPeriodsOf({})).toEqual({});
+    });
+
+    it("folds the old single window into the list and sorts by start", () => {
+      expect(
+        resolveWorksPeriods({
+          curatedOutOfServiceFrom: "2026-11-02",
+          curatedOutOfServiceTo: "2026-11-20",
+          curatedOutOfServiceToUncertain: true,
+          curatedOutOfServicePeriods: [openEnded, spring],
+        }),
+      ).toEqual([spring, autumn, openEnded]);
+    });
+
+    it("puts a window with no start first", () => {
+      const noStart = { from: null, to: "2026-01-05", toUncertain: false };
+      expect(
+        resolveWorksPeriods({ curatedOutOfServicePeriods: [spring, noStart] }),
+      ).toEqual([noStart, spring]);
+    });
+
+    it("drops an exact duplicate of the old window, the list entry winning", () => {
+      expect(
+        resolveWorksPeriods({
+          curatedOutOfServiceFrom: spring.from,
+          curatedOutOfServiceTo: spring.to,
+          curatedOutOfServiceToUncertain: true,
+          curatedOutOfServicePeriods: [spring],
+        }),
+      ).toEqual([spring]);
+    });
+
+    it("normalises every entry like the single window", () => {
+      expect(
+        resolveWorksPeriods({
+          curatedOutOfServicePeriods: [
+            { from: "2026-05-01", to: null, toUncertain: true },
+            { from: null, to: null, toUncertain: false },
+          ],
+        }),
+      ).toEqual([{ from: "2026-05-01", to: null, toUncertain: false }]);
+    });
+  });
+
+  describe("isCuratedOutOfService", () => {
+    const source = { curatedOutOfServicePeriods: [spring, autumn] };
+
+    it("is true inside any window, bounds inclusive", () => {
+      expect(isCuratedOutOfService(source, TZ, "2026-01-16")).toBe(true);
+      expect(isCuratedOutOfService(source, TZ, "2026-03-03")).toBe(true);
+      expect(isCuratedOutOfService(source, TZ, "2026-11-10")).toBe(true);
+    });
+
+    it("is false between and around the windows", () => {
+      expect(isCuratedOutOfService(source, TZ, "2026-01-15")).toBe(false);
+      expect(isCuratedOutOfService(source, TZ, "2026-07-01")).toBe(false);
+      expect(isCuratedOutOfService(source, TZ, "2026-11-21")).toBe(false);
+    });
+
+    it("still reads the old columns beside the list", () => {
+      expect(
+        isCuratedOutOfService(
+          {
+            curatedOutOfServiceFrom: "2026-07-01",
+            curatedOutOfServiceTo: "2026-07-05",
+            curatedOutOfServicePeriods: [spring],
+          },
+          TZ,
+          "2026-07-03",
+        ),
+      ).toBe(true);
+    });
+
+    it("asks the park's calendar for today", () => {
+      jest.useFakeTimers().setSystemTime(new Date("2026-11-01T23:30:00Z"));
+      try {
+        // 00:30 on 2 November in Berlin, still 1 November in UTC and New York.
+        expect(isCuratedOutOfService(source, "Europe/Berlin")).toBe(true);
+        expect(isCuratedOutOfService(source, "America/New_York")).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe("resolveWorksPeriod picks one window", () => {
+    const source = { curatedOutOfServicePeriods: [spring, autumn, openEnded] };
+
+    it("the one running on the park's day", () => {
+      expect(resolveWorksPeriod(source, TZ, "2026-11-02")).toEqual(autumn);
+    });
+
+    it("else the next to start", () => {
+      expect(resolveWorksPeriod(source, TZ, "2026-07-01")).toEqual(autumn);
+      expect(resolveWorksPeriod(source, TZ, "2026-11-21")).toEqual(openEnded);
+    });
+
+    it("else the most recent past one", () => {
+      expect(
+        resolveWorksPeriod(
+          { curatedOutOfServicePeriods: [spring, autumn] },
+          TZ,
+          "2026-12-24",
+        ),
+      ).toEqual(autumn);
+    });
+
+    it("uses the park's today when no day is given", () => {
+      jest.useFakeTimers().setSystemTime(new Date("2026-11-01T23:30:00Z"));
+      try {
+        // 2 November in Berlin, still 1 November in New York.
+        const firstOfNovember = {
+          from: "2026-11-01",
+          to: "2026-11-01",
+          toUncertain: false,
+        };
+        const both = {
+          curatedOutOfServicePeriods: [spring, firstOfNovember, autumn],
+        };
+        expect(resolveWorksPeriod(both, "Europe/Berlin")).toEqual(autumn);
+        expect(resolveWorksPeriod(both, "America/New_York")).toEqual(
+          firstOfNovember,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("serves the first window when no timezone is known", () => {
+      expect(resolveWorksPeriod(source)).toEqual(spring);
+    });
+  });
+
+  describe("worksPeriodsOverlap", () => {
+    it("counts a shared boundary day as overlap", () => {
+      expect(
+        worksPeriodsOverlap(spring, {
+          from: "2026-03-03",
+          to: null,
+          toUncertain: false,
+        }),
+      ).toBe(true);
+    });
+
+    it("lets back-to-back windows stand", () => {
+      expect(
+        worksPeriodsOverlap(spring, {
+          from: "2026-03-04",
+          to: "2026-03-10",
+          toUncertain: false,
+        }),
+      ).toBe(false);
+      expect(worksPeriodsOverlap(spring, autumn)).toBe(false);
+    });
+
+    it("treats an open bound as reaching forever", () => {
+      expect(
+        worksPeriodsOverlap(openEnded, {
+          from: "2030-01-01",
+          to: "2030-01-02",
+          toUncertain: false,
+        }),
+      ).toBe(true);
+      expect(
+        worksPeriodsOverlap(
+          { from: null, to: "2026-02-01", toUncertain: false },
+          spring,
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("attractionIsCuratedOutOfService", () => {
+    const sql = flat(attractionIsCuratedOutOfService("a", "d.op_day"));
+
+    it("asks the list with an EXISTS beside the old columns", () => {
+      expect(sql).toContain(
+        "OR EXISTS ( SELECT 1 FROM jsonb_array_elements( COALESCE(a.curated_out_of_service_periods, '[]'::jsonb) )",
+      );
+      expect(sql).toContain("d.op_day >= (w->>'from')::date");
+      expect(sql).toContain("d.op_day <= (w->>'to')::date");
+      expect(sql).toContain("(w->>'from' IS NOT NULL OR w->>'to' IS NOT NULL)");
     });
   });
 });

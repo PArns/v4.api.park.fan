@@ -607,10 +607,10 @@ describe("closure-gap statements", () => {
       ).toHaveLength(1);
     });
 
-    it("emits what the hand-written predicate said, plus one pair of parentheses", () => {
-      // The predicate CLOSURE_GAP_INTERVALS_SQL carried before PAR-278. The
-      // helper wraps the same three conjuncts in one outer pair, and AND is
-      // associative, so `x AND (a AND b AND c)` is `x AND a AND b AND c`.
+    it("keeps the hand-written single-window predicate as its first arm, ORed with the list", () => {
+      // The predicate CLOSURE_GAP_INTERVALS_SQL carried before PAR-278 is the
+      // single-window arm, unchanged; PAR-1246 ORs the list beside it, so a
+      // ride holding only the old columns is excluded exactly as before.
       const handWritten = `(ca.curated_out_of_service_from IS NOT NULL
                OR ca.curated_out_of_service_to IS NOT NULL)
           AND (ca.curated_out_of_service_from IS NULL
@@ -620,9 +620,15 @@ describe("closure-gap statements", () => {
       const norm = (sql: string) =>
         flat(sql).replace(/\( /g, "(").replace(/ \)/g, ")").trim();
 
-      expect(norm(attractionIsCuratedOutOfService("ca", "g.op_day"))).toBe(
-        `(${norm(handWritten)})`,
+      const helper = norm(attractionIsCuratedOutOfService("ca", "g.op_day"));
+      expect(helper.startsWith(`((${norm(handWritten)}) OR EXISTS (`)).toBe(
+        true,
       );
+      expect(helper).toContain(
+        "jsonb_array_elements(COALESCE(ca.curated_out_of_service_periods, '[]'::jsonb))",
+      );
+      expect(helper).toContain("g.op_day >= (w->>'from')::date");
+      expect(helper).toContain("g.op_day <= (w->>'to')::date");
     });
   });
 

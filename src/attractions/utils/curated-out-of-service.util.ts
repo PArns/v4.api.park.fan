@@ -32,6 +32,13 @@ import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 export interface CuratedOutOfServiceSource {
   curatedOutOfServiceFrom?: string | null;
   curatedOutOfServiceTo?: string | null;
+  curatedOutOfServiceToUncertain?: boolean | null;
+  /**
+   * The list of windows (PAR-1246). Read beside the three single-window columns
+   * for one release — expand/contract — and never on its own: every reader goes
+   * through {@link resolveWorksPeriods}.
+   */
+  curatedOutOfServicePeriods?: readonly WorksPeriod[] | null;
 }
 
 /**
@@ -56,50 +63,148 @@ export interface WorksPeriod {
   toUncertain: boolean;
 }
 
-export interface WorksPeriodSource extends CuratedOutOfServiceSource {
-  curatedOutOfServiceToUncertain?: boolean | null;
-}
+export type WorksPeriodSource = CuratedOutOfServiceSource;
 
 /**
- * The curated works period for the API, or null when nothing is curated.
- *
- * Null rather than a block of nulls: "no works period" is the state of nearly
- * every ride in the catalogue, and an object saying so on each of them is
- * payload on every park page for a fact that is almost always absent.
+ * One stored window as the API serves it.
  *
  * Two normalisations, both so a client cannot render a half-statement:
  *
  * - `toUncertain` is false whenever `to` is null. An adverb needs a date to
  *   qualify, and the pair (`to: null`, `toUncertain: true`) is a curation
  *   leftover from clearing the end date and not clearing the flag.
- * - `null` on the column reads as false here. Three states are what the EDITOR
+ * - `null` on the flag reads as false here. Three states are what the EDITOR
  *   needs — "nobody has looked" is worth seeing in the form — but a page has
  *   two renderings, "until 3 March" and "probably until 3 March", and an
  *   unchecked date gets the plain one.
  *
- * This deliberately says nothing about whether the window covers today.
- * `isCuratedOutOfService()` answers that, it needs the park's timezone, and a
- * client comparing these dates against the reader's own clock would open the
- * window at the wrong moment for every park outside the reader's zone.
+ * Also the entity's read transformer for the jsonb list, so the keys always
+ * come back in this order: jsonb stores them sorted by length (`to`, `from`,
+ * `toUncertain`), and the admin's diff and undo compare `JSON.stringify` output.
  */
-export function resolveWorksPeriod(
-  source: WorksPeriodSource,
-): WorksPeriod | null {
-  const from = source.curatedOutOfServiceFrom ?? null;
-  const to = source.curatedOutOfServiceTo ?? null;
-  if (!from && !to) return null;
-
+export function normalizeWorksPeriod(period: {
+  from?: string | null;
+  to?: string | null;
+  toUncertain?: boolean | null;
+}): WorksPeriod {
+  const to = period.to ?? null;
   return {
-    from,
+    from: period.from ?? null,
     to,
-    toUncertain: to !== null && source.curatedOutOfServiceToUncertain === true,
+    toUncertain: to !== null && period.toUncertain === true,
   };
 }
 
 /**
- * Whether a curated works period covers the given park-local day.
+ * Every curated window, sorted by `from` (an open start first), then by `to`
+ * (an open end last), with exact duplicates removed.
  *
- * @param source - The attraction's two curated date columns.
+ * The single-window columns are read beside the list for this release: a write
+ * of the list clears them, so until every ride has been saved once the old
+ * window is still the only place some rides keep theirs. A list entry wins a
+ * duplicate over the old window because it is the newer statement.
+ *
+ * Windows with neither bound are dropped — they claim nothing.
+ */
+export function resolveWorksPeriods(source: WorksPeriodSource): WorksPeriod[] {
+  const legacy =
+    source.curatedOutOfServiceFrom || source.curatedOutOfServiceTo
+      ? [
+          {
+            from: source.curatedOutOfServiceFrom,
+            to: source.curatedOutOfServiceTo,
+            toUncertain: source.curatedOutOfServiceToUncertain,
+          },
+        ]
+      : [];
+  const seen = new Set<string>();
+  return [...(source.curatedOutOfServicePeriods ?? []), ...legacy]
+    .map(normalizeWorksPeriod)
+    .filter((window) => {
+      const key = `${window.from}|${window.to}`;
+      if ((!window.from && !window.to) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort(compareWorksPeriods);
+}
+
+/**
+ * `{ worksPeriods }` for a payload, or nothing: an empty list on every ride of
+ * every park page would be payload for a fact that is almost always absent.
+ */
+export function worksPeriodsOf(source: WorksPeriodSource): {
+  worksPeriods?: WorksPeriod[];
+} {
+  const worksPeriods = resolveWorksPeriods(source);
+  return worksPeriods.length > 0 ? { worksPeriods } : {};
+}
+
+function compareWorksPeriods(a: WorksPeriod, b: WorksPeriod): number {
+  if (a.from !== b.from) {
+    if (a.from === null) return -1;
+    if (b.from === null) return 1;
+    return a.from < b.from ? -1 : 1;
+  }
+  if (a.to === b.to) return 0;
+  if (a.to === null) return 1;
+  if (b.to === null) return -1;
+  return a.to < b.to ? -1 : 1;
+}
+
+/** Whether one window covers a park-local day. Both bounds inclusive. */
+function covers(window: WorksPeriod, day: string): boolean {
+  // Plain YYYY-MM-DD strings, so a lexicographic compare is a calendar
+  // compare. No Date objects: constructing one would drag the server's offset
+  // back into a park-local question.
+  return (
+    (!window.from || day >= window.from) && (!window.to || day <= window.to)
+  );
+}
+
+/**
+ * The one window `worksPeriod` serves, or null when nothing is curated.
+ *
+ * The window running on the park's today; else the next one to start; else the
+ * one that ended most recently. That is the order a ride page asks in — "closed
+ * for works now", "closed from 16 January", "was closed until March" — and a
+ * ride with a single window gets that window whatever the day, exactly as
+ * before the list existed. Every window is on `worksPeriods`.
+ *
+ * Null rather than a block of nulls: "no works period" is the state of nearly
+ * every ride in the catalogue, and an object saying so on each of them is
+ * payload on every park page for a fact that is almost always absent.
+ *
+ * @param timezone - The park's IANA timezone. Without one (a projection that
+ *   did not join the park) the first window is served.
+ * @param onDate - Park-local `YYYY-MM-DD`. Defaults to the park's today.
+ */
+export function resolveWorksPeriod(
+  source: WorksPeriodSource,
+  timezone?: string | null,
+  onDate?: string,
+): WorksPeriod | null {
+  const windows = resolveWorksPeriods(source);
+  if (windows.length === 0) return null;
+
+  const day = onDate ?? (timezone ? safeToday(timezone) : null);
+  // shortcut: no park timezone means no "today"; the first window is the
+  // honest single answer for the one or two rides that carry several.
+  if (!day) return windows[0];
+
+  return (
+    windows.find((window) => covers(window, day)) ??
+    windows.find((window) => window.from !== null && window.from > day) ??
+    windows.reduce((latest, window) =>
+      (window.to ?? "") > (latest.to ?? "") ? window : latest,
+    )
+  );
+}
+
+/**
+ * Whether any curated works period covers the given park-local day.
+ *
+ * @param source - The attraction's curated works-period columns.
  * @param timezone - The park's IANA timezone.
  * @param onDate - Park-local `YYYY-MM-DD` to test. Defaults to the park's today.
  */
@@ -108,19 +213,13 @@ export function isCuratedOutOfService(
   timezone: string,
   onDate?: string,
 ): boolean {
-  const from = source.curatedOutOfServiceFrom ?? null;
-  const to = source.curatedOutOfServiceTo ?? null;
-  if (!from && !to) return false;
+  const windows = resolveWorksPeriods(source);
+  if (windows.length === 0) return false;
 
   const day = onDate ?? safeToday(timezone);
   if (!day) return false;
 
-  // Both columns are `date`, so a lexicographic compare on YYYY-MM-DD is a
-  // calendar compare. No Date objects: constructing one would drag the server's
-  // offset back into a park-local question.
-  if (from && day < from) return false;
-  if (to && day > to) return false;
-  return true;
+  return windows.some((window) => covers(window, day));
 }
 
 /**
@@ -144,13 +243,26 @@ export function attractionIsCuratedOutOfService(
   alias: string,
   dayExpr: string,
 ): string {
+  // The list is jsonb, so its bounds are text cast to `date` — the cast sits
+  // on the extracted value, never on a column an index could serve.
   return `(
-           (${alias}.curated_out_of_service_from IS NOT NULL
-            OR ${alias}.curated_out_of_service_to IS NOT NULL)
-           AND (${alias}.curated_out_of_service_from IS NULL
-                OR ${dayExpr} >= ${alias}.curated_out_of_service_from)
-           AND (${alias}.curated_out_of_service_to IS NULL
-                OR ${dayExpr} <= ${alias}.curated_out_of_service_to)
+           (
+             (${alias}.curated_out_of_service_from IS NOT NULL
+              OR ${alias}.curated_out_of_service_to IS NOT NULL)
+             AND (${alias}.curated_out_of_service_from IS NULL
+                  OR ${dayExpr} >= ${alias}.curated_out_of_service_from)
+             AND (${alias}.curated_out_of_service_to IS NULL
+                  OR ${dayExpr} <= ${alias}.curated_out_of_service_to)
+           )
+           OR EXISTS (
+             SELECT 1
+               FROM jsonb_array_elements(
+                      COALESCE(${alias}.curated_out_of_service_periods, '[]'::jsonb)
+                    ) AS works_window(w)
+              WHERE (w->>'from' IS NOT NULL OR w->>'to' IS NOT NULL)
+                AND (w->>'from' IS NULL OR ${dayExpr} >= (w->>'from')::date)
+                AND (w->>'to' IS NULL OR ${dayExpr} <= (w->>'to')::date)
+           )
          )`;
 }
 
@@ -187,4 +299,20 @@ export function worksPeriodEndsBeforeItBegins(
   to: string | null | undefined,
 ): boolean {
   return Boolean(from) && Boolean(to) && (to as string) < (from as string);
+}
+
+/**
+ * Most windows one ride may hold. A ride closes for planned work a few times a
+ * year at most; twenty is somebody pasting a calendar, not a curation.
+ */
+export const MAX_WORKS_PERIODS = 20;
+
+/**
+ * Whether two windows share a day. Both bounds inclusive; a missing bound is
+ * open in its direction.
+ */
+export function worksPeriodsOverlap(a: WorksPeriod, b: WorksPeriod): boolean {
+  return (
+    (!a.from || !b.to || a.from <= b.to) && (!b.from || !a.to || b.from <= a.to)
+  );
 }

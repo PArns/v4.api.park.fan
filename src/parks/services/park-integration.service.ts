@@ -1166,6 +1166,8 @@ export class ParkIntegrationService {
               byId.get(a.id)?.curatedOutOfServiceFrom ?? null,
             curatedOutOfServiceTo:
               byId.get(a.id)?.curatedOutOfServiceTo ?? null,
+            curatedOutOfServicePeriods:
+              byId.get(a.id)?.curatedOutOfServicePeriods ?? null,
           })),
         );
         if (outages.size > 0) {
@@ -1199,6 +1201,8 @@ export class ParkIntegrationService {
                 curated.get(a.id)?.curatedOutOfServiceFrom ?? null,
               curatedOutOfServiceTo:
                 curated.get(a.id)?.curatedOutOfServiceTo ?? null,
+              curatedOutOfServicePeriods:
+                curated.get(a.id)?.curatedOutOfServicePeriods ?? null,
             })),
         );
         if (notRun.size > 0) {

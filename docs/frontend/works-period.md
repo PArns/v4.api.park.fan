@@ -1,10 +1,13 @@
-# The works period on a ride (`worksPeriod`)
+# The works period on a ride (`worksPeriod`, `worksPeriods`)
 
-The contract for a ride's hand-curated rebuild or refit window: its shape, why it is
-never an outage, how to word it, and why "is it running today" is the client's
+The contract for a ride's hand-curated rebuild or refit windows: their shape, why they are
+never an outage, how to word them, and why "is it running today" is the client's
 comparison. Present on the attraction detail payload and on every ride in the park
 payload, so a ride list can badge without a second request. `/plan/day` leaves a ride
-out of a day inside the window ([plan-day availability](./plan-day/availability.md)).
+out of a day inside any window ([plan-day availability](./plan-day/availability.md)).
+
+A ride can have several windows (PAR-1246), so a known future one can be written down
+while the current one runs. `worksPeriods` carries all of them; `worksPeriod` carries one.
 
 ```jsonc
 "worksPeriod": {
@@ -13,6 +16,22 @@ out of a day inside the window ([plan-day availability](./plan-day/availability.
   "toUncertain": false    // true: `to` is our estimate, not a date the park published
 }
 ```
+
+```jsonc
+"worksPeriods": [          // every window, sorted by `from`; an open start first
+  { "from": "2026-01-16", "to": "2026-03-03", "toUncertain": false },
+  { "from": "2026-11-02", "toUncertain": false }
+]
+```
+
+Same item shape as `worksPeriod`. Windows never overlap, and `worksPeriods` is absent
+when no window is curated — never an empty list.
+
+**Which window `worksPeriod` is:** the one running on the park's today; else the next
+one to start; else the one that ended most recently. A ride with one window gets that
+window whatever the day, exactly as before the list existed. The choice is made when the
+payload is built and the payload is cached, so it can lag a window boundary by the cache
+lifetime — still compare its dates yourself (next sections) before saying "running now".
 
 Curated by hand under `/admin/attractions/<id>`, in the group "Umbaupause". No
 feed carries it — ThemeParks.wiki passes `REFURBISHMENT` through with no start,
@@ -73,9 +92,10 @@ somebody writes the day down.
 
 ## Whether it is running today is your comparison, not ours
 
-The block is a fact about a date range and says nothing about today. A window
+The block is a fact about a date range and carries no running flag. A window
 that ended in March stays on the row; a rebuild starting next winter looks the
-same from here.
+same from here. `worksPeriod` prefers the running window, but only as of the
+moment the cached payload was built.
 
 Both bounds are park-local `YYYY-MM-DD` and both are **inclusive**, so compare
 them against the park's own calendar day — `timezone` on the park payload — and

@@ -26,7 +26,8 @@ import type { WorksPeriod } from "../utils/curated-out-of-service.util";
  * the same from here. That is deliberate — the window is a fact about a date
  * range, and a page wanting "closed for works right now" makes the comparison
  * above, while one wanting "reopens 3 March" reads `to` on a window that has
- * not started.
+ * not started. Where a ride has several (`worksPeriods`), `worksPeriod` is the
+ * one running on the park's today, else the next, else the last.
  *
  * `from` and `to` stay REQUIRED in TypeScript and are `required: false` in the
  * published schema, and the two say different things on purpose. Every object

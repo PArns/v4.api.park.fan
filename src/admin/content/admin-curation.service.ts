@@ -18,7 +18,13 @@ import {
   RevalidationService,
 } from "../../common/revalidation/revalidation.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
-import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  normalizeWorksPeriod,
+  resolveWorksPeriods,
+  type WorksPeriod,
+  worksPeriodEndsBeforeItBegins,
+  worksPeriodsOverlap,
+} from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
 import {
   abbreviationsProblem,
@@ -255,6 +261,27 @@ export class AdminCurationService {
       after[key] = value;
       changed.push(key);
       (attraction as unknown as Record<string, unknown>)[key] = value;
+    }
+
+    // Expand/contract (PAR-1246): a write of the list is the whole statement —
+    // the editor was shown the old single window inside it and sent it back
+    // there — so the three single-window columns are cleared in the same
+    // UPDATE, and the diff records them, so undo puts them back. Asked of the
+    // patch rather than of `changed`: a list that is unchanged while the old
+    // window is still set means the editor deleted that window. A column the
+    // patch sets itself (an undo of this very write) is left as sent.
+    if ("curatedOutOfServicePeriods" in changes) {
+      for (const key of [
+        "curatedOutOfServiceFrom",
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ] as const) {
+        if (key in changes || attraction[key] == null) continue;
+        before[key] = attraction[key] ?? null;
+        after[key] = null;
+        changed.push(key);
+        attraction[key] = null;
+      }
     }
 
     // Nothing changed: no write, no cache eviction, no audit row. A form that
@@ -818,32 +845,42 @@ export class AdminCurationService {
         return Math.round(value * 100) / 100;
       }
 
-      case "date": {
-        if (typeof raw !== "string") {
-          throw new BadRequestException(`${spec.label} must be a date`);
-        }
-        const trimmed = raw.trim();
-        if (trimmed.length === 0) return unset;
-        // Stored and compared as a plain `YYYY-MM-DD` string, never parsed into
-        // a Date. A works period is a statement in the park's calendar, and
-        // constructing a Date here would drag the server's offset into it and
-        // move the boundary by a day for every park west of Greenwich.
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      case "date":
+        return parseParkLocalDate(spec.label, raw) ?? unset;
+
+      case "periods": {
+        if (!Array.isArray(raw)) {
           throw new BadRequestException(
-            `${spec.label} must be a date in YYYY-MM-DD form`,
+            `${spec.label} must be a list of windows`,
           );
         }
-        // Rejects 2026-02-30 and 2026-13-01, which the pattern lets through.
-        const [year, month, day] = trimmed.split("-").map(Number);
-        const probe = new Date(Date.UTC(year, month - 1, day));
-        if (
-          probe.getUTCFullYear() !== year ||
-          probe.getUTCMonth() !== month - 1 ||
-          probe.getUTCDate() !== day
-        ) {
-          throw new BadRequestException(`${spec.label} is not a real date`);
+        // No windows is no claim, stored as null like every empty curation.
+        if (raw.length === 0) return unset;
+        if (spec.max !== undefined && raw.length > spec.max) {
+          throw new BadRequestException(
+            `${spec.label} may hold at most ${spec.max} windows`,
+          );
         }
-        return trimmed;
+        const windows = raw.map((entry: unknown, index) =>
+          parseWorksPeriod(`${spec.label}: window ${index + 1}`, entry),
+        );
+        // Overlaps are refused rather than merged: two windows covering one
+        // day are two statements about it, and which end the page prints
+        // would depend on the order somebody typed them in.
+        for (let i = 0; i < windows.length; i++) {
+          for (let j = i + 1; j < windows.length; j++) {
+            if (worksPeriodsOverlap(windows[i], windows[j])) {
+              throw new BadRequestException(
+                `${spec.label}: window ${i + 1} (${describeWindow(windows[i])}) ` +
+                  `overlaps window ${j + 1} (${describeWindow(windows[j])}). ` +
+                  `Windows must not share a day.`,
+              );
+            }
+          }
+        }
+        // Sorted, so two saves differing only in the order the rows were
+        // typed do not read as a change.
+        return resolveWorksPeriods({ curatedOutOfServicePeriods: windows });
       }
 
       case "months": {
@@ -921,4 +958,77 @@ export class AdminCurationService {
       );
     }
   }
+}
+
+/**
+ * A park-local `YYYY-MM-DD`, or null for an empty one.
+ *
+ * Stored and compared as a plain string, never parsed into a Date. A works
+ * period is a statement in the park's calendar, and constructing a Date here
+ * would drag the server's offset into it and move the boundary by a day for
+ * every park west of Greenwich.
+ */
+function parseParkLocalDate(label: string, raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "string") {
+    throw new BadRequestException(`${label} must be a date`);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throw new BadRequestException(`${label} must be a date in YYYY-MM-DD form`);
+  }
+  // Rejects 2026-02-30 and 2026-13-01, which the pattern lets through.
+  const [year, month, day] = trimmed.split("-").map(Number);
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== day
+  ) {
+    throw new BadRequestException(`${label} is not a real date`);
+  }
+  return trimmed;
+}
+
+/** One entry of a works-period list, validated like the single window was. */
+function parseWorksPeriod(label: string, entry: unknown): WorksPeriod {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new BadRequestException(
+      `${label} must be an object with from, to and toUncertain`,
+    );
+  }
+  const { from, to, toUncertain } = entry as Record<string, unknown>;
+  const first = parseParkLocalDate(`${label} "from"`, from);
+  const last = parseParkLocalDate(`${label} "to"`, to);
+  if (!first && !last) {
+    throw new BadRequestException(`${label} needs a first or a last day`);
+  }
+  if (worksPeriodEndsBeforeItBegins(first, last)) {
+    throw new BadRequestException(
+      `${label} ends ${last} and starts ${first}. A window that ends before ` +
+        `it begins never applies.`,
+    );
+  }
+  if (
+    toUncertain !== undefined &&
+    toUncertain !== null &&
+    typeof toUncertain !== "boolean"
+  ) {
+    throw new BadRequestException(
+      `${label} "toUncertain" must be true or false`,
+    );
+  }
+  // Rejected rather than dropped: inside a list the editor sent both on
+  // purpose, and a hedge with no date to qualify is a half-filled row.
+  if (toUncertain === true && !last) {
+    throw new BadRequestException(
+      `${label} marks its end as an estimate but has no last day`,
+    );
+  }
+  return normalizeWorksPeriod({ from: first, to: last, toUncertain });
+}
+
+function describeWindow(window: WorksPeriod): string {
+  return `${window.from ?? "open start"} – ${window.to ?? "open end"}`;
 }

@@ -374,6 +374,7 @@ export class AttractionIntegrationService {
             effectiveStatus: dto.effectiveStatus,
             curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
             curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
+            curatedOutOfServicePeriods: attraction.curatedOutOfServicePeriods,
           },
         ],
       );
@@ -391,6 +392,7 @@ export class AttractionIntegrationService {
               isCurrentlyInSeason: dto.isCurrentlyInSeason,
               curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
               curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
+              curatedOutOfServicePeriods: attraction.curatedOutOfServicePeriods,
             },
           ],
         );
