@@ -15,6 +15,10 @@ import {
 import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 import {
+  logExternalApiError,
+  logJobFailure,
+} from "../../common/utils/file-logger.util";
+import {
   EFTELING_MAINTENANCE_URL,
   type EftelingMaintenanceRow,
   parseEftelingMaintenance,
@@ -225,7 +229,21 @@ export class EftelingMaintenanceSyncProcessor {
 
   @Process(SYNC_EFTELING_MAINTENANCE_JOB)
   async handle(job: Job<{ dryRun?: boolean }>): Promise<EftelingSyncResult> {
-    return this.sync(job.data?.dryRun === true);
+    const dryRun = job.data?.dryRun === true;
+    try {
+      return await this.sync(dryRun);
+    } catch (error) {
+      // The queue card shows the failure; the log files keep why, after Bull trimmed it.
+      this.logger.error(
+        `🛠️ Efteling maintenance sync failed: ${(error as Error)?.message ?? error}`,
+        (error as Error)?.stack,
+      );
+      logJobFailure(SYNC_EFTELING_MAINTENANCE_JOB, "manual-metadata", error, {
+        dryRun,
+        url: EFTELING_MAINTENANCE_URL,
+      });
+      throw error;
+    }
   }
 
   async sync(dryRun: boolean): Promise<EftelingSyncResult> {
@@ -238,11 +256,18 @@ export class EftelingMaintenanceSyncProcessor {
     const park = parks[0];
     const today = getCurrentDateInTimezone(park.timezone);
 
-    const response = await axios.get<string>(EFTELING_MAINTENANCE_URL, {
-      headers: { ...BROWSER_HEADERS, Accept: "text/html" },
-      timeout: 20_000,
-      responseType: "text",
-    });
+    const response = await axios
+      .get<string>(EFTELING_MAINTENANCE_URL, {
+        headers: { ...BROWSER_HEADERS, Accept: "text/html" },
+        timeout: 20_000,
+        responseType: "text",
+      })
+      .catch((error: unknown) => {
+        logExternalApiError("efteling", "maintenance-calendar", error, {
+          url: EFTELING_MAINTENANCE_URL,
+        });
+        throw error;
+      });
     const { rows, unparsed } = parseEftelingMaintenance(response.data);
 
     const rides = await this.attractions.find({
@@ -314,14 +339,29 @@ export class EftelingMaintenanceSyncProcessor {
       }
     }
 
+    // Not a failed run, but windows that were not applied: error level, and in the log file.
     if (unmatched.length > 0) {
-      this.logger.warn(
-        `🛠️ Efteling names matching no ride: ${unmatched.join(", ")}`,
+      const message = `Efteling names matching no ride: ${unmatched.join(", ")}`;
+      this.logger.error(`🛠️ ${message}`);
+      logExternalApiError(
+        "efteling",
+        "maintenance-calendar",
+        new Error(message),
+        {
+          unmatched,
+        },
       );
     }
     if (unparsed.length > 0) {
-      this.logger.warn(
-        `🛠️ Efteling rows with unreadable dates: ${unparsed.join("; ")}`,
+      const message = `Efteling rows with unreadable dates: ${unparsed.join("; ")}`;
+      this.logger.error(`🛠️ ${message}`);
+      logExternalApiError(
+        "efteling",
+        "maintenance-calendar",
+        new Error(message),
+        {
+          unparsed,
+        },
       );
     }
 

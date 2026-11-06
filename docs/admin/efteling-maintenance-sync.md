@@ -57,6 +57,16 @@ Writes go through `AdminCurationService.curateAttractionsBulk` as the system act
 reason and the page as `sourceUrl`, so each ride's change can be undone in the admin; then one
 Redis eviction and the two frontend revalidations ([publish outside-in](../rules/publish-outside-in.md)).
 
+## Error logging
+
+A failed run (fetch, layout change, no park, a write) is logged at error level and written to the
+job-failure log with `logJobFailure` (`/data/parkfan/logs/` on the host), then rethrown, so the job
+still shows as failed on the queue card. A failed fetch is also written to `external-api-errors`
+(`logExternalApiError("efteling", "maintenance-calendar", …)`; timeouts are left out there, as for
+every source). Names that match no ride and rows with unreadable dates do not fail the run, since the
+rest still applies, but they are logged at error level and written to `external-api-errors` too:
+those are windows that did not reach the site.
+
 ## First run
 
 The only destructive step removes the sync's own not-yet-started windows, so on the first run, when

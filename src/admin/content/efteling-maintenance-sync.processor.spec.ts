@@ -14,6 +14,14 @@ jest.mock("axios", () => ({ __esModule: true, default: { get: jest.fn() } }));
 jest.mock("../../common/utils/date.util", () => ({
   getCurrentDateInTimezone: () => "2026-11-06",
 }));
+jest.mock("../../common/utils/file-logger.util", () => ({
+  logExternalApiError: jest.fn(),
+  logJobFailure: jest.fn(),
+}));
+import {
+  logExternalApiError,
+  logJobFailure,
+} from "../../common/utils/file-logger.util";
 
 const TODAY = "2026-11-06";
 const own = (from: string | null, to: string | null) => ({
@@ -229,5 +237,53 @@ describe("EftelingMaintenanceSyncProcessor", () => {
     (axios.get as jest.Mock).mockResolvedValue({ data: "<html></html>" });
     await expect(processor.sync(false)).rejects.toThrow(/layout changed/);
     expect(curation.curateAttractionsBulk).not.toHaveBeenCalled();
+  });
+
+  describe("error logging", () => {
+    beforeEach(() => jest.clearAllMocks());
+    const job = (data = {}) => ({ data }) as never;
+
+    it("logs a failed run to the job-failure log and still fails the job", async () => {
+      const { processor } = build();
+      (axios.get as jest.Mock).mockResolvedValue({ data: "<html></html>" });
+      await expect(processor.handle(job())).rejects.toThrow(/layout changed/);
+      expect(logJobFailure).toHaveBeenCalledWith(
+        "sync-efteling-maintenance",
+        "manual-metadata",
+        expect.any(Error),
+        expect.objectContaining({ url: EFTELING_MAINTENANCE_URL }),
+      );
+    });
+
+    it("logs a failed fetch as an external API error as well", async () => {
+      const { processor } = build();
+      (axios.get as jest.Mock).mockRejectedValue(new Error("HTTP 503"));
+      await expect(processor.handle(job())).rejects.toThrow("HTTP 503");
+      expect(logExternalApiError).toHaveBeenCalledWith(
+        "efteling",
+        "maintenance-calendar",
+        expect.any(Error),
+        expect.anything(),
+      );
+      expect(logJobFailure).toHaveBeenCalled();
+    });
+
+    it("logs names it could not match, without failing the run", async () => {
+      const { processor } = build();
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: html.replace(/Pagode/g, "Pagoda Renamed"),
+      });
+      const result = await processor.handle(job({ dryRun: true }));
+      expect(result.unmatched).toEqual(["Pagoda Renamed"]);
+      expect(logExternalApiError).toHaveBeenCalledWith(
+        "efteling",
+        "maintenance-calendar",
+        expect.objectContaining({
+          message: expect.stringContaining("Pagoda Renamed"),
+        }),
+        { unmatched: ["Pagoda Renamed"] },
+      );
+      expect(logJobFailure).not.toHaveBeenCalled();
+    });
   });
 });
