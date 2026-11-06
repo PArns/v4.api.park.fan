@@ -35,7 +35,10 @@ import {
   NotRunTodayDto,
 } from "../../attractions/dto/attraction-outage.dto";
 import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
-import { resolveWorksPeriod } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  resolveWorksPeriod,
+  worksPeriodsOf,
+} from "../../attractions/utils/curated-out-of-service.util";
 import {
   resolveCuratedPark,
   resolveFunFacts,
@@ -314,14 +317,28 @@ export class ParkAttractionDto {
       "written down in advance. Absent unless an editor has curated one. " +
       "Beside `outage` and never inside it: an outage is a fault, this is " +
       "planned work, and inside this window no outage is reported at all. " +
-      "Both dates are park-local and inclusive, and the block says nothing " +
-      "about whether the window is running today — compare them in the " +
-      "park's `timezone`, never against the reader's own clock.",
+      "Both dates are park-local and inclusive. With several windows " +
+      "(`worksPeriods`) this is the one running on the park's today, else " +
+      "the next to start, else the most recent past one; it carries no " +
+      "running flag — compare the dates in the park's `timezone`, never " +
+      "against the reader's own clock.",
     required: false,
     nullable: true,
     type: WorksPeriodDto,
   })
   worksPeriod?: WorksPeriodDto | null;
+
+  @ApiProperty({
+    description:
+      "Every curated works period of this ride, sorted by `from` (an open " +
+      "start first). Same item shape as `worksPeriod`; windows never " +
+      "overlap. Absent when none is curated. `worksPeriod` is the one of " +
+      "these running on the park's today, else the next to start, else the " +
+      "most recent past one.",
+    required: false,
+    type: [WorksPeriodDto],
+  })
+  worksPeriods?: WorksPeriodDto[];
 
   @ApiProperty({
     description:
@@ -1038,7 +1055,8 @@ export class ParkWithAttractionsDto {
               hasVirtualLine: attraction.hasVirtualLine ?? null,
               // Null on nearly every ride, so this is one absent key per
               // attraction rather than a block of nulls across the catalogue.
-              worksPeriod: resolveWorksPeriod(attraction),
+              worksPeriod: resolveWorksPeriod(attraction, park.timezone),
+              ...worksPeriodsOf(attraction),
               // `park` here, not `attraction.park`: the list is built from the
               // park being mapped, and the attractions carry no back-reference.
               fastPass: resolveFastPass(attraction, park),

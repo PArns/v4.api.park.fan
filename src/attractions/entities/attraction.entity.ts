@@ -16,6 +16,10 @@ import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { generateSlug } from "../../common/utils/slug.util";
 import type { AttractionKind } from "../../common/types/attraction-kind.type";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
+import {
+  normalizeWorksPeriod,
+  type WorksPeriod,
+} from "../utils/curated-out-of-service.util";
 
 /**
  * Attraction Entity
@@ -297,6 +301,34 @@ export class Attraction {
     nullable: true,
   })
   curatedOutOfServiceToUncertain: boolean | null;
+
+  /**
+   * Every hand-written works period, as a list (PAR-1246): a ride can have a
+   * known future window entered while the current one still runs.
+   *
+   * Each entry is `{ from, to, toUncertain }` with park-local `YYYY-MM-DD`
+   * bounds, both inclusive, at least one present, `from <= to`, and
+   * `toUncertain` only beside a `to`; windows do not overlap.
+   * `AdminCurationService` enforces all of it and stores the list sorted, or
+   * null for none — never `[]`, so `IS NOT NULL` keeps meaning "curated".
+   *
+   * Expand/contract: the three single-window columns above stay and are still
+   * read for this release. A write of this list clears them in the same
+   * UPDATE, the editor having sent their window back inside the list. Read
+   * through `resolveWorksPeriods()` / `isCuratedOutOfService()` /
+   * `attractionIsCuratedOutOfService()`, which merge both.
+   */
+  @Column({
+    name: "curated_out_of_service_periods",
+    type: "jsonb",
+    nullable: true,
+    transformer: {
+      to: (value: WorksPeriod[] | null | undefined) => value,
+      from: (value: unknown) =>
+        Array.isArray(value) ? value.map(normalizeWorksPeriod) : null,
+    },
+  })
+  curatedOutOfServicePeriods: WorksPeriod[] | null;
 
   /**
    * Whether the ride has a single-rider line at all — a static fact about the

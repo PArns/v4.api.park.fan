@@ -49,9 +49,11 @@ future date.
 ## A ride inside a hand-written works period is absent too
 
 The season is **detected**; a works period is **written** — under
-`/admin/attractions/<id>` as `curated_out_of_service_from` / `_to`, park-local,
-**both bounds inclusive**, either bound alone allowed. It is the stronger statement
-and needs none of the season's caution.
+`/admin/attractions/<id>` as a list of windows (`curated_out_of_service_periods`,
+plus the older single window `curated_out_of_service_from` / `_to`), park-local,
+**both bounds inclusive**, either bound alone allowed. A ride is absent on a day
+**any** window covers. It is the stronger statement and needs none of the season's
+caution.
 
 - **Asked about the planned day** (`isCuratedOutOfService(…, dateStr)`), not about
   today, which is the helper's default.
@@ -63,8 +65,8 @@ and needs none of the season's caution.
 - **A live reading does not overrule it.** The live exception is the season's
   alone.
 
-The window itself is not repeated here; the client reads `worksPeriod` on the park
-and attraction payloads to say why a ride is missing — see
+The window itself is not repeated here; the client reads `worksPeriod` /
+`worksPeriods` on the park and attraction payloads to say why a ride is missing — see
 [works-period](../works-period.md).
 
 ## A day with no rides says why (`ridesUnavailable`)

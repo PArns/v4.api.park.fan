@@ -30,8 +30,9 @@ tall" with "needs an adult below this") were the first two. The general form:
 
 Human-only, nothing syncs them: `attraction_kind` ([attraction kind](../frontend/attraction-kind.md)),
 `indoor_outdoor` ([indoor/outdoor](../frontend/indoor-outdoor.md)), `has_single_rider`,
-`has_virtual_line`, `open_with_park`, `rcdb_id`, the works period `curated_out_of_service_from` / `_to` /
-`_to_uncertain` ([works period](../frontend/works-period.md)), `retired_at` / `retired_reason` /
+`has_virtual_line`, `open_with_park`, `rcdb_id`, the works periods `curated_out_of_service_periods` and the
+older single window `curated_out_of_service_from` / `_to` / `_to_uncertain`
+([works period](../frontend/works-period.md)), `retired_at` / `retired_reason` /
 `retired_kind`, the fast-pass columns below, and the rest of `attraction_ride_profiles`
 ([ride ↔ glossary](../frontend/ride-glossary-link.md)).
 
@@ -154,7 +155,10 @@ attraction).
 `GET /v1/admin/content/fields` serves `ATTRACTION_CURATED_FIELDS` and `PARK_CURATED_FIELDS`
 (`src/admin/content/curated-field.spec-list.ts`): per field the PATCH key, label, type, the synced key it
 corrects (or null), the resolved key it produces, group, options, unit, bounds, hint and `defaultValue`.
-Adding a curated column there makes it appear in the admin with no frontend change.
+Adding a curated column there makes it appear in the admin with no frontend change. Two optional keys on a
+view: `legacy: true` marks a field that is still written and read but superseded by another one the admin
+shows instead (the three single-window works-period fields, PAR-1246), and `max` on a `periods` field is
+the most windows it takes.
 `GET /v1/admin/content/resolve` shows synced, curated and resolved values side by side.
 
 ## Writing
@@ -167,6 +171,15 @@ on the page, and leaves no audit row.
   PATCHes on every blur does not bury the real edits.
 - **Only changed columns are written** (`update`, not `save`): `save()` wrote every loaded column, so two
   editors saving different fields reverted each other.
+- **Works periods** (PAR-1246) are one field, `curatedOutOfServicePeriods`, type `periods`, group
+  "Umbaupause": `Array<{ from: string | null; to: string | null; toUncertain: boolean }>` or null, dates
+  park-local `YYYY-MM-DD`, both bounds inclusive. Its view's value is the stored list with the old single
+  window folded in, so the editor starts from what is in force. A write sends the whole list; it is
+  validated (each window has a bound, real dates, `from <= to`, `toUncertain` only with a `to`, no two
+  windows sharing a day, at most 20), stored sorted, `[]` becomes null, and the same write clears
+  `curatedOutOfServiceFrom` / `_To` / `_ToUncertain` (audited, so undo restores them). The single-window
+  columns are still read beside the list for this release — expand/contract — and go once every curated
+  ride has been saved through the list. `PATCH …/parks/:id/attractions` takes the field too.
 - **Recording a check that changed nothing** (PAR-601): `POST /v1/admin/content/parks/:id/verify` with
   `fields`, optional `reason` and a required http(s) `sourceUrl` writes one `park.verify` audit row
   (`before` = the fields as they stand, `after` null), saves nothing, evicts nothing, cannot be undone, and
@@ -323,7 +336,9 @@ the losing row, and a curation that lived only there reverts silently. `previewM
   column-by-column merge would break. The winner inherits the set only when it holds none of the three,
   and the merged window is checked with the same `worksPeriodEndsBeforeItBegins` the endpoint uses; a stale
   estimate flag is dropped rather than sinking the dates. A window held back is a silent loss
-  `previewMerge` does not name (PAR-301).
+  `previewMerge` does not name (PAR-301). `curated_out_of_service_periods` is in the same set (PAR-1246):
+  a winner holding a single window or a list keeps its own; otherwise the loser's list travels as stored,
+  even when its single window is refused as inverted.
 - **`curated_is_seasonal` / `curated_season_months`** stay column by column on purpose: a winner curated
   seasonal without months should take the loser's months. The crossed pair (curated `false` beside
   inherited months) never reaches a reader, because the resolver drops months when seasonality is false.

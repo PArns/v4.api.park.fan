@@ -609,6 +609,22 @@ describe("AttractionOutageService — the closure path", () => {
       ]);
     });
 
+    it("keeps out a ride inside any window of its list (PAR-1246)", async () => {
+      await service.getNotRunToday(PARK, [
+        CLOSED_RIDE,
+        {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          effectiveStatus: "CLOSED",
+          curatedOutOfServicePeriods: [
+            { from: "2000-01-01", to: "2000-01-31", toUncertain: false },
+            { from: "2001-01-01", to: null, toUncertain: false },
+          ],
+        },
+      ]);
+
+      expect(query.mock.calls[0][1][0]).toEqual([CLOSED_RIDE.id]);
+    });
+
     it("asks nothing when no ride is closed", async () => {
       await service.getNotRunToday(PARK, [
         { id: DOWN_RIDE.id, effectiveStatus: "DOWN" },

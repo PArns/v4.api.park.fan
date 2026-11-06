@@ -193,6 +193,30 @@ describe("ParkWithAttractionsDto.fromEntity › worksPeriod", () => {
       toUncertain: false,
     });
   });
+
+  it("serves every window as worksPeriods, and the next one as worksPeriod (PAR-1246)", () => {
+    // Far apart on purpose, so the park's today sits in neither window while
+    // the far one is still upcoming whenever this runs.
+    const past = { from: "2001-01-01", to: "2001-02-01", toUncertain: false };
+    const future = { from: "2999-01-01", to: null, toUncertain: false };
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([
+        ride({
+          curatedOutOfServiceFrom: "2001-01-01",
+          curatedOutOfServiceTo: "2001-02-01",
+          curatedOutOfServicePeriods: [future],
+        }),
+      ]),
+    );
+
+    expect(dto.attractions[0].worksPeriods).toEqual([past, future]);
+    expect(dto.attractions[0].worksPeriod).toEqual(future);
+  });
+
+  it("leaves worksPeriods out for a ride nobody has curated", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
+    expect(dto.attractions[0]).not.toHaveProperty("worksPeriods");
+  });
 });
 
 /**

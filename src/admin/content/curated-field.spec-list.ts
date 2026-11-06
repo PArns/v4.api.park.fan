@@ -8,6 +8,11 @@ import {
   resolveCuratedPark,
 } from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
+import {
+  MAX_WORKS_PERIODS,
+  resolveWorksPeriods,
+  type WorksPeriodSource,
+} from "../../attractions/utils/curated-out-of-service.util";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
 
@@ -38,7 +43,12 @@ export type CuratedFieldType =
   | "months"
   | "date"
   | "url"
-  | "glossaryTerm";
+  | "glossaryTerm"
+  /**
+   * A list of works periods: `Array<{ from: string | null; to: string | null;
+   * toUncertain: boolean }>` or null, dates park-local `YYYY-MM-DD`.
+   */
+  | "periods";
 
 export interface CuratedFieldSpec {
   /** The curated column's TS property name — also the PATCH body key. */
@@ -76,6 +86,16 @@ export interface CuratedFieldSpec {
    * locale was machine-translated. A function, so `/content/fields` (JSON) never serves it.
    */
   entityHint?: (entity: Record<string, unknown>) => string | null;
+  /**
+   * The value the editor starts from, when that is not simply the column. A
+   * function for the same reason as `entityHint`.
+   */
+  entityValue?: (entity: Record<string, unknown>) => unknown;
+  /**
+   * Still writable and still read, but superseded by another field the editor
+   * should show instead. Served on the view so the admin can hide it.
+   */
+  legacy?: true;
 }
 
 /**
@@ -205,8 +225,30 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "Monate — abgeleitete wären nur unser Aufzeichnungsfenster.",
   },
   {
+    key: "curatedOutOfServicePeriods",
+    label: "Umbaupausen",
+    type: "periods",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Umbaupause",
+    max: MAX_WORKS_PERIODS,
+    // The editor starts from what is in force: the old single window folded
+    // into the list, so saving the list carries it over instead of losing it.
+    entityValue: (attraction) => {
+      const windows = resolveWorksPeriods(attraction as WorksPeriodSource);
+      return windows.length > 0 ? windows : null;
+    },
+    hint:
+      "Mehrere Fenster möglich, auch künftige. Je Fenster erster und letzter " +
+      "Tag einschließlich, in der Zeitzone des Parks; das Ende darf eine " +
+      "Schätzung sein. Solange eines läuft, meldet die Seite für diese Bahn " +
+      "keine Störung — weder live noch in der Auswertung. Fenster dürfen sich " +
+      "nicht überschneiden.",
+  },
+  {
     key: "curatedOutOfServiceFrom",
     label: "Außer Betrieb ab",
+    legacy: true,
     type: "date",
     syncedKey: null,
     resolvedKey: null,
@@ -220,6 +262,7 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   },
   {
     key: "curatedOutOfServiceTo",
+    legacy: true,
     label: "Außer Betrieb bis",
     type: "date",
     syncedKey: null,
@@ -231,6 +274,7 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
   },
   {
     key: "curatedOutOfServiceToUncertain",
+    legacy: true,
     label: "Enddatum nur geschätzt",
     type: "boolean",
     syncedKey: null,
@@ -701,6 +745,7 @@ export interface CuratedFieldView {
   max?: number;
   maxLength?: number;
   hint?: string;
+  legacy?: true;
 }
 
 function readKey(source: Record<string, unknown>, key: string | null): unknown {
@@ -715,7 +760,9 @@ function buildViews(
   resolved: Record<string, unknown>,
 ): CuratedFieldView[] {
   return specs.map((spec) => {
-    const curatedValue = readKey(entity, spec.key);
+    const curatedValue = spec.entityValue
+      ? spec.entityValue(entity)
+      : readKey(entity, spec.key);
     const syncedValue = readKey(entity, spec.syncedKey);
     const resolvedValue = spec.resolvedKey
       ? readKey(resolved, spec.resolvedKey)
@@ -751,6 +798,7 @@ function buildViews(
       ...(spec.min !== undefined ? { min: spec.min } : {}),
       ...(spec.max !== undefined ? { max: spec.max } : {}),
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
+      ...(spec.legacy ? { legacy: spec.legacy } : {}),
       ...((spec.entityHint?.(entity) ?? spec.hint)
         ? { hint: spec.entityHint?.(entity) ?? spec.hint }
         : {}),

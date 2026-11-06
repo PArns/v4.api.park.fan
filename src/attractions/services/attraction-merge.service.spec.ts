@@ -268,6 +268,67 @@ describe("AttractionMergeService", () => {
     );
   });
 
+  it("carries the loser's works-period list with its single window (PAR-1246)", async () => {
+    const periods = [
+      { from: "2026-11-02", to: "2026-11-20", toUncertain: false },
+    ];
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+        curatedOutOfServicePeriods: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: null,
+        curatedOutOfServicePeriods: periods,
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServicePeriods: periods,
+      }),
+    );
+  });
+
+  it("carries none of the loser's list when the winner holds a list of its own", async () => {
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServicePeriods: [
+          { from: "2026-06-01", to: null, toUncertain: false },
+        ],
+        landName: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServicePeriods: [
+          { from: "2026-11-02", to: null, toUncertain: false },
+        ],
+        landName: "Family Rides",
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    const [, , payload] = manager.update.mock.calls[0];
+    expect(payload).toMatchObject({ landName: "Family Rides" });
+    expect(payload).not.toHaveProperty("curatedOutOfServicePeriods");
+    expect(payload).not.toHaveProperty("curatedOutOfServiceFrom");
+  });
+
   it("writes no part of a works period the winner already has one of", async () => {
     // And the other direction, at the same level: the winner's own window is
     // never overwritten, and none of the loser's three columns reaches the

@@ -2585,6 +2585,38 @@ describe("PlanDayService", () => {
       expect(closing.rides).toEqual([]);
     });
 
+    it("leaves a ride out of a day any window of its list covers (PAR-1246)", async () => {
+      const date = farDate();
+
+      const covered = await planWithWindow(date, {
+        curatedOutOfServicePeriods: [
+          {
+            from: dayShift(date, -40),
+            to: dayShift(date, -30),
+            toUncertain: false,
+          },
+          {
+            from: dayShift(date, -2),
+            to: dayShift(date, 2),
+            toUncertain: true,
+          },
+        ],
+      });
+      expect(covered.rides).toEqual([]);
+
+      const between = await planWithWindow(date, {
+        curatedOutOfServicePeriods: [
+          {
+            from: dayShift(date, -40),
+            to: dayShift(date, -1),
+            toUncertain: false,
+          },
+          { from: dayShift(date, 1), to: null, toUncertain: false },
+        ],
+      });
+      expect(between.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
     it("handles a window with only a start, which is the usual one", async () => {
       // Work is running and nobody has said when it ends. Open-ended forward,
       // so every later date is inside it.

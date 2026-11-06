@@ -181,7 +181,8 @@ call is on screen already and a repeat after the result would show twice.
 `get_ride` (the admin MCP's `get_attraction`) also carries, from the attraction detail: `land`,
 `fastPass` (the paid product; absent is "nobody checked or none sold") and `headliner` (the set
 the park payload's `isHeadliner` reads, `AnalyticsService.getHeadlinerAttractionIds`; null when it
-cannot be read) under `facts`; `worksPeriod.runningToday` against the park's today; `ropeDrop`
+cannot be read) under `facts`; `worksPeriod.runningToday` against the park's today (`worksPeriod` is the
+running window when one runs) and every window as `worksPeriods`; `ropeDrop`
 (`worth`, `strength`, `confidence`, the wait at opening against the busy peak and the minutes
 saved, `rideBy` and `bestSlot` as instants of the next operating day, `betterLateInTheDay`); and
 `bestVisitTimesToday`.

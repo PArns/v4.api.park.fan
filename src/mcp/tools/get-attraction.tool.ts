@@ -99,6 +99,8 @@ export const getAttractionTool = defineMcpTool({
             ),
           }
         : null,
+      // Every window, for "when is it closed next" — worksPeriod is just one.
+      worksPeriods: dto.worksPeriods ?? [],
       facts: {
         kind: dto.attractionKind ?? null,
         indoorOutdoor: dto.indoorOutdoor ?? null,

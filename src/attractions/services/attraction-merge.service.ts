@@ -841,30 +841,44 @@ export class AttractionMergeService {
         "curatedOutOfServiceFrom",
         "curatedOutOfServiceTo",
         "curatedOutOfServiceToUncertain",
+        // The list (PAR-1246) is the same statement, so it moves with the
+        // single window or not at all: a survivor holding either keeps its own.
+        "curatedOutOfServicePeriods",
       ],
-      settle: (carried) => {
-        const from = carried.curatedOutOfServiceFrom ?? null;
-        const to = carried.curatedOutOfServiceTo ?? null;
-
-        // It has to be a window at all. `AdminCurationService` refuses this
-        // pair outright, so a row carrying it never came through it.
-        if (worksPeriodEndsBeforeItBegins(from, to)) return null;
-
-        // The flag qualifies the end date and means nothing without one. The
-        // endpoint clears it and keeps the dates; so does this.
-        //
-        // This is also what leaves a window of nothing but a flag behind: with
-        // the flag dropped there is nothing left to assign, so "a bare
-        // toUncertain is not a window" needs no rule of its own — and a rule
-        // no mutation can turn red would read like one that does something.
-        if (!isSet(to) && "curatedOutOfServiceToUncertain" in carried) {
-          const { curatedOutOfServiceToUncertain: _dropped, ...rest } = carried;
-          return rest;
-        }
-        return carried;
+      settle: ({ curatedOutOfServicePeriods: periods, ...single }) => {
+        const settled = AttractionMergeService.settleSingleWindow(single);
+        // The list was validated on its way in, so it travels as it is; only
+        // the single window is asked the questions below.
+        if (!isSet(periods)) return settled;
+        return { ...(settled ?? {}), curatedOutOfServicePeriods: periods };
       },
     },
   ];
+
+  /** The single-window columns' half of the works-period set's `settle`. */
+  private static settleSingleWindow(
+    carried: Partial<Attraction>,
+  ): Partial<Attraction> | null {
+    const from = carried.curatedOutOfServiceFrom ?? null;
+    const to = carried.curatedOutOfServiceTo ?? null;
+
+    // It has to be a window at all. `AdminCurationService` refuses this
+    // pair outright, so a row carrying it never came through it.
+    if (worksPeriodEndsBeforeItBegins(from, to)) return null;
+
+    // The flag qualifies the end date and means nothing without one. The
+    // endpoint clears it and keeps the dates; so does this.
+    //
+    // This is also what leaves a window of nothing but a flag behind: with
+    // the flag dropped there is nothing left to assign, so "a bare
+    // toUncertain is not a window" needs no rule of its own — and a rule
+    // no mutation can turn red would read like one that does something.
+    if (!isSet(to) && "curatedOutOfServiceToUncertain" in carried) {
+      const { curatedOutOfServiceToUncertain: _dropped, ...rest } = carried;
+      return rest;
+    }
+    return carried;
+  }
 
   /**
    * Columns whose "nobody decided anything" is a value rather than an absence.

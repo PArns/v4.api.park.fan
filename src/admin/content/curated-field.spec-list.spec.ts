@@ -179,6 +179,50 @@ describe("curated field views", () => {
     });
   });
 
+  describe("the works-period list (PAR-1246)", () => {
+    it("starts the editor from the old window folded into the list", () => {
+      const view = byKey(
+        attractionFieldViews(
+          anAttraction({
+            curatedOutOfServiceFrom: "2026-11-02",
+            curatedOutOfServiceTo: null,
+            curatedOutOfServicePeriods: [
+              { from: "2026-01-16", to: "2026-03-03", toUncertain: true },
+            ],
+          }),
+        ),
+        "curatedOutOfServicePeriods",
+      );
+      expect(view.type).toBe("periods");
+      expect(view.group).toBe("Umbaupause");
+      expect(view.max).toBe(20);
+      expect(view.curatedValue).toEqual([
+        { from: "2026-01-16", to: "2026-03-03", toUncertain: true },
+        { from: "2026-11-02", to: null, toUncertain: false },
+      ]);
+    });
+
+    it("is null when nothing is curated, and not overridden", () => {
+      const view = byKey(
+        attractionFieldViews(anAttraction()),
+        "curatedOutOfServicePeriods",
+      );
+      expect(view.curatedValue).toBeNull();
+      expect(view.overridden).toBe(false);
+    });
+
+    it("marks the three single-window fields legacy, and nothing else", () => {
+      const legacy = attractionFieldViews(anAttraction())
+        .filter((view) => view.legacy)
+        .map((view) => view.key);
+      expect(legacy).toEqual([
+        "curatedOutOfServiceFrom",
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ]);
+    });
+  });
+
   it("describes every curated column exactly once", () => {
     const keys = ATTRACTION_CURATED_FIELDS.map((field) => field.key);
     expect(new Set(keys).size).toBe(keys.length);
