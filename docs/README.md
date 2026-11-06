@@ -82,6 +82,7 @@ Start at the first page: which model serves which surface today.
 - [endpoints](admin/endpoints.md) — Every `/v1/admin` route by purpose with required role and what it triggers, linking the owning docs
 - [authentication](admin/authentication.md) — Admin accounts, Redis sessions, scrypt, TOTP, roles, login limits, Turnstile, legacy pass
 - [curation](admin/curation.md) — Curated columns on parks and attractions, resolvers, editor descriptors, publish, undo, merges
+- [efteling-maintenance-sync](admin/efteling-maintenance-sync.md) — The weekly job that writes Efteling's maintenance calendar into works periods: parsing, matching, window ownership (`source`), first run
 - [mcp](admin/mcp.md) — The admin MCP server: connecting Claude, OAuth 2.1 flow, API tokens, tools, security, edge rules
 - [search-console-setup](admin/search-console-setup.md) — Connecting Google Search Console: service account, property access, the GSC_ variables, first import, error table
 

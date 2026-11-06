@@ -1463,6 +1463,30 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // Efteling maintenance calendar → works periods (PAR-1245). Weekly, Monday
+    // 10:20: the park updates the page a few times a month, and the slot is
+    // clear of the night batch (01:00–09:30) and of the :00–:10 crons.
+    // Failures are kept, so the admin's queue card shows a layout change.
+    if (
+      !(await this.hasRepeatableJob(
+        this.manualMetadataQueue,
+        "efteling-maintenance-cron",
+        "20 10 * * 1",
+        "UTC",
+      ))
+    ) {
+      await this.manualMetadataQueue.add(
+        "sync-efteling-maintenance",
+        {},
+        {
+          repeat: { cron: "20 10 * * 1", tz: "UTC" },
+          jobId: "efteling-maintenance-cron",
+          removeOnComplete: 100,
+          removeOnFail: 100,
+        },
+      );
+    }
+
     // Data-quality sweep: a park losing a block of attractions from its feed,
     // and jobs that are scheduled, run and throw. Both failure modes ran for
     // weeks unnoticed before this existed — see DataQualityMonitorService.

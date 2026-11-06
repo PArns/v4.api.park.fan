@@ -867,6 +867,38 @@ describe("AdminCurationService", () => {
       expect(row.before.curatedOutOfServiceFrom).toBe("2026-01-16");
     });
 
+    it("keeps an automated window's source when an admin save leaves its dates alone (PAR-1245)", async () => {
+      const synced = { ...spring, source: "efteling-maintenance-calendar" };
+      // The form sends no source; the stored window keeps it, the edited one loses it.
+      const { saved, result } = await write(
+        [spring, { ...autumn, to: "2026-12-01" }],
+        {
+          curatedOutOfServicePeriods: [
+            synced,
+            { ...autumn, source: "efteling-maintenance-calendar" },
+          ],
+        },
+      );
+      expect(result.changed).toEqual(["curatedOutOfServicePeriods"]);
+      expect(saved).toEqual({
+        curatedOutOfServicePeriods: [synced, { ...autumn, to: "2026-12-01" }],
+      });
+    });
+
+    it("writes nothing when an admin save resends a synced list unchanged", async () => {
+      const synced = { ...spring, source: "efteling-maintenance-calendar" };
+      const { saved } = await write([spring], {
+        curatedOutOfServicePeriods: [synced],
+      });
+      expect(saved).toBeUndefined();
+    });
+
+    it("refuses a source that is no short slug", async () => {
+      await expect(
+        write([{ ...spring, source: "Not A Slug!" }]),
+      ).rejects.toThrow(/"source" must be a short lower-case slug/);
+    });
+
     it("clears the old window even when the list itself is unchanged", async () => {
       // The editor deleted the old window from the list it was shown.
       const { saved } = await write([autumn], {

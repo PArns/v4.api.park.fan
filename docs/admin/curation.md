@@ -180,6 +180,12 @@ on the page, and leaves no audit row.
   `curatedOutOfServiceFrom` / `_To` / `_ToUncertain` (audited, so undo restores them). The single-window
   columns are still read beside the list for this release — expand/contract — and go once every curated
   ride has been saved through the list. `PATCH …/parks/:id/attractions` takes the field too.
+  A window may carry `source` (a short slug) naming the automated writer that owns it — today only
+  `efteling-maintenance-calendar` ([Efteling sync](efteling-maintenance-sync.md)). The form sends
+  windows without it, and a sent window whose `from` and `to` match a stored one keeps that one's
+  `source`, so a save does not turn the sync's windows into hand-written ones; changing a window's
+  dates makes it the editor's. `source` is in the field value and the audit rows, never on public
+  payloads.
 - **Recording a check that changed nothing** (PAR-601): `POST /v1/admin/content/parks/:id/verify` with
   `fields`, optional `reason` and a required http(s) `sourceUrl` writes one `park.verify` audit row
   (`before` = the fields as they stand, `after` null), saves nothing, evicts nothing, cannot be undone, and

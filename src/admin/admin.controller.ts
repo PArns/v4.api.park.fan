@@ -23,6 +23,7 @@ import {
   ApiQuery,
 } from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bull";
+import { SYNC_EFTELING_MAINTENANCE_JOB } from "./content/efteling-maintenance-sync.processor";
 import { Queue } from "bull";
 import { In } from "typeorm";
 import { Redis } from "ioredis";
@@ -1443,6 +1444,36 @@ export class AdminController {
       { priority: 1 },
     );
     return { message: "Ride profile publish queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Run the Efteling maintenance-calendar sync now (PAR-1245). Weekly on its
+   * own; `dryRun` returns the per-ride diff in the job result and writes nothing.
+   */
+  @Post("sync-efteling-maintenance")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Sync Efteling's maintenance calendar into works periods",
+    description:
+      "Reads efteling.com's in-maintenance page and adds, moves or removes the " +
+      "works periods the sync owns (`source: efteling-maintenance-calendar`). " +
+      "Hand-written windows are never touched. Pass `dryRun: true` to see the " +
+      "diff in the job result without writing.",
+  })
+  @ApiResponse({ status: 202, description: "Job queued" })
+  async triggerEftelingMaintenanceSync(
+    @Body() body?: { dryRun?: unknown },
+  ): Promise<{ message: string; jobId: string }> {
+    const job = await this.manualMetadataQueue.add(
+      SYNC_EFTELING_MAINTENANCE_JOB,
+      { dryRun: readBodyFlag(body?.dryRun) === true },
+      { priority: 1, removeOnComplete: 100 },
+    );
+    return {
+      message: "Efteling maintenance sync queued",
+      jobId: job.id.toString(),
+    };
   }
 
   /**

@@ -1,6 +1,7 @@
 import {
   attractionIsCuratedOutOfService,
   isCuratedOutOfService,
+  normalizeWorksPeriod,
   resolveWorksPeriod,
   resolveWorksPeriods,
   worksPeriodEndsBeforeItBegins,
@@ -431,5 +432,25 @@ describe("several works periods (PAR-1246)", () => {
       expect(sql).toContain("d.op_day <= (w->>'to')::date");
       expect(sql).toContain("(w->>'from' IS NOT NULL OR w->>'to' IS NOT NULL)");
     });
+  });
+});
+
+describe("the window's owner (PAR-1245)", () => {
+  const synced = {
+    from: "2026-11-09",
+    to: "2026-12-04",
+    toUncertain: false,
+    source: "efteling-maintenance-calendar",
+  };
+
+  it("survives the read transformer and the resolver, and is never served", () => {
+    const source = {
+      curatedOutOfServicePeriods: [normalizeWorksPeriod(synced)],
+    };
+    expect(resolveWorksPeriods(source)).toEqual([synced]);
+    expect(worksPeriodsOf(source).worksPeriods?.[0]).not.toHaveProperty(
+      "source",
+    );
+    expect(resolveWorksPeriod(source, null)).not.toHaveProperty("source");
   });
 });
