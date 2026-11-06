@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# parkfan-backup.sh — Daily backup: PostgreSQL base backup + ML/NF models → Samba NAS
+# parkfan-backup.sh — Daily backup: PostgreSQL base backup + ML/NF/PCN models → Samba NAS
 #
 # NAS layout:
 #   Backups/
@@ -13,8 +13,10 @@
 #       │   ├── catboost_v20260528_1809.cbm
 #       │   ├── metadata_v20260528_1809.pkl
 #       │   └── active_version.txt
-#       └── nf-models/
-#           └── (TFT model files)
+#       ├── nf-models/
+#       │   └── nf_models_<datetime>.tar.gz
+#       └── pcn-models/
+#           └── pcn_models_<datetime>.tar.gz
 #
 # Deploy to host:
 #   scp scripts/backup/parkfan-backup.sh <user>@<host>:/opt/parkfan/backup.sh
@@ -51,6 +53,7 @@ DB_DATABASE="${DB_DATABASE:-parkfan}"
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/data/parkfan/postgres}"
 ML_MODELS_DIR="${ML_MODELS_DIR:-/data/parkfan/ml-models}"
 NF_MODELS_DIR="${NF_MODELS_DIR:-/data/parkfan/nf-models}"
+PCN_MODELS_DIR="${PCN_MODELS_DIR:-/data/parkfan/pcn-models}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 BACKUP_ML_MODELS_KEEP="${BACKUP_ML_MODELS_KEEP:-7}"
 
@@ -85,7 +88,8 @@ NAS_ROOT="$MOUNT_POINT/parkfan"
 NAS_DB_DATE_DIR="$NAS_ROOT/db/$DATE"
 NAS_ML_DIR="$NAS_ROOT/ml-models"
 NAS_NF_DIR="$NAS_ROOT/nf-models"
-mkdir -p "$NAS_DB_DATE_DIR" "$NAS_ML_DIR" "$NAS_NF_DIR"
+NAS_PCN_DIR="$NAS_ROOT/pcn-models"
+mkdir -p "$NAS_DB_DATE_DIR" "$NAS_ML_DIR" "$NAS_NF_DIR" "$NAS_PCN_DIR"
 
 # ── PostgreSQL Backup (pg_basebackup) ─────────────────────────────────────────
 # pg_basebackup creates a consistent binary copy of the entire cluster including
@@ -186,30 +190,38 @@ else
   fi
 fi
 
-# ── NF Model Backup (TFT) ──────────────────────────────────────────────────────
-log "Backing up NF/TFT models from $NF_MODELS_DIR"
+# ── NF (TFT) and PCN Model Backup ──────────────────────────────────────────────
+# Both services overwrite their model files in place, so each run archives the
+# whole directory. Keep the last 3 archives (models are large).
+backup_model_dir() {
+  local label="$1" src="$2" nas_dir="$3" prefix="$4"
+  log "Backing up $label models from $src"
 
-if [[ -d "$NF_MODELS_DIR" ]] && [[ -n "$(ls -A "$NF_MODELS_DIR" 2>/dev/null)" ]]; then
-  NF_BACKUP="$NAS_NF_DIR/nf_models_${DATETIME}.tar.gz"
-  tar -czf "$NF_BACKUP" -C "$NF_MODELS_DIR" . 2>/dev/null || true
-  NF_SIZE=$(du -sh "$NF_BACKUP" | cut -f1)
-  log "NF models backed up: $(basename "$NF_BACKUP") ($NF_SIZE)"
+  if [[ -d "$src" ]] && [[ -n "$(ls -A "$src" 2>/dev/null)" ]]; then
+    local archive="$nas_dir/${prefix}_${DATETIME}.tar.gz"
+    tar -czf "$archive" -C "$src" . 2>/dev/null || true
+    log "$label models backed up: $(basename "$archive") ($(du -sh "$archive" | cut -f1))"
 
-  # Keep last 3 NF backups (models are large)
-  mapfile -t NF_BACKUPS < <(find "$NAS_NF_DIR" -maxdepth 1 -name "nf_models_*.tar.gz" | sort)
-  NF_COUNT=${#NF_BACKUPS[@]}
-  if (( NF_COUNT > 3 )); then
-    for old in "${NF_BACKUPS[@]:0:$(( NF_COUNT - 3 ))}"; do
-      rm -f "$old"
-      log "  Pruned old NF backup: $(basename "$old")"
-    done
+    local archives
+    mapfile -t archives < <(find "$nas_dir" -maxdepth 1 -name "${prefix}_*.tar.gz" | sort)
+    local count=${#archives[@]}
+    if (( count > 3 )); then
+      for old in "${archives[@]:0:$(( count - 3 ))}"; do
+        rm -f "$old"
+        log "  Pruned old $label backup: $(basename "$old")"
+      done
+    fi
+  else
+    log "No $label model files found — skipping"
   fi
-else
-  log "No NF model files found — skipping"
-fi
+}
+
+backup_model_dir "NF/TFT" "$NF_MODELS_DIR" "$NAS_NF_DIR" nf_models
+backup_model_dir "PCN" "$PCN_MODELS_DIR" "$NAS_PCN_DIR" pcn_models
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 DB_DAYS=$(find "$NAS_ROOT/db" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
 ML_VERSIONS=$(find "$NAS_ML_DIR" -maxdepth 1 -name "catboost_*.cbm" 2>/dev/null | wc -l)
 NF_BACKUPS_COUNT=$(find "$NAS_NF_DIR" -maxdepth 1 -name "nf_models_*.tar.gz" 2>/dev/null | wc -l)
-log "Done. DB days: $DB_DAYS/${BACKUP_RETENTION_DAYS}, CatBoost versions: $ML_VERSIONS/${BACKUP_ML_MODELS_KEEP}, NF backups: $NF_BACKUPS_COUNT/3"
+PCN_BACKUPS_COUNT=$(find "$NAS_PCN_DIR" -maxdepth 1 -name "pcn_models_*.tar.gz" 2>/dev/null | wc -l)
+log "Done. DB days: $DB_DAYS/${BACKUP_RETENTION_DAYS}, CatBoost versions: $ML_VERSIONS/${BACKUP_ML_MODELS_KEEP}, NF backups: $NF_BACKUPS_COUNT/3, PCN backups: $PCN_BACKUPS_COUNT/3"
