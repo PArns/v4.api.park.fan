@@ -421,9 +421,14 @@ export class ParkShowDto {
   @ApiProperty({ description: "Status", required: false })
   status?: string;
 
-  @ApiProperty({ description: "Showtimes", required: false })
+  @ApiProperty({
+    description:
+      "Showtimes. `endTime` is present only when the feed's end is after the start and at most three hours later",
+    required: false,
+  })
   showtimes?: {
     startTime: string;
+    endTime?: string;
   }[];
 
   @ApiProperty({

@@ -84,6 +84,16 @@ hold the break, and left 28d/90d alone, so the flags never had to carry anything
 `holiday_count_total` 0.00, `is_bridge_day` 0.01 against `park_occupancy_pct` 16.84 and
 `avg_wait_last_1h` 16.42 (importance, %).
 
+After it, from `GET /model/info/{version}` (importance in %, rank of 75 features):
+
+| Feature | v20261024_0600 (before PAR-1051) | v20261024_1243 (first after) | v20261106_0600 |
+|---|---|---|---|
+| `is_holiday_primary` | 0.00 | 0.19 (#37) | 0.10 (#48) |
+| `is_school_holiday_primary` | 0.06 | 1.23 (#17) | 3.27 (#10) |
+| `is_bridge_day` | 0.01 | 0.22 (#33) | 0.14 (#45) |
+
+School holidays now carry weight; public holidays and bridge days rose off zero but stay small.
+
 **Weights** (`train.compute_sample_weights`, applied to the fit and to the refit):
 
 - accuracy feedback (`ENABLE_SAMPLE_WEIGHTS`): `1 + (MAE / 20) · 0.5`, MAE per ride from
@@ -218,9 +228,9 @@ before changing the budget.
 ## After a training
 
 `GET /v1/ml/models/metrics-history` shows the trend; per version `GET /model/info/{version}`
-(`metrics.feature_importances` in %, `holdoutMetrics`, `trainingTimings`). Since PAR-1051 the
-holiday flags should rise clearly above 0 % importance; compare `holdoutMetrics` with the
-previous model before reading the gate's verdict.
+(`metrics.feature_importances` in %, `holdoutMetrics`, `trainingTimings`). Compare the holiday
+flags with the table under [Dropouts and sample weights](#dropouts-and-sample-weights) and
+`holdoutMetrics` with the previous model before reading the gate's verdict.
 
 ## Rejected (measured)
 
@@ -235,5 +245,5 @@ previous model before reading the gate's verdict.
 
 ## Open work
 
-PAR-1117: the `TRAIN_MAX_ROWS` A/B, whether the gate reads `holdoutMetrics.origin_leads`, the
-`CATBOOST_CURATED_RIDE_TYPE` flip, and the holiday importances after PAR-1051.
+PAR-1117: the `TRAIN_MAX_ROWS` A/B, whether the gate reads `holdoutMetrics.origin_leads`, and
+the `CATBOOST_CURATED_RIDE_TYPE` flip.

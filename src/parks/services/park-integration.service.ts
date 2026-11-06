@@ -81,6 +81,7 @@ import {
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { partialRunWeekdays } from "../../common/utils/run-weekdays.util";
+import { showtimeEndTime } from "../../shows/showtime-end-time.util";
 
 /**
  * Park Integration Service
@@ -1284,16 +1285,16 @@ export class ParkIntegrationService {
           // Live showtimes can still carry a previous day's date (source APIs
           // lag around midnight) — project them onto today's date in park-local
           // time while the show is operating, as a fallback for ShowsService.
-          const projectedShowtimes =
-            show.status === "OPERATING" && rawShowtimes.length > 0
-              ? rawShowtimes.map((st) => {
-                  if (!st.startTime) return st;
-                  const currentDatePart = st.startTime.substring(0, 10);
-                  return currentDatePart !== todayStr
-                    ? { startTime: todayStr + st.startTime.substring(10) }
-                    : { startTime: st.startTime };
-                })
-              : rawShowtimes.map((st) => ({ startTime: st.startTime }));
+          const projectedShowtimes = rawShowtimes.map((st) => {
+            const startTime =
+              show.status === "OPERATING" &&
+              st.startTime &&
+              st.startTime.substring(0, 10) !== todayStr
+                ? todayStr + st.startTime.substring(10)
+                : st.startTime;
+            const endTime = showtimeEndTime(st, startTime);
+            return endTime ? { startTime, endTime } : { startTime };
+          });
 
           show.showtimes = projectedShowtimes;
         } else {

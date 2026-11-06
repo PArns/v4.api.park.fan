@@ -51,6 +51,7 @@ import {
   formatNextSchedule,
 } from "../common/utils/schedule.util";
 import { resolveCuratedFacts } from "../attractions/utils/curated-attraction-facts.util";
+import { showtimeEndTime } from "../shows/showtime-end-time.util";
 
 /**
  * Favorites Service
@@ -1020,7 +1021,11 @@ export class FavoritesService {
               )
             : null,
         status: liveData?.status || "CLOSED",
-        showtimes: liveData?.showtimes || null,
+        showtimes:
+          liveData?.showtimes?.map((st) => ({
+            ...st,
+            endTime: showtimeEndTime(st) ?? undefined,
+          })) || null,
         // Shows have no route of their own; the park payload lists them.
         url: show.park ? buildParkUrl(show.park) : null,
         park: show.park
