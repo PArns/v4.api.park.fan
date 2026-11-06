@@ -146,7 +146,10 @@ with `source: "chat"` and the `kind`, once per answer, at most twice per chat
 The tools (`tools/assistant-tools.ts`) are a fixed list. Lookups, most reusing the admin MCP
 server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`, `find_rides`,
 `find_restaurants`,
-`get_ride` (with the ride profile below), `compare_rides`, `get_ride_forecast` (per hour, from `PlanDayService`), `get_park_forecast` (at most 31
+`get_ride` (with the ride profile below, and `today`: the ride's own `opensAt` and
+`runsOnWeekdays` from `PlanDayService`), `compare_rides`, `get_ride_forecast` (per hour, from
+`PlanDayService`), `get_park_day` (one day as the planner builds it: hours, crowd, weather,
+holidays, early entry, each ride's opening, peak and shortest hour, the shows), `get_park_forecast` (at most 31
 days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park

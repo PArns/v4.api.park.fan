@@ -283,10 +283,30 @@ describe("system prompt", () => {
     });
     // A German visitor on an English page got English twenty times over.
     expect(context).not.toContain("whatever language the user writes in");
-    expect(context).toContain("unless the user writes in another");
-    expect(SYSTEM_PROMPT).toContain("Answer in the one the user writes in");
+    expect(context).toContain("unless the user writes in or asks for another");
+    expect(SYSTEM_PROMPT).toContain(
+      "Answer in the language the user writes in",
+    );
     expect(SYSTEM_PROMPT).toContain("call switch_language first");
     expect(SYSTEM_PROMPT).toContain("a yes counts as asking");
+  });
+
+  it("writes dates in words, not as the ISO day the tools carry", () => {
+    // "opens again on 2026-11-05 at 10:30".
+    expect(SYSTEM_PROMPT).toContain("never in the tools' year-month-day form");
+  });
+
+  it("chats back instead of steering every compliment to a park", () => {
+    // "Du bist toll" got "Danke! Nenn mir einfach einen Park".
+    expect(SYSTEM_PROMPT).toContain("Small talk is welcome");
+    expect(SYSTEM_PROMPT).toContain("Do not steer back to waits");
+    expect(SYSTEM_PROMPT).toContain("a bit of nerd knowledge");
+  });
+
+  it("keeps chatting in a language the site does not offer", () => {
+    // Asked for Chinese, Parky said park.fan did not speak it and offered six others.
+    expect(SYSTEM_PROMPT).toContain("any language at all");
+    expect(SYSTEM_PROMPT).toContain("never refuse and never offer a switch");
   });
 
   it("passes real feedback on, and nothing that only looks like it", () => {
@@ -630,6 +650,7 @@ describe("assistant tools", () => {
       "get_ride",
       "compare_rides",
       "get_ride_forecast",
+      "get_park_day",
       "get_park_forecast",
       "get_park_weather",
       "get_best_days",

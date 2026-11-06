@@ -91,7 +91,7 @@ export type RideRanking = (typeof RIDE_RANKINGS)[number];
  * The ride types a comparison can be narrowed to, read off the profile's glossary type ids:
  * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`).
  */
-export const RIDE_TYPE_FILTERS = ["coaster"] as const;
+export const RIDE_TYPE_FILTERS = ["coaster", "dark-ride", "water"] as const;
 
 export type RideTypeFilter = (typeof RIDE_TYPE_FILTERS)[number];
 
@@ -108,12 +108,43 @@ const COASTER_TYPE_IDS: ReadonlySet<string> = new Set([
   "slc",
 ]);
 
+/**
+ * The glossary's ride terms (`category: 'attractions'`) for a ride through a story in the dark,
+ * and for one on or through water. A visitor asking for "immersive" means the first.
+ */
+const OTHER_TYPE_IDS: Record<
+  Exclude<RideTypeFilter, "coaster">,
+  ReadonlySet<string>
+> = {
+  "dark-ride": new Set([
+    "dark-ride",
+    "suspended-dark-ride",
+    "interactive-dark-ride",
+    "trackless-ride",
+    "omnimover",
+    "flying-theater",
+    "motion-simulator",
+    "4d-cinema",
+    "madhouse",
+  ]),
+  water: new Set([
+    "water-ride",
+    "log-flume",
+    "river-rapids",
+    "shoot-the-chute",
+    "boat-ride",
+  ]),
+};
+
 /** Whether a ride's glossary type ids make it a ride of `type`. */
 export function isRideOfType(
   types: readonly string[],
   type: RideTypeFilter,
 ): boolean {
   switch (type) {
+    case "dark-ride":
+    case "water":
+      return types.some((id) => OTHER_TYPE_IDS[type].has(id));
     case "coaster":
       return types.some(
         (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),

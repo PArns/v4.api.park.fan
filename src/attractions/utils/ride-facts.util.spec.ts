@@ -155,6 +155,14 @@ describe("isRideOfType", () => {
       expect(isRideOfType(types, "coaster")).toBe(false);
     }
   });
+
+  it("finds dark rides and simulators for 'immersive', and water rides apart", () => {
+    expect(isRideOfType(["trackless-ride"], "dark-ride")).toBe(true);
+    expect(isRideOfType(["flying-theater"], "dark-ride")).toBe(true);
+    expect(isRideOfType(["log-flume"], "dark-ride")).toBe(false);
+    expect(isRideOfType(["river-rapids"], "water")).toBe(true);
+    expect(isRideOfType(["dark-ride"], "water")).toBe(false);
+  });
 });
 
 describe("comparedRides", () => {
