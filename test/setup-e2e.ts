@@ -160,6 +160,33 @@ async function waitForActiveBullJobs(): Promise<void> {
   }
 }
 
+/**
+ * One TRUNCATE, retried when Postgres picks it as a deadlock victim (40P01).
+ *
+ * Pausing Bull does not silence the app's own boot work: `SearchService`
+ * loads its index from parks, attractions, shows and restaurants in the
+ * background right after `app.init()`, which is exactly when a file's first
+ * cleanup runs. That join and this table-by-table TRUNCATE lock the same
+ * tables in opposite order; the release branch of 2026-11-06 hit it in
+ * `admin-mcp.e2e-spec.ts` twice in a row. A deadlock aborts only one side, so
+ * a short retry lets the reader finish and the cleanup win. Anything other
+ * than a deadlock still fails the test.
+ */
+async function truncateRetryingDeadlock(tableName: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await dataSource.query(`TRUNCATE TABLE "${tableName}" CASCADE;`);
+      return;
+    } catch (error) {
+      const code =
+        (error as { code?: string; driverError?: { code?: string } })
+          .driverError?.code ?? (error as { code?: string }).code;
+      if (code !== "40P01" || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+}
+
 async function truncateAllTables(): Promise<void> {
   if (!dataSource?.isInitialized) {
     return;
@@ -187,7 +214,7 @@ async function truncateAllTables(): Promise<void> {
       // to a background query, say. Swallowing it was survivable while each
       // file had its own database; with one shared database it silently seeds
       // every later file, so it fails the test that caused it instead.
-      await dataSource.query(`TRUNCATE TABLE "${tableName}" CASCADE;`);
+      await truncateRetryingDeadlock(tableName);
     }
   } finally {
     // Re-enable foreign key checks
