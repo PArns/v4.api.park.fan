@@ -89,9 +89,15 @@ export type RideRanking = (typeof RIDE_RANKINGS)[number];
 
 /**
  * The ride types a comparison can be narrowed to, read off the profile's glossary type ids:
- * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`).
+ * upstream's `attractionType` is empty on all but one ride (`attraction-kind.type.ts`). No
+ * "show": three profiles carry `live-show`, and shows are their own records (`get_shows`).
  */
-export const RIDE_TYPE_FILTERS = ["coaster", "dark-ride", "water"] as const;
+export const RIDE_TYPE_FILTERS = [
+  "coaster",
+  "dark_ride",
+  "water",
+  "family",
+] as const;
 
 export type RideTypeFilter = (typeof RIDE_TYPE_FILTERS)[number];
 
@@ -109,21 +115,22 @@ const COASTER_TYPE_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The glossary's ride terms (`category: 'attractions'`) for a ride through a story in the dark,
- * and for one on or through water. A visitor asking for "immersive" means the first.
+ * The other filters' glossary type ids (`category: 'attractions'` in the same file). A dark ride
+ * is any indoor themed ride system, simulators included, because that is what a visitor asking
+ * for immersion means; a plain `boat-ride` is not wet (It's a Small World), so it is not water.
  */
-const OTHER_TYPE_IDS: Record<
+const TYPE_IDS: Record<
   Exclude<RideTypeFilter, "coaster">,
   ReadonlySet<string>
 > = {
-  "dark-ride": new Set([
+  dark_ride: new Set([
     "dark-ride",
     "suspended-dark-ride",
     "interactive-dark-ride",
     "trackless-ride",
     "omnimover",
-    "flying-theater",
     "motion-simulator",
+    "flying-theater",
     "4d-cinema",
     "madhouse",
   ]),
@@ -132,7 +139,19 @@ const OTHER_TYPE_IDS: Record<
     "log-flume",
     "river-rapids",
     "shoot-the-chute",
-    "boat-ride",
+    "water-coaster",
+  ]),
+  family: new Set([
+    "family-coaster",
+    "carousel",
+    "teacups",
+    "ferris-wheel",
+    "bumper-cars",
+    "swing-ride",
+    "people-mover",
+    "park-railway",
+    "monorail",
+    "sky-ride",
   ]),
 };
 
@@ -141,15 +160,12 @@ export function isRideOfType(
   types: readonly string[],
   type: RideTypeFilter,
 ): boolean {
-  switch (type) {
-    case "dark-ride":
-    case "water":
-      return types.some((id) => OTHER_TYPE_IDS[type].has(id));
-    case "coaster":
-      return types.some(
-        (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),
-      );
+  if (type === "coaster") {
+    return types.some(
+      (id) => id.endsWith("-coaster") || COASTER_TYPE_IDS.has(id),
+    );
   }
+  return types.some((id) => TYPE_IDS[type].has(id));
 }
 
 /** One ride of a park with what is known about it, for {@link compareRides}. */

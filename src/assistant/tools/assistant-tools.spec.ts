@@ -686,13 +686,50 @@ describe("show_card kind rides with a type", () => {
         ],
       }),
     });
-    expect(json.shown).toBe("3 coaster rides of Phantasialand");
-    // The model gets the rows too, or it cannot name a ride from the card it just showed.
-    expect(json.rides).toEqual([
-      { name: "Raik", status: "OPERATING", waitMinutes: 5 },
-      { name: "Taron", status: "OPERATING", waitMinutes: 45 },
-      { name: "Black Mamba", status: "DOWN", waitMinutes: null },
+    expect(json.shown).toBe("3 coasters of Phantasialand");
+    // The model reads the rows, with their types, so it can name its pick after the card.
+    expect(json.rows).toEqual([
+      {
+        name: "Raik",
+        status: "OPERATING",
+        waitMinutes: 5,
+        types: ["boomerang"],
+      },
+      {
+        name: "Taron",
+        status: "OPERATING",
+        waitMinutes: 45,
+        types: ["launch-coaster"],
+      },
+      {
+        name: "Black Mamba",
+        status: "DOWN",
+        waitMinutes: null,
+        types: ["inverted-coaster"],
+      },
     ]);
+    expect(json.typeUnknown).toBe(0);
+
+    // A dark ride with no wait to speak of is found though it never makes the longest-wait list.
+    const dark = await run(
+      "show_card",
+      { kind: "rides", park: PARK_ID, type: "dark_ride" },
+      new Map(providers).set(
+        RideProfileService,
+        profiles({ a: ["launch-coaster"], c: ["dark-ride", "animatronics"] }),
+      ),
+    );
+    expect(dark.json.shown).toBe("1 dark rides of Phantasialand");
+    expect(dark.json.rows).toEqual([
+      {
+        name: "Raik",
+        status: "OPERATING",
+        waitMinutes: 5,
+        types: ["dark-ride", "animatronics"],
+      },
+    ]);
+    // River Quest, Black Mamba and Talocan have no profile: left out, and counted.
+    expect(dark.json.typeUnknown).toBe(3);
 
     // A full "shortest" list leaves no room for rides that are down.
     const full = await run(

@@ -883,9 +883,9 @@ export const ASSISTANT_TOOLS = [
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
       "average and peak waits today, weather now, only the 8 longest current standby waits, " +
       "rides that are down and rides that have not run today, the park's pageUrl and the " +
-      "editors' funFacts about it. Not the " +
-      "shortest waits or one ride type: show_card kind rides order shortest (type coaster, " +
-      "dark-ride or water) has every waiting ride.",
+      "editors' funFacts about it. Not the shortest waits, one ride type or a recommendation: " +
+      "show_card kind rides order shortest (with type for coasters, dark rides, water or " +
+      "family rides) has every waiting ride.",
     input: z.object({ park: parkRef }),
     run: async ({ park }, ctx) => {
       const live = (await getParkTool.handler(
@@ -1117,9 +1117,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "The rides of one park, or of every park in a country, ranked by a fact: top speed, height, " +
       "length, duration, inversions, launches, opening year or minimum rider height (cm), highest " +
-      "first unless order asc. type keeps only roller coasters (coaster), dark rides and other " +
-      "rides through a story, simulators included (dark-ride, for 'immersive'), or water " +
-      "rides (water). With riderHeightCm only " +
+      "first unless order asc. type keeps only coasters, dark rides (simulators included), water " +
+      "rides or family rides. With riderHeightCm only " +
       'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
       'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
       "what it left out for lack of data (say so when many are). No waits: those are show_card " +
@@ -1614,12 +1613,15 @@ export const ASSISTANT_TOOLS = [
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
       "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
       "level), a park's rides with their current waits (kind rides, longest or shortest " +
-      "first, then rides that are down; type coaster, dark-ride (also for 'immersive') or " +
-      "water for one kind only; its rows come back to you), several parks to click " +
+      "first, then rides that are down; type for coasters, dark rides, water or family rides " +
+      "only; the result lists each row with its type ids), several parks to click " +
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), or its restaurants and food " +
-      "stands, optionally matching query (kind restaurants). Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
+      "stands, optionally matching query (kind restaurants). Whenever the answer lists rides " +
+      "with waits, parks, shows or places to eat, show the matching kind instead of writing " +
+      "the list as text; then name your pick in a sentence without repeating the card's numbers. " +
+      "Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
       "compare_rides.",
     input: z.object({
       kind: z.enum([
@@ -1776,7 +1778,8 @@ export const ASSISTANT_TOOLS = [
         const card: AssistantCard = { kind: "parks", parks: rows };
         return new ActionOutcome(
           { type: "card", card },
-          { shown: rows.map((row) => row.name) },
+          // The rows without their links, so the model can say which park it would pick.
+          { shown: rows.map(({ url: _url, ...row }) => row) },
         );
       }
       if (kind === "rides") {
@@ -1790,12 +1793,19 @@ export const ASSISTANT_TOOLS = [
         if ("ambiguous" in live) return live;
         let all = live.rides?.longestWaits ?? [];
         let down = live.rides?.down ?? [];
+        // The types also go to the model with each row, so it can say which ride it would pick.
+        const profiles = await ctx
+          .get(RideProfileService)
+          .findByAttractions([...all, ...down].map((ride) => ride.id));
+        const typesOf = (ride: { id: string }) =>
+          profiles.get(ride.id)?.types ?? [];
+        let typeUnknown = 0;
         if (type) {
-          const profiles = await ctx
-            .get(RideProfileService)
-            .findByAttractions([...all, ...down].map((ride) => ride.id));
+          typeUnknown = [...all, ...down].filter(
+            (ride) => typesOf(ride).length === 0,
+          ).length;
           const ofType = (ride: { id: string }) =>
-            isRideOfType(profiles.get(ride.id)?.types ?? [], type);
+            isRideOfType(typesOf(ride), type);
           all = all.filter(ofType);
           down = down.filter(ofType);
         }
@@ -1854,13 +1864,17 @@ export const ASSISTANT_TOOLS = [
         return new ActionOutcome(
           { type: "card", card },
           {
-            shown: `${rides.length} ${type ? `${type} rides` : "rides"} of ${live.name}`,
-            // The rows in card order, so the answer can name a ride from the list it just showed.
-            rides: rides.map(({ name, status, waitMinutes }) => ({
-              name,
-              status,
-              waitMinutes,
-            })),
+            shown: `${rides.length} ${type ? `${type.replace("_", " ")}s` : "rides"} of ${live.name}`,
+            rows: picked.map((ride) => {
+              const types = typesOf(ride);
+              return {
+                name: ride.name,
+                status: ride.status,
+                waitMinutes: ride.waitMinutes,
+                ...(types.length > 0 && { types }),
+              };
+            }),
+            ...(type && { typeUnknown }),
           },
         );
       }
