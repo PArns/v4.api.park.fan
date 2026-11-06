@@ -103,6 +103,28 @@ true bit of lore instead of describing the gap; asked to entertain, he tells a t
 once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
 (`SYSTEM_PROMPT_VERSION`, 14 since these rules).
 
+The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
+page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
+safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
+does, and when Parky may call it is the prompt's action rule.
+
+### The prompt eval
+
+`src/assistant/assistant-eval.ts` sends 34 short chats (`assistant-eval.fixtures.ts`: page, planner,
+alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
+before it, or a tool that must not be called (canned results stand in for a second step). It prints
+the prompt's tokens alone and with the tools, then a pass/fail table:
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval
+ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval --prompt-ref origin/main   # another commit's prompt, this checkout's tools
+```
+
+It reads the key from the environment only and costs a few cents a run. `--only <case id>` runs one
+case. The model answers differently from run to run, so a single failure is worth a second run
+before it is worth a rule.
+
 ## Language and feedback from the chat
 
 Parky answers in the language the visitor writes in when it is one of the six (`ASSISTANT_LOCALES`),
@@ -241,7 +263,9 @@ planner actions carry; times are `HH:MM` on the park's clock.
 | `plan_share`        | `{ type: "planner_share" }` (refused with nothing planned)                                 |
 
 `plan_update_block` changes blocks only. `plan_add_show` checks the time against the show's
-showtimes that day; `get_shows` lists each show's `slug` for it.
+showtimes that day; `get_shows` lists each show's `slug` for it. `plan_undo` takes back Parky's
+own last change to the day, and the widget refuses it when the visitor changed the day since; Parky sees only the snapshot, so when a visitor says the
+undo did not work he says the day changed since and offers to make the change by hand.
 
 ### Push alerts in the chat
 

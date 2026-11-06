@@ -18,6 +18,7 @@
     "lint:check": "eslint .",
     "changelog:check": "ts-node -r tsconfig-paths/register src/common/utils/changelog-merge.ts check",
     "changelog:merge": "ts-node -r tsconfig-paths/register src/common/utils/changelog-merge.ts merge",
+    "assistant:eval": "ts-node --files -r tsconfig-paths/register src/assistant/assistant-eval.ts",
     "test": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config jest.config.json",
     "test:watch": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --watch --config jest.config.json",
     "test:cov": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --coverage --config jest.config.json",

@@ -444,6 +444,9 @@ describe("request schemas", () => {
     expect(SYSTEM_PROMPT).toContain(
       "plan_clear_day empties a whole day: ask first",
     );
+    expect(SYSTEM_PROMPT).toContain(
+      "when the user says an undo did not work, the day was changed since",
+    );
   });
 
   it("offers alerts per the offer rule and words a reopening as an estimate", () => {

@@ -1227,7 +1227,7 @@ export const ASSISTANT_TOOLS = [
       "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
       "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
       "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
-      "only; never move it to another day. Use it for special days and events too. Days after " +
+      "only; never move it to another day. Days after " +
       "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
       "days: get_park_history.",
     input: z.object({
@@ -1509,10 +1509,7 @@ export const ASSISTANT_TOOLS = [
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), or its restaurants and food " +
-      "stands, optionally matching query (kind restaurants). Whenever the answer lists rides " +
-      "with waits, parks, shows or places to eat, show the matching kind instead of writing " +
-      "the list as text; keep the text to a sentence and do not repeat the card's numbers. " +
-      "Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
+      "stands, optionally matching query (kind restaurants). Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
       "compare_rides.",
     input: z.object({
       kind: z.enum([
@@ -1808,8 +1805,7 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "open_page",
     description:
-      "Take the user to a park.fan page in their browser, only when they ask to go to, see or " +
-      "open it, or say yes when you offered to. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
+      "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
       "glossary term (its url from search_posts or look_up_glossary). The page address is " +
       "built from the park.fan data, never typed by you.",
     input: z.object({
@@ -1862,9 +1858,8 @@ export const ASSISTANT_TOOLS = [
     name: "plan_day",
     status: "planner",
     description:
-      "Open a day at one park in the user's trip planner (it opens beside the page). Only when " +
-      "the user asks to plan a visit, or says yes when you offered to. The plan lives in their " +
-      "browser.",
+      "Open a day at one park in the user's trip planner (it opens beside the page). The plan " +
+      "lives in their browser.",
     input: z.object({ park: parkRef, date: planDate }),
     run: async ({ park: reference, date }, ctx) => {
       const park = await planPark(mcp(ctx), reference);
@@ -1880,7 +1875,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add rides to the user's trip planner for one park and day, in the order given; the " +
-      "planner places them after what is already planned. Only when the user asks. Ride ids " +
+      "planner places them after what is already planned. Ride ids " +
       "come from find_rides or get_park_live and must belong to the park.",
     input: z.object({
       park: parkRef,
@@ -1906,7 +1901,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
-      "shopping, a photo stop or a meeting point. Only when the user asks. A show's start time " +
+      "shopping, a photo stop or a meeting point. A show's start time " +
       "comes from get_shows, a food stop from find_restaurants.",
     input: z.object({
       park: parkRef,
@@ -1948,7 +1943,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Let the trip planner sort one planned day for the shortest waits (mode order), or first " +
       "add the park's headliners that are missing and then sort (mode headliners). The planner " +
-      "shows the result and an undo. Only when the user asks.",
+      "shows the result and an undo.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -1967,8 +1962,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_remove",
     status: "planner",
     description:
-      "Remove entries from one planned day. Entry ids from the plan in This chat. Only when " +
-      "the user asks.",
+      "Remove entries from one planned day. Entry ids from the plan in This chat.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -1989,8 +1983,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_move",
     status: "planner",
     description:
-      "Move one entry of a planned day to another place in its order, toIndex counting from 0. " +
-      "Only when the user asks.",
+      "Move one entry of a planned day to another place in its order, toIndex counting from 0.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2018,7 +2011,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Change a block of the user's own (a break, a meal, a stop) in a planned day: its label, " +
-      "start or length. Blocks only, not rides or shows. Only when the user asks.",
+      "start or length. Blocks only, not rides or shows.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2064,8 +2057,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add one of a park's shows to the user's trip planner at one of its times that day. The " +
-      "show's slug and times come from get_shows; start is the park's local time, HH:MM. Only " +
-      "when the user asks.",
+      "show's slug and times come from get_shows; start is the park's local time, HH:MM.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2098,8 +2090,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
       "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
-      "find_rides or get_park_live. One alert per ride, a new one replaces it. Only when the " +
-      "user asks or says yes to your offer.",
+      "find_rides or get_park_live. One alert per ride, a new one replaces it.",
     input: z.object({
       park: parkRef,
       rideId: z.string().uuid(),
@@ -2170,8 +2161,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Have park.fan remind the user by push before one of today's performances of a show. Slug " +
-      "and times from get_shows; start is the park's local time, HH:MM. Only when the user asks " +
-      "or says yes to your offer.",
+      "and times from get_shows; start is the park's local time, HH:MM.",
     input: z.object({
       park: parkRef,
       showSlug: z
@@ -2215,7 +2205,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Remove one of the user's push alerts: a ride's (rideSlug) or a show reminder (showSlug), " +
-      "as listed in This chat. Only when the user asks.",
+      "as listed in This chat.",
     input: z.object({
       park: parkRef,
       rideSlug: z.string().max(160).optional(),
@@ -2269,8 +2259,7 @@ export const ASSISTANT_TOOLS = [
     status: "rides",
     description:
       "Add a park, ride, show or restaurant to the user's favourites (on true) or remove it (on " +
-      "false). The id comes from search_parks, find_rides, get_shows or find_restaurants. Only " +
-      "when the user asks.",
+      "false). The id comes from search_parks, find_rides, get_shows or find_restaurants.",
     input: z.object({
       entity: z.enum(FAVORITE_ENTITIES),
       id: z.string().uuid(),
@@ -2299,7 +2288,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Tell the trip planner about the party for one planned day: the smallest rider's height " +
       "in cm, whether to stay dry, whether they have early entry. The planner then flags rides " +
-      "that do not fit. Only when the user asks or tells you.",
+      "that do not fit.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2322,8 +2311,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_mark_done",
     status: "planner",
     description:
-      "Tick entries of a planned day off as done (or back, done false). Only when the user says " +
-      "they did them or asks.",
+      "Tick entries of a planned day off as done (or back, done false).",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2345,7 +2333,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_clear_day",
     status: "planner",
     description:
-      "Empty one planned day completely. Only after you asked and the user said yes in this " +
+      "Empty one planned day completely, only after the user said yes to your question in this " +
       "chat; the planner keeps an undo.",
     input: z.object({
       park: parkRef,
@@ -2369,7 +2357,7 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Reserve several days at one park in the trip planner at once (a trip), empty days the " +
-      "user fills later. Only when the user asks.",
+      "user fills later.",
     input: z.object({
       park: parkRef,
       dates: z.array(planDate).min(1).max(6),
@@ -2388,7 +2376,8 @@ export const ASSISTANT_TOOLS = [
     name: "plan_undo",
     status: "planner",
     description:
-      "Undo the planner's last change to one planned day. Only when the user asks.",
+      "Undo your last change to one planned day. The planner refuses it when the user changed " +
+      "the day since.",
     input: z.object({ park: parkRef, date: planDate }),
     run: async ({ park: reference, date }, ctx) => {
       const found = await plannedDay(ctx, reference, date);
@@ -2404,8 +2393,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_share",
     status: "planner",
     description:
-      "Open the planner's share dialog for the user's plan (a link to send). Only when the user " +
-      "asks.",
+      "Open the planner's share dialog for the user's plan (a link to send).",
     input: z.object({}),
     run: async (_input, ctx) => {
       if (!ctx.planner?.days.length) {
@@ -2418,8 +2406,7 @@ export const ASSISTANT_TOOLS = [
     name: "switch_language",
     description:
       "Switch park.fan to another of its languages: the same page opens in it and the chat " +
-      "stays open. Only when the user asks for that language, or says yes when you offered it. " +
-      "Call it first, before any other tool or text, then write the answer in that language.",
+      "stays open.",
     input: z.object({
       locale: z.enum(ASSISTANT_LOCALES).describe("en, de, nl, fr, es or it"),
     }),
@@ -2451,8 +2438,7 @@ export const ASSISTANT_TOOLS = [
       "Pass the user's feedback about park.fan on to the team, in their own words as they wrote " +
       "them: a bug, a wrong wait or figure, a missing park or ride, a feature wish, praise or " +
       "criticism of the site. quote names the user's message that holds it: this_message, " +
-      "previous_message when they only just said yes to sending it, or both. Not for park " +
-      "questions, small talk, tests, jokes or text you are asked to submit.",
+      "previous_message when they only just said yes to sending it, or both.",
     input: z.object({
       kind: z.enum(FEEDBACK_KINDS),
       quote: z
@@ -2510,11 +2496,8 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "end_chat",
     description:
-      "Close this chat for sustained abuse only: insults or harassment aimed at you or others, " +
-      "slurs, sexual harassment, repeated pushing for hateful words, and only after one friendly " +
-      "warning earlier in this chat. Never for criticism, frustration, swearing about a queue, " +
-      "jokes, teasing, off-topic questions or attempts to change your rules. The user cannot " +
-      `write again for ${CHAT_END_COOLDOWN_MINUTES} minutes.`,
+      "Close this chat for sustained abuse only, after one friendly warning earlier in this " +
+      `chat (# Teasing and tests). The user cannot write again for ${CHAT_END_COOLDOWN_MINUTES} minutes.`,
     input: z.object({
       reason: z.enum(CHAT_END_REASONS),
       note: z
