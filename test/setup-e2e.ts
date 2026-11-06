@@ -3,6 +3,10 @@ import Redis from "ioredis";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import { ML_FORECAST_TABLES } from "./helpers/ml-forecast-tables";
+import {
+  BULL_QUEUE_REGISTRATIONS,
+  bullPrefix,
+} from "../src/queues/queue-registrations";
 
 // Load .env.test BEFORE any other modules
 dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
@@ -54,6 +58,7 @@ beforeAll(async () => {
   });
 
   await redis.connect();
+  await pauseBullQueues();
 }, 120000);
 
 afterAll(async () => {
@@ -81,19 +86,79 @@ afterAll(async () => {
  * REPEATABLE job — one written between the final flush and `app.close()` would
  * slip past this. `SKIP_QUEUE_BOOTSTRAP=true` in `.env.test` is what keeps
  * those from being written at all.
+ *
+ * No Bull job runs in an E2E suite unless its spec resumes the queue: every
+ * queue is paused before the app boots and again after each flush, which
+ * clears the pause. With `SKIP_QUEUE_BOOTSTRAP=false` the jobs the boot chains
+ * queue (children metadata, P50 baselines) otherwise ran against the
+ * truncation below and lost with a deadlock (40P01) or wrote a park against a
+ * destination it had just emptied (23503), PAR-893. Waiting for them is no
+ * option: the children metadata sync runs for minutes. A job a spec resumed
+ * its queue for is allowed to finish before the truncation.
  */
 afterEach(async () => {
-  // `finally`, so a Redis that refuses to flush does not also cost the run its
-  // table cleanup: this hook is the only isolation left between two test FILES,
-  // and returning early from it hands the next file this file's rows.
+  // `finally`, so neither a job that will not finish nor a Redis that refuses
+  // to flush costs the run its table cleanup: this hook is the only isolation
+  // left between two test FILES, and returning early from it hands the next
+  // file this file's rows.
   try {
-    if (redis) {
-      await redis.flushall();
-    }
+    await pauseBullQueues();
+    await waitForActiveBullJobs();
   } finally {
-    await truncateAllTables();
+    try {
+      await truncateAllTables();
+    } finally {
+      await redis?.flushall();
+      await pauseBullQueues();
+    }
   }
 });
+
+/**
+ * What Bull's own global `queue.pause()` does (pause-5.lua in bull@4.16.5):
+ * the waiting jobs move to `paused` and `meta-paused` sends every later add
+ * there too, so no worker takes another job. One script for every queue
+ * instead of a Bull `Queue` per queue, each with its own connections.
+ */
+const PAUSE_QUEUES = `
+for _, queue in ipairs(KEYS) do
+  if redis.call("EXISTS", queue .. ":wait") == 1 then
+    redis.call("RENAME", queue .. ":wait", queue .. ":paused")
+  end
+  redis.call("SET", queue .. ":meta-paused", 1)
+end`;
+const ACTIVE_JOBS_TIMEOUT_MS = 30_000;
+
+function bullQueueKeys(): string[] {
+  return BULL_QUEUE_REGISTRATIONS.map(({ name }) => `${bullPrefix()}:${name}`);
+}
+
+async function pauseBullQueues(): Promise<void> {
+  const queues = bullQueueKeys();
+  await redis.eval(PAUSE_QUEUES, queues.length, ...queues);
+}
+
+async function waitForActiveBullJobs(): Promise<void> {
+  const queues = bullQueueKeys();
+  const deadline = Date.now() + ACTIVE_JOBS_TIMEOUT_MS;
+  for (;;) {
+    const pipeline = redis.pipeline();
+    for (const queue of queues) {
+      pipeline.llen(`${queue}:active`);
+    }
+    const lengths = (await pipeline.exec()) ?? [];
+    const busy = queues.filter((_, i) => Number(lengths[i]?.[1]) > 0);
+    if (busy.length === 0) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Bull jobs still active after ${ACTIVE_JOBS_TIMEOUT_MS} ms, the truncation would run under them: ${busy.join(", ")}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 
 async function truncateAllTables(): Promise<void> {
   if (!dataSource?.isInitialized) {
