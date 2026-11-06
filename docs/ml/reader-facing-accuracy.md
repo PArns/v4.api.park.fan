@@ -69,7 +69,8 @@ separate served-consistency gap, not fixed.
 
 Rows written before PAR-854 carry no source and count for nothing:
 
-- `leadTimeMae` is absent per bucket until it has 100 scored served rows (`MIN_SCORED`). About 360
+- A bucket publishes once it has 100 scored served rows (`MIN_SCORED`); until then `leadTimeMae`
+  falls back to the nearest published bucket below it, and is absent when there is none. About 360
   headliner rows per bucket per night get an actual once the target day is over everywhere (the
   03:00 job, UTC−12 cutoff), so lead *L* reports roughly *L* + 2 nights after deploy.
   `accuracy.basis` is unaffected (it reads the forecast-accuracy profile).

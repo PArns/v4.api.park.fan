@@ -1096,8 +1096,9 @@ export class MLService {
    * runs roughly a third the width of the measured band. The calendar therefore
    * steps down at the seam. Putting CatBoost's side on this same basis is the
    * fix, and it is not possible yet: its error past 60 days has never been
-   * measurable, and `prediction_lead_snapshots` cannot report the `d60` bucket
-   * before 2026-11-02. Tracked as PAR-167; do not "smooth" the seam by narrowing
+   * measurable, and `prediction_lead_snapshots` reports its CatBoost-only `d60`
+   * and `d90` buckets from about 2026-12 and three months after d90 was added.
+   * Tracked as PAR-167; do not "smooth" the seam by narrowing
    * this side, which would mean serving a band nobody measured.
    */
   async getTftDailyPredictions(

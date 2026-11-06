@@ -59,7 +59,7 @@ export type LeadSnapshotSource = "tft" | "catboost";
 // actual yet. `targetDate` leads because it is the selective half.
 @Index("idx_pls_target_scored", ["targetDate", "scoredAt"])
 // The read path's query: the mean error at one lead distance, over scored rows.
-// `leadDays` leads because it is what the question filters on, and there are six
+// `leadDays` leads because it is what the question filters on, and there are seven
 // values of it.
 @Index("idx_pls_lead_scored", ["leadDays", "scoredAt"])
 export class PredictionLeadSnapshot {
