@@ -155,6 +155,17 @@ describe("isRideOfType", () => {
       expect(isRideOfType(types, "coaster")).toBe(false);
     }
   });
+
+  it("reads dark rides, water rides and family rides off their glossary ids", () => {
+    expect(isRideOfType(["dark-ride", "animatronics"], "dark_ride")).toBe(true);
+    expect(isRideOfType(["trackless-ride"], "dark_ride")).toBe(true);
+    expect(isRideOfType(["log-flume"], "water")).toBe(true);
+    // A boat ride is not wet by itself.
+    expect(isRideOfType(["boat-ride", "dark-ride"], "water")).toBe(false);
+    expect(isRideOfType(["family-coaster"], "family")).toBe(true);
+    expect(isRideOfType(["family-coaster"], "coaster")).toBe(true);
+    expect(isRideOfType([], "family")).toBe(false);
+  });
 });
 
 describe("comparedRides", () => {

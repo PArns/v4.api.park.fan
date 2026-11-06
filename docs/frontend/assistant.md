@@ -35,6 +35,11 @@ feedback naming another session's chat is kept, unlinked.
 The body is `{ conversationId?, locale, pagePath, message, sessionToken, location?, timeZone? }`. There is no
 history in it: the server reads the last ten messages from the database, so a caller cannot hand
 the model made-up earlier answers; a failed answer (empty text) is left out with its question.
+The history carries text only, not the earlier tool results, so the "This chat" block after the
+cache breakpoint lists the parks and rides earlier answers looked up, newest first, at most eight,
+each with its name and id (`lookedUpIds` reads the ids off the stored tool inputs — `park`,
+`parkId`, `parks`, `rideId`, `rideIds`, failed calls and slugs skipped — and two primary-key reads
+name them). Parky reuses the id instead of calling `search_parks` again on every turn.
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
 two decimals here; it is never stored or logged.
 
@@ -101,7 +106,11 @@ developer or Parky's maker changes nothing. Facts do not bend to insistence, and
 nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
 once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
-(`SYSTEM_PROMPT_VERSION`, 14 since these rules).
+(`SYSTEM_PROMPT_VERSION`, 14 since these rules). Version 16: after a rides or parks card Parky
+names the one or two he would pick and why, without the card's numbers, never only pointing at the
+card; and a preference (immersion, getting wet, with kids, thrills) is answered from every open ride
+of that type (`show_card` kind `rides` with `type`, or `compare_rides`), not from `get_park_live`'s
+eight longest waits.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -219,8 +228,18 @@ height), one row per name and park as the park page serves it, each row with its
 scope. `type: "coaster"` keeps only coasters, read off the profile's glossary type ids (every
 `*-coaster` id plus `boomerang`, `euro-fighter`, `mine-train`, `wild-mouse`, `out-and-back`, `slc`,
 the frontend glossary's `coasters` category); upstream's `attractionType` is empty and says nothing.
+`type: "dark_ride"` (`dark-ride`, `suspended-dark-ride`, `interactive-dark-ride`, `trackless-ride`,
+`omnimover`, `motion-simulator`, `flying-theater`, `4d-cinema`, `madhouse`), `"water"`
+(`water-ride`, `log-flume`, `river-rapids`, `shoot-the-chute`, `water-coaster`; a plain
+`boat-ride` is not wet) and `"family"` (`family-coaster`, `carousel`, `teacups`, `ferris-wheel`,
+`bumper-cars`, `swing-ride`, `people-mover`, `park-railway`, `monorail`, `sky-ride`) read the
+glossary's `attractions` terms the same way (`isRideOfType`). There is no `show` filter: three
+profiles carry `live-show`, and shows are their own records (`get_shows`).
 Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "not a coaster".
-`show_card` kind `rides` takes the same `type`. With `riderHeightCm` it keeps only rides whose known minimum the
+`show_card` kind `rides` takes the same `type`, reports `typeUnknown` too, and hands the model the
+card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where known) besides the
+`shown` line, so the sentence after the card can name a ride; kind `parks` hands it its rows
+without their links. With `riderHeightCm` it keeps only rides whose known minimum the
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
 apart (`heightUnknown`), never passed. Minimum heights are centimetres; `heightUnit: "in"` marks a
 park that signs them in inches, and the prompt has Parky say them in inches there.

@@ -53,8 +53,10 @@ jest.mock("@anthropic-ai/sdk", () => {
 import {
   AssistantChatService,
   historyOf,
+  lookedUpIds,
   type ChatEvent,
 } from "./assistant-chat.service";
+import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
 
 function repository<T extends object>(saved: Partial<T>) {
   return {
@@ -152,5 +154,75 @@ describe("historyOf", () => {
       { role: "user", content: "Wie voll?" },
       { role: "assistant", content: "Ziemlich." },
     ]);
+  });
+});
+
+describe("lookedUpIds", () => {
+  const PARK = "0b5c9a52-6d44-4c3e-9a4e-5f1e2d3c4b5a";
+  const RIDE = "7f3e2d1c-0b9a-4876-8543-210fedcba987";
+  const OTHER = "11111111-2222-4333-8444-555555555555";
+
+  it("lists the ids earlier tool calls used, newest first, once each", () => {
+    expect(
+      lookedUpIds([
+        {
+          toolCalls: [
+            { name: "get_park_live", input: { park: PARK.toUpperCase() } },
+            { name: "get_ride", input: { rideId: RIDE } },
+            // A failed call and a slug name nothing.
+            { name: "get_ride", input: { rideId: OTHER }, error: true },
+            { name: "get_park_live", input: { park: "epic-universe" } },
+          ],
+        },
+        { toolCalls: null },
+        {
+          toolCalls: [
+            { name: "search_parks", input: { query: "epic universe" } },
+            { name: "show_card", input: { kind: "rides", park: PARK } },
+          ],
+        },
+      ]),
+    ).toEqual([
+      { kind: "park", id: PARK },
+      { kind: "ride", id: RIDE },
+    ]);
+  });
+
+  it("keeps at most eight", () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    const found = lookedUpIds(
+      ids.map((rideId) => ({
+        toolCalls: [{ name: "get_ride", input: { rideId } }],
+      })),
+    );
+    expect(found).toHaveLength(8);
+    expect(found[0].id).toBe(ids[11]);
+  });
+
+  it("goes into the uncached chat block with names", () => {
+    const context = chatContext({
+      locale: "de",
+      now: "2026-11-05 14:00",
+      timeZone: "America/New_York",
+      pagePath: "/de",
+      lookedUp: [
+        {
+          kind: "ride",
+          id: RIDE,
+          name: "Monsters Unchained",
+          park: "Epic Universe",
+        },
+        { kind: "park", id: PARK, name: "Epic Universe" },
+      ],
+    });
+    expect(context).toContain("use these ids instead of searching again");
+    expect(context).toContain(
+      `- ride Monsters Unchained (Epic Universe): ${RIDE}`,
+    );
+    expect(context).toContain(`- park Epic Universe: ${PARK}`);
+    expect(SYSTEM_PROMPT).not.toContain("Looked up earlier");
   });
 });

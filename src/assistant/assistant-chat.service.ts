@@ -2,7 +2,10 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import { InjectRepository } from "@nestjs/typeorm";
 import Anthropic from "@anthropic-ai/sdk";
-import { Repository } from "typeorm";
+import { DataSource, In, Repository } from "typeorm";
+import { isCanonicalUuid } from "../common/utils/uuid-param.util";
+import { Park } from "../parks/entities/park.entity";
+import { Attraction } from "../attractions/entities/attraction.entity";
 import { hashRateLimitKey } from "../common/redis/rate-limit.util";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import {
@@ -11,7 +14,11 @@ import {
 } from "./entities/assistant-message.entity";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { AssistantPageService } from "./assistant-page.service";
-import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import {
+  chatContext,
+  SYSTEM_PROMPT,
+  type LookedUpEntity,
+} from "./system-prompt";
 import { repeatsLastQuestion } from "./assistant-junk";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
@@ -34,6 +41,8 @@ const MAX_ROUNDS = 4;
 const HISTORY_MESSAGES = 10;
 /** Thinking counts against it too; an answer is meant to be a few sentences. */
 const MAX_TOKENS = 2048;
+/** Parks and rides of earlier answers named in "This chat", newest first. */
+const MAX_LOOKED_UP = 8;
 
 /** US dollars per million tokens for Claude Haiku 5.5, up to 100K tokens of prompt. */
 const PRICE_PER_MTOK = {
@@ -57,6 +66,8 @@ export interface PreparedChat {
   apiKey: string;
   conversation: AssistantConversation;
   history: Anthropic.MessageParam[];
+  /** Park and ride ids earlier answers of this chat used, newest first. */
+  lookedUp?: LookedUpId[];
   request: ChatRequest;
   /** The session's id, which the feedback limits are counted under. */
   session: string;
@@ -112,6 +123,7 @@ export class AssistantChatService {
 
     let conversation: AssistantConversation | null;
     let history: Anthropic.MessageParam[] = [];
+    let lookedUp: LookedUpId[] = [];
     if (request.conversationId) {
       conversation = await this.conversations.findOneBy({
         id: request.conversationId,
@@ -131,6 +143,7 @@ export class AssistantChatService {
         return "junk";
       }
       history = historyOf(earlier);
+      lookedUp = lookedUpIds(earlier);
     } else {
       conversation = await this.conversations.save(
         this.conversations.create({
@@ -141,7 +154,15 @@ export class AssistantChatService {
         }),
       );
     }
-    return { apiKey, conversation, history, request, session, sessionHash };
+    return {
+      apiKey,
+      conversation,
+      history,
+      lookedUp,
+      request,
+      session,
+      sessionHash,
+    };
   }
 
   async answer(
@@ -186,6 +207,7 @@ export class AssistantChatService {
           planner: request.planner,
           alerts: request.alerts,
           favorites: request.favorites,
+          lookedUp: await this.namesOf(chat.lookedUp ?? []),
         }),
       },
     ];
@@ -330,6 +352,47 @@ export class AssistantChatService {
     });
   }
 
+  /**
+   * Names for the ids earlier answers used: two primary-key reads, so Parky can reuse an id
+   * instead of searching again. An id that no longer resolves is left out.
+   */
+  private async namesOf(ids: LookedUpId[]): Promise<LookedUpEntity[]> {
+    if (ids.length === 0) return [];
+    const data = this.moduleRef.get(DataSource, { strict: false });
+    const idsOf = (kind: LookedUpId["kind"]) =>
+      ids.filter((ref) => ref.kind === kind).map((ref) => ref.id);
+    try {
+      const [parks, rides] = await Promise.all([
+        data.getRepository(Park).find({
+          where: { id: In(idsOf("park")) },
+          select: { id: true, name: true },
+        }),
+        data.getRepository(Attraction).find({
+          where: { id: In(idsOf("ride")) },
+          relations: { park: true },
+          select: { id: true, name: true, park: { id: true, name: true } },
+        }),
+      ]);
+      const names = new Map<string, LookedUpEntity>();
+      for (const park of parks) {
+        names.set(park.id, { kind: "park", id: park.id, name: park.name });
+      }
+      for (const ride of rides) {
+        names.set(ride.id, {
+          kind: "ride",
+          id: ride.id,
+          name: ride.name,
+          ...(ride.park?.name && { park: ride.park.name }),
+        });
+      }
+      return ids.flatMap((ref) => names.get(ref.id) ?? []);
+    } catch (error) {
+      // A context line is a convenience: without it Parky searches again, as before.
+      this.logger.warn(`Looked-up names failed: ${describeError(error)}`);
+      return [];
+    }
+  }
+
   private async record(
     conversation: AssistantConversation,
     text: string,
@@ -419,6 +482,45 @@ export function historyOf(
   }
   while (history[0]?.role === "assistant") history.shift();
   return history;
+}
+
+/** A park or ride id an earlier answer used. */
+export interface LookedUpId {
+  kind: "park" | "ride";
+  id: string;
+}
+
+/**
+ * The park and ride ids earlier answers passed to their tools, newest first and at most
+ * {@link MAX_LOOKED_UP}: the stored tool calls keep their inputs, not their results, so a
+ * `search_parks` names nothing, but the id it found shows up in the next call. Failed calls are
+ * skipped. shortcut: a park given by slug is skipped (slugs repeat across parks); Parky passes ids.
+ */
+export function lookedUpIds(
+  messages: Array<Pick<AssistantMessage, "toolCalls">>,
+): LookedUpId[] {
+  const found: LookedUpId[] = [];
+  const seen = new Set<string>();
+  const add = (kind: LookedUpId["kind"], value: unknown) => {
+    const id = typeof value === "string" ? value.toLowerCase() : null;
+    if (!isCanonicalUuid(id) || seen.has(id)) return;
+    seen.add(id);
+    found.push({ kind, id });
+  };
+  const list = (value: unknown): unknown[] =>
+    Array.isArray(value) ? value : [];
+  for (const message of [...messages].reverse()) {
+    for (const call of [...(message.toolCalls ?? [])].reverse()) {
+      if (call.error || !call.input || typeof call.input !== "object") continue;
+      const input = call.input as Record<string, unknown>;
+      add("ride", input.rideId);
+      list(input.rideIds).forEach((id) => add("ride", id));
+      add("park", input.park);
+      add("park", input.parkId);
+      list(input.parks).forEach((id) => add("park", id));
+    }
+  }
+  return found.slice(0, MAX_LOOKED_UP);
 }
 
 /** The visitor's question before this one, as they typed it, or null in a new chat. */
