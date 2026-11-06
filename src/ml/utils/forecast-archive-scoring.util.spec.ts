@@ -277,6 +277,60 @@ describe("scoreParkDay", () => {
     expect(obs).toHaveLength(2);
   });
 
+  it("writes D6 again under the model behind the calendar level", () => {
+    const acc = new ScoreAccumulator();
+    const day = {
+      originAt: origin,
+      tier: "composed",
+      crowdLevel: "moderate",
+      typicalDayPeak: 50,
+      crowdLevelFallback: false,
+    };
+    const obs = scoreParkDay(
+      {
+        region: "EU",
+        curves: [],
+        parkDays: [
+          {
+            ...day,
+            leadDays: 3,
+            predictedCrowdLevel: "moderate",
+            levelSource: "tft",
+          },
+          {
+            ...day,
+            leadDays: 5,
+            predictedCrowdLevel: "very_high",
+            levelSource: "mixed",
+          },
+          { ...day, leadDays: 7, predictedCrowdLevel: "moderate" },
+        ],
+        truth,
+        hadWindows: false,
+        calendarDayValue: 54,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|D6|d3|level_tft|all")).toMatchObject({
+      n: 1,
+      exact: 1,
+    });
+    expect(sumsOf(acc, "EU|D6|d5|level_mixed|all")).toMatchObject({
+      n: 1,
+      exact: 0,
+      busyPred: 1,
+    });
+    // The split rows repeat the calendar's, never add to them.
+    expect(sumsOf(acc, "EU|D6|d3|predicted|all").n).toBe(1);
+    // A park-day without a level source has no split row.
+    expect(
+      acc
+        .entries()
+        .some((e) => e.lead === "d7" && e.source.startsWith("level_")),
+    ).toBe(false);
+    expect(obs.filter((o) => o.source.startsWith("level_"))).toHaveLength(2);
+  });
+
   it("counts an empty plan against a park whose rides ran (D9)", () => {
     const acc = new ScoreAccumulator();
     scoreParkDay(
