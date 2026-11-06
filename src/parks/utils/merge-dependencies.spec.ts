@@ -97,6 +97,7 @@ describe("merge dependency tables", () => {
     "forecast_archive_curves",
     "forecast_data",
     "headliner_attractions",
+    "hourly_lead_snapshots",
     "ml_prediction_anomalies",
     "pcn_forecasts",
     "park_seasons",

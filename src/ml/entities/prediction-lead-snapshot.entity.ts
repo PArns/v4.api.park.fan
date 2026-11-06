@@ -22,7 +22,11 @@ export type LeadSnapshotSource = "tft" | "catboost";
  *    in its own type doc: a prediction type that is not compared reports
  *    `tracked: false`, "e.g. daily predictions, which span up to 365 days and are
  *    never compared, so 0% would read as broken". `prediction_accuracy` therefore
- *    holds hourly rows only, which reach 48 hours ahead.
+ *    holds hourly rows only, and those cannot answer the hourly version of the
+ *    question either: its upsert keeps the newest run per slot, so a row keeps
+ *    a long lead only when no later run predicted the slot, mostly because the
+ *    park stayed closed. The hourly curve has its own forward table,
+ *    `hourly_lead_snapshots` (PAR-658).
  *
  * 2. The predictions themselves do not survive to be scored later.
  *    `MLService.deduplicatePredictions` deletes every daily row with

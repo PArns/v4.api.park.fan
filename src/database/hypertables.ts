@@ -43,7 +43,8 @@ export interface HypertableSpec {
   readonly description: string;
   /**
    * `timescaledb.compress_segmentby`. Among the tables a merge writes, only
-   * `wait_time_predictions` has one, and the absence on the others is
+   * `wait_time_predictions` and `hourly_lead_snapshots` have one, and the
+   * absence on the others is
    * load-bearing rather than a gap: segmenting by a column a merge REWRITES
    * lets TimescaleDB decompress that one segment instead of every batch the
    * rows sit in, which is an easier case than the one production runs. The
@@ -105,6 +106,19 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     description: "ML Predictions",
     segmentBy: "attractionId",
     orderBy: "predictedTime ASC",
+  },
+  // The hourly lead snapshots (PAR-658): insert-only, up to four rows per
+  // ride and slot. Segmented by ride like the predictions, so a merge
+  // decompresses that ride's rows instead of a whole week of every ride.
+  // Dropped whole after `HOURLY_LEAD_SNAPSHOT_RETENTION_DAYS`.
+  {
+    table: "hourly_lead_snapshots",
+    timeColumn: "target_time",
+    chunkInterval: "7 days",
+    compressAfterDays: 7,
+    description: "Hourly forecasts sampled at fixed leads",
+    segmentBy: "attraction_id",
+    orderBy: "target_time ASC",
   },
   // The site statistic (PAR-1151): insert-only, one row per dimension
   // combination and flush window, bucketed by the UTC hour. Week chunks, so a
@@ -204,3 +218,11 @@ export const PREDICTION_CHUNK_RETENTION_DAYS = 90;
  * in the busy 03:30 window is expected, two weeks of misses are not.
  */
 export const PREDICTION_CHUNK_OVERDUE_DAYS = 14;
+
+/**
+ * `hourly_lead_snapshots` chunks older than this are dropped by the same
+ * nightly `cleanup-old` job. The band calibration reads 28 days
+ * (`BAND_CALIBRATION_WINDOW_DAYS`); a week on top keeps a full window while
+ * the oldest weekly chunk waits for its drop.
+ */
+export const HOURLY_LEAD_SNAPSHOT_RETENTION_DAYS = 35;

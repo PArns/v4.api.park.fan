@@ -20,6 +20,7 @@ How the schema reaches production: [the entities are the schema](../rules/the-en
   | `show_live_data`, `restaurant_live_data` | `timestamp` | 1 day | 30 days |
   | `queue_data_aggregates` | `hour` | 7 days | 30 days |
   | `wait_time_predictions` | `createdAt` | 7 days | 14 days, `segmentby attractionId` |
+  | `hourly_lead_snapshots` | `target_time` | 7 days | 7 days, `segmentby attraction_id`; dropped after 35 days ([hourly lead snapshots](../ml/hourly-lead-snapshots.md)) |
 
 - **Tables of the Python services** have no entity; their DDL is in the writer: `pcn_forecasts`,
   `pcn_intraday_comparisons`, `pcn_lead_curve_comparisons` (`pcn-service/db.py`), `tft_forecasts`,

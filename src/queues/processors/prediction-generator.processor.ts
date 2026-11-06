@@ -11,6 +11,7 @@ import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
   PREDICTION_CHUNK_OVERDUE_DAYS,
+  HOURLY_LEAD_SNAPSHOT_RETENTION_DAYS,
   PREDICTION_CHUNK_RETENTION_DAYS,
 } from "../../database/hypertables";
 
@@ -465,6 +466,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     // — a chunk that could not be dropped today is dropped tomorrow, and must
     // never cost the row cleanup its run.
     await this.dropExpiredPredictionChunks();
+    await this.dropExpiredHourlyLeadSnapshotChunks();
 
     // The two row cleanups are independent, so each runs in its own try: until
     // PAR-900 one try block held both, so a failed hourly purge skipped the
@@ -577,6 +579,33 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(`Prediction chunk retention failed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * The hourly lead snapshots' retention (PAR-658), whole weekly chunks with
+   * the same lock_timeout and retries. The table has no foreign key, so a
+   * missed night only means the chunk goes the next one.
+   */
+  private async dropExpiredHourlyLeadSnapshotChunks(): Promise<void> {
+    try {
+      const result = await this.mlService.dropExpiredPredictionChunks(
+        HOURLY_LEAD_SNAPSHOT_RETENTION_DAYS,
+        { table: "hourly_lead_snapshots" },
+      );
+      if (result.lockTimedOut) {
+        this.logger.warn(
+          `⏳ ${result.due} hourly lead snapshot chunk(s) not dropped: lock busy, retrying next run.`,
+        );
+      } else if (result.dropped > 0) {
+        this.logger.log(
+          `🗑️  Dropped ${result.dropped} hourly lead snapshot chunk(s) past ${HOURLY_LEAD_SNAPSHOT_RETENTION_DAYS} days`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Hourly lead snapshot retention failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }

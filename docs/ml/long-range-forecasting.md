@@ -108,7 +108,8 @@ Rows written before PAR-854 (2026-10-11) carry no source and count for nothing, 
 lead *L* reports about *L* + 2 nights after that deploy — d60 not before ~2026-12-12; an empty far
 bucket is the designed answer, not a fault. Its near buckets score the daily serving path over headliners, so
 they are not comparable line for line with §2. The 15-minute curve's equivalent is the
-[forward archive](forward-archive/README.md).
+[forward archive](forward-archive/README.md); the raw hourly forecast's is
+[hourly lead snapshots](hourly-lead-snapshots.md).
 
 ## 7. The served error grid
 

@@ -4,6 +4,8 @@ import { DataSource } from "typeorm";
 import { AppModule } from "../../src/app.module";
 import { HolidaysService } from "../../src/holidays/holidays.service";
 import { buildLeadSnapshotScoreUpdate } from "../../src/ml/services/prediction-lead-snapshot.service";
+import { HourlyLeadSnapshotService } from "../../src/ml/services/hourly-lead-snapshot.service";
+import { WaitTimePrediction } from "../../src/ml/entities/wait-time-prediction.entity";
 
 /**
  * PAR-872, against a real PostgreSQL: the parts of the DB clean-up that are
@@ -16,6 +18,8 @@ import { buildLeadSnapshotScoreUpdate } from "../../src/ml/services/prediction-l
  *   `xmin`) and still writes a changed one.
  * - The set-based lead-snapshot UPDATE types a chunk whose first row is all
  *   NULL, and writes exactly the rows it names.
+ * - The hourly lead snapshot (PAR-658) keeps the first run inside a sampling
+ *   window on the hypertable: a later run in the same window is ignored.
  */
 describe("DB clean-up writes (e2e)", () => {
   let app: INestApplication;
@@ -238,6 +242,50 @@ describe("DB clean-up writes (e2e)", () => {
           actual_wait_time: 55,
           absolute_error: 15,
           scored: true,
+        },
+      ]);
+    });
+  });
+
+  describe("hourly lead snapshot write (PAR-658)", () => {
+    const ride = "00000000-0000-4000-8000-000000000658";
+    const slot = new Date("2026-10-01T12:00:00Z");
+    const run = (leadMinutes: number, wait: number) =>
+      ({
+        attractionId: ride,
+        createdAt: new Date(slot.getTime() - leadMinutes * 60_000),
+        predictedTime: slot,
+        predictedWaitTime: wait,
+        uncertaintyMinutes: 9,
+        modelVersion: "e2e",
+        predictionType: "hourly",
+      }) as WaitTimePrediction;
+
+    afterAll(async () => {
+      await dataSource.query(
+        `DELETE FROM hourly_lead_snapshots WHERE attraction_id = $1::uuid`,
+        [ride],
+      );
+    });
+
+    it("keeps the first run of a window and ignores the next one", async () => {
+      const service = app.get(HourlyLeadSnapshotService);
+      await service.record([run(360, 40)], [{ wait: 44, source: "pcn" }]);
+      await service.record([run(345, 70)], [{ wait: 75, source: "pcn" }]);
+
+      const rows = await dataSource.query(
+        `SELECT lead_bucket, lead_minutes, predicted_wait_time,
+                served_wait_time, served_source
+           FROM hourly_lead_snapshots WHERE attraction_id = $1::uuid`,
+        [ride],
+      );
+      expect(rows).toEqual([
+        {
+          lead_bucket: "h2-6",
+          lead_minutes: 360,
+          predicted_wait_time: 40,
+          served_wait_time: 44,
+          served_source: "pcn",
         },
       ]);
     });

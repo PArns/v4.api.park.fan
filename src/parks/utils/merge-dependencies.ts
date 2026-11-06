@@ -846,6 +846,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "lead_days"],
   },
   {
+    // Its hourly counterpart (PAR-658), moved for the same reason. PK
+    // `(attraction_id, target_time, lead_bucket)`.
+    table: "hourly_lead_snapshots",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["target_time", "lead_bucket"],
+  },
+  {
     // The forward archive of served curves (PAR-831): no FK, same reasoning
     // as `prediction_lead_snapshots` above — the served curve at a lead cannot
     // be recomputed later, so a loser's rows move. Its PK is

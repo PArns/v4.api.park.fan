@@ -2772,6 +2772,8 @@ export class MLService {
       attempts?: number;
       retryDelayMs?: number;
       overdueAfterDays?: number;
+      /** Another hypertable with the same chunk retention need. */
+      table?: "wait_time_predictions" | "hourly_lead_snapshots";
     } = {},
   ): Promise<{
     due: number;
@@ -2785,8 +2787,9 @@ export class MLService {
     const retryDelayMs = options.retryDelayMs ?? 30_000;
     const overdueAfterDays = options.overdueAfterDays ?? 14;
     const olderThan = `${retainDays} days`;
+    const table = options.table ?? "wait_time_predictions";
 
-    const due = await this.countPredictionChunksOlderThan(olderThan);
+    const due = await this.countPredictionChunksOlderThan(olderThan, table);
     if (due === 0) {
       return {
         due: 0,
@@ -2811,8 +2814,8 @@ export class MLService {
             ]);
             return em.query(
               `SELECT c::text AS chunk
-                 FROM drop_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
-              [olderThan],
+                 FROM drop_chunks($2::regclass, older_than => $1::interval) AS c`,
+              [olderThan, table],
             );
           });
         return {
@@ -2830,6 +2833,7 @@ export class MLService {
 
     const overdue = await this.countPredictionChunksOlderThan(
       `${retainDays + overdueAfterDays} days`,
+      table,
     );
     return {
       due,
@@ -2840,15 +2844,16 @@ export class MLService {
     };
   }
 
-  /** `wait_time_predictions` chunks lying entirely before now - `olderThan`. */
+  /** Chunks of `table` lying entirely before now - `olderThan`. */
   private async countPredictionChunksOlderThan(
     olderThan: string,
+    table: string,
   ): Promise<number> {
     const rows: Array<{ chunk: string }> =
       await this.predictionRepository.manager.query(
         `SELECT c::text AS chunk
-           FROM show_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
-        [olderThan],
+           FROM show_chunks($2::regclass, older_than => $1::interval) AS c`,
+        [olderThan, table],
       );
     return rows.length;
   }
