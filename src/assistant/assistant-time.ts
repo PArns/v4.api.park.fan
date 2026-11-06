@@ -52,14 +52,31 @@ export function parkHourInstant(
   date: string,
   hour: number,
   parkTimeZone: string,
+  minute = 0,
 ): string {
   const day = new Date(`${date}T00:00:00Z`);
   day.setUTCDate(day.getUTCDate() + Math.floor(hour / 24));
   const hh = String(hour % 24).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
   return fromZonedTime(
-    `${day.toISOString().slice(0, 10)}T${hh}:00:00`,
+    `${day.toISOString().slice(0, 10)}T${hh}:${mm}:00`,
     parkTimeZone,
   ).toISOString();
+}
+
+/**
+ * The instant of a park-local "HH:mm" on a plan day. A time before the day's opening hour belongs
+ * after midnight, as plan-day lists a show at 00:30 after the one at 22:00.
+ */
+export function parkClockInstant(
+  date: string,
+  hhmm: string,
+  openHour: number | null,
+  parkTimeZone: string,
+): string {
+  const [hour, minute] = hhmm.split(":").map(Number);
+  const unfolded = openHour !== null && hour < openHour ? hour + 24 : hour;
+  return parkHourInstant(date, unfolded, parkTimeZone, minute);
 }
 
 /**

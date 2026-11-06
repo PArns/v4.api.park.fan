@@ -92,6 +92,7 @@ import {
   storedToolInput,
   CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
+import { PlanDayService } from "../../parks/services/plan-day.service";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
@@ -1510,6 +1511,96 @@ describe("reopenSearchFrom", () => {
     expect(
       reopenSearchFrom({ reason: "unknown", status: "CLOSED" }, "2026-11-05"),
     ).toBeNull();
+  });
+});
+
+describe("get_ride › today / get_park_day", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const RIDE = "55555555-5555-4555-8555-555555555555";
+  // Phantasialand at 09:00, Taron an hour later; a show past midnight.
+  const plan = {
+    timezone: "Europe/Berlin",
+    tier: "measured",
+    context: {
+      date: "2026-11-07",
+      status: "OPERATING",
+      openHour: 9,
+      closeHour: 23,
+    },
+    rides: [
+      {
+        attractionId: RIDE,
+        attractionName: "Taron",
+        opensAt: "10:00",
+        opensAtConfidence: "high",
+        runsOnWeekdays: [1, 2, 3, 4, 5, 6, 7],
+        dayPeak: 45,
+        hours: [
+          { hour: 10, wait: 20 },
+          { hour: 14, wait: 45 },
+          { hour: 21, wait: 10 },
+        ],
+      },
+    ],
+    shows: [
+      {
+        showName: "Night show",
+        source: "scheduled",
+        times: ["22:00", "00:30"],
+      },
+    ],
+  };
+  const providers = () =>
+    new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({ ...park })),
+          getFirstOperatingDayFrom: jest.fn(async () => null),
+        },
+      ],
+      [PlanDayService, { buildPlanDay: jest.fn(async () => plan) }],
+    ]);
+
+  it("says when a ride starts that opens after the park", async () => {
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE,
+      name: "Taron",
+      status: "CLOSED",
+      park: { id: PARK_ID, name: "Phantasialand" },
+      facts: {},
+    });
+    const { json } = await run("get_ride", { rideId: RIDE }, providers());
+    // 10:00 in Brühl is 09:00 UTC, the test's visitor clock.
+    expect(json.today).toEqual({
+      opensAt: "2026-11-07 09:00",
+      opensAtConfidence: "high",
+      runsOnWeekdays: [1, 2, 3, 4, 5, 6, 7],
+    });
+  });
+
+  it("lays out a planned day with each ride's opening and shortest hour", async () => {
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      providers(),
+    );
+    expect(json).toMatchObject({
+      park: "Phantasialand",
+      opens: "2026-11-07 08:00",
+      closes: "2026-11-07 22:00",
+      rides: [
+        {
+          name: "Taron",
+          opensAt: "2026-11-07 09:00",
+          predictedPeakWaitMinutes: 45,
+          shortestAt: { at: "2026-11-07 20:00", waitMinutes: 10 },
+        },
+      ],
+      // 00:30 belongs to the night after.
+      shows: [{ times: ["2026-11-07 21:00", "2026-11-07 23:30"] }],
+    });
   });
 });
 

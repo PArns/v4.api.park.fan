@@ -58,8 +58,10 @@ import { getFrontendUrl } from "../../config/oauth.config";
 import {
   bookableHours,
   localizeTimes,
+  parkClockInstant,
   parkHourInstant,
 } from "../assistant-time";
+import type { PlanDayDto, PlanDayRideDto } from "../../parks/dto/plan-day.dto";
 import { formatInTimeZone } from "date-fns-tz";
 import { unfoldedCloseHour } from "../../common/utils/day-shape.util";
 import { LocationService } from "../../location/location.service";
@@ -656,6 +658,36 @@ export function reopenSearchFrom(
 }
 
 /**
+ * When one ride of a planned day starts, if later than the park's opening (Phantasialand 09:00,
+ * Taron 10:00), as an instant for the visitor's clock, and the weekdays it usually runs on.
+ */
+export function rideOpeningOf(
+  ride: PlanDayRideDto,
+  plan: Pick<PlanDayDto, "context" | "timezone">,
+) {
+  return {
+    ...(ride.opensAt && {
+      opensAt: parkClockInstant(
+        plan.context.date,
+        ride.opensAt,
+        plan.context.openHour,
+        plan.timezone,
+      ),
+      opensAtConfidence: ride.opensAtConfidence,
+    }),
+    ...(ride.runsOnWeekdays && { runsOnWeekdays: ride.runsOnWeekdays }),
+  };
+}
+
+/** The forecast hour with the shortest wait among `hours`, or null. */
+function shortestHour<T extends { wait: number }>(hours: readonly T[]) {
+  return hours.reduce<T | null>(
+    (low, hour) => (low === null || hour.wait < low.wait ? hour : low),
+    null,
+  );
+}
+
+/**
  * A park's shows on one day for `get_shows`: those with a showtime, earliest first, each start an
  * instant so it reaches the model in the visitor's clock. Status and duration come from a live
  * reading of the show only; without one they are null, never a guessed "closed".
@@ -1006,7 +1038,10 @@ export const ASSISTANT_TOOLS = [
       "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
       "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
       "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
-      "best visit times, its pageUrl and, while it is not running, reopening: why (breakdown, " +
+      "best visit times (bestVisitTimesToday: the slots our intraday forecast rates optimal or " +
+      "good, renewed every 15 minutes), its pageUrl, today: opensAt (when the ride usually " +
+      "starts, later than the park's gates; absent means not known, never 'with the park') and " +
+      "runsOnWeekdays (ISO, Monday 1), and, while it is not running, reopening: why (breakdown, " +
       "works, season or unknown) and what is known about its return.",
     input: z.object({
       rideId: z
@@ -1043,6 +1078,14 @@ export const ASSISTANT_TOOLS = [
       if (park) {
         // The park's calendar month and day: the season and the opening calendar are park-local.
         const today = getCurrentDateInTimezone(park.timezone);
+        // A failed plan costs the ride's day, not the ride.
+        const plan = await Promise.resolve()
+          .then(() => ctx.get(PlanDayService).buildPlanDay(park, today))
+          .catch(() => null);
+        const planned = plan?.rides.find(
+          (r) => r.attractionId === rideId.toLowerCase(),
+        );
+        if (plan && planned) ride.today = rideOpeningOf(planned, plan);
         const reopening = reopeningOf(
           ride as RideClosure,
           Number(today.slice(5, 7)),
@@ -1190,10 +1233,7 @@ export const ASSISTANT_TOOLS = [
         isToday ? Number(formatInTimeZone(new Date(), tz, "H")) : null,
       );
       const { openHour, closeHour } = plan.context;
-      const best = hours.reduce<(typeof hours)[number] | null>(
-        (low, hour) => (low === null || hour.wait < low.wait ? hour : low),
-        null,
-      );
+      const best = shortestHour(hours);
       return {
         ride: ride.name,
         park: ride.park.name,
@@ -1216,6 +1256,73 @@ export const ASSISTANT_TOOLS = [
               waitMinutes: best.wait,
             }
           : null,
+      };
+    },
+  }),
+  tool({
+    name: "get_park_day",
+    status: "forecast",
+    description:
+      "One day at one park as park.fan's trip planner sees it: whether and when it is open, the " +
+      "expected crowd level, the day's weather (absent beyond about 14 days), holiday, school " +
+      "break, bridge day and weekend, neighbouring holidays, hotel early entry; every ride with " +
+      "opensAt (when it starts, later than the park's gates; absent means not known), the " +
+      "weekdays it runs on, the predicted peak and the hour with the shortest wait; and the " +
+      "shows with their times (projected: what the show did on a recent matching day, not a " +
+      'promise). For "what is the day like", "which rides open later", "a plan for Saturday". ' +
+      "Today by default.",
+    input: z.object({ park: parkRef, date: planDate.optional() }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const park = await ctx.get(ParksService).findById(found.id);
+      if (!park)
+        throw new McpToolError(`No park ${reference}; try search_parks`);
+      const tz = park.timezone;
+      const day = date ?? getCurrentDateInTimezone(tz);
+      const plan = await ctx.get(PlanDayService).buildPlanDay(park, day);
+      const { openHour, closeHour, ...context } = plan.context;
+      const currentHour =
+        day === getCurrentDateInTimezone(tz)
+          ? Number(formatInTimeZone(new Date(), tz, "H"))
+          : null;
+      return {
+        park: park.name,
+        tier: plan.tier,
+        ...context,
+        opens: openHour !== null ? parkHourInstant(day, openHour, tz) : null,
+        closes:
+          openHour !== null && closeHour !== null
+            ? parkHourInstant(day, unfoldedCloseHour(openHour, closeHour), tz)
+            : null,
+        rides: plan.rides.map((ride) => {
+          const shortest = shortestHour(
+            bookableHours(ride.hours, plan.context, currentHour),
+          );
+          return {
+            id: ride.attractionId,
+            name: ride.attractionName,
+            ...(ride.land && { land: ride.land }),
+            ...(ride.isHeadliner && { headliner: true }),
+            ...(ride.downYesterday && { downYesterday: true }),
+            ...rideOpeningOf(ride, plan),
+            predictedPeakWaitMinutes: ride.dayPeak,
+            shortestAt: shortest && {
+              at: parkHourInstant(day, shortest.hour, tz),
+              waitMinutes: shortest.wait,
+            },
+          };
+        }),
+        ...(plan.ridesUnavailable && {
+          ridesUnavailable: plan.ridesUnavailable,
+        }),
+        shows: plan.shows.map((show) => ({
+          name: show.showName,
+          source: show.source,
+          times: show.times.map((time) =>
+            parkClockInstant(day, time, openHour, tz),
+          ),
+        })),
       };
     },
   }),
