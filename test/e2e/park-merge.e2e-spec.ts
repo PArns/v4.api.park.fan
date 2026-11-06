@@ -18,6 +18,7 @@ import {
 } from "../../src/parks/utils/merge-dependencies";
 import { HYPERTABLES } from "../../src/database/hypertables";
 import { HOURLY_AGGREGATE_UPSERT } from "../../src/queues/processors/hourly-aggregate.sql";
+import { insertScheduleEntries, scheduleOf } from "../helpers/schedule-entries";
 
 /**
  * The merge transaction against a real Postgres.
@@ -119,7 +120,7 @@ describe("Park merge (E2E)", () => {
    * `expectPairIsMergeable` pins the precondition so the next threshold change
    * fails on the sentence that states it.
    */
-  async function seedCollidingParks(): Promise<void> {
+  async function seedCollidingParkPair(): Promise<void> {
     const park = (
       id: string,
       name: string,
@@ -133,23 +134,35 @@ describe("Park merge (E2E)", () => {
       );
     await park(WINNER_PARK, DUPLICATE_PARK_NAME, "winner-park", "wiki-winner");
     await park(GHOST_PARK, DUPLICATE_PARK_NAME, "ghost-park", null);
+  }
 
-    const attraction = (
-      id: string,
-      parkId: string,
-      slug: string,
-      externalId: string,
-    ) =>
-      dataSource.query(
-        `INSERT INTO attractions (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
-        [id, externalId, slug, slug, parkId],
-      );
+  /** A ride whose name is its slug; the merge matches rides on the slug. */
+  const insertAttraction = (
+    id: string,
+    parkId: string,
+    slug: string,
+    externalId: string,
+  ) =>
+    dataSource.query(
+      `INSERT INTO attractions (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
+      [id, externalId, slug, slug, parkId],
+    );
+
+  /** The pair above, with a colliding ride, a lonely ride and their history. */
+  async function seedCollidingParks(): Promise<void> {
+    await seedCollidingParkPair();
+
     // Same slug on both sides: the collision the merge has to resolve.
-    await attraction(WINNER_ATTR, WINNER_PARK, "taron", "ext-taron-wiki");
-    await attraction(GHOST_ATTR, GHOST_PARK, "taron", "ext-taron-qt");
+    await insertAttraction(WINNER_ATTR, WINNER_PARK, "taron", "ext-taron-wiki");
+    await insertAttraction(GHOST_ATTR, GHOST_PARK, "taron", "ext-taron-qt");
     // No counterpart on the winner: this one only has to be reparented.
-    await attraction(LONELY_ATTR, GHOST_PARK, "black-mamba", "ext-mamba-qt");
+    await insertAttraction(
+      LONELY_ATTR,
+      GHOST_PARK,
+      "black-mamba",
+      "ext-mamba-qt",
+    );
 
     // queue_data — the hypertable. Its key is a surrogate, so nothing here can
     // collide; what is at stake is the time series surviving the merge at all.
@@ -245,6 +258,70 @@ describe("Park merge (E2E)", () => {
       [GHOST_PARK],
     );
   }
+
+  /**
+   * One park day on both sides of a merge, in the shape of PAR-171's seven-row
+   * fixture: opening hours on both parks, a ride on both (the loser's copy
+   * merges into the winner's), and a ride only the loser has.
+   *
+   * The lonely ride's OPERATING row is what a `(date, scheduleType)` key took:
+   * the winner holds an OPERATING row that day, its own opening hours, so the
+   * loser's row read as already stated.
+   */
+  const SCHEDULE_DAY = "2026-09-20";
+  const SCHEDULE_NEXT_DAY = "2026-09-21";
+
+  async function seedMergedScheduleDay(ids: {
+    winnerPark: string;
+    loserPark: string;
+    winnerRide: string;
+    loserTwin: string;
+    loserLonely: string;
+  }): Promise<void> {
+    const { winnerPark, loserPark, winnerRide, loserTwin, loserLonely } = ids;
+    const row = (
+      parkId: string,
+      attractionId: string | null,
+      date: string,
+      scheduleType: string,
+      description: string,
+    ) => ({ parkId, attractionId, date, scheduleType, description });
+    await insertScheduleEntries(dataSource, [
+      row(winnerPark, null, SCHEDULE_DAY, "OPERATING", "winner hours"),
+      row(winnerPark, winnerRide, SCHEDULE_DAY, "OPERATING", "winner ride"),
+      // A true duplicate: same day, type and ride (none) as the winner's hours.
+      row(loserPark, null, SCHEDULE_DAY, "OPERATING", "loser hours"),
+      // Merges into `winnerRide`, which already states the day.
+      row(loserPark, loserTwin, SCHEDULE_DAY, "OPERATING", "loser twin"),
+      // Same day and type as the winner's hours, but another subject.
+      row(loserPark, loserLonely, SCHEDULE_DAY, "OPERATING", "loser lonely"),
+      row(
+        loserPark,
+        loserLonely,
+        SCHEDULE_NEXT_DAY,
+        "OPERATING",
+        "loser lonely",
+      ),
+      row(loserPark, loserLonely, SCHEDULE_DAY, "CLOSED", "loser lonely"),
+    ]);
+
+    // The seed, asserted (📚 G-72).
+    expect(await scheduleOf(dataSource, winnerPark)).toHaveLength(2);
+    expect(await scheduleOf(dataSource, loserPark)).toHaveLength(5);
+  }
+
+  /**
+   * What either merge path has to leave: PAR-171's new-key column, 2 rows
+   * deleted and 3 moved. The old key deleted 3 and moved 2.
+   */
+  const mergedScheduleDay = (winnerRide: string, loserLonely: string) =>
+    [
+      `${SCHEDULE_DAY} OPERATING park winner hours`,
+      `${SCHEDULE_DAY} OPERATING ${winnerRide} winner ride`,
+      `${SCHEDULE_DAY} OPERATING ${loserLonely} loser lonely`,
+      `${SCHEDULE_DAY} CLOSED ${loserLonely} loser lonely`,
+      `${SCHEDULE_NEXT_DAY} OPERATING ${loserLonely} loser lonely`,
+    ].sort();
 
   /**
    * The guard that keeps this suite honest as the merge grows.
@@ -495,6 +572,25 @@ describe("Park merge (E2E)", () => {
         WINNER_PARK,
       ]),
     ).toBe(1);
+  });
+
+  it("keeps the ghost park's per-ride schedule and drops only what the winner states", async () => {
+    await seedCollidingParks();
+    await expectPairIsMergeable();
+    await seedMergedScheduleDay({
+      winnerPark: WINNER_PARK,
+      loserPark: GHOST_PARK,
+      winnerRide: WINNER_ATTR,
+      loserTwin: GHOST_ATTR,
+      loserLonely: LONELY_ATTR,
+    });
+
+    await parksService.repairDuplicates();
+
+    expect(await scheduleOf(dataSource, WINNER_PARK)).toEqual(
+      mergedScheduleDay(WINNER_ATTR, LONELY_ATTR),
+    );
+    expect(await scheduleOf(dataSource, GHOST_PARK)).toEqual([]);
   });
 
   /**
@@ -1295,6 +1391,42 @@ describe("Park merge (E2E)", () => {
       ).toBe(0);
     });
 
+    /**
+     * The path PAR-171 fixed: until then step 3 handed `schedule_entries` to
+     * `migrateTableData` with `["date", "scheduleType"]`.
+     */
+    it("keeps the loser's per-ride schedule and drops only what the winner states", async () => {
+      const WINNER_RIDE = "12121212-1212-4121-8121-121212121212";
+      const LOSER_TWIN = "13131313-1313-4131-8131-131313131313";
+      const LOSER_LONELY = "14141414-1414-4141-8141-141414141414";
+
+      await seedMergeParks();
+      await insertAttraction(WINNER_RIDE, MERGE_WINNER, "baron", "ext-baron-1");
+      await insertAttraction(LOSER_TWIN, MERGE_LOSER, "baron", "ext-baron-2");
+      await insertAttraction(LOSER_LONELY, MERGE_LOSER, "joris", "ext-joris");
+      await seedMergedScheduleDay({
+        winnerPark: MERGE_WINNER,
+        loserPark: MERGE_LOSER,
+        winnerRide: WINNER_RIDE,
+        loserTwin: LOSER_TWIN,
+        loserLonely: LOSER_LONELY,
+      });
+
+      const result = await parkMergeService.mergeParks(
+        MERGE_WINNER,
+        MERGE_LOSER,
+      );
+
+      expect(result.success).toBe(true);
+      // The rows `migrateScheduleEntries` moved: the lonely ride's three. The
+      // twin's row was dropped one step earlier, by the ride merge.
+      expect(result.migratedScheduleEntries).toBe(3);
+      expect(await scheduleOf(dataSource, MERGE_WINNER)).toEqual(
+        mergedScheduleDay(WINNER_RIDE, LOSER_LONELY),
+      );
+      expect(await scheduleOf(dataSource, MERGE_LOSER)).toEqual([]);
+    });
+
     it("refuses a self-merge without touching a row", async () => {
       await seedShowAndRestaurantCollision();
 
@@ -1376,4 +1508,241 @@ describe("Park merge (E2E)", () => {
       ).toBe(4);
     });
   });
+
+  /**
+   * The four tables PAR-149 added to `ATTRACTION_DEPENDENCIES`, seeded.
+   *
+   * `attraction_review_marks` is the one with hand-written SQL: a CHECK
+   * `attraction_id < other_attraction_id` that is not deferrable, a unique
+   * index over `(kind, attraction_id, other_attraction_id)` and `LEAST` /
+   * `GREATEST` over uuids. The stored order of a pair is the uuid order, so it
+   * decides which of the three UPDATEs sees a row — which is why the case runs
+   * with the loser's id above the winner's and below it. The mid partner sits
+   * between the two in both runs, so its mark flips order when it moves.
+   */
+  describe.each([
+    {
+      direction: "loser above winner",
+      winner: "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a3a",
+      loser: "4b4b4b4b-4b4b-44b4-84b4-4b4b4b4b4b4b",
+    },
+    {
+      direction: "loser below winner",
+      winner: "4b4b4b4b-4b4b-44b4-84b4-4b4b4b4b4b4b",
+      loser: "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a3a",
+    },
+  ])(
+    "a merged ride's alerts, schedule, snapshots and marks ($direction)",
+    ({ winner, loser }) => {
+      const MID_PARTNER = "3c3c3c3c-3c3c-43c3-83c3-3c3c3c3c3c3c";
+      const SHARED_PARTNER = "6e6e6e6e-6e6e-46e6-86e6-6e6e6e6e6e6e";
+      const SUB_BOTH = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      const SUB_LOSER = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+      const mark = (
+        kind: string,
+        a: string,
+        b: string | null,
+        reason: string,
+      ) =>
+        dataSource.query(
+          `INSERT INTO attraction_review_marks (id, kind, attraction_id, other_attraction_id, reason, reviewed_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())`,
+          b === null
+            ? [kind, a, null, reason]
+            : [kind, ...[a, b].sort(), reason],
+        );
+
+      /** Every row a table holds for one ride, as sorted readable lines. */
+      const linesOf = async (sql: string, id: string): Promise<string[]> =>
+        (await dataSource.query(sql, [id]))
+          .map((r: { line: string }) => r.line)
+          .sort();
+
+      const marksOf = (id: string) =>
+        linesOf(
+          `SELECT concat_ws(' ', kind, attraction_id, COALESCE(other_attraction_id::text, '-'), reason) AS line
+           FROM attraction_review_marks
+          WHERE attraction_id = $1 OR other_attraction_id = $1`,
+          id,
+        );
+      const alertsOf = (id: string) =>
+        linesOf(
+          `SELECT concat_ws(' ', "subscriptionId", "thresholdMinutes") AS line
+           FROM ride_alerts WHERE "attractionId" = $1`,
+          id,
+        );
+      const snapshotsOf = (id: string) =>
+        linesOf(
+          `SELECT concat_ws(' ', to_char(target_date, 'YYYY-MM-DD'), lead_days, predicted_wait_time) AS line
+           FROM prediction_lead_snapshots WHERE attraction_id = $1`,
+          id,
+        );
+      const rideScheduleOf = (id: string) =>
+        linesOf(
+          `SELECT concat_ws(' ', "parkId", to_char(date, 'YYYY-MM-DD'), "scheduleType", description) AS line
+           FROM schedule_entries WHERE "attractionId" = $1`,
+          id,
+        );
+
+      async function seed(): Promise<void> {
+        await seedCollidingParkPair();
+        await insertAttraction(winner, WINNER_PARK, "taron", "ext-taron-wiki");
+        await insertAttraction(loser, GHOST_PARK, "taron", "ext-taron-qt");
+        await insertAttraction(MID_PARTNER, WINNER_PARK, "raik", "ext-raik");
+        await insertAttraction(
+          SHARED_PARTNER,
+          WINNER_PARK,
+          "chiapas",
+          "ext-chi",
+        );
+
+        // Review marks: the merge pair itself, a pair with a third ride, a pair
+        // the winner already has a verdict on, and one single mark per side.
+        await mark("not_a_duplicate", winner, loser, "the pair itself");
+        await mark("not_a_duplicate", loser, MID_PARTNER, "loser and mid");
+        await mark(
+          "not_a_duplicate",
+          loser,
+          SHARED_PARTNER,
+          "loser and shared",
+        );
+        await mark(
+          "not_a_duplicate",
+          winner,
+          SHARED_PARTNER,
+          "winner and shared",
+        );
+        await mark("not_retired", loser, null, "loser not retired");
+        await mark("not_retired", winner, null, "winner not retired");
+
+        // ride_alerts: one subscriber on both rides (collides on the unique
+        // `(subscriptionId, attractionId)`), one on the loser only.
+        for (const [id, endpoint] of [
+          [SUB_BOTH, "https://push.example/both"],
+          [SUB_LOSER, "https://push.example/loser"],
+        ]) {
+          await dataSource.query(
+            `INSERT INTO push_subscriptions (id, endpoint, p256dh, auth)
+           VALUES ($1, $2, 'p256dh-key', 'auth-secret')`,
+            [id, endpoint],
+          );
+        }
+        const alert = (
+          subscriptionId: string,
+          rideId: string,
+          minutes: number,
+        ) =>
+          dataSource.query(
+            `INSERT INTO ride_alerts (id, "subscriptionId", "attractionId", "thresholdMinutes", armed, "createdAt", "updatedAt")
+           VALUES (gen_random_uuid(), $1, $2, $3, true, NOW(), NOW())`,
+            [subscriptionId, rideId, minutes],
+          );
+        await alert(SUB_BOTH, winner, 20);
+        await alert(SUB_BOTH, loser, 40);
+        await alert(SUB_LOSER, loser, 30);
+
+        // prediction_lead_snapshots: PK `(attraction_id, target_date,
+        // lead_days)`, so the loser's 7-day lead collides and its 30-day does not.
+        const snapshot = (rideId: string, lead: number, wait: number) =>
+          dataSource.query(
+            `INSERT INTO prediction_lead_snapshots (attraction_id, target_date, lead_days, predicted_wait_time, model_version, created_at)
+           VALUES ($1, '2026-10-01', $2, $3, 'v1', NOW())`,
+            [rideId, lead, wait],
+          );
+        await snapshot(winner, 7, 25);
+        await snapshot(loser, 7, 99);
+        await snapshot(loser, 30, 40);
+
+        // schedule_entries with a ride: the loser's 09-20 collides with the
+        // winner's on `(date, scheduleType)`, its 09-21 does not.
+        await insertScheduleEntries(dataSource, [
+          {
+            parkId: WINNER_PARK,
+            attractionId: winner,
+            date: SCHEDULE_DAY,
+            scheduleType: "OPERATING",
+            description: "winner ride",
+          },
+          {
+            parkId: GHOST_PARK,
+            attractionId: loser,
+            date: SCHEDULE_DAY,
+            scheduleType: "OPERATING",
+            description: "loser ride",
+          },
+          {
+            parkId: GHOST_PARK,
+            attractionId: loser,
+            date: SCHEDULE_NEXT_DAY,
+            scheduleType: "OPERATING",
+            description: "loser ride",
+          },
+        ]);
+      }
+
+      it("commits without 23514 or 23505, moves the non-colliding rows and keeps both single marks", async () => {
+        await seed();
+        await expectPairIsMergeable();
+
+        // The seed, asserted (📚 G-72): four marks name the loser, and each of
+        // the other three tables holds a colliding and a moving row for it.
+        expect(await marksOf(loser)).toHaveLength(4);
+        expect(await alertsOf(loser)).toHaveLength(2);
+        expect(await snapshotsOf(loser)).toHaveLength(2);
+        expect(await rideScheduleOf(loser)).toHaveLength(2);
+
+        await parksService.repairDuplicates();
+
+        // 1 · It committed: a CHECK or unique violation rolls everything back.
+        expect(
+          await count(`SELECT count(*) c FROM attractions WHERE id = $1`, [
+            loser,
+          ]),
+        ).toBe(0);
+        expect(
+          await count(`SELECT count(*) c FROM parks WHERE id = $1`, [
+            GHOST_PARK,
+          ]),
+        ).toBe(0);
+
+        // 2 · Review marks: the pair's own mark and the superseded one are gone,
+        //     the third-ride mark moved in canonical order, the winner's verdict
+        //     on the shared partner stands, and both single marks survive.
+        const [lo, hi] = [winner, MID_PARTNER].sort();
+        expect(await marksOf(winner)).toEqual(
+          [
+            `not_a_duplicate ${lo} ${hi} loser and mid`,
+            `not_a_duplicate ${winner} ${SHARED_PARTNER} winner and shared`,
+            `not_retired ${winner} - loser not retired`,
+            `not_retired ${winner} - winner not retired`,
+          ].sort(),
+        );
+
+        // 3 · The other three: the winner's colliding row wins, the loser's
+        //     other row moves.
+        expect(await alertsOf(winner)).toEqual(
+          [`${SUB_BOTH} 20`, `${SUB_LOSER} 30`].sort(),
+        );
+        expect(await snapshotsOf(winner)).toEqual([
+          "2026-10-01 30 40",
+          "2026-10-01 7 25",
+        ]);
+        expect(await rideScheduleOf(winner)).toEqual([
+          `${WINNER_PARK} ${SCHEDULE_DAY} OPERATING winner ride`,
+          `${WINNER_PARK} ${SCHEDULE_NEXT_DAY} OPERATING loser ride`,
+        ]);
+
+        // 4 · No orphans. Three of the tables cascade, so a forgotten row would
+        //     be gone rather than orphaned and is caught above; the snapshots
+        //     have no FK, so this is where they would show up.
+        expect(
+          await count(
+            `SELECT count(*) c FROM prediction_lead_snapshots s
+            WHERE NOT EXISTS (SELECT 1 FROM attractions a WHERE a.id = s.attraction_id)`,
+          ),
+        ).toBe(0);
+      });
+    },
+  );
 });
