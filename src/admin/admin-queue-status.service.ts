@@ -1,5 +1,6 @@
-import { Injectable } from "@nestjs/common";
-import { InjectQueue } from "@nestjs/bull";
+import { Injectable, OnModuleInit } from "@nestjs/common";
+import { ModuleRef } from "@nestjs/core";
+import { getQueueToken } from "@nestjs/bull";
 import { Queue } from "bull";
 import {
   newestSuccessByName,
@@ -7,6 +8,7 @@ import {
   settledAt,
   type QueueKey,
 } from "../queues/queue-job-history";
+import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 
 /**
  * The newest failures of a queue that `failedOpen` looks at. Bull keeps up to
@@ -47,49 +49,23 @@ export interface QueueFailure {
  * screen and the MCP server's `queue_status` tool.
  */
 @Injectable()
-export class AdminQueueStatusService {
+export class AdminQueueStatusService implements OnModuleInit {
   /**
-   * The queues the status screen counts, and whose failures it can read: one
-   * list, because the screen offers "why" on every queue that shows a failure.
+   * Every queue the app registers, counted and with its failures readable: a
+   * hand-kept list here missed live-cache-warmup, whose failures the
+   * data-quality card showed while the queue screen and the MCP did not.
    */
-  private readonly queues: Record<string, Queue>;
+  private readonly queues: Record<string, Queue> = {};
 
-  constructor(
-    @InjectQueue("holidays") holidays: Queue,
-    @InjectQueue("park-metadata") parkMetadata: Queue,
-    @InjectQueue("park-enrichment") parkEnrichment: Queue,
-    @InjectQueue("ml-training") mlTraining: Queue,
-    @InjectQueue("wait-times") waitTimes: Queue,
-    @InjectQueue("children-metadata") children: Queue,
-    @InjectQueue("six-flags-heights") sixFlagsHeights: Queue,
-    @InjectQueue("ride-stats") rideStats: Queue,
-    @InjectQueue("manual-metadata") manualMetadata: Queue,
-    @InjectQueue("prediction-accuracy") accuracy: Queue,
-    @InjectQueue("analytics") analytics: Queue,
-    @InjectQueue("search-console") searchConsole: Queue,
-    @InjectQueue("downtime") downtime: Queue,
-    @InjectQueue("pcn-shadow") pcnShadow: Queue,
-    @InjectQueue("park-day-operation") parkDayOperation: Queue,
-  ) {
-    this.queues = {
-      "wait-times": waitTimes,
-      "park-metadata": parkMetadata,
-      "ml-training": mlTraining,
-      "prediction-accuracy": accuracy,
-      analytics,
-      holidays,
-      "park-enrichment": parkEnrichment,
-      "children-metadata": children,
-      // The queues you can trigger by hand, because right after firing one
-      // is when you want to see whether the job waits, failed or is done.
-      "manual-metadata": manualMetadata,
-      "six-flags-heights": sixFlagsHeights,
-      "ride-stats": rideStats,
-      "search-console": searchConsole,
-      downtime,
-      "pcn-shadow": pcnShadow,
-      "park-day-operation": parkDayOperation,
-    };
+  constructor(private readonly moduleRef: ModuleRef) {}
+
+  onModuleInit(): void {
+    for (const { name } of BULL_QUEUE_REGISTRATIONS) {
+      if (!name) continue;
+      this.queues[name] = this.moduleRef.get<Queue>(getQueueToken(name), {
+        strict: false,
+      });
+    }
   }
 
   async counts(): Promise<QueueCounts[]> {

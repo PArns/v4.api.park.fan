@@ -210,7 +210,11 @@ All admin-auth, read-only, every query under statement limits.
 
 - `GET /v1/admin/model-comparison?days=28&region=ALL|EU|NA|ASIA|OTHER` — `ModelComparisonResponseDto`.
   Cached 2 h under the scoring run's board version (`forecast-archive:board:version`). One aggregate
-  over the window's paired rows (`GROUP BY` use case, lead, model, segment, park).
+  over the window's paired rows (`GROUP BY` use case, lead, model, segment, park). Each model
+  carries a `family` (`in_app`, `baseline`, `profile`, `daily_candidate`, `foundation`) and
+  `families` lists them in column order with their German headers, so the matrix can group its
+  columns without its own list. `in_app` means the model serves somewhere in the app; which one
+  serves a question is still that question's `servedModel`.
 - `GET /v1/admin/model-comparison/day/options?date=YYYY-MM-DD` — complete target dates with
   archived 06:00 curves (newest first, ≤ 30): a date is listed once it is over in every park's
   timezone (`lastCompleteDate`). `parks` / `rides` are the rides with a `park_hourly` or `plan_day`

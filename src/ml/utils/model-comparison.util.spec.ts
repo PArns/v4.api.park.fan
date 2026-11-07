@@ -263,6 +263,21 @@ describe("offline-model-verdicts.json — the PAR-1038 schema", () => {
   });
 });
 
+describe("cellNote — a lead without data", () => {
+  it("says the longest lead is missing instead of 0 of 14 days", () => {
+    const note = cellNote(
+      q("plan_d6_60"),
+      "pending",
+      true,
+      live({ days: 0, parks: 0, enoughData: false }),
+      null,
+      undefined,
+    );
+    expect(note).toMatch(/die längste Vorlaufzeit hat noch keine Daten\.$/);
+    expect(note).not.toMatch(/0 von 14/);
+  });
+});
+
 describe("cellNote — a live win offline does not back", () => {
   it("names whether offline disagrees or is still running", () => {
     expect(
@@ -414,6 +429,43 @@ describe("cellExpectedBy", () => {
       label: "frühestens 20.10. (noch 9 von 14 Tagen)",
     });
   });
+  it("names the longest lead when it, not the days, sets the date", () => {
+    expect(
+      cellExpectedBy(
+        "pending",
+        checks("running"),
+        live({ days: 0, enoughData: false }),
+        null,
+        "2026-11-05",
+        "2026-11-07",
+        "2026-12-22",
+      ),
+    ).toEqual({
+      date: "2026-12-22",
+      label:
+        "frühestens 22.12., wenn auch die längste Vorlaufzeit 14 Tage gemessen ist",
+    });
+  });
+  it("marks an offline run whose date has passed as overdue", () => {
+    const off = {
+      ...offline("pending"),
+      expectedBy: { date: "2026-10-26", label: "Offline-Lauf" },
+    };
+    expect(
+      cellExpectedBy(
+        "pending",
+        { offline: "running", live: "yes", visible: false },
+        null,
+        off,
+        "2026-11-05",
+        "2026-11-07",
+      ),
+    ).toEqual({
+      date: "2026-10-26",
+      label: "überfällig seit 26.10.: Offline-Lauf",
+      overdue: true,
+    });
+  });
   it("waits for parks once the days are there", () => {
     expect(
       cellExpectedBy(
@@ -461,6 +513,19 @@ describe("buildModelComparison", () => {
       today: "2026-10-15",
       generatedAt: "2026-10-15T08:00:00.000Z",
     });
+
+  it("puts every model in a listed family and every served model in the app's", () => {
+    const res = build([]);
+    const families = res.families.map((f) => f.id);
+    for (const model of res.models) expect(families).toContain(model.family);
+    for (const family of families) {
+      expect(res.models.some((m) => m.family === family)).toBe(true);
+    }
+    const familyOf = new Map(res.models.map((m) => [m.id, m.family]));
+    for (const q of res.questions) {
+      expect(familyOf.get(q.servedModel)).toBe("in_app");
+    }
+  });
 
   it("has a today cell for the served model of every question and only applicable cells", () => {
     const res = build([]);

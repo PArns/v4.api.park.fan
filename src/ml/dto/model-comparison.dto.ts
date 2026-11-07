@@ -16,10 +16,19 @@ export type ModelComparisonState =
 
 export type ModelComparisonCheck = "yes" | "no" | "running" | "open";
 
+/**
+ * What kind of model a column is, so the matrix can group its columns. Which
+ * model a question serves is still `servedModel`: `in_app` is what runs in the
+ * app somewhere, not necessarily on that question.
+ */
+export type ModelComparisonFamilyId =
+  "in_app" | "baseline" | "profile" | "daily_candidate" | "foundation";
+
 export interface ModelComparisonModelDto {
   id: string;
   /** German column label, e.g. "Wochentag-Durchschnitt". */
   label: string;
+  family: ModelComparisonFamilyId;
   /** One German sentence describing the model. */
   oneLiner: string;
 }
@@ -119,6 +128,8 @@ export interface ModelComparisonExpectedByDto {
   date: string;
   /** German, e.g. "frühestens 26.10. (noch 9 von 14 Tagen)". */
   label: string;
+  /** The date has passed and the result is still missing (an offline run is late). */
+  overdue?: true;
 }
 
 export interface ModelComparisonCellDto {
@@ -172,6 +183,8 @@ export interface ModelComparisonResponseDto {
   rule: { minDays: 14; minParks: 10 };
   models: ModelComparisonModelDto[];
   groups: { id: ModelComparisonGroupId; label: string }[];
+  /** The families in column order, with their German headers. */
+  families: { id: ModelComparisonFamilyId; label: string }[];
   questions: ModelComparisonQuestionDto[];
   /** Counts over every non-`today` cell. */
   summary: { better: number; pending: number; unclear: number; worse: number };
