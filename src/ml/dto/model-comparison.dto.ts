@@ -128,6 +128,8 @@ export interface ModelComparisonExpectedByDto {
   date: string;
   /** German, e.g. "frühestens 26.10. (noch 9 von 14 Tagen)". */
   label: string;
+  /** The date has passed and the result is still missing (an offline run is late). */
+  overdue?: true;
 }
 
 export interface ModelComparisonCellDto {

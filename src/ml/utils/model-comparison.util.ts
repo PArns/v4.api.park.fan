@@ -1062,6 +1062,10 @@ export function cellNote(
     return offline ? base : `${base} Dieses Modell wird live nicht archiviert.`;
   }
   if (!live) return `${base} Live noch keine Daten.`;
+  // poolCell gives 0 days while some lead of the cell has no data yet.
+  if (live.days === 0 && live.n > 0) {
+    return `${base} Live bisher ${fmtDe(live.diff, true)} ${unitWord(q)} gegenüber heute; die längste Vorlaufzeit hat noch keine Daten.`;
+  }
   return `${base} Live bisher ${fmtDe(live.diff, true)} ${unitWord(q)} gegenüber heute, ${live.days} von ${MIN_DAYS} Tagen je Park, ${live.parks} von ${MIN_PARKS} Parks.`;
 }
 
@@ -1085,7 +1089,16 @@ export function cellExpectedBy(
   if (state === "today") return null;
   const options: ModelComparisonExpectedByDto[] = [];
   if (checks.offline === "running" && offline?.expectedBy) {
-    options.push(offline.expectedBy);
+    const { date, label } = offline.expectedBy;
+    options.push(
+      date < today
+        ? {
+            date,
+            label: `überfällig seit ${dayMonthDe(date)}: ${label}`,
+            overdue: true,
+          }
+        : offline.expectedBy,
+    );
   }
   if (checks.live === "running") {
     const days = live?.days ?? 0;
@@ -1097,10 +1110,16 @@ export function cellExpectedBy(
       return floor && floor > x ? floor : x;
     };
     if (remaining > 0) {
-      const date = atLeast(addIsoDays(base, remaining + 1));
+      const byDays = addIsoDays(base, remaining + 1);
+      const date = atLeast(byDays);
+      // A cell's days are its slowest lead's, 0 while the longest lead has no
+      // data at all; then the floor sets the date, not the days shown.
+      const byLongestLead = !!floor && date === floor && floor > byDays;
       options.push({
         date,
-        label: `frühestens ${dayMonthDe(date)} (noch ${remaining} von ${MIN_DAYS} Tagen)`,
+        label: byLongestLead
+          ? `frühestens ${dayMonthDe(date)}, wenn auch die längste Vorlaufzeit ${MIN_DAYS} Tage gemessen ist`
+          : `frühestens ${dayMonthDe(date)} (noch ${remaining} von ${MIN_DAYS} Tagen)`,
       });
     } else {
       const date = atLeast(addIsoDays(base, 1));
