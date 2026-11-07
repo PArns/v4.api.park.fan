@@ -1,4 +1,7 @@
 import type { Queue } from "bull";
+import type { ModuleRef } from "@nestjs/core";
+import { getQueueToken } from "@nestjs/bull";
+import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 import { AdminQueueStatusService } from "./admin-queue-status.service";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -72,30 +75,28 @@ function fakeQueue(
   } as unknown as Queue;
 }
 
-/** The fifteen queues in constructor order; `queues` replaces the first ones. */
-function build(...queues: Queue[]): AdminQueueStatusService {
-  const all = Array.from(
-    { length: 15 },
-    (_, i) => queues[i] ?? fakeQueue([{ id: "1", name: "job", at: NOW }]),
+const REGISTERED = BULL_QUEUE_REGISTRATIONS.map((q) => q.name as string);
+
+/** Every registered queue, failed once; `queues` replaces some by name. */
+function build(queues: Record<string, Queue> = {}): AdminQueueStatusService {
+  const tokens = new Map(
+    REGISTERED.map((name) => [
+      getQueueToken(name),
+      queues[name] ?? fakeQueue([{ id: "1", name: "job", at: NOW }]),
+    ]),
   );
-  return new (
-    AdminQueueStatusService as unknown as new (
-      ...args: Queue[]
-    ) => AdminQueueStatusService
-  )(...all);
+  const service = new AdminQueueStatusService({
+    get: (token: string) => tokens.get(token),
+  } as unknown as ModuleRef);
+  service.onModuleInit();
+  return service;
 }
 
 describe("AdminQueueStatusService", () => {
-  it("counts the Search Console queue, whose import the admin starts by hand", async () => {
+  it("counts every registered queue, the cache warmup too", async () => {
     const names = (await build().counts()).map((queue) => queue.name);
-    expect(names).toEqual(
-      expect.arrayContaining([
-        "search-console",
-        "downtime",
-        "pcn-shadow",
-        "park-day-operation",
-      ]),
-    );
+    expect(names).toEqual(REGISTERED);
+    expect(names).toContain("live-cache-warmup");
   });
 
   it("reads the failures of every queue it counts", async () => {
@@ -110,7 +111,7 @@ describe("AdminQueueStatusService", () => {
 
   it("knows no queue it does not count", async () => {
     expect(await build().failures("toString", 3)).toBeNull();
-    expect(await build().failures("weather", 3)).toBeNull();
+    expect(await build().failures("no-such-queue", 3)).toBeNull();
   });
 
   // The admin's card on 2026-10-30: three red queues, two of them settled.
@@ -132,14 +133,14 @@ describe("AdminQueueStatusService", () => {
     [{ id: "c3", name: "fetch-all-children", at: NOW - DAY }],
   );
   const service = () =>
-    build(
+    build({
       holidays,
-      parkMetadata,
-      parkEnrichment,
-      mlTraining,
-      waitTimes,
-      children,
-    );
+      "park-metadata": parkMetadata,
+      "park-enrichment": parkEnrichment,
+      "ml-training": mlTraining,
+      "wait-times": waitTimes,
+      "children-metadata": children,
+    });
 
   it("counts a failure as open only until a later run of the same job succeeds", async () => {
     const counts = await service().counts();
@@ -162,12 +163,13 @@ describe("AdminQueueStatusService", () => {
       [{ id: "c9", name: "forecast-pcn", at: NOW - 60 * 1000 }],
       { "train-pcn": String(trainedAt) },
     );
-    const counts = await build(pcn).counts();
-    expect(counts.find((q) => q.name === "holidays")).toMatchObject({
+    const counts = await build({ "pcn-shadow": pcn }).counts();
+    expect(counts.find((q) => q.name === "pcn-shadow")).toMatchObject({
       failed: 1,
       failedOpen: 0,
     });
-    const [settled] = (await build(pcn).failures("holidays", 1)) ?? [];
+    const [settled] =
+      (await build({ "pcn-shadow": pcn }).failures("pcn-shadow", 1)) ?? [];
     expect(settled.succeededSince).toBe(new Date(trainedAt).toISOString());
   });
 
