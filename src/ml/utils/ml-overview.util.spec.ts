@@ -61,6 +61,7 @@ function matrix(
     rule: { minDays: 14, minParks: 10 },
     models: [],
     groups: [],
+    families: [],
     questions: Object.entries(cells).map(([id, c]) => ({
       id,
       group: "planner",

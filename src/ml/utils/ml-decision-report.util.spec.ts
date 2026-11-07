@@ -50,6 +50,7 @@ function greenMatrix(lastDate = "2026-12-21"): ModelComparisonResponseDto {
     rule: { minDays: 14, minParks: 10 },
     models: [],
     groups: [],
+    families: [],
     questions: [
       {
         id: "plan_d0_1",

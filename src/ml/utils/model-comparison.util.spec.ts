@@ -462,6 +462,19 @@ describe("buildModelComparison", () => {
       generatedAt: "2026-10-15T08:00:00.000Z",
     });
 
+  it("puts every model in a listed family and every served model in the app's", () => {
+    const res = build([]);
+    const families = res.families.map((f) => f.id);
+    for (const model of res.models) expect(families).toContain(model.family);
+    for (const family of families) {
+      expect(res.models.some((m) => m.family === family)).toBe(true);
+    }
+    const familyOf = new Map(res.models.map((m) => [m.id, m.family]));
+    for (const q of res.questions) {
+      expect(familyOf.get(q.servedModel)).toBe("in_app");
+    }
+  });
+
   it("has a today cell for the served model of every question and only applicable cells", () => {
     const res = build([]);
     expect(res.rule).toEqual({ minDays: 14, minParks: 10 });

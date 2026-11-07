@@ -34,6 +34,7 @@ import {
   ModelComparisonCellDto,
   ModelComparisonCheck,
   ModelComparisonExpectedByDto,
+  ModelComparisonFamilyId,
   ModelComparisonGroupId,
   ModelComparisonLeadDto,
   ModelComparisonLiveDto,
@@ -103,82 +104,96 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
   {
     id: "persist",
     label: "Aktuelle Wartezeit",
+    family: "baseline",
     oneLiner: "Was gerade angezeigt wird, einfach weitergeschrieben.",
   },
   {
     id: "pcn",
     label: "PCN",
+    family: "in_app",
     oneLiner:
       "Unser Live-Modell für die nächsten 12 Stunden. Heute in der App.",
   },
   {
     id: "served",
     label: "Tagesplaner heute",
+    family: "in_app",
     oneLiner:
       "Typischer Stundenverlauf, hochgerechnet auf das erwartete Tagesniveau. Heute in der App.",
   },
   {
     id: "h5",
     label: "H5-Profil",
+    family: "profile",
     oneLiner:
       "Typischer Verlauf in 15-Minuten-Schritten, ausgerichtet an Öffnung und Schließung.",
   },
   {
     id: "tfth5",
     label: "H5 + TFT-Niveau",
+    family: "profile",
     oneLiner:
       "H5-Verlauf, aber bei vollen Fahrgeschäften auf die TFT-Tagesprognose skaliert.",
   },
   {
     id: "peak",
     label: "Alt-Profil skaliert",
+    family: "profile",
     oneLiner:
       "Der heutige Tagesplaner-Verlauf in 15-Minuten-Schritten statt Stundenwerten.",
   },
   {
     id: "chronos",
     label: "Chronos-2",
+    family: "foundation",
     oneLiner:
       "Fertig trainiertes KI-Modell von Amazon, bekommt Öffnungszeiten, Ferien und Feiertage.",
   },
   {
     id: "tft",
     label: "TFT",
+    family: "in_app",
     oneLiner: "Unser Tagesmodell für die nächsten 60 Tage. Heute im Kalender.",
   },
   {
     id: "tft_grid",
     label: "TFT mit Lücken-Raster",
+    family: "daily_candidate",
     oneLiner:
       "Dasselbe Tagesmodell, aber es lernt auf jedem Kalendertag statt nur auf Öffnungstagen und kennt Öffnungsplan und Schulferien. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "tft_grid_drivers",
     label: "TFT mit Lücken-Raster + Treibern",
+    family: "daily_candidate",
     oneLiner:
       "Wie „TFT mit Lücken-Raster“, kennt zusätzlich längere oder kürzere Öffnungszeiten als sonst, den ersten Tag nach einer Schließung und Ferienanfang/-ende, und lernt die zeitgewichtete Tagesspitze. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "driver",
     label: "Treiber-Niveau",
+    family: "daily_candidate",
     oneLiner:
       "Der Wochentag-Wert, korrigiert um das, was man vorher weiß: Ferien, Feiertage, Brückentage und die veröffentlichten Öffnungszeiten. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "catboost",
     label: "CatBoost",
+    family: "in_app",
     oneLiner:
       "Unser ältestes Modell, liefert Stundenwerte und das Tagesniveau ab Tag 61.",
   },
   {
     id: "wkd",
     label: "Wochentag-Durchschnitt",
+    family: "baseline",
     oneLiner:
       "Was an diesem Wochentag in den letzten Wochen typisch war. Die Messlatte, die jedes Modell schlagen muss.",
   },
   {
     id: "fm",
     label: "Toto 2.0 / TiRex",
+    family: "foundation",
     oneLiner:
       "Zwei weitere fertig trainierte KI-Modelle, bisher nur offline gemessen.",
   },
@@ -192,6 +207,18 @@ export const COMPARISON_GROUPS: {
   { id: "today", label: "Heute im Tagesverlauf" },
   { id: "planner", label: "Tagesplaner" },
   { id: "calendar", label: "Kalender" },
+];
+
+/** Column order of the matrix: what serves first, as the reference. */
+export const COMPARISON_FAMILIES: {
+  id: ModelComparisonFamilyId;
+  label: string;
+}[] = [
+  { id: "in_app", label: "Heute in der App" },
+  { id: "baseline", label: "Messlatten" },
+  { id: "profile", label: "Profile" },
+  { id: "daily_candidate", label: "Neue Tagesmodelle" },
+  { id: "foundation", label: "Fertige KI-Modelle" },
 ];
 
 /**
@@ -1313,6 +1340,7 @@ export function buildModelComparison(
     rule: { minDays: MIN_DAYS, minParks: MIN_PARKS },
     models: COMPARISON_MODELS,
     groups: COMPARISON_GROUPS,
+    families: COMPARISON_FAMILIES,
     questions,
     summary,
   };
