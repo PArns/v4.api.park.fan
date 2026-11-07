@@ -9,6 +9,10 @@ import { systemHealthTool } from "./system-health.tool";
 import { queueStatusTool } from "./queue-status.tool";
 import { mlOverviewTool } from "./ml-overview.tool";
 import { mlAccuracyTool } from "./ml-accuracy.tool";
+import {
+  modelComparisonDayTool,
+  modelComparisonTool,
+} from "./model-comparison.tool";
 import { parkForecastTool } from "./park-forecast.tool";
 import { dataQualityTool } from "./data-quality.tool";
 import { duplicatesTool } from "./duplicates.tool";
@@ -54,6 +58,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   queueStatusTool,
   mlOverviewTool,
   mlAccuracyTool,
+  modelComparisonTool,
+  modelComparisonDayTool,
   dataQualityTool,
   duplicatesTool,
   retirementCandidatesTool,
