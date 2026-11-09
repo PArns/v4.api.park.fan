@@ -338,8 +338,11 @@ Parky words a breakdown as an estimate from past outages, never a promise.
 
 **Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
 park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
-included), `ridesInMaintenance` on `get_park_day` and `closedForMaintenance` on
-`get_ride_forecast`, all through `worksPeriodOn` (`curated-out-of-service.util.ts`). The system
+included), `ridesInMaintenance` on `get_park_day` and on each day of `get_park_forecast`, and
+`closedForMaintenance` on `get_ride_forecast`; `get_park_live` lists the rides in maintenance today
+with their window and those starting within 30 days (`maintenanceAhead`). All of it goes through
+`worksPeriodOn` and `worksPeriodCovering` (`curated-out-of-service.util.ts`), the admin MCP's
+`get_park` and `park_forecast` included. The system
 prompt (version 27) has it call a window maintenance unless a post says rebuild, name until when,
 hedge an estimated end, and never leave such a ride out of an answer without saying why. A ride in
 maintenance stays findable (`find_rides`, `compare_rides`); it only cannot be planned that day.

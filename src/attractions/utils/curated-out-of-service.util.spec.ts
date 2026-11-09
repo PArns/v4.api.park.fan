@@ -5,6 +5,8 @@ import {
   resolveWorksPeriod,
   resolveWorksPeriods,
   worksPeriodEndsBeforeItBegins,
+  nextWorksPeriod,
+  worksPeriodCovering,
   worksPeriodOn,
   worksPeriodsOf,
   worksPeriodsOverlap,
@@ -487,5 +489,26 @@ describe("worksPeriodOn", () => {
 
   it("serves the window without the writer that owns it", () => {
     expect(worksPeriodOn(source, "2026-12-08")).not.toHaveProperty("source");
+  });
+});
+
+describe("worksPeriodCovering / nextWorksPeriod", () => {
+  const served = [
+    { from: null, to: "2026-11-10", toUncertain: false },
+    { from: "2026-12-08", to: "2026-12-08", toUncertain: false },
+    { from: "2027-01-04", to: null, toUncertain: false },
+  ];
+
+  it("finds the served window covering a day, a start-less one included", () => {
+    expect(worksPeriodCovering(served, "2026-11-01")?.to).toBe("2026-11-10");
+    expect(worksPeriodCovering(served, "2026-12-08")?.from).toBe("2026-12-08");
+    expect(worksPeriodCovering(served, "2027-06-01")?.from).toBe("2027-01-04");
+    expect(worksPeriodCovering(served, "2026-11-20")).toBeNull();
+  });
+
+  it("names the next window to start, never a running or start-less one", () => {
+    expect(nextWorksPeriod(served, "2026-11-01")?.from).toBe("2026-12-08");
+    expect(nextWorksPeriod(served, "2026-12-08")?.from).toBe("2027-01-04");
+    expect(nextWorksPeriod(served, "2027-01-04")).toBeNull();
   });
 });

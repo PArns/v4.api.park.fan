@@ -273,8 +273,34 @@ export function worksPeriodOn(
   source: WorksPeriodSource,
   day: string,
 ): WorksPeriod | null {
-  const window = resolveWorksPeriods(source).find((w) => covers(w, day));
-  return window ? publicWorksPeriod(window) : null;
+  return worksPeriodCovering(
+    resolveWorksPeriods(source).map(publicWorksPeriod),
+    day,
+  );
+}
+
+/**
+ * {@link worksPeriodOn} for windows already served (`worksPeriods` on a park
+ * or attraction payload), where the curated columns are gone.
+ */
+export function worksPeriodCovering(
+  windows: readonly WorksPeriod[],
+  day: string,
+): WorksPeriod | null {
+  return windows.find((window) => covers(window, day)) ?? null;
+}
+
+/**
+ * The next window to start after `day` among windows already served, or null.
+ * Only a window with a start can lie ahead.
+ */
+export function nextWorksPeriod(
+  windows: readonly WorksPeriod[],
+  day: string,
+): WorksPeriod | null {
+  return (
+    windows.find((window) => window.from !== null && window.from > day) ?? null
+  );
 }
 
 /**

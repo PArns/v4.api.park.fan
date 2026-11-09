@@ -883,7 +883,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "The park right now: open or closed, today's hours and the next opening, crowd level, " +
       "average and peak waits today, weather now, only the 8 longest current standby waits, " +
-      "rides that are down and rides that have not run today, the park's pageUrl and the " +
+      "rides that are down, rides in maintenance (window: until when), maintenance starting in " +
+      "the next 30 days (maintenanceAhead), rides that have not run today, the park's pageUrl and the " +
       "editors' funFacts about it. Not the shortest waits, one ride type or a recommendation: " +
       "show_card kind rides order shortest (with type for coasters, dark rides, water or " +
       "family rides) has every waiting ride.",

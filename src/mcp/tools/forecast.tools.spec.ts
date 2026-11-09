@@ -6,6 +6,7 @@ import { MlOverviewService } from "../../admin/ml-overview.service";
 import { ForecastErrorBreakdownService } from "../../ml/services/forecast-error-breakdown.service";
 import { DataSource } from "typeorm";
 import { parkForecastTool } from "./park-forecast.tool";
+import { PlanDayService } from "../../parks/services/plan-day.service";
 import { mlAccuracyTool } from "./ml-accuracy.tool";
 
 const PARK_ID = "11111111-1111-4111-8111-111111111111";
@@ -135,6 +136,51 @@ describe("park_forecast", () => {
     ]);
     expect(out.todayHeadliners[0]).toMatchObject({ name: "Taron" });
     expect(out.servingModels.map((m: { id: string }) => m.id)).toEqual(["pcn"]);
+  });
+
+  it("names the rides a maintenance window shuts each day, none on a closed day", async () => {
+    const shut = { from: "2026-10-30", to: "2026-11-05", toUncertain: false };
+    const closedCalendar = {
+      buildCalendarResponse: jest.fn(async () => ({
+        meta: { scheduleCoverage: { from: "2026-03-01", to: "2026-11-01" } },
+        days: [
+          day("2026-10-29", { isToday: true }),
+          day("2026-10-30"),
+          day("2026-10-31", { status: "CLOSED" }),
+        ],
+      })),
+    };
+    const withMaintenance = ctxWith(
+      new Map<unknown, unknown>([
+        [ParksService, parksService],
+        [DataSource, dataSource],
+        [CalendarService, closedCalendar],
+        [MlOverviewService, overview],
+        [
+          PlanDayService,
+          {
+            maintenanceWindows: jest.fn(async () => [
+              { id: "r", name: "Raik", windows: [shut] },
+            ]),
+          },
+        ],
+      ]),
+    );
+    const input = z.object(parkForecastTool.input).parse({ park: PARK_ID });
+    const out = (await parkForecastTool.handler(
+      input as never,
+      withMaintenance,
+    )) as any;
+    expect(out.days[0].ridesInMaintenance).toBeUndefined();
+    expect(out.days[1].ridesInMaintenance).toEqual(["Raik"]);
+    expect(out.days[2].ridesInMaintenance).toBeUndefined();
+  });
+
+  it("keeps the days when the maintenance lookup fails", async () => {
+    const input = z.object(parkForecastTool.input).parse({ park: PARK_ID });
+    const out = (await parkForecastTool.handler(input as never, ctx)) as any;
+    expect(out.days).toHaveLength(2);
+    expect(out.days[1].ridesInMaintenance).toBeUndefined();
   });
 
   it("refuses more than 60 days", () => {

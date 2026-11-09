@@ -72,7 +72,9 @@ import {
 } from "../../attractions/utils/curated-attraction-facts.util";
 import {
   isCuratedOutOfService,
-  worksPeriodOn,
+  publicWorksPeriod,
+  resolveWorksPeriods,
+  worksPeriodCovering,
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
@@ -314,10 +316,27 @@ export class PlanDayService {
   ): Promise<Array<{ id: string; name: string; window: WorksPeriod }>> {
     if (dateStr < formatInParkTimezone(new Date(), park.timezone)) return [];
     const out: Array<{ id: string; name: string; window: WorksPeriod }> = [];
+    for (const ride of await this.maintenanceWindows(park)) {
+      const window = worksPeriodCovering(ride.windows, dateStr);
+      if (window) out.push({ id: ride.id, name: ride.name, window });
+    }
+    return out;
+  }
+
+  /**
+   * Every ride of the park that has a curated maintenance or works window, with
+   * all its windows as a payload serves them, by name: one query for a caller
+   * that asks about many days, such as `park_forecast`.
+   */
+  async maintenanceWindows(
+    park: Park,
+  ): Promise<Array<{ id: string; name: string; windows: WorksPeriod[] }>> {
+    const out: Array<{ id: string; name: string; windows: WorksPeriod[] }> = [];
     for (const attraction of await this.attractions(park)) {
-      const window = worksPeriodOn(attraction, dateStr);
-      if (window)
-        out.push({ id: attraction.id, name: attraction.name, window });
+      const windows = resolveWorksPeriods(attraction).map(publicWorksPeriod);
+      if (windows.length > 0) {
+        out.push({ id: attraction.id, name: attraction.name, windows });
+      }
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
