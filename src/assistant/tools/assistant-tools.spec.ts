@@ -1094,6 +1094,71 @@ describe("planner tools", () => {
     expect(result.action).toEqual({ park: plannerPark, date: DATE, ...action });
   });
 
+  describe("plan_add_rides and maintenance", () => {
+    const TARON = "66666666-6666-4666-8666-666666666666";
+    const RAIK = "77777777-7777-4777-8777-777777777777";
+    const rideRow = (id: string, slug: string, name: string, periods = []) => ({
+      id,
+      slug,
+      name,
+      park: { slug: "phantasialand", timezone: "Europe/Berlin" },
+      curatedOutOfServiceFrom: null,
+      curatedOutOfServiceTo: null,
+      curatedOutOfServicePeriods: periods,
+    });
+    const shut = { from: dayAhead(1), to: dayAhead(30), toUncertain: false };
+    const add = (rideIds: string[]) =>
+      runAssistantTool(
+        "plan_add_rides",
+        { park: PARK_ID, date: DATE, rideIds },
+        {
+          ...context(
+            new Map<unknown, unknown>([
+              ...providers,
+              [
+                DataSource,
+                {
+                  getRepository: () => ({
+                    find: jest.fn(async () => [
+                      rideRow(TARON, "taron", "Taron"),
+                      rideRow(RAIK, "raik", "Raik", [shut] as never),
+                    ]),
+                  }),
+                },
+              ],
+            ]),
+          ),
+          planner,
+        },
+        jest.fn(),
+      );
+
+    it("leaves a ride in maintenance out and says until when", async () => {
+      const result = await add([TARON, RAIK]);
+      expect(result.isError).toBeFalsy();
+      expect(result.action).toEqual({
+        type: "planner_add_rides",
+        park: plannerPark,
+        date: DATE,
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: ["Taron"],
+        notAdded: [{ name: "Raik", reason: "maintenance", window: shut }],
+      });
+    });
+
+    it("sends no planner change when every ride is in maintenance", async () => {
+      const result = await add([RAIK]);
+      expect(result.isError).toBeFalsy();
+      expect(result.action).toBeUndefined();
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: [],
+        notAdded: [{ name: "Raik" }],
+      });
+    });
+  });
+
   it("plan_trip reserves each day once, in order", async () => {
     const later = dayAhead(5);
     const result = await call("plan_trip", { dates: [later, DATE, later] });
@@ -1578,6 +1643,40 @@ describe("get_ride › today / get_park_day", () => {
       opensAtConfidence: "high",
       runsOnWeekdays: [1, 2, 3, 4, 5, 6, 7],
     });
+  });
+
+  it("names the rides a maintenance window shuts that day", async () => {
+    const window = { from: "2026-11-01", to: "2026-11-20", toUncertain: false };
+    const ridesInMaintenance = jest.fn(async () => [
+      { id: "88888888-8888-4888-8888-888888888888", name: "Raik", window },
+    ]);
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      new Map<unknown, unknown>([
+        ...providers(),
+        [
+          PlanDayService,
+          { buildPlanDay: jest.fn(async () => plan), ridesInMaintenance },
+        ],
+      ]),
+    );
+    expect(json.ridesInMaintenance).toEqual([
+      { id: "88888888-8888-4888-8888-888888888888", name: "Raik", window },
+    ]);
+    expect(json.rides.map((ride: { name: string }) => ride.name)).toEqual([
+      "Taron",
+    ]);
+  });
+
+  it("keeps the day when the maintenance lookup fails", async () => {
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      providers(),
+    );
+    expect(json.ridesInMaintenance).toBeUndefined();
+    expect(json.rides).toHaveLength(1);
   });
 
   it("lays out a planned day with each ride's opening and shortest hour", async () => {

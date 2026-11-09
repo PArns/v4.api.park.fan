@@ -261,6 +261,23 @@ export function isCuratedOutOfService(
 }
 
 /**
+ * The window that covers a park-local day, as a payload serves it, or null.
+ *
+ * {@link isCuratedOutOfService} answers whether; this answers which, so a
+ * caller can say until when. The assistant names it for a ride on the day it
+ * is asked about, and refuses to plan the ride into that day.
+ *
+ * @param day - Park-local `YYYY-MM-DD`.
+ */
+export function worksPeriodOn(
+  source: WorksPeriodSource,
+  day: string,
+): WorksPeriod | null {
+  const window = resolveWorksPeriods(source).find((w) => covers(w, day));
+  return window ? publicWorksPeriod(window) : null;
+}
+
+/**
  * SQL twin of {@link isCuratedOutOfService}, for the reconstruction and for any
  * catalogue-wide query that never loads a row.
  *

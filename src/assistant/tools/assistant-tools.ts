@@ -39,6 +39,7 @@ import { Restaurant } from "../../restaurants/entities/restaurant.entity";
 import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { worksPeriodOn } from "../../attractions/utils/curated-out-of-service.util";
 import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
@@ -1041,8 +1042,10 @@ export const ASSISTANT_TOOLS = [
       "best visit times (bestVisitTimesToday: the slots our intraday forecast rates optimal or " +
       "good, renewed every 15 minutes), its pageUrl, today: opensAt (when the ride usually " +
       "starts, later than the park's gates; absent means not known, never 'with the park') and " +
-      "runsOnWeekdays (ISO, Monday 1), and, while it is not running, reopening: why (breakdown, " +
-      "works, season or unknown) and what is known about its return.",
+      "runsOnWeekdays (ISO, Monday 1), worksPeriods (every planned maintenance or works window: " +
+      "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
+      "the end is our estimate; past windows stay on the list), and, while it is not running, " +
+      "reopening: why (breakdown, works, season or unknown) and what is known about its return.",
     input: z.object({
       rideId: z
         .string()
@@ -1200,7 +1203,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "The predicted standby wait of one ride per hour of a day (park local hours), the hour with " +
       'the shortest predicted wait, and how far ahead the forecast is (tier). For "when is the ' +
-      'queue for X shortest". Today by default.',
+      'queue for X shortest". Today by default. A day a maintenance window shuts the ride has ' +
+      "no hours and says closedForMaintenance with the window instead.",
     input: z.object({
       rideId: z
         .string()
@@ -1223,6 +1227,9 @@ export const ASSISTANT_TOOLS = [
       if (!ride?.park)
         throw new McpToolError(`No ride ${rideId}; try find_rides`);
       const day = date ?? getCurrentDateInTimezone(ride.park.timezone);
+      // The plan leaves a ride out on a day a works window covers; this says why its hours are
+      // empty, so "no forecast" is never what the visitor hears.
+      const maintenance = worksPeriodOn(ride, day);
       const plan = await ctx.get(PlanDayService).buildPlanDay(ride.park, day);
       const tz = ride.park.timezone;
       const isToday = day === getCurrentDateInTimezone(tz);
@@ -1256,6 +1263,7 @@ export const ASSISTANT_TOOLS = [
               waitMinutes: best.wait,
             }
           : null,
+        ...(maintenance && { closedForMaintenance: maintenance }),
       };
     },
   }),
@@ -1270,7 +1278,8 @@ export const ASSISTANT_TOOLS = [
       "weekdays it runs on, the predicted peak and the hour with the shortest wait; and the " +
       "shows with their times (projected: what the show did on a recent matching day, not a " +
       'promise). For "what is the day like", "which rides open later", "a plan for Saturday". ' +
-      "Today by default.",
+      "Rides a maintenance or works window shuts that day are not in rides but in " +
+      "ridesInMaintenance, each with its window. Today by default.",
     input: z.object({ park: parkRef, date: planDate.optional() }),
     run: async ({ park: reference, date }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
@@ -1280,7 +1289,14 @@ export const ASSISTANT_TOOLS = [
         throw new McpToolError(`No park ${reference}; try search_parks`);
       const tz = park.timezone;
       const day = date ?? getCurrentDateInTimezone(tz);
-      const plan = await ctx.get(PlanDayService).buildPlanDay(park, day);
+      const planDays = ctx.get(PlanDayService);
+      // A failed lookup costs the list, never the day.
+      const [plan, inMaintenance] = await Promise.all([
+        planDays.buildPlanDay(park, day),
+        Promise.resolve()
+          .then(() => planDays.ridesInMaintenance(park, day))
+          .catch(() => []),
+      ]);
       const { openHour, closeHour, ...context } = plan.context;
       const currentHour =
         day === getCurrentDateInTimezone(tz)
@@ -1315,6 +1331,13 @@ export const ASSISTANT_TOOLS = [
         }),
         ...(plan.ridesUnavailable && {
           ridesUnavailable: plan.ridesUnavailable,
+        }),
+        ...(inMaintenance.length > 0 && {
+          ridesInMaintenance: inMaintenance.map((ride) => ({
+            id: ride.id,
+            name: ride.name,
+            window: ride.window,
+          })),
         }),
         shows: plan.shows.map((show) => ({
           name: show.showName,
@@ -2006,7 +2029,9 @@ export const ASSISTANT_TOOLS = [
     description:
       "Add rides to the user's trip planner for one park and day, in the order given; the " +
       "planner places them after what is already planned. Ride ids " +
-      "come from find_rides or get_park_live and must belong to the park.",
+      "come from find_rides or get_park_live and must belong to the park. A ride a maintenance " +
+      "window shuts that day is not added: it comes back in notAdded with the window, to tell " +
+      "the user.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2019,11 +2044,35 @@ export const ASSISTANT_TOOLS = [
     run: async ({ park: reference, date, rideIds }, ctx) => {
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
-      const rides = await parkRides(mcp(ctx), park.slug, rideIds);
-      return new ActionOutcome(
-        { type: "planner_add_rides", park, date, rides },
-        { added: rides.map((ride) => ride.name), park: park.name, date },
+      const found = await parkRides(mcp(ctx), park.slug, rideIds, date);
+      // The planner refuses a ride in maintenance on that day by every other way in, so this
+      // way in does too, and says which and until when instead of reporting it added.
+      const rides = found
+        .filter((ride) => !ride.maintenance)
+        .map(({ slug, name }) => ({ slug, name }));
+      const notAdded = found.flatMap((ride) =>
+        ride.maintenance
+          ? [
+              {
+                name: ride.name,
+                reason: "maintenance",
+                window: ride.maintenance,
+              },
+            ]
+          : [],
       );
+      const result = {
+        added: rides.map((ride) => ride.name),
+        ...(notAdded.length > 0 && { notAdded }),
+        park: park.name,
+        date,
+      };
+      return rides.length > 0
+        ? new ActionOutcome(
+            { type: "planner_add_rides", park, date, rides },
+            result,
+          )
+        : result;
     },
   }),
   tool({

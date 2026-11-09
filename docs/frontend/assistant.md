@@ -166,8 +166,11 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 `find_restaurants`,
 `get_ride` (with the ride profile below, and `today`: the ride's own `opensAt` and
 `runsOnWeekdays` from `PlanDayService`), `compare_rides`, `get_ride_forecast` (per hour, from
-`PlanDayService`), `get_park_day` (one day as the planner builds it: hours, crowd, weather,
-holidays, early entry, each ride's opening, peak and shortest hour, the shows), `get_park_forecast` (at most 31
+`PlanDayService`; on a day a maintenance window shuts the ride, no hours and
+`closedForMaintenance` with the window), `get_park_day` (one day as the planner builds it: hours,
+crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
+`ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
+from `PlanDayService.ridesInMaintenance`), `get_park_forecast` (at most 31
 days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
@@ -260,7 +263,9 @@ park that signs them in inches, and the prompt has Parky say them in inches ther
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
 park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs), `request_location` (the share
-buttons), `plan_day`, `plan_add_rides` (rides of that park only), `plan_add_block`,
+buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
+that day is not added and comes back in `notAdded` with its window, and with none left no action
+is sent), `plan_add_block`,
 `plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner"), `switch_language`
 (`switch_locale` with the locale; the widget carries it out once the answer is complete) and
 `submit_feedback` (`feedback_sent`, a chip under the answer).
@@ -330,6 +335,14 @@ park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query be
 `nextSchedule`) after the last closed day or from the first of the next season month; null when
 the calendar has none yet, absent when nothing says when the closure ends.
 Parky words a breakdown as an estimate from past outages, never a promise.
+
+**Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
+park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
+included), `ridesInMaintenance` on `get_park_day` and `closedForMaintenance` on
+`get_ride_forecast`, all through `worksPeriodOn` (`curated-out-of-service.util.ts`). The system
+prompt (version 27) has it call a window maintenance unless a post says rebuild, name until when,
+hedge an estimated end, and never leave such a ride out of an answer without saying why. A ride in
+maintenance stays findable (`find_rides`, `compare_rides`); it only cannot be planned that day.
 
 ### Favourites in the chat
 

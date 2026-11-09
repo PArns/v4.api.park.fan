@@ -5,6 +5,7 @@ import {
   resolveWorksPeriod,
   resolveWorksPeriods,
   worksPeriodEndsBeforeItBegins,
+  worksPeriodOn,
   worksPeriodsOf,
   worksPeriodsOverlap,
 } from "./curated-out-of-service.util";
@@ -452,5 +453,39 @@ describe("the window's owner (PAR-1245)", () => {
       "source",
     );
     expect(resolveWorksPeriod(source, null)).not.toHaveProperty("source");
+  });
+});
+
+describe("worksPeriodOn", () => {
+  const source = {
+    curatedOutOfServicePeriods: [
+      { from: "2027-01-04", to: "2027-03-25", toUncertain: false },
+      {
+        from: "2026-12-08",
+        to: "2026-12-08",
+        toUncertain: false,
+        source: "efteling-maintenance-calendar",
+      },
+    ],
+  };
+
+  it("names the window covering the day, both ends inclusive", () => {
+    expect(worksPeriodOn(source, "2027-01-04")).toEqual({
+      from: "2027-01-04",
+      to: "2027-03-25",
+      toUncertain: false,
+    });
+    expect(worksPeriodOn(source, "2027-03-25")?.to).toBe("2027-03-25");
+    expect(worksPeriodOn(source, "2026-12-08")?.from).toBe("2026-12-08");
+  });
+
+  it("answers null between windows and outside them", () => {
+    expect(worksPeriodOn(source, "2026-12-09")).toBeNull();
+    expect(worksPeriodOn(source, "2027-03-26")).toBeNull();
+    expect(worksPeriodOn({}, "2027-01-10")).toBeNull();
+  });
+
+  it("serves the window without the writer that owns it", () => {
+    expect(worksPeriodOn(source, "2026-12-08")).not.toHaveProperty("source");
   });
 });
