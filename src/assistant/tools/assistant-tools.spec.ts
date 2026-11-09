@@ -1580,6 +1580,11 @@ describe("reopenSearchFrom", () => {
 });
 
 describe("get_ride › today / get_park_day", () => {
+  // The fixture is 7 November 2026, and `planDate` refuses a day more than two days back, so the
+  // clock is the fixture's: a fixed date in the input stops being valid two days after it is written.
+  beforeEach(() => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-07T08:00:00Z"));
+  });
   afterEach(() => jest.restoreAllMocks());
 
   const RIDE = "55555555-5555-4555-8555-555555555555";
