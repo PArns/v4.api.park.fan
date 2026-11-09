@@ -261,6 +261,99 @@ export function isCuratedOutOfService(
 }
 
 /**
+ * The window that covers a park-local day, as a payload serves it, or null.
+ *
+ * {@link isCuratedOutOfService} answers whether; this answers which, so a
+ * caller can say until when. The assistant names it for a ride on the day it
+ * is asked about, and refuses to plan the ride into that day.
+ *
+ * @param day - Park-local `YYYY-MM-DD`.
+ */
+export function worksPeriodOn(
+  source: WorksPeriodSource,
+  day: string,
+): WorksPeriod | null {
+  return worksPeriodCovering(
+    resolveWorksPeriods(source).map(publicWorksPeriod),
+    day,
+  );
+}
+
+/**
+ * {@link worksPeriodOn} for windows already served (`worksPeriods` on a park
+ * or attraction payload), where the curated columns are gone.
+ */
+export function worksPeriodCovering(
+  windows: readonly WorksPeriod[],
+  day: string,
+): WorksPeriod | null {
+  return windows.find((window) => covers(window, day)) ?? null;
+}
+
+/** One ride's curated windows, as a park-wide read hands them out. */
+export interface RideWorksPeriods {
+  id: string;
+  name: string;
+  windows: WorksPeriod[];
+}
+
+/**
+ * Every ride among `attractions` that has a curated window, with its windows
+ * as a payload serves them, by name. The one place a park's rows become that
+ * list, whichever query loaded them.
+ */
+export function rideWorksPeriods(
+  attractions: readonly (WorksPeriodSource & { id: string; name: string })[],
+): RideWorksPeriods[] {
+  const out: RideWorksPeriods[] = [];
+  for (const attraction of attractions) {
+    const windows = resolveWorksPeriods(attraction).map(publicWorksPeriod);
+    if (windows.length > 0) {
+      out.push({ id: attraction.id, name: attraction.name, windows });
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * `predictions` without the rows of a ride that a curated window shuts on the
+ * row's day.
+ *
+ * The model forecasts every ride for every day and has never heard of a
+ * window, so a ride in maintenance arrives with an ordinary wait. Left in, it
+ * counts towards a day's average and crowd level and can head the day's
+ * headliner list while the same day lists it as closed.
+ *
+ * @param dayOf - The row's park-local `YYYY-MM-DD`, read the way the caller
+ *   already reads it, so the filter and the grouping agree on the day.
+ */
+export function withoutRidesInMaintenance<T extends { attractionId: string }>(
+  predictions: T[],
+  rides: readonly Pick<RideWorksPeriods, "id" | "windows">[],
+  dayOf: (prediction: T) => string,
+): T[] {
+  if (rides.length === 0) return predictions;
+  const windowsByRide = new Map(rides.map((ride) => [ride.id, ride.windows]));
+  return predictions.filter((prediction) => {
+    const windows = windowsByRide.get(prediction.attractionId);
+    return !windows || !worksPeriodCovering(windows, dayOf(prediction));
+  });
+}
+
+/**
+ * The next window to start after `day` among windows already served, or null.
+ * Only a window with a start can lie ahead.
+ */
+export function nextWorksPeriod(
+  windows: readonly WorksPeriod[],
+  day: string,
+): WorksPeriod | null {
+  return (
+    windows.find((window) => window.from !== null && window.from > day) ?? null
+  );
+}
+
+/**
  * SQL twin of {@link isCuratedOutOfService}, for the reconstruction and for any
  * catalogue-wide query that never loads a row.
  *

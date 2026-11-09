@@ -10,6 +10,10 @@ import {
   closedRideParkPageCutoff,
   isOnParkPage,
 } from "./services/attraction-retirement.service";
+import {
+  rideWorksPeriods,
+  type RideWorksPeriods,
+} from "./utils/curated-out-of-service.util";
 
 @Injectable()
 export class AttractionsService {
@@ -49,6 +53,26 @@ export class AttractionsService {
       result.set(row.id, row.name);
     }
     return result;
+  }
+
+  /**
+   * Every ride of a park that has a curated maintenance or works window, with
+   * its windows, by name. One query for a caller that asks about many days,
+   * such as the calendar dropping those rides from a day's forecast.
+   */
+  async getMaintenanceWindows(parkId: string): Promise<RideWorksPeriods[]> {
+    const rows = await this.attractionRepository.find({
+      where: { parkId, retiredAt: IsNull() },
+      select: {
+        id: true,
+        name: true,
+        curatedOutOfServiceFrom: true,
+        curatedOutOfServiceTo: true,
+        curatedOutOfServiceToUncertain: true,
+        curatedOutOfServicePeriods: true,
+      },
+    });
+    return rideWorksPeriods(rows);
   }
 
   /**

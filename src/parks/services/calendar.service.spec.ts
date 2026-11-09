@@ -1078,7 +1078,10 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
         },
         {
           provide: AttractionsService,
-          useValue: { getNamesByIds: jest.fn().mockResolvedValue(new Map()) },
+          useValue: {
+            getNamesByIds: jest.fn().mockResolvedValue(new Map()),
+            getMaintenanceWindows: jest.fn().mockResolvedValue([]),
+          },
         },
         {
           provide: REDIS_CLIENT,
@@ -1476,6 +1479,109 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
 
       const rated = await buildDay(day, [row("h1", day, 50, "high", "tft")]);
       expect(rated.recommendation).toBeDefined();
+    });
+  });
+
+  describe("a headliner in maintenance on the day (PAR-1255)", () => {
+    const day = (() => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + 10);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    const row = (attractionId: string, wait: number) => ({
+      attractionId,
+      predictedTime: `${day}T12:00:00`,
+      predictedWaitTime: wait,
+      predictionType: "daily",
+      confidence: 0.8,
+      crowdLevel: "moderate",
+      baseline: 0,
+      modelVersion: "tft",
+    });
+
+    const buildDay = async (windows: unknown[] | Error) => {
+      const svc = service as any;
+      svc.parksService.getSchedule.mockResolvedValue([
+        {
+          date: day,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(`${day}T09:00:00Z`),
+          closingTime: new Date(`${day}T18:00:00Z`),
+        },
+      ]);
+      // The model forecasts the ride in maintenance like any other day.
+      svc.mlService.getServingDailyPredictions.mockResolvedValue({
+        predictions: [row("h1", 90), row("h2", 30)],
+      });
+      svc.analyticsService.getHeadlinerAttractions.mockResolvedValue([
+        { attractionId: "h1" },
+        { attractionId: "h2" },
+      ]);
+      svc.analyticsService.getTypicalDayPeakFromCache.mockResolvedValue(30);
+      svc.attractionsService.getNamesByIds.mockResolvedValue(
+        new Map([
+          ["h1", "Droomvlucht"],
+          ["h2", "Python"],
+        ]),
+      );
+      if (windows instanceof Error) {
+        svc.attractionsService.getMaintenanceWindows.mockRejectedValue(windows);
+      } else {
+        svc.attractionsService.getMaintenanceWindows.mockResolvedValue(windows);
+      }
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+      return response.days[0];
+    };
+
+    it("leaves it out of the day's average, level and headliner list", async () => {
+      const built = await buildDay([
+        {
+          id: "h1",
+          name: "Droomvlucht",
+          windows: [{ from: day, to: day, toUncertain: false }],
+        },
+      ]);
+      // Python alone: 30 / 30 = 100 % → moderate, not (90 + 30) / 2 = 60 → 200 %.
+      expect(built.crowdLevel).toBe("moderate");
+      expect(built.headlinerForecast?.avgWait).toBe(30);
+      expect(built.headlinerForecast?.rides.map((r) => r.name)).toEqual([
+        "Python",
+      ]);
+    });
+
+    it("keeps it on a day its window does not cover", async () => {
+      const built = await buildDay([
+        {
+          id: "h1",
+          name: "Droomvlucht",
+          windows: [
+            { from: "2020-01-01", to: "2020-01-31", toUncertain: false },
+          ],
+        },
+      ]);
+      expect(built.headlinerForecast?.avgWait).toBe(60);
+      expect(built.headlinerForecast?.rides[0].name).toBe("Droomvlucht");
+    });
+
+    it("still builds the day when the windows cannot be read", async () => {
+      const built = await buildDay(new Error("db down"));
+      expect(built.headlinerForecast?.avgWait).toBe(60);
     });
   });
 

@@ -7,6 +7,11 @@ import { CalendarService } from "../../parks/services/calendar.service";
 import { MlOverviewService } from "../../admin/ml-overview.service";
 import { parseDateRange } from "../../common/utils/date-parsing.util";
 import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
+import { PlanDayService } from "../../parks/services/plan-day.service";
+import {
+  worksPeriodCovering,
+  type WorksPeriod,
+} from "../../attractions/utils/curated-out-of-service.util";
 
 const LOCAL_ISO = "yyyy-MM-dd'T'HH:mmXXX";
 const HEADLINERS = 5;
@@ -20,8 +25,28 @@ function localTime(value: string | undefined, timezone: string) {
     : formatInTimeZone(at, timezone, LOCAL_ISO);
 }
 
-export function compactDay(day: CalendarDay, timezone: string) {
+/** The rides a park has curated maintenance or works windows for, with them. */
+type MaintenanceRides = ReadonlyArray<{
+  name: string;
+  windows: readonly WorksPeriod[];
+}>;
+
+/**
+ * One calendar day for a tool. With `maintenance`, the rides a window shuts
+ * that day, by name; a closed day lists none, since nothing runs anyway.
+ */
+export function compactDay(
+  day: CalendarDay,
+  timezone: string,
+  maintenance: MaintenanceRides = [],
+) {
   const weather = day.weather;
+  const inMaintenance =
+    day.status === "CLOSED"
+      ? []
+      : maintenance
+          .filter((ride) => worksPeriodCovering(ride.windows, day.date))
+          .map((ride) => ride.name);
   return {
     date: day.date,
     status: day.status,
@@ -47,6 +72,7 @@ export function compactDay(day: CalendarDay, timezone: string) {
     events: day.events?.length
       ? day.events.map((event) => `${event.name} (${event.type})`)
       : undefined,
+    ridesInMaintenance: inMaintenance.length > 0 ? inMaintenance : undefined,
   };
 }
 
@@ -58,7 +84,8 @@ export const parkForecastTool = defineMcpTool({
     "timezone the opening hours (or closed), the crowd level as the calendar rates it (the day's " +
     "peak against a typical day's peak), the expected peak wait of the headliners, weather " +
     "(`basis: climate_normal` is the long-run average, not a forecast) and holidays, school " +
-    "breaks and bridge days; today's hourly forecast (expected level and wait per hour) and " +
+    "breaks and bridge days, the rides a maintenance or works window shuts that day " +
+    "(ridesInMaintenance, by name); today's hourly forecast (expected level and wait per hour) and " +
     "today's headliner waits; and which models serve which horizon. Days after " +
     "`scheduleCoverage.to` have no published hours: their status is inferred, read it as " +
     "unknown. For the live state use get_park; for how wrong the forecasts are use ml_accuracy. " +
@@ -89,7 +116,7 @@ export const parkForecastTool = defineMcpTool({
       defaultToDaysAhead: days - 1,
     });
     // `today` carries the hourly curve; the calendar caches months per variant.
-    const [calendar, overview] = await Promise.all([
+    const [calendar, overview, maintenance] = await Promise.all([
       ctx
         .get(CalendarService)
         .buildCalendarResponse(park, fromDate, toDate, "today"),
@@ -97,6 +124,10 @@ export const parkForecastTool = defineMcpTool({
         .get(MlOverviewService)
         .getOverview()
         .catch(() => null),
+      // A failed lookup costs the days their maintenance list, never the days.
+      Promise.resolve()
+        .then(() => ctx.get(PlanDayService).maintenanceWindows(park))
+        .catch(() => []),
     ]);
 
     const today = calendar.days.find((day) => day.isToday);
@@ -108,7 +139,9 @@ export const parkForecastTool = defineMcpTool({
         pageUrl: parkPageUrl(park),
       },
       scheduleCoverage: calendar.meta.scheduleCoverage,
-      days: calendar.days.map((day) => compactDay(day, park.timezone)),
+      days: calendar.days.map((day) =>
+        compactDay(day, park.timezone, maintenance),
+      ),
       todayHourly: today?.hourly?.length
         ? today.hourly.map((hour) => ({
             hour: hour.hour,

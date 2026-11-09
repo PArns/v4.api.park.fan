@@ -70,7 +70,13 @@ import {
   isCurrentlyInSeason,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
-import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  isCuratedOutOfService,
+  rideWorksPeriods,
+  worksPeriodCovering,
+  type RideWorksPeriods,
+  type WorksPeriod,
+} from "../../attractions/utils/curated-out-of-service.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
 
 /**
@@ -295,6 +301,35 @@ export class PlanDayService {
 
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
     return this.build(park, dateStr, null);
+  }
+
+  /**
+   * The rides a curated maintenance or works window shuts on `dateStr`, with
+   * the window, by name. {@link buildPlanDay} leaves them out of `rides` and
+   * the payload does not say why; the assistant asks this to name them and to
+   * refuse planning them into that day. Not applied to the past, like the
+   * filter it mirrors (see {@link cannotOpenOn}).
+   */
+  async ridesInMaintenance(
+    park: Park,
+    dateStr: string,
+  ): Promise<Array<{ id: string; name: string; window: WorksPeriod }>> {
+    if (dateStr < formatInParkTimezone(new Date(), park.timezone)) return [];
+    const out: Array<{ id: string; name: string; window: WorksPeriod }> = [];
+    for (const ride of await this.maintenanceWindows(park)) {
+      const window = worksPeriodCovering(ride.windows, dateStr);
+      if (window) out.push({ id: ride.id, name: ride.name, window });
+    }
+    return out;
+  }
+
+  /**
+   * Every ride of the park that has a curated maintenance or works window, with
+   * all its windows as a payload serves them, by name: one query for a caller
+   * that asks about many days, such as `park_forecast`.
+   */
+  async maintenanceWindows(park: Park): Promise<RideWorksPeriods[]> {
+    return rideWorksPeriods(await this.attractions(park));
   }
 
   /**
@@ -2581,6 +2616,7 @@ export class PlanDayService {
         curatedSeasonMonths: true,
         curatedOutOfServiceFrom: true,
         curatedOutOfServiceTo: true,
+        curatedOutOfServiceToUncertain: true,
         curatedOutOfServicePeriods: true,
       },
     });

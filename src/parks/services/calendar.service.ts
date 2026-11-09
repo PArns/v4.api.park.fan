@@ -51,6 +51,10 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { PredictionDto } from "../../ml/dto";
 import { predictionLocalDate } from "../../ml/utils/prediction-local-date.util";
+import {
+  withoutRidesInMaintenance,
+  type RideWorksPeriods,
+} from "../../attractions/utils/curated-out-of-service.util";
 import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -281,22 +285,43 @@ export class CalendarService {
         toStr,
         park.timezone,
       ),
+      this.attractionsService
+        .getMaintenanceWindows(park.id)
+        .catch((err: Error) => {
+          this.logger.warn(
+            `Maintenance windows unavailable for ${park.slug}: ${err.message}`,
+          );
+          return [] as RideWorksPeriods[];
+        }),
     ]);
 
     const schedules = results[0] as ScheduleEntry[];
     const weatherData = results[1] as WeatherData[];
-    const mlPredictions = results[2] as { predictions: PredictionDto[] };
     const holidays = results[3] as HolidayRow[];
     const operatingDateRange = results[4] as {
       minDate: string | null;
       maxDate: string | null;
     };
-    const hourlyPredictionsList = results[5] as PredictionDto[];
     const isSeasonal = results[6] as boolean;
     const derivedHistoricalHours = results[7] as Map<
       string,
       { openingTime: string; closingTime: string }
     >;
+    // A ride in maintenance leaves the day's forecast before anything is
+    // aggregated from it; the day still names it, under the window.
+    const maintenance = results[8] as RideWorksPeriods[];
+    const mlPredictions = {
+      predictions: withoutRidesInMaintenance(
+        (results[2] as { predictions: PredictionDto[] }).predictions,
+        maintenance,
+        (p) => p.predictedTime.split("T")[0],
+      ),
+    };
+    const hourlyPredictionsList = withoutRidesInMaintenance(
+      results[5] as PredictionDto[],
+      maintenance,
+      (p) => predictionLocalDate(p.predictedTime, park.timezone),
+    );
 
     // Derive booleans / range info from operatingDateRange
     const parkHasOperatingSchedule =

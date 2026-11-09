@@ -6,6 +6,11 @@ import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import {
+  worksPeriodOn,
+  type WorksPeriod,
+} from "../../attractions/utils/curated-out-of-service.util";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
 
 /**
@@ -533,12 +538,18 @@ export async function planPark(ctx: McpToolContext, reference: string) {
   return isAmbiguous(found) ? found : plannerPark(found);
 }
 
-/** The rides of one park by id, in the order asked, refusing ids of other parks. */
+/**
+ * The rides of one park by id, in the order asked, refusing ids of other parks. With a park-local
+ * `date`, each ride also carries the maintenance or works window that shuts it that day.
+ */
 export async function parkRides(
   ctx: McpToolContext,
   parkSlug: string,
   ids: string[],
-): Promise<Array<{ slug: string; name: string }>> {
+  date?: string,
+): Promise<
+  Array<{ slug: string; name: string; maintenance: WorksPeriod | null }>
+> {
   const rides = await ctx
     .get(DataSource)
     .getRepository(Attraction)
@@ -552,6 +563,14 @@ export async function parkRides(
     if (!ride || ride.park?.slug !== parkSlug) {
       throw new McpToolError(`Ride ${id} is not in this park; use find_rides`);
     }
-    return { slug: ride.slug, name: ride.name };
+    return {
+      slug: ride.slug,
+      name: ride.name,
+      // Not on a day already over, like the plan's own filter: yesterday's plan records what ran.
+      maintenance:
+        date && date >= getCurrentDateInTimezone(ride.park.timezone)
+          ? worksPeriodOn(ride, date)
+          : null,
+    };
   });
 }

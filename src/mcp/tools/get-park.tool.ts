@@ -6,7 +6,14 @@ import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { Park } from "../../parks/entities/park.entity";
 import { formatInTimeZone } from "date-fns-tz";
-import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+} from "../../common/utils/date.util";
+import {
+  nextWorksPeriod,
+  worksPeriodCovering,
+} from "../../attractions/utils/curated-out-of-service.util";
 import type {
   ParkAttractionDto,
   ParkWithAttractionsDto,
@@ -15,6 +22,9 @@ import type {
 function rideStatus(ride: ParkAttractionDto): string {
   return ride.effectiveStatus ?? ride.status ?? "UNKNOWN";
 }
+
+/** How far ahead `maintenanceAhead` looks for a window about to start. */
+const MAINTENANCE_AHEAD_DAYS = 30;
 
 function standbyWait(ride: ParkAttractionDto): number | null {
   const standby = ride.queues?.find((queue) => queue.queueType === "STANDBY");
@@ -30,6 +40,10 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
   }
   const statistics = dto.analytics?.statistics;
   const today = getCurrentDateInTimezone(dto.timezone);
+  const aheadUntil = addIsoDays(today, MAINTENANCE_AHEAD_DAYS);
+  // The curated window running today, which a feed's CLOSED does not tell apart from a breakdown.
+  const windowToday = (ride: ParkAttractionDto) =>
+    worksPeriodCovering(ride.worksPeriods ?? [], today);
 
   return {
     id: dto.id,
@@ -101,16 +115,34 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
           signal: ride.outage?.signal ?? null,
           operatingMinutesDown: ride.outage?.estimate?.elapsedMinutes ?? null,
         })),
-      // REFURBISHMENT rides, with the same since-when as `down`.
+      // REFURBISHMENT rides with the same since-when as `down`, and rides a curated window shuts
+      // today with that window, which says until when.
       maintenance: rides
-        .filter((ride) => rideStatus(ride) === "REFURBISHMENT")
+        .filter(
+          (ride) =>
+            rideStatus(ride) === "REFURBISHMENT" || windowToday(ride) !== null,
+        )
         .map((ride) => ({
           id: ride.id,
           name: ride.name,
           since: ride.outage?.startedAt ?? null,
           startObserved: ride.outage?.startObserved ?? null,
           operatingMinutes: ride.outage?.estimate?.elapsedMinutes ?? null,
+          window: windowToday(ride),
         })),
+      // Curated windows that start within MAINTENANCE_AHEAD_DAYS, soonest first.
+      maintenanceAhead: rides
+        .map((ride) => ({
+          id: ride.id,
+          name: ride.name,
+          window: nextWorksPeriod(ride.worksPeriods ?? [], today),
+        }))
+        .filter((entry) =>
+          Boolean(entry.window?.from && entry.window.from <= aheadUntil),
+        )
+        .sort((a, b) =>
+          (a.window?.from ?? "").localeCompare(b.window?.from ?? ""),
+        ),
       notRunToday: rides
         .filter((ride) => ride.notRunToday)
         .map((ride) => ({ id: ride.id, name: ride.name })),
@@ -129,7 +161,9 @@ export const getParkTool = defineMcpTool({
     "park's timezone, crowd level and average/peak waits, current weather, ride counts by status, " +
     "the longest standby waits, rides that are down (since when, and whether the park reported it " +
     "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
-    "(since when), rides that have not run today, and the editors' fun facts about the park " +
+    "(since when, and the curated window with its end where one runs today), maintenance windows " +
+    "starting in the next 30 days (maintenanceAhead), rides that have not run today, and the " +
+    "editors' fun facts about the park " +
     "per locale. Pass the park id from find_parks, or its slug when that is unambiguous.",
   input: {
     park: z

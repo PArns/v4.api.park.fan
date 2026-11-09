@@ -53,6 +53,10 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
     determineCrowdLevel: jest.fn(determineCrowdLevel),
   };
 
+  const attractionsService = {
+    getMaintenanceWindows: jest.fn().mockResolvedValue([]),
+  };
+
   const TZ = "Europe/Copenhagen";
 
   // No schedule by default: every day stays open, as before PAR-410.
@@ -87,7 +91,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
           provide: WeatherWarningsService,
           useValue: { getActiveWarnings: jest.fn().mockResolvedValue([]) },
         },
-        { provide: AttractionsService, useValue: {} },
+        { provide: AttractionsService, useValue: attractionsService },
         { provide: ShowsService, useValue: {} },
         { provide: RestaurantsService, useValue: {} },
         { provide: QueueDataService, useValue: {} },
@@ -255,6 +259,76 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       );
 
       expect(day.crowdLevel).toBe("high"); // AVG 70 / 50 = 140%
+    });
+  });
+
+  describe("a headliner in maintenance on the day (PAR-1255)", () => {
+    it("leaves it out of that day only, as the monthly calendar does", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["droomvlucht", "python"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+      attractionsService.getMaintenanceWindows.mockResolvedValueOnce([
+        {
+          id: "droomvlucht",
+          name: "Droomvlucht",
+          windows: [
+            { from: "2027-01-04", to: "2027-01-04", toUncertain: false },
+          ],
+        },
+      ]);
+
+      const days = await service.aggregateDailyPredictions(
+        buildPredictions([
+          {
+            attractionId: "droomvlucht",
+            date: "2027-01-04",
+            hour: 12,
+            wait: 90,
+          },
+          { attractionId: "python", date: "2027-01-04", hour: 12, wait: 50 },
+          {
+            attractionId: "droomvlucht",
+            date: "2027-01-05",
+            hour: 12,
+            wait: 90,
+          },
+          { attractionId: "python", date: "2027-01-05", hour: 12, wait: 50 },
+        ]),
+        "p1",
+        TZ,
+      );
+
+      expect(days.map((d) => [d.date, d.avgWaitTime])).toEqual([
+        ["2027-01-04", 50],
+        ["2027-01-05", 70],
+      ]);
+    });
+
+    it("rates the day as before when the windows cannot be read", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["droomvlucht", "python"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+      attractionsService.getMaintenanceWindows.mockRejectedValueOnce(
+        new Error("db down"),
+      );
+
+      const [day] = await service.aggregateDailyPredictions(
+        buildPredictions([
+          {
+            attractionId: "droomvlucht",
+            date: "2027-01-04",
+            hour: 12,
+            wait: 90,
+          },
+          { attractionId: "python", date: "2027-01-04", hour: 12, wait: 50 },
+        ]),
+        "p1",
+        TZ,
+      );
+
+      expect(day.avgWaitTime).toBe(70);
     });
   });
 

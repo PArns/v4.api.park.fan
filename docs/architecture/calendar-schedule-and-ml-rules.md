@@ -30,6 +30,12 @@ closed.
   level; today and future days the headliner forecast (`buildPredictedCrowdLevels`: average predicted
   headliner wait ÷ typical-day-peak). With neither it is **`unknown`** — never one ride's own
   `crowdLevel` and never a placeholder `moderate` (PAR-1028; [crowd-level rule](../rules/crowd-levels.md)).
+- A ride a curated maintenance or works window shuts on a day leaves that day's predictions before
+  anything is aggregated (`withoutRidesInMaintenance`, windows from
+  `AttractionsService.getMaintenanceWindows`): out of the crowd level, the `headlinerForecast` average
+  and its ride list, and the hourly curve. The model forecasts it like any other day. The yearly
+  predictions drop it the same way, so both views rate the day alike. If the windows cannot be read,
+  the day is served without the filter (PAR-1255).
 - CLOSED, or a past day without opening data: `closed`.
 
 ### 1.3 Yearly predictions use the same closed rule
