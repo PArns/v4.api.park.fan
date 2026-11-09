@@ -194,7 +194,7 @@ describe("curated field views", () => {
         "curatedOutOfServicePeriods",
       );
       expect(view.type).toBe("periods");
-      expect(view.group).toBe("Umbaupause");
+      expect(view.group).toBe("Wartung");
       expect(view.max).toBe(20);
       expect(view.curatedValue).toEqual([
         { from: "2026-01-16", to: "2026-03-03", toUncertain: true },
