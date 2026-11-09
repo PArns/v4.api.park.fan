@@ -4,6 +4,8 @@ import {
   normalizeWorksPeriod,
   resolveWorksPeriod,
   resolveWorksPeriods,
+  rideWorksPeriods,
+  withoutRidesInMaintenance,
   worksPeriodEndsBeforeItBegins,
   nextWorksPeriod,
   worksPeriodCovering,
@@ -510,5 +512,78 @@ describe("worksPeriodCovering / nextWorksPeriod", () => {
     expect(nextWorksPeriod(served, "2026-11-01")?.from).toBe("2026-12-08");
     expect(nextWorksPeriod(served, "2026-12-08")?.from).toBe("2027-01-04");
     expect(nextWorksPeriod(served, "2027-01-04")).toBeNull();
+  });
+});
+
+describe("rideWorksPeriods", () => {
+  it("lists only rides with a window, by name, with the windows served", () => {
+    const rides = rideWorksPeriods([
+      { id: "a", name: "Python" },
+      {
+        id: "b",
+        name: "Droomvlucht",
+        curatedOutOfServicePeriods: [
+          {
+            from: "2026-11-09",
+            to: "2026-12-04",
+            toUncertain: true,
+            source: "efteling-maintenance-calendar",
+          },
+        ],
+      },
+      {
+        id: "c",
+        name: "Baron 1898",
+        curatedOutOfServiceFrom: "2026-12-08",
+        curatedOutOfServiceTo: "2026-12-08",
+        curatedOutOfServiceToUncertain: false,
+      },
+    ]);
+    expect(rides).toEqual([
+      {
+        id: "c",
+        name: "Baron 1898",
+        windows: [{ from: "2026-12-08", to: "2026-12-08", toUncertain: false }],
+      },
+      {
+        id: "b",
+        name: "Droomvlucht",
+        windows: [{ from: "2026-11-09", to: "2026-12-04", toUncertain: true }],
+      },
+    ]);
+  });
+});
+
+describe("withoutRidesInMaintenance", () => {
+  const rides = [
+    {
+      id: "droomvlucht",
+      windows: [{ from: "2027-01-04", to: "2027-03-25", toUncertain: false }],
+    },
+  ];
+  const row = (attractionId: string, day: string) => ({
+    attractionId,
+    predictedTime: `${day}T12:00:00`,
+  });
+  const dayOf = (p: { predictedTime: string }) => p.predictedTime.slice(0, 10);
+
+  it("drops a ride's rows only on the days its window covers", () => {
+    const rows = [
+      row("droomvlucht", "2027-01-03"),
+      row("droomvlucht", "2027-01-04"),
+      row("droomvlucht", "2027-03-25"),
+      row("droomvlucht", "2027-03-26"),
+      row("python", "2027-01-04"),
+    ];
+    expect(withoutRidesInMaintenance(rows, rides, dayOf)).toEqual([
+      row("droomvlucht", "2027-01-03"),
+      row("droomvlucht", "2027-03-26"),
+      row("python", "2027-01-04"),
+    ]);
+  });
+
+  it("hands the rows back untouched when no ride has a window", () => {
+    const rows = [row("python", "2027-01-04")];
+    expect(withoutRidesInMaintenance(rows, [], dayOf)).toBe(rows);
   });
 });

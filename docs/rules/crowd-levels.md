@@ -12,7 +12,8 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   100 % is a typical day, `moderate`. A future day uses the same baseline with predicted headliner
   waits, which come from `MLService.getServingDailyPredictions`: TFT for days 1–60 (`tftDays`)
   wherever it covers the ride, CatBoost beyond and for any ride-day TFT lacks. That merge is for
-  serving only; the prediction writer stores pure CatBoost.
+  serving only; the prediction writer stores pure CatBoost. A headliner in a curated maintenance or
+  works window on that day is not in the average (`withoutRidesInMaintenance`).
 - **Point-in-time and live signals use ratio-vs-P50.** `calculateParkOccupancy` is
   `Σ latest_wait ÷ Σ attraction_p50 × 100` over headliners reporting in the last 60 min
   (`getHeadlinerLoad`), falling back to `avg(latest) ÷ park_p50` without per-ride baselines. The

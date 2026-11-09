@@ -79,6 +79,7 @@ import {
   ttlSecondsToNextBoundary,
 } from "../../common/utils/best-visit-times.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { withoutRidesInMaintenance } from "../../attractions/utils/curated-out-of-service.util";
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { partialRunWeekdays } from "../../common/utils/run-weekdays.util";
 import { showtimeEndTime } from "../../shows/showtime-end-time.util";
@@ -1810,11 +1811,20 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, typicalDayPeak, closedDates] = await Promise.all([
-      this.analyticsService.getHeadlinerAttractionIds(parkId),
-      this.analyticsService.getTypicalDayPeakFromCache(parkId),
-      this.getClosedPredictionDates(predictions, parkId, timezone),
-    ]);
+    const [headlinerIds, typicalDayPeak, closedDates, maintenance] =
+      await Promise.all([
+        this.analyticsService.getHeadlinerAttractionIds(parkId),
+        this.analyticsService.getTypicalDayPeakFromCache(parkId),
+        this.getClosedPredictionDates(predictions, parkId, timezone),
+        this.attractionsService
+          .getMaintenanceWindows(parkId)
+          .catch((err: Error) => {
+            this.logger.warn(
+              `Maintenance windows unavailable for park ${parkId}: ${err.message}`,
+            );
+            return [];
+          }),
+      ]);
     // Calendar-parity crowd level: AVG of predicted headliner waits ÷ the
     // typical-day-peak baseline ("predicted level vs a typical day's peak").
     // Same numerator (equal-weighted headliner mean) and denominator the
@@ -1826,11 +1836,18 @@ export class ParkIntegrationService {
 
     const datesMap = new Map<string, PredictionDto[]>();
 
-    // Group by date, filtering to headliners only (fall back to all if none defined)
+    // Group by date, filtering to headliners only (fall back to all if none
+    // defined). A ride in maintenance on a day is out first, as in the
+    // monthly calendar, or the two would rate that day differently.
+    const open = withoutRidesInMaintenance(
+      predictions,
+      maintenance,
+      (p) => p.predictedTime.split("T")[0],
+    );
     const filtered =
       headlinerIds.size > 0
-        ? predictions.filter((p) => headlinerIds.has(p.attractionId))
-        : predictions;
+        ? open.filter((p) => headlinerIds.has(p.attractionId))
+        : open;
 
     for (const p of filtered) {
       // predictedTime is ISO string, take YYYY-MM-DD

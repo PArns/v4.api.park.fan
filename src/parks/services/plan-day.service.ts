@@ -72,9 +72,9 @@ import {
 } from "../../attractions/utils/curated-attraction-facts.util";
 import {
   isCuratedOutOfService,
-  publicWorksPeriod,
-  resolveWorksPeriods,
+  rideWorksPeriods,
   worksPeriodCovering,
+  type RideWorksPeriods,
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
@@ -328,17 +328,8 @@ export class PlanDayService {
    * all its windows as a payload serves them, by name: one query for a caller
    * that asks about many days, such as `park_forecast`.
    */
-  async maintenanceWindows(
-    park: Park,
-  ): Promise<Array<{ id: string; name: string; windows: WorksPeriod[] }>> {
-    const out: Array<{ id: string; name: string; windows: WorksPeriod[] }> = [];
-    for (const attraction of await this.attractions(park)) {
-      const windows = resolveWorksPeriods(attraction).map(publicWorksPeriod);
-      if (windows.length > 0) {
-        out.push({ id: attraction.id, name: attraction.name, windows });
-      }
-    }
-    return out.sort((a, b) => a.name.localeCompare(b.name));
+  async maintenanceWindows(park: Park): Promise<RideWorksPeriods[]> {
+    return rideWorksPeriods(await this.attractions(park));
   }
 
   /**
@@ -2625,6 +2616,7 @@ export class PlanDayService {
         curatedSeasonMonths: true,
         curatedOutOfServiceFrom: true,
         curatedOutOfServiceTo: true,
+        curatedOutOfServiceToUncertain: true,
         curatedOutOfServicePeriods: true,
       },
     });
