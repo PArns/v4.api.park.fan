@@ -172,7 +172,7 @@ on the page, and leaves no audit row.
 - **Only changed columns are written** (`update`, not `save`): `save()` wrote every loaded column, so two
   editors saving different fields reverted each other.
 - **Works periods** (PAR-1246) are one field, `curatedOutOfServicePeriods`, type `periods`, group
-  "Umbaupause": `Array<{ from: string | null; to: string | null; toUncertain: boolean }>` or null, dates
+  "Wartung": `Array<{ from: string | null; to: string | null; toUncertain: boolean }>` or null, dates
   park-local `YYYY-MM-DD`, both bounds inclusive. Its view's value is the stored list with the old single
   window folded in, so the editor starts from what is in force. A write sends the whole list; it is
   validated (each window has a bound, real dates, `from <= to`, `toUncertain` only with a `to`, no two

@@ -33,7 +33,7 @@ window whatever the day, exactly as before the list existed. The choice is made 
 payload is built and the payload is cached, so it can lag a window boundary by the cache
 lifetime — still compare its dates yourself (next sections) before saying "running now".
 
-Curated by hand under `/admin/attractions/<id>`, in the group "Umbaupause", and for
+Curated by hand under `/admin/attractions/<id>`, in the group "Wartung", and for
 Efteling also written weekly from the park's own maintenance calendar
 ([Efteling sync](../admin/efteling-maintenance-sync.md)); which writer owns a window is
 stored beside it and not served — both kinds look the same here. No live
@@ -71,8 +71,8 @@ no to                 → no end clause at all
 and `from` only decides whether the sentence opens with a start:
 
 ```
-from    → "Umbaupause seit 16. Januar …"
-no from → "Umbaupause …"
+from    → "Wartung seit 16. Januar …"
+no from → "Wartung …"
 ```
 
 **`toUncertain` is independent of `from`.** A window with an end and no start is
@@ -86,7 +86,7 @@ Two things the API does guarantee, so nobody builds a dead branch:
   qualify is dropped on the way out.
 - **At least one of `from` and `to` is always there.** Both empty is not an
   empty block, it is no block: `worksPeriod` itself is absent. A bare
-  "Umbaupause" with no date is a state this endpoint cannot produce.
+  "Wartung" with no date is a state this endpoint cannot produce.
 
 **A missing `to` is not "closed for good".** It is the ordinary state while work
 is running and the park has not said when it ends — the park usually names a
