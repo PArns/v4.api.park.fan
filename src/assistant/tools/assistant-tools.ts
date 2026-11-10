@@ -232,6 +232,8 @@ export interface AssistantToolContext {
   alerts?: AlertsSnapshot | null;
   /** The ids of the favourites as the browser sent them. */
   favorites?: FavoritesSnapshot | null;
+  /** The ids of the rides the visitor marked as ridden, as the browser sent them. */
+  ridden?: ReadonlySet<string>;
   /**
    * The chat this answer belongs to, all of it from the request and the server's own records:
    * what `submit_feedback` stores comes from here, never from the model's input.
@@ -397,6 +399,11 @@ async function indoorOutdoorOf(
       ride.indoorOutdoor ? [[ride.id, ride.indoorOutdoor] as const] : [],
     ),
   );
+}
+
+/** `{ ridden: true }` for a ride the visitor marked as ridden, nothing otherwise. */
+function riddenMark(ctx: AssistantToolContext, rideId: string) {
+  return ctx.ridden?.has(rideId) ? { ridden: true as const } : {};
 }
 
 /** The visitor's planned day at this park and date, as the planner snapshot holds it. */
@@ -1346,20 +1353,25 @@ export const ASSISTANT_TOOLS = [
       const profiles = await ctx
         .get(RideProfileService)
         .findByAttractions(found.map((attraction) => attraction.id));
+      const compared = compareRides(comparedRides(found, profiles), {
+        by,
+        order,
+        type,
+        shelter,
+        riderHeightCm,
+        limit,
+      });
       return {
         ...scope,
         by,
         order,
         ...(type && { type }),
         ...(shelter && { shelter }),
-        ...compareRides(comparedRides(found, profiles), {
-          by,
-          order,
-          type,
-          shelter,
-          riderHeightCm,
-          limit,
-        }),
+        ...compared,
+        rides: compared.rides.map((ride) => ({
+          ...ride,
+          ...riddenMark(ctx, ride.id),
+        })),
       };
     },
   }),
@@ -1507,6 +1519,7 @@ export const ASSISTANT_TOOLS = [
               minimumHeightCm: ride.minimumHeight,
             }),
             ...(tooShort.has(ride) && { tooShortForParty: true }),
+            ...riddenMark(ctx, ride.attractionId),
             ...rideOpeningOf(ride, plan),
             predictedPeakWaitMinutes: ride.dayPeak,
             shortestAt: shortest && {
@@ -2231,6 +2244,7 @@ export const ASSISTANT_TOOLS = [
                 waitMinutes: ride.waitMinutes,
                 ...(types.length > 0 && { types }),
                 ...(dryness && { indoorOutdoor: dryness }),
+                ...riddenMark(ctx, ride.id),
               };
             }),
             ...(type && { typeUnknown }),

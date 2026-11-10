@@ -845,6 +845,41 @@ describe("show_card kind rides with a type", () => {
   });
 });
 
+describe("rides the visitor marked as ridden", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("are marked in the rows of a rides card, the others not", async () => {
+    jest.spyOn(getParkTool, "handler").mockResolvedValue({
+      name: "Phantasialand",
+      status: "OPERATING",
+      rides: {
+        longestWaits: [
+          { id: "a", name: "Taron", waitMinutes: 45 },
+          { id: "c", name: "Raik", waitMinutes: 5 },
+        ],
+        down: [],
+      },
+    });
+    const providers = new Map<unknown, unknown>([
+      [RideProfileService, profiles({})],
+      [
+        DataSource,
+        { getRepository: () => ({ find: jest.fn(async () => []) }) },
+      ],
+    ]);
+    const result = await runAssistantTool(
+      "show_card",
+      { kind: "rides", park: PARK_ID },
+      { ...context(providers), ridden: new Set(["a"]) },
+      jest.fn(),
+    );
+    expect(JSON.parse(result.content).rows).toEqual([
+      { name: "Taron", status: "OPERATING", waitMinutes: 45, ridden: true },
+      { name: "Raik", status: "OPERATING", waitMinutes: 5 },
+    ]);
+  });
+});
+
 describe("show_card kind rides for the rain", () => {
   afterEach(() => jest.restoreAllMocks());
 

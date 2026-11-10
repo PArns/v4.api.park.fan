@@ -379,6 +379,23 @@ describe("request schemas", () => {
     sessionToken: "s1.1.n.sig",
   };
 
+  it("keeps the ridden rides' ids, drops anything else and caps the list", () => {
+    const id = "66666666-6666-4666-8666-666666666666";
+    const parsed = chatRequestSchema.parse({
+      ...chat,
+      ridden: [id, "taron", 7, id.toUpperCase()],
+    });
+    expect(parsed.ridden?.[0]).toBe(id);
+    expect(parsed.ridden).not.toContain("taron");
+    expect(
+      chatRequestSchema.parse({ ...chat, ridden: Array(400).fill(id) }).ridden,
+    ).toHaveLength(300);
+    // A list that is no list costs the marks, never the question.
+    expect(chatRequestSchema.parse({ ...chat, ridden: "all" }).ridden).toEqual(
+      [],
+    );
+  });
+
   it("takes one question and no history or role", () => {
     expect(chatRequestSchema.safeParse(chat).success).toBe(true);
     const { sessionToken: _dropped, ...withoutSession } = chat;
