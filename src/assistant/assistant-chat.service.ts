@@ -208,6 +208,7 @@ export class AssistantChatService {
           planner: request.planner,
           alerts: request.alerts,
           favorites: request.favorites,
+          riddenCount: request.ridden?.length ?? 0,
           lookedUp: await this.namesOf(chat.lookedUp ?? []),
         }),
       },
@@ -227,6 +228,7 @@ export class AssistantChatService {
       planner: request.planner ?? null,
       alerts: request.alerts ?? null,
       favorites: request.favorites ?? null,
+      ridden: new Set(request.ridden ?? []),
       chat: {
         conversationId: conversation.id,
         pagePath: request.pagePath,

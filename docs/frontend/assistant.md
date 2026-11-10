@@ -124,7 +124,8 @@ for that day, and a closed park gets no crowd but the time it opens next. Versio
 goes to the `shelter` filter, and a thin list is said to be incomplete. Version 31: several parks on
 one day go to `compare_parks`, never one lookup per park. Version 32: `open_page` also
 opens a park's crowd calendar, the park comparison and the site's own pages. Version 33: a past day goes
-to `get_park_history` with `on`.
+to `get_park_history` with `on`. Version 34: rides the visitor
+marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet".
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -346,6 +347,11 @@ own last change to the day, and the widget refuses it when the visitor changed t
 undo did not work he says the day changed since and offers to make the change by hand.
 
 ### Push alerts in the chat
+
+`ridden` lists the ids of the rides the visitor marked as ridden on park.fan (the browser's
+`ridden-rides` store), UUIDs only, at most 300 (`RIDDEN_SNAPSHOT_MAX`), lenient like the rest. "This
+chat" says how many; `show_card` kind `rides`, `compare_rides` and `get_park_day` mark each of them
+`ridden: true` in their rows.
 
 The chat request carries an optional `alerts` snapshot (`alertsSnapshotSchema`): `{ push: "ready" |
 "needs-permission" | "unavailable", rides: [{ park, rideSlug, name, kind: "wait_below" | "reopen",

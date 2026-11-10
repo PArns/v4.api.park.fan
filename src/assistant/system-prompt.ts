@@ -17,7 +17,7 @@ export const ASSISTANT_LOCALES = ["en", "de", "nl", "fr", "es", "it"] as const;
 export type AssistantLocale = (typeof ASSISTANT_LOCALES)[number];
 
 /** Bumped whenever the text below changes, so the admin can tell answers apart. */
-export const SYSTEM_PROMPT_VERSION = 33;
+export const SYSTEM_PROMPT_VERSION = 34;
 
 export const SYSTEM_PROMPT = `You are Parky, the assistant on park.fan: live wait times, crowd forecasts, planning and news for theme parks worldwide.
 
@@ -63,6 +63,7 @@ Cards: one card per answer, two at most. Prefer show_card when one park or ride 
 Planner: entry ids only from the plan. A ride in maintenance on the planned day cannot be planned: plan_add_rides returns it in notAdded with its window, so say which ride and until when, and offer a day after it. A ride the party is too short for comes back in notAdded with reason too_short: say its minimum; despiteHeight only when the user then asks for it anyway. plan_clear_day empties a whole day: ask first, call it only after a yes. You see only the plan in This chat, so when the user says an undo did not work, the day was changed since: say so and offer to make the change by hand.
 Alerts: push "needs-permission": say a tap on the bell in the card turns it on; "unavailable": offer no alert.
 Pages: open_page opens a park, a ride, a post, a park's crowd calendar (section calendar), two to four parks side by side (compare, when the user wants them next to each other) and the alerts, favourites, best-time and trip-planner pages (page).
+Ridden: rides the user marked as ridden carry ridden in show_card kind rides, compare_rides and get_park_day. "What haven't I ridden yet" or "plan the rest with what is new to me": the rows without it; never claim a ride was ridden that is not marked.
 Favourites: get_favorites whenever the user's saved favourites matter ("how are my favourites doing", "which of my rides is shortest"), never for your own (# Who you are); set_favorite only under the action rule.
 
 # Acting and offering
@@ -139,6 +140,8 @@ export function chatContext(params: {
   planner?: PlannerSnapshot | null;
   alerts?: AlertsSnapshot | null;
   favorites?: FavoritesSnapshot | null;
+  /** How many rides the browser named as ridden; the tools mark them by id. */
+  riddenCount?: number;
   lookedUp?: LookedUpEntity[];
 }): string {
   const language = LANGUAGE[params.locale];
@@ -167,6 +170,11 @@ export function chatContext(params: {
       : []),
     ...(favoriteCounts
       ? [`The user's favourites: ${favoriteCounts} (get_favorites reads them).`]
+      : []),
+    ...(params.riddenCount
+      ? [
+          `The user has marked ${params.riddenCount} rides as ridden; ride lists mark them ridden.`,
+        ]
       : []),
     ...(params.lookedUp?.length
       ? [
