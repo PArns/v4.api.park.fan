@@ -117,7 +117,9 @@ sentence; "something like" a ride means that ride's type. Asked about his own fa
 answers in character and leaves `get_favorites` to the visitor's saved ones; a line the visitor
 quotes from the bubble on the page ("I have a few myself"), which the chat never sees, he owns
 instead of wondering where it came from. A sexual remark gets no innuendo or pun, only a plain line
-back to parks.
+back to parks. Version 28: with a party's height Parky never recommends or plans a ride its
+shortest rider is under, names such rides with their minimum, and says a minimum is not known
+rather than that a ride is fine.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -257,15 +259,25 @@ card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where kno
 `shown` line, so the sentence after the card can name a ride; kind `parks` hands it its rows
 without their links. With `riderHeightCm` it keeps only rides whose known minimum the
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
-apart (`heightUnknown`), never passed. Minimum heights are centimetres; `heightUnit: "in"` marks a
-park that signs them in inches, and the prompt has Parky say them in inches there.
+apart (`heightUnknown`), never passed. Both kinds left out are also named, the first 20 each
+(`HEIGHT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
+alone read as "not known" and got a ride recommended to a child too short for it. Minimum heights
+are centimetres; `heightUnit: "in"` marks a park that signs them in inches, and the prompt has
+Parky say them in inches there.
+
+The party's height is the planner snapshot's `prefs.riderHeightCm` for that park and day. Against
+it only the minimum counts (`partyTooShort`, as the planner's own flag: a maximum would flag a
+kiddie ride for the child it was built for). `get_park_day` gives each ride its `minimumHeightCm`
+where known, marks `tooShortForParty`, and names the planned rides among them as
+`plannedTooShort`; `plan_add_rides` leaves such a ride out (below).
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
 park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
-that day is not added and comes back in `notAdded` with its window, and with none left no action
-is sent), `plan_add_block`,
+that day is not added and comes back in `notAdded` with its window, a ride the party is too short
+for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
+action is sent), `plan_add_block`,
 `plan_optimize` (the planner's own „Tag optimieren" or „Alle Headliner"), `switch_language`
 (`switch_locale` with the locale; the widget carries it out once the answer is complete) and
 `submit_feedback` (`feedback_sent`, a chip under the answer).

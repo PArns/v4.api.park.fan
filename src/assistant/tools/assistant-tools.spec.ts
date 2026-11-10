@@ -1105,12 +1105,17 @@ describe("planner tools", () => {
       curatedOutOfServiceFrom: null,
       curatedOutOfServiceTo: null,
       curatedOutOfServicePeriods: periods,
+      minimumHeight: slug === "taron" ? 130 : null,
     });
     const shut = { from: dayAhead(1), to: dayAhead(30), toUncertain: false };
-    const add = (rideIds: string[]) =>
+    const add = (
+      rideIds: string[],
+      plan: typeof planner = planner,
+      input: Record<string, unknown> = {},
+    ) =>
       runAssistantTool(
         "plan_add_rides",
-        { park: PARK_ID, date: DATE, rideIds },
+        { park: PARK_ID, date: DATE, rideIds, ...input },
         {
           ...context(
             new Map<unknown, unknown>([
@@ -1128,7 +1133,7 @@ describe("planner tools", () => {
               ],
             ]),
           ),
-          planner,
+          planner: plan,
         },
         jest.fn(),
       );
@@ -1155,6 +1160,35 @@ describe("planner tools", () => {
       expect(JSON.parse(result.content)).toMatchObject({
         added: [],
         notAdded: [{ name: "Raik" }],
+      });
+    });
+
+    // A 1 m child and Taron's 130 cm: picked for the party unasked, it once went into the plan.
+    const withChild = {
+      days: [{ ...planner.days[0], prefs: { riderHeightCm: 100 } }],
+    };
+
+    it("leaves out a ride the party's shortest rider is too short for", async () => {
+      const result = await add([TARON], withChild);
+      expect(result.isError).toBeFalsy();
+      expect(result.action).toBeUndefined();
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: [],
+        notAdded: [
+          {
+            name: "Taron",
+            reason: "too_short",
+            minimumHeightCm: 130,
+            riderHeightCm: 100,
+          },
+        ],
+      });
+    });
+
+    it("adds it anyway once the user asked for it despite the height", async () => {
+      const result = await add([TARON], withChild, { despiteHeight: true });
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
       });
     });
   });
@@ -1671,6 +1705,60 @@ describe("get_ride › today / get_park_day", () => {
     ]);
     expect(json.rides.map((ride: { name: string }) => ride.name)).toEqual([
       "Taron",
+    ]);
+  });
+
+  it("marks the rides the party's shortest rider may not take, planned ones by name", async () => {
+    const withHeights = {
+      ...plan,
+      rides: [
+        { ...plan.rides[0], attractionSlug: "taron", minimumHeight: 130 },
+        {
+          ...plan.rides[0],
+          attractionId: "99999999-9999-4999-8999-999999999999",
+          attractionSlug: "wakobato",
+          attractionName: "Wakobato",
+          minimumHeight: 95,
+        },
+      ],
+    };
+    const result = await runAssistantTool(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      {
+        ...context(
+          new Map<unknown, unknown>([
+            ...providers(),
+            [
+              PlanDayService,
+              { buildPlanDay: jest.fn(async () => withHeights) },
+            ],
+          ]),
+        ),
+        planner: {
+          days: [
+            {
+              park: { slug: "phantasialand", name: "Phantasialand" },
+              date: "2026-11-07",
+              prefs: { riderHeightCm: 100 },
+              entries: [
+                { id: "r1", kind: "ride", name: "Taron", rideSlug: "taron" },
+              ],
+            },
+          ],
+        },
+      },
+      jest.fn(),
+    );
+    const json = JSON.parse(result.content);
+    expect(json.partyRiderHeightCm).toBe(100);
+    expect(json.rides).toMatchObject([
+      { name: "Taron", minimumHeightCm: 130, tooShortForParty: true },
+      { name: "Wakobato", minimumHeightCm: 95 },
+    ]);
+    expect(json.rides[1]).not.toHaveProperty("tooShortForParty");
+    expect(json.plannedTooShort).toEqual([
+      { name: "Taron", minimumHeightCm: 130 },
     ]);
   });
 

@@ -50,6 +50,7 @@ import {
   compareRides,
   comparedRides,
   isRideOfType,
+  partyTooShort,
   RIDE_RANKINGS,
   RIDE_TYPE_FILTERS,
 } from "../../attractions/utils/ride-facts.util";
@@ -339,13 +340,22 @@ async function plannedDay(
 ) {
   const park = await planPark(mcp(ctx), reference);
   if ("ambiguous" in park) return park;
-  const day = ctx.planner?.days.find(
-    (planned) => planned.park.slug === park.slug && planned.date === date,
-  );
+  const day = snapshotDay(ctx, park.slug, date);
   if (!day) {
     throw new McpToolError(`${park.name} on ${date} is not in the user's plan`);
   }
   return { park, day };
+}
+
+/** The visitor's planned day at this park and date, as the planner snapshot holds it. */
+function snapshotDay(
+  ctx: AssistantToolContext,
+  parkSlug: string,
+  date: string,
+): PlannerDay | undefined {
+  return ctx.planner?.days.find(
+    (planned) => planned.park.slug === parkSlug && planned.date === date,
+  );
 }
 
 /** The entries by id, in the order asked; an id the plan does not hold is refused, never guessed. */
@@ -1280,7 +1290,10 @@ export const ASSISTANT_TOOLS = [
       "shows with their times (projected: what the show did on a recent matching day, not a " +
       'promise). For "what is the day like", "which rides open later", "a plan for Saturday". ' +
       "Rides a maintenance or works window shuts that day are not in rides but in " +
-      "ridesInMaintenance, each with its window. Today by default.",
+      "ridesInMaintenance, each with its window. Each ride carries its minimumHeightCm where " +
+      "known; with the party's height in the plan, tooShortForParty marks the rides its " +
+      "shortest rider may not take and plannedTooShort names those already planned. Today by " +
+      "default.",
     input: z.object({ park: parkRef, date: planDate.optional() }),
     run: async ({ park: reference, date }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
@@ -1303,6 +1316,19 @@ export const ASSISTANT_TOOLS = [
         day === getCurrentDateInTimezone(tz)
           ? Number(formatInTimeZone(new Date(), tz, "H"))
           : null;
+      const visitorDay = snapshotDay(ctx, park.slug, day);
+      const party = visitorDay?.prefs?.riderHeightCm;
+      const tooShort = new Set(
+        plan.rides.filter((ride) => partyTooShort(ride.minimumHeight, party)),
+      );
+      const planned = new Set(
+        visitorDay?.entries.flatMap((entry) =>
+          entry.kind === "ride" && entry.rideSlug ? [entry.rideSlug] : [],
+        ),
+      );
+      const plannedTooShort = [...tooShort].filter((ride) =>
+        planned.has(ride.attractionSlug),
+      );
       return {
         park: park.name,
         tier: plan.tier,
@@ -1322,6 +1348,10 @@ export const ASSISTANT_TOOLS = [
             ...(ride.land && { land: ride.land }),
             ...(ride.isHeadliner && { headliner: true }),
             ...(ride.downYesterday && { downYesterday: true }),
+            ...(ride.minimumHeight !== undefined && {
+              minimumHeightCm: ride.minimumHeight,
+            }),
+            ...(tooShort.has(ride) && { tooShortForParty: true }),
             ...rideOpeningOf(ride, plan),
             predictedPeakWaitMinutes: ride.dayPeak,
             shortestAt: shortest && {
@@ -1332,6 +1362,13 @@ export const ASSISTANT_TOOLS = [
         }),
         ...(plan.ridesUnavailable && {
           ridesUnavailable: plan.ridesUnavailable,
+        }),
+        ...(party !== undefined && { partyRiderHeightCm: party }),
+        ...(plannedTooShort.length > 0 && {
+          plannedTooShort: plannedTooShort.map((ride) => ({
+            name: ride.attractionName,
+            minimumHeightCm: ride.minimumHeight,
+          })),
         }),
         ...(inMaintenance.length > 0 && {
           ridesInMaintenance: inMaintenance.map((ride) => ({
@@ -2032,7 +2069,9 @@ export const ASSISTANT_TOOLS = [
       "planner places them after what is already planned. Ride ids " +
       "come from find_rides or get_park_live and must belong to the park. A ride a maintenance " +
       "window shuts that day is not added: it comes back in notAdded with the window, to tell " +
-      "the user.",
+      "the user. Nor is a ride the party's shortest rider (the day's riderHeightCm) is under " +
+      "the minimum for: notAdded with reason too_short and the minimum. despiteHeight adds such " +
+      "a ride anyway, only when the user asked for it after hearing its minimum.",
     input: z.object({
       park: parkRef,
       date: planDate,
@@ -2041,17 +2080,27 @@ export const ASSISTANT_TOOLS = [
         .min(1)
         .max(10)
         .describe("Ride ids, at most ten"),
+      despiteHeight: z
+        .boolean()
+        .optional()
+        .describe(
+          "Add rides the party's shortest rider is too short for (an adult rides alone)",
+        ),
     }),
-    run: async ({ park: reference, date, rideIds }, ctx) => {
+    run: async ({ park: reference, date, rideIds, despiteHeight }, ctx) => {
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
       const found = await parkRides(mcp(ctx), park.slug, rideIds, date);
+      const party = snapshotDay(ctx, park.slug, date)?.prefs?.riderHeightCm;
+      const tooShort = (ride: (typeof found)[number]) =>
+        !despiteHeight && partyTooShort(ride.minimumHeightCm, party);
       // The planner refuses a ride in maintenance on that day by every other way in, so this
-      // way in does too, and says which and until when instead of reporting it added.
+      // way in does too, and says which and until when instead of reporting it added. A ride
+      // the child may not take is never picked for the party unasked.
       const rides = found
-        .filter((ride) => !ride.maintenance)
+        .filter((ride) => !ride.maintenance && !tooShort(ride))
         .map(({ slug, name }) => ({ slug, name }));
-      const notAdded = found.flatMap((ride) =>
+      const notAdded = found.flatMap((ride): Record<string, unknown>[] =>
         ride.maintenance
           ? [
               {
@@ -2060,7 +2109,16 @@ export const ASSISTANT_TOOLS = [
                 window: ride.maintenance,
               },
             ]
-          : [],
+          : tooShort(ride)
+            ? [
+                {
+                  name: ride.name,
+                  reason: "too_short",
+                  minimumHeightCm: ride.minimumHeightCm,
+                  riderHeightCm: party,
+                },
+              ]
+            : [],
       );
       const result = {
         added: rides.map((ride) => ride.name),

@@ -116,6 +116,12 @@ describe("compareRides", () => {
     ]);
     expect(child.notAllowed).toBe(2);
     expect(child.heightUnknown).toBe(1);
+    // Named, so a ride the child is too small for is never taken for one of unknown height.
+    expect(child.notAllowedRides).toEqual([
+      { name: "Taron", minimumHeightCm: 130 },
+      { name: "Black Mamba", minimumHeightCm: 140 },
+    ]);
+    expect(child.heightUnknownRides).toEqual(["Carousel"]);
 
     const tall = compareRides(rides, {
       by: "minimumHeight",
