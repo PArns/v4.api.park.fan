@@ -94,7 +94,19 @@ async function parkByName(
   const hits = (found?.results ?? []).filter((item) => item.type === "park");
   if (hits.length === 0) return null;
   const key = nameKey(reference);
-  const exact = hits.filter((hit) => nameKey(hit.name) === key);
+  // A park is also called by its name and city: "Disneyland Paris" is the Disneyland Park in
+  // Paris, never the one in Anaheim the search may list first.
+  const names = (hit: { name: string; city?: string | null }) => {
+    const bare = hit.name.replace(/\s*park$/i, "");
+    return [
+      hit.name,
+      `${hit.name} ${hit.city ?? ""}`,
+      `${bare} ${hit.city ?? ""}`,
+    ];
+  };
+  const exact = hits.filter((hit) =>
+    names(hit).some((name) => nameKey(name) === key),
+  );
   const pick = hits.length === 1 ? hits : exact;
   if (pick.length === 1) return ctx.get(ParksService).findById(pick[0].id);
   return {

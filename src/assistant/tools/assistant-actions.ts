@@ -188,7 +188,7 @@ export interface ForecastSummary {
  * One forecast day as the cards show it. Past the published schedule the status is the calendar's
  * guess, so it reads UNKNOWN and carries no hours (docs/rules/absent-facts.md).
  */
-function cardDay(
+export function cardDay(
   day: ForecastSummary["days"][number],
   coverage: ForecastSummary["scheduleCoverage"],
   timezone: string,

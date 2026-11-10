@@ -129,7 +129,9 @@ marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden ye
 particular days of one park go to `compare_dates`, and a closed day is always called closed with
 the next day the park opens. Version 36: a reason a result
 gives for a gap is told, and "not known" is never "there is none". Version 37: park names go
-straight into the tools, and the park card's result replaces `get_park_live`.
+straight into the tools, and the park card's result replaces `get_park_live`. Version 38: "Saturday or
+Sunday?" and events go to `compare_dates`; the parks card only for today; the day's expected level
+(`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -230,6 +232,12 @@ instead of `date` it reads that one past day itself ("last Saturday"), up to a y
 (`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
 measured.
 
+Days whose hours the park has not published yet are an estimate everywhere: `get_best_days`
+counts them apart (`hoursNotPublishedDays`, with the reason) and refuses a range past its 90-day
+snapshot, pointing at `compare_dates`; `get_park_day` says `hoursPublished` and, when false,
+`statusWhy`; the tiles' result carries the day's `status`. The last published day comes from
+`ParksService.getOperatingDateRange` (`publishedUntil`).
+
 `compare_dates` puts particular days of one park side by side, up to a year ahead
 (`COMPARE_DATES_AHEAD`): 1 to 10 `dates`, or `from` and `to` for up to 31 days. It reads the
 calendar every park page shows, one month at a time, so May and December build two months and not
@@ -240,7 +248,7 @@ closed day loses its crowd level and gets `nextOpenDay`, the first day with publ
 it (`firstOpenDay`, which `get_ride`'s `reopensOn` reads too). `quietestOpenDay` names the open day
 with the lowest level. Past days are `get_park_history`.
 
-`compare_parks` puts several parks side by side on one day (today by default, up to 60 days
+`compare_parks` puts several parks side by side on one day (today by default, up to a year
 ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_PARKS`) or 2 to 10
 `parks`. Each park's day comes from the calendar every park page shows
 (`CalendarService.buildCalendarResponse`, six parks at a time, `CALENDAR_BATCH`), so every park is
