@@ -99,6 +99,37 @@ describe("AssistantPageService.subject", () => {
     expect(posts.glossary).toHaveBeenCalledWith("de", "airtime");
   });
 
+  it("reads the segments the site writes in the reader's language", async () => {
+    const { service, posts, attractions } = setup();
+    expect(
+      await service.subject(`${PARK_PATH}/durchschnittliche-wartezeiten`, "de"),
+    ).toBe(
+      'the average wait times page of the park "Phantasialand" in "Brühl, Germany" (park id park-1)',
+    );
+    expect(await service.subject(`${PARK_PATH}/met-kinderen`, "nl")).toContain(
+      "the page for a visit with kids of",
+    );
+    expect(attractions.findBySlugInPark).not.toHaveBeenCalled();
+    expect(await service.subject("/de/glossar/airtime", "de")).toContain(
+      'the glossary entry "Airtime" (slug "airtime"',
+    );
+    expect(posts.glossary).toHaveBeenCalledWith("de", "airtime");
+    expect(await service.subject("/de/beste-reisezeit", "de")).toBe(
+      "the best-time-to-visit overview",
+    );
+    expect(await service.subject("/es/planificador", "es")).toBe(
+      "the trip planner",
+    );
+  });
+
+  it("knows no page by a name every object inherits", async () => {
+    const { service } = setup();
+    expect(await service.subject("/de/constructor", "de")).toBeNull();
+    expect(await service.subject("/de/parks/__proto__", "de")).not.toContain(
+      "function",
+    );
+  });
+
   it("asks nothing for a page without a subject", async () => {
     const { service, cache, parks } = setup();
     expect(await service.subject("/de/search", "de")).toBe("the search page");

@@ -112,6 +112,22 @@ export type AssistantCard =
       }>;
     }
   | {
+      kind: "posts";
+      /** One to three park.fan posts, as the guides menu lists them. */
+      posts: PostCardRow[];
+    }
+  | {
+      kind: "glossary";
+      /** One to three glossary terms. */
+      terms: Array<{
+        name: string;
+        definition: string;
+        /** The glossary's category id ("coasters"), for its icon. */
+        category: string | null;
+        url: string;
+      }>;
+    }
+  | {
       kind: "calendar";
       park: string;
       /** The park's page; the widget appends its localized calendar subpage. */
@@ -188,7 +204,7 @@ export interface ForecastSummary {
  * One forecast day as the cards show it. Past the published schedule the status is the calendar's
  * guess, so it reads UNKNOWN and carries no hours (docs/rules/absent-facts.md).
  */
-function cardDay(
+export function cardDay(
   day: ForecastSummary["days"][number],
   coverage: ForecastSummary["scheduleCoverage"],
   timezone: string,
@@ -447,6 +463,23 @@ export const clockTime = z
     return hours * 60 + minutes;
   });
 
+/** A post as a card row: the guides menu's row, with the post's own page as a site path. */
+export interface PostCardRow {
+  title: string;
+  url: string;
+  /** YYYY-MM-DD: when a news post went out, when an article last changed. */
+  date: string;
+  /** True when `date` is an article's last update, not its publication. */
+  updated: boolean;
+  news: boolean;
+  readingTimeMinutes: number | null;
+  excerpt: string | null;
+  category: string | null;
+  /** The cover as a site path, and where to crop it (`object-position`). */
+  image: string | null;
+  imagePosition: string | null;
+}
+
 /** A tool result that also asks the widget to act. */
 export class ActionOutcome {
   constructor(
@@ -551,6 +584,7 @@ export async function parkRides(
   date?: string,
 ): Promise<
   Array<{
+    id: string;
     slug: string;
     name: string;
     maintenance: WorksPeriod | null;
@@ -572,6 +606,7 @@ export async function parkRides(
     }
     const { minimumHeight } = resolveCuratedFacts(ride);
     return {
+      id: ride.id,
       slug: ride.slug,
       name: ride.name,
       // Not on a day already over, like the plan's own filter: yesterday's plan records what ran.

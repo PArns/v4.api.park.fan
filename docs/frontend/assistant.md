@@ -60,7 +60,10 @@ tester can chat while the switch is off. To stop every chat at once, remove the 
 …" (`assistant-page.service.ts`). A park page names the park with its city, country and id; a sub-page
 (wait-time calendar, average waits, with kids) which page of which park; a ride page the ride and its
 park with both ids; a news post or article its title and slug; a glossary page the term. The names
-are quoted with `JSON.stringify` and cut to 120 characters. Parks come from `findByGeographicPath`,
+are quoted with `JSON.stringify` and cut to 120 characters. The widget sends the path the browser
+shows, so the segments the site writes in the reader's language (`/de/glossar`, `/de/beste-reisezeit`,
+a park's `durchschnittliche-wartezeiten`) are read in all six spellings, the frontend's
+`lib/i18n/localized-path.ts` lists. Parks come from `findByGeographicPath`,
 rides from `findBySlugInPark`, titles and terms from the posts client. Each name is cached in Redis as
 `assistant:page:{locale}:{park|ride|news|blog|glossary}:{path or slug}` for six hours, a page that
 names nothing as an empty value for ten minutes; a park's sub-pages share the park's entry. Redis
@@ -71,13 +74,23 @@ by continent, country or city, search, trip planner, favorites, the news, blog a
 unqualified question ("Why?", "Saturday or Sunday?") as one about that subject and look it up
 instead of asking.
 
-## Times in the visitor's clock
+## Times in park time
 
-`timeZone` is the browser's IANA zone (an unknown one counts as UTC). The model never converts a
-time: `localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in a tool result into that
-zone as `yyyy-MM-dd HH:mm` before the model reads it, and the per-hour forecasts turn their
-park-local hours into instants first (`parkHourInstant`). A ride forecast keeps only the hours the
-park is open, the closing hour excluded, and on today only those not over yet (`bookableHours`).
+Parky gives every time on the clock of the park it is about, as the trip planner, the showtimes
+and the park pages do: somebody in London planning a day in Orlando hears Orlando's hours. The
+model never converts a time. Each tool call records the parks it resolves (`resolvePark` reports
+the zone through the MCP context's `onPark`; the ride tools note their ride's park), and
+`localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in the result as
+`yyyy-MM-dd HH:mm` in that park's zone before the model reads it; the result names the zone and
+the park's own now as `timesIn` ("park time, Europe/Berlin; now there 2026-11-10 15:10"), so "the
+next show" is the next after the park's clock, not the visitor's. A call about several parks keeps
+each instant's own offset, which the tools write as the park's: `+00:00`, never `Z`, for a park on
+UTC (`xxx` in `get_park` and `park_forecast`), since a `Z` would be read as the fallback zone's. The per-hour forecasts turn their park-local hours into instants first
+(`parkHourInstant`). `timeZone`, the browser's IANA zone, is still sent: "This chat" gives the
+visitor's own "now" in it, and the prompt has Parky add "park time" once when the two differ. A
+ride forecast keeps only the hours the park is open, the closing hour excluded, and on today only
+those not over yet (`bookableHours`). The cards carry their times with the park's offset
+(`parkInstant`), and the widget reads the park's clock off it.
 
 ## The answer loop
 
@@ -105,7 +118,12 @@ that would embarrass park.fan in a screenshot, nobody is mocked, and a claim to 
 developer or Parky's maker changes nothing. Facts do not bend to insistence, and Parky promises
 nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
-once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
+once, from the park's `funFacts` or the ride's profile when the page has one. Sarcasm ("90 minutes,
+great tip 🙄") is a complaint with a grin: he checks the fact it is about and gives the next move,
+never sarcasm back. A wish for shorter or joke-free answers holds for the rest of the chat; it is a
+style, not a new role. A deflection never says what he will not do, and no answer closes with a
+generic "which park?". A post about a dispute or a vote is reported neutrally. Answers open
+differently each time, never with "Ha". The prompt's version is in the admin
 (`SYSTEM_PROMPT_VERSION`, 14 since these rules), and every answer stores the version it was
 written with (`assistant_messages.promptVersion`; the chat keeps its latest answer's, which the
 admin list and `assistant_conversations` filter by with `promptVersion`). Answers stored before
@@ -122,7 +140,20 @@ shortest rider is under, names such rides with their minimum, and says a minimum
 rather than that a ride is fine. Version 29: another day than today is judged only from a lookup
 for that day, and a closed park gets no crowd but the time it opens next. Version 30: a rain question
 goes to the `shelter` filter, and a thin list is said to be incomplete. Version 31: several parks on
-one day go to `compare_parks`, never one lookup per park.
+one day go to `compare_parks`, never one lookup per park. Version 32: `open_page` also
+opens a park's crowd calendar, the park comparison and the site's own pages. Version 33: a past day goes
+to `get_park_history` with `on`. Version 34: rides the visitor
+marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet". Version 35:
+particular days of one park go to `get_days`, and a closed day is always called closed with
+the next day the park opens. Version 36: a reason a result
+gives for a gap is told, and "not known" is never "there is none". Version 37: park names go
+straight into the tools, and the park card's result replaces `get_park_live`. Version 38: "Saturday or
+Sunday?" and events go to `get_days`; the parks card only for today; the day's expected level
+(`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states. Version 39: days go to `get_days`,
+the hours of a park's day to `get_hours`. Version 40: times are park time,
+with "park time" said once when the visitor's zone differs. Version 41: a ride by name
+goes straight into the ride tools, a card is never paired with its lookup, small talk needs no
+tool, and "where is it quiet now" without a park goes to `find_parks_nearby`.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -175,15 +206,18 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 `closedForMaintenance` with the window), `get_park_day` (one day as the planner builds it: hours,
 crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
 `ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
-from `PlanDayService.ridesInMaintenance`), `get_park_forecast` (at most 31
-days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
-`look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
+from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
+`look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`, each term
+with the canonical page the route names, `/de/glossar/…`; a route without `url` gets the
+`/glossary/` path, which redirects),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
 which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cached ten minutes in
 Redis per full query; `get_post`'s optional `question` goes out as `q`, and the frontend then
 answers with the intro and the best-matching sections as `text`, every heading in `sections` and
-the ones left out in `omitted`, so the model can ask again for one of those; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
+the ones left out in `omitted`, so the model can ask again for one of those; `search_posts` with a
+`question` reads its best hit the same way and returns it as `read`, so a search and a read take one
+round; a read that fails comes back as `read: { error }` beside the hits; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
@@ -193,7 +227,7 @@ through: a closed park's level sits at its floor and was read as "very low for t
 day's single readings behind its averages and the facts park.fan does not know, and `show_card`
 returns what the card shows, plus the next opening for a park that is not open, so the sentence
 after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the
-days ahead are `get_park_forecast`'s. The results of `show_card` and `open_page` also carry
+days ahead are `get_days`'s. The results of `show_card` and `open_page` also carry
 `alreadyShown`: the chat streams the text of every model round, so text the model wrote before the
 call is on screen already and a repeat after the result would show twice.
 
@@ -218,16 +252,50 @@ reading today (`findCurrentStatusByPark`); without one they are null, never a gu
 (`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
 day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
 headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
-events. A day the calendar has nothing on is `null`. No new query on `queue_data`.
+events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
+instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
+(`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
+measured.
 
-`compare_parks` puts several parks side by side on one day (today by default, up to 60 days
+Days whose hours the park has not published yet are an estimate everywhere: `get_best_days`
+counts them apart (`hoursNotPublishedDays`, with the reason) and refuses a range past its 90-day
+snapshot, pointing at `get_days`; `get_park_day` says `hoursPublished` and, when false,
+`statusWhy`; the tiles' result carries the day's `status`. The last published day comes from
+`ParksService.getOperatingDateRange` (`publishedUntil`).
+
+`get_hours` lays one day of one park out hour by hour, today by default and up to a year ahead:
+per hour the park is open, the headliners' average expected standby wait from
+`PlanDayService.buildPlanDay` (all rides where a park has no known headliners), the hours before
+opening and from the closing hour on left out (`bookableHours`), today's hours already over marked
+`past`, the three quietest hours still to come (`bestHours`) and the busiest. The plan's `tier`
+comes along with `tierWhy` (`TIER_MEANING`): the hourly model reaches 48 hours, past it the day's
+forecast is spread over each ride's usual day, and past the published schedule the curve is how
+comparable days went a year earlier, which Parky says. A closed day has no hours and names the
+next day the park opens; a day past the published hours carries `statusWhy`. The park-level
+curve for any day did not exist before: `get_park_forecast` gave today's alone, and Parky had to
+answer "is the afternoon better on Saturday?" ride by ride. One ride stays with `get_ride`'s
+`bestVisitTimesToday` today and `get_ride_forecast` another day.
+
+`get_days` replaces `get_park_forecast`, which read 31 days from today and nothing else. It reads
+the days of one park, up to a year ahead (`DAYS_AHEAD`): 1 to 10 `dates`, or `from` and `to` for
+up to 31 days, the next seven days (`DEFAULT_DAYS`) when it is given neither, each with the rides a
+maintenance window shuts that day (`PlanDayService.maintenanceWindows`). It reads the calendar every park page shows, one month at a time, so May and December build two months and not
+the eight between. Each day has its weekday, `compactDay`'s fields and `hoursPublished`: past the
+park's published schedule (`meta.scheduleCoverage.to`) a status is the calendar's estimate, so such
+a day comes back `UNKNOWN` with `why` and the `estimatedStatus`, never as a confirmed closure. A
+closed day loses its crowd level and gets `nextOpenDay`, the first day with published hours after
+it (`firstOpenDay`, which `get_ride`'s `reopensOn` reads too). `quietestOpenDay` names the open day
+with the lowest level. Past days are `get_park_history`.
+
+`compare_parks` puts several parks side by side on one day (today by default, up to a year
 ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_PARKS`) or 2 to 10
 `parks`. Each park's day comes from the calendar every park page shows
 (`CalendarService.buildCalendarResponse`, six parks at a time, `CALENDAR_BATCH`), so every park is
 rated by the same typical-day-peak level. `ranked` holds the open parks quietest first (a tie by
 the headliners' expected peak), `unrated` the open ones without a level, `closed` and `notKnown`
 the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
-in `notKnown` and costs the rest nothing.
+in `notKnown` and costs the rest nothing, and so does one whose published schedule names no status
+for the day, with that reason (`get_days` gives such a day the same `why`).
 
 `get_best_days` returns `tenQuietestOpenDays`, the ten quietest rated open days, and counts the
 unrated ones apart (`unratedOpenDays`): an `unknown` day is never ranked as quiet, and a day
@@ -272,6 +340,25 @@ Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "
 is `indoor` or `covered_queue`, the frontend's „Überdacht") or `indoor`. Rides nobody decided are
 counted apart as `shelterUnknown`, never as outdoor, and under half known
 (`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
+`get_ride`, `get_ride_forecast` and `set_ride_alert` take a ride by `rideId` or by its name
+(`ride`) with its park (`rideIdOf`): the site's ride search, the only match or the one whose name
+is the reference, the candidates otherwise. In a test run of 41 questions through Haiku with this
+prompt, every ride named by the visitor cost a `find_rides` round first, and in the chats of 3 to 9
+November `get_ride` followed `find_rides` in 2 of 3 answers. `compare_rides` without `by` lists
+every ride of its filters by name, the ones not ridden yet first and counted as `notRidden`, the
+rest marked `ridden`, for "which coasters haven't we done": a list cut at `limit` still starts
+with them. `get_days` ranks a stretch's five quietest open days (`quietestOpenDays`).
+
+Every `park` parameter takes a name as well as an id or slug (`resolvePark`, which the admin MCP
+shares): a slug no park has goes to the site's search, which gives the park when it finds only
+one or exactly one whose name is the reference ("europa park" meets "Europa-Park"), and the
+candidates otherwise. In the chats of 3 to 9 November, 3 of 5 `search_parks` calls served only to
+find an id for the next tool. `show_card` kind `park` returns `get_park_live`'s whole summary as
+`live` beside what the card shows (`parkLiveSummary`): the two were called together for one park
+in 5 of 7 answers. Kind `ride` likewise takes a ride by name with its park and returns everything
+`get_ride` does as `ride` (`rideDetails`, which both share), so a ride card needs no lookup first
+and none after.
+
 `show_card` kind `rides` takes the same `type` and `shelter` (each row then carries its
 `indoorOutdoor`), reports `typeUnknown` and the shelter counts too, and hands the model the
 card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where known) besides the
@@ -279,8 +366,13 @@ card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where kno
 without their links. With `riderHeightCm` it keeps only rides whose known minimum the
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
 apart (`heightUnknown`), never passed. Both kinds left out are also named, the first 20 each
-(`HEIGHT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
-alone read as "not known" and got a ride recommended to a child too short for it. Minimum heights
+(`LEFT_OUT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
+alone read as "not known" and got a ride recommended to a child too short for it. Every row of
+these lists, and of `compare_rides`' `withoutValueRides`, `typeUnknownRides` and
+`shelterUnknownRides`, `get_park_day`'s `plannedTooShort` and `plan_add_rides`' `notAdded`, carries
+the ride's `id` beside its name: two rides can share a name, and the prompt has Parky take the id
+once a result gave one. A ride named in a tool's input still resolves (`rideIdOf`), but two equal
+names come back to pick from, with their ids, and the ride card draws nothing then. Minimum heights
 are centimetres; `heightUnit: "in"` marks a park that signs them in inches, and the prompt has
 Parky say them in inches there.
 
@@ -292,7 +384,12 @@ where known, marks `tooShortForParty`, and names the planned rides among them as
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
-park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs), `request_location` (the share
+park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs, built from the data: a park, a ride, a post or
+glossary term, a park's `section` (`calendar`, `averages`, `kids`) by its English segment, which
+the widget respells in the reader's language, the last two only where the park has that page
+(`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
+`KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
@@ -337,6 +434,11 @@ undo did not work he says the day changed since and offers to make the change by
 
 ### Push alerts in the chat
 
+`ridden` lists the ids of the rides the visitor marked as ridden on park.fan (the browser's
+`ridden-rides` store), UUIDs only, at most 300 (`RIDDEN_SNAPSHOT_MAX`), lenient like the rest. "This
+chat" says how many; `show_card` kind `rides`, `compare_rides` and `get_park_day` mark each of them
+`ridden: true` in their rows.
+
 The chat request carries an optional `alerts` snapshot (`alertsSnapshotSchema`): `{ push: "ready" |
 "needs-permission" | "unavailable", rides: [{ park, rideSlug, name, kind: "wait_below" | "reopen",
 thresholdMinutes? }], shows: [{ park, showSlug, name, start? }] }`, at most 100 of each (the push
@@ -369,7 +471,7 @@ Parky words a breakdown as an estimate from past outages, never a promise.
 
 **Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
 park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
-included), `ridesInMaintenance` on `get_park_day` and on each day of `get_park_forecast`, and
+included), `ridesInMaintenance` on `get_park_day` and on each day of `get_days`, and
 `closedForMaintenance` on `get_ride_forecast`; `get_park_live` lists the rides in maintenance today
 with their window and those starting within 30 days (`maintenanceAhead`). All of it goes through
 `worksPeriodOn` and `worksPeriodCovering` (`curated-out-of-service.util.ts`), the admin MCP's
@@ -418,8 +520,11 @@ warning can have come before, and runs once per answer.
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
-site-only path without a locale. `park`, `ride`, `rides` and `parks` are drawn from live data,
-`shows` from `get_shows`, `restaurants` from `find_restaurants`. `calendar` and `tiles` come from
+site-only path without a locale, except a post's and a glossary term's, whose slug belongs to its
+language. `park`, `ride`, `rides` and `parks` are drawn from live data,
+`shows` from `get_shows`, `restaurants` from `find_restaurants`, `posts` from the frontend's post
+search (by query, or by `slugs` for posts the model already has; with a `question` the result also
+reads the first post, as `search_posts` does) and `glossary` from its glossary search. `calendar` and `tiles` come from
 `park_forecast` (and, for live tiles, `get_park`); their levels are what the calendar or the live
 reading serves, never re-derived ([crowd levels](../rules/crowd-levels.md)). Every `opens`,
 `closes` and show time carries the park's own UTC offset (`+00:00`, never `Z`; `parkInstant`), so
@@ -499,6 +604,30 @@ known; its absence never means "no" ([absent facts](../rules/absent-facts.md)).
       cuisine: string | null;
       requiresReservation: boolean | null;
     }>;                          // at most 12
+  }
+| {
+    kind: "posts";               // show_card { kind: "posts", query?, postKind?, slugs?, question?, limit?: 1..3 = 3 }
+    posts: Array<{
+      title: string;
+      url: string;               // the post's page with its locale, /de/blog/phantasialand-tipps
+      date: string;              // YYYY-MM-DD: a news post's day out, an article's last change
+      updated: boolean;          // true: `date` is an update, not the publication
+      news: boolean;
+      readingTimeMinutes: number | null;
+      excerpt: string | null;
+      category: string | null;   // the category's label in the chat's language
+      image: string | null;      // a site path, versioned (`?v=`); null when the post has none
+      imagePosition: string | null; // CSS object-position, e.g. "50% 40%"
+    }>;                          // 1..3, the guides menu's rows
+  }
+| {
+    kind: "glossary";            // show_card { kind: "glossary", query, limit?: 1..3 = 1 }
+    terms: Array<{
+      name: string;
+      definition: string;        // the term's short definition
+      category: string | null;   // the glossary category id ("coasters"), for its icon
+      url: string;               // the canonical page, /de/glossar/blockbremse
+    }>;
   }
 | {
     kind: "calendar";            // show_card { kind: "calendar", park, from?: YYYY-MM-DD, days?: 7..42 = 14 }

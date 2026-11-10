@@ -291,26 +291,46 @@ export interface RideComparison {
   rides: ComparedRide[];
   /** Rides that had the value and passed the height filter. */
   ranked: number;
+  /** Without `by` and with `first`: how many of the ranked rides it holds for, listed first. */
+  firstCount?: number;
   /** Rides left out because park.fan does not know the value ranked by. */
   withoutValue: number;
   /** With a rider height: rides left out because their minimum height is unknown. */
   heightUnknown?: number;
-  /** The first {@link HEIGHT_NAMES_LIMIT} of them by name, so an answer can say which. */
-  heightUnknownRides?: string[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them, so an answer can say which. */
+  heightUnknownRides?: RideRef[];
   /** With a rider height: rides the rider is too small or too tall for. */
   notAllowed?: number;
-  /** The first {@link HEIGHT_NAMES_LIMIT} of them with their limits, so none is recommended. */
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them with their limits, so none is recommended. */
   notAllowedRides?: RideOutOfReach[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of the rides without the value ranked by. */
+  withoutValueRides?: RideRef[];
   /** With a type: rides left out because park.fan does not know their type. */
   typeUnknown?: number;
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them. */
+  typeUnknownRides?: RideRef[];
   /** With a shelter: rides left out because nobody decided whether they keep you dry. */
   shelterUnknown?: number;
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them. */
+  shelterUnknownRides?: RideRef[];
   /** With a shelter: under half the rides are known, so the list is incomplete. */
   shelterIncomplete?: true;
 }
 
+/**
+ * A ride a list leaves out, by id as well as name: two rides can share a name, and the id is what
+ * the next tool takes.
+ */
+export interface RideRef {
+  id: string;
+  name: string;
+  /** The ride's park, when the list spans parks. */
+  park?: string;
+}
+
 /** A ride a rider may not take, with the limit that rules it out. */
 export interface RideOutOfReach {
+  id: string;
   name: string;
   park?: string;
   minimumHeightCm: number;
@@ -319,11 +339,11 @@ export interface RideOutOfReach {
 }
 
 /**
- * How many rides a height filter names among those it left out. A count alone
- * read as "the height is unknown" and got the rides recommended to a child too
- * small for them.
+ * How many rides a filter names among those it left out. A count alone read as
+ * "the height is unknown" and got the rides recommended to a child too small
+ * for them, and a name tells the visitor which ride park.fan cannot judge.
  */
-export const HEIGHT_NAMES_LIMIT = 20;
+export const LEFT_OUT_NAMES_LIMIT = 20;
 
 /**
  * A park's rides ranked by one fact, highest first unless `order` is "asc".
@@ -338,18 +358,22 @@ export const HEIGHT_NAMES_LIMIT = 20;
 export function compareRides(
   all: readonly ComparedRide[],
   params: {
-    by: RideRanking;
+    /** Absent: every ride of the filters, by name, for "which coasters haven't we done". */
+    by?: RideRanking;
     order?: "asc" | "desc";
     riderHeightCm?: number;
     type?: RideTypeFilter;
     shelter?: ShelterFilter;
     limit: number;
+    /**
+     * Without `by`: the rides this holds for come first (the ones not ridden yet), each group by
+     * name, and are counted, so a list cut at `limit` still starts with what was asked for.
+     */
+    first?: (ride: ComparedRide) => boolean;
   },
 ): RideComparison {
   const { type, shelter } = params;
-  const typeUnknown = type
-    ? all.filter((ride) => !ride.types?.length).length
-    : 0;
+  const untyped = type ? all.filter((ride) => !ride.types?.length) : [];
   const ofType = type
     ? all.filter((ride) => isRideOfType(ride.types ?? [], type))
     : all;
@@ -372,29 +396,46 @@ export function compareRides(
           return fits;
         });
 
-  const value = VALUE[params.by];
+  const by = params.by;
+  const value = by ? VALUE[by] : () => 0;
   const withValue = allowed.filter((ride) => value(ride) !== undefined);
   const sign = params.order === "asc" ? 1 : -1;
+  const first = !by ? params.first : undefined;
+  const group = (ride: ComparedRide) => (first && !first(ride) ? 1 : 0);
   const ranked = [...withValue].sort(
     (a, b) =>
+      group(a) - group(b) ||
       sign * ((value(a) as number) - (value(b) as number)) ||
       a.name.localeCompare(b.name),
   );
 
+  const refs = (rides: readonly ComparedRide[]) =>
+    rides.slice(0, LEFT_OUT_NAMES_LIMIT).map(rideRefOf);
+  const withoutValue = allowed.filter((ride) => value(ride) === undefined);
   return {
     rides: ranked.slice(0, params.limit),
     ranked: ranked.length,
-    withoutValue: allowed.length - withValue.length,
+    ...(first && { firstCount: withValue.filter(first).length }),
+    withoutValue: withoutValue.length,
+    ...(withoutValue.length > 0 && { withoutValueRides: refs(withoutValue) }),
     ...(rider !== undefined && {
       heightUnknown: heightUnknown.length,
-      heightUnknownRides: heightUnknown
-        .slice(0, HEIGHT_NAMES_LIMIT)
-        .map((ride) => ride.name),
+      heightUnknownRides: refs(heightUnknown),
       notAllowed: notAllowed.length,
-      notAllowedRides: notAllowed.slice(0, HEIGHT_NAMES_LIMIT).map(outOfReach),
+      notAllowedRides: notAllowed
+        .slice(0, LEFT_OUT_NAMES_LIMIT)
+        .map(outOfReach),
     }),
-    ...(type && { typeUnknown }),
-    ...(shelter && shelterCoverage(ofType.map((ride) => ride.indoorOutdoor))),
+    ...(type && {
+      typeUnknown: untyped.length,
+      typeUnknownRides: refs(untyped),
+    }),
+    ...(shelter && {
+      ...shelterCoverage(ofType.map((ride) => ride.indoorOutdoor)),
+      shelterUnknownRides: refs(
+        ofType.filter((ride) => ride.indoorOutdoor === undefined),
+      ),
+    }),
   };
 }
 
@@ -431,8 +472,18 @@ export function partyTooShort(
   );
 }
 
+/** A left-out ride as its id, name and, across parks, its park. */
+function rideRefOf(ride: ComparedRide): RideRef {
+  return {
+    id: ride.id,
+    name: ride.name,
+    ...(ride.park && { park: ride.park }),
+  };
+}
+
 function outOfReach(ride: ComparedRide): RideOutOfReach {
   return {
+    id: ride.id,
     name: ride.name,
     ...(ride.park && { park: ride.park }),
     minimumHeightCm: ride.minimumHeightCm as number,

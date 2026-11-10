@@ -4,6 +4,7 @@ import { Repository } from "typeorm";
 import { truncateIp } from "../../common/utils/request.util";
 import { AdminAuditLog } from "./entities/admin-audit-log.entity";
 import type { AdminPrincipal } from "./admin-principal";
+import { likeStartsWith } from "../../common/utils/like-pattern.util";
 
 export interface AuditWrite {
   actor: AdminPrincipal;
@@ -157,7 +158,9 @@ export class AdminAuditService {
       // Prefix match so `park.` selects the whole family of park actions —
       // the useful question is almost always "what happened to parks", not
       // "what happened via park.season.update".
-      qb.andWhere("log.action LIKE :action", { action: `${query.action}%` });
+      qb.andWhere("log.action LIKE :action", {
+        action: likeStartsWith(query.action),
+      });
     }
 
     const [rows, total] = await qb.getManyAndCount();

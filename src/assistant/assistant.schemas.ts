@@ -165,6 +165,15 @@ export const favoritesSnapshotSchema = z.object({
 });
 export type FavoritesSnapshot = z.infer<typeof favoritesSnapshotSchema>;
 
+/**
+ * The most rides a question names as ridden. The browser keeps them for every park the visitor
+ * ever marked, and only the parks of this chat matter, so a long list is cut rather than refused.
+ */
+export const RIDDEN_SNAPSHOT_MAX = 300;
+
+/** The ids of the rides the visitor marked as ridden, as the browser keeps them. */
+export const riddenSnapshotSchema = lenientList(z.uuid(), RIDDEN_SNAPSHOT_MAX);
+
 /** The token `POST /v1/assistant/session` hands out after the challenge. */
 const sessionToken = z.string().max(200);
 
@@ -206,6 +215,7 @@ export const chatRequestSchema = z.strictObject({
   planner: lenient(plannerSnapshotSchema),
   alerts: lenient(alertsSnapshotSchema),
   favorites: lenient(favoritesSnapshotSchema),
+  ridden: riddenSnapshotSchema.optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

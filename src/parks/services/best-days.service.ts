@@ -21,7 +21,7 @@ import {
 } from "../dto/best-days-calendar.dto";
 
 /** Rolling window length, in days, from "today" (park timezone). */
-const BEST_DAYS_WINDOW = 90;
+export const BEST_DAYS_WINDOW = 90;
 
 /**
  * Snapshot TTL, and the invariant is that a PROJECTION may not outlive its

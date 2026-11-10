@@ -92,7 +92,42 @@ describe("compareRides", () => {
     ]);
     expect(fastest.ranked).toBe(3);
     expect(fastest.withoutValue).toBe(2);
+    // Named, so Parky can say which rides park.fan has no figure for, with the id the next tool takes.
+    expect(fastest.withoutValueRides).toEqual([
+      { id: "c", name: "Colorado Adventure" },
+      { id: "e", name: "Carousel" },
+    ]);
     expect(fastest).not.toHaveProperty("heightUnknown");
+  });
+
+  it("lists every ride of the filters by name without a fact to rank by", () => {
+    const all = compareRides(rides, { limit: 10 });
+    expect(all.rides.map((ride) => ride.name)).toEqual([
+      "Black Mamba",
+      "Carousel",
+      "Colorado Adventure",
+      "Kiddie Coaster",
+      "Taron",
+    ]);
+    expect(all.withoutValue).toBe(0);
+  });
+
+  it("lists the rides not ridden yet first without a fact to rank by, and counts them", () => {
+    const ridden = new Set(["b", "e"]);
+    const left = compareRides(rides, {
+      limit: 3,
+      first: (ride) => !ridden.has(ride.id),
+    });
+    expect(left.rides.map((ride) => ride.id)).not.toContain("b");
+    expect(left.rides.map((ride) => ride.id)).not.toContain("e");
+    expect(left.firstCount).toBe(3);
+    // A ranking keeps its order; `first` only sorts the list by name.
+    const fastest = compareRides(rides, {
+      by: "topSpeed",
+      limit: 10,
+      first: (ride) => !ridden.has(ride.id),
+    });
+    expect(fastest).not.toHaveProperty("firstCount");
   });
 
   it("ranks the other way round with order asc", () => {
@@ -118,10 +153,10 @@ describe("compareRides", () => {
     expect(child.heightUnknown).toBe(1);
     // Named, so a ride the child is too small for is never taken for one of unknown height.
     expect(child.notAllowedRides).toEqual([
-      { name: "Taron", minimumHeightCm: 130 },
-      { name: "Black Mamba", minimumHeightCm: 140 },
+      { id: "a", name: "Taron", minimumHeightCm: 130 },
+      { id: "b", name: "Black Mamba", minimumHeightCm: 140 },
     ]);
-    expect(child.heightUnknownRides).toEqual(["Carousel"]);
+    expect(child.heightUnknownRides).toEqual([{ id: "e", name: "Carousel" }]);
 
     const tall = compareRides(rides, {
       by: "minimumHeight",
