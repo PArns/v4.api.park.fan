@@ -224,10 +224,12 @@ export class HolidaysProcessor {
                 year,
                 isoCode,
               );
+              if (!longWeekends) continue;
               const savedBridges =
                 await this.holidaysService.saveLongWeekendsFromApi(
                   longWeekends,
                   isoCode,
+                  year,
                 );
               totalHolidaysSaved += savedBridges;
             }

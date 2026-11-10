@@ -198,53 +198,38 @@ export class HolidaysService {
   }
 
   /**
-   * Save long weekends (bridge days) from Nager.Date API
+   * Save one country's bridge days of one year from Nager.Date's long weekends,
+   * replacing what an earlier sync stored for that year.
+   *
+   * Only the days Nager names in `bridgeDays`. Every weekday of the long
+   * weekend's range used to be stored, the holiday itself among them: 1 January
+   * and 14 July read as bridge days, and a day once stored stayed, since nothing
+   * removed what a later answer no longer listed. A year Nager lists none for
+   * keeps what it has, as `replaceHolidaysBySource` never empties a source.
    */
   async saveLongWeekendsFromApi(
     longWeekends: import("../external-apis/nager-date/nager-date.types").NagerLongWeekend[],
     countryCode: string,
+    year: number,
   ): Promise<number> {
-    if (longWeekends.length === 0) return 0;
+    const holidaysToUpsert: HolidayInput[] = bridgeDaysOf(
+      longWeekends,
+      year,
+    ).map((day) => ({
+      externalId: `nager-bridge:${countryCode}:${day}`,
+      date: new Date(`${day}T00:00:00Z`),
+      name: "Bridge Day",
+      localName: "Brückentag",
+      country: countryCode,
+      holidayType: "bridge",
+      isNationwide: true,
+    }));
 
-    const holidaysToUpsert: HolidayInput[] = [];
-
-    for (const lw of longWeekends) {
-      if (!lw.needBridgeDay) continue;
-
-      // Nager doesn't tell us WHICH day is the bridge day in the /LongWeekend response,
-      // only the range. Usually it's the Friday after or Monday before a holiday.
-      // However, we can store the whole period or use our internal logic.
-      // Better: The Nager API /LongWeekend logic is used to supplement our detection.
-
-      // For now, we store the start/end as a 'bridge' type if it's not a weekend
-      // and not already a holiday.
-      const start = new Date(`${lw.startDate}T12:00:00Z`);
-      const end = new Date(`${lw.endDate}T12:00:00Z`);
-      const current = new Date(start);
-
-      while (current <= end) {
-        const dayOfWeek = current.getUTCDay();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-        if (!isWeekend) {
-          const dateStr = current.toISOString().split("T")[0];
-          const externalId = `nager-bridge:${countryCode}:${dateStr}`;
-
-          holidaysToUpsert.push({
-            externalId,
-            date: new Date(current.setUTCHours(0, 0, 0, 0)),
-            name: "Bridge Day",
-            localName: "Brückentag",
-            country: countryCode,
-            holidayType: "bridge",
-            isNationwide: true,
-          });
-        }
-        current.setUTCDate(current.getUTCDate() + 1);
-      }
-    }
-
-    return this.saveRawHolidays(holidaysToUpsert);
+    const { saved } = await this.replaceHolidaysBySource(
+      `nager-bridge:${countryCode}:${year}-`,
+      holidaysToUpsert,
+    );
+    return saved;
   }
 
   /**
@@ -1120,4 +1105,26 @@ export class HolidaysService {
 
     return finalHolidays.length;
   }
+}
+
+/**
+ * The bridge days Nager names for `year`, each once and in order: working days
+ * only, never a weekend, and none outside the year asked for (a long weekend
+ * over New Year belongs to both).
+ */
+export function bridgeDaysOf(
+  longWeekends: ReadonlyArray<{ bridgeDays?: string[] }>,
+  year: number,
+): string[] {
+  const days = new Set<string>();
+  for (const weekend of longWeekends) {
+    for (const day of weekend.bridgeDays ?? []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !day.startsWith(`${year}-`)) {
+        continue;
+      }
+      const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+      if (weekday !== 0 && weekday !== 6) days.add(day);
+    }
+  }
+  return [...days].sort();
 }

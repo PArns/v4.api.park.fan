@@ -8,12 +8,29 @@ filled in, and which holiday fields this endpoint cannot be trusted for. Open it
 
 ```jsonc
 // GET /v1/parks/:continent/:country/:city/:park/schedule?from=2026-10-27&to=2026-11-02
-{ "park": { "id": "…", "name": "Phantasialand", "slug": "phantasialand", "timezone": "Europe/Berlin" },
+{
+  "park": {
+    "id": "…",
+    "name": "Phantasialand",
+    "slug": "phantasialand",
+    "timezone": "Europe/Berlin",
+  },
   "schedule": [
-    { "date": "2026-10-27", "scheduleType": "OPERATING",
-      "openingTime": "2026-10-27T08:00:00.000Z", "closingTime": "2026-10-27T17:00:00.000Z",
-      "isHoliday": false, "isPublicHoliday": false, "isSchoolHoliday": false, "isBridgeDay": false,
-      "isEstimated": false, "isInferred": false, "influencingHolidays": [] } ] }
+    {
+      "date": "2026-10-27",
+      "scheduleType": "OPERATING",
+      "openingTime": "2026-10-27T08:00:00.000Z",
+      "closingTime": "2026-10-27T17:00:00.000Z",
+      "isHoliday": false,
+      "isPublicHoliday": false,
+      "isSchoolHoliday": false,
+      "isBridgeDay": false,
+      "isEstimated": false,
+      "isInferred": false,
+      "influencingHolidays": [],
+    },
+  ],
+}
 ```
 
 ## The rows
@@ -34,10 +51,10 @@ filled in, and which holiday fields this endpoint cannot be trusted for. Open it
 Only for a park that has never published hours (`hasOperatingSchedule` false), and only for an
 `UNKNOWN` row on or before today:
 
-| Ride activity that day | Row becomes |
-| --- | --- |
-| yes | `OPERATING` with hours derived from the rides, `isEstimated: true`, `isInferred: true` |
-| none, strictly past day | `CLOSED`, `isEstimated: true` |
+| Ride activity that day  | Row becomes                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| yes                     | `OPERATING` with hours derived from the rides, `isEstimated: true`, `isInferred: true` |
+| none, strictly past day | `CLOSED`, `isEstimated: true`                                                          |
 
 A park that publishes hours gets its rows as stored.
 
@@ -45,6 +62,10 @@ A park that publishes hours gets its rows as stored.
 
 - `isHoliday`, `holidayName` and `isBridgeDay` were stamped on the row when the schedule was synced, so
   they can lag the holiday tables.
+- A bridge day is either worked out from the public holidays around it (a Friday after a Thursday
+  holiday, a Monday before a Tuesday one, a day between two: `calculateHolidayInfo`) or named by
+  Nager.Date in a long weekend's `bridgeDays`. Those are stored as `nager-bridge:<country>:<day>`,
+  and each sync replaces a year's set (`saveLongWeekendsFromApi`); a failed fetch leaves it alone.
 - **`isPublicHoliday` and `isSchoolHoliday` are always `false` here** and `holidayType` is never sent:
   no type is stored with a row, and these two are derived from it. `influencingHolidays` is always
   `[]`. Read holidays from the calendar, which computes them at request time.

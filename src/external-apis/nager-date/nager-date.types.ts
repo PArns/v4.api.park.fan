@@ -118,4 +118,10 @@ export interface NagerLongWeekend {
    * Whether this requires a bridge day (taking day off between holiday and weekend)
    */
   needBridgeDay: boolean;
+
+  /**
+   * The bridge days themselves, YYYY-MM-DD: the working days to take off. The
+   * range around them also holds the holiday and the weekend.
+   */
+  bridgeDays?: string[];
 }
