@@ -12,7 +12,7 @@ import {
   isLocationDerivedEvent,
   type SiteLocale,
 } from "./site-analytics.constants";
-import { AI_SOURCE_HOSTS } from "./referrer.util";
+import { AI_SOURCE_HOSTS, SOCIAL_SOURCE_HOSTS } from "./referrer.util";
 
 /**
  * What a hit may look like. There is no event schema: a new event, property
@@ -261,7 +261,13 @@ function validReferrer(value: unknown): string | null {
   return value;
 }
 
-/** An AI assistant's host from `utm_source` ({@link AI_SOURCE_HOSTS}), or null. */
+/**
+ * An AI assistant's or a social network's host from `utm_source`
+ * ({@link AI_SOURCE_HOSTS}, {@link SOCIAL_SOURCE_HOSTS}), or null.
+ */
 function validSource(value: unknown): string | null {
-  return typeof value === "string" && AI_SOURCE_HOSTS.has(value) ? value : null;
+  if (typeof value !== "string") return null;
+  return AI_SOURCE_HOSTS.has(value) || SOCIAL_SOURCE_HOSTS.has(value)
+    ? value
+    : null;
 }

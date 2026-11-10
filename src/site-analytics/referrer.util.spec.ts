@@ -1,6 +1,7 @@
 import {
   AI_SOURCE_HOSTS,
   REFERRER_RULES,
+  SOCIAL_SOURCE_HOSTS,
   classifyReferrer,
 } from "./referrer.util";
 
@@ -67,9 +68,12 @@ describe("classifyReferrer", () => {
     }
   });
 
-  it("files every `source` the beacon may send under the ai channel", () => {
+  it("files every `source` the beacon may send under its channel", () => {
     for (const host of AI_SOURCE_HOSTS) {
       expect(classifyReferrer(host).channel).toBe("ai");
+    }
+    for (const host of SOCIAL_SOURCE_HOSTS) {
+      expect(classifyReferrer(host).channel).toBe("social");
     }
   });
 });

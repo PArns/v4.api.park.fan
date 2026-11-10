@@ -128,6 +128,18 @@ export const AI_SOURCE_HOSTS: ReadonlySet<string> = new Set([
   "phind.com",
 ]);
 
+/**
+ * The social networks' hosts a page view's `source` may name: park.fan tags
+ * the links in its own Instagram and Facebook posts with `utm_source`, and the
+ * frontend sends the network's host (its `SOCIAL_SOURCE_HOSTS`), because
+ * Instagram's in-app browser and the apps a bio or story link opens in send no
+ * referrer. Each one is a host of a `social` rule above.
+ */
+export const SOCIAL_SOURCE_HOSTS: ReadonlySet<string> = new Set([
+  "instagram.com",
+  "facebook.com",
+]);
+
 /** Prefixes a site's own pages carry in front of its name. */
 const HOST_PREFIX = /^(?:www\d?|m|l|lm|mobile|amp)\./;
 
