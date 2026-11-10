@@ -974,6 +974,68 @@ async function inBatches<T, R>(
   return results;
 }
 
+/**
+ * The park's first day with published opening hours on or after `from` (YYYY-MM-DD), a year
+ * ahead at most, or null when none is published.
+ */
+async function firstOpenDay(
+  ctx: AssistantToolContext,
+  parkId: string,
+  from: string,
+): Promise<string | null> {
+  const opening = await ctx
+    .get(ParksService)
+    .getFirstOperatingDayFrom(parkId, from);
+  if (!opening) return null;
+  // The DATE column arrives as "YYYY-MM-DD" from the driver; a Date is its UTC day.
+  return typeof opening.date === "string"
+    ? (opening.date as string).slice(0, 10)
+    : opening.date.toISOString().slice(0, 10);
+}
+
+/** How far ahead `compare_dates` reads a day: the yearly forecast's reach. */
+const COMPARE_DATES_AHEAD = 365;
+
+/** Most days one `compare_dates` reads: ten named days, or a month as a range. */
+const MAX_COMPARED_DATES = 31;
+
+/**
+ * One park's days as the calendar every park page shows them, read month by month so a
+ * comparison of May and December builds two months, not the eight between them.
+ */
+async function calendarDays(
+  ctx: AssistantToolContext,
+  park: Park,
+  dates: readonly string[],
+) {
+  const byMonth = new Map<string, string[]>();
+  for (const date of dates) {
+    const month = date.slice(0, 7);
+    byMonth.set(month, [...(byMonth.get(month) ?? []), date]);
+  }
+  const calendars = await Promise.all(
+    [...byMonth.values()].map((days) => {
+      const sorted = [...days].sort();
+      const { fromDate, toDate } = parseDateRange(
+        sorted[0],
+        sorted[sorted.length - 1],
+        { timezone: park.timezone },
+      );
+      return ctx
+        .get(CalendarService)
+        .buildCalendarResponse(park, fromDate, toDate, "none");
+    }),
+  );
+  const days = new Map(
+    calendars.flatMap((calendar) => calendar.days.map((d) => [d.date, d])),
+  );
+  return {
+    days,
+    coverage: calendars[0]?.meta.scheduleCoverage ?? { from: null, to: null },
+    hasOperatingSchedule: calendars[0]?.meta.hasOperatingSchedule ?? false,
+  };
+}
+
 /** One park's day for `compare_parks`, from the calendar every park page shows. */
 async function comparedParkDay(
   ctx: AssistantToolContext,
@@ -1255,19 +1317,9 @@ export const ASSISTANT_TOOLS = [
         );
         if (reopening) {
           const from = reopenSearchFrom(reopening, today);
-          const opening = from
-            ? await parks.getFirstOperatingDayFrom(park.id, from)
-            : null;
           ride.reopening = {
             ...reopening,
-            // The DATE column arrives as "YYYY-MM-DD" from the driver; a Date is its UTC day.
-            ...(from && {
-              reopensOn: opening
-                ? typeof opening.date === "string"
-                  ? (opening.date as string).slice(0, 10)
-                  : opening.date.toISOString().slice(0, 10)
-                : null,
-            }),
+            ...(from && { reopensOn: await firstOpenDay(ctx, park.id, from) }),
           };
         }
       }
@@ -1566,7 +1618,7 @@ export const ASSISTANT_TOOLS = [
       "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
       "only; never move it to another day. Days after " +
       "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
-      "days: get_park_history.",
+      "days: get_park_history; particular days or days beyond 31: compare_dates.",
     input: z.object({
       park: parkRef,
       days: z
@@ -1812,6 +1864,118 @@ export const ASSISTANT_TOOLS = [
           .filter((d) => d.found?.status === "CLOSED")
           .map((d) => d.park.name),
         notKnown: days.filter((d) => !d.found).map((d) => d.park.name),
+      };
+    },
+  }),
+  tool({
+    name: "compare_dates",
+    status: "forecast",
+    description:
+      "Particular days at one park side by side, up to a year ahead: per day its weekday, " +
+      "whether it is open, closed or its hours are not published yet, the hours, the crowd " +
+      "level park.fan's calendar expects, the headliners' expected peak wait, holidays, school " +
+      "breaks, bridge days and events, and the weather where a forecast reaches. A closed day " +
+      "names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
+      'up to 31 days ("the end of December"). For "Saturday or Sunday?", "10 or 17 May?", ' +
+      '"is it open on 28 December?". Past days are get_park_history.',
+    input: z.object({
+      park: parkRef,
+      dates: z
+        .array(isoDay)
+        .min(1)
+        .max(10)
+        .optional()
+        .describe("YYYY-MM-DD in the park's calendar"),
+      from: isoDay.optional().describe("Instead of dates: first day"),
+      to: isoDay.optional().describe("With from: last day"),
+    }),
+    run: async ({ park: reference, dates, from, to }, ctx) => {
+      if (!dates === !(from && to)) {
+        throw new McpToolError("Give either dates, or from and to");
+      }
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const today = getCurrentDateInTimezone(found.timezone);
+      const asked = dates
+        ? [...new Set(dates)].sort()
+        : Array.from(
+            { length: daysBetween(from as string, to as string) + 1 },
+            (_, i) => addIsoDays(from as string, i),
+          );
+      if (asked.length === 0 || asked.length > MAX_COMPARED_DATES) {
+        throw new McpToolError(`Give 1 to ${MAX_COMPARED_DATES} days`);
+      }
+      if (asked[0] < today) {
+        throw new McpToolError(
+          `${asked[0]} is over; past days are get_park_history with on`,
+        );
+      }
+      const last = addIsoDays(today, COMPARE_DATES_AHEAD);
+      if (asked[asked.length - 1] > last) {
+        throw new McpToolError(`park.fan looks ahead up to ${last}`);
+      }
+      const { days, coverage, hasOperatingSchedule } = await calendarDays(
+        ctx,
+        found,
+        asked,
+      );
+      const rows = await Promise.all(
+        asked.map(async (date) => {
+          const day = days.get(date);
+          const weekday = formatInTimeZone(
+            new Date(`${date}T12:00:00Z`),
+            "UTC",
+            "EEEE",
+          );
+          if (!day)
+            return { date, weekday, status: "UNKNOWN", why: "no calendar day" };
+          const compact = compactDay(day, found.timezone);
+          // Past the published schedule a status is the calendar's guess, not the park's word.
+          const published =
+            hasOperatingSchedule && coverage.to !== null && date <= coverage.to;
+          const base = {
+            weekday,
+            ...compact,
+            hoursPublished: published,
+          };
+          if (!published) {
+            return {
+              ...base,
+              status: "UNKNOWN",
+              why: hasOperatingSchedule
+                ? `the park has published its hours up to ${coverage.to}; this is park.fan's estimate`
+                : "the park publishes no opening hours; this is park.fan's estimate",
+              estimatedStatus: compact.status,
+            };
+          }
+          if (compact.status === "CLOSED") {
+            return {
+              ...base,
+              crowdLevel: undefined,
+              expectedPeakWaitMinutes: undefined,
+              nextOpenDay: await firstOpenDay(
+                ctx,
+                found.id,
+                addIsoDays(date, 1),
+              ),
+            };
+          }
+          return base;
+        }),
+      );
+      const rank = (row: (typeof rows)[number]) =>
+        "crowdLevel" in row && row.crowdLevel
+          ? CROWD_ORDER.indexOf(row.crowdLevel)
+          : -1;
+      const open = rows.filter(
+        (row) => row.status === "OPERATING" && rank(row) >= 0,
+      );
+      const quietest = [...open].sort((a, b) => rank(a) - rank(b))[0];
+      return {
+        park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
+        hoursPublishedUntil: coverage.to,
+        days: rows,
+        quietestOpenDay: quietest?.date ?? null,
       };
     },
   }),
