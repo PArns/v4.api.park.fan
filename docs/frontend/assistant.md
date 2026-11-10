@@ -122,7 +122,8 @@ shortest rider is under, names such rides with their minimum, and says a minimum
 rather than that a ride is fine. Version 29: another day than today is judged only from a lookup
 for that day, and a closed park gets no crowd but the time it opens next. Version 30: a rain question
 goes to the `shelter` filter, and a thin list is said to be incomplete. Version 31: several parks on
-one day go to `compare_parks`, never one lookup per park.
+one day go to `compare_parks`, never one lookup per park. Version 32: `open_page` also
+opens a park's crowd calendar, the park comparison and the site's own pages.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -292,7 +293,12 @@ where known, marks `tooShortForParty`, and names the planned rides among them as
 
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
-park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs), `request_location` (the share
+park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs, built from the data: a park, a ride, a post or
+glossary term, a park's `section` `calendar` by its English segment, which the widget respells in
+the reader's language, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`; the average-wait
+and with-kids pages exist only for parks with enough data, a gate the frontend decides, so they are
+not offered), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no

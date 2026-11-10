@@ -35,6 +35,7 @@ import {
 import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
 import { Park } from "../../parks/entities/park.entity";
+import { frontendParkPath } from "../../common/utils/frontend-url.util";
 import { Show as ShowEntity } from "../../shows/entities/show.entity";
 import { Restaurant } from "../../restaurants/entities/restaurant.entity";
 import { FavoritesService } from "../../favorites/favorites.service";
@@ -461,6 +462,30 @@ async function showPerformance(
   }
   return { park, show, timezone: found.timezone, instant: instants[at] };
 }
+
+/**
+ * A park's own sub-pages `open_page` can open, by their English segment, which the widget respells
+ * in the reader's language (`localizedPath` in the frontend). Only the calendar: the average-wait
+ * and with-kids pages exist only for parks with enough data, a gate the frontend decides.
+ */
+const PARK_SECTIONS = ["calendar"] as const;
+const PARK_SECTION_SEGMENTS: Record<(typeof PARK_SECTIONS)[number], string> = {
+  calendar: "wait-time-calendar",
+};
+
+/** The site's pages without one park, ride or post that `open_page` can open. */
+const SITE_PAGES = [
+  "alerts",
+  "best_time",
+  "favorites",
+  "trip_planner",
+] as const;
+const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
+  alerts: "/alerts",
+  best_time: "/best-time-to-visit",
+  favorites: "/favorites",
+  trip_planner: "/trip-planner",
+};
 
 /** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
 const CONTENT_PATH =
@@ -2243,11 +2268,18 @@ export const ASSISTANT_TOOLS = [
   tool({
     name: "open_page",
     description:
-      "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or slug), a ride (rideId), or a post or " +
-      "glossary term (its url from search_posts or look_up_glossary). The page address is " +
-      "built from the park.fan data, never typed by you.",
+      "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or " +
+      "slug; with section calendar its wait-time calendar), a ride (rideId), a post or glossary " +
+      "term (its url from search_posts or look_up_glossary), 2 to 4 parks side by side (compare), " +
+      "or one of the site's pages (page: alerts, the user's push alerts; best_time, the best time " +
+      "to visit across parks; favorites; trip_planner). The page address is built from the " +
+      "park.fan data, never typed by you.",
     input: z.object({
       park: parkRef.optional(),
+      section: z
+        .enum(PARK_SECTIONS)
+        .optional()
+        .describe("With park: calendar for its wait-time calendar"),
       rideId: z
         .string()
         .uuid()
@@ -2260,8 +2292,23 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "A post's or glossary term's url, exactly as a tool returned it",
         ),
+      compare: z
+        .array(parkRef)
+        .min(2)
+        .max(4)
+        .optional()
+        .describe("Park ids or slugs for the park comparison"),
+      page: z.enum(SITE_PAGES).optional(),
     }),
-    run: async ({ park, rideId, url }, ctx) => {
+    run: async ({ park, section, rideId, url, compare, page }, ctx) => {
+      const targets = [park, rideId, url, compare, page].filter(
+        (target) => target !== undefined,
+      );
+      if (targets.length !== 1 || (section && !park)) {
+        throw new McpToolError(
+          "Give exactly one target: park (with or without section), rideId, url, compare or page",
+        );
+      }
       let path: string | null = null;
       if (rideId) {
         const ride = await ctx
@@ -2278,15 +2325,32 @@ export const ASSISTANT_TOOLS = [
         const found = await resolvePark(mcp(ctx), park);
         if (isAmbiguous(found)) return found;
         const pageUrl = parkPageUrl(found);
-        path = pageUrl ? siteOnlyPath(pageUrl) : null;
+        const base = pageUrl ? siteOnlyPath(pageUrl) : null;
+        path =
+          base && section ? `${base}/${PARK_SECTION_SEGMENTS[section]}` : base;
       } else if (url) {
         const candidate = siteOnlyPath(url);
         // Posts and glossary terms only; parks and rides go by id, so no address is guessed.
         path = candidate && CONTENT_PATH.test(candidate) ? candidate : null;
+      } else if (compare) {
+        const found = await Promise.all(
+          compare.map((reference) => resolvePark(mcp(ctx), reference)),
+        );
+        const ambiguous = found.find(isAmbiguous);
+        if (ambiguous) return ambiguous;
+        // The long form, continent/country/city/park: a bare slug is shared by Paris and Anaheim.
+        const refs = (found as Park[]).map((one) =>
+          frontendParkPath(one)?.replace(/^\/parks\//, ""),
+        );
+        path = refs.every(Boolean)
+          ? `/compare?parks=${[...new Set(refs)].join(",")}`
+          : null;
+      } else if (page) {
+        path = SITE_PAGE_PATHS[page];
       }
       if (!path) {
         throw new McpToolError(
-          "Give a park, a rideId, or a post or glossary url a tool returned",
+          "Give a park, a rideId, a post or glossary url a tool returned, compare or page",
         );
       }
       return new ActionOutcome({ type: "navigate", path }, { opened: true });
