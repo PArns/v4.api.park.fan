@@ -57,6 +57,7 @@ import {
   SeasonWriteDto,
   VerifyFieldsDto,
 } from "./dto/curation.dto";
+import { likeContains } from "../../common/utils/like-pattern.util";
 
 /**
  * The editing surface: parks, rides, their curated fields, their seasons.
@@ -297,7 +298,7 @@ export class AdminContentController {
       .skip(Number(offset) || 0);
 
     if (q && q.trim().length > 0) {
-      const like = `%${q.trim()}%`;
+      const like = likeContains(q.trim());
       // Both names, because an editor searching for a park they renamed is
       // searching for the name they typed, not the one upstream still uses.
       qb.andWhere(
@@ -483,7 +484,7 @@ export class AdminContentController {
       qb.andWhere("attraction.retired_at IS NULL");
     }
     if (q && q.trim().length > 0) {
-      const like = `%${q.trim()}%`;
+      const like = likeContains(q.trim());
       qb.andWhere(
         new Brackets((w) => {
           w.where("attraction.name ILIKE :like", { like }).orWhere(
@@ -559,7 +560,7 @@ export class AdminContentController {
     const term = q?.trim() ?? "";
     if (term.length < 2) return { total: 0, attractions: [] };
 
-    const like = `%${term}%`;
+    const like = likeContains(term);
     const [rows, total] = await this.attractions
       .createQueryBuilder("attraction")
       .leftJoinAndSelect("attraction.park", "park")

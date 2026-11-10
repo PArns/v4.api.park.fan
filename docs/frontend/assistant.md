@@ -81,9 +81,11 @@ and the park pages do: somebody in London planning a day in Orlando hears Orland
 model never converts a time. Each tool call records the parks it resolves (`resolvePark` reports
 the zone through the MCP context's `onPark`; the ride tools note their ride's park), and
 `localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in the result as
-`yyyy-MM-dd HH:mm` in that park's zone before the model reads it; the result names the zone as
-`timesIn`. A call about several parks keeps each instant's own offset, which the tools write as
-the park's. The per-hour forecasts turn their park-local hours into instants first
+`yyyy-MM-dd HH:mm` in that park's zone before the model reads it; the result names the zone and
+the park's own now as `timesIn` ("park time, Europe/Berlin; now there 2026-11-10 15:10"), so "the
+next show" is the next after the park's clock, not the visitor's. A call about several parks keeps
+each instant's own offset, which the tools write as the park's: `+00:00`, never `Z`, for a park on
+UTC (`xxx` in `get_park` and `park_forecast`), since a `Z` would be read as the fallback zone's. The per-hour forecasts turn their park-local hours into instants first
 (`parkHourInstant`). `timeZone`, the browser's IANA zone, is still sent: "This chat" gives the
 visitor's own "now" in it, and the prompt has Parky add "park time" once when the two differ. A
 ride forecast keeps only the hours the park is open, the closing hour excluded, and on today only
@@ -292,7 +294,8 @@ ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_P
 rated by the same typical-day-peak level. `ranked` holds the open parks quietest first (a tie by
 the headliners' expected peak), `unrated` the open ones without a level, `closed` and `notKnown`
 the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
-in `notKnown` and costs the rest nothing.
+in `notKnown` and costs the rest nothing, and so does one whose published schedule names no status
+for the day, with that reason (`get_days` gives such a day the same `why`).
 
 `get_best_days` returns `tenQuietestOpenDays`, the ten quietest rated open days, and counts the
 unrated ones apart (`unratedOpenDays`): an `unknown` day is never ranked as quiet, and a day
@@ -342,8 +345,9 @@ counted apart as `shelterUnknown`, never as outdoor, and under half known
 is the reference, the candidates otherwise. In a test run of 41 questions through Haiku with this
 prompt, every ride named by the visitor cost a `find_rides` round first, and in the chats of 3 to 9
 November `get_ride` followed `find_rides` in 2 of 3 answers. `compare_rides` without `by` lists
-every ride of its filters by name, each marked `ridden` where ticked off, for "which coasters
-haven't we done". `get_days` ranks a stretch's five quietest open days (`quietestOpenDays`).
+every ride of its filters by name, the ones not ridden yet first and counted as `notRidden`, the
+rest marked `ridden`, for "which coasters haven't we done": a list cut at `limit` still starts
+with them. `get_days` ranks a stretch's five quietest open days (`quietestOpenDays`).
 
 Every `park` parameter takes a name as well as an id or slug (`resolvePark`, which the admin MCP
 shares): a slug no park has goes to the site's search, which gives the park when it finds only

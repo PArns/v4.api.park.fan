@@ -35,6 +35,10 @@ import {
   resolveAbbreviations,
   resolveCuratedPark,
 } from "../parks/utils/curated-park-facts.util";
+import {
+  likeContains,
+  likeStartsWith,
+} from "../common/utils/like-pattern.util";
 
 interface ParkIndexData {
   id: string;
@@ -679,7 +683,9 @@ export class SearchService implements OnModuleInit {
             // and ILIKE all use the pg_trgm GIN indexes; pg_trgm is
             // case-insensitive, so LOWER() wrapping is removed (it would
             // defeat the index built on the raw column).
-            qb.where("park.name ILIKE :likeQuery", { likeQuery: `%${query}%` })
+            qb.where("park.name ILIKE :likeQuery", {
+              likeQuery: likeContains(query),
+            })
               .orWhere("park.city ILIKE :likeQuery")
               .orWhere("park.country ILIKE :likeQuery")
               .orWhere("park.continent ILIKE :likeQuery")
@@ -687,7 +693,7 @@ export class SearchService implements OnModuleInit {
               // GIN trgm index on REGEXP_REPLACE(name, ...)
               .orWhere(
                 "REGEXP_REPLACE(park.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
-                { normalizedQuery: `%${normalizedQuery}%` },
+                { normalizedQuery: likeContains(normalizedQuery) },
               )
               // Phonetic Match — uses functional B-tree index on dmetaphone(name)
               .orWhere("dmetaphone(park.name) = dmetaphone(:query)")
@@ -723,7 +729,7 @@ export class SearchService implements OnModuleInit {
         // Secondary sort by similarity
         .addOrderBy("similarity(LOWER(park.name), LOWER(:query))", "DESC")
         .setParameter("exactQuery", query)
-        .setParameter("startsWith", `${query}%`)
+        .setParameter("startsWith", likeStartsWith(query))
         .setParameter("normalizedQueryExact", normalizedQuery)
         .setParameter("query", query)
         .setParameter(
@@ -814,12 +820,12 @@ export class SearchService implements OnModuleInit {
             // sequential scan. levenshtein() and similarity()>X were removed
             // for that reason — trigram % handles typo tolerance.
             qb.where("attraction.name ILIKE :likeQuery", {
-              likeQuery: `%${query}%`,
+              likeQuery: likeContains(query),
             })
               .orWhere("attraction.landName ILIKE :likeQuery")
               .orWhere(
                 "REGEXP_REPLACE(attraction.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
-                { normalizedQuery: `%${normalizedQuery}%` },
+                { normalizedQuery: likeContains(normalizedQuery) },
               )
               .orWhere("dmetaphone(attraction.name) = dmetaphone(:query)")
               .orWhere("attraction.name % :query")
@@ -846,7 +852,7 @@ export class SearchService implements OnModuleInit {
           "DESC",
         )
         .setParameter("exactQuery", query)
-        .setParameter("startsWith", `${query}%`)
+        .setParameter("startsWith", likeStartsWith(query))
         .setParameter("normalizedQueryExact", normalizedQuery)
         .setParameter("query", query)
         .setParameter(
@@ -926,11 +932,11 @@ export class SearchService implements OnModuleInit {
         new Brackets((qb) => {
           // Index-only WHERE — see searchParks comment.
           qb.where("show.name ILIKE :likeQuery", {
-            likeQuery: `%${query}%`,
+            likeQuery: likeContains(query),
           })
             .orWhere(
               "REGEXP_REPLACE(show.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
-              { normalizedQuery: `%${normalizedQuery}%` },
+              { normalizedQuery: likeContains(normalizedQuery) },
             )
             .orWhere("dmetaphone(show.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
@@ -953,7 +959,7 @@ export class SearchService implements OnModuleInit {
       )
       .addOrderBy("similarity(LOWER(show.name), LOWER(:query))", "DESC")
       .setParameter("exactQuery", query)
-      .setParameter("startsWith", `${query}%`)
+      .setParameter("startsWith", likeStartsWith(query))
       .setParameter("normalizedQueryExact", normalizedQuery)
       .setParameter("query", query)
       .limit(limit)
@@ -1023,11 +1029,11 @@ export class SearchService implements OnModuleInit {
         new Brackets((qb) => {
           // Index-only WHERE — see searchParks comment.
           qb.where("restaurant.name ILIKE :likeQuery", {
-            likeQuery: `%${query}%`,
+            likeQuery: likeContains(query),
           })
             .orWhere(
               "REGEXP_REPLACE(restaurant.name, '[^a-zA-Z0-9]', '', 'g') ILIKE :normalizedQuery",
-              { normalizedQuery: `%${normalizedQuery}%` },
+              { normalizedQuery: likeContains(normalizedQuery) },
             )
             .orWhere("dmetaphone(restaurant.name) = dmetaphone(:query)")
             .orWhere("dmetaphone(park.city) = dmetaphone(:query)")
@@ -1050,7 +1056,7 @@ export class SearchService implements OnModuleInit {
       )
       .addOrderBy("similarity(LOWER(restaurant.name), LOWER(:query))", "DESC")
       .setParameter("exactQuery", query)
-      .setParameter("startsWith", `${query}%`)
+      .setParameter("startsWith", likeStartsWith(query))
       .setParameter("normalizedQueryExact", normalizedQuery)
       .setParameter("query", query)
       .limit(limit)
@@ -1086,7 +1092,7 @@ export class SearchService implements OnModuleInit {
         .where(
           new Brackets((qb) => {
             qb.where("park.city ILIKE :likeQuery", {
-              likeQuery: `%${query}%`,
+              likeQuery: likeContains(query),
             })
               .orWhere("park.city % :query")
               .orWhere("dmetaphone(park.city) = dmetaphone(:query)");
@@ -1118,7 +1124,7 @@ export class SearchService implements OnModuleInit {
         .where(
           new Brackets((qb) => {
             qb.where("park.country ILIKE :likeQuery", {
-              likeQuery: `%${query}%`,
+              likeQuery: likeContains(query),
             })
               .orWhere("park.country % :query")
               .orWhere("dmetaphone(park.country) = dmetaphone(:query)");

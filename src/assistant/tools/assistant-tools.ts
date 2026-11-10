@@ -1820,8 +1820,9 @@ export const ASSISTANT_TOOLS = [
       "first unless order asc. type keeps only coasters, dark rides (simulators included), water " +
       "rides or family rides; shelter keeps only the rides that keep you dry in the rain " +
       "(covered: indoors or a roofed queue; indoor: the ride too). With riderHeightCm only " +
-      "the rides someone that tall may ride. Without by, every ride of the filters by name, each " +
-      'marked ridden where the user ticked it off ("which coasters haven\'t we done"). ' +
+      "the rides someone that tall may ride. Without by, every ride of the filters by name, the " +
+      "ones not ridden yet first (notRidden counts them), the others marked ridden where the user " +
+      'ticked them off ("which coasters haven\'t we done"; raise limit to see them all). ' +
       'For "the fastest ride in X", "the fastest coaster in ' +
       'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
       "what it left out for lack of data (say so when many are). No waits: those are show_card " +
@@ -1897,14 +1898,20 @@ export const ASSISTANT_TOOLS = [
       const profiles = await ctx
         .get(RideProfileService)
         .findByAttractions(found.map((attraction) => attraction.id));
-      const compared = compareRides(comparedRides(found, profiles), {
-        by,
-        order,
-        type,
-        shelter,
-        riderHeightCm,
-        limit,
-      });
+      const ridden = ctx.ridden;
+      const { firstCount, ...compared } = compareRides(
+        comparedRides(found, profiles),
+        {
+          by,
+          order,
+          type,
+          shelter,
+          riderHeightCm,
+          limit,
+          // "Which haven't we done": a list cut at the limit starts with those.
+          ...(ridden?.size && { first: (ride) => !ridden.has(ride.id) }),
+        },
+      );
       return {
         ...scope,
         by,
@@ -1912,6 +1919,7 @@ export const ASSISTANT_TOOLS = [
         ...(type && { type }),
         ...(shelter && { shelter }),
         ...compared,
+        ...(firstCount !== undefined && { notRidden: firstCount }),
         rides: compared.rides.map((ride) => ({
           ...ride,
           ...riddenMark(ctx, ride.id),
@@ -2464,8 +2472,11 @@ export const ASSISTANT_TOOLS = [
         schoolVacation: d.schoolVacation,
       });
       // Past a park's published schedule its status is the calendar's estimate, never a fact.
-      const published = known.filter((d) => "published" in d && d.published);
-      const estimated = known.filter((d) => !published.includes(d));
+      const inSchedule = known.filter((d) => "published" in d && d.published);
+      const estimated = known.filter((d) => !inSchedule.includes(d));
+      // Within it, a day the schedule names no status for is neither open nor closed.
+      const unstated = inSchedule.filter((d) => d.found.status === "UNKNOWN");
+      const published = inSchedule.filter((d) => !unstated.includes(d));
       const open = published.filter((d) => d.found.status === "OPERATING");
       const closed = published.filter((d) => d.found.status === "CLOSED");
       // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
@@ -2504,9 +2515,18 @@ export const ASSISTANT_TOOLS = [
               ? `hours published up to ${d.publishedUntil}; this is park.fan's estimate`
               : "the park publishes no opening hours; this is park.fan's estimate",
         })),
-        notKnown: read
-          .filter((d) => !("found" in d) || d.found === undefined)
-          .map((d) => ({ name: d.park.name, why: "why" in d ? d.why : null })),
+        notKnown: [
+          ...read
+            .filter((d) => !("found" in d) || d.found === undefined)
+            .map((d) => ({
+              name: d.park.name,
+              why: "why" in d ? d.why : null,
+            })),
+          ...unstated.map((d) => ({
+            name: d.park.name,
+            why: "the park's published schedule names no opening status for that day",
+          })),
+        ],
       };
     },
   }),
@@ -2592,6 +2612,12 @@ export const ASSISTANT_TOOLS = [
               ...base,
               status: "UNKNOWN",
               estimatedStatus: compact.status,
+            };
+          }
+          if (compact.status === "UNKNOWN") {
+            return {
+              ...base,
+              why: "the park's published schedule names no opening status for this day",
             };
           }
           if (compact.status === "CLOSED") {
@@ -3078,7 +3104,7 @@ export const ASSISTANT_TOOLS = [
         const typesOf = (ride: { id: string }) =>
           profiles.get(ride.id)?.types ?? [];
         let typeUnknown = 0;
-        let typeUnknownRides: string[] = [];
+        let typeUnknownRides: Array<{ id: string; name: string }> = [];
         if (type) {
           const untyped = [...all, ...down].filter(
             (ride) => typesOf(ride).length === 0,
@@ -3086,7 +3112,7 @@ export const ASSISTANT_TOOLS = [
           typeUnknown = untyped.length;
           typeUnknownRides = untyped
             .slice(0, LEFT_OUT_NAMES_LIMIT)
-            .map((ride) => ride.name);
+            .map((ride) => ({ id: ride.id, name: ride.name }));
           const ofType = (ride: { id: string }) =>
             isRideOfType(typesOf(ride), type);
           all = all.filter(ofType);
@@ -3107,7 +3133,7 @@ export const ASSISTANT_TOOLS = [
                 shelterUnknownRides: candidates
                   .filter((r) => !shelterOf.has(r.id))
                   .slice(0, LEFT_OUT_NAMES_LIMIT)
-                  .map((r) => r.name),
+                  .map((r) => ({ id: r.id, name: r.name })),
               }
             : null;
         if (shelter && shelterOf) {
@@ -4251,7 +4277,12 @@ export async function runAssistantTool(
         : plain;
     const labelled =
       zone && shown && typeof shown === "object" && !Array.isArray(shown)
-        ? { timesIn: `park time, ${zone}`, ...shown }
+        ? {
+            // The park's own now beside its times: "the next show" is the next after this, not
+            // after the visitor's clock, which the chat context gives.
+            timesIn: `park time, ${zone}; now there ${formatInTimeZone(Date.now(), zone, "yyyy-MM-dd HH:mm")}`,
+            ...shown,
+          }
         : shown;
     const result = JSON.stringify(
       localizeTimes(

@@ -1446,6 +1446,27 @@ describe("compare_parks", () => {
     ]);
   });
 
+  it("names a park whose published schedule gives the day no status, never drops it", async () => {
+    const saved = days[EP.id];
+    days[EP.id] = { status: "UNKNOWN", crowdLevel: "unknown" };
+    try {
+      const { json } = await run(
+        "compare_parks",
+        { country: "Germany", date: DATE },
+        providers(),
+      );
+      expect(
+        json.ranked.map((row: { name: string }) => row.name),
+      ).not.toContain("Europa-Park");
+      expect(json.notKnown).toContainEqual({
+        name: "Europa-Park",
+        why: "the park's published schedule names no opening status for that day",
+      });
+    } finally {
+      days[EP.id] = saved;
+    }
+  });
+
   it("keeps an open park without a level out of the ranking, with the reason", async () => {
     const saved = days[MP.id];
     days[MP.id] = { status: "OPERATING", crowdLevel: "unknown" };
@@ -1661,7 +1682,9 @@ describe("times in park time", () => {
       jest.fn(),
     );
     const json = JSON.parse(result.content);
-    expect(json.timesIn).toBe("park time, Europe/Berlin");
+    expect(json.timesIn).toMatch(
+      /^park time, Europe\/Berlin; now there \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+    );
     expect(json.opens).toBe(`${day} 09:00`);
   });
 });

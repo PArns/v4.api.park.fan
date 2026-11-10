@@ -10,6 +10,9 @@ import {
 import { Transform, Type } from "class-transformer";
 import { ApiProperty } from "@nestjs/swagger";
 
+/** The longest search query read; anything after it is dropped. */
+export const SEARCH_QUERY_MAX = 100;
+
 export class SearchQueryDto {
   @ApiProperty({
     description: "Search query (searches name, city, country, continent)",
@@ -18,6 +21,11 @@ export class SearchQueryDto {
   })
   @IsString()
   @MinLength(2, { message: "Search query must be at least 2 characters long" })
+  // Cut, not refused: a pasted paragraph searches its start, and no query reaches the trigram
+  // scans at any length.
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === "string" ? value.slice(0, SEARCH_QUERY_MAX) : value,
+  )
   q: string;
 
   @ApiProperty({

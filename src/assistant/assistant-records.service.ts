@@ -9,6 +9,7 @@ import {
   type FeedbackSource,
   type FeedbackStatus,
 } from "./entities/site-feedback.entity";
+import { likeContains } from "../common/utils/like-pattern.util";
 
 /** How long chats are kept; feedback is kept until it is deleted by hand. */
 export const CONVERSATION_RETENTION_DAYS = 7;
@@ -135,7 +136,7 @@ export class AssistantRecordsService {
       query.andWhere(
         `EXISTS (SELECT 1 FROM assistant_messages m
                   WHERE m."conversationId" = c.id AND m.text ILIKE :q)`,
-        { q: `%${params.q.replace(/[\\%_]/g, "\\$&")}%` },
+        { q: likeContains(params.q) },
       );
     }
     const [items, total] = await query.getManyAndCount();
