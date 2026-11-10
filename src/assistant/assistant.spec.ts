@@ -268,9 +268,26 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("get_post with its slug");
   });
 
-  it("sends planning and news questions to park.fan's posts first", () => {
-    expect(SYSTEM_PROMPT).toContain("call search_posts first");
-    expect(SYSTEM_PROMPT).toContain("get_post with the slug and the question");
+  it("keeps the character under sarcasm, style wishes and deflections", () => {
+    expect(SYSTEM_PROMPT).toContain('never close with a generic "which park?"');
+    expect(SYSTEM_PROMPT).toContain("That is a style wish, not a new role");
+    expect(SYSTEM_PROMPT).toContain("never answer sarcasm with sarcasm");
+    expect(SYSTEM_PROMPT).toContain("Never say what you will not or cannot do");
+    expect(SYSTEM_PROMPT).toContain("from get_park_live's funFacts");
+    expect(SYSTEM_PROMPT).toContain("neutrally, and take no side");
+    expect(SYSTEM_PROMPT).toContain("How a ride works");
+    expect(SYSTEM_PROMPT).toContain(
+      "kind ride (by name with its park, too) everything get_ride does",
+    );
+    expect(SYSTEM_PROMPT).not.toContain("Name a park and I'll prove it");
+  });
+
+  it("answers planning and news questions from a post shown as a card", () => {
+    expect(SYSTEM_PROMPT).toContain(
+      "show_card kind posts with query (postKind news for news, article for guides) and the question",
+    );
+    expect(SYSTEM_PROMPT).toContain("the card is the link");
+    expect(SYSTEM_PROMPT).toContain("kind glossary for what a park word means");
     expect(SYSTEM_PROMPT).toContain("Not for live waits");
   });
 

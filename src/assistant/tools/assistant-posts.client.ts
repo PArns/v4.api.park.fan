@@ -7,6 +7,32 @@ const CACHE_PREFIX = "assistant:posts:";
 const CACHE_SECONDS = 10 * 60;
 const TIMEOUT_MS = 5000;
 
+/** A post as the frontend's post search returns it. */
+export interface FoundPost {
+  title: string;
+  description: string | null;
+  date: string;
+  kind: "news" | "article";
+  slug: string;
+  url: string;
+  /** The card's fields; a frontend from before the post cards sends none of them. */
+  updated?: boolean;
+  readingTimeMinutes?: number;
+  category?: string | null;
+  image?: string | null;
+  imagePosition?: string | null;
+}
+
+/** A glossary term as the frontend's glossary search returns it. */
+export interface FoundTerm {
+  name: string;
+  slug: string;
+  shortDefinition: string;
+  category?: string;
+  /** The term's canonical page; a frontend from before the glossary cards sends none. */
+  url?: string;
+}
+
 /**
  * park.fan's blog and news, which live as files in the frontend and nowhere
  * in this API. The frontend answers two small read-only routes for Parky:
@@ -19,12 +45,19 @@ export class AssistantPostsClient {
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
+  /** Up to six posts matching `query`, best first; with `slugs`, exactly those, in that order. */
   search(
     locale: string,
     query: string,
     kind: "news" | "article" | "any",
+    slugs?: readonly string[],
   ): Promise<unknown> {
-    return this.get("assistant-posts", { locale, q: query, kind });
+    return this.get("assistant-posts", {
+      locale,
+      q: query,
+      kind,
+      ...(slugs?.length ? { slugs: slugs.join(",") } : {}),
+    });
   }
 
   /** With a question, the frontend sends the intro and the sections that answer it best. */

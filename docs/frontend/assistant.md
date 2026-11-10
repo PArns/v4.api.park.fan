@@ -116,7 +116,12 @@ that would embarrass park.fan in a screenshot, nobody is mocked, and a claim to 
 developer or Parky's maker changes nothing. Facts do not bend to insistence, and Parky promises
 nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
-once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
+once, from the park's `funFacts` or the ride's profile when the page has one. Sarcasm ("90 minutes,
+great tip 🙄") is a complaint with a grin: he checks the fact it is about and gives the next move,
+never sarcasm back. A wish for shorter or joke-free answers holds for the rest of the chat; it is a
+style, not a new role. A deflection never says what he will not do, and no answer closes with a
+generic "which park?". A post about a dispute or a vote is reported neutrally. Answers open
+differently each time, never with "Ha". The prompt's version is in the admin
 (`SYSTEM_PROMPT_VERSION`, 14 since these rules), and every answer stores the version it was
 written with (`assistant_messages.promptVersion`; the chat keeps its latest answer's, which the
 admin list and `assistant_conversations` filter by with `promptVersion`). Answers stored before
@@ -200,13 +205,17 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
 `ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
 from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
-`look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
+`look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`, each term
+with the canonical page the route names, `/de/glossar/…`; a route without `url` gets the
+`/glossary/` path, which redirects),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
 which read the frontend's `/api/assistant-posts` and `/api/assistant-post` (cached ten minutes in
 Redis per full query; `get_post`'s optional `question` goes out as `q`, and the frontend then
 answers with the intro and the best-matching sections as `text`, every heading in `sections` and
-the ones left out in `omitted`, so the model can ask again for one of those; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
+the ones left out in `omitted`, so the model can ask again for one of those; `search_posts` with a
+`question` reads its best hit the same way and returns it as `read`, so a search and a read take one
+round; a read that fails comes back as `read: { error }` beside the hits; park.fan's Cloudflare needs a skip rule for these three paths from the API server,
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
@@ -342,7 +351,9 @@ one or exactly one whose name is the reference ("europa park" meets "Europa-Park
 candidates otherwise. In the chats of 3 to 9 November, 3 of 5 `search_parks` calls served only to
 find an id for the next tool. `show_card` kind `park` returns `get_park_live`'s whole summary as
 `live` beside what the card shows (`parkLiveSummary`): the two were called together for one park
-in 5 of 7 answers.
+in 5 of 7 answers. Kind `ride` likewise takes a ride by name with its park and returns everything
+`get_ride` does as `ride` (`rideDetails`, which both share), so a ride card needs no lookup first
+and none after.
 
 `show_card` kind `rides` takes the same `type` and `shelter` (each row then carries its
 `indoorOutdoor`), reports `typeUnknown` and the shelter counts too, and hands the model the
@@ -500,8 +511,11 @@ warning can have come before, and runs once per answer.
 ### Card shapes
 
 A `card` action carries one `AssistantCard` (`tools/assistant-actions.ts`); every `url` is a
-site-only path without a locale. `park`, `ride`, `rides` and `parks` are drawn from live data,
-`shows` from `get_shows`, `restaurants` from `find_restaurants`. `calendar` and `tiles` come from
+site-only path without a locale, except a post's and a glossary term's, whose slug belongs to its
+language. `park`, `ride`, `rides` and `parks` are drawn from live data,
+`shows` from `get_shows`, `restaurants` from `find_restaurants`, `posts` from the frontend's post
+search (by query, or by `slugs` for posts the model already has; with a `question` the result also
+reads the first post, as `search_posts` does) and `glossary` from its glossary search. `calendar` and `tiles` come from
 `park_forecast` (and, for live tiles, `get_park`); their levels are what the calendar or the live
 reading serves, never re-derived ([crowd levels](../rules/crowd-levels.md)). Every `opens`,
 `closes` and show time carries the park's own UTC offset (`+00:00`, never `Z`; `parkInstant`), so
@@ -581,6 +595,30 @@ known; its absence never means "no" ([absent facts](../rules/absent-facts.md)).
       cuisine: string | null;
       requiresReservation: boolean | null;
     }>;                          // at most 12
+  }
+| {
+    kind: "posts";               // show_card { kind: "posts", query?, postKind?, slugs?, question?, limit?: 1..3 = 3 }
+    posts: Array<{
+      title: string;
+      url: string;               // the post's page with its locale, /de/blog/phantasialand-tipps
+      date: string;              // YYYY-MM-DD: a news post's day out, an article's last change
+      updated: boolean;          // true: `date` is an update, not the publication
+      news: boolean;
+      readingTimeMinutes: number | null;
+      excerpt: string | null;
+      category: string | null;   // the category's label in the chat's language
+      image: string | null;      // a site path, versioned (`?v=`); null when the post has none
+      imagePosition: string | null; // CSS object-position, e.g. "50% 40%"
+    }>;                          // 1..3, the guides menu's rows
+  }
+| {
+    kind: "glossary";            // show_card { kind: "glossary", query, limit?: 1..3 = 1 }
+    terms: Array<{
+      name: string;
+      definition: string;        // the term's short definition
+      category: string | null;   // the glossary category id ("coasters"), for its icon
+      url: string;               // the canonical page, /de/glossar/blockbremse
+    }>;
   }
 | {
     kind: "calendar";            // show_card { kind: "calendar", park, from?: YYYY-MM-DD, days?: 7..42 = 14 }

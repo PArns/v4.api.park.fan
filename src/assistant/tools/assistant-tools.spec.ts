@@ -34,6 +34,243 @@ describe("get_post", () => {
   });
 });
 
+describe("posts and glossary cards", () => {
+  const POST = {
+    title: "Im Phantasialand lohnt der Quick Pass nur an vollen Tagen",
+    description: "Den Quick Pass brauchst du nur an vollen Tagen.",
+    date: "2026-10-14",
+    updated: true,
+    kind: "article",
+    slug: "phantasialand-tipps",
+    url: "https://park.fan/de/blog/phantasialand-tipps",
+    readingTimeMinutes: 14,
+    category: "Parkguides",
+    image: "/media/blog/phantasialand-tipps/cover.webp?v=3",
+    imagePosition: "50% 40%",
+  };
+  const NEWS = {
+    ...POST,
+    title: "Brühl prüft Bürgerbegehren gegen Phantasialand-Erweiterung",
+    updated: false,
+    kind: "news",
+    slug: "phantasialand-erweiterung-unterschriften-abgegeben",
+    url: "https://park.fan/de/news/phantasialand-erweiterung-unterschriften-abgegeben",
+    image: "https://evil.example/cover.jpg",
+  };
+  const client = (posts: unknown[], terms: unknown[] = []) => ({
+    search: jest.fn(async () => ({ total: posts.length, posts })),
+    post: jest.fn(async () => ({ text: "Nur an vollen Tagen.", sections: [] })),
+    glossary: jest.fn(async () => ({ results: terms })),
+  });
+  const providers = (posts: ReturnType<typeof client>) =>
+    new Map<unknown, unknown>([[AssistantPostsClient, posts]]);
+
+  it("shows posts as a card and reads the first one for the question", async () => {
+    const posts = client([POST, NEWS]);
+    const result = await run(
+      "show_card",
+      {
+        kind: "posts",
+        query: "Quick Pass Phantasialand",
+        postKind: "article",
+        question: "Lohnt sich der Quick Pass?",
+      },
+      providers(posts),
+      "de",
+    );
+    expect(posts.search).toHaveBeenCalledWith(
+      "de",
+      "Quick Pass Phantasialand",
+      "article",
+      undefined,
+    );
+    expect(posts.post).toHaveBeenCalledWith(
+      "de",
+      "phantasialand-tipps",
+      "Lohnt sich der Quick Pass?",
+    );
+    expect(result.action).toEqual({
+      type: "card",
+      card: {
+        kind: "posts",
+        posts: [
+          {
+            title: POST.title,
+            url: "/de/blog/phantasialand-tipps",
+            date: "2026-10-14",
+            updated: true,
+            news: false,
+            readingTimeMinutes: 14,
+            excerpt: POST.description,
+            category: "Parkguides",
+            image: POST.image,
+            imagePosition: "50% 40%",
+          },
+          expect.objectContaining({
+            news: true,
+            // A cover from another host is no cover.
+            image: null,
+            imagePosition: null,
+          }),
+        ],
+      },
+    });
+    expect(result.json.read).toEqual({
+      text: "Nur an vollen Tagen.",
+      sections: [],
+    });
+    expect(result.json.posts[0]).toEqual({
+      title: POST.title,
+      description: POST.description,
+      date: "2026-10-14",
+      updated: true,
+      kind: "article",
+      slug: "phantasialand-tipps",
+      url: POST.url,
+    });
+  });
+
+  it("shows the posts it is given by slug, without a search", async () => {
+    const posts = client([NEWS]);
+    await run(
+      "show_card",
+      { kind: "posts", slugs: [NEWS.slug] },
+      providers(posts),
+      "de",
+    );
+    expect(posts.search).toHaveBeenCalledWith("de", "", "any", [NEWS.slug]);
+    expect(posts.post).not.toHaveBeenCalled();
+  });
+
+  it("says why no card comes when no post matches", async () => {
+    const result = await run(
+      "show_card",
+      { kind: "posts", query: "Halloween", postKind: "news" },
+      providers(client([])),
+      "de",
+    );
+    expect(result.action).toBeUndefined();
+    expect(result.json.why).toBe(
+      'no park.fan news matches "Halloween" in this language',
+    );
+  });
+
+  it("reads the best hit when search_posts gets a question", async () => {
+    const posts = client([POST]);
+    const result = await run(
+      "search_posts",
+      { query: "Quick Pass", question: "Lohnt sich der Quick Pass?" },
+      providers(posts),
+      "de",
+    );
+    expect(result.json.read.text).toBe("Nur an vollen Tagen.");
+    expect(result.json.posts[0]).not.toHaveProperty("image");
+  });
+
+  it("still answers when the post cannot be read", async () => {
+    const posts = client([POST]);
+    posts.post.mockRejectedValueOnce(new Error("assistant-post answered 500"));
+    const result = await run(
+      "search_posts",
+      { query: "Quick Pass", question: "Lohnt er sich?" },
+      providers(posts),
+      "de",
+    );
+    expect(result.json.read).toEqual({
+      error: "could not read the post right now",
+    });
+    expect(result.json.posts).toHaveLength(1);
+  });
+
+  it("shows the best glossary term with its canonical page", async () => {
+    const posts = client(
+      [],
+      [
+        {
+          name: "Blockbremse",
+          slug: "blockbremse",
+          shortDefinition: "Eine Bremse, die einen Zug anhält.",
+          category: "coasters",
+          url: "https://park.fan/de/glossar/blockbremse",
+        },
+        {
+          name: "Trimmbremse",
+          slug: "trimmbremse",
+          shortDefinition: "Eine Bremse, die nur abbremst.",
+          category: "coasters",
+        },
+      ],
+    );
+    const result = await run(
+      "show_card",
+      { kind: "glossary", query: "Blockbremse" },
+      providers(posts),
+      "de",
+    );
+    expect(result.action).toEqual({
+      type: "card",
+      card: {
+        kind: "glossary",
+        terms: [
+          {
+            name: "Blockbremse",
+            definition: "Eine Bremse, die einen Zug anhält.",
+            category: "coasters",
+            url: "/de/glossar/blockbremse",
+          },
+        ],
+      },
+    });
+    const looked = await run(
+      "look_up_glossary",
+      { term: "Bremse" },
+      providers(posts),
+      "de",
+    );
+    // A frontend without the url field: the old path, which redirects.
+    expect(looked.json.terms[1].url).toBe(
+      "https://park.fan/de/glossary/trimmbremse",
+    );
+  });
+});
+
+describe("show_card kind ride", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("takes a ride by its name and hands the model everything get_ride would", async () => {
+    const RIDE_ID = "33333333-3333-4333-8333-333333333333";
+    jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+      attractions: [
+        { id: RIDE_ID, name: "Taron", park: { name: "Phantasialand" } },
+      ],
+    });
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE_ID,
+      name: "Taron",
+      park: null,
+      status: "OPERATING",
+      queues: [{ type: "STANDBY", waitMinutes: 25 }],
+      facts: { hasSingleRider: true, minHeightCm: null },
+      bestVisitTimesToday: [{ from: "17:00", to: "17:30" }],
+      predictionAccuracy: { mae: 4 },
+    });
+    const result = await run(
+      "show_card",
+      { kind: "ride", ride: "Taron" },
+      new Map<unknown, unknown>(),
+    );
+    expect(result.action).toMatchObject({
+      type: "card",
+      card: { kind: "ride", name: "Taron", waitMinutes: 25, singleRider: true },
+    });
+    expect(result.json.ride.bestVisitTimesToday).toEqual([
+      { from: "17:00", to: "17:30" },
+    ]);
+    expect(result.json.ride.unknownFacts).toEqual(["minHeightCm"]);
+    expect(result.json.ride).not.toHaveProperty("predictionAccuracy");
+  });
+});
+
 describe("get_best_days", () => {
   it("ranks only rated open days, an unknown one never the quietest", async () => {
     const day = (date: string, crowdLevel: string, status = "OPERATING") => ({
@@ -1636,6 +1873,15 @@ describe("open_page beyond parks, rides and posts", () => {
     ]);
   const open = async (input: Record<string, unknown>) =>
     runAssistantTool("open_page", input, context(providers()), jest.fn());
+
+  it("opens a glossary term under its segment in the reader's language", async () => {
+    expect(
+      (await open({ url: "https://park.fan/de/glossar/blockbremse" })).action,
+    ).toEqual({ type: "navigate", path: "/de/glossar/blockbremse" });
+    expect(
+      (await open({ url: "https://park.fan/de/glossarx/blockbremse" })).action,
+    ).toBeUndefined();
+  });
 
   it("opens a park's wait-time calendar, which the widget respells per language", async () => {
     expect((await open({ park: PARK_ID, section: "calendar" })).action).toEqual(
