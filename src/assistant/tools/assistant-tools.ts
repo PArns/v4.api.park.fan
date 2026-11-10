@@ -35,6 +35,7 @@ import {
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
@@ -1178,10 +1179,28 @@ async function publishedUntil(
   return range?.maxDate ?? null;
 }
 
-/** How far ahead `compare_dates` reads a day: the yearly forecast's reach. */
-const COMPARE_DATES_AHEAD = 365;
+/** How far ahead `get_days` reads a day: the yearly forecast's reach. */
+const DAYS_AHEAD = 365;
 
-/** Most days one `compare_dates` reads: ten named days, or a month as a range. */
+/** How many quiet hours `get_hours` names. */
+const BEST_HOURS = 3;
+
+/**
+ * What a day plan's numbers are, in the words the model passes on: the tier decides whether
+ * an hour is a forecast, a spread day forecast or last year's pattern (plan-day/tiers.md).
+ */
+const TIER_MEANING: Record<PlanDayTier, string> = {
+  observed: "what the queues did that day",
+  measured: "park.fan's hourly forecast",
+  composed: "the day's forecast spread over each ride's usual day",
+  climatology: "how comparable days went a year earlier: not a forecast",
+  long_range: "too far ahead for an hourly curve",
+};
+
+/** The days `get_days` reads when it is given none: the week ahead. */
+const DEFAULT_DAYS = 7;
+
+/** Most days one `get_days` reads: ten named days, or a month as a range. */
 const MAX_COMPARED_DATES = 31;
 
 /**
@@ -1233,11 +1252,11 @@ async function comparedParkDay(
   if (ahead < 0) {
     return { park, day, why: "that day is over in the park's time zone" };
   }
-  if (ahead > COMPARE_DATES_AHEAD) {
+  if (ahead > DAYS_AHEAD) {
     return {
       park,
       day,
-      why: `park.fan looks ahead ${COMPARE_DATES_AHEAD} days`,
+      why: `park.fan looks ahead ${DAYS_AHEAD} days`,
     };
   }
   const { days, coverage, hasOperatingSchedule } = await calendarDays(
@@ -1698,6 +1717,108 @@ export const ASSISTANT_TOOLS = [
     },
   }),
   tool({
+    name: "get_hours",
+    status: "forecast",
+    description:
+      "One day at one park hour by hour, today by default and up to a year ahead: for each hour " +
+      "the park is open, the headliners' expected average standby wait and how many of them carry " +
+      "a value; hours before opening and after closing are not listed, and today's hours already " +
+      "over are marked past. bestHours are the three quietest hours still to come, busiestHour " +
+      "the worst. A closed day has no hours and names the next day the park opens; hoursPublished " +
+      "false means the park has not published that day's hours, so it is park.fan's estimate. " +
+      "tier and tierWhy say what the numbers are (the hourly model up to 48 hours ahead, the " +
+      "day's forecast spread over each ride's usual day, or how comparable days went a year " +
+      'earlier). For "when is it quietest in the day", "is the afternoon better", "when should ' +
+      "we arrive\". One ride: get_ride's bestVisitTimesToday today, get_ride_forecast another day.",
+    input: z.object({ park: parkRef, date: planDate.optional() }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await resolvePark(mcp(ctx), reference);
+      if (isAmbiguous(found)) return found;
+      const tz = found.timezone;
+      const today = getCurrentDateInTimezone(tz);
+      const day = date ?? today;
+      const [plan, until] = await Promise.all([
+        ctx.get(PlanDayService).buildPlanDay(found, day),
+        publishedUntil(ctx, found),
+      ]);
+      const hoursPublished = until !== null && day <= until;
+      const { openHour, closeHour, status } = plan.context;
+      const base = {
+        park: found.name,
+        date: day,
+        status,
+        hoursPublished,
+        ...(!hoursPublished && {
+          statusWhy: until
+            ? `the park has published its hours up to ${until}; status and hours are park.fan's estimate`
+            : "the park publishes no opening hours; status and hours are park.fan's estimate",
+        }),
+        tier: plan.tier,
+        tierWhy: TIER_MEANING[plan.tier],
+      };
+      if (status === "CLOSED" || openHour === null) {
+        return {
+          ...base,
+          hours: [],
+          ...(status === "CLOSED" && {
+            nextOpenDay: await firstOpenDay(ctx, found.id, addIsoDays(day, 1)),
+          }),
+          ...(plan.ridesUnavailable && {
+            ridesUnavailable: plan.ridesUnavailable,
+          }),
+        };
+      }
+      // The headliners carry the day a visitor feels; a park without known ones counts all.
+      const headliners = plan.rides.filter((ride) => ride.isHeadliner);
+      const counted = headliners.length > 0 ? headliners : plan.rides;
+      const waits = new Map<number, number[]>();
+      for (const ride of counted) {
+        for (const { hour, wait } of bookableHours(
+          ride.hours,
+          plan.context,
+          null,
+        )) {
+          waits.set(hour, [...(waits.get(hour) ?? []), wait]);
+        }
+      }
+      const currentHour =
+        day === today ? Number(formatInTimeZone(new Date(), tz, "H")) : null;
+      const hours = [...waits.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([hour, list]) => ({
+          at: parkHourInstant(day, hour, tz),
+          waitMinutes: Math.round(
+            list.reduce((sum, w) => sum + w, 0) / list.length,
+          ),
+          rides: list.length,
+          ...(currentHour !== null &&
+            hour < currentHour && { past: true as const }),
+        }));
+      const ahead = hours.filter((hour) => !("past" in hour));
+      return {
+        ...base,
+        opens: parkHourInstant(day, openHour, tz),
+        closes:
+          closeHour !== null
+            ? parkHourInstant(day, unfoldedCloseHour(openHour, closeHour), tz)
+            : null,
+        counted: headliners.length > 0 ? "headliners" : "all rides",
+        bestHours: [...ahead]
+          .sort((a, b) => a.waitMinutes - b.waitMinutes)
+          .slice(0, BEST_HOURS)
+          .map((hour) => hour.at),
+        busiestHour:
+          [...hours].sort((a, b) => b.waitMinutes - a.waitMinutes)[0]?.at ??
+          null,
+        ...(hours.length === 0 && {
+          hoursWhy:
+            "no ride has an hourly figure for that day; get_days has the day's level",
+        }),
+        hours,
+      };
+    },
+  }),
+  tool({
     name: "get_park_day",
     status: "forecast",
     description:
@@ -1826,56 +1947,12 @@ export const ASSISTANT_TOOLS = [
     },
   }),
   tool({
-    name: "get_park_forecast",
-    status: "forecast",
-    description:
-      "The days ahead for one park: per day the opening hours or closed, the expected crowd level, " +
-      "the expected peak wait of the headliners, weather (basis climate_normal is the long-run " +
-      "average, not a forecast), holidays, school breaks, bridge days and the park's events " +
-      "(Halloween, Christmas season, special openings, festivals); plus today's hourly " +
-      "forecast. days: 1 to 31 from today, default 7. Each day's weather belongs to that date " +
-      "only; never move it to another day. Days after " +
-      "scheduleCoverage.to have no published hours yet: treat their status as unknown. Past " +
-      "days: get_park_history; particular days or days beyond 31: compare_dates.",
-    input: z.object({
-      park: parkRef,
-      days: z
-        .number()
-        .int()
-        .min(1)
-        .max(31)
-        .default(7)
-        .describe("Days ahead, today included"),
-    }),
-    run: async ({ park, days }, ctx) => {
-      const forecast = (await parkForecastTool.handler(
-        { park, days },
-        mcp(ctx),
-      )) as Record<string, unknown>;
-      delete forecast.servingModels;
-      // `todayHourly` counts park-local hours of the park's today; make them instants.
-      const parkInfo = forecast.park as { timezone?: string } | undefined;
-      const forecastDays = forecast.days as Array<{ date: string }> | undefined;
-      const hourly = forecast.todayHourly as Array<
-        { hour: number } & Record<string, unknown>
-      > | null;
-      const today = forecastDays?.[0]?.date;
-      if (hourly && parkInfo?.timezone && today) {
-        forecast.todayHourly = hourly.map(({ hour, ...rest }) => ({
-          at: parkHourInstant(today, hour, parkInfo.timezone as string),
-          ...rest,
-        }));
-      }
-      return forecast;
-    },
-  }),
-  tool({
     name: "get_park_weather",
     status: "weather",
     description:
       "Weather at one park right now and for the next hours: temperature, whether it rains, when " +
       "rain or a thunderstorm starts and ends (ISO times), wind gusts, and an hourly forecast " +
-      "for the next 12 hours (weatherCode is the WMO code). For days ahead use get_park_forecast.",
+      "for the next 12 hours (weatherCode is the WMO code). For days ahead use get_days.",
     input: z.object({ park: parkRef }),
     run: async ({ park: reference }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
@@ -1922,7 +1999,7 @@ export const ASSISTANT_TOOLS = [
       "lower avgCrowdScore = quieter). Only the quietest ten, not a ranking of every day: a day " +
       "missing from the list is not a day to avoid. Days the park is closed and days whose hours " +
       'are not published yet are counted apart, never ranked. Use for "when should I go" in the ' +
-      "next three months; later days and particular days are compare_dates.",
+      "next three months; later days and particular days are get_days.",
     input: z.object({
       park: parkRef,
       from: z
@@ -1946,7 +2023,7 @@ export const ASSISTANT_TOOLS = [
       );
       if ((from && from > last) || (to && to > last)) {
         throw new McpToolError(
-          `get_best_days reads up to ${last}; for later days use compare_dates (up to a year ahead)`,
+          `get_best_days reads up to ${last}; for later days use get_days (up to a year ahead)`,
         );
       }
       const [result, until] = await Promise.all([
@@ -2013,7 +2090,7 @@ export const ASSISTANT_TOOLS = [
       'June", "which of these three". Closed parks (with the day each opens next), open ones ' +
       "without a rating and parks whose hours for that day are not published yet are listed " +
       "apart, each with the reason, never as quiet. Today by default, up to a year ahead; one " +
-      "park's best days are get_best_days, its particular days compare_dates.",
+      "park's best days are get_best_days, its particular days get_days.",
     input: z.object({
       country: z
         .string()
@@ -2148,16 +2225,17 @@ export const ASSISTANT_TOOLS = [
     },
   }),
   tool({
-    name: "compare_dates",
+    name: "get_days",
     status: "forecast",
     description:
-      "Particular days at one park side by side, up to a year ahead: per day its weekday, " +
-      "whether it is open, closed or its hours are not published yet, the hours, the crowd " +
-      "level park.fan's calendar expects, the headliners' expected peak wait, holidays, school " +
-      "breaks, bridge days and events, and the weather where a forecast reaches. A closed day " +
-      "names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
-      'up to 31 days ("the end of December"). For "Saturday or Sunday?", "10 or 17 May?", ' +
-      '"is it open on 28 December?". Past days are get_park_history.',
+      "The days at one park, up to a year ahead: per day its weekday, whether it is open, " +
+      "closed or its hours are not published yet, the hours, the crowd level park.fan's calendar " +
+      "expects, the headliners' expected peak wait, holidays, school breaks, bridge days, events, " +
+      "the rides a maintenance window shuts, and the weather where a forecast reaches. A closed " +
+      "day names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
+      'up to 31 days; nothing gives the next 7 days. For "Saturday or Sunday?", "10 or 17 ' +
+      'May?", "is it open on 28 December?", "the next two weeks". The hours of one day are ' +
+      "get_hours; past days get_park_history.",
     input: z.object({
       park: parkRef,
       dates: z
@@ -2170,17 +2248,19 @@ export const ASSISTANT_TOOLS = [
       to: isoDay.optional().describe("With from: last day"),
     }),
     run: async ({ park: reference, dates, from, to }, ctx) => {
-      if (!dates === !(from && to)) {
+      if (dates && (from || to)) {
         throw new McpToolError("Give either dates, or from and to");
       }
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const today = getCurrentDateInTimezone(found.timezone);
+      const first = from ?? today;
+      const lastAsked = to ?? addIsoDays(first, DEFAULT_DAYS - 1);
       const asked = dates
         ? [...new Set(dates)].sort()
         : Array.from(
-            { length: daysBetween(from as string, to as string) + 1 },
-            (_, i) => addIsoDays(from as string, i),
+            { length: Math.max(0, daysBetween(first, lastAsked) + 1) },
+            (_, i) => addIsoDays(first, i),
           );
       if (asked.length === 0 || asked.length > MAX_COMPARED_DATES) {
         throw new McpToolError(`Give 1 to ${MAX_COMPARED_DATES} days`);
@@ -2190,15 +2270,18 @@ export const ASSISTANT_TOOLS = [
           `${asked[0]} is over; past days are get_park_history with on`,
         );
       }
-      const last = addIsoDays(today, COMPARE_DATES_AHEAD);
+      const last = addIsoDays(today, DAYS_AHEAD);
       if (asked[asked.length - 1] > last) {
         throw new McpToolError(`park.fan looks ahead up to ${last}`);
       }
-      const { days, coverage, hasOperatingSchedule } = await calendarDays(
-        ctx,
-        found,
-        asked,
-      );
+      const [{ days, coverage, hasOperatingSchedule }, maintenance] =
+        await Promise.all([
+          calendarDays(ctx, found, asked),
+          // A failed lookup costs the maintenance names, never the days.
+          Promise.resolve()
+            .then(() => ctx.get(PlanDayService).maintenanceWindows(found))
+            .catch(() => []),
+        ]);
       const rows = await Promise.all(
         asked.map(async (date) => {
           const day = days.get(date);
@@ -2209,7 +2292,7 @@ export const ASSISTANT_TOOLS = [
           );
           if (!day)
             return { date, weekday, status: "UNKNOWN", why: "no calendar day" };
-          const compact = compactDay(day, found.timezone);
+          const compact = compactDay(day, found.timezone, maintenance);
           // Past the published schedule a status is the calendar's guess, not the park's word.
           const published =
             hasOperatingSchedule && coverage.to !== null && date <= coverage.to;

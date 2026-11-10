@@ -126,12 +126,13 @@ one day go to `compare_parks`, never one lookup per park. Version 32: `open_page
 opens a park's crowd calendar, the park comparison and the site's own pages. Version 33: a past day goes
 to `get_park_history` with `on`. Version 34: rides the visitor
 marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet". Version 35:
-particular days of one park go to `compare_dates`, and a closed day is always called closed with
+particular days of one park go to `get_days`, and a closed day is always called closed with
 the next day the park opens. Version 36: a reason a result
 gives for a gap is told, and "not known" is never "there is none". Version 37: park names go
 straight into the tools, and the park card's result replaces `get_park_live`. Version 38: "Saturday or
-Sunday?" and events go to `compare_dates`; the parks card only for today; the day's expected level
-(`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states.
+Sunday?" and events go to `get_days`; the parks card only for today; the day's expected level
+(`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states. Version 39: days go to `get_days`,
+the hours of a park's day to `get_hours`.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -184,8 +185,7 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 `closedForMaintenance` with the window), `get_park_day` (one day as the planner builds it: hours,
 crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
 `ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
-from `PlanDayService.ridesInMaintenance`), `get_park_forecast` (at most 31
-days), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
+from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`),
 `find_parks_nearby` (the shared position, else a GeoIP guess marked `precise: false`; inside a park
 the rides around the visitor), `get_directions` (a Google Maps link), and `search_posts`/`get_post`,
@@ -202,7 +202,7 @@ through: a closed park's level sits at its floor and was read as "very low for t
 day's single readings behind its averages and the facts park.fan does not know, and `show_card`
 returns what the card shows, plus the next opening for a park that is not open, so the sentence
 after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the
-days ahead are `get_park_forecast`'s. The results of `show_card` and `open_page` also carry
+days ahead are `get_days`'s. The results of `show_card` and `open_page` also carry
 `alreadyShown`: the chat streams the text of every model round, so text the model wrote before the
 call is on screen already and a repeat after the result would show twice.
 
@@ -234,13 +234,27 @@ measured.
 
 Days whose hours the park has not published yet are an estimate everywhere: `get_best_days`
 counts them apart (`hoursNotPublishedDays`, with the reason) and refuses a range past its 90-day
-snapshot, pointing at `compare_dates`; `get_park_day` says `hoursPublished` and, when false,
+snapshot, pointing at `get_days`; `get_park_day` says `hoursPublished` and, when false,
 `statusWhy`; the tiles' result carries the day's `status`. The last published day comes from
 `ParksService.getOperatingDateRange` (`publishedUntil`).
 
-`compare_dates` puts particular days of one park side by side, up to a year ahead
-(`COMPARE_DATES_AHEAD`): 1 to 10 `dates`, or `from` and `to` for up to 31 days. It reads the
-calendar every park page shows, one month at a time, so May and December build two months and not
+`get_hours` lays one day of one park out hour by hour, today by default and up to a year ahead:
+per hour the park is open, the headliners' average expected standby wait from
+`PlanDayService.buildPlanDay` (all rides where a park has no known headliners), the hours before
+opening and from the closing hour on left out (`bookableHours`), today's hours already over marked
+`past`, the three quietest hours still to come (`bestHours`) and the busiest. The plan's `tier`
+comes along with `tierWhy` (`TIER_MEANING`): the hourly model reaches 48 hours, past it the day's
+forecast is spread over each ride's usual day, and past the published schedule the curve is how
+comparable days went a year earlier, which Parky says. A closed day has no hours and names the
+next day the park opens; a day past the published hours carries `statusWhy`. The park-level
+curve for any day did not exist before: `get_park_forecast` gave today's alone, and Parky had to
+answer "is the afternoon better on Saturday?" ride by ride. One ride stays with `get_ride`'s
+`bestVisitTimesToday` today and `get_ride_forecast` another day.
+
+`get_days` replaces `get_park_forecast`, which read 31 days from today and nothing else. It reads
+the days of one park, up to a year ahead (`DAYS_AHEAD`): 1 to 10 `dates`, or `from` and `to` for
+up to 31 days, the next seven days (`DEFAULT_DAYS`) when it is given neither, each with the rides a
+maintenance window shuts that day (`PlanDayService.maintenanceWindows`). It reads the calendar every park page shows, one month at a time, so May and December build two months and not
 the eight between. Each day has its weekday, `compactDay`'s fields and `hoursPublished`: past the
 park's published schedule (`meta.scheduleCoverage.to`) a status is the calendar's estimate, so such
 a day comes back `UNKNOWN` with `why` and the `estimatedStatus`, never as a confirmed closure. A
@@ -415,7 +429,7 @@ Parky words a breakdown as an estimate from past outages, never a promise.
 
 **Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
 park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
-included), `ridesInMaintenance` on `get_park_day` and on each day of `get_park_forecast`, and
+included), `ridesInMaintenance` on `get_park_day` and on each day of `get_days`, and
 `closedForMaintenance` on `get_ride_forecast`; `get_park_live` lists the rides in maintenance today
 with their window and those starting within 30 days (`maintenanceAhead`). All of it goes through
 `worksPeriodOn` and `worksPeriodCovering` (`curated-out-of-service.util.ts`), the admin MCP's

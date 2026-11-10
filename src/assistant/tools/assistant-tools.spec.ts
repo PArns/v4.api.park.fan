@@ -91,7 +91,7 @@ describe("get_best_days", () => {
     ).toEqual(["2026-11-08", "2026-11-06"]);
   });
 
-  it("refuses a range past its 90 days and points at compare_dates", async () => {
+  it("refuses a range past its 90 days and points at get_days", async () => {
     const providers = new Map<unknown, unknown>([
       [
         ParksService,
@@ -115,7 +115,7 @@ describe("get_best_days", () => {
       jest.fn(),
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain("compare_dates");
+    expect(result.content).toContain("get_days");
   });
 });
 import {
@@ -1241,7 +1241,7 @@ describe("compare_parks", () => {
   });
 });
 
-describe("compare_dates", () => {
+describe("get_days", () => {
   afterEach(() => jest.restoreAllMocks());
 
   const dayAhead = (days: number) =>
@@ -1291,7 +1291,7 @@ describe("compare_dates", () => {
   it("puts the days side by side, a closed one with the next day the park opens", async () => {
     const { providers: p } = providers();
     const { json } = await run(
-      "compare_dates",
+      "get_days",
       { park: PARK_ID, dates: [CLOSED, OPEN_BUSY, OPEN_QUIET] },
       p,
     );
@@ -1312,7 +1312,7 @@ describe("compare_dates", () => {
   it("calls a day past the published hours unknown and says why, never closed", async () => {
     const { providers: p } = providers();
     const { json } = await run(
-      "compare_dates",
+      "get_days",
       { park: PARK_ID, dates: [LATER] },
       p,
     );
@@ -1326,11 +1326,7 @@ describe("compare_dates", () => {
 
   it("reads each month once, not the months between", async () => {
     const { providers: p, build } = providers();
-    await run(
-      "compare_dates",
-      { park: PARK_ID, dates: [OPEN_QUIET, LATER] },
-      p,
-    );
+    await run("get_days", { park: PARK_ID, dates: [OPEN_QUIET, LATER] }, p);
     const months = new Set([OPEN_QUIET, LATER].map((date) => date.slice(0, 7)));
     expect(build).toHaveBeenCalledTimes(months.size);
   });
@@ -1338,7 +1334,7 @@ describe("compare_dates", () => {
   it("takes a stretch of days, and refuses a past day or one past the forecast", async () => {
     const { providers: p } = providers();
     const { json } = await run(
-      "compare_dates",
+      "get_days",
       { park: PARK_ID, from: OPEN_QUIET, to: CLOSED },
       p,
     );
@@ -1350,13 +1346,107 @@ describe("compare_dates", () => {
       { dates: [OPEN_QUIET], from: OPEN_QUIET, to: CLOSED },
     ]) {
       const result = await runAssistantTool(
-        "compare_dates",
+        "get_days",
         { park: PARK_ID, ...input },
         context(p),
         jest.fn(),
       );
       expect(result.isError).toBe(true);
     }
+  });
+});
+
+describe("get_hours", () => {
+  const plan = (status: string, extra: object = {}) => ({
+    tier: "composed",
+    context: { date: "2026-11-14", status, openHour: 10, closeHour: 18 },
+    rides: [
+      {
+        attractionId: "a",
+        attractionName: "Taron",
+        isHeadliner: true,
+        hours: [
+          { hour: 9, wait: 5 },
+          { hour: 10, wait: 20 },
+          { hour: 11, wait: 40 },
+          { hour: 17, wait: 10 },
+          { hour: 18, wait: 5 },
+        ],
+      },
+      {
+        attractionId: "b",
+        attractionName: "Black Mamba",
+        isHeadliner: true,
+        hours: [
+          { hour: 10, wait: 10 },
+          { hour: 11, wait: 30 },
+          { hour: 17, wait: 20 },
+        ],
+      },
+      {
+        attractionId: "c",
+        attractionName: "Kiddie",
+        hours: [{ hour: 10, wait: 90 }],
+      },
+    ],
+    shows: [],
+    ...extra,
+  });
+  const providers = (built: object) =>
+    new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({ ...park })),
+          getOperatingDateRange: jest.fn(async () => ({
+            minDate: "2026-01-01",
+            maxDate: "2027-01-10",
+          })),
+          getFirstOperatingDayFrom: jest.fn(async () => ({
+            date: "2026-11-20",
+          })),
+        },
+      ],
+      [PlanDayService, { buildPlanDay: jest.fn(async () => built) }],
+    ]);
+
+  it("lays the day out hour by hour from the headliners, opening to closing", async () => {
+    const { json } = await run(
+      "get_hours",
+      { park: PARK_ID, date: "2026-11-14" },
+      providers(plan("OPERATING")),
+    );
+    // 09:00 is before opening and 18:00 the closing hour: neither is listed.
+    expect(
+      json.hours.map((h: { waitMinutes: number }) => h.waitMinutes),
+    ).toEqual([15, 35, 15]);
+    expect(json.counted).toBe("headliners");
+    expect(json.bestHours).toHaveLength(3);
+    expect(json.busiestHour).toBe(json.hours[1].at);
+    expect(json.tierWhy).toContain("spread");
+  });
+
+  it("gives a closed day no hours and the next day the park opens", async () => {
+    const { json } = await run(
+      "get_hours",
+      { park: PARK_ID, date: "2026-11-14" },
+      providers(
+        plan("CLOSED", {
+          context: {
+            date: "2026-11-14",
+            status: "CLOSED",
+            openHour: null,
+            closeHour: null,
+          },
+          rides: [],
+        }),
+      ),
+    );
+    expect(json).toMatchObject({
+      status: "CLOSED",
+      hours: [],
+      nextOpenDay: "2026-11-20",
+    });
   });
 });
 

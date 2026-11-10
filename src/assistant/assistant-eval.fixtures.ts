@@ -280,7 +280,7 @@ export const EVAL_CASES: EvalCase[] = [
       {
         tool: [
           "get_park_day",
-          "get_park_forecast",
+          "get_days",
           "get_best_days",
           "get_ride_forecast",
           "show_card",
@@ -369,7 +369,7 @@ export const EVAL_CASES: EvalCase[] = [
     pagePath: PHL_PAGE,
     pageSubject: PHL_SUBJECT,
     message: "Wann ist es im Dezember hier am leersten?",
-    want: [{ tool: ["get_best_days", "get_park_forecast", "show_card"] }],
+    want: [{ tool: ["get_best_days", "get_days", "show_card"] }],
   },
   {
     id: "fastest-coaster-country",
@@ -383,6 +383,15 @@ export const EVAL_CASES: EvalCase[] = [
         input: { by: "topSpeed", type: "coaster", country: "*" },
       },
     ],
+  },
+  {
+    id: "quietest-hour-of-a-day",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message:
+      "Wann ist es am Samstag hier am leersten, vormittags oder nachmittags?",
+    want: [{ tool: "get_hours" }],
   },
   {
     id: "quietest-park-in-country",
