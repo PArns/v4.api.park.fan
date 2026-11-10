@@ -123,7 +123,8 @@ rather than that a ride is fine. Version 29: another day than today is judged on
 for that day, and a closed park gets no crowd but the time it opens next. Version 30: a rain question
 goes to the `shelter` filter, and a thin list is said to be incomplete. Version 31: several parks on
 one day go to `compare_parks`, never one lookup per park. Version 32: `open_page` also
-opens a park's crowd calendar, the park comparison and the site's own pages.
+opens a park's crowd calendar, the park comparison and the site's own pages. Version 33: a past day goes
+to `get_park_history` with `on`.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -219,7 +220,10 @@ reading today (`findCurrentStatusByPark`); without one they are null, never a gu
 (`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
 day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
 headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
-events. A day the calendar has nothing on is `null`. No new query on `queue_data`.
+events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
+instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
+(`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
+measured.
 
 `compare_parks` puts several parks side by side on one day (today by default, up to 60 days
 ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_PARKS`) or 2 to 10
