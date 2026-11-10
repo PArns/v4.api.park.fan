@@ -2,6 +2,7 @@ import { mapRideProfile, type RideProfileDto } from "../dto/ride-profile.dto";
 import type { Attraction } from "../entities/attraction.entity";
 import type { AttractionRideProfile } from "../entities/attraction-ride-profile.entity";
 import { resolveCuratedFacts } from "./curated-attraction-facts.util";
+import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
 import {
   chooseNameDuplicateWinner,
   nameDuplicateKey,
@@ -102,6 +103,50 @@ export const RIDE_TYPE_FILTERS = [
 export type RideTypeFilter = (typeof RIDE_TYPE_FILTERS)[number];
 
 /**
+ * Where a rain plan can send people: `covered` keeps them dry while they queue (indoors, or a
+ * roofed queue for a ride that runs outside), `indoor` keeps them dry on the ride too. The same
+ * split as the frontend's „Überdacht" filter (`lib/utils/covered-rides.ts`).
+ */
+export const SHELTER_FILTERS = ["covered", "indoor"] as const;
+
+export type ShelterFilter = (typeof SHELTER_FILTERS)[number];
+
+/** Whether a ride's hand-decided `indoorOutdoor` meets `shelter`; unknown never does. */
+export function isSheltered(
+  indoorOutdoor: IndoorOutdoor | null | undefined,
+  shelter: ShelterFilter,
+): boolean {
+  return shelter === "indoor"
+    ? indoorOutdoor === "indoor"
+    : indoorOutdoor === "indoor" || indoorOutdoor === "covered_queue";
+}
+
+/**
+ * Under this share of rides with a known `indoorOutdoor`, a sheltered list is whatever somebody
+ * happened to check, and a visitor reads a short list as a complete one: the frontend's
+ * `COVERED_MIN_KNOWN_SHARE`.
+ */
+export const SHELTER_MIN_KNOWN_SHARE = 0.5;
+
+/**
+ * What a shelter filter could not judge: how many rides have no `indoorOutdoor`, and whether so
+ * many that the list is incomplete.
+ */
+export function shelterCoverage(
+  values: ReadonlyArray<IndoorOutdoor | null | undefined>,
+): { shelterUnknown: number; shelterIncomplete?: true } {
+  const unknown = values.filter((value) => value == null).length;
+  const known = values.length - unknown;
+  return {
+    shelterUnknown: unknown,
+    ...(values.length > 0 &&
+      known / values.length < SHELTER_MIN_KNOWN_SHARE && {
+        shelterIncomplete: true as const,
+      }),
+  };
+}
+
+/**
  * The coaster terms of park.fan's glossary (`category: 'coasters'` in the frontend's
  * `lib/glossary/data.ts`) that do not end in "-coaster"; every "-coaster" id is one too.
  */
@@ -179,6 +224,8 @@ export interface ComparedRide extends Omit<RideFacts, "elements" | "model"> {
   maximumHeightCm?: number;
   /** "in" where the park signs the height in inches. */
   heightUnit?: "in";
+  /** Whether it keeps riders dry, where an editor decided it. */
+  indoorOutdoor?: IndoorOutdoor;
 }
 
 /**
@@ -219,6 +266,9 @@ export function comparedRides(
         maximumHeightCm: facts.maximumHeight,
       }),
       ...(facts.minimumHeightUnit === "in" && { heightUnit: "in" as const }),
+      ...(attraction.indoorOutdoor && {
+        indoorOutdoor: attraction.indoorOutdoor,
+      }),
       ...known,
     };
   });
@@ -253,6 +303,10 @@ export interface RideComparison {
   notAllowedRides?: RideOutOfReach[];
   /** With a type: rides left out because park.fan does not know their type. */
   typeUnknown?: number;
+  /** With a shelter: rides left out because nobody decided whether they keep you dry. */
+  shelterUnknown?: number;
+  /** With a shelter: under half the rides are known, so the list is incomplete. */
+  shelterIncomplete?: true;
 }
 
 /** A ride a rider may not take, with the limit that rules it out. */
@@ -278,7 +332,8 @@ export const HEIGHT_NAMES_LIMIT = 20;
  * the minimum height must be known and met, and a maximum, where there is one,
  * not exceeded. A ride with no known minimum is counted apart rather than
  * passed, because an unknown limit is not the same as none. With `type` only
- * the rides of that type are ranked, and those of unknown type counted apart.
+ * the rides of that type are ranked, and those of unknown type counted apart;
+ * with `shelter` only the rides that keep you dry, and the unknown ones too.
  */
 export function compareRides(
   all: readonly ComparedRide[],
@@ -287,16 +342,20 @@ export function compareRides(
     order?: "asc" | "desc";
     riderHeightCm?: number;
     type?: RideTypeFilter;
+    shelter?: ShelterFilter;
     limit: number;
   },
 ): RideComparison {
-  const type = params.type;
+  const { type, shelter } = params;
   const typeUnknown = type
     ? all.filter((ride) => !ride.types?.length).length
     : 0;
-  const rides = type
+  const ofType = type
     ? all.filter((ride) => isRideOfType(ride.types ?? [], type))
     : all;
+  const rides = shelter
+    ? ofType.filter((ride) => isSheltered(ride.indoorOutdoor, shelter))
+    : ofType;
   const rider = params.riderHeightCm;
   const heightUnknown: ComparedRide[] = [];
   const notAllowed: ComparedRide[] = [];
@@ -335,6 +394,7 @@ export function compareRides(
       notAllowedRides: notAllowed.slice(0, HEIGHT_NAMES_LIMIT).map(outOfReach),
     }),
     ...(type && { typeUnknown }),
+    ...(shelter && shelterCoverage(ofType.map((ride) => ride.indoorOutdoor))),
   };
 }
 

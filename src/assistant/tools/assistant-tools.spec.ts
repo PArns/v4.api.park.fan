@@ -802,6 +802,60 @@ describe("show_card kind rides with a type", () => {
   });
 });
 
+describe("show_card kind rides for the rain", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("lists the rides that keep you dry, the unknown ones counted apart", async () => {
+    jest.spyOn(getParkTool, "handler").mockResolvedValue({
+      name: "Phantasialand",
+      status: "OPERATING",
+      rides: {
+        longestWaits: [
+          { id: "a", name: "Taron", waitMinutes: 45 },
+          { id: "b", name: "Winja's Fear", waitMinutes: 30 },
+          { id: "c", name: "Maus au Chocolat", waitMinutes: 20 },
+        ],
+        down: [{ id: "d", name: "Talocan" }],
+      },
+    });
+    const dryness: Record<string, string | null> = {
+      a: "covered_queue",
+      b: "indoor",
+      c: "indoor",
+      d: null,
+    };
+    const find = jest.fn(async ({ where }: { where: { id: unknown } }) => {
+      const ids = (where.id as { value: string[] }).value;
+      return ids.map((id) => ({ id, indoorOutdoor: dryness[id] }));
+    });
+    const providers = new Map<unknown, unknown>([
+      [RideProfileService, profiles({})],
+      [DataSource, { getRepository: () => ({ find }) }],
+    ]);
+    const covered = await run(
+      "show_card",
+      { kind: "rides", park: PARK_ID, shelter: "covered" },
+      providers,
+    );
+    expect(covered.json.rows.map((row: { name: string }) => row.name)).toEqual([
+      "Taron",
+      "Winja's Fear",
+      "Maus au Chocolat",
+    ]);
+    // The model can tell a roofed queue from a ride that is dry the whole way.
+    expect(covered.json.rows[0].indoorOutdoor).toBe("covered_queue");
+    expect(covered.json.shelterUnknown).toBe(1);
+    expect(covered.json).not.toHaveProperty("shelterIncomplete");
+
+    const indoor = await run(
+      "show_card",
+      { kind: "rides", park: PARK_ID, shelter: "indoor" },
+      providers,
+    );
+    expect(indoor.json.shown).toBe("2 indoor rides of Phantasialand");
+  });
+});
+
 describe("ride card badges", () => {
   it("sends each badge only when true or known", () => {
     expect(

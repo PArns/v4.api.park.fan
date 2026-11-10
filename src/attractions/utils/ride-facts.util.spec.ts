@@ -131,6 +131,54 @@ describe("compareRides", () => {
     expect(tall.rides.map((ride) => ride.name)).not.toContain("Kiddie Coaster");
   });
 
+  it("keeps only the rides that keep you dry with shelter, unknown ones counted apart", () => {
+    const rainy: ComparedRide[] = [
+      {
+        id: "a",
+        name: "Taron",
+        topSpeedKmh: 117,
+        indoorOutdoor: "covered_queue",
+      },
+      {
+        id: "b",
+        name: "Winja's Fear",
+        topSpeedKmh: 60,
+        indoorOutdoor: "indoor",
+      },
+      { id: "c", name: "Raik", topSpeedKmh: 40, indoorOutdoor: "outdoor" },
+      { id: "d", name: "Colorado Adventure", topSpeedKmh: 55 },
+    ];
+    const covered = compareRides(rainy, {
+      by: "topSpeed",
+      shelter: "covered",
+      limit: 5,
+    });
+    expect(covered.rides.map((ride) => ride.name)).toEqual([
+      "Taron",
+      "Winja's Fear",
+    ]);
+    expect(covered.shelterUnknown).toBe(1);
+    expect(covered).not.toHaveProperty("shelterIncomplete");
+
+    const indoor = compareRides(rainy, {
+      by: "topSpeed",
+      shelter: "indoor",
+      limit: 5,
+    });
+    expect(indoor.rides.map((ride) => ride.name)).toEqual(["Winja's Fear"]);
+
+    // Under half known: whatever somebody happened to check, so the list says it is incomplete.
+    const thin = compareRides(
+      [
+        ...rainy.slice(0, 1),
+        { id: "e", name: "Mystery" },
+        { id: "f", name: "Chiapas" },
+      ],
+      { by: "topSpeed", shelter: "covered", limit: 5 },
+    );
+    expect(thin.shelterIncomplete).toBe(true);
+  });
+
   it("keeps only coasters with type, the rides of unknown type counted apart", () => {
     const typed: ComparedRide[] = [
       { id: "a", name: "Taron", topSpeedKmh: 117, types: ["launch-coaster"] },

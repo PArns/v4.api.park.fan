@@ -33,6 +33,7 @@ import {
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
 import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
+import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
 import { Park } from "../../parks/entities/park.entity";
 import { Show as ShowEntity } from "../../shows/entities/show.entity";
 import { Restaurant } from "../../restaurants/entities/restaurant.entity";
@@ -50,9 +51,12 @@ import {
   compareRides,
   comparedRides,
   isRideOfType,
+  isSheltered,
   partyTooShort,
   RIDE_RANKINGS,
   RIDE_TYPE_FILTERS,
+  SHELTER_FILTERS,
+  shelterCoverage,
 } from "../../attractions/utils/ride-facts.util";
 import { getCountryISOCode } from "../../common/constants/country-codes.constant";
 import { AssistantPostsClient } from "./assistant-posts.client";
@@ -372,6 +376,26 @@ async function plannedDay(
     throw new McpToolError(`${park.name} on ${date} is not in the user's plan`);
   }
   return { park, day };
+}
+
+/** Each ride's hand-decided `indoorOutdoor`, absent where nobody decided it. */
+async function indoorOutdoorOf(
+  ctx: AssistantToolContext,
+  rides: ReadonlyArray<{ id: string }>,
+): Promise<Map<string, IndoorOutdoor>> {
+  if (rides.length === 0) return new Map();
+  const found = await ctx
+    .get(DataSource)
+    .getRepository(Attraction)
+    .find({
+      where: { id: In(rides.map((ride) => ride.id)) },
+      select: { id: true, indoorOutdoor: true },
+    });
+  return new Map(
+    found.flatMap((ride) =>
+      ride.indoorOutdoor ? [[ride.id, ride.indoorOutdoor] as const] : [],
+    ),
+  );
 }
 
 /** The visitor's planned day at this park and date, as the planner snapshot holds it. */
@@ -1156,7 +1180,8 @@ export const ASSISTANT_TOOLS = [
       "The rides of one park, or of every park in a country, ranked by a fact: top speed, height, " +
       "length, duration, inversions, launches, opening year or minimum rider height (cm), highest " +
       "first unless order asc. type keeps only coasters, dark rides (simulators included), water " +
-      "rides or family rides. With riderHeightCm only " +
+      "rides or family rides; shelter keeps only the rides that keep you dry in the rain " +
+      "(covered: indoors or a roofed queue; indoor: the ride too). With riderHeightCm only " +
       'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
       'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
       "what it left out for lack of data (say so when many are). No waits: those are show_card " +
@@ -1173,11 +1198,21 @@ export const ASSISTANT_TOOLS = [
       by: z.enum(RIDE_RANKINGS),
       order: z.enum(["desc", "asc"]).default("desc"),
       type: z.enum(RIDE_TYPE_FILTERS).optional(),
+      shelter: z.enum(SHELTER_FILTERS).optional(),
       riderHeightCm: z.number().int().min(50).max(250).optional(),
       limit: z.number().int().min(1).max(15).default(5),
     }),
     run: async (
-      { park: reference, country, by, order, type, riderHeightCm, limit },
+      {
+        park: reference,
+        country,
+        by,
+        order,
+        type,
+        shelter,
+        riderHeightCm,
+        limit,
+      },
       ctx,
     ) => {
       if (!reference === !country) {
@@ -1222,10 +1257,12 @@ export const ASSISTANT_TOOLS = [
         by,
         order,
         ...(type && { type }),
+        ...(shelter && { shelter }),
         ...compareRides(comparedRides(found, profiles), {
           by,
           order,
           type,
+          shelter,
           riderHeightCm,
           limit,
         }),
@@ -1699,7 +1736,8 @@ export const ASSISTANT_TOOLS = [
       "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
       "level), a park's rides with their current waits (kind rides, longest or shortest " +
       "first, then rides that are down; type for coasters, dark rides, water or family rides " +
-      "only; the result lists each row with its type ids), several parks to click " +
+      "only; shelter for rides that keep you dry in the rain; the result lists each row with " +
+      "its type ids), several parks to click " +
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
       "a park's shows with their times on a day (kind shows), or its restaurants and food " +
@@ -1758,6 +1796,12 @@ export const ASSISTANT_TOOLS = [
         .enum(RIDE_TYPE_FILTERS)
         .optional()
         .describe("For kind rides: only rides of this type"),
+      shelter: z
+        .enum(SHELTER_FILTERS)
+        .optional()
+        .describe(
+          "For kind rides: covered (indoors or a roofed queue) or indoor (the ride too)",
+        ),
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
@@ -1769,6 +1813,7 @@ export const ASSISTANT_TOOLS = [
         rideId,
         order,
         type,
+        shelter,
         limit,
         from,
         days,
@@ -1873,7 +1918,7 @@ export const ASSISTANT_TOOLS = [
         // With a type every waiting ride, so a coaster further down the list is not cut.
         const live = (await parkNow(ctx, {
           park,
-          longestWaits: type ? 500 : 30,
+          longestWaits: type || shelter ? 500 : 30,
         })) as ParkSummary;
         if ("ambiguous" in live) return live;
         let all = live.rides?.longestWaits ?? [];
@@ -1893,6 +1938,20 @@ export const ASSISTANT_TOOLS = [
             isRideOfType(typesOf(ride), type);
           all = all.filter(ofType);
           down = down.filter(ofType);
+        }
+        // Read only for a rain question: one query for every candidate, before any is cut.
+        const shelterOf = shelter
+          ? await indoorOutdoorOf(ctx, [...all, ...down])
+          : null;
+        const coverage =
+          shelter && shelterOf
+            ? shelterCoverage([...all, ...down].map((r) => shelterOf.get(r.id)))
+            : null;
+        if (shelter && shelterOf) {
+          const dry = (ride: { id: string }) =>
+            isSheltered(shelterOf.get(ride.id), shelter);
+          all = all.filter(dry);
+          down = down.filter(dry);
         }
         const waiting = (order === "shortest" ? [...all].reverse() : all).slice(
           0,
@@ -1949,17 +2008,20 @@ export const ASSISTANT_TOOLS = [
         return new ActionOutcome(
           { type: "card", card },
           {
-            shown: `${rides.length} ${type ? `${type.replace("_", " ")}s` : "rides"} of ${live.name}`,
+            shown: `${rides.length} ${shelter ? `${shelter} ` : ""}${type ? `${type.replace("_", " ")}s` : "rides"} of ${live.name}`,
             rows: picked.map((ride) => {
               const types = typesOf(ride);
+              const dryness = shelterOf?.get(ride.id);
               return {
                 name: ride.name,
                 status: ride.status,
                 waitMinutes: ride.waitMinutes,
                 ...(types.length > 0 && { types }),
+                ...(dryness && { indoorOutdoor: dryness }),
               };
             }),
             ...(type && { typeUnknown }),
+            ...coverage,
           },
         );
       }
