@@ -121,7 +121,8 @@ back to parks. Version 28: with a party's height Parky never recommends or plans
 shortest rider is under, names such rides with their minimum, and says a minimum is not known
 rather than that a ride is fine. Version 29: another day than today is judged only from a lookup
 for that day, and a closed park gets no crowd but the time it opens next. Version 30: a rain question
-goes to the `shelter` filter, and a thin list is said to be incomplete.
+goes to the `shelter` filter, and a thin list is said to be incomplete. Version 31: several parks on
+one day go to `compare_parks`, never one lookup per park.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -218,6 +219,15 @@ reading today (`findCurrentStatusByPark`); without one they are null, never a gu
 day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
 headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
 events. A day the calendar has nothing on is `null`. No new query on `queue_data`.
+
+`compare_parks` puts several parks side by side on one day (today by default, up to 60 days
+ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_PARKS`) or 2 to 10
+`parks`. Each park's day comes from the calendar every park page shows
+(`CalendarService.buildCalendarResponse`, six parks at a time, `CALENDAR_BATCH`), so every park is
+rated by the same typical-day-peak level. `ranked` holds the open parks quietest first (a tie by
+the headliners' expected peak), `unrated` the open ones without a level, `closed` and `notKnown`
+the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
+in `notKnown` and costs the rest nothing.
 
 `get_best_days` returns `tenQuietestOpenDays`, the ten quietest rated open days, and counts the
 unrated ones apart (`unratedOpenDays`): an `unknown` day is never ranked as quiet, and a day

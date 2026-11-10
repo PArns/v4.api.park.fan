@@ -856,6 +856,139 @@ describe("show_card kind rides for the rain", () => {
   });
 });
 
+describe("compare_parks", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const dayAhead = (days: number) =>
+    new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  const DATE = dayAhead(3);
+  const parkRow = (id: string, name: string) => ({
+    ...park,
+    id,
+    name,
+    slug: name.toLowerCase().replace(/ /g, "-"),
+  });
+  const PHL = parkRow("11111111-1111-4111-8111-111111111111", "Phantasialand");
+  const EP = parkRow("22222222-2222-4222-8222-222222222222", "Europa-Park");
+  const MP = parkRow("33333333-3333-4333-8333-333333333333", "Movie Park");
+  const HP = parkRow("44444444-4444-4444-8444-444444444444", "Hansa-Park");
+  const LL = parkRow("55555555-5555-4555-8555-555555555555", "Legoland");
+  const days: Record<string, unknown> = {
+    [PHL.id]: {
+      status: "OPERATING",
+      crowdLevel: "high",
+      headlinerForecast: { avgWait: 60 },
+    },
+    [EP.id]: {
+      status: "OPERATING",
+      crowdLevel: "low",
+      headlinerForecast: { avgWait: 40 },
+    },
+    [MP.id]: {
+      status: "OPERATING",
+      crowdLevel: "low",
+      headlinerForecast: { avgWait: 25 },
+    },
+    [HP.id]: { status: "CLOSED", crowdLevel: "closed" },
+    [LL.id]: { status: "OPERATING", crowdLevel: "unknown" },
+  };
+  const all = [PHL, EP, MP, HP, LL];
+  const providers = (rows = all) =>
+    new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async (id: string) =>
+            rows.find((row) => row.id === id),
+          ),
+        },
+      ],
+      [
+        DataSource,
+        {
+          getRepository: () => ({
+            createQueryBuilder: () => {
+              const query = {
+                where: () => query,
+                andWhere: () => query,
+                getMany: async () => rows,
+              };
+              return query;
+            },
+          }),
+        },
+      ],
+      [
+        CalendarService,
+        {
+          buildCalendarResponse: jest.fn(async (p: { id: string }) => ({
+            days: [{ date: DATE, ...(days[p.id] as object) }],
+          })),
+        },
+      ],
+    ]);
+
+  it("ranks a country's parks quietest first, closed and unrated apart", async () => {
+    const { json } = await run(
+      "compare_parks",
+      { country: "Germany", date: DATE },
+      providers(),
+    );
+    // Two "low" parks: the one with the shorter expected peak first.
+    expect(json.ranked.map((row: { name: string }) => row.name)).toEqual([
+      "Movie Park",
+      "Europa-Park",
+      "Phantasialand",
+    ]);
+    expect(json.ranked[0]).toMatchObject({
+      id: MP.id,
+      crowdLevel: "low",
+      expectedPeakWaitMinutes: 25,
+    });
+    // An unknown level is never ranked as quiet.
+    expect(json.unrated.map((row: { name: string }) => row.name)).toEqual([
+      "Legoland",
+    ]);
+    expect(json.closed).toEqual(["Hansa-Park"]);
+  });
+
+  it("compares the parks it is given and refuses a day past the forecast", async () => {
+    const { json } = await run(
+      "compare_parks",
+      { parks: [PHL.id, EP.id], date: DATE },
+      providers(),
+    );
+    expect(json.ranked.map((row: { name: string }) => row.name)).toEqual([
+      "Europa-Park",
+      "Phantasialand",
+    ]);
+    const far = await run(
+      "compare_parks",
+      { parks: [PHL.id, EP.id], date: dayAhead(90) },
+      providers(),
+    );
+    expect(far.json.ranked).toEqual([]);
+    expect(far.json.notKnown).toEqual(["Phantasialand", "Europa-Park"]);
+  });
+
+  it("asks for a city when a country has too many parks", async () => {
+    const many = Array.from({ length: 31 }, (_, i) =>
+      parkRow(
+        `66666666-6666-4666-8666-${String(i).padStart(12, "0")}`,
+        `P${i}`,
+      ),
+    );
+    const result = await runAssistantTool(
+      "compare_parks",
+      { country: "US" },
+      context(providers(many)),
+      jest.fn(),
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(result.content).toContain("name a city");
+  });
+});
+
 describe("ride card badges", () => {
   it("sends each badge only when true or known", () => {
     expect(
