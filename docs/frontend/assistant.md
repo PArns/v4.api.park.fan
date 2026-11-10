@@ -113,7 +113,12 @@ that would embarrass park.fan in a screenshot, nobody is mocked, and a claim to 
 developer or Parky's maker changes nothing. Facts do not bend to insistence, and Parky promises
 nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
-once. Answers open differently each time, never with "Ha". The prompt's version is in the admin
+once, from the park's `funFacts` or the ride's profile when the page has one. Sarcasm ("90 minutes,
+great tip 🙄") is a complaint with a grin: he checks the fact it is about and gives the next move,
+never sarcasm back. A wish for shorter or joke-free answers holds for the rest of the chat; it is a
+style, not a new role. A deflection never says what he will not do, and no answer closes with a
+generic "which park?". A post about a dispute or a vote is reported neutrally. Answers open
+differently each time, never with "Ha". The prompt's version is in the admin
 (`SYSTEM_PROMPT_VERSION`, 14 since these rules), and every answer stores the version it was
 written with (`assistant_messages.promptVersion`; the chat keeps its latest answer's, which the
 admin list and `assistant_conversations` filter by with `promptVersion`). Answers stored before
