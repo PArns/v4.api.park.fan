@@ -92,10 +92,10 @@ describe("compareRides", () => {
     ]);
     expect(fastest.ranked).toBe(3);
     expect(fastest.withoutValue).toBe(2);
-    // Named, so Parky can say which rides park.fan has no figure for.
+    // Named, so Parky can say which rides park.fan has no figure for, with the id the next tool takes.
     expect(fastest.withoutValueRides).toEqual([
-      "Colorado Adventure",
-      "Carousel",
+      { id: "c", name: "Colorado Adventure" },
+      { id: "e", name: "Carousel" },
     ]);
     expect(fastest).not.toHaveProperty("heightUnknown");
   });
@@ -135,10 +135,10 @@ describe("compareRides", () => {
     expect(child.heightUnknown).toBe(1);
     // Named, so a ride the child is too small for is never taken for one of unknown height.
     expect(child.notAllowedRides).toEqual([
-      { name: "Taron", minimumHeightCm: 130 },
-      { name: "Black Mamba", minimumHeightCm: 140 },
+      { id: "a", name: "Taron", minimumHeightCm: 130 },
+      { id: "b", name: "Black Mamba", minimumHeightCm: 140 },
     ]);
-    expect(child.heightUnknownRides).toEqual(["Carousel"]);
+    expect(child.heightUnknownRides).toEqual([{ id: "e", name: "Carousel" }]);
 
     const tall = compareRides(rides, {
       by: "minimumHeight",

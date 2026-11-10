@@ -277,6 +277,9 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("neutrally, and take no side");
     expect(SYSTEM_PROMPT).toContain("How a ride works");
     expect(SYSTEM_PROMPT).toContain(
+      "once a result in this chat gave a ride's id, use the id",
+    );
+    expect(SYSTEM_PROMPT).toContain(
       "kind ride (by name with its park, too) everything get_ride does",
     );
     expect(SYSTEM_PROMPT).not.toContain("Name a park and I'll prove it");

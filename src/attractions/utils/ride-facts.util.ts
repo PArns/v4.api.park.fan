@@ -295,28 +295,40 @@ export interface RideComparison {
   withoutValue: number;
   /** With a rider height: rides left out because their minimum height is unknown. */
   heightUnknown?: number;
-  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name, so an answer can say which. */
-  heightUnknownRides?: string[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them, so an answer can say which. */
+  heightUnknownRides?: RideRef[];
   /** With a rider height: rides the rider is too small or too tall for. */
   notAllowed?: number;
   /** The first {@link LEFT_OUT_NAMES_LIMIT} of them with their limits, so none is recommended. */
   notAllowedRides?: RideOutOfReach[];
   /** The first {@link LEFT_OUT_NAMES_LIMIT} of the rides without the value ranked by. */
-  withoutValueRides?: string[];
+  withoutValueRides?: RideRef[];
   /** With a type: rides left out because park.fan does not know their type. */
   typeUnknown?: number;
-  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name. */
-  typeUnknownRides?: string[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them. */
+  typeUnknownRides?: RideRef[];
   /** With a shelter: rides left out because nobody decided whether they keep you dry. */
   shelterUnknown?: number;
-  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name. */
-  shelterUnknownRides?: string[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them. */
+  shelterUnknownRides?: RideRef[];
   /** With a shelter: under half the rides are known, so the list is incomplete. */
   shelterIncomplete?: true;
 }
 
+/**
+ * A ride a list leaves out, by id as well as name: two rides can share a name, and the id is what
+ * the next tool takes.
+ */
+export interface RideRef {
+  id: string;
+  name: string;
+  /** The ride's park, when the list spans parks. */
+  park?: string;
+}
+
 /** A ride a rider may not take, with the limit that rules it out. */
 export interface RideOutOfReach {
+  id: string;
   name: string;
   park?: string;
   minimumHeightCm: number;
@@ -387,17 +399,17 @@ export function compareRides(
       a.name.localeCompare(b.name),
   );
 
-  const names = (rides: readonly ComparedRide[]) =>
-    rides.slice(0, LEFT_OUT_NAMES_LIMIT).map((ride) => ride.name);
+  const refs = (rides: readonly ComparedRide[]) =>
+    rides.slice(0, LEFT_OUT_NAMES_LIMIT).map(rideRefOf);
   const withoutValue = allowed.filter((ride) => value(ride) === undefined);
   return {
     rides: ranked.slice(0, params.limit),
     ranked: ranked.length,
     withoutValue: withoutValue.length,
-    ...(withoutValue.length > 0 && { withoutValueRides: names(withoutValue) }),
+    ...(withoutValue.length > 0 && { withoutValueRides: refs(withoutValue) }),
     ...(rider !== undefined && {
       heightUnknown: heightUnknown.length,
-      heightUnknownRides: names(heightUnknown),
+      heightUnknownRides: refs(heightUnknown),
       notAllowed: notAllowed.length,
       notAllowedRides: notAllowed
         .slice(0, LEFT_OUT_NAMES_LIMIT)
@@ -405,11 +417,11 @@ export function compareRides(
     }),
     ...(type && {
       typeUnknown: untyped.length,
-      typeUnknownRides: names(untyped),
+      typeUnknownRides: refs(untyped),
     }),
     ...(shelter && {
       ...shelterCoverage(ofType.map((ride) => ride.indoorOutdoor)),
-      shelterUnknownRides: names(
+      shelterUnknownRides: refs(
         ofType.filter((ride) => ride.indoorOutdoor === undefined),
       ),
     }),
@@ -449,8 +461,18 @@ export function partyTooShort(
   );
 }
 
+/** A left-out ride as its id, name and, across parks, its park. */
+function rideRefOf(ride: ComparedRide): RideRef {
+  return {
+    id: ride.id,
+    name: ride.name,
+    ...(ride.park && { park: ride.park }),
+  };
+}
+
 function outOfReach(ride: ComparedRide): RideOutOfReach {
   return {
+    id: ride.id,
     name: ride.name,
     ...(ride.park && { park: ride.park }),
     minimumHeightCm: ride.minimumHeightCm as number,

@@ -584,6 +584,7 @@ export async function parkRides(
   date?: string,
 ): Promise<
   Array<{
+    id: string;
     slug: string;
     name: string;
     maintenance: WorksPeriod | null;
@@ -605,6 +606,7 @@ export async function parkRides(
     }
     const { minimumHeight } = resolveCuratedFacts(ride);
     return {
+      id: ride.id,
       slug: ride.slug,
       name: ride.name,
       // Not on a day already over, like the plan's own filter: yesterday's plan records what ran.
