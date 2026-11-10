@@ -92,6 +92,11 @@ describe("compareRides", () => {
     ]);
     expect(fastest.ranked).toBe(3);
     expect(fastest.withoutValue).toBe(2);
+    // Named, so Parky can say which rides park.fan has no figure for.
+    expect(fastest.withoutValueRides).toEqual([
+      "Colorado Adventure",
+      "Carousel",
+    ]);
     expect(fastest).not.toHaveProperty("heightUnknown");
   });
 

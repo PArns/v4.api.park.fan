@@ -295,16 +295,22 @@ export interface RideComparison {
   withoutValue: number;
   /** With a rider height: rides left out because their minimum height is unknown. */
   heightUnknown?: number;
-  /** The first {@link HEIGHT_NAMES_LIMIT} of them by name, so an answer can say which. */
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name, so an answer can say which. */
   heightUnknownRides?: string[];
   /** With a rider height: rides the rider is too small or too tall for. */
   notAllowed?: number;
-  /** The first {@link HEIGHT_NAMES_LIMIT} of them with their limits, so none is recommended. */
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them with their limits, so none is recommended. */
   notAllowedRides?: RideOutOfReach[];
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of the rides without the value ranked by. */
+  withoutValueRides?: string[];
   /** With a type: rides left out because park.fan does not know their type. */
   typeUnknown?: number;
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name. */
+  typeUnknownRides?: string[];
   /** With a shelter: rides left out because nobody decided whether they keep you dry. */
   shelterUnknown?: number;
+  /** The first {@link LEFT_OUT_NAMES_LIMIT} of them by name. */
+  shelterUnknownRides?: string[];
   /** With a shelter: under half the rides are known, so the list is incomplete. */
   shelterIncomplete?: true;
 }
@@ -319,11 +325,11 @@ export interface RideOutOfReach {
 }
 
 /**
- * How many rides a height filter names among those it left out. A count alone
- * read as "the height is unknown" and got the rides recommended to a child too
- * small for them.
+ * How many rides a filter names among those it left out. A count alone read as
+ * "the height is unknown" and got the rides recommended to a child too small
+ * for them, and a name tells the visitor which ride park.fan cannot judge.
  */
-export const HEIGHT_NAMES_LIMIT = 20;
+export const LEFT_OUT_NAMES_LIMIT = 20;
 
 /**
  * A park's rides ranked by one fact, highest first unless `order` is "asc".
@@ -347,9 +353,7 @@ export function compareRides(
   },
 ): RideComparison {
   const { type, shelter } = params;
-  const typeUnknown = type
-    ? all.filter((ride) => !ride.types?.length).length
-    : 0;
+  const untyped = type ? all.filter((ride) => !ride.types?.length) : [];
   const ofType = type
     ? all.filter((ride) => isRideOfType(ride.types ?? [], type))
     : all;
@@ -381,20 +385,32 @@ export function compareRides(
       a.name.localeCompare(b.name),
   );
 
+  const names = (rides: readonly ComparedRide[]) =>
+    rides.slice(0, LEFT_OUT_NAMES_LIMIT).map((ride) => ride.name);
+  const withoutValue = allowed.filter((ride) => value(ride) === undefined);
   return {
     rides: ranked.slice(0, params.limit),
     ranked: ranked.length,
-    withoutValue: allowed.length - withValue.length,
+    withoutValue: withoutValue.length,
+    ...(withoutValue.length > 0 && { withoutValueRides: names(withoutValue) }),
     ...(rider !== undefined && {
       heightUnknown: heightUnknown.length,
-      heightUnknownRides: heightUnknown
-        .slice(0, HEIGHT_NAMES_LIMIT)
-        .map((ride) => ride.name),
+      heightUnknownRides: names(heightUnknown),
       notAllowed: notAllowed.length,
-      notAllowedRides: notAllowed.slice(0, HEIGHT_NAMES_LIMIT).map(outOfReach),
+      notAllowedRides: notAllowed
+        .slice(0, LEFT_OUT_NAMES_LIMIT)
+        .map(outOfReach),
     }),
-    ...(type && { typeUnknown }),
-    ...(shelter && shelterCoverage(ofType.map((ride) => ride.indoorOutdoor))),
+    ...(type && {
+      typeUnknown: untyped.length,
+      typeUnknownRides: names(untyped),
+    }),
+    ...(shelter && {
+      ...shelterCoverage(ofType.map((ride) => ride.indoorOutdoor)),
+      shelterUnknownRides: names(
+        ofType.filter((ride) => ride.indoorOutdoor === undefined),
+      ),
+    }),
   };
 }
 

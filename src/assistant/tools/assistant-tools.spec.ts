@@ -303,6 +303,8 @@ describe("get_shows", () => {
       ],
       withShowtimes: 2,
       withoutShowtimes: 1,
+      // Named, so a show without a time today is "no time published", not "none".
+      withoutShowtimesNames: ["Meet & Greet"],
     });
   });
 });
@@ -703,6 +705,8 @@ describe("a closed park's crowd", () => {
       avgWaitTodayMinutes: 24,
       peakWaitTodayMinutes: 55,
       peakHourLocal: 14,
+      level: null,
+      levelWhy: expect.stringContaining("closed"),
     });
     expect(json.nextSchedule).toBeDefined();
   });
@@ -979,6 +983,9 @@ describe("compare_parks", () => {
           findById: jest.fn(async (id: string) =>
             rows.find((row) => row.id === id),
           ),
+          getFirstOperatingDayFrom: jest.fn(async () => ({
+            date: dayAhead(20),
+          })),
         },
       ],
       [
@@ -1000,6 +1007,10 @@ describe("compare_parks", () => {
         CalendarService,
         {
           buildCalendarResponse: jest.fn(async (p: { id: string }) => ({
+            meta: {
+              scheduleCoverage: { from: "2025-12-26", to: dayAhead(100) },
+              hasOperatingSchedule: p.id !== LL.id,
+            },
             days: [{ date: DATE, ...(days[p.id] as object) }],
           })),
         },
@@ -1023,11 +1034,40 @@ describe("compare_parks", () => {
       crowdLevel: "low",
       expectedPeakWaitMinutes: 25,
     });
-    // An unknown level is never ranked as quiet.
-    expect(json.unrated.map((row: { name: string }) => row.name)).toEqual([
-      "Legoland",
+    // A park that publishes no hours is listed with the reason, never ranked or called closed.
+    expect(json.hoursNotPublished).toEqual([
+      expect.objectContaining({
+        name: "Legoland",
+        why: expect.stringContaining("publishes no opening hours"),
+      }),
     ]);
-    expect(json.closed).toEqual(["Hansa-Park"]);
+    // A closed park says when it opens next.
+    expect(json.closed).toEqual([
+      { name: "Hansa-Park", nextOpenDay: dayAhead(20) },
+    ]);
+  });
+
+  it("keeps an open park without a level out of the ranking, with the reason", async () => {
+    const saved = days[MP.id];
+    days[MP.id] = { status: "OPERATING", crowdLevel: "unknown" };
+    try {
+      const { json } = await run(
+        "compare_parks",
+        { parks: [MP.id, EP.id], date: DATE },
+        providers(),
+      );
+      expect(json.ranked.map((row: { name: string }) => row.name)).toEqual([
+        "Europa-Park",
+      ]);
+      expect(json.unrated).toEqual([
+        expect.objectContaining({
+          name: "Movie Park",
+          why: expect.any(String),
+        }),
+      ]);
+    } finally {
+      days[MP.id] = saved;
+    }
   });
 
   it("compares the parks it is given and refuses a day past the forecast", async () => {
@@ -1042,11 +1082,14 @@ describe("compare_parks", () => {
     ]);
     const far = await run(
       "compare_parks",
-      { parks: [PHL.id, EP.id], date: dayAhead(90) },
+      { parks: [PHL.id, EP.id], date: dayAhead(400) },
       providers(),
     );
     expect(far.json.ranked).toEqual([]);
-    expect(far.json.notKnown).toEqual(["Phantasialand", "Europa-Park"]);
+    expect(far.json.notKnown).toEqual([
+      { name: "Phantasialand", why: expect.stringContaining("looks ahead") },
+      { name: "Europa-Park", why: expect.stringContaining("looks ahead") },
+    ]);
   });
 
   it("asks for a city when a country has too many parks", async () => {
@@ -1317,6 +1360,27 @@ describe("open_page beyond parks, rides and posts", () => {
     expect((await open({ page: "best_time" })).action).toMatchObject({
       path: "/best-time-to-visit",
     });
+  });
+
+  it("says why a park has no with-kids page instead of opening a 404", async () => {
+    const rides = Array.from({ length: 30 }, (_, i) => ({
+      id: `r${i}`,
+      name: `Ride ${i}`,
+      minimumHeight: i < 8 ? 100 : null,
+    }));
+    const result = await runAssistantTool(
+      "open_page",
+      { park: PARK_ID, section: "kids" },
+      context(
+        new Map<unknown, unknown>([
+          ...providers(),
+          [DataSource, { getRepository: () => ({ find: async () => rides }) }],
+        ]),
+      ),
+      jest.fn(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("only 8 of its 30 rides");
   });
 
   it("refuses two targets, or a section without its park", async () => {
