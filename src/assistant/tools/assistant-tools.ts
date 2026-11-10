@@ -332,6 +332,33 @@ function mcp(ctx: AssistantToolContext): McpToolContext {
   return { admin: PARKY, get: ctx.get.bind(ctx) };
 }
 
+/** The parts of a park's live crowd reading that describe this moment, not the day so far. */
+const LIVE_CROWD_NOW = [
+  "level",
+  "avgWaitMinutes",
+  "occupancyPercent",
+  "comparedToTypicalPercent",
+] as const;
+
+/**
+ * `get_park`'s summary, its crowd reading of this moment only while the park runs. Closed, the
+ * reading sits at its floor, and Parky called a closed park "very low for the moment". Today's
+ * average and peak so far stay: they describe hours the park was open.
+ */
+async function parkNow(
+  ctx: AssistantToolContext,
+  input: { park: string; longestWaits: number },
+): Promise<Record<string, unknown>> {
+  const live = (await getParkTool.handler(input, mcp(ctx))) as Record<
+    string,
+    unknown
+  >;
+  if (live.status === "OPERATING" || !live.crowd) return live;
+  const crowd = { ...(live.crowd as Record<string, unknown>) };
+  for (const key of LIVE_CROWD_NOW) delete crowd[key];
+  return { ...live, crowd };
+}
+
 /** A day of the visitor's plan, the park checked; the planner snapshot is the only source. */
 async function plannedDay(
   ctx: AssistantToolContext,
@@ -460,10 +487,10 @@ async function dayCard(
       mcp(ctx),
     ) as Promise<ForecastSummary>,
     live
-      ? (getParkTool.handler(
-          { park: found.id, longestWaits: 0 },
-          mcp(ctx),
-        ) as Promise<LiveParkSummary>)
+      ? (parkNow(ctx, {
+          park: found.id,
+          longestWaits: 0,
+        }) as Promise<LiveParkSummary>)
       : null,
   ]);
   if (kind === "calendar") {
@@ -900,10 +927,7 @@ export const ASSISTANT_TOOLS = [
       "family rides) has every waiting ride.",
     input: z.object({ park: parkRef }),
     run: async ({ park }, ctx) => {
-      const live = (await getParkTool.handler(
-        { park, longestWaits: 8 },
-        mcp(ctx),
-      )) as Record<string, unknown>;
+      const live = await parkNow(ctx, { park, longestWaits: 8 });
       // Every time reaches the model in the visitor's clock, so the park's own clock and zone
       // only cost tokens.
       const {
@@ -1847,10 +1871,10 @@ export const ASSISTANT_TOOLS = [
         if (!park) throw new McpToolError("kind rides needs park");
         // Every operating ride with a posted wait, longest first, so both ends can be cut.
         // With a type every waiting ride, so a coaster further down the list is not cut.
-        const live = (await getParkTool.handler(
-          { park, longestWaits: type ? 500 : 30 },
-          mcp(ctx),
-        )) as ParkSummary;
+        const live = (await parkNow(ctx, {
+          park,
+          longestWaits: type ? 500 : 30,
+        })) as ParkSummary;
         if ("ambiguous" in live) return live;
         let all = live.rides?.longestWaits ?? [];
         let down = live.rides?.down ?? [];
@@ -1941,10 +1965,10 @@ export const ASSISTANT_TOOLS = [
       }
       if (kind === "park") {
         if (!park) throw new McpToolError("kind park needs park");
-        const live = (await getParkTool.handler(
-          { park, longestWaits: 3 },
-          mcp(ctx),
-        )) as ParkSummary;
+        const live = (await parkNow(ctx, {
+          park,
+          longestWaits: 3,
+        })) as ParkSummary;
         if ("ambiguous" in live) return live;
         const today = live.scheduleToday?.[0];
         const card: AssistantCard = {

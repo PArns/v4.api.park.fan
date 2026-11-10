@@ -119,7 +119,8 @@ quotes from the bubble on the page ("I have a few myself"), which the chat never
 instead of wondering where it came from. A sexual remark gets no innuendo or pun, only a plain line
 back to parks. Version 28: with a party's height Parky never recommends or plans a ride its
 shortest rider is under, names such rides with their minimum, and says a minimum is not known
-rather than that a ride is fine.
+rather than that a ride is fine. Version 29: another day than today is judged only from a lookup
+for that day, and a closed park gets no crowd but the time it opens next.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -184,7 +185,9 @@ the ones left out in `omitted`, so the model can ask again for one of those; par
 which sends `User-Agent: api.park.fan-assistant`). There is no web search, no fetch of a URL and no admin data. Every input is checked with
 zod, a result is cut at 12,000 characters, and an unexpected error reaches the model as "the lookup
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
-drops the park's clock and zone (every time reaches the model in the visitor's), `get_ride` the
+drops the park's clock and zone (every time reaches the model in the visitor's) and, while the park
+is not operating, the crowd reading of this moment (`parkNow`, which every live park read goes
+through: a closed park's level sits at its floor and was read as "very low for the moment"), `get_ride` the
 day's single readings behind its averages and the facts park.fan does not know, and `show_card`
 returns what the card shows, plus the next opening for a park that is not open, so the sentence
 after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the

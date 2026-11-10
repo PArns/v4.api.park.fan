@@ -269,6 +269,35 @@ export const EVAL_CASES: EvalCase[] = [
     want: [{ tool: "get_ride", input: { rideId: TARON_ID } }],
   },
   {
+    // Answered once with today's breakdown alone, never looking at December.
+    id: "ride-later-in-year",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/bruehl/phantasialand/taron",
+    pageSubject: `the ride "Taron" (ride id ${TARON_ID}) in ${PHL_SUBJECT}`,
+    message: "Fährt Taron Ende Dezember?",
+    allowBefore: ["get_ride"],
+    want: [
+      {
+        tool: [
+          "get_park_day",
+          "get_park_forecast",
+          "get_best_days",
+          "get_ride_forecast",
+          "show_card",
+        ],
+      },
+    ],
+    results: {
+      get_ride: {
+        id: TARON_ID,
+        name: "Taron",
+        status: "DOWN",
+        reopening: { reason: "breakdown", downSince: "2026-11-07 11:20" },
+        worksPeriods: [],
+      },
+    },
+  },
+  {
     id: "ride-worth-it",
     locale: "en",
     pagePath: "/en/parks/europe/germany/bruehl/phantasialand/taron",
