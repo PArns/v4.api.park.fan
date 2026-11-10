@@ -208,6 +208,49 @@ describe("the same day last year", () => {
       headlinerPeakWaitMinutes: null,
     });
   });
+
+  it("reads one past day itself with on, and refuses today or a day ahead", async () => {
+    const daysAgo = (days: number) =>
+      new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    const ON = daysAgo(4);
+    const providers = new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+      [
+        CalendarService,
+        {
+          buildCalendarResponse: jest.fn(async () => ({
+            days: [
+              {
+                date: ON,
+                status: "OPERATING",
+                crowdLevel: "moderate",
+                headlinerForecast: { avgWait: 40, rides: [], actual: true },
+              },
+            ],
+          })),
+        },
+      ],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, on: ON },
+      providers,
+    );
+    expect(json.day).toMatchObject({
+      date: ON,
+      crowdLevel: "moderate",
+      headlinerPeakWaitMinutes: 40,
+    });
+    for (const on of [daysAgo(-3), daysAgo(400)]) {
+      const result = await runAssistantTool(
+        "get_park_history",
+        { park: PARK_ID, on },
+        context(providers),
+        jest.fn(),
+      );
+      expect(result.isError).toBe(true);
+    }
+  });
 });
 
 describe("get_shows", () => {

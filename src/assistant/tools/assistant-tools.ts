@@ -499,6 +499,9 @@ const parkRef = z
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
+/** How far back `get_park_history` reads a single day: a year, as its year-back view. */
+const HISTORY_DAYS = 366;
+
 /** How far `park_forecast` looks ahead, today included. */
 const FORECAST_DAYS = 60;
 
@@ -1092,7 +1095,8 @@ export const ASSISTANT_TOOLS = [
       "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
       "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
       '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
-      "Halloween as date. Only one year back, not other years or the days ahead.",
+      'Halloween as date. With on instead, that one past day itself ("last Saturday", ' +
+      '"on 3 August"), up to a year back. Never the days ahead.',
     input: z.object({
       park: parkRef,
       date: isoDay
@@ -1100,11 +1104,34 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "The day to look a year back from, YYYY-MM-DD; default the park's today",
         ),
+      on: isoDay
+        .optional()
+        .describe("Instead of date: a past day to read itself, YYYY-MM-DD"),
     }),
-    run: async ({ park: reference, date }, ctx) => {
+    run: async ({ park: reference, date, on }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const today = getCurrentDateInTimezone(found.timezone);
+      if (on) {
+        if (date) throw new McpToolError("Give either date or on");
+        const back = daysBetween(on, today);
+        if (back <= 0 || back > HISTORY_DAYS) {
+          throw new McpToolError(
+            `Pick a past day from ${addIsoDays(today, -HISTORY_DAYS)} to yesterday`,
+          );
+        }
+        const { fromDate, toDate } = parseDateRange(on, on, {
+          timezone: found.timezone,
+        });
+        const calendar = await ctx
+          .get(CalendarService)
+          .buildCalendarResponse(found, fromDate, toDate, "none");
+        const day = calendar.days.find((d) => d.date === on);
+        return {
+          park: found.name,
+          day: pastDay(day && compactDay(day, found.timezone)),
+        };
+      }
       const day = date ?? today;
       const { sameDate, sameWeekday } = lastYearDays(day);
       if (sameDate >= today) {
