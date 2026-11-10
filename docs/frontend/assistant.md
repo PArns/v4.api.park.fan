@@ -125,7 +125,9 @@ goes to the `shelter` filter, and a thin list is said to be incomplete. Version 
 one day go to `compare_parks`, never one lookup per park. Version 32: `open_page` also
 opens a park's crowd calendar, the park comparison and the site's own pages. Version 33: a past day goes
 to `get_park_history` with `on`. Version 34: rides the visitor
-marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet".
+marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet". Version 35:
+particular days of one park go to `compare_dates`, and a closed day is always called closed with
+the next day the park opens.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -225,6 +227,16 @@ events. A day the calendar has nothing on is `null`. No new query on `queue_data
 instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
 (`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
 measured.
+
+`compare_dates` puts particular days of one park side by side, up to a year ahead
+(`COMPARE_DATES_AHEAD`): 1 to 10 `dates`, or `from` and `to` for up to 31 days. It reads the
+calendar every park page shows, one month at a time, so May and December build two months and not
+the eight between. Each day has its weekday, `compactDay`'s fields and `hoursPublished`: past the
+park's published schedule (`meta.scheduleCoverage.to`) a status is the calendar's estimate, so such
+a day comes back `UNKNOWN` with `why` and the `estimatedStatus`, never as a confirmed closure. A
+closed day loses its crowd level and gets `nextOpenDay`, the first day with published hours after
+it (`firstOpenDay`, which `get_ride`'s `reopensOn` reads too). `quietestOpenDay` names the open day
+with the lowest level. Past days are `get_park_history`.
 
 `compare_parks` puts several parks side by side on one day (today by default, up to 60 days
 ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_PARKS`) or 2 to 10
