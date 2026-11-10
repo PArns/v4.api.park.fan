@@ -128,7 +128,8 @@ to `get_park_history` with `on`. Version 34: rides the visitor
 marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet". Version 35:
 particular days of one park go to `compare_dates`, and a closed day is always called closed with
 the next day the park opens. Version 36: a reason a result
-gives for a gap is told, and "not known" is never "there is none".
+gives for a gap is told, and "not known" is never "there is none". Version 37: park names go
+straight into the tools, and the park card's result replaces `get_park_live`.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -291,6 +292,14 @@ Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "
 is `indoor` or `covered_queue`, the frontend's „Überdacht") or `indoor`. Rides nobody decided are
 counted apart as `shelterUnknown`, never as outdoor, and under half known
 (`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
+Every `park` parameter takes a name as well as an id or slug (`resolvePark`, which the admin MCP
+shares): a slug no park has goes to the site's search, which gives the park when it finds only
+one or exactly one whose name is the reference ("europa park" meets "Europa-Park"), and the
+candidates otherwise. In the chats of 3 to 9 November, 3 of 5 `search_parks` calls served only to
+find an id for the next tool. `show_card` kind `park` returns `get_park_live`'s whole summary as
+`live` beside what the card shows (`parkLiveSummary`): the two were called together for one park
+in 5 of 7 answers.
+
 `show_card` kind `rides` takes the same `type` and `shelter` (each row then carries its
 `indoorOutdoor`), reports `typeUnknown` and the shelter counts too, and hands the model the
 card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where known) besides the
