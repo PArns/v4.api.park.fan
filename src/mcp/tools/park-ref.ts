@@ -63,6 +63,7 @@ export async function resolvePark(
     }
   }
   if (!park) throw new McpToolError(`No park "${reference}"; try find_parks`);
+  ctx.onPark?.(park.timezone);
   return park;
 }
 

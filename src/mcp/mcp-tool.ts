@@ -9,6 +9,8 @@ export interface McpToolContext {
   admin: AdminPrincipal;
   /** Any provider of the application, e.g. `ctx.get(ParksService)`. */
   get<T>(token: Type<T>): T;
+  /** Told the time zone of every park a tool resolves, so a caller can show its times in it. */
+  onPark?: (timezone: string) => void;
 }
 
 type ToolInputShape = Record<string, z.ZodType>;

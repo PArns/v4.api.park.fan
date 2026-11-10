@@ -1356,6 +1356,47 @@ describe("get_days", () => {
   });
 });
 
+describe("times in park time", () => {
+  it("gives a park's times in its own clock and names the zone, wherever the visitor is", async () => {
+    const day = new Date(Date.now() + 3 * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    const result = await runAssistantTool(
+      "get_park_day",
+      { park: PARK_ID, date: day },
+      {
+        ...context(
+          new Map<unknown, unknown>([
+            [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+            [
+              PlanDayService,
+              {
+                buildPlanDay: jest.fn(async () => ({
+                  tier: "measured",
+                  context: {
+                    date: day,
+                    status: "OPERATING",
+                    openHour: 9,
+                    closeHour: 18,
+                  },
+                  rides: [],
+                  shows: [],
+                })),
+              },
+            ],
+          ]),
+        ),
+        // A visitor in New York planning a day in Brühl hears Brühl's hours.
+        timeZone: "America/New_York",
+      },
+      jest.fn(),
+    );
+    const json = JSON.parse(result.content);
+    expect(json.timesIn).toBe("park time, Europe/Berlin");
+    expect(json.opens).toBe(`${day} 09:00`);
+  });
+});
+
 describe("get_hours", () => {
   const plan = (status: string, extra: object = {}) => ({
     tier: "composed",
@@ -2467,9 +2508,9 @@ describe("get_ride › today / get_park_day", () => {
       facts: {},
     });
     const { json } = await run("get_ride", { rideId: RIDE }, providers());
-    // 10:00 in Brühl is 09:00 UTC, the test's visitor clock.
+    // Park time: 10:00 in Brühl, whatever the visitor's clock (UTC here) says.
     expect(json.today).toEqual({
-      opensAt: "2026-11-07 09:00",
+      opensAt: "2026-11-07 10:00",
       opensAtConfidence: "high",
       runsOnWeekdays: [1, 2, 3, 4, 5, 6, 7],
     });
@@ -2593,18 +2634,18 @@ describe("get_ride › today / get_park_day", () => {
     );
     expect(json).toMatchObject({
       park: "Phantasialand",
-      opens: "2026-11-07 08:00",
-      closes: "2026-11-07 22:00",
+      opens: "2026-11-07 09:00",
+      closes: "2026-11-07 23:00",
       rides: [
         {
           name: "Taron",
-          opensAt: "2026-11-07 09:00",
+          opensAt: "2026-11-07 10:00",
           predictedPeakWaitMinutes: 45,
-          shortestAt: { at: "2026-11-07 20:00", waitMinutes: 10 },
+          shortestAt: { at: "2026-11-07 21:00", waitMinutes: 10 },
         },
       ],
       // 00:30 belongs to the night after.
-      shows: [{ times: ["2026-11-07 21:00", "2026-11-07 23:30"] }],
+      shows: [{ times: ["2026-11-07 22:00", "2026-11-08 00:30"] }],
     });
   });
 });
