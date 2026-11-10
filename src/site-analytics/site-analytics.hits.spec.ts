@@ -133,6 +133,30 @@ describe("validateHit", () => {
     });
   });
 
+  it("takes a social network's `source` from park.fan's own posts, as its host only", () => {
+    for (const source of ["instagram.com", "facebook.com"]) {
+      expect(validateHit(pageview({ source }))).toMatchObject({
+        referrer: source,
+      });
+    }
+    // The browser's own referrer wins here too.
+    expect(
+      validateHit(pageview({ referrer: "google.de", source: "instagram.com" })),
+    ).toMatchObject({ referrer: "google.de" });
+    // The frontend normalises the spellings; the wire takes the host alone.
+    for (const source of [
+      "instagram",
+      "facebook",
+      "l.instagram.com",
+      "m.facebook.com",
+      "twitter.com",
+    ]) {
+      expect(validateHit(pageview({ source }))).toMatchObject({
+        referrer: null,
+      });
+    }
+  });
+
   it("counts a hit that still carries `viewport` or `campaign`, and keeps neither", () => {
     const stale = { viewport: "mobile", campaign: "summer-2026" };
     expect(validateHit(pageview({ ...stale, referrer: "google.com" }))).toEqual(
