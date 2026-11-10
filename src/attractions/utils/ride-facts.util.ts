@@ -344,7 +344,8 @@ export const LEFT_OUT_NAMES_LIMIT = 20;
 export function compareRides(
   all: readonly ComparedRide[],
   params: {
-    by: RideRanking;
+    /** Absent: every ride of the filters, by name, for "which coasters haven't we done". */
+    by?: RideRanking;
     order?: "asc" | "desc";
     riderHeightCm?: number;
     type?: RideTypeFilter;
@@ -376,7 +377,8 @@ export function compareRides(
           return fits;
         });
 
-  const value = VALUE[params.by];
+  const by = params.by;
+  const value = by ? VALUE[by] : () => 0;
   const withValue = allowed.filter((ride) => value(ride) !== undefined);
   const sign = params.order === "asc" ? 1 : -1;
   const ranked = [...withValue].sort(

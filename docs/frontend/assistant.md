@@ -141,7 +141,9 @@ straight into the tools, and the park card's result replaces `get_park_live`. Ve
 Sunday?" and events go to `get_days`; the parks card only for today; the day's expected level
 (`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states. Version 39: days go to `get_days`,
 the hours of a park's day to `get_hours`. Version 40: times are park time,
-with "park time" said once when the visitor's zone differs.
+with "park time" said once when the visitor's zone differs. Version 41: a ride by name
+goes straight into the ride tools, a card is never paired with its lookup, small talk needs no
+tool, and "where is it quiet now" without a park goes to `find_parks_nearby`.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -323,6 +325,14 @@ Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "
 is `indoor` or `covered_queue`, the frontend's „Überdacht") or `indoor`. Rides nobody decided are
 counted apart as `shelterUnknown`, never as outdoor, and under half known
 (`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
+`get_ride`, `get_ride_forecast` and `set_ride_alert` take a ride by `rideId` or by its name
+(`ride`) with its park (`rideIdOf`): the site's ride search, the only match or the one whose name
+is the reference, the candidates otherwise. In a test run of 41 questions through Haiku with this
+prompt, every ride named by the visitor cost a `find_rides` round first, and in the chats of 3 to 9
+November `get_ride` followed `find_rides` in 2 of 3 answers. `compare_rides` without `by` lists
+every ride of its filters by name, each marked `ridden` where ticked off, for "which coasters
+haven't we done". `get_days` ranks a stretch's five quietest open days (`quietestOpenDays`).
+
 Every `park` parameter takes a name as well as an id or slug (`resolvePark`, which the admin MCP
 shares): a slug no park has goes to the site's search, which gives the park when it finds only
 one or exactly one whose name is the reference ("europa park" meets "Europa-Park"), and the

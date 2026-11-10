@@ -100,6 +100,18 @@ describe("compareRides", () => {
     expect(fastest).not.toHaveProperty("heightUnknown");
   });
 
+  it("lists every ride of the filters by name without a fact to rank by", () => {
+    const all = compareRides(rides, { limit: 10 });
+    expect(all.rides.map((ride) => ride.name)).toEqual([
+      "Black Mamba",
+      "Carousel",
+      "Colorado Adventure",
+      "Kiddie Coaster",
+      "Taron",
+    ]);
+    expect(all.withoutValue).toBe(0);
+  });
+
   it("ranks the other way round with order asc", () => {
     const slowest = compareRides(rides, {
       by: "topSpeed",
