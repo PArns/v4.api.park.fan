@@ -385,6 +385,21 @@ export const EVAL_CASES: EvalCase[] = [
     ],
   },
   {
+    // A find_rides round used to come first, only to learn the id.
+    id: "alert-by-ride-name",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/rust/europa-park",
+    pageSubject: 'the park "Europa-Park" in "Rust, Germany"',
+    alerts: { push: "ready", rides: [], shows: [] },
+    message: "Sag Bescheid, wenn Blue Fire unter 20 Minuten ist",
+    want: [
+      {
+        tool: "set_ride_alert",
+        input: { ride: "*", kind: "wait_below", thresholdMinutes: 20 },
+      },
+    ],
+  },
+  {
     id: "quietest-hour-of-a-day",
     locale: "de",
     pagePath: PHL_PAGE,

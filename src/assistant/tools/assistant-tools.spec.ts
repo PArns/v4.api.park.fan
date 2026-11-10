@@ -4,6 +4,7 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
+import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { AssistantPostsClient } from "./assistant-posts.client";
 
@@ -1307,6 +1308,7 @@ describe("get_days", () => {
     });
     expect(json.days[2].crowdLevel).toBeUndefined();
     expect(json.quietestOpenDay).toBe(OPEN_QUIET);
+    expect(json.quietestOpenDays).toEqual([OPEN_QUIET, OPEN_BUSY]);
   });
 
   it("calls a day past the published hours unknown and says why, never closed", async () => {
@@ -1394,6 +1396,43 @@ describe("times in park time", () => {
     const json = JSON.parse(result.content);
     expect(json.timesIn).toBe("park time, Europe/Berlin");
     expect(json.opens).toBe(`${day} 09:00`);
+  });
+});
+
+describe("a ride by its name", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const providers = () =>
+    new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+    ]);
+
+  it("takes the ride whose name is the reference, with no find_rides round first", async () => {
+    jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+      attractions: [
+        { id: "r-mamba", name: "Black Mamba", park: { name: "Phantasialand" } },
+        { id: "r-taron", name: "Taron", park: { name: "Phantasialand" } },
+      ],
+    });
+    const getRide = jest
+      .spyOn(getAttractionTool, "handler")
+      .mockResolvedValue({ id: "r-taron", name: "Taron", facts: {} });
+    await run("get_ride", { ride: "taron", park: PARK_ID }, providers());
+    expect(getRide.mock.calls[0][0]).toMatchObject({ attractionId: "r-taron" });
+  });
+
+  it("hands several equal rides back to pick from", async () => {
+    jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+      attractions: [
+        { id: "a", name: "Pirates", park: { name: "Disneyland Park" } },
+        { id: "b", name: "Pirates", park: { name: "Magic Kingdom" } },
+      ],
+    });
+    const { json } = await run("get_ride", { ride: "Pirates" }, providers());
+    expect(json).toMatchObject({
+      ambiguous: true,
+      rides: [{ id: "a" }, { id: "b" }],
+    });
   });
 });
 

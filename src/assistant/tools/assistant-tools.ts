@@ -17,7 +17,12 @@ import {
 } from "../../mcp/tools/park-forecast.tool";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { parseDateRange } from "../../common/utils/date-parsing.util";
-import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
+import {
+  type AmbiguousPark,
+  isAmbiguous,
+  nameKey,
+  resolvePark,
+} from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import {
   BEST_DAYS_WINDOW,
@@ -397,7 +402,9 @@ async function plannedDay(
   if ("ambiguous" in park) return park;
   const day = snapshotDay(ctx, park.slug, date);
   if (!day) {
-    throw new McpToolError(`${park.name} on ${date} is not in the user's plan`);
+    throw new McpToolError(
+      `${park.name} on ${date} is not in the user's plan; open it with plan_day first. A party's height for a new day goes to get_park_day and plan_add_rides as riderHeightCm`,
+    );
   }
   return { park, day };
 }
@@ -479,6 +486,68 @@ async function parkLiveSummary(
   const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
   if (told) rest.funFacts = told;
   return rest;
+}
+
+/** A ride by its id, or by its name with its park, so no search round goes before the tool. */
+const rideRef = {
+  rideId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe("Ride id from find_rides or a ride list"),
+  ride: z
+    .string()
+    .trim()
+    .min(2)
+    .max(100)
+    .optional()
+    .describe('Instead of rideId: the ride\'s name, e.g. "Taron", with park'),
+};
+
+/** Rides of the same name to pick from, handed back instead of a guess. */
+interface AmbiguousRide {
+  ambiguous: true;
+  hint: string;
+  rides: Array<{ id: string; name: string; park: string | null }>;
+}
+
+/**
+ * The ride's id from `rideId`, or from `ride` (a name) within `park`: the only match, or the one
+ * whose name is the reference itself; several equal candidates come back to pick from.
+ */
+async function rideIdOf(
+  ctx: AssistantToolContext,
+  input: { rideId?: string; ride?: string; park?: string },
+): Promise<string | AmbiguousRide | AmbiguousPark> {
+  if (input.rideId) return input.rideId;
+  if (!input.ride) throw new McpToolError("Give rideId, or ride with its park");
+  const park = input.park ? await resolvePark(mcp(ctx), input.park) : null;
+  if (park && isAmbiguous(park)) return park;
+  const found = (await findAttractionsTool.handler(
+    { query: input.ride, parkId: park?.id, limit: 5 },
+    mcp(ctx),
+  )) as {
+    attractions?: Array<{ id: string; name: string; park?: { name?: string } }>;
+  };
+  const hits = found.attractions ?? [];
+  if (hits.length === 0) {
+    throw new McpToolError(
+      `No ride "${input.ride}"${park ? ` at ${park.name}` : ""}; try find_rides`,
+    );
+  }
+  const key = nameKey(input.ride);
+  const exact = hits.filter((hit) => nameKey(hit.name) === key);
+  const pick = hits.length === 1 ? hits : exact;
+  if (pick.length === 1) return pick[0].id;
+  return {
+    ambiguous: true,
+    hint: "Several rides match; call again with one rideId",
+    rides: (exact.length > 1 ? exact : hits).map((hit) => ({
+      id: hit.id,
+      name: hit.name,
+      park: hit.park?.name ?? null,
+    })),
+  };
 }
 
 /** The visitor's planned day at this park and date, as the planner snapshot holds it. */
@@ -1194,6 +1263,9 @@ const TIER_MEANING: Record<PlanDayTier, string> = {
   long_range: "too far ahead for an hourly curve",
 };
 
+/** How many of a stretch's quietest open days `get_days` ranks. */
+const QUIETEST_DAYS = 5;
+
 /** The days `get_days` reads when it is given none: the week ahead. */
 const DEFAULT_DAYS = 7;
 
@@ -1295,7 +1367,9 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_live",
     status: "wait-times",
     description:
-      "The park right now: open or closed, today's hours and the next opening, crowd level, " +
+      "The park right now: open or closed, today's hours and the next opening, the live crowd " +
+      "level (null with levelWhy while closed), todayExpected (the calendar's rating of the whole " +
+      'day, for "how full will it get today"), ' +
       "average and peak waits today, weather now, only the 8 longest current standby waits, " +
       "rides that are down, rides in maintenance (window: until when), maintenance starting in " +
       "the next 30 days (maintenanceAhead), rides that have not run today, the park's pageUrl and the " +
@@ -1332,8 +1406,9 @@ export const ASSISTANT_TOOLS = [
       "A park's restaurants, snack bars and food stands, optionally only those whose name or " +
       'cuisine contains query (e.g. "eis", "ice", "pizza"): name, status now where the park ' +
       "reports it, cuisine and reservation where known, land, and the park's pageUrl. For " +
-      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan. No ' +
-      "menus, prices or opening hours.",
+      '"where can I eat", "every ice-cream stand"; plan_add_block puts a stop in the plan, ' +
+      "set_favorite takes its id. No menus, prices or opening hours. show_card kind restaurants " +
+      "returns the same rows: call one, never both.",
     input: z.object({
       park: parkRef,
       query: z.string().trim().min(2).max(60).optional(),
@@ -1437,9 +1512,10 @@ export const ASSISTANT_TOOLS = [
     description:
       "One park's shows with their showtimes on a day (today by default), earliest first: " +
       "name, land, status now (today only, where the park reports it), every start time, the " +
-      "duration where known, and season. Shows without a time that day are counted, not listed. " +
+      "duration where known, and season. Shows without a time that day are named apart. " +
       'For "when is the next show", "what\'s on today". Parks seldom publish times beyond ' +
-      "today, so another day is often empty; no parades the park does not list as a show.",
+      "today, so another day is often empty (get_park_day projects them); no parades the park " +
+      "does not list as a show. show_card kind shows returns the same rows: call one, never both.",
     input: z.object({
       park: parkRef,
       date: isoDay
@@ -1471,12 +1547,13 @@ export const ASSISTANT_TOOLS = [
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
       "reopening: why (breakdown, works, season or unknown) and what is known about its return.",
     input: z.object({
-      rideId: z
-        .string()
-        .uuid()
-        .describe("Ride id from find_rides or get_park_live"),
+      ...rideRef,
+      park: parkRef.optional().describe("With ride: the ride's park"),
     }),
-    run: async ({ rideId }, ctx) => {
+    run: async (input, ctx) => {
+      const resolved = await rideIdOf(ctx, input);
+      if (typeof resolved !== "string") return resolved;
+      const rideId = resolved;
       const ride = (await getAttractionTool.handler(
         { attractionId: rideId, historyDays: 0 },
         mcp(ctx),
@@ -1542,7 +1619,9 @@ export const ASSISTANT_TOOLS = [
       "first unless order asc. type keeps only coasters, dark rides (simulators included), water " +
       "rides or family rides; shelter keeps only the rides that keep you dry in the rain " +
       "(covered: indoors or a roofed queue; indoor: the ride too). With riderHeightCm only " +
-      'the rides someone that tall may ride. For "the fastest ride in X", "the fastest coaster in ' +
+      "the rides someone that tall may ride. Without by, every ride of the filters by name, each " +
+      'marked ridden where the user ticked it off ("which coasters haven\'t we done"). ' +
+      'For "the fastest ride in X", "the fastest coaster in ' +
       'Germany", "the newest coaster", "what can my 1 m child ride". Give park or country. Counts ' +
       "what it left out for lack of data (say so when many are). No waits: those are show_card " +
       "kind rides.",
@@ -1555,7 +1634,12 @@ export const ASSISTANT_TOOLS = [
         .max(60)
         .optional()
         .describe('Instead of park: a country, "Germany" or its code "DE"'),
-      by: z.enum(RIDE_RANKINGS),
+      by: z
+        .enum(RIDE_RANKINGS)
+        .optional()
+        .describe(
+          "The fact to rank by; leave it out for every ride of the filters, by name",
+        ),
       order: z.enum(["desc", "asc"]).default("desc"),
       type: z.enum(RIDE_TYPE_FILTERS).optional(),
       shelter: z.enum(SHELTER_FILTERS).optional(),
@@ -1643,17 +1727,18 @@ export const ASSISTANT_TOOLS = [
       'queue for X shortest". Today by default. A day a maintenance window shuts the ride has ' +
       "no hours and says closedForMaintenance with the window instead.",
     input: z.object({
-      rideId: z
-        .string()
-        .uuid()
-        .describe("Ride id from find_rides or get_park_live"),
+      ...rideRef,
+      park: parkRef.optional().describe("With ride: the ride's park"),
       date: z
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .optional()
         .describe("YYYY-MM-DD in the park's calendar; default today"),
     }),
-    run: async ({ rideId, date }, ctx) => {
+    run: async ({ date, ...reference }, ctx) => {
+      const resolved = await rideIdOf(ctx, reference);
+      if (typeof resolved !== "string") return resolved;
+      const rideId = resolved;
       const ride = await ctx
         .get(DataSource)
         .getRepository(Attraction)
@@ -2329,7 +2414,15 @@ export const ASSISTANT_TOOLS = [
       const open = rows.filter(
         (row) => row.status === "OPERATING" && rank(row) >= 0,
       );
-      const quietest = [...open].sort((a, b) => rank(a) - rank(b))[0];
+      const ranked = [...open].sort(
+        (a, b) =>
+          rank(a) - rank(b) ||
+          ((a as { expectedPeakWaitMinutes?: number })
+            .expectedPeakWaitMinutes ?? 0) -
+            ((b as { expectedPeakWaitMinutes?: number })
+              .expectedPeakWaitMinutes ?? 0),
+      );
+      const quietest = ranked[0];
       const unpublished = rows.some((row) => row.status === "UNKNOWN");
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
@@ -2341,6 +2434,8 @@ export const ASSISTANT_TOOLS = [
             : "the park publishes no opening hours; estimatedStatus is park.fan's estimate",
         }),
         quietestOpenDay: quietest?.date ?? null,
+        // A stretch ranked, so "the quietest days in May" needs no reading of every row.
+        quietestOpenDays: ranked.slice(0, QUIETEST_DAYS).map((row) => row.date),
         days: rows,
       };
     },
@@ -2544,7 +2639,9 @@ export const ASSISTANT_TOOLS = [
         .describe("For kind parks: park ids or slugs, in the order to show"),
       park: parkRef
         .optional()
-        .describe("For kind park, rides, calendar or tiles: park id or slug"),
+        .describe(
+          "For kind park, rides, calendar, tiles, shows or restaurants: the park's name, slug or id",
+        ),
       order: z
         .enum(["longest", "shortest"])
         .default("longest")
@@ -3325,10 +3422,10 @@ export const ASSISTANT_TOOLS = [
     description:
       "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
       "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
-      "find_rides or get_park_live. One alert per ride, a new one replaces it.",
+      "find_rides or a ride list, or the ride's name. One alert per ride, a new one replaces it.",
     input: z.object({
       park: parkRef,
-      rideId: z.string().uuid(),
+      ...rideRef,
       kind: z.enum(["wait_below", "reopen"]),
       thresholdMinutes: z
         .number()
@@ -3338,7 +3435,17 @@ export const ASSISTANT_TOOLS = [
         .optional()
         .describe("For wait_below: notify under this many minutes"),
     }),
-    run: async ({ park: reference, rideId, kind, thresholdMinutes }, ctx) => {
+    run: async (
+      { park: reference, rideId: id, ride: name, kind, thresholdMinutes },
+      ctx,
+    ) => {
+      const resolved = await rideIdOf(ctx, {
+        rideId: id,
+        ride: name,
+        park: reference,
+      });
+      if (typeof resolved !== "string") return resolved;
+      const rideId = resolved;
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
       if (ctx.alerts?.push === "unavailable") {
