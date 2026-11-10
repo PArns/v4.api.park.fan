@@ -419,6 +419,36 @@ function riddenMark(ctx: AssistantToolContext, rideId: string) {
   return ctx.ridden?.has(rideId) ? { ridden: true as const } : {};
 }
 
+/** How many of the longest waits a park's live summary carries. */
+const LIVE_LONGEST_WAITS = 8;
+
+/** How many of them the park card draws. */
+const PARK_CARD_WAITS = 3;
+
+/**
+ * A park right now as `get_park_live` hands it to the model, which the park card returns too, so
+ * one call answers both: the live summary without the park's own clock and zone (every time
+ * reaches the model in the visitor's) and with the editors' fun facts in the chat's language.
+ */
+async function parkLiveSummary(
+  ctx: AssistantToolContext,
+  park: string,
+): Promise<Record<string, unknown>> {
+  const live = await parkNow(ctx, { park, longestWaits: LIVE_LONGEST_WAITS });
+  const {
+    localTime: _localTime,
+    timezone: _timezone,
+    funFacts,
+    ...rest
+  } = live;
+  if (rest.retiredAt === null) delete rest.retiredAt;
+  // English stands in for an untranslated locale: the model retells it in the chat's language.
+  const facts = funFacts as FunFacts | null;
+  const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
+  if (told) rest.funFacts = told;
+  return rest;
+}
+
 /** The visitor's planned day at this park and date, as the planner snapshot holds it. */
 function snapshotDay(
   ctx: AssistantToolContext,
@@ -566,7 +596,9 @@ const parkRef = z
   .string()
   .min(2)
   .max(120)
-  .describe('Park id from search_parks, or its slug like "phantasialand"');
+  .describe(
+    'Park id, its slug like "phantasialand", or its name like "Europa-Park" (several matches come back to pick from)',
+  );
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -1172,23 +1204,7 @@ export const ASSISTANT_TOOLS = [
       "show_card kind rides order shortest (with type for coasters, dark rides, water or " +
       "family rides) has every waiting ride.",
     input: z.object({ park: parkRef }),
-    run: async ({ park }, ctx) => {
-      const live = await parkNow(ctx, { park, longestWaits: 8 });
-      // Every time reaches the model in the visitor's clock, so the park's own clock and zone
-      // only cost tokens.
-      const {
-        localTime: _localTime,
-        timezone: _timezone,
-        funFacts,
-        ...rest
-      } = live;
-      if (rest.retiredAt === null) delete rest.retiredAt;
-      // English stands in for an untranslated locale: the model retells it in the chat's language.
-      const facts = funFacts as FunFacts | null;
-      const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
-      if (told) rest.funFacts = told;
-      return rest;
-    },
+    run: ({ park }, ctx) => parkLiveSummary(ctx, park),
   }),
   tool({
     name: "find_rides",
@@ -2256,7 +2272,8 @@ export const ASSISTANT_TOOLS = [
     name: "show_card",
     description:
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
-      "(status, crowd level, today's hours, longest waits), a ride (status, standby wait, crowd " +
+      "(status, crowd level, today's hours, longest waits; the result also holds everything " +
+      "get_park_live returns, so never call both for one park), a ride (status, standby wait, crowd " +
       "level), a park's rides with their current waits (kind rides, longest or shortest " +
       "first, then rides that are down; type for coasters, dark rides, water or family rides " +
       "only; shelter for rides that keep you dry in the rain; the result lists each row with " +
@@ -2576,10 +2593,8 @@ export const ASSISTANT_TOOLS = [
       }
       if (kind === "park") {
         if (!park) throw new McpToolError("kind park needs park");
-        const live = (await parkNow(ctx, {
-          park,
-          longestWaits: 3,
-        })) as ParkSummary;
+        const summary = await parkLiveSummary(ctx, park);
+        const live = summary as ParkSummary;
         if ("ambiguous" in live) return live;
         const today = live.scheduleToday?.[0];
         const card: AssistantCard = {
@@ -2590,18 +2605,21 @@ export const ASSISTANT_TOOLS = [
           crowdLevel: live.crowd?.level ?? null,
           opens: today?.opens ?? null,
           closes: today?.closes ?? null,
-          waits: (live.rides?.longestWaits ?? []).map((ride) => ({
-            name: ride.name,
-            waitMinutes: ride.waitMinutes,
-          })),
+          waits: (live.rides?.longestWaits ?? [])
+            .slice(0, PARK_CARD_WAITS)
+            .map((ride) => ({
+              name: ride.name,
+              waitMinutes: ride.waitMinutes,
+            })),
           url: live.pageUrl ? siteOnlyPath(live.pageUrl) : null,
         };
-        // What the card says, so the sentence after it needs no second lookup.
+        // What the card says and everything get_park_live would, so no second lookup follows.
         const { url: _url, ...shown } = card;
         return new ActionOutcome(
           { type: "card", card },
           {
             shown,
+            live: summary,
             ...(live.status !== "OPERATING" && {
               nextOpening: live.nextSchedule ?? null,
             }),

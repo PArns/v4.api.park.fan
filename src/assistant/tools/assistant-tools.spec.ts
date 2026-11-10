@@ -717,6 +717,20 @@ describe("a closed park's crowd", () => {
     expect(json.crowd).toEqual(crowd);
   });
 
+  it("hands the model the whole live summary with the park card", async () => {
+    summary("OPERATING");
+    const result = await run(
+      "show_card",
+      { kind: "park", park: PARK_ID },
+      new Map(),
+    );
+    // One call instead of the card and get_park_live side by side.
+    expect(result.json.live).toMatchObject({
+      name: "Six Flags Fiesta Texas",
+      crowd,
+    });
+  });
+
   it("draws the park card of a closed park without a level", async () => {
     summary("CLOSED");
     const result = await run(
