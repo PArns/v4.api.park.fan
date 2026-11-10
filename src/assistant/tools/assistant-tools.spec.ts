@@ -1073,6 +1073,67 @@ describe("display tools", () => {
   });
 });
 
+describe("open_page beyond parks, rides and posts", () => {
+  const EP_ID = "22222222-2222-4222-8222-222222222222";
+  const europaPark = {
+    ...park,
+    id: EP_ID,
+    name: "Europa-Park",
+    slug: "europa-park",
+    citySlug: "rust",
+  };
+  const providers = () =>
+    new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async (id: string) =>
+            id === EP_ID ? europaPark : { ...park },
+          ),
+        },
+      ],
+    ]);
+  const open = async (input: Record<string, unknown>) =>
+    runAssistantTool("open_page", input, context(providers()), jest.fn());
+
+  it("opens a park's wait-time calendar, which the widget respells per language", async () => {
+    expect((await open({ park: PARK_ID, section: "calendar" })).action).toEqual(
+      {
+        type: "navigate",
+        path: "/parks/europe/germany/bruehl/phantasialand/wait-time-calendar",
+      },
+    );
+  });
+
+  it("puts parks side by side by their full path, which no other park shares", async () => {
+    expect((await open({ compare: [PARK_ID, EP_ID] })).action).toEqual({
+      type: "navigate",
+      path: "/compare?parks=europe/germany/bruehl/phantasialand,europe/germany/rust/europa-park",
+    });
+  });
+
+  it("opens the site's own pages", async () => {
+    expect((await open({ page: "alerts" })).action).toEqual({
+      type: "navigate",
+      path: "/alerts",
+    });
+    expect((await open({ page: "best_time" })).action).toMatchObject({
+      path: "/best-time-to-visit",
+    });
+  });
+
+  it("refuses two targets, or a section without its park", async () => {
+    for (const input of [
+      { park: PARK_ID, page: "alerts" },
+      { section: "calendar", page: "favorites" },
+    ]) {
+      const result = await open(input);
+      expect(result.isError).toBe(true);
+      expect(result.action).toBeUndefined();
+    }
+  });
+});
+
 describe("calendar and tiles cards", () => {
   const forecast: ForecastSummary = {
     park: {
