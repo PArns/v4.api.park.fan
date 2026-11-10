@@ -84,22 +84,27 @@ export const EVAL_CASES: EvalCase[] = [
     pageSubject: "the park.fan home page",
     message: "Lohnt sich der Express Pass in der USJ?",
     want: [
-      { tool: "search_posts", input: { kind: "article" } },
-      { tool: "get_post", input: { slug: "usj-express-pass", question: "*" } },
-    ],
-    results: {
-      search_posts: {
-        results: [
-          {
-            title: "Universal Studios Japan: Lohnt sich der Express Pass?",
-            description: "Welcher Express Pass sich wann rechnet.",
-            date: "2026-09-12",
-            slug: "usj-express-pass",
-            url: "https://park.fan/de/blog/usj-express-pass",
-          },
-        ],
+      {
+        tool: "show_card",
+        input: { kind: "posts", question: "*" },
       },
-    },
+    ],
+  },
+  {
+    id: "events-without-a-park",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Welche Halloween-Events laufen gerade noch?",
+    want: [{ tool: ["show_card", "search_posts"], input: { query: "*" } }],
+  },
+  {
+    id: "glossary-word-as-card",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Was ist eine Blockbremse?",
+    want: [{ tool: "show_card", input: { kind: "glossary" } }],
   },
   {
     id: "plan-remove-taron",

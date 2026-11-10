@@ -268,9 +268,12 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("get_post with its slug");
   });
 
-  it("sends planning and news questions to park.fan's posts first", () => {
-    expect(SYSTEM_PROMPT).toContain("call search_posts first");
-    expect(SYSTEM_PROMPT).toContain("get_post with the slug and the question");
+  it("answers planning and news questions from a post shown as a card", () => {
+    expect(SYSTEM_PROMPT).toContain(
+      "show_card kind posts with query (postKind news for news, article for guides) and the question",
+    );
+    expect(SYSTEM_PROMPT).toContain("the card is the link");
+    expect(SYSTEM_PROMPT).toContain("kind glossary for what a park word means");
     expect(SYSTEM_PROMPT).toContain("Not for live waits");
   });
 

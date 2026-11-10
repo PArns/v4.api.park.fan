@@ -75,7 +75,11 @@ import {
   shelterCoverage,
 } from "../../attractions/utils/ride-facts.util";
 import { getCountryISOCode } from "../../common/constants/country-codes.constant";
-import { AssistantPostsClient } from "./assistant-posts.client";
+import {
+  AssistantPostsClient,
+  type FoundPost,
+  type FoundTerm,
+} from "./assistant-posts.client";
 import { getFrontendUrl } from "../../config/oauth.config";
 import {
   bookableHours,
@@ -124,6 +128,7 @@ import {
   siteOnlyPath,
   type AssistantCard,
   type ClientAction,
+  type PostCardRow,
 } from "./assistant-actions";
 import {
   plannerClock,
@@ -689,9 +694,196 @@ const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
   trip_planner: "/trip-planner",
 };
 
-/** A post's or glossary term's page: `/<locale>/blog|news|glossary/<slug>`. */
+/**
+ * A post's or glossary term's page: `/<locale>/blog|news/<slug>`, or the glossary under its
+ * segment in any of the six languages (`/de/glossar/<slug>`).
+ */
 const CONTENT_PATH =
-  /^\/(?:en|de|nl|fr|es|it)\/(?:blog|news|glossary)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  /^\/(?:en|de|nl|fr|es|it)\/(?:blog|news|glossary|glossar|glossaire|glossario|woordenboek|glosario)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** A slug as park.fan's posts and glossary terms have them. */
+const CONTENT_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** At most this many posts or glossary terms on one card: a chat bubble, not the blog. */
+const MAX_POST_CARD = 3;
+const MAX_GLOSSARY_CARD = 3;
+
+/** A cover on park.fan itself, optionally versioned (`/media/…/cover.webp?v=3`). */
+const SITE_IMAGE = /^\/[A-Za-z0-9._\-/]{1,250}(?:\?[A-Za-z0-9=&._-]{0,60})?$/;
+/** A CSS `object-position` in percent, as the post covers carry it. */
+const OBJECT_POSITION = /^\d{1,3}(?:\.\d+)?% \d{1,3}(?:\.\d+)?%$/;
+
+/** Posts matching `query` in the chat's language, best first, or the posts with `slugs`. */
+async function findPosts(
+  ctx: AssistantToolContext,
+  query: string,
+  kind: "news" | "article" | "any",
+  slugs?: readonly string[],
+): Promise<FoundPost[]> {
+  const found = (await ctx
+    .get(AssistantPostsClient)
+    .search(ctx.locale, query, kind, slugs)) as { posts?: FoundPost[] };
+  return (found.posts ?? []).filter((post) => CONTENT_SLUG.test(post.slug));
+}
+
+/** What the model reads of a found post; the cover and its crop say nothing to it. */
+function postRow(post: FoundPost) {
+  return {
+    title: post.title,
+    description: post.description,
+    date: post.date,
+    // The search dates an article by its last change; the post's own date is its first.
+    ...(post.updated && { updated: true }),
+    kind: post.kind,
+    slug: post.slug,
+    url: post.url,
+  };
+}
+
+/** One post's text for a question, or why it could not be read this time. */
+async function readPost(
+  ctx: AssistantToolContext,
+  slug: string,
+  question: string,
+): Promise<unknown> {
+  try {
+    return await ctx.get(AssistantPostsClient).post(ctx.locale, slug, question);
+  } catch {
+    return { error: "could not read the post right now" };
+  }
+}
+
+/** A found post as a card row, or null when its page is not on park.fan. */
+function postCardRow(post: FoundPost): PostCardRow | null {
+  const url = siteOnlyPath(post.url);
+  if (!url) return null;
+  const image =
+    typeof post.image === "string" && SITE_IMAGE.test(post.image)
+      ? post.image
+      : null;
+  return {
+    title: post.title,
+    url,
+    date: post.date.slice(0, 10),
+    updated: post.updated === true,
+    news: post.kind === "news",
+    readingTimeMinutes:
+      typeof post.readingTimeMinutes === "number"
+        ? post.readingTimeMinutes
+        : null,
+    excerpt: post.description ?? null,
+    category: post.category ?? null,
+    image,
+    imagePosition:
+      image &&
+      typeof post.imagePosition === "string" &&
+      OBJECT_POSITION.test(post.imagePosition)
+        ? post.imagePosition
+        : null,
+  };
+}
+
+/** Rows of a rides card when the model names no limit. */
+const DEFAULT_RIDE_ROWS = 6;
+
+/**
+ * Posts as a card: the best matches for a query, or the posts the model already has by slug.
+ * With a question, the result also carries the first post's text, so showing a guide and
+ * answering from it takes one call.
+ */
+async function postsCard(
+  ctx: AssistantToolContext,
+  {
+    query,
+    postKind,
+    slugs,
+    question,
+    limit,
+  }: {
+    query?: string;
+    postKind: "news" | "article" | "any";
+    slugs?: string[];
+    question?: string;
+    limit?: number;
+  },
+) {
+  if (!query && !slugs?.length) {
+    throw new McpToolError("kind posts needs query or slugs");
+  }
+  const found = await findPosts(
+    ctx,
+    slugs?.length ? "" : (query ?? ""),
+    slugs?.length ? "any" : postKind,
+    slugs,
+  );
+  const picked = found.slice(
+    0,
+    Math.min(limit ?? MAX_POST_CARD, MAX_POST_CARD),
+  );
+  const rows = picked.flatMap((post) => postCardRow(post) ?? []);
+  if (rows.length === 0) {
+    return {
+      shown: 0,
+      why: slugs?.length
+        ? "no park.fan post has these slugs in this language"
+        : `no park.fan ${postKind === "any" ? "post" : postKind} matches "${query}" in this language`,
+    };
+  }
+  const card: AssistantCard = { kind: "posts", posts: rows };
+  return new ActionOutcome(
+    { type: "card", card },
+    {
+      shown: `${rows.length} posts`,
+      posts: picked.map(postRow),
+      ...(question && {
+        read: await readPost(ctx, picked[0].slug, question),
+      }),
+    },
+  );
+}
+
+/** Glossary terms as a card: the best match, or up to three when the model asks. */
+async function glossaryCard(
+  ctx: AssistantToolContext,
+  query: string,
+  limit?: number,
+) {
+  const terms = (await findTerms(ctx, query)).slice(
+    0,
+    Math.min(limit ?? 1, MAX_GLOSSARY_CARD),
+  );
+  const rows = terms.flatMap((term) => {
+    const url = siteOnlyPath(term.url);
+    return url ? [{ ...term, url }] : [];
+  });
+  if (rows.length === 0) {
+    return { shown: 0, why: `the glossary has no term for "${query}"` };
+  }
+  const card: AssistantCard = { kind: "glossary", terms: rows };
+  return new ActionOutcome(
+    { type: "card", card },
+    { shown: `${rows.length} glossary terms`, terms },
+  );
+}
+
+/** Glossary terms for a word, best first, each with its page in the chat's language. */
+async function findTerms(ctx: AssistantToolContext, term: string) {
+  const found = (await ctx
+    .get(AssistantPostsClient)
+    .glossary(ctx.locale, term)) as { results?: FoundTerm[] };
+  return (found.results ?? [])
+    .filter((t) => CONTENT_SLUG.test(t.slug))
+    .map((t) => ({
+      name: t.name,
+      definition: t.shortDefinition,
+      category: t.category ?? null,
+      // The frontend names the canonical page (`/de/glossar/…`); `/glossary/` redirects there.
+      url:
+        t.url && siteOnlyPath(t.url)
+          ? t.url
+          : `${getFrontendUrl()}/${ctx.locale}/glossary/${t.slug}`,
+    }));
+}
 
 const parkRef = z
   .string()
@@ -2445,26 +2637,46 @@ export const ASSISTANT_TOOLS = [
     status: "posts",
     description:
       "Search park.fan's own news and blog posts in the chat's language. Returns title, " +
-      "description, date, slug and url. Use get_post for a post's text.",
+      "description, date, slug and url, best first. With question, the result also holds the " +
+      "best post's text for it (read), so no get_post is needed; to show posts as a card, " +
+      "show_card kind posts does the same search.",
     input: z.object({
       query: z
         .string()
         .min(2)
         .max(100)
-        .describe("Words to look for, e.g. a park or topic"),
+        .describe(
+          "Words to look for, e.g. a park, a ride, an event or a topic",
+        ),
       kind: z
         .enum(["news", "article", "any"])
         .default("any")
         .describe("news for news items, article for guides and blog posts"),
+      question: z
+        .string()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe("The user's question, to read the best post for it"),
     }),
-    run: ({ query, kind }, ctx) =>
-      ctx.get(AssistantPostsClient).search(ctx.locale, query, kind),
+    run: async ({ query, kind, question }, ctx) => {
+      const posts = await findPosts(ctx, query, kind);
+      const best = posts[0];
+      return {
+        posts: posts.map(postRow),
+        ...(posts.length === 0 && {
+          why: `no park.fan ${kind === "any" ? "post" : kind} matches "${query}" in this language`,
+        }),
+        ...(question &&
+          best && { read: await readPost(ctx, best.slug, question) }),
+      };
+    },
   }),
   tool({
     name: "get_post",
     status: "posts",
     description:
-      "The text of one park.fan post, by its slug from search_posts. Long posts are shortened: " +
+      "The text of one park.fan post, by its slug (from search_posts, a posts card or the page). Long posts are shortened: " +
       "with a question, text is the intro and the sections that answer it best. sections lists " +
       "all the post's headings, omitted the ones left out; for an omitted one, call again with a " +
       "question naming it.",
@@ -2473,7 +2685,7 @@ export const ASSISTANT_TOOLS = [
         .string()
         .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
         .max(160)
-        .describe("Slug from search_posts"),
+        .describe("The post's slug"),
       question: z
         .string()
         .min(2)
@@ -2490,32 +2702,12 @@ export const ASSISTANT_TOOLS = [
     description:
       "park.fan's glossary of theme-park words: ride types, coaster elements, queue systems, " +
       "industry terms (e.g. airtime, launch, single rider, B&M, dark ride). Returns the term, a " +
-      "short definition and its page. Use it for what a word means, and for a nerdy fact.",
+      "short definition and its page. Use it for what a word means, and for a nerdy fact; " +
+      "show_card kind glossary does the same lookup and shows the term as a card.",
     input: z.object({
       term: z.string().trim().min(3).max(60).describe("The word to look up"),
     }),
-    run: async ({ term }, ctx) => {
-      const found = (await ctx
-        .get(AssistantPostsClient)
-        .glossary(ctx.locale, term)) as {
-        results?: Array<{
-          name: string;
-          slug: string;
-          shortDefinition: string;
-          category?: string;
-        }>;
-      };
-      return {
-        terms: (found.results ?? [])
-          .filter((t) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(t.slug))
-          .map((t) => ({
-            name: t.name,
-            definition: t.shortDefinition,
-            category: t.category ?? null,
-            url: `${getFrontendUrl()}/${ctx.locale}/glossary/${t.slug}`,
-          })),
-      };
-    },
+    run: async ({ term }, ctx) => ({ terms: await findTerms(ctx, term) }),
   }),
   tool({
     name: "find_parks_nearby",
@@ -2592,10 +2784,14 @@ export const ASSISTANT_TOOLS = [
       "its type ids), several parks to click " +
       "(kind parks), a park's crowd calendar over 7 to 42 days with levels, hours and holidays " +
       "(kind calendar), one day's tiles: live today, else the forecast for date (kind tiles), " +
-      "a park's shows with their times on a day (kind shows), or its restaurants and food " +
-      "stands, optionally matching query (kind restaurants). Whenever the answer lists rides " +
-      "with waits, parks, shows or places to eat, show the matching kind instead of writing " +
-      "the list as text; then name your pick in a sentence without repeating the card's numbers. " +
+      "a park's shows with their times on a day (kind shows), its restaurants and food " +
+      "stands, optionally matching query (kind restaurants), park.fan's own guides and news " +
+      "with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
+      "question the result also holds the first post's text, as search_posts does), or " +
+      "glossary terms with their definition (kind glossary, query the word). Whenever the " +
+      "answer lists rides with waits, parks, shows or places to eat, or rests on a post or a " +
+      "glossary term, show the matching kind instead of writing the list or the link as text; " +
+      "then name your pick in a sentence without repeating the card's numbers. " +
       "Calendar and tiles reach 60 days ahead, never back; rankings by speed or height are " +
       "compare_rides.",
     input: z.object({
@@ -2608,15 +2804,39 @@ export const ASSISTANT_TOOLS = [
         "tiles",
         "shows",
         "restaurants",
+        "posts",
+        "glossary",
       ]),
       query: z
         .string()
         .trim()
         .min(2)
-        .max(60)
+        .max(100)
         .optional()
         .describe(
-          'For kind restaurants: only names or cuisines with this, e.g. "eis"',
+          'For kind restaurants: only names or cuisines with this, e.g. "eis"; for kind posts: words to search, e.g. "Halloween" or a park; for kind glossary: the word',
+        ),
+      postKind: z
+        .enum(["news", "article", "any"])
+        .default("any")
+        .describe(
+          "For kind posts with query: news, article (guides and blog) or any",
+        ),
+      slugs: z
+        .array(z.string().regex(CONTENT_SLUG).max(160))
+        .min(1)
+        .max(MAX_POST_CARD)
+        .optional()
+        .describe(
+          "For kind posts: exactly these posts, by slug, instead of a search",
+        ),
+      question: z
+        .string()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe(
+          "For kind posts: the user's question; the result then holds the first post's text for it",
         ),
       from: isoDay
         .optional()
@@ -2661,7 +2881,15 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "For kind rides: only rides someone this tall may ride; each row carries its limits",
         ),
-      limit: z.number().int().min(1).max(10).default(6),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .optional()
+        .describe(
+          "Rows: kind rides 6 by default; kind posts at most 3 (default 3), kind glossary at most 3 (default 1)",
+        ),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
     run: async (
@@ -2679,9 +2907,20 @@ export const ASSISTANT_TOOLS = [
         days,
         date,
         query,
+        postKind,
+        slugs,
+        question,
       },
       ctx,
     ) => {
+      if (kind === "posts") {
+        return postsCard(ctx, { query, postKind, slugs, question, limit });
+      }
+      if (kind === "glossary") {
+        if (!query)
+          throw new McpToolError("kind glossary needs query, the word");
+        return glossaryCard(ctx, query, limit);
+      }
       if (kind === "shows") {
         if (!park) throw new McpToolError("kind shows needs park");
         const found = await showsOf(ctx, park, date);
@@ -2892,14 +3131,15 @@ export const ASSISTANT_TOOLS = [
           all = all.filter(fits);
           down = down.filter(fits);
         }
+        const rowCount = limit ?? DEFAULT_RIDE_ROWS;
         const waiting = (order === "shortest" ? [...all].reverse() : all).slice(
           0,
-          limit,
+          rowCount,
         );
         // Rides down right now follow the waits; a full "shortest" list has no room for them.
         const room =
           order === "shortest"
-            ? Math.min(MAX_DOWN_ROWS, limit - waiting.length)
+            ? Math.min(MAX_DOWN_ROWS, rowCount - waiting.length)
             : MAX_DOWN_ROWS;
         const picked: Array<{
           id: string;
