@@ -385,6 +385,14 @@ export const EVAL_CASES: EvalCase[] = [
     ],
   },
   {
+    id: "quietest-park-in-country",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wo ist es am Samstag in Deutschland am leersten?",
+    want: [{ tool: "compare_parks", input: { country: "*" } }],
+  },
+  {
     id: "child-height",
     locale: "de",
     pagePath: PHL_PAGE,

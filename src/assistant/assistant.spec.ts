@@ -672,6 +672,7 @@ describe("assistant tools", () => {
       "get_park_forecast",
       "get_park_weather",
       "get_best_days",
+      "compare_parks",
       "search_posts",
       "get_post",
       "look_up_glossary",

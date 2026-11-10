@@ -920,6 +920,48 @@ const CROWD_ORDER = [
   "extreme",
 ];
 
+/** Most parks one `compare_parks` reads; a country beyond it is asked for a city. */
+const MAX_COMPARED_PARKS = 30;
+
+/** Calendars `compare_parks` builds at once: a cold month is a full build, so never thirty. */
+const CALENDAR_BATCH = 6;
+
+/** `run` over `items`, `size` at a time, results in order. */
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let at = 0; at < items.length; at += size) {
+    results.push(...(await Promise.all(items.slice(at, at + size).map(run))));
+  }
+  return results;
+}
+
+/** One park's day for `compare_parks`, from the calendar every park page shows. */
+async function comparedParkDay(
+  ctx: AssistantToolContext,
+  park: Park,
+  date: string | undefined,
+) {
+  const day = date ?? getCurrentDateInTimezone(park.timezone);
+  const ahead = daysBetween(getCurrentDateInTimezone(park.timezone), day);
+  if (ahead < 0 || ahead >= FORECAST_DAYS) return { park, day, found: null };
+  const { fromDate, toDate } = parseDateRange(day, day, {
+    timezone: park.timezone,
+  });
+  const calendar = await ctx
+    .get(CalendarService)
+    .buildCalendarResponse(park, fromDate, toDate, "none");
+  const found = calendar.days.find((d) => d.date === day);
+  return {
+    park,
+    day,
+    found: found ? compactDay(found, park.timezone) : null,
+  };
+}
+
 export const ASSISTANT_TOOLS = [
   tool({
     name: "search_parks",
@@ -1586,6 +1628,125 @@ export const ASSISTANT_TOOLS = [
           )
           .slice(0, 10),
         byDayOfWeek: result.byDayOfWeek ?? null,
+      };
+    },
+  }),
+  tool({
+    name: "compare_parks",
+    status: "forecast",
+    description:
+      "Several parks on one day, quietest first: whether each is open, its hours, the crowd " +
+      "level park.fan's calendar expects (one day rating for every park, so they compare " +
+      "fairly) and the headliners' expected peak wait. Give a country (with city to narrow it) " +
+      'or 2 to 10 parks. For "which park is quietest on Saturday", "where in Germany on 28 ' +
+      'June", "which of these three". Closed parks and open ones without a rating are listed ' +
+      "apart, never as quiet. Today by default, up to 60 days ahead; one park's best days are " +
+      "get_best_days.",
+    input: z.object({
+      country: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .optional()
+        .describe('A country, "Germany" or its code "DE"'),
+      city: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .optional()
+        .describe("With country: only the parks of this city"),
+      parks: z
+        .array(parkRef)
+        .min(2)
+        .max(10)
+        .optional()
+        .describe("Instead of country: park ids or slugs"),
+      date: isoDay
+        .optional()
+        .describe("YYYY-MM-DD in the parks' calendar; default today"),
+    }),
+    run: async ({ country, city, parks, date }, ctx) => {
+      if (!country === !parks) {
+        throw new McpToolError("Give either country or parks");
+      }
+      let found: Park[];
+      if (parks) {
+        const resolved = await Promise.all(
+          parks.map((reference) => resolvePark(mcp(ctx), reference)),
+        );
+        const ambiguous = resolved.find(isAmbiguous);
+        if (ambiguous) return ambiguous;
+        found = resolved as Park[];
+      } else {
+        const query = ctx
+          .get(DataSource)
+          .getRepository(Park)
+          .createQueryBuilder("park")
+          .where("park.retiredAt IS NULL")
+          .andWhere(
+            "(park.countryCode = :code OR lower(park.country) = lower(:country))",
+            { code: getCountryISOCode(country as string) ?? "", country },
+          );
+        if (city) {
+          query.andWhere("lower(park.city) = lower(:city)", { city });
+        }
+        found = await query.getMany();
+        if (found.length === 0) {
+          throw new McpToolError(
+            `No parks in "${[city, country].filter(Boolean).join(", ")}"; try search_parks`,
+          );
+        }
+        if (found.length > MAX_COMPARED_PARKS) {
+          throw new McpToolError(
+            `${found.length} parks in ${country}: name a city, or up to 10 parks`,
+          );
+        }
+      }
+      const days = await inBatches(found, CALENDAR_BATCH, (park) =>
+        comparedParkDay(ctx, park, date).catch(() => ({
+          park,
+          day: date ?? null,
+          found: null,
+        })),
+      );
+      const row = ({ park, found: d }: (typeof days)[number]) => ({
+        id: park.id,
+        name: park.name,
+        city: park.city,
+        ...(d && {
+          opens: d.opens,
+          closes: d.closes,
+          hoursInferred: d.hoursInferred,
+          crowdLevel: d.crowdLevel,
+          expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
+          holiday: d.holiday,
+          schoolVacation: d.schoolVacation,
+        }),
+      });
+      const open = days.filter((d) => d.found && d.found.status !== "CLOSED");
+      // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
+      const rated = open.filter((d) =>
+        CROWD_ORDER.includes(d.found?.crowdLevel ?? ""),
+      );
+      const rank = (d: (typeof days)[number]) =>
+        CROWD_ORDER.indexOf(d.found?.crowdLevel ?? "");
+      return {
+        date: date ?? days[0]?.day ?? null,
+        ranked: [...rated]
+          .sort(
+            (a, b) =>
+              rank(a) - rank(b) ||
+              (a.found?.expectedPeakWaitMinutes ?? 0) -
+                (b.found?.expectedPeakWaitMinutes ?? 0),
+          )
+          .map(row),
+        unrated: open.filter((d) => !rated.includes(d)).map(row),
+        closed: days
+          .filter((d) => d.found?.status === "CLOSED")
+          .map((d) => d.park.name),
+        notKnown: days.filter((d) => !d.found).map((d) => d.park.name),
       };
     },
   }),
