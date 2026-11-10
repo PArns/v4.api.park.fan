@@ -129,12 +129,24 @@ describe("HolidaysProcessor", () => {
     expect(nagerDateClient.getLongWeekends.mock.calls).toEqual(
       years.map((y) => [y, "DE"]),
     );
+    expect(holidaysService.saveLongWeekendsFromApi.mock.calls).toEqual(
+      years.map((y) => [[], "DE", y]),
+    );
     expect(openHolidaysClient.getSchoolHolidays.mock.calls).toEqual(
       years.map((y) => ["DE", `${y}-01-01`, `${y}-12-31`]),
     );
     expect(
       holidaysService.synthesizeProjectedSummerHolidays,
     ).toHaveBeenCalledWith("DE");
+  });
+
+  it("leaves a year's bridge days alone when its long weekends could not be fetched", async () => {
+    parksService.getSyncCountryCodes.mockResolvedValue(["FR"]);
+    nagerDateClient.getLongWeekends.mockResolvedValue(null);
+
+    await run();
+
+    expect(holidaysService.saveLongWeekendsFromApi).not.toHaveBeenCalled();
   });
 
   it("keeps going with the next country when Nager.Date fails for one", async () => {

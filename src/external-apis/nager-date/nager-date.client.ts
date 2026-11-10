@@ -98,7 +98,7 @@ export class NagerDateClient {
   async getLongWeekends(
     year: number,
     countryCode: string,
-  ): Promise<NagerLongWeekend[]> {
+  ): Promise<NagerLongWeekend[] | null> {
     try {
       const response = await this.client.get<NagerLongWeekend[]>(
         `/LongWeekend/${year}/${countryCode}`,
@@ -110,8 +110,9 @@ export class NagerDateClient {
       this.logger.warn(
         `Failed to fetch long weekends for ${countryCode} ${year}: ${errorMessage}`,
       );
-      // Don't throw - long weekends are optional enhancement
-      return [];
+      // Null, not an empty list: the bridge days of a year are replaced by what comes back,
+      // so a failed fetch read as "none" would delete them.
+      return null;
     }
   }
 

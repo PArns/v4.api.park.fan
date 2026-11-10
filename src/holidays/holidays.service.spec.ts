@@ -1,6 +1,10 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { HOLIDAY_UPSERT_OPTIONS, HolidaysService } from "./holidays.service";
+import {
+  bridgeDaysOf,
+  HOLIDAY_UPSERT_OPTIONS,
+  HolidaysService,
+} from "./holidays.service";
 import { Holiday } from "./entities/holiday.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -488,6 +492,71 @@ describe("HolidaysService", () => {
         removed: 0,
       });
       expect(deleteQb.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bridge days from Nager's long weekends (PAR-1269)", () => {
+    // France 2026 as Nager answers: New Year on a Thursday, Ascension, 14 July on a Tuesday.
+    const france2026 = [
+      {
+        startDate: "2026-01-01",
+        endDate: "2026-01-04",
+        bridgeDays: ["2026-01-02"],
+      },
+      {
+        startDate: "2026-05-14",
+        endDate: "2026-05-17",
+        bridgeDays: ["2026-05-15"],
+      },
+      {
+        startDate: "2026-07-11",
+        endDate: "2026-07-14",
+        bridgeDays: ["2026-07-13"],
+      },
+      { startDate: "2026-12-25", endDate: "2026-12-27", bridgeDays: [] },
+    ];
+
+    it("keeps only the days Nager names, never the holiday or the weekend around them", () => {
+      expect(bridgeDaysOf(france2026, 2026)).toEqual([
+        "2026-01-02",
+        "2026-05-15",
+        "2026-07-13",
+      ]);
+    });
+
+    it("drops a weekend day, a day of another year and a duplicate", () => {
+      expect(
+        bridgeDaysOf(
+          [
+            { bridgeDays: ["2025-12-29", "2026-01-02"] },
+            { bridgeDays: ["2026-01-02", "2026-01-03", "not-a-day"] },
+          ],
+          2026,
+        ),
+      ).toEqual(["2026-01-02"]);
+    });
+
+    it("replaces the year's stored bridge days with exactly those", async () => {
+      const replace = jest
+        .spyOn(service, "replaceHolidaysBySource")
+        .mockResolvedValue({ saved: 3, removed: 4 });
+
+      await expect(
+        service.saveLongWeekendsFromApi(france2026 as never, "FR", 2026),
+      ).resolves.toBe(3);
+
+      const [prefix, rows] = replace.mock.calls[0];
+      expect(prefix).toBe("nager-bridge:FR:2026-");
+      expect(rows.map((row) => row.externalId)).toEqual([
+        "nager-bridge:FR:2026-01-02",
+        "nager-bridge:FR:2026-05-15",
+        "nager-bridge:FR:2026-07-13",
+      ]);
+      expect(rows[0]).toMatchObject({
+        date: new Date("2026-01-02T00:00:00Z"),
+        holidayType: "bridge",
+        country: "FR",
+      });
     });
   });
 });

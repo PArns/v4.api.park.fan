@@ -117,11 +117,12 @@ describe("NagerDateClient", () => {
       expect(http.get).toHaveBeenCalledWith("/LongWeekend/2026/DE");
     });
 
-    it("returns an empty list instead of throwing on an HTTP error", async () => {
+    it("returns null, not an empty list, on an HTTP error", async () => {
       http.get.mockRejectedValue(new Error("503"));
       jest.spyOn((client as any).logger, "warn").mockImplementation();
 
-      await expect(client.getLongWeekends(2026, "DE")).resolves.toEqual([]);
+      // Read as "no bridge days", a failed fetch would delete the year's stored ones.
+      await expect(client.getLongWeekends(2026, "DE")).resolves.toBeNull();
     });
   });
 
