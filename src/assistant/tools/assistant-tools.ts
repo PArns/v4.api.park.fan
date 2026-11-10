@@ -235,8 +235,10 @@ export interface AssistantToolContext {
   ip?: string | null;
   /** The position the visitor shared in this question, rounded to about a kilometre. */
   location?: { lat: number; lng: number } | null;
-  /** The browser's IANA zone; every instant in a result is shown in it. */
+  /** The browser's IANA zone: "now" for the visitor, and the zone of a time no park claims. */
   timeZone?: string;
+  /** Told the zone of every park a call resolves; its times are then shown in that park's clock. */
+  notePark?: (timezone: string) => void;
   /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
   planner?: PlannerSnapshot | null;
   /** The browser's push state and alerts as it sent them. */
@@ -347,7 +349,7 @@ function tool<Shape extends z.ZodRawShape>(
 }
 
 function mcp(ctx: AssistantToolContext): McpToolContext {
-  return { admin: PARKY, get: ctx.get.bind(ctx) };
+  return { admin: PARKY, get: ctx.get.bind(ctx), onPark: ctx.notePark };
 }
 
 /** The parts of a park's live crowd reading that describe this moment, not the day so far. */
@@ -440,20 +442,15 @@ const PARK_CARD_WAITS = 3;
 
 /**
  * A park right now as `get_park_live` hands it to the model, which the park card returns too, so
- * one call answers both: the live summary without the park's own clock and zone (every time
- * reaches the model in the visitor's) and with the editors' fun facts in the chat's language.
+ * one call answers both: the live summary, with the editors' fun facts in the chat's language.
  */
 async function parkLiveSummary(
   ctx: AssistantToolContext,
   park: string,
 ): Promise<Record<string, unknown>> {
   const live = await parkNow(ctx, { park, longestWaits: LIVE_LONGEST_WAITS });
-  const {
-    localTime: _localTime,
-    timezone: _timezone,
-    funFacts,
-    ...rest
-  } = live;
+  // The park's clock right now and its zone stay: every time reaches the model in that zone.
+  const { funFacts, ...rest } = live;
   if (rest.retiredAt === null) delete rest.retiredAt;
   // The day's rating beside the live one: before opening the live level is null, and "how full
   // will it get today?" is the calendar's to answer, labelled as such.
@@ -1509,6 +1506,7 @@ export const ASSISTANT_TOOLS = [
       const parkId = (ride.park as { id?: string } | null)?.id;
       const parks = ctx.get(ParksService);
       const park = parkId ? await parks.findById(parkId) : null;
+      if (park) ctx.notePark?.(park.timezone);
       if (park) {
         // The park's calendar month and day: the season and the opening calendar are park-local.
         const today = getCurrentDateInTimezone(park.timezone);
@@ -1665,6 +1663,7 @@ export const ASSISTANT_TOOLS = [
         });
       if (!ride?.park)
         throw new McpToolError(`No ride ${rideId}; try find_rides`);
+      ctx.notePark?.(ride.park.timezone);
       const day = date ?? getCurrentDateInTimezone(ride.park.timezone);
       // The plan leaves a ride out on a day a works window covers; this says why its hours are
       // empty, so "no forecast" is never what the visitor hears.
@@ -2890,8 +2889,9 @@ export const ASSISTANT_TOOLS = [
           place: [live.city, live.country].filter(Boolean).join(", ") || null,
           status: live.status ?? null,
           crowdLevel: live.crowd?.level ?? null,
-          opens: today?.opens ?? null,
-          closes: today?.closes ?? null,
+          // With the park's own offset: the widget reads the park's clock off it.
+          opens: parkInstant(today?.opens, String(summary.timezone ?? "UTC")),
+          closes: parkInstant(today?.closes, String(summary.timezone ?? "UTC")),
           waits: (live.rides?.longestWaits ?? [])
             .slice(0, PARK_CARD_WAITS)
             .map((ride) => ({
@@ -3854,16 +3854,31 @@ export async function runAssistantTool(
     };
   }
   try {
-    const outcome = await definition.run(input.data, ctx);
+    // The parks this call is about, so its times come in their clock, not the visitor's.
+    const zones = new Set<string>();
+    const callCtx: AssistantToolContext = {
+      ...ctx,
+      notePark: (timezone) => zones.add(timezone),
+    };
+    const outcome = await definition.run(input.data, callCtx);
     const action =
       outcome instanceof ActionOutcome ? outcome.action : undefined;
     const plain = outcome instanceof ActionOutcome ? outcome.result : outcome;
+    const zone = zones.size === 1 ? [...zones][0] : null;
     const shown =
       action?.type === "card" || action?.type === "navigate"
         ? { ...(plain as object), alreadyShown: ALREADY_SHOWN }
         : plain;
+    const labelled =
+      zone && shown && typeof shown === "object" && !Array.isArray(shown)
+        ? { timesIn: `park time, ${zone}`, ...shown }
+        : shown;
     const result = JSON.stringify(
-      localizeTimes(localizePageUrls(shown, ctx.locale), ctx.timeZone ?? "UTC"),
+      localizeTimes(
+        localizePageUrls(labelled, ctx.locale),
+        zone,
+        [...zones][0] ?? ctx.timeZone ?? "UTC",
+      ),
     );
     return {
       content:

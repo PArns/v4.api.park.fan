@@ -2,8 +2,9 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { unfoldedCloseHour } from "../common/utils/day-shape.util";
 
 /**
- * Parky speaks in the visitor's own clock. The model never converts a time: every instant in a
- * tool result is rewritten here, in code, into the browser's zone before the model reads it.
+ * Parky speaks in the park's clock, as the planner, the showtimes and the park pages do. The
+ * model never converts a time: every instant in a tool result is rewritten here, in code, into
+ * the zone of the park the call was about before the model reads it.
  */
 
 /** An ISO instant with a zone (`Z` or `±hh:mm`); a bare date or a naive time is left alone. */
@@ -21,23 +22,36 @@ export function userTimeZone(raw: string | undefined): string {
   }
 }
 
-/** Every instant in `value`, at any depth, as "yyyy-MM-dd HH:mm" in `timeZone`. */
-export function localizeTimes(value: unknown, timeZone: string): unknown {
+/** An instant written with a UTC offset other than `Z`: its wall clock is that offset's. */
+const OFFSET_INSTANT = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}).*[+-]\d{2}:?\d{2}$/;
+
+/**
+ * Every instant in `value`, at any depth, as "yyyy-MM-dd HH:mm" on a park's clock. With the one
+ * park the call was about, in its `timeZone`; a call about several parks (null) keeps each
+ * instant's own offset, which the tools write as the park's, and puts a bare UTC instant in
+ * `fallback`.
+ */
+export function localizeTimes(
+  value: unknown,
+  timeZone: string | null,
+  fallback: string = timeZone ?? "UTC",
+): unknown {
   if (typeof value === "string") {
     if (!INSTANT.test(value)) return value;
     const at = new Date(value);
-    return Number.isNaN(at.getTime())
-      ? value
-      : formatInTimeZone(at, timeZone, "yyyy-MM-dd HH:mm");
+    if (Number.isNaN(at.getTime())) return value;
+    const own = timeZone === null ? OFFSET_INSTANT.exec(value) : null;
+    if (own && !value.endsWith("Z")) return `${own[1]} ${own[2]}`;
+    return formatInTimeZone(at, timeZone ?? fallback, "yyyy-MM-dd HH:mm");
   }
   if (Array.isArray(value)) {
-    return value.map((item) => localizeTimes(item, timeZone));
+    return value.map((item) => localizeTimes(item, timeZone, fallback));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        localizeTimes(item, timeZone),
+        localizeTimes(item, timeZone, fallback),
       ]),
     );
   }

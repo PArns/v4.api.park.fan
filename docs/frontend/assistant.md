@@ -71,13 +71,21 @@ by continent, country or city, search, trip planner, favorites, the news, blog a
 unqualified question ("Why?", "Saturday or Sunday?") as one about that subject and look it up
 instead of asking.
 
-## Times in the visitor's clock
+## Times in park time
 
-`timeZone` is the browser's IANA zone (an unknown one counts as UTC). The model never converts a
-time: `localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in a tool result into that
-zone as `yyyy-MM-dd HH:mm` before the model reads it, and the per-hour forecasts turn their
-park-local hours into instants first (`parkHourInstant`). A ride forecast keeps only the hours the
-park is open, the closing hour excluded, and on today only those not over yet (`bookableHours`).
+Parky gives every time on the clock of the park it is about, as the trip planner, the showtimes
+and the park pages do: somebody in London planning a day in Orlando hears Orlando's hours. The
+model never converts a time. Each tool call records the parks it resolves (`resolvePark` reports
+the zone through the MCP context's `onPark`; the ride tools note their ride's park), and
+`localizeTimes` (`assistant-time.ts`) rewrites every ISO instant in the result as
+`yyyy-MM-dd HH:mm` in that park's zone before the model reads it; the result names the zone as
+`timesIn`. A call about several parks keeps each instant's own offset, which the tools write as
+the park's. The per-hour forecasts turn their park-local hours into instants first
+(`parkHourInstant`). `timeZone`, the browser's IANA zone, is still sent: "This chat" gives the
+visitor's own "now" in it, and the prompt has Parky add "park time" once when the two differ. A
+ride forecast keeps only the hours the park is open, the closing hour excluded, and on today only
+those not over yet (`bookableHours`). The cards carry their times with the park's offset
+(`parkInstant`), and the widget reads the park's clock off it.
 
 ## The answer loop
 
@@ -132,7 +140,8 @@ gives for a gap is told, and "not known" is never "there is none". Version 37: p
 straight into the tools, and the park card's result replaces `get_park_live`. Version 38: "Saturday or
 Sunday?" and events go to `get_days`; the parks card only for today; the day's expected level
 (`todayExpected`) for "how full will it get"; a paid queue's price is the one price Parky states. Version 39: days go to `get_days`,
-the hours of a park's day to `get_hours`.
+the hours of a park's day to `get_hours`. Version 40: times are park time,
+with "park time" said once when the visitor's zone differs.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
