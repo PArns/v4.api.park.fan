@@ -21,6 +21,78 @@ const PARK_CHAPTERS: Record<string, string> = {
   "with-kids": "page for a visit with kids",
 };
 
+/**
+ * The site writes some segments in the reader's language (`/de/glossar`, `/de/beste-reisezeit`,
+ * a park's `/durchschnittliche-wartezeiten`), and the widget sends the path as the browser shows
+ * it. Each spelling maps to the English segment the tables here use; the frontend keeps the same
+ * lists, gathered in its `lib/i18n/localized-path.ts`.
+ */
+const LOCALIZED_TOP: Record<string, string> = spellings({
+  glossary: ["glossar", "glossaire", "glossario", "woordenboek", "glosario"],
+  "best-time-to-visit": [
+    "beste-reisezeit",
+    "meilleure-periode-pour-visiter",
+    "periodo-migliore-per-visitare",
+    "beste-tijd-om-te-bezoeken",
+    "mejor-epoca-para-visitar",
+  ],
+  "trip-planner": [
+    "tagesplaner",
+    "planificateur",
+    "pianificatore",
+    "dagplanner",
+    "planificador",
+  ],
+  "how-park-fan-works": [
+    "so-funktioniert-park-fan",
+    "comment-fonctionne-park-fan",
+    "come-funziona-park-fan",
+    "hoe-park-fan-werkt",
+    "como-funciona-park-fan",
+  ],
+});
+
+/** A park's sub-page segments in every language, mapped to the English one. */
+const LOCALIZED_CHAPTERS: Record<string, string> = spellings({
+  "wait-time-calendar": [
+    "wartezeiten-kalender",
+    "calendrier-temps-attente",
+    "calendario-tempi-attesa",
+    "wachttijden-kalender",
+    "calendario-tiempos-espera",
+  ],
+  "average-wait-times": [
+    "durchschnittliche-wartezeiten",
+    "temps-attente-moyens",
+    "tempi-di-attesa-medi",
+    "gemiddelde-wachttijden",
+    "tiempos-de-espera-medios",
+  ],
+  "with-kids": [
+    "mit-kindern",
+    "avec-enfants",
+    "con-bambini",
+    "met-kinderen",
+    "con-ninos",
+  ],
+});
+
+/** `{ english: [other spellings] }` as one lookup from every spelling to the English one. */
+function spellings(families: Record<string, string[]>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(families).flatMap(([english, others]) =>
+      [english, ...others].map((spelling) => [spelling, english]),
+    ),
+  );
+}
+
+/** A table's own entry for a segment from the URL, never an inherited one ("constructor"). */
+function own(table: Record<string, string>, key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key)
+    ? table[key]
+    : undefined;
+}
+
 /** Pages without one park, ride or post, by their first segment after the locale. */
 const SITE_PAGES: Record<string, string> = {
   "": "the park.fan home page",
@@ -62,20 +134,22 @@ type Page =
   | { kind: "term"; slug: string };
 
 function parsePage(pagePath: string): Page | null {
-  const [, section = "", ...rest] = pagePath.split("/").filter(Boolean);
+  const [, written = "", ...rest] = pagePath.split("/").filter(Boolean);
+  const section = own(LOCALIZED_TOP, written) ?? written;
   if (section === "parks") {
     const [continent, country, city, park, next] = rest;
     if (park) {
       const at = { continent, country, city, park };
       if (!next) return { kind: "park", at };
-      const chapter = PARK_CHAPTERS[next];
+      const chapter = own(PARK_CHAPTERS, own(LOCALIZED_CHAPTERS, next) ?? next);
       return chapter
         ? { kind: "park", at, chapter }
         : { kind: "ride", at, ride: next };
     }
     if (!continent) return { kind: "site", text: SITE_PAGES.parks };
-    if (!country && PARK_GROUPS[continent]) {
-      return { kind: "site", text: PARK_GROUPS[continent] };
+    const group = own(PARK_GROUPS, continent);
+    if (!country && group) {
+      return { kind: "site", text: group };
     }
     const [scope, slug] = city
       ? ["city", city]
@@ -95,7 +169,7 @@ function parsePage(pagePath: string): Page | null {
     return { kind: "post", section, slug };
   }
   if (section === "glossary" && slug) return { kind: "term", slug };
-  const text = SITE_PAGES[section];
+  const text = own(SITE_PAGES, section);
   return text ? { kind: "site", text } : null;
 }
 

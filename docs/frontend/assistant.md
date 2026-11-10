@@ -60,7 +60,10 @@ tester can chat while the switch is off. To stop every chat at once, remove the 
 …" (`assistant-page.service.ts`). A park page names the park with its city, country and id; a sub-page
 (wait-time calendar, average waits, with kids) which page of which park; a ride page the ride and its
 park with both ids; a news post or article its title and slug; a glossary page the term. The names
-are quoted with `JSON.stringify` and cut to 120 characters. Parks come from `findByGeographicPath`,
+are quoted with `JSON.stringify` and cut to 120 characters. The widget sends the path the browser
+shows, so the segments the site writes in the reader's language (`/de/glossar`, `/de/beste-reisezeit`,
+a park's `durchschnittliche-wartezeiten`) are read in all six spellings, the frontend's
+`lib/i18n/localized-path.ts` lists. Parks come from `findByGeographicPath`,
 rides from `findBySlugInPark`, titles and terms from the posts client. Each name is cached in Redis as
 `assistant:page:{locale}:{park|ride|news|blog|glossary}:{path or slug}` for six hours, a page that
 names nothing as an empty value for ten minutes; a park's sub-pages share the park's entry. Redis
