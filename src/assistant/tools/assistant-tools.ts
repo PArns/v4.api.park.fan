@@ -555,6 +555,69 @@ async function rideIdOf(
   };
 }
 
+/**
+ * One ride as get_ride returns it: the ride's answer without the readings of today one by one,
+ * its unknown facts named, and, from its park's day, when it opens today and when it reopens.
+ * The ride card hands the same to the model, so no get_ride follows a card.
+ */
+async function rideDetails(
+  ctx: AssistantToolContext,
+  rideId: string,
+): Promise<Record<string, unknown>> {
+  const ride = (await getAttractionTool.handler(
+    { attractionId: rideId, historyDays: 0 },
+    mcp(ctx),
+  )) as Record<string, unknown>;
+  delete ride.predictionAccuracy;
+  // Today's readings one by one and the bookkeeping around them answer nothing a visitor
+  // asks; the averages and the peak stay. New objects, because the response may be cached.
+  const statistics = ride.statistics as Record<string, unknown> | null;
+  if (statistics) {
+    const {
+      history: _history,
+      dataPoints: _dataPoints,
+      timestamp: _timestamp,
+      ...kept
+    } = statistics;
+    ride.statistics = kept;
+  }
+  const facts = Object.entries(ride.facts as Record<string, unknown>);
+  ride.facts = Object.fromEntries(facts.filter(([, value]) => value !== null));
+  // Named, so a missing height reads "not recorded", never "no limit".
+  const unknownFacts = facts
+    .filter(([, value]) => value === null)
+    .map(([key]) => key);
+  if (unknownFacts.length > 0) ride.unknownFacts = unknownFacts;
+  const parkId = (ride.park as { id?: string } | null)?.id;
+  const parks = ctx.get(ParksService);
+  const park = parkId ? await parks.findById(parkId) : null;
+  if (park) ctx.notePark?.(park.timezone);
+  if (park) {
+    // The park's calendar month and day: the season and the opening calendar are park-local.
+    const today = getCurrentDateInTimezone(park.timezone);
+    // A failed plan costs the ride's day, not the ride.
+    const plan = await Promise.resolve()
+      .then(() => ctx.get(PlanDayService).buildPlanDay(park, today))
+      .catch(() => null);
+    const planned = plan?.rides.find(
+      (r) => r.attractionId === rideId.toLowerCase(),
+    );
+    if (plan && planned) ride.today = rideOpeningOf(planned, plan);
+    const reopening = reopeningOf(
+      ride as RideClosure,
+      Number(today.slice(5, 7)),
+    );
+    if (reopening) {
+      const from = reopenSearchFrom(reopening, today);
+      ride.reopening = {
+        ...reopening,
+        ...(from && { reopensOn: await firstOpenDay(ctx, park.id, from) }),
+      };
+    }
+  }
+  return ride;
+}
+
 /** The visitor's planned day at this park and date, as the planner snapshot holds it. */
 function snapshotDay(
   ctx: AssistantToolContext,
@@ -1745,61 +1808,7 @@ export const ASSISTANT_TOOLS = [
     run: async (input, ctx) => {
       const resolved = await rideIdOf(ctx, input);
       if (typeof resolved !== "string") return resolved;
-      const rideId = resolved;
-      const ride = (await getAttractionTool.handler(
-        { attractionId: rideId, historyDays: 0 },
-        mcp(ctx),
-      )) as Record<string, unknown>;
-      delete ride.predictionAccuracy;
-      // Today's readings one by one and the bookkeeping around them answer nothing a visitor
-      // asks; the averages and the peak stay. New objects, because the response may be cached.
-      const statistics = ride.statistics as Record<string, unknown> | null;
-      if (statistics) {
-        const {
-          history: _history,
-          dataPoints: _dataPoints,
-          timestamp: _timestamp,
-          ...kept
-        } = statistics;
-        ride.statistics = kept;
-      }
-      const facts = Object.entries(ride.facts as Record<string, unknown>);
-      ride.facts = Object.fromEntries(
-        facts.filter(([, value]) => value !== null),
-      );
-      // Named, so a missing height reads "not recorded", never "no limit".
-      const unknownFacts = facts
-        .filter(([, value]) => value === null)
-        .map(([key]) => key);
-      if (unknownFacts.length > 0) ride.unknownFacts = unknownFacts;
-      const parkId = (ride.park as { id?: string } | null)?.id;
-      const parks = ctx.get(ParksService);
-      const park = parkId ? await parks.findById(parkId) : null;
-      if (park) ctx.notePark?.(park.timezone);
-      if (park) {
-        // The park's calendar month and day: the season and the opening calendar are park-local.
-        const today = getCurrentDateInTimezone(park.timezone);
-        // A failed plan costs the ride's day, not the ride.
-        const plan = await Promise.resolve()
-          .then(() => ctx.get(PlanDayService).buildPlanDay(park, today))
-          .catch(() => null);
-        const planned = plan?.rides.find(
-          (r) => r.attractionId === rideId.toLowerCase(),
-        );
-        if (plan && planned) ride.today = rideOpeningOf(planned, plan);
-        const reopening = reopeningOf(
-          ride as RideClosure,
-          Number(today.slice(5, 7)),
-        );
-        if (reopening) {
-          const from = reopenSearchFrom(reopening, today);
-          ride.reopening = {
-            ...reopening,
-            ...(from && { reopensOn: await firstOpenDay(ctx, park.id, from) }),
-          };
-        }
-      }
-      return ride;
+      return rideDetails(ctx, resolved);
     },
   }),
   tool({
@@ -2778,7 +2787,8 @@ export const ASSISTANT_TOOLS = [
       "Show a live card in the chat, drawn with park.fan's own badges and wait chips: a park " +
       "(status, crowd level, today's hours, longest waits; the result also holds everything " +
       "get_park_live returns, so never call both for one park), a ride (status, standby wait, crowd " +
-      "level), a park's rides with their current waits (kind rides, longest or shortest " +
+      "level; by rideId or by its name with park; the result also holds everything get_ride " +
+      "returns, so never call both for one ride), a park's rides with their current waits (kind rides, longest or shortest " +
       "first, then rides that are down; type for coasters, dark rides, water or family rides " +
       "only; shelter for rides that keep you dry in the rain; the result lists each row with " +
       "its type ids), several parks to click " +
@@ -2860,7 +2870,7 @@ export const ASSISTANT_TOOLS = [
       park: parkRef
         .optional()
         .describe(
-          "For kind park, rides, calendar, tiles, shows or restaurants: the park's name, slug or id",
+          "For kind park, ride (with a ride's name), rides, calendar, tiles, shows or restaurants: the park's name, slug or id",
         ),
       order: z
         .enum(["longest", "shortest"])
@@ -2891,6 +2901,15 @@ export const ASSISTANT_TOOLS = [
           "Rows: kind rides 6 by default; kind posts at most 3 (default 3), kind glossary at most 3 (default 1)",
         ),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
+      ride: z
+        .string()
+        .trim()
+        .min(2)
+        .max(100)
+        .optional()
+        .describe(
+          'For kind ride, instead of rideId: the ride\'s name, e.g. "Taron", with park',
+        ),
     }),
     run: async (
       {
@@ -2898,6 +2917,7 @@ export const ASSISTANT_TOOLS = [
         park,
         parks,
         rideId,
+        ride,
         order,
         type,
         shelter,
@@ -3250,24 +3270,30 @@ export const ASSISTANT_TOOLS = [
           },
         );
       }
-      if (!rideId) throw new McpToolError("kind ride needs rideId");
-      const ride = (await getAttractionTool.handler(
-        { attractionId: rideId, historyDays: 0 },
-        mcp(ctx),
-      )) as RideSummary;
-      const standby = ride.queues?.find((queue) => queue.type === "STANDBY");
+      if (!rideId && !ride) {
+        throw new McpToolError("kind ride needs rideId, or ride with its park");
+      }
+      const resolved = await rideIdOf(ctx, { rideId, ride, park });
+      if (typeof resolved !== "string") return resolved;
+      const details = await rideDetails(ctx, resolved);
+      const found = details as unknown as RideSummary;
+      const standby = found.queues?.find((queue) => queue.type === "STANDBY");
       const card: AssistantCard = {
         kind: "ride",
-        name: ride.name,
-        park: ride.park?.name ?? null,
-        status: ride.effectiveStatus ?? ride.status ?? null,
-        crowdLevel: ride.crowdLevel ?? null,
+        name: found.name,
+        park: found.park?.name ?? null,
+        status: found.effectiveStatus ?? found.status ?? null,
+        crowdLevel: found.crowdLevel ?? null,
         waitMinutes: standby?.waitMinutes ?? null,
-        url: ride.pageUrl ? siteOnlyPath(ride.pageUrl) : null,
-        ...rideBadges(ride),
+        url: found.pageUrl ? siteOnlyPath(found.pageUrl) : null,
+        ...rideBadges(found),
       };
       const { url: _url, ...shown } = card;
-      return new ActionOutcome({ type: "card", card }, { shown });
+      // What the card says and everything get_ride would, so no second lookup follows.
+      return new ActionOutcome(
+        { type: "card", card },
+        { shown, ride: details },
+      );
     },
   }),
   tool({

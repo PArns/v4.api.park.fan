@@ -234,6 +234,43 @@ describe("posts and glossary cards", () => {
   });
 });
 
+describe("show_card kind ride", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("takes a ride by its name and hands the model everything get_ride would", async () => {
+    const RIDE_ID = "33333333-3333-4333-8333-333333333333";
+    jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+      attractions: [
+        { id: RIDE_ID, name: "Taron", park: { name: "Phantasialand" } },
+      ],
+    });
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE_ID,
+      name: "Taron",
+      park: null,
+      status: "OPERATING",
+      queues: [{ type: "STANDBY", waitMinutes: 25 }],
+      facts: { hasSingleRider: true, minHeightCm: null },
+      bestVisitTimesToday: [{ from: "17:00", to: "17:30" }],
+      predictionAccuracy: { mae: 4 },
+    });
+    const result = await run(
+      "show_card",
+      { kind: "ride", ride: "Taron" },
+      new Map<unknown, unknown>(),
+    );
+    expect(result.action).toMatchObject({
+      type: "card",
+      card: { kind: "ride", name: "Taron", waitMinutes: 25, singleRider: true },
+    });
+    expect(result.json.ride.bestVisitTimesToday).toEqual([
+      { from: "17:00", to: "17:30" },
+    ]);
+    expect(result.json.ride.unknownFacts).toEqual(["minHeightCm"]);
+    expect(result.json.ride).not.toHaveProperty("predictionAccuracy");
+  });
+});
+
 describe("get_best_days", () => {
   it("ranks only rated open days, an unknown one never the quietest", async () => {
     const day = (date: string, crowdLevel: string, status = "OPERATING") => ({

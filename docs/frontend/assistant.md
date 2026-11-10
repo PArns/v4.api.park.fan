@@ -348,7 +348,9 @@ one or exactly one whose name is the reference ("europa park" meets "Europa-Park
 candidates otherwise. In the chats of 3 to 9 November, 3 of 5 `search_parks` calls served only to
 find an id for the next tool. `show_card` kind `park` returns `get_park_live`'s whole summary as
 `live` beside what the card shows (`parkLiveSummary`): the two were called together for one park
-in 5 of 7 answers.
+in 5 of 7 answers. Kind `ride` likewise takes a ride by name with its park and returns everything
+`get_ride` does as `ride` (`rideDetails`, which both share), so a ride card needs no lookup first
+and none after.
 
 `show_card` kind `rides` takes the same `type` and `shelter` (each row then carries its
 `indoorOutdoor`), reports `typeUnknown` and the shelter counts too, and hands the model the

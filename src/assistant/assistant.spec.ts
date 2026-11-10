@@ -275,6 +275,10 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("Never say what you will not or cannot do");
     expect(SYSTEM_PROMPT).toContain("from get_park_live's funFacts");
     expect(SYSTEM_PROMPT).toContain("neutrally, and take no side");
+    expect(SYSTEM_PROMPT).toContain("How a ride works");
+    expect(SYSTEM_PROMPT).toContain(
+      "kind ride (by name with its park, too) everything get_ride does",
+    );
     expect(SYSTEM_PROMPT).not.toContain("Name a park and I'll prove it");
   });
 
