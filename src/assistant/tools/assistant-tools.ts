@@ -19,7 +19,10 @@ import { CalendarService } from "../../parks/services/calendar.service";
 import { parseDateRange } from "../../common/utils/date-parsing.util";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
-import { BestDaysService } from "../../parks/services/best-days.service";
+import {
+  BEST_DAYS_WINDOW,
+  BestDaysService,
+} from "../../parks/services/best-days.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -59,6 +62,7 @@ import {
   isSheltered,
   LEFT_OUT_NAMES_LIMIT,
   partyTooShort,
+  riderFits,
   RIDE_RANKINGS,
   RIDE_TYPE_FILTERS,
   SHELTER_FILTERS,
@@ -99,6 +103,7 @@ export const CHAT_END_REASONS = [
 import {
   ActionOutcome,
   calendarCard,
+  cardDay,
   clockTime,
   parkInstant,
   tilesCard,
@@ -394,21 +399,25 @@ async function plannedDay(
   return { park, day };
 }
 
-/** Each ride's hand-decided `indoorOutdoor`, absent where nobody decided it. */
-async function indoorOutdoorOf(
+/** The rides' rows by id, one query, for the filters that read curated facts. */
+async function attractionsById(
   ctx: AssistantToolContext,
   rides: ReadonlyArray<{ id: string }>,
-): Promise<Map<string, IndoorOutdoor>> {
+): Promise<Map<string, Attraction>> {
   if (rides.length === 0) return new Map();
   const found = await ctx
     .get(DataSource)
     .getRepository(Attraction)
-    .find({
-      where: { id: In(rides.map((ride) => ride.id)) },
-      select: { id: true, indoorOutdoor: true },
-    });
+    .find({ where: { id: In(rides.map((ride) => ride.id)) } });
+  return new Map(found.map((ride) => [ride.id, ride]));
+}
+
+/** Each ride's hand-decided `indoorOutdoor`, absent where nobody decided it. */
+function shelterMap(
+  rows: ReadonlyMap<string, Attraction>,
+): Map<string, IndoorOutdoor> {
   return new Map(
-    found.flatMap((ride) =>
+    [...rows.values()].flatMap((ride) =>
       ride.indoorOutdoor ? [[ride.id, ride.indoorOutdoor] as const] : [],
     ),
   );
@@ -418,6 +427,9 @@ async function indoorOutdoorOf(
 function riddenMark(ctx: AssistantToolContext, rideId: string) {
   return ctx.ridden?.has(rideId) ? { ridden: true as const } : {};
 }
+
+/** Enough for every waiting ride of the biggest park, so a list can be cut at either end. */
+const ALL_WAITING_RIDES = 500;
 
 /** How many of the longest waits a park's live summary carries. */
 const LIVE_LONGEST_WAITS = 8;
@@ -442,6 +454,28 @@ async function parkLiveSummary(
     ...rest
   } = live;
   if (rest.retiredAt === null) delete rest.retiredAt;
+  // The day's rating beside the live one: before opening the live level is null, and "how full
+  // will it get today?" is the calendar's to answer, labelled as such.
+  const entity =
+    typeof rest.id === "string"
+      ? await ctx
+          .get(ParksService)
+          .findById(rest.id)
+          .catch(() => null)
+      : null;
+  if (entity) {
+    const today = getCurrentDateInTimezone(entity.timezone);
+    const day = await calendarDays(ctx, entity, [today])
+      .then(({ days }) => days.get(today))
+      .catch(() => undefined);
+    if (day) {
+      rest.todayExpected = {
+        crowdLevel: day.crowdLevel,
+        expectedPeakWaitMinutes: day.headlinerForecast?.avgWait,
+        note: "the calendar's rating of the whole day, not the live level",
+      };
+    }
+  }
   // English stands in for an untranslated locale: the model retells it in the chat's language.
   const facts = funFacts as FunFacts | null;
   const told = facts?.[ctx.locale as FunFactLocale] ?? facts?.en;
@@ -602,6 +636,9 @@ const parkRef = z
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
+/** A rider's height in cm, as the planner and the height filters take it. */
+const riderHeight = z.number().int().min(50).max(250);
+
 /** How far back `get_park_history` reads a single day: a year, as its year-back view. */
 const HISTORY_DAYS = 366;
 
@@ -655,12 +692,34 @@ async function dayCard(
       { type: "card", card },
       {
         shown: `${card.days.length} days of ${card.park} from ${first}, ${open} open`,
+        // The days as the card shows them, so the sentence after it can name a pick; UNKNOWN
+        // is a day whose hours are not published yet, never a closure.
+        days: card.days.map(({ date, status, crowdLevel, holiday }) => ({
+          date,
+          status,
+          crowdLevel,
+          ...(holiday && { holiday }),
+        })),
       },
     );
   }
   const card = tilesCard(forecast, first, summary);
   const { url: _url, ...shown } = card;
-  return new ActionOutcome({ type: "card", card }, { shown });
+  const tileDay = forecast.days.find((day) => day.date === first);
+  const status = tileDay
+    ? cardDay(tileDay, forecast.scheduleCoverage, forecast.park.timezone).status
+    : "UNKNOWN";
+  return new ActionOutcome(
+    { type: "card", card },
+    {
+      shown,
+      // The tiles carry no status: a closed day or one without published hours says so here.
+      status,
+      ...(status === "UNKNOWN" && {
+        why: "the park has not published that day's hours; the tiles show park.fan's estimate",
+      }),
+    },
+  );
 }
 
 /**
@@ -730,8 +789,15 @@ export function favoritesSummary(found: FavoritesResponseDto) {
       id: park.id,
       name: park.name,
       status: park.status,
-      crowdLevel: park.analytics?.crowdLevel ?? null,
-      avgWaitMinutes: park.analytics?.avgWaitTime ?? null,
+      // A closed park's live level sits at its floor and is no reading at all.
+      crowdLevel:
+        park.status === "OPERATING"
+          ? (park.analytics?.crowdLevel ?? null)
+          : null,
+      avgWaitMinutes:
+        park.status === "OPERATING"
+          ? (park.analytics?.avgWaitTime ?? null)
+          : null,
     })),
     rides: found.attractions.map((ride) => ({
       id: ride.id,
@@ -1095,6 +1161,23 @@ async function firstOpenDay(
     : opening.date.toISOString().slice(0, 10);
 }
 
+/**
+ * The last day the park has published opening hours for (park-local YYYY-MM-DD), or null when
+ * it publishes none: past it a day's status is the calendar's estimate.
+ */
+async function publishedUntil(
+  ctx: AssistantToolContext,
+  park: Park,
+): Promise<string | null> {
+  // A failed lookup reads as "not published": the day is then an estimate, never a fact.
+  const range = await Promise.resolve()
+    .then(() =>
+      ctx.get(ParksService).getOperatingDateRange(park.id, park.timezone),
+    )
+    .catch(() => null);
+  return range?.maxDate ?? null;
+}
+
 /** How far ahead `compare_dates` reads a day: the yearly forecast's reach. */
 const COMPARE_DATES_AHEAD = 365;
 
@@ -1215,14 +1298,16 @@ export const ASSISTANT_TOOLS = [
       'coaster" or "coasters in Germany" use compare_rides.',
     input: z.object({
       query: z.string().min(2).max(100).describe('Ride name, e.g. "taron"'),
-      parkId: z
-        .string()
-        .uuid()
-        .optional()
-        .describe("Only rides of this park (id from search_parks)"),
+      park: parkRef.optional().describe("Only rides of this park"),
     }),
-    run: ({ query, parkId }, ctx) =>
-      findAttractionsTool.handler({ query, parkId, limit: 5 }, mcp(ctx)),
+    run: async ({ query, park }, ctx) => {
+      const found = park ? await resolvePark(mcp(ctx), park) : null;
+      if (found && isAmbiguous(found)) return found;
+      return findAttractionsTool.handler(
+        { query, parkId: found?.id, limit: 5 },
+        mcp(ctx),
+      );
+    },
   }),
   tool({
     name: "find_restaurants",
@@ -1243,6 +1328,8 @@ export const ASSISTANT_TOOLS = [
       return {
         ...found,
         restaurants: found.restaurants.slice(0, MAX_RESTAURANTS).map((r) => ({
+          // The id is what set_favorite takes.
+          id: r.id,
           name: r.name,
           status: r.status,
           ...(r.cuisine && { cuisine: r.cuisine }),
@@ -1455,7 +1542,7 @@ export const ASSISTANT_TOOLS = [
       order: z.enum(["desc", "asc"]).default("desc"),
       type: z.enum(RIDE_TYPE_FILTERS).optional(),
       shelter: z.enum(SHELTER_FILTERS).optional(),
-      riderHeightCm: z.number().int().min(50).max(250).optional(),
+      riderHeightCm: riderHeight.optional(),
       limit: z.number().int().min(1).max(15).default(5),
     }),
     run: async (
@@ -1624,10 +1711,19 @@ export const ASSISTANT_TOOLS = [
       "Rides a maintenance or works window shuts that day are not in rides but in " +
       "ridesInMaintenance, each with its window. Each ride carries its minimumHeightCm where " +
       "known; with the party's height in the plan, tooShortForParty marks the rides its " +
-      "shortest rider may not take and plannedTooShort names those already planned. Today by " +
-      "default.",
-    input: z.object({ park: parkRef, date: planDate.optional() }),
-    run: async ({ park: reference, date }, ctx) => {
+      "shortest rider may not take and plannedTooShort names those already planned (riderHeightCm " +
+      "for a party the plan does not hold yet). hoursPublished false: the park has not published " +
+      "that day's hours, so status and hours are park.fan's estimate (statusWhy). Today by default.",
+    input: z.object({
+      park: parkRef,
+      date: planDate.optional(),
+      riderHeightCm: riderHeight
+        .optional()
+        .describe(
+          "The party's shortest rider, when the plan does not hold it yet",
+        ),
+    }),
+    run: async ({ park: reference, date, riderHeightCm }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const park = await ctx.get(ParksService).findById(found.id);
@@ -1637,19 +1733,21 @@ export const ASSISTANT_TOOLS = [
       const day = date ?? getCurrentDateInTimezone(tz);
       const planDays = ctx.get(PlanDayService);
       // A failed lookup costs the list, never the day.
-      const [plan, inMaintenance] = await Promise.all([
+      const [plan, inMaintenance, until] = await Promise.all([
         planDays.buildPlanDay(park, day),
         Promise.resolve()
           .then(() => planDays.ridesInMaintenance(park, day))
           .catch(() => []),
+        publishedUntil(ctx, park),
       ]);
+      const hoursPublished = until !== null && day <= until;
       const { openHour, closeHour, ...context } = plan.context;
       const currentHour =
         day === getCurrentDateInTimezone(tz)
           ? Number(formatInTimeZone(new Date(), tz, "H"))
           : null;
       const visitorDay = snapshotDay(ctx, park.slug, day);
-      const party = visitorDay?.prefs?.riderHeightCm;
+      const party = visitorDay?.prefs?.riderHeightCm ?? riderHeightCm;
       const tooShort = new Set(
         plan.rides.filter((ride) => partyTooShort(ride.minimumHeight, party)),
       );
@@ -1665,34 +1763,17 @@ export const ASSISTANT_TOOLS = [
         park: park.name,
         tier: plan.tier,
         ...context,
+        hoursPublished,
+        ...(!hoursPublished && {
+          statusWhy: until
+            ? `the park has published its hours up to ${until}; status and hours are park.fan's estimate`
+            : "the park publishes no opening hours; status and hours are park.fan's estimate",
+        }),
         opens: openHour !== null ? parkHourInstant(day, openHour, tz) : null,
         closes:
           openHour !== null && closeHour !== null
             ? parkHourInstant(day, unfoldedCloseHour(openHour, closeHour), tz)
             : null,
-        rides: plan.rides.map((ride) => {
-          const shortest = shortestHour(
-            bookableHours(ride.hours, plan.context, currentHour),
-          );
-          return {
-            id: ride.attractionId,
-            name: ride.attractionName,
-            ...(ride.land && { land: ride.land }),
-            ...(ride.isHeadliner && { headliner: true }),
-            ...(ride.downYesterday && { downYesterday: true }),
-            ...(ride.minimumHeight !== undefined && {
-              minimumHeightCm: ride.minimumHeight,
-            }),
-            ...(tooShort.has(ride) && { tooShortForParty: true }),
-            ...riddenMark(ctx, ride.attractionId),
-            ...rideOpeningOf(ride, plan),
-            predictedPeakWaitMinutes: ride.dayPeak,
-            shortestAt: shortest && {
-              at: parkHourInstant(day, shortest.hour, tz),
-              waitMinutes: shortest.wait,
-            },
-          };
-        }),
         ...(plan.ridesUnavailable && {
           ridesUnavailable: plan.ridesUnavailable,
         }),
@@ -1717,6 +1798,30 @@ export const ASSISTANT_TOOLS = [
             parkClockInstant(day, time, openHour, tz),
           ),
         })),
+        // Last, since it is the long list: a cut at the size limit takes rides, not the day.
+        rides: plan.rides.map((ride) => {
+          const shortest = shortestHour(
+            bookableHours(ride.hours, plan.context, currentHour),
+          );
+          return {
+            id: ride.attractionId,
+            name: ride.attractionName,
+            ...(ride.land && { land: ride.land }),
+            ...(ride.isHeadliner && { headliner: true }),
+            ...(ride.downYesterday && { downYesterday: true }),
+            ...(ride.minimumHeight !== undefined && {
+              minimumHeightCm: ride.minimumHeight,
+            }),
+            ...(tooShort.has(ride) && { tooShortForParty: true }),
+            ...riddenMark(ctx, ride.attractionId),
+            ...rideOpeningOf(ride, plan),
+            predictedPeakWaitMinutes: ride.dayPeak,
+            shortestAt: shortest && {
+              at: parkHourInstant(day, shortest.hour, tz),
+              waitMinutes: shortest.wait,
+            },
+          };
+        }),
       };
     },
   }),
@@ -1812,10 +1917,12 @@ export const ASSISTANT_TOOLS = [
     name: "get_best_days",
     status: "forecast",
     description:
-      "The 10 quietest rated open days of one park in the next 90 days (or a range you give), " +
+      "The 10 quietest rated open days of one park in the next 90 days (or a range inside them), " +
       "quietest first, and the typical crowd per weekday from history (dayOfWeek 0 = Sunday, " +
       "lower avgCrowdScore = quieter). Only the quietest ten, not a ranking of every day: a day " +
-      'missing from the list is not a day to avoid. Use for "when should I go".',
+      "missing from the list is not a day to avoid. Days the park is closed and days whose hours " +
+      'are not published yet are counted apart, never ranked. Use for "when should I go" in the ' +
+      "next three months; later days and particular days are compare_dates.",
     input: z.object({
       park: parkRef,
       from: z
@@ -1832,26 +1939,50 @@ export const ASSISTANT_TOOLS = [
     run: async ({ park: reference, from, to }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
-      const result = await ctx
-        .get(BestDaysService)
-        .getBestDays(found, from, to);
-      const open = result.days.filter((day) => day.crowdLevel !== "closed");
+      // The snapshot reaches 90 days: a later range came back empty and read as "closed".
+      const last = addIsoDays(
+        getCurrentDateInTimezone(found.timezone),
+        BEST_DAYS_WINDOW,
+      );
+      if ((from && from > last) || (to && to > last)) {
+        throw new McpToolError(
+          `get_best_days reads up to ${last}; for later days use compare_dates (up to a year ahead)`,
+        );
+      }
+      const [result, until] = await Promise.all([
+        ctx.get(BestDaysService).getBestDays(found, from, to),
+        publishedUntil(ctx, found),
+      ]);
+      // Past the published hours a status is the calendar's estimate: neither open nor closed.
+      const notPublished = result.days.filter(
+        (day) => day.status === "UNKNOWN" || !until || day.date > until,
+      );
+      const known = result.days.filter((day) => !notPublished.includes(day));
+      const open = known.filter((day) => day.status === "OPERATING");
       // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
       const rated = open.filter((day) => CROWD_ORDER.includes(day.crowdLevel));
-      const closedDays = result.days.length - open.length;
+      const closedDays = known.length - open.length;
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
         window: { from: result.meta.windowFrom, to: result.meta.windowTo },
+        hoursPublishedUntil: until,
         openDays: open.length,
         closedDays,
-        // A window the park is shut for gets its next opening, not just an empty list.
-        ...(open.length === 0 && {
-          nextOpenDay: await firstOpenDay(
-            ctx,
-            found.id,
-            addIsoDays(result.meta.windowTo, 1),
-          ),
+        ...(notPublished.length > 0 && {
+          hoursNotPublishedDays: notPublished.length,
+          hoursNotPublishedWhy: until
+            ? `the park has published its hours up to ${until}`
+            : "the park publishes no opening hours",
         }),
+        // A window the park is shut for gets its next opening, not just an empty list.
+        ...(open.length === 0 &&
+          known.length > 0 && {
+            nextOpenDay: await firstOpenDay(
+              ctx,
+              found.id,
+              addIsoDays(result.meta.windowTo, 1),
+            ),
+          }),
         unratedOpenDays: open.length - rated.length,
         tenQuietestOpenDays: rated
           .map((day) => ({
@@ -2091,9 +2222,6 @@ export const ASSISTANT_TOOLS = [
             return {
               ...base,
               status: "UNKNOWN",
-              why: hasOperatingSchedule
-                ? `the park has published its hours up to ${coverage.to}; this is park.fan's estimate`
-                : "the park publishes no opening hours; this is park.fan's estimate",
               estimatedStatus: compact.status,
             };
           }
@@ -2120,11 +2248,18 @@ export const ASSISTANT_TOOLS = [
         (row) => row.status === "OPERATING" && rank(row) >= 0,
       );
       const quietest = [...open].sort((a, b) => rank(a) - rank(b))[0];
+      const unpublished = rows.some((row) => row.status === "UNKNOWN");
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
-        hoursPublishedUntil: coverage.to,
-        days: rows,
+        hoursPublishedUntil: hasOperatingSchedule ? coverage.to : null,
+        // Once for every UNKNOWN day, not on each row: a month of rows stays under the size limit.
+        ...(unpublished && {
+          unknownDaysWhy: hasOperatingSchedule
+            ? `the park has published its hours up to ${coverage.to}; estimatedStatus is park.fan's estimate`
+            : "the park publishes no opening hours; estimatedStatus is park.fan's estimate",
+        }),
         quietestOpenDay: quietest?.date ?? null,
+        days: rows,
       };
     },
   }),
@@ -2342,6 +2477,11 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "For kind rides: covered (indoors or a roofed queue) or indoor (the ride too)",
         ),
+      riderHeightCm: riderHeight
+        .optional()
+        .describe(
+          "For kind rides: only rides someone this tall may ride; each row carries its limits",
+        ),
       limit: z.number().int().min(1).max(10).default(6),
       rideId: z.string().uuid().optional().describe("For kind ride: ride id"),
     }),
@@ -2354,6 +2494,7 @@ export const ASSISTANT_TOOLS = [
         order,
         type,
         shelter,
+        riderHeightCm,
         limit,
         from,
         days,
@@ -2380,7 +2521,13 @@ export const ASSISTANT_TOOLS = [
           { type: "card", card },
           {
             shown: `${card.shows.length} shows of ${card.park} on ${card.date}`,
+            shows: card.shows.map(({ name, status, times }) => ({
+              name,
+              status,
+              times,
+            })),
             withoutShowtimes: found.withoutShowtimes,
+            withoutShowtimesNames: found.withoutShowtimesNames,
           },
         );
       }
@@ -2401,6 +2548,15 @@ export const ASSISTANT_TOOLS = [
           { type: "card", card },
           {
             shown: `${card.restaurants.length} of ${found.matched} places to eat at ${found.park}`,
+            // With their ids, which set_favorite takes.
+            restaurants: found.restaurants
+              .slice(0, MAX_RESTAURANT_CARD)
+              .map(({ id, name, cuisine, land }) => ({
+                id,
+                name,
+                ...(cuisine && { cuisine }),
+                ...(land && { land }),
+              })),
           },
         );
       }
@@ -2467,11 +2623,11 @@ export const ASSISTANT_TOOLS = [
       }
       if (kind === "rides") {
         if (!park) throw new McpToolError("kind rides needs park");
-        // Every operating ride with a posted wait, longest first, so both ends can be cut.
-        // With a type every waiting ride, so a coaster further down the list is not cut.
+        // Every operating ride with a posted wait, longest first, so both ends can be cut: with
+        // only the 30 longest, "shortest" at a big park was the shortest of the long ones.
         const live = (await parkNow(ctx, {
           park,
-          longestWaits: type || shelter ? 500 : 30,
+          longestWaits: ALL_WAITING_RIDES,
         })) as ParkSummary;
         if ("ambiguous" in live) return live;
         let all = live.rides?.longestWaits ?? [];
@@ -2497,10 +2653,13 @@ export const ASSISTANT_TOOLS = [
           all = all.filter(ofType);
           down = down.filter(ofType);
         }
-        // Read only for a rain question: one query for every candidate, before any is cut.
-        const shelterOf = shelter
-          ? await indoorOutdoorOf(ctx, [...all, ...down])
-          : null;
+        // Read only for a rain or height question: one query for every candidate, before any
+        // is cut.
+        const rows =
+          shelter || riderHeightCm !== undefined
+            ? await attractionsById(ctx, [...all, ...down])
+            : null;
+        const shelterOf = shelter && rows ? shelterMap(rows) : null;
         const candidates = [...all, ...down];
         const coverage =
           shelter && shelterOf
@@ -2517,6 +2676,42 @@ export const ASSISTANT_TOOLS = [
             isSheltered(shelterOf.get(ride.id), shelter);
           all = all.filter(dry);
           down = down.filter(dry);
+        }
+        const heightOf = (ride: { id: string }) => {
+          const row = rows?.get(ride.id);
+          if (!row) return {};
+          const facts = resolveCuratedFacts(row);
+          return {
+            ...(facts.minimumHeight !== null && {
+              minimumHeightCm: facts.minimumHeight,
+            }),
+            ...(facts.maximumHeight !== null && {
+              maximumHeightCm: facts.maximumHeight,
+            }),
+          };
+        };
+        let heights: Record<string, unknown> | null = null;
+        if (riderHeightCm !== undefined) {
+          const unknown = [...all, ...down].filter(
+            (ride) => heightOf(ride).minimumHeightCm === undefined,
+          );
+          const fits = (ride: { id: string }) =>
+            riderFits(heightOf(ride), riderHeightCm);
+          const tooShort = [...all, ...down].filter(
+            (ride) => !unknown.includes(ride) && !fits(ride),
+          );
+          heights = {
+            heightUnknown: unknown.length,
+            heightUnknownRides: unknown
+              .slice(0, LEFT_OUT_NAMES_LIMIT)
+              .map((ride) => ride.name),
+            notAllowed: tooShort.length,
+            notAllowedRides: tooShort
+              .slice(0, LEFT_OUT_NAMES_LIMIT)
+              .map((ride) => ({ name: ride.name, ...heightOf(ride) })),
+          };
+          all = all.filter(fits);
+          down = down.filter(fits);
         }
         const waiting = (order === "shortest" ? [...all].reverse() : all).slice(
           0,
@@ -2578,9 +2773,11 @@ export const ASSISTANT_TOOLS = [
               const types = typesOf(ride);
               const dryness = shelterOf?.get(ride.id);
               return {
+                id: ride.id,
                 name: ride.name,
                 status: ride.status,
                 waitMinutes: ride.waitMinutes,
+                ...heightOf(ride),
                 ...(types.length > 0 && { types }),
                 ...(dryness && { indoorOutdoor: dryness }),
                 ...riddenMark(ctx, ride.id),
@@ -2588,6 +2785,13 @@ export const ASSISTANT_TOOLS = [
             }),
             ...(type && { typeUnknown, typeUnknownRides }),
             ...coverage,
+            ...heights,
+            // An empty card of a closed park says why, so it never reads as "no such rides".
+            ...(live.status !== "OPERATING" && {
+              parkStatus: live.status ?? null,
+              why: "the park is not operating now, so no ride has a wait",
+              nextOpening: live.nextSchedule ?? null,
+            }),
           },
         );
       }
@@ -2779,6 +2983,11 @@ export const ASSISTANT_TOOLS = [
         .min(1)
         .max(10)
         .describe("Ride ids, at most ten"),
+      riderHeightCm: riderHeight
+        .optional()
+        .describe(
+          "The party's shortest rider, when the plan does not hold it yet",
+        ),
       despiteHeight: z
         .boolean()
         .optional()
@@ -2786,11 +2995,16 @@ export const ASSISTANT_TOOLS = [
           "Add rides the party's shortest rider is too short for (an adult rides alone)",
         ),
     }),
-    run: async ({ park: reference, date, rideIds, despiteHeight }, ctx) => {
+    run: async (
+      { park: reference, date, rideIds, riderHeightCm, despiteHeight },
+      ctx,
+    ) => {
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
       const found = await parkRides(mcp(ctx), park.slug, rideIds, date);
-      const party = snapshotDay(ctx, park.slug, date)?.prefs?.riderHeightCm;
+      const party =
+        snapshotDay(ctx, park.slug, date)?.prefs?.riderHeightCm ??
+        riderHeightCm;
       const tooShort = (ride: (typeof found)[number]) =>
         !despiteHeight && partyTooShort(ride.minimumHeightCm, party);
       // The planner refuses a ride in maintenance on that day by every other way in, so this
@@ -2838,8 +3052,9 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
-      "shopping, a photo stop or a meeting point. A show's start time " +
-      "comes from get_shows, a food stop from find_restaurants.",
+      "shopping, a photo stop or a meeting point. A show's start time comes from get_shows " +
+      "for today and get_park_day's shows for another day (projected, so say so); a food stop " +
+      "from find_restaurants. A show with a listed time goes in with plan_add_show instead.",
     input: z.object({
       park: parkRef,
       date: planDate,

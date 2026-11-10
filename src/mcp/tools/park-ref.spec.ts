@@ -44,6 +44,17 @@ describe("resolvePark by name", () => {
     ).resolves.toMatchObject({ id: "b" });
   });
 
+  it("knows a park by its name and city", async () => {
+    const hits = [
+      { ...park("a", "Disneyland Park"), city: "Anaheim" },
+      { ...park("b", "Disneyland Park"), city: "Paris" },
+      { ...park("c", "Walt Disney Studios Park"), city: "Paris" },
+    ];
+    await expect(
+      resolvePark(context(hits), "Disneyland Paris"),
+    ).resolves.toMatchObject({ id: "b" });
+  });
+
   it("hands several equal candidates back to pick from", async () => {
     const hits = [park("a", "Legoland"), park("b", "Legoland")];
     await expect(resolvePark(context(hits), "Legoland")).resolves.toMatchObject(

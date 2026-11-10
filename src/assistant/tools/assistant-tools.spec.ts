@@ -35,8 +35,9 @@ describe("get_post", () => {
 
 describe("get_best_days", () => {
   it("ranks only rated open days, an unknown one never the quietest", async () => {
-    const day = (date: string, crowdLevel: string) => ({
+    const day = (date: string, crowdLevel: string, status = "OPERATING") => ({
       date,
+      status: crowdLevel === "closed" ? "CLOSED" : status,
       crowdLevel,
       isHoliday: false,
       isSchoolVacation: false,
@@ -48,6 +49,11 @@ describe("get_best_days", () => {
           findById: jest.fn(async () => ({
             id: "11111111-1111-4111-8111-111111111111",
             name: "Phantasialand",
+            timezone: "Europe/Berlin",
+          })),
+          getOperatingDateRange: jest.fn(async () => ({
+            minDate: "2026-01-01",
+            maxDate: "2026-11-09",
           })),
         },
       ],
@@ -61,6 +67,8 @@ describe("get_best_days", () => {
               day("2026-11-06", "high"),
               day("2026-11-07", "closed"),
               day("2026-11-08", "low"),
+              // Past the published hours: never ranked, counted apart.
+              day("2026-11-10", "very_low"),
             ],
           })),
         },
@@ -74,10 +82,40 @@ describe("get_best_days", () => {
     );
     const json = JSON.parse(result.content);
     expect(json.openDays).toBe(3);
+    expect(json.closedDays).toBe(1);
     expect(json.unratedOpenDays).toBe(1);
+    expect(json.hoursNotPublishedDays).toBe(1);
+    expect(json.hoursNotPublishedWhy).toContain("2026-11-09");
     expect(
       json.tenQuietestOpenDays.map((d: { date: string }) => d.date),
     ).toEqual(["2026-11-08", "2026-11-06"]);
+  });
+
+  it("refuses a range past its 90 days and points at compare_dates", async () => {
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            id: "11111111-1111-4111-8111-111111111111",
+            name: "Phantasialand",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+    ]);
+    const result = await runAssistantTool(
+      "get_best_days",
+      {
+        park: "11111111-1111-4111-8111-111111111111",
+        from: "2099-05-01",
+        to: "2099-05-31",
+      },
+      { get: <T>(token: unknown) => providers.get(token) as T, locale: "en" },
+      jest.fn(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("compare_dates");
   });
 });
 import {
@@ -451,16 +489,22 @@ describe("find_restaurants", () => {
     );
     expect(json).toMatchObject({ park: "Phantasialand", total: 3, matched: 1 });
     expect(json.restaurants).toEqual([
-      { name: "Eiscafé Rutmors", status: "OPERATING", land: "Rookburgh" },
+      {
+        id: "r1",
+        name: "Eiscafé Rutmors",
+        status: "OPERATING",
+        land: "Rookburgh",
+      },
     ]);
     const all = await run("find_restaurants", { park: PARK_ID }, providers);
     // No reading of its own: the payload's status is a guess from the park's, not passed on.
-    expect(all.json.restaurants[1]).toEqual({
+    expect(all.json.restaurants[1]).toMatchObject({
       name: "Wok",
       status: null,
       cuisine: "Asian",
     });
     expect(all.json.restaurants[2]).toEqual({
+      id: "r3",
       name: "Ice Cream Stand",
       status: null,
       requiresReservation: true,
@@ -804,18 +848,21 @@ describe("show_card kind rides with a type", () => {
     // The model reads the rows, with their types, so it can name its pick after the card.
     expect(json.rows).toEqual([
       {
+        id: "c",
         name: "Raik",
         status: "OPERATING",
         waitMinutes: 5,
         types: ["boomerang"],
       },
       {
+        id: "a",
         name: "Taron",
         status: "OPERATING",
         waitMinutes: 45,
         types: ["launch-coaster"],
       },
       {
+        id: "d",
         name: "Black Mamba",
         status: "DOWN",
         waitMinutes: null,
@@ -836,6 +883,7 @@ describe("show_card kind rides with a type", () => {
     expect(dark.json.shown).toBe("1 dark rides of Phantasialand");
     expect(dark.json.rows).toEqual([
       {
+        id: "c",
         name: "Raik",
         status: "OPERATING",
         waitMinutes: 5,
@@ -892,9 +940,78 @@ describe("rides the visitor marked as ridden", () => {
       jest.fn(),
     );
     expect(JSON.parse(result.content).rows).toEqual([
-      { name: "Taron", status: "OPERATING", waitMinutes: 45, ridden: true },
-      { name: "Raik", status: "OPERATING", waitMinutes: 5 },
+      {
+        id: "a",
+        name: "Taron",
+        status: "OPERATING",
+        waitMinutes: 45,
+        ridden: true,
+      },
+      { id: "c", name: "Raik", status: "OPERATING", waitMinutes: 5 },
     ]);
+  });
+});
+
+describe("show_card kind rides for a child", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const providers = (rows: object[]) =>
+    new Map<unknown, unknown>([
+      [RideProfileService, profiles({})],
+      [
+        DataSource,
+        { getRepository: () => ({ find: jest.fn(async () => rows) }) },
+      ],
+    ]);
+
+  it("keeps the rides a child may ride, the others named with their limits", async () => {
+    jest.spyOn(getParkTool, "handler").mockResolvedValue({
+      name: "Phantasialand",
+      status: "OPERATING",
+      rides: {
+        longestWaits: [
+          { id: "a", name: "Taron", waitMinutes: 45 },
+          { id: "b", name: "Wellenflug", waitMinutes: 10 },
+          { id: "c", name: "Raik", waitMinutes: 5 },
+        ],
+        down: [],
+      },
+    });
+    const { json } = await run(
+      "show_card",
+      { kind: "rides", park: PARK_ID, riderHeightCm: 110 },
+      providers([
+        { id: "a", name: "Taron", minimumHeight: 130 },
+        { id: "b", name: "Wellenflug", minimumHeight: 100 },
+        { id: "c", name: "Raik", minimumHeight: null },
+      ]),
+    );
+    expect(json.rows).toEqual([
+      expect.objectContaining({ name: "Wellenflug", minimumHeightCm: 100 }),
+    ]);
+    expect(json.notAllowedRides).toEqual([
+      { name: "Taron", minimumHeightCm: 130 },
+    ]);
+    expect(json.heightUnknownRides).toEqual(["Raik"]);
+  });
+
+  it("says why the card of a closed park is empty", async () => {
+    jest.spyOn(getParkTool, "handler").mockResolvedValue({
+      name: "Phantasialand",
+      status: "CLOSED",
+      rides: { longestWaits: [], down: [] },
+      nextSchedule: { date: "2026-11-14" },
+    });
+    const { json } = await run(
+      "show_card",
+      { kind: "rides", park: PARK_ID, shelter: "covered" },
+      providers([]),
+    );
+    expect(json).toMatchObject({
+      parkStatus: "CLOSED",
+      why: expect.stringContaining("not operating"),
+      nextOpening: { date: "2026-11-14" },
+    });
   });
 });
 
@@ -1204,7 +1321,7 @@ describe("compare_dates", () => {
       hoursPublished: false,
       estimatedStatus: "CLOSED",
     });
-    expect(json.days[0].why).toContain(published);
+    expect(json.unknownDaysWhy).toContain(published);
   });
 
   it("reads each month once, not the months between", async () => {
@@ -1758,6 +1875,14 @@ describe("planner tools", () => {
             riderHeightCm: 100,
           },
         ],
+      });
+    });
+
+    it("takes the party's height from the call when the plan has none yet", async () => {
+      const result = await add([TARON], planner, { riderHeightCm: 100 });
+      expect(result.action).toBeUndefined();
+      expect(JSON.parse(result.content)).toMatchObject({
+        notAdded: [{ name: "Taron", reason: "too_short" }],
       });
     });
 
@@ -2336,6 +2461,28 @@ describe("get_ride › today / get_park_day", () => {
     expect(json.plannedTooShort).toEqual([
       { name: "Taron", minimumHeightCm: 130 },
     ]);
+  });
+
+  it("labels a day past the published hours as park.fan's estimate", async () => {
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      new Map<unknown, unknown>([
+        ...providers(),
+        [
+          ParksService,
+          {
+            findById: jest.fn(async () => ({ ...park })),
+            getOperatingDateRange: jest.fn(async () => ({
+              minDate: "2026-03-01",
+              maxDate: "2026-11-01",
+            })),
+          },
+        ],
+      ]),
+    );
+    expect(json.hoursPublished).toBe(false);
+    expect(json.statusWhy).toContain("2026-11-01");
   });
 
   it("keeps the day when the maintenance lookup fails", async () => {
