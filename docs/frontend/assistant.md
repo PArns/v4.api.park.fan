@@ -120,7 +120,8 @@ instead of wondering where it came from. A sexual remark gets no innuendo or pun
 back to parks. Version 28: with a party's height Parky never recommends or plans a ride its
 shortest rider is under, names such rides with their minimum, and says a minimum is not known
 rather than that a ride is fine. Version 29: another day than today is judged only from a lookup
-for that day, and a closed park gets no crowd but the time it opens next.
+for that day, and a closed park gets no crowd but the time it opens next. Version 30: a rain question
+goes to the `shelter` filter, and a thin list is said to be incomplete.
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -257,7 +258,12 @@ the frontend glossary's `coasters` category); upstream's `attractionType` is emp
 glossary's `attractions` terms the same way (`isRideOfType`). There is no `show` filter: three
 profiles carry `live-show`, and shows are their own records (`get_shows`).
 Rides with no profiled type are counted apart (`typeUnknown`), never ranked as "not a coaster".
-`show_card` kind `rides` takes the same `type`, reports `typeUnknown` too, and hands the model the
+`shelter` keeps only the rides that keep you dry in the rain: `covered` (the editors' `indoorOutdoor`
+is `indoor` or `covered_queue`, the frontend's „Überdacht") or `indoor`. Rides nobody decided are
+counted apart as `shelterUnknown`, never as outdoor, and under half known
+(`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
+`show_card` kind `rides` takes the same `type` and `shelter` (each row then carries its
+`indoorOutdoor`), reports `typeUnknown` and the shelter counts too, and hands the model the
 card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where known) besides the
 `shown` line, so the sentence after the card can name a ride; kind `parks` hands it its rows
 without their links. With `riderHeightCm` it keeps only rides whose known minimum the
