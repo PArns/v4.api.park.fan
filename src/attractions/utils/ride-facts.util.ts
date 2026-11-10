@@ -245,11 +245,31 @@ export interface RideComparison {
   withoutValue: number;
   /** With a rider height: rides left out because their minimum height is unknown. */
   heightUnknown?: number;
+  /** The first {@link HEIGHT_NAMES_LIMIT} of them by name, so an answer can say which. */
+  heightUnknownRides?: string[];
   /** With a rider height: rides the rider is too small or too tall for. */
   notAllowed?: number;
+  /** The first {@link HEIGHT_NAMES_LIMIT} of them with their limits, so none is recommended. */
+  notAllowedRides?: RideOutOfReach[];
   /** With a type: rides left out because park.fan does not know their type. */
   typeUnknown?: number;
 }
+
+/** A ride a rider may not take, with the limit that rules it out. */
+export interface RideOutOfReach {
+  name: string;
+  park?: string;
+  minimumHeightCm: number;
+  maximumHeightCm?: number;
+  heightUnit?: "in";
+}
+
+/**
+ * How many rides a height filter names among those it left out. A count alone
+ * read as "the height is unknown" and got the rides recommended to a child too
+ * small for them.
+ */
+export const HEIGHT_NAMES_LIMIT = 20;
 
 /**
  * A park's rides ranked by one fact, highest first unless `order` is "asc".
@@ -278,21 +298,18 @@ export function compareRides(
     ? all.filter((ride) => isRideOfType(ride.types ?? [], type))
     : all;
   const rider = params.riderHeightCm;
-  let heightUnknown = 0;
-  let notAllowed = 0;
+  const heightUnknown: ComparedRide[] = [];
+  const notAllowed: ComparedRide[] = [];
   const allowed =
     rider === undefined
       ? rides
       : rides.filter((ride) => {
           if (ride.minimumHeightCm === undefined) {
-            heightUnknown++;
+            heightUnknown.push(ride);
             return false;
           }
-          const fits =
-            ride.minimumHeightCm <= rider &&
-            (ride.maximumHeightCm === undefined ||
-              ride.maximumHeightCm >= rider);
-          if (!fits) notAllowed++;
+          const fits = riderFits(ride, rider);
+          if (!fits) notAllowed.push(ride);
           return fits;
         });
 
@@ -309,7 +326,59 @@ export function compareRides(
     rides: ranked.slice(0, params.limit),
     ranked: ranked.length,
     withoutValue: allowed.length - withValue.length,
-    ...(rider !== undefined && { heightUnknown, notAllowed }),
+    ...(rider !== undefined && {
+      heightUnknown: heightUnknown.length,
+      heightUnknownRides: heightUnknown
+        .slice(0, HEIGHT_NAMES_LIMIT)
+        .map((ride) => ride.name),
+      notAllowed: notAllowed.length,
+      notAllowedRides: notAllowed.slice(0, HEIGHT_NAMES_LIMIT).map(outOfReach),
+    }),
     ...(type && { typeUnknown }),
+  };
+}
+
+/**
+ * Whether a rider of `riderHeightCm` may take a ride: its minimum must be known
+ * and met, and a maximum, where there is one, not exceeded.
+ */
+export function riderFits(
+  ride: Pick<ComparedRide, "minimumHeightCm" | "maximumHeightCm">,
+  riderHeightCm: number,
+): boolean {
+  return (
+    ride.minimumHeightCm !== undefined &&
+    ride.minimumHeightCm <= riderHeightCm &&
+    (ride.maximumHeightCm === undefined ||
+      ride.maximumHeightCm >= riderHeightCm)
+  );
+}
+
+/**
+ * Whether a party's shortest rider is under a ride's known minimum. Only the
+ * minimum counts, as in the trip planner's own flag: the party's height names
+ * its shortest rider, and a maximum would flag a kiddie ride for the child it
+ * was built for.
+ */
+export function partyTooShort(
+  minimumHeightCm: number | undefined,
+  partyHeightCm: number | undefined,
+): boolean {
+  return (
+    minimumHeightCm !== undefined &&
+    partyHeightCm !== undefined &&
+    partyHeightCm < minimumHeightCm
+  );
+}
+
+function outOfReach(ride: ComparedRide): RideOutOfReach {
+  return {
+    name: ride.name,
+    ...(ride.park && { park: ride.park }),
+    minimumHeightCm: ride.minimumHeightCm as number,
+    ...(ride.maximumHeightCm !== undefined && {
+      maximumHeightCm: ride.maximumHeightCm,
+    }),
+    ...(ride.heightUnit && { heightUnit: ride.heightUnit }),
   };
 }

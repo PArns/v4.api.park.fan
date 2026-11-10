@@ -11,6 +11,7 @@ import {
   worksPeriodOn,
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
 
 /**
@@ -540,7 +541,8 @@ export async function planPark(ctx: McpToolContext, reference: string) {
 
 /**
  * The rides of one park by id, in the order asked, refusing ids of other parks. With a park-local
- * `date`, each ride also carries the maintenance or works window that shuts it that day.
+ * `date`, each ride also carries the maintenance or works window that shuts it that day. The
+ * minimum rider height comes along where one is known.
  */
 export async function parkRides(
   ctx: McpToolContext,
@@ -548,7 +550,12 @@ export async function parkRides(
   ids: string[],
   date?: string,
 ): Promise<
-  Array<{ slug: string; name: string; maintenance: WorksPeriod | null }>
+  Array<{
+    slug: string;
+    name: string;
+    maintenance: WorksPeriod | null;
+    minimumHeightCm?: number;
+  }>
 > {
   const rides = await ctx
     .get(DataSource)
@@ -563,6 +570,7 @@ export async function parkRides(
     if (!ride || ride.park?.slug !== parkSlug) {
       throw new McpToolError(`Ride ${id} is not in this park; use find_rides`);
     }
+    const { minimumHeight } = resolveCuratedFacts(ride);
     return {
       slug: ride.slug,
       name: ride.name,
@@ -571,6 +579,7 @@ export async function parkRides(
         date && date >= getCurrentDateInTimezone(ride.park.timezone)
           ? worksPeriodOn(ride, date)
           : null,
+      ...(minimumHeight !== null && { minimumHeightCm: minimumHeight }),
     };
   });
 }
