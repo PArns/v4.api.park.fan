@@ -20,11 +20,15 @@ import { parseDateRange } from "../../common/utils/date-parsing.util";
 import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { attractionPageUrl, parkPageUrl } from "../../mcp/tools/links";
 import { BestDaysService } from "../../parks/services/best-days.service";
+import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
 import { ShowsService } from "../../shows/shows.service";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
-import { isCurrentlyInSeason } from "../../attractions/utils/curated-attraction-facts.util";
+import {
+  isCurrentlyInSeason,
+  resolveCuratedFacts,
+} from "../../attractions/utils/curated-attraction-facts.util";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
 import { PlanDayService } from "../../parks/services/plan-day.service";
@@ -53,6 +57,7 @@ import {
   comparedRides,
   isRideOfType,
   isSheltered,
+  LEFT_OUT_NAMES_LIMIT,
   partyTooShort,
   RIDE_RANKINGS,
   RIDE_TYPE_FILTERS,
@@ -349,8 +354,9 @@ const LIVE_CROWD_NOW = [
 
 /**
  * `get_park`'s summary, its crowd reading of this moment only while the park runs. Closed, the
- * reading sits at its floor, and Parky called a closed park "very low for the moment". Today's
- * average and peak so far stay: they describe hours the park was open.
+ * reading sits at its floor, and Parky called a closed park "very low for the moment". The level
+ * becomes null with the reason beside it; today's average and peak so far stay, since they
+ * describe hours the park was open.
  */
 async function parkNow(
   ctx: AssistantToolContext,
@@ -363,7 +369,14 @@ async function parkNow(
   if (live.status === "OPERATING" || !live.crowd) return live;
   const crowd = { ...(live.crowd as Record<string, unknown>) };
   for (const key of LIVE_CROWD_NOW) delete crowd[key];
-  return { ...live, crowd };
+  return {
+    ...live,
+    crowd: {
+      ...crowd,
+      level: null,
+      levelWhy: `no live crowd while the park is ${String(live.status ?? "not reporting").toLowerCase()}; it exists only while the park runs`,
+    },
+  };
 }
 
 /** A day of the visitor's plan, the park checked; the planner snapshot is the only source. */
@@ -472,13 +485,64 @@ async function showPerformance(
 
 /**
  * A park's own sub-pages `open_page` can open, by their English segment, which the widget respells
- * in the reader's language (`localizedPath` in the frontend). Only the calendar: the average-wait
- * and with-kids pages exist only for parks with enough data, a gate the frontend decides.
+ * in the reader's language (`localizedPath` in the frontend).
  */
-const PARK_SECTIONS = ["calendar"] as const;
-const PARK_SECTION_SEGMENTS: Record<(typeof PARK_SECTIONS)[number], string> = {
+const PARK_SECTIONS = ["calendar", "averages", "kids"] as const;
+type ParkSection = (typeof PARK_SECTIONS)[number];
+const PARK_SECTION_SEGMENTS: Record<ParkSection, string> = {
   calendar: "wait-time-calendar",
+  averages: "average-wait-times",
+  kids: "with-kids",
 };
+
+/** The years the average-wait page reads, the frontend's `PARK_STATS_PAGE_QUERY.years`. */
+const AVERAGES_PAGE_YEARS = 2;
+
+/**
+ * When the with-kids page exists: the frontend's `KIDS_PAGE_GATE` (`lib/parks/kids-page.ts`),
+ * held against the park's rides here so Parky never opens a 404.
+ */
+const KIDS_PAGE_GATE = { minRidesWithHeight: 20, minShareWithHeight: 0.5 };
+
+/**
+ * Why a park has no such sub-page, or null when it has one. Every park has the calendar; the
+ * average-wait page needs enough measured days, the with-kids page enough known rider heights.
+ */
+async function missingSection(
+  ctx: AssistantToolContext,
+  park: Park,
+  section: ParkSection,
+): Promise<string | null> {
+  if (section === "averages") {
+    const stats = await ctx
+      .get(ParkHistoricalStatsService)
+      .getParkHistoricalStats(park, AVERAGES_PAGE_YEARS)
+      .catch(() => null);
+    if (!stats) {
+      return `the average waits of ${park.name} cannot be read just now`;
+    }
+    return stats.meta.displayable
+      ? null
+      : `${park.name} has no average-wait page yet: only ${stats.meta.totalSampleDays} measured days`;
+  }
+  if (section === "kids") {
+    const rides = await ctx
+      .get(DataSource)
+      .getRepository(Attraction)
+      .find({ where: { parkId: park.id, retiredAt: IsNull() } });
+    const withHeight = rides.filter(
+      (ride) => (resolveCuratedFacts(ride).minimumHeight ?? 0) > 0,
+    ).length;
+    const enough =
+      withHeight >= KIDS_PAGE_GATE.minRidesWithHeight &&
+      rides.length > 0 &&
+      withHeight / rides.length >= KIDS_PAGE_GATE.minShareWithHeight;
+    return enough
+      ? null
+      : `${park.name} has no with-kids page: park.fan knows the minimum height of only ${withHeight} of its ${rides.length} rides`;
+  }
+  return null;
+}
 
 /** The site's pages without one park, ride or post that `open_page` can open. */
 const SITE_PAGES = [
@@ -827,10 +891,16 @@ export function showsOnDay(
       };
     })
     .sort((a, b) => a.showtimes[0].localeCompare(b.showtimes[0]));
+  const timed = new Set(listed.map((show) => show.id));
   return {
     shows: listed.slice(0, MAX_SHOWS),
     withShowtimes: listed.length,
     withoutShowtimes: shows.length - listed.length,
+    // Named, so "is the parade on?" gets "no time published", not "there is none".
+    withoutShowtimesNames: shows
+      .filter((show) => !timed.has(show.id))
+      .slice(0, MAX_SHOWS)
+      .map((show) => show.name),
   };
 }
 
@@ -1036,29 +1106,42 @@ async function calendarDays(
   };
 }
 
-/** One park's day for `compare_parks`, from the calendar every park page shows. */
+/** One park's day for `compare_parks`, from the calendar every park page shows, or why not. */
 async function comparedParkDay(
   ctx: AssistantToolContext,
   park: Park,
   date: string | undefined,
 ) {
-  const day = date ?? getCurrentDateInTimezone(park.timezone);
-  const ahead = daysBetween(getCurrentDateInTimezone(park.timezone), day);
-  if (ahead < 0 || ahead >= FORECAST_DAYS) return { park, day, found: null };
-  const { fromDate, toDate } = parseDateRange(day, day, {
-    timezone: park.timezone,
-  });
-  const calendar = await ctx
-    .get(CalendarService)
-    .buildCalendarResponse(park, fromDate, toDate, "none");
-  const found = calendar.days.find((d) => d.date === day);
+  const today = getCurrentDateInTimezone(park.timezone);
+  const day = date ?? today;
+  const ahead = daysBetween(today, day);
+  if (ahead < 0) {
+    return { park, day, why: "that day is over in the park's time zone" };
+  }
+  if (ahead > COMPARE_DATES_AHEAD) {
+    return {
+      park,
+      day,
+      why: `park.fan looks ahead ${COMPARE_DATES_AHEAD} days`,
+    };
+  }
+  const { days, coverage, hasOperatingSchedule } = await calendarDays(
+    ctx,
+    park,
+    [day],
+  );
+  const found = days.get(day);
+  if (!found) return { park, day, why: "the calendar has no such day" };
   return {
     park,
     day,
-    found: found ? compactDay(found, park.timezone) : null,
+    found: compactDay(found, park.timezone),
+    published:
+      hasOperatingSchedule && coverage.to !== null && day <= coverage.to,
+    // Null for a park that publishes no hours at all, whatever the coverage says.
+    publishedUntil: hasOperatingSchedule ? coverage.to : null,
   };
 }
-
 export const ASSISTANT_TOOLS = [
   tool({
     name: "search_parks",
@@ -1292,11 +1375,15 @@ export const ASSISTANT_TOOLS = [
         } = statistics;
         ride.statistics = kept;
       }
+      const facts = Object.entries(ride.facts as Record<string, unknown>);
       ride.facts = Object.fromEntries(
-        Object.entries(ride.facts as Record<string, unknown>).filter(
-          ([, value]) => value !== null,
-        ),
+        facts.filter(([, value]) => value !== null),
       );
+      // Named, so a missing height reads "not recorded", never "no limit".
+      const unknownFacts = facts
+        .filter(([, value]) => value === null)
+        .map(([key]) => key);
+      if (unknownFacts.length > 0) ride.unknownFacts = unknownFacts;
       const parkId = (ride.park as { id?: string } | null)?.id;
       const parks = ctx.get(ParksService);
       const park = parkId ? await parks.findById(parkId) : null;
@@ -1464,8 +1551,9 @@ export const ASSISTANT_TOOLS = [
       const tz = ride.park.timezone;
       const isToday = day === getCurrentDateInTimezone(tz);
       // Never an hour after closing, and today never one that is already over.
+      const planned = plan.rides.find((r) => r.attractionId === ride.id);
       const hours = bookableHours(
-        plan.rides.find((r) => r.attractionId === ride.id)?.hours ?? [],
+        planned?.hours ?? [],
         plan.context,
         isToday ? Number(formatInTimeZone(new Date(), tz, "H")) : null,
       );
@@ -1494,6 +1582,15 @@ export const ASSISTANT_TOOLS = [
             }
           : null,
         ...(maintenance && { closedForMaintenance: maintenance }),
+        ...(plan.ridesUnavailable && {
+          ridesUnavailable: plan.ridesUnavailable,
+        }),
+        ...(!planned &&
+          !maintenance &&
+          !plan.ridesUnavailable && {
+            notInDayPlan:
+              "park.fan's plan for that day has no hours for this ride (out of season, not on that weekday, or no forecast); get_ride says why it is not running",
+          }),
       };
     },
   }),
@@ -1725,10 +1822,20 @@ export const ASSISTANT_TOOLS = [
       const open = result.days.filter((day) => day.crowdLevel !== "closed");
       // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
       const rated = open.filter((day) => CROWD_ORDER.includes(day.crowdLevel));
+      const closedDays = result.days.length - open.length;
       return {
         park: { id: found.id, name: found.name, pageUrl: parkPageUrl(found) },
         window: { from: result.meta.windowFrom, to: result.meta.windowTo },
         openDays: open.length,
+        closedDays,
+        // A window the park is shut for gets its next opening, not just an empty list.
+        ...(open.length === 0 && {
+          nextOpenDay: await firstOpenDay(
+            ctx,
+            found.id,
+            addIsoDays(result.meta.windowTo, 1),
+          ),
+        }),
         unratedOpenDays: open.length - rated.length,
         tenQuietestOpenDays: rated
           .map((day) => ({
@@ -1756,9 +1863,10 @@ export const ASSISTANT_TOOLS = [
       "level park.fan's calendar expects (one day rating for every park, so they compare " +
       "fairly) and the headliners' expected peak wait. Give a country (with city to narrow it) " +
       'or 2 to 10 parks. For "which park is quietest on Saturday", "where in Germany on 28 ' +
-      'June", "which of these three". Closed parks and open ones without a rating are listed ' +
-      "apart, never as quiet. Today by default, up to 60 days ahead; one park's best days are " +
-      "get_best_days.",
+      'June", "which of these three". Closed parks (with the day each opens next), open ones ' +
+      "without a rating and parks whose hours for that day are not published yet are listed " +
+      "apart, each with the reason, never as quiet. Today by default, up to a year ahead; one " +
+      "park's best days are get_best_days, its particular days compare_dates.",
     input: z.object({
       country: z
         .string()
@@ -1821,49 +1929,74 @@ export const ASSISTANT_TOOLS = [
           );
         }
       }
-      const days = await inBatches(found, CALENDAR_BATCH, (park) =>
+      const read = await inBatches(found, CALENDAR_BATCH, (park) =>
         comparedParkDay(ctx, park, date).catch(() => ({
           park,
           day: date ?? null,
-          found: null,
+          why: "its calendar could not be read just now",
         })),
       );
-      const row = ({ park, found: d }: (typeof days)[number]) => ({
+      type Read = (typeof read)[number];
+      const known = read.filter(
+        (d): d is Read & { found: ReturnType<typeof compactDay> } =>
+          "found" in d && d.found !== undefined,
+      );
+      const row = ({ park, found: d }: (typeof known)[number]) => ({
         id: park.id,
         name: park.name,
         city: park.city,
-        ...(d && {
-          opens: d.opens,
-          closes: d.closes,
-          hoursInferred: d.hoursInferred,
-          crowdLevel: d.crowdLevel,
-          expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
-          holiday: d.holiday,
-          schoolVacation: d.schoolVacation,
-        }),
+        opens: d.opens,
+        closes: d.closes,
+        hoursInferred: d.hoursInferred,
+        crowdLevel: d.crowdLevel,
+        expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
+        holiday: d.holiday,
+        schoolVacation: d.schoolVacation,
       });
-      const open = days.filter((d) => d.found && d.found.status !== "CLOSED");
+      // Past a park's published schedule its status is the calendar's estimate, never a fact.
+      const published = known.filter((d) => "published" in d && d.published);
+      const estimated = known.filter((d) => !published.includes(d));
+      const open = published.filter((d) => d.found.status === "OPERATING");
+      const closed = published.filter((d) => d.found.status === "CLOSED");
       // A day without a rating is no quiet day: ranked, `indexOf` -1 would put it first.
       const rated = open.filter((d) =>
-        CROWD_ORDER.includes(d.found?.crowdLevel ?? ""),
+        CROWD_ORDER.includes(d.found.crowdLevel),
       );
-      const rank = (d: (typeof days)[number]) =>
-        CROWD_ORDER.indexOf(d.found?.crowdLevel ?? "");
+      const rank = (d: (typeof known)[number]) =>
+        CROWD_ORDER.indexOf(d.found.crowdLevel);
+      const reopening = await inBatches(closed, CALENDAR_BATCH, (d) =>
+        firstOpenDay(ctx, d.park.id, addIsoDays(d.day as string, 1)).catch(
+          () => null,
+        ),
+      );
       return {
-        date: date ?? days[0]?.day ?? null,
+        date: date ?? read[0]?.day ?? null,
         ranked: [...rated]
           .sort(
             (a, b) =>
               rank(a) - rank(b) ||
-              (a.found?.expectedPeakWaitMinutes ?? 0) -
-                (b.found?.expectedPeakWaitMinutes ?? 0),
+              (a.found.expectedPeakWaitMinutes ?? 0) -
+                (b.found.expectedPeakWaitMinutes ?? 0),
           )
           .map(row),
-        unrated: open.filter((d) => !rated.includes(d)).map(row),
-        closed: days
-          .filter((d) => d.found?.status === "CLOSED")
-          .map((d) => d.park.name),
-        notKnown: days.filter((d) => !d.found).map((d) => d.park.name),
+        unrated: open
+          .filter((d) => !rated.includes(d))
+          .map((d) => ({ ...row(d), why: "no crowd rating for that day" })),
+        closed: closed.map((d, i) => ({
+          name: d.park.name,
+          nextOpenDay: reopening[i],
+        })),
+        hoursNotPublished: estimated.map((d) => ({
+          ...row(d),
+          estimatedStatus: d.found.status,
+          why:
+            "publishedUntil" in d && d.publishedUntil
+              ? `hours published up to ${d.publishedUntil}; this is park.fan's estimate`
+              : "the park publishes no opening hours; this is park.fan's estimate",
+        })),
+        notKnown: read
+          .filter((d) => !("found" in d) || d.found === undefined)
+          .map((d) => ({ name: d.park.name, why: "why" in d ? d.why : null })),
       };
     },
   }),
@@ -2267,16 +2400,26 @@ export const ASSISTANT_TOOLS = [
       if (kind === "parks") {
         if (!parks?.length) throw new McpToolError("kind parks needs parks");
         // Each row with its live state, as the park cards on the site show it.
+        const notShown: Array<{ park: string; why: string }> = [];
         const rows = (
           await Promise.all(
             parks.map(async (reference) => {
               const found = await resolvePark(mcp(ctx), reference).catch(
                 () => null,
               );
-              if (!found || isAmbiguous(found)) return null;
-              const live = (await getParkTool
-                .handler({ park: found.id, longestWaits: 0 }, mcp(ctx))
-                .catch(() => null)) as ParkSummary | null;
+              if (!found || isAmbiguous(found)) {
+                notShown.push({
+                  park: reference,
+                  why: found
+                    ? "several parks share this slug; give the id"
+                    : "no park with this id or slug; try search_parks",
+                });
+                return null;
+              }
+              const live = (await parkNow(ctx, {
+                park: found.id,
+                longestWaits: 0,
+              }).catch(() => null)) as ParkSummary | null;
               const summary = live && !("ambiguous" in live) ? live : null;
               const pageUrl = parkPageUrl(found);
               return {
@@ -2299,7 +2442,10 @@ export const ASSISTANT_TOOLS = [
         return new ActionOutcome(
           { type: "card", card },
           // The rows without their links, so the model can say which park it would pick.
-          { shown: rows.map(({ url: _url, ...row }) => row) },
+          {
+            shown: rows.map(({ url: _url, ...row }) => row),
+            ...(notShown.length > 0 && { notShown }),
+          },
         );
       }
       if (kind === "rides") {
@@ -2320,10 +2466,15 @@ export const ASSISTANT_TOOLS = [
         const typesOf = (ride: { id: string }) =>
           profiles.get(ride.id)?.types ?? [];
         let typeUnknown = 0;
+        let typeUnknownRides: string[] = [];
         if (type) {
-          typeUnknown = [...all, ...down].filter(
+          const untyped = [...all, ...down].filter(
             (ride) => typesOf(ride).length === 0,
-          ).length;
+          );
+          typeUnknown = untyped.length;
+          typeUnknownRides = untyped
+            .slice(0, LEFT_OUT_NAMES_LIMIT)
+            .map((ride) => ride.name);
           const ofType = (ride: { id: string }) =>
             isRideOfType(typesOf(ride), type);
           all = all.filter(ofType);
@@ -2333,9 +2484,16 @@ export const ASSISTANT_TOOLS = [
         const shelterOf = shelter
           ? await indoorOutdoorOf(ctx, [...all, ...down])
           : null;
+        const candidates = [...all, ...down];
         const coverage =
           shelter && shelterOf
-            ? shelterCoverage([...all, ...down].map((r) => shelterOf.get(r.id)))
+            ? {
+                ...shelterCoverage(candidates.map((r) => shelterOf.get(r.id))),
+                shelterUnknownRides: candidates
+                  .filter((r) => !shelterOf.has(r.id))
+                  .slice(0, LEFT_OUT_NAMES_LIMIT)
+                  .map((r) => r.name),
+              }
             : null;
         if (shelter && shelterOf) {
           const dry = (ride: { id: string }) =>
@@ -2411,7 +2569,7 @@ export const ASSISTANT_TOOLS = [
                 ...riddenMark(ctx, ride.id),
               };
             }),
-            ...(type && { typeUnknown }),
+            ...(type && { typeUnknown, typeUnknownRides }),
             ...coverage,
           },
         );
@@ -2474,7 +2632,8 @@ export const ASSISTANT_TOOLS = [
     name: "open_page",
     description:
       "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or " +
-      "slug; with section calendar its wait-time calendar), a ride (rideId), a post or glossary " +
+      "slug; with section its wait-time calendar, its average waits or its page for a visit " +
+      "with kids where it has one, else the error says why), a ride (rideId), a post or glossary " +
       "term (its url from search_posts or look_up_glossary), 2 to 4 parks side by side (compare), " +
       "or one of the site's pages (page: alerts, the user's push alerts; best_time, the best time " +
       "to visit across parks; favorites; trip_planner). The page address is built from the " +
@@ -2484,7 +2643,9 @@ export const ASSISTANT_TOOLS = [
       section: z
         .enum(PARK_SECTIONS)
         .optional()
-        .describe("With park: calendar for its wait-time calendar"),
+        .describe(
+          "With park: calendar (wait-time calendar), averages (average waits), kids (with kids)",
+        ),
       rideId: z
         .string()
         .uuid()
@@ -2529,6 +2690,10 @@ export const ASSISTANT_TOOLS = [
       } else if (park) {
         const found = await resolvePark(mcp(ctx), park);
         if (isAmbiguous(found)) return found;
+        const missing = section
+          ? await missingSection(ctx, found, section)
+          : null;
+        if (missing) throw new McpToolError(missing);
         const pageUrl = parkPageUrl(found);
         const base = pageUrl ? siteOnlyPath(pageUrl) : null;
         path =

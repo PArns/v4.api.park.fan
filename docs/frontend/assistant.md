@@ -127,7 +127,8 @@ opens a park's crowd calendar, the park comparison and the site's own pages. Ver
 to `get_park_history` with `on`. Version 34: rides the visitor
 marked as ridden carry `ridden` in the ride lists, for "what haven't I ridden yet". Version 35:
 particular days of one park go to `compare_dates`, and a closed day is always called closed with
-the next day the park opens.
+the next day the park opens. Version 36: a reason a result
+gives for a gap is told, and "not known" is never "there is none".
 
 The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
@@ -297,7 +298,7 @@ card's rows (`name`, `status`, `waitMinutes` and the profile's `types` where kno
 without their links. With `riderHeightCm` it keeps only rides whose known minimum the
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
 apart (`heightUnknown`), never passed. Both kinds left out are also named, the first 20 each
-(`HEIGHT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
+(`LEFT_OUT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
 alone read as "not known" and got a ride recommended to a child too short for it. Minimum heights
 are centimetres; `heightUnit: "in"` marks a park that signs them in inches, and the prompt has
 Parky say them in inches there.
@@ -311,11 +312,11 @@ where known, marks `tooShortForParty`, and names the planned rides among them as
 Actions (`tools/assistant-actions.ts`) return an `ActionOutcome`: the model reads its result, the
 widget gets the `action` and carries it out after checking it again: `show_card` (a park, a ride, a
 park's rides with their waits, several parks, a crowd calendar or one day's tiles; shapes below), `open_page` (only a park.fan path of slugs, built from the data: a park, a ride, a post or
-glossary term, a park's `section` `calendar` by its English segment, which the widget respells in
-the reader's language, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
-park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`; the average-wait
-and with-kids pages exist only for parks with enough data, a gate the frontend decides, so they are
-not offered), `request_location` (the share
+glossary term, a park's `section` (`calendar`, `averages`, `kids`) by its English segment, which
+the widget respells in the reader's language, the last two only where the park has that page
+(`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
+`KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
