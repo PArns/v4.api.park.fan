@@ -631,6 +631,59 @@ describe("get_park_live › funFacts", () => {
   });
 });
 
+describe("a closed park's crowd", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const crowd = {
+    level: "very_low",
+    avgWaitMinutes: 0,
+    avgWaitTodayMinutes: 24,
+    peakWaitTodayMinutes: 55,
+    peakHourLocal: 14,
+    occupancyPercent: 3,
+    comparedToTypicalPercent: -90,
+  };
+  const summary = (status: string) =>
+    jest.spyOn(getParkTool, "handler").mockResolvedValue({
+      name: "Six Flags Fiesta Texas",
+      status,
+      crowd,
+      scheduleToday: [],
+      nextSchedule: { date: "2026-11-07", opens: "2026-11-07T12:00:00-06:00" },
+    });
+
+  // Once read out as "very low for the moment" for a park nobody could enter.
+  it("keeps only the day so far once the park has closed", async () => {
+    summary("CLOSED");
+    const { json } = await run("get_park_live", { park: PARK_ID }, new Map());
+    expect(json.crowd).toEqual({
+      avgWaitTodayMinutes: 24,
+      peakWaitTodayMinutes: 55,
+      peakHourLocal: 14,
+    });
+    expect(json.nextSchedule).toBeDefined();
+  });
+
+  it("keeps the whole reading while it runs", async () => {
+    summary("OPERATING");
+    const { json } = await run("get_park_live", { park: PARK_ID }, new Map());
+    expect(json.crowd).toEqual(crowd);
+  });
+
+  it("draws the park card of a closed park without a level", async () => {
+    summary("CLOSED");
+    const result = await run(
+      "show_card",
+      { kind: "park", park: PARK_ID },
+      new Map(),
+    );
+    expect(result.action).toMatchObject({
+      type: "card",
+      card: { kind: "park", status: "CLOSED", crowdLevel: null },
+    });
+  });
+});
+
 describe("show_card kind rides with a type", () => {
   afterEach(() => jest.restoreAllMocks());
 
