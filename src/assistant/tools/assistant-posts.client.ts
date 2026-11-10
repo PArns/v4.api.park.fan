@@ -69,9 +69,13 @@ export class AssistantPostsClient {
     });
   }
 
-  /** Up to five glossary terms for a query, with their short definitions. */
+  /**
+   * Up to five glossary terms for a query, with their short definitions. `deep` also searches the
+   * long definitions, where a term named in English in every language carries the reader's word
+   * ("Blockbremse" for "Block Brake"); the site's search palette leaves that pass out.
+   */
   glossary(locale: string, query: string): Promise<unknown> {
-    return this.get("glossary-search", { locale, q: query });
+    return this.get("glossary-search", { locale, q: query, deep: "1" });
   }
 
   private async get(

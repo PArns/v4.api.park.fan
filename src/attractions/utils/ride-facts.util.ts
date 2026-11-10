@@ -291,6 +291,8 @@ export interface RideComparison {
   rides: ComparedRide[];
   /** Rides that had the value and passed the height filter. */
   ranked: number;
+  /** Without `by` and with `first`: how many of the ranked rides it holds for, listed first. */
+  firstCount?: number;
   /** Rides left out because park.fan does not know the value ranked by. */
   withoutValue: number;
   /** With a rider height: rides left out because their minimum height is unknown. */
@@ -363,6 +365,11 @@ export function compareRides(
     type?: RideTypeFilter;
     shelter?: ShelterFilter;
     limit: number;
+    /**
+     * Without `by`: the rides this holds for come first (the ones not ridden yet), each group by
+     * name, and are counted, so a list cut at `limit` still starts with what was asked for.
+     */
+    first?: (ride: ComparedRide) => boolean;
   },
 ): RideComparison {
   const { type, shelter } = params;
@@ -393,8 +400,11 @@ export function compareRides(
   const value = by ? VALUE[by] : () => 0;
   const withValue = allowed.filter((ride) => value(ride) !== undefined);
   const sign = params.order === "asc" ? 1 : -1;
+  const first = !by ? params.first : undefined;
+  const group = (ride: ComparedRide) => (first && !first(ride) ? 1 : 0);
   const ranked = [...withValue].sort(
     (a, b) =>
+      group(a) - group(b) ||
       sign * ((value(a) as number) - (value(b) as number)) ||
       a.name.localeCompare(b.name),
   );
@@ -405,6 +415,7 @@ export function compareRides(
   return {
     rides: ranked.slice(0, params.limit),
     ranked: ranked.length,
+    ...(first && { firstCount: withValue.filter(first).length }),
     withoutValue: withoutValue.length,
     ...(withoutValue.length > 0 && { withoutValueRides: refs(withoutValue) }),
     ...(rider !== undefined && {

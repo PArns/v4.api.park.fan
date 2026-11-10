@@ -112,6 +112,24 @@ describe("compareRides", () => {
     expect(all.withoutValue).toBe(0);
   });
 
+  it("lists the rides not ridden yet first without a fact to rank by, and counts them", () => {
+    const ridden = new Set(["b", "e"]);
+    const left = compareRides(rides, {
+      limit: 3,
+      first: (ride) => !ridden.has(ride.id),
+    });
+    expect(left.rides.map((ride) => ride.id)).not.toContain("b");
+    expect(left.rides.map((ride) => ride.id)).not.toContain("e");
+    expect(left.firstCount).toBe(3);
+    // A ranking keeps its order; `first` only sorts the list by name.
+    const fastest = compareRides(rides, {
+      by: "topSpeed",
+      limit: 10,
+      first: (ride) => !ridden.has(ride.id),
+    });
+    expect(fastest).not.toHaveProperty("firstCount");
+  });
+
   it("ranks the other way round with order asc", () => {
     const slowest = compareRides(rides, {
       by: "topSpeed",

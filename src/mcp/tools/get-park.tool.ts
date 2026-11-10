@@ -54,7 +54,7 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
     localTime: formatInTimeZone(
       new Date(),
       dto.timezone,
-      "yyyy-MM-dd'T'HH:mmXXX",
+      "yyyy-MM-dd'T'HH:mmxxx",
     ),
     pageUrl: parkPageUrl(park),
     status: dto.status ?? null,

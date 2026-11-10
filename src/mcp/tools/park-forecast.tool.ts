@@ -13,7 +13,7 @@ import {
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
 
-const LOCAL_ISO = "yyyy-MM-dd'T'HH:mmXXX";
+const LOCAL_ISO = "yyyy-MM-dd'T'HH:mmxxx";
 const HEADLINERS = 5;
 
 /** An hour of the day's opening, in the park's clock with its offset. */
