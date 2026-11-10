@@ -237,6 +237,36 @@ describe("posts and glossary cards", () => {
 describe("show_card kind ride", () => {
   afterEach(() => jest.restoreAllMocks());
 
+  it("draws no card for a name two rides share, and hands back both with their ids", async () => {
+    jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+      attractions: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          name: "Wilde Maus",
+          park: { name: "Wiener Prater" },
+        },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          name: "Wilde Maus",
+          park: { name: "Erlebnispark Tripsdrill" },
+        },
+      ],
+    });
+    const attraction = jest.spyOn(getAttractionTool, "handler");
+    const result = await run(
+      "show_card",
+      { kind: "ride", ride: "Wilde Maus" },
+      new Map<unknown, unknown>(),
+    );
+    expect(result.action).toBeUndefined();
+    expect(attraction).not.toHaveBeenCalled();
+    expect(result.json.ambiguous).toBe(true);
+    expect(result.json.rides.map((ride: { id: string }) => ride.id)).toEqual([
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ]);
+  });
+
   it("takes a ride by its name and hands the model everything get_ride would", async () => {
     const RIDE_ID = "33333333-3333-4333-8333-333333333333";
     jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
@@ -1228,9 +1258,9 @@ describe("show_card kind rides for a child", () => {
       expect.objectContaining({ name: "Wellenflug", minimumHeightCm: 100 }),
     ]);
     expect(json.notAllowedRides).toEqual([
-      { name: "Taron", minimumHeightCm: 130 },
+      { id: "a", name: "Taron", minimumHeightCm: 130 },
     ]);
-    expect(json.heightUnknownRides).toEqual(["Raik"]);
+    expect(json.heightUnknownRides).toEqual([{ id: "c", name: "Raik" }]);
   });
 
   it("says why the card of a closed park is empty", async () => {
@@ -2875,7 +2905,11 @@ describe("get_ride › today / get_park_day", () => {
     ]);
     expect(json.rides[1]).not.toHaveProperty("tooShortForParty");
     expect(json.plannedTooShort).toEqual([
-      { name: "Taron", minimumHeightCm: 130 },
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        name: "Taron",
+        minimumHeightCm: 130,
+      },
     ]);
   });
 

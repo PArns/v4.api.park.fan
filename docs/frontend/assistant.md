@@ -363,7 +363,12 @@ without their links. With `riderHeightCm` it keeps only rides whose known minimu
 rider meets and whose maximum, if any, they do not exceed; rides with no known minimum are counted
 apart (`heightUnknown`), never passed. Both kinds left out are also named, the first 20 each
 (`LEFT_OUT_NAMES_LIMIT`): `notAllowedRides` with their limits and `heightUnknownRides`, since a count
-alone read as "not known" and got a ride recommended to a child too short for it. Minimum heights
+alone read as "not known" and got a ride recommended to a child too short for it. Every row of
+these lists, and of `compare_rides`' `withoutValueRides`, `typeUnknownRides` and
+`shelterUnknownRides`, `get_park_day`'s `plannedTooShort` and `plan_add_rides`' `notAdded`, carries
+the ride's `id` beside its name: two rides can share a name, and the prompt has Parky take the id
+once a result gave one. A ride named in a tool's input still resolves (`rideIdOf`), but two equal
+names come back to pick from, with their ids, and the ride card draws nothing then. Minimum heights
 are centimetres; `heightUnit: "in"` marks a park that signs them in inches, and the prompt has
 Parky say them in inches there.
 

@@ -2186,6 +2186,7 @@ export const ASSISTANT_TOOLS = [
         ...(party !== undefined && { partyRiderHeightCm: party }),
         ...(plannedTooShort.length > 0 && {
           plannedTooShort: plannedTooShort.map((ride) => ({
+            id: ride.attractionId,
             name: ride.attractionName,
             minimumHeightCm: ride.minimumHeight,
           })),
@@ -2655,7 +2656,7 @@ export const ASSISTANT_TOOLS = [
         .min(2)
         .max(100)
         .describe(
-          "Words to look for, e.g. a park, a ride, an event or a topic",
+          "Two or three key words, e.g. a park and a topic: every word must match, so never the whole question",
         ),
       kind: z
         .enum(["news", "article", "any"])
@@ -2824,7 +2825,7 @@ export const ASSISTANT_TOOLS = [
         .max(100)
         .optional()
         .describe(
-          'For kind restaurants: only names or cuisines with this, e.g. "eis"; for kind posts: words to search, e.g. "Halloween" or a park; for kind glossary: the word',
+          'For kind restaurants: only names or cuisines with this, e.g. "eis"; for kind posts: two or three key words, every one must match, e.g. "Quick Pass Phantasialand", never the whole question; for kind glossary: the word',
         ),
       postKind: z
         .enum(["news", "article", "any"])
@@ -3142,11 +3143,15 @@ export const ASSISTANT_TOOLS = [
             heightUnknown: unknown.length,
             heightUnknownRides: unknown
               .slice(0, LEFT_OUT_NAMES_LIMIT)
-              .map((ride) => ride.name),
+              .map((ride) => ({ id: ride.id, name: ride.name })),
             notAllowed: tooShort.length,
             notAllowedRides: tooShort
               .slice(0, LEFT_OUT_NAMES_LIMIT)
-              .map((ride) => ({ name: ride.name, ...heightOf(ride) })),
+              .map((ride) => ({
+                id: ride.id,
+                name: ride.name,
+                ...heightOf(ride),
+              })),
           };
           all = all.filter(fits);
           down = down.filter(fits);
@@ -3463,6 +3468,7 @@ export const ASSISTANT_TOOLS = [
         ride.maintenance
           ? [
               {
+                id: ride.id,
                 name: ride.name,
                 reason: "maintenance",
                 window: ride.maintenance,
@@ -3471,6 +3477,7 @@ export const ASSISTANT_TOOLS = [
           : tooShort(ride)
             ? [
                 {
+                  id: ride.id,
                   name: ride.name,
                   reason: "too_short",
                   minimumHeightCm: ride.minimumHeightCm,
