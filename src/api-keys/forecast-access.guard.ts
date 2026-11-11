@@ -135,10 +135,9 @@ export async function authorizeForecastRequest(
   } else {
     keepResponsePrivate(response);
   }
-  if (bypassKeyOpensForecasts() && carriesThrottleBypassKey(request.headers)) {
-    return;
-  }
-
+  // A data key goes first, the bypass key after it: park.fan's frontend sends
+  // both, and checked the other way round its own key would never be looked
+  // up, counted or marked as used while the bypass still opens forecasts.
   const presentedWith = readPresentedApiKeyWithSource(request.headers);
   const presented = presentedWith?.key ?? null;
   const found = presented ? await apiKeys.lookup(presented) : null;
@@ -173,6 +172,10 @@ export async function authorizeForecastRequest(
       );
     }
     request.apiKey = resolved;
+    return;
+  }
+
+  if (bypassKeyOpensForecasts() && carriesThrottleBypassKey(request.headers)) {
     return;
   }
 

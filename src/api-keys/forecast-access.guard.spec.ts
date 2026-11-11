@@ -1,4 +1,5 @@
 import { HttpException, UnauthorizedException } from "@nestjs/common";
+import { bypassKeyOpensForecasts } from "./api-key.constants";
 import {
   checkAllowedPark,
   ForecastAccessGuard,
@@ -140,6 +141,28 @@ describe("ForecastAccessGuard", () => {
     expect(sent.get("cache-control")).toBe("private, no-store");
   });
 
+  it("counts the frontend's data key even while the bypass key would open the route", async () => {
+    const { guard: g, apiKeys } = guard();
+    const { ctx, request } = context({
+      "x-auth-key": "frontend-secret",
+      "x-api-key": VALID,
+    });
+    await expect(g.canActivate(ctx)).resolves.toBe(true);
+    expect(apiKeys.lookup).toHaveBeenCalledWith(VALID);
+    expect(apiKeys.countRequest).toHaveBeenCalled();
+    expect((request.apiKey as { id: string }).id).toBe("k1");
+  });
+
+  it("falls back to the bypass key when the data key it carries is unknown", async () => {
+    const { guard: g, apiKeys } = guard();
+    const { ctx } = context({
+      "x-auth-key": "frontend-secret",
+      "x-api-key": `pfk_${"d".repeat(43)}`,
+    });
+    await expect(g.canActivate(ctx)).resolves.toBe(true);
+    expect(apiKeys.countRequest).not.toHaveBeenCalled();
+  });
+
   it("lets an active data key through and attaches it", async () => {
     const { guard: g } = guard();
     const { ctx, request } = context({ "x-api-key": VALID });
@@ -205,6 +228,21 @@ describe("ForecastAccessGuard", () => {
         "x-api-key": VALID,
       });
       await expect(g.canActivate(keyed.ctx)).resolves.toBe(true);
+    } finally {
+      delete process.env.FORECAST_BYPASS_KEY;
+    }
+  });
+
+  it("reads the switch loosely, as a dashboard may store it", () => {
+    try {
+      for (const value of ['"off"', " OFF ", "false", "0", "'no'"]) {
+        process.env.FORECAST_BYPASS_KEY = value;
+        expect(bypassKeyOpensForecasts()).toBe(false);
+      }
+      for (const value of ["", "on", "true"]) {
+        process.env.FORECAST_BYPASS_KEY = value;
+        expect(bypassKeyOpensForecasts()).toBe(true);
+      }
     } finally {
       delete process.env.FORECAST_BYPASS_KEY;
     }

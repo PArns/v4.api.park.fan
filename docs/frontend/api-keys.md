@@ -51,8 +51,10 @@ allowance (a new internal key gets none), issued in
 any other key.
 
 Before that key existed, the throttle bypass key (`x-auth-key`, `THROTTLE_BYPASS_KEYS`) opened the
-forecast routes, and it still does until `FORECAST_BYPASS_KEY=off`. Set that once the frontend
-sends `API_DATA_KEY`: the bypass key also lifts the rate limits and makes the API believe the
+forecast routes, and it still does until `FORECAST_BYPASS_KEY=off`. A request that carries both is
+checked against its data key first, so the frontend's key is counted and marked as used from the
+moment it is set, and the bypass key only stands in when the data key is missing or refused. Set
+`FORECAST_BYPASS_KEY=off` once the frontend's key shows up in its statistics: the bypass key also lifts the rate limits and makes the API believe the
 caller's `X-Forwarded-For` ([edge and throttling](../deployment/edge-and-throttling.md)), and it
 should open nothing else. Never hand it to a data consumer.
 
