@@ -50,6 +50,9 @@ scripts/backup/*.env
 *.md
 !README.md
 !CLAUDE.md
+# The code licence and what it leaves out.
+!/LICENSE.md
+!/NOTICE.md
 
 # GeoIP (GeoLite2-City) – downloaded by geoip-update job
 /data/

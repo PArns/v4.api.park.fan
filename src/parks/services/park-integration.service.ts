@@ -222,6 +222,29 @@ export class ParkIntegrationService {
     );
   }
 
+  /**
+   * The cached payload of a park when it is warm and not about to expire, for
+   * a caller that has not loaded the park's relations; null otherwise, and the
+   * caller then goes through `buildIntegratedResponse`, which also refreshes
+   * an entry in its last minute. Counts the request like that path does.
+   */
+  async peekIntegratedResponse(
+    parkId: string,
+  ): Promise<ParkWithAttractionsDto | null> {
+    const cacheKey = CacheKeys.parkIntegrated(parkId);
+    const [cached, ttl] = await Promise.all([
+      this.redis.get(cacheKey).catch(() => null),
+      this.redis.ttl(cacheKey).catch(() => -2),
+    ]);
+    const dto = safeJsonParse<ParkWithAttractionsDto>(cached);
+    if (!dto || ttl < 60) return null;
+    if (dto.attractions?.some((attraction) => !attraction.url)) return null;
+    this.popularityService
+      .recordParkHit(parkId)
+      .catch((err) => this.logger.debug(`Failed to record park hit: ${err}`));
+    return dto;
+  }
+
   /** The uncached build behind `buildIntegratedResponse`; writes the result to `cacheKey`. */
   private async rebuildIntegratedResponse(
     park: Park,

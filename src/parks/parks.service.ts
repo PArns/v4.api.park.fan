@@ -3668,8 +3668,12 @@ export class ParksService {
    * after ThemeParks Wiki publishes new opening hours.
    */
   async invalidateCalendarMonthCache(parkId: string): Promise<void> {
+    // The route answers and day plans are built from these months, so they go
+    // with them.
     const cleared = await deleteKeysByPatterns(this.redis, [
       CacheKeys.calendarMonthPattern(parkId),
+      CacheKeys.calendarResponsePattern(parkId),
+      CacheKeys.planDayResponsePattern(parkId),
     ]);
     if (cleared > 0) {
       this.logger.debug(

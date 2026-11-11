@@ -1,3 +1,4 @@
+import { ForecastFields } from "../api-keys/forecast-fields.interceptor";
 import { Controller, Get, Query, Req, UseInterceptors } from "@nestjs/common";
 import {
   ApiTags,
@@ -41,6 +42,11 @@ export class FavoritesController {
    * Supports optional distance calculation if user location is provided.
    */
   @Get()
+  @ForecastFields(
+    "attractions[].hourlyForecast",
+    "attractions[].bestVisitTimes",
+    "attractions[].predictionAccuracy",
+  )
   @UseInterceptors(new NoCdnCacheInterceptor()) // Response can depend on client IP (GeoIP) – must not be CDN-cached
   @ApiExtraModels(
     FavoritesResponseDto,

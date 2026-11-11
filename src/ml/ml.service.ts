@@ -1021,13 +1021,18 @@ export class MLService {
       // same source as the calendar so the two views' crowd levels agree.
       const response = await this.getServingDailyPredictions(parkId);
 
-      // Cache for 24 hours
-      await this.redis.set(
-        cacheKey,
-        JSON.stringify(response),
-        "EX",
-        this.TTL_DAILY_PREDICTIONS,
-      );
+      // Kept for the day, but never an outage: the ML call reports a failure
+      // as `modelVersion: "unavailable"` (or "unavailable+…" when only one
+      // model answered) rather than throwing, and caching that served an
+      // empty year until the TTL ran out.
+      if (!response.modelVersion?.includes("unavailable")) {
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(response),
+          "EX",
+          this.TTL_DAILY_PREDICTIONS,
+        );
+      }
 
       return response;
     } catch (error: unknown) {

@@ -13,7 +13,7 @@ describe("ParksController — attraction slug aliases", () => {
     resolveSlugAlias: jest.fn(),
   };
   const attractionIntegrationService = { buildIntegratedResponse: jest.fn() };
-  const res = { redirect: jest.fn() };
+  const res = { redirect: jest.fn(), req: { originalUrl: "" } };
 
   const controller = Object.assign(Object.create(ParksController.prototype), {
     attractionsService,
@@ -54,7 +54,9 @@ describe("ParksController — attraction slug aliases", () => {
     );
   });
 
-  it("keeps the requested history window across the redirect", async () => {
+  it("keeps the whole query across the redirect, the forecast flag included", async () => {
+    res.req.originalUrl =
+      "/v1/parks/europe/germany/bottrop/movie-park-germany/attractions/jason-universum?days=90&forecast=true";
     attractionsService.resolveSlugAlias.mockResolvedValue({
       continentSlug: "europe",
       countrySlug: "germany",
@@ -67,8 +69,9 @@ describe("ParksController — attraction slug aliases", () => {
 
     expect(res.redirect).toHaveBeenCalledWith(
       301,
-      "/v1/parks/europe/germany/bottrop/movie-park-germany/attractions/jason-universe?days=90",
+      "/v1/parks/europe/germany/bottrop/movie-park-germany/attractions/jason-universe?days=90&forecast=true",
     );
+    res.req.originalUrl = "";
   });
 
   it("stays a 404 when no alias is recorded", async () => {

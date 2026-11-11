@@ -48,6 +48,9 @@ What to keep in mind when giving a route a policy:
 - **Guard on `response.headersSent`.** Both interceptors skip a client that has already gone: setting a
   header then throws `ERR_HTTP_HEADERS_SENT`, which Nest logged as a 500 (48–178 a day on the
   park-detail routes). A new interceptor keeps the guard.
+- **A forecast is never shared.** `@RequiresApiKey()` and `@ForecastFields` with
+  `?forecast=true` make every `Cache-Control` the response gets `private`, whoever sets it
+  ([data API keys](../frontend/api-keys.md#caching)).
 - **A route may set its own header.** The nowcast aligns `max-age` to its `nextUpdateAt` with no
   stale window ([weather](../frontend/weather.md)).
 - **This service cannot purge Cloudflare.** A change reaches the edge when the TTL runs out, which is
@@ -65,6 +68,10 @@ and Cloudflare absorbs most reads before they reach the origin.
 | `THROTTLE_LIMIT`         | `300`        | requests per key per window; `0` does not register the guard, which also switches off every `@Throttle()` |
 | `THROTTLE_TTL`           | `60`         | window in seconds                                                                                         |
 | `THROTTLE_BYPASS_HEADER` | `x-auth-key` | header that carries a bypass key (lowercased)                                                             |
+| `THROTTLE_ANON_LIMIT`    | `60`         | public data reads per minute and address without a data key; 0 turns it off ([data API keys](../frontend/api-keys.md#without-a-key)) |
+| `THROTTLE_ANON_HOURLY_LIMIT` | `1000`   | the same per hour |
+| `FORECAST_BYPASS_KEY`    | unset        | `off` stops the bypass key from opening the forecast routes, once the frontend sends its own data key ([data API keys](../frontend/api-keys.md#parkfans-own-frontend)) |
+| `FORECAST_SHARED_CACHE`  | unset        | `vary` lets keyed forecast answers be cached per key once the Cloudflare Vary rule is live ([data API keys](../frontend/api-keys.md#caching)) |
 | `THROTTLE_BYPASS_KEYS`   | empty        | comma-separated keys; a request carrying one skips the guard. Empty means no bypass                       |
 
 - **Counted in process memory.** No storage is configured, so the count is per container and starts
@@ -74,6 +81,11 @@ and Cloudflare absorbs most reads before they reach the origin.
   (10 a minute), `change-password` (5), `totp/begin` (10) and `totp/disable` (5) are skipped for it too,
   so they only bind callers that do not go through the frontend. The OAuth endpoints of the admin MCP (`register` 10,
   `authorize` 30, `token` 60, `revoke` 30) are such callers: MCP clients call them directly.
+- **Tighter without a data key.** Two more throttlers, `anonymous-minute` and `anonymous-hour`
+  (`ANONYMOUS_THROTTLERS`), apply only to public data reads from a caller without an active data key
+  (`isAnonymousDataRequest`, `CfThrottlerGuard.handleRequest`); past one the answer is a 429
+  `rate-limited` that points at the free key. Like the rest they count only what reaches this
+  service: a Cloudflare hit costs nothing ([data API keys](../frontend/api-keys.md#without-a-key)).
 - **Read the variables lazily.** `ConfigModule` loads `.env` after the imports run; a module-level
   `process.env` read falls back to its default silently. This is why the config file exports functions.
 

@@ -1,5 +1,6 @@
 import { DocumentBuilder, OpenAPIObject } from "@nestjs/swagger";
 import * as packageJson from "../../../package.json";
+import { DATA_TERMS_URL } from "../../api-keys/api-key.constants";
 
 /**
  * The OpenAPI config and the route prefix, shared by `src/main.ts` (runtime
@@ -32,9 +33,18 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
     new DocumentBuilder()
       .setTitle("park.fan API v4")
       .setDescription(
-        "Real-time theme park intelligence powered by machine learning. " +
-          "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-          "for optimal theme park experiences worldwide.",
+        "Live wait times, opening hours, weather, statistics and crowd forecasts for " +
+          "around 200 theme parks. Free for non-commercial use with a credit to park.fan. " +
+          "Forecasts need a data key in X-API-Key (free for non-commercial use, on " +
+          "request); without a key, reads are limited to 60 a minute and 1,000 an hour " +
+          "per address. Commercial use of the forecasts and statistics needs a written " +
+          "agreement with Patrick Arns (park.fan), and the live data may not be used " +
+          "commercially through park.fan.",
+      )
+      .setTermsOfService(DATA_TERMS_URL)
+      .setLicense(
+        "Free for non-commercial use; commercial use by agreement",
+        DATA_TERMS_URL,
       )
       .setVersion(packageJson.version)
       .setExternalDoc("Frontend Application", "https://park.fan")
@@ -108,6 +118,17 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
             "token (pfo_…) from /v1/oauth/token. Accepted by /v1/mcp only, read-only.",
         },
         "admin-api-token",
+      )
+      .addApiKey(
+        {
+          type: "apiKey",
+          in: "header",
+          name: "X-API-Key",
+          description:
+            "A data key (pfk_…) for the forecast routes. Free for non-commercial " +
+            "use on request; see the terms.",
+        },
+        "api-key",
       )
       .build()
   );

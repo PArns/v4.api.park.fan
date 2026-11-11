@@ -17,11 +17,15 @@ page for the field or endpoint you are reading or changing.
   re-derive a level a payload already carries ([crowd levels](../rules/crowd-levels.md)).
 - **Dates are park-local** `YYYY-MM-DD`; compare them against the park's `timezone`,
   never the reader's clock.
+- **Forecasts need a data key.** The ML forecast routes answer 401 without one, and mixed
+  routes leave their forecast fields out unless `?forecast=true` comes with a key
+  ([data API keys](./api-keys.md)).
 
 ## Pages
 
 | Page                                                              | Covers                                                                                                          |
 | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [api-keys](./api-keys.md)                                         | which routes need a data key, `?forecast=true` on mixed routes, issuing keys                                    |
 | [plan-day/](./plan-day/README.md)                                 | `/plan/day`: the trip planner's per-ride series for one date                                                    |
 | [schedule](./schedule.md)                                         | `/schedule`: a park's opening-hours range                                                                       |
 | [yearly-predictions](./yearly-predictions.md)                     | `/predictions/yearly`: crowd outlook per day of the year                                                        |

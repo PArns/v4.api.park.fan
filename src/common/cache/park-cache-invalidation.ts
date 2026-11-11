@@ -48,6 +48,9 @@ export async function invalidateParkCaches(
     // (Cloudflare still fronts this endpoint with s-maxage=86400, so the
     // public copy lags until the edge revalidates.)
     CacheKeys.sitemapAttractions(),
+    // Derived from the calendar months cleared below; left alone it kept the
+    // old projection for up to 13 h after a merge or a works-window edit.
+    CacheKeys.bestDays(parkId),
   ];
 
   // Migrated attractions keep their IDs but their integrated payload embeds
@@ -74,6 +77,10 @@ export async function invalidateParkCaches(
     CacheKeys.parkHistoricalStatsPattern(parkId),
     CacheKeys.parkDerivedHoursPattern(parkId),
     CacheKeys.mlParkPattern(parkId),
+    CacheKeys.calendarResponsePattern(parkId),
+    CacheKeys.planDayResponsePattern(parkId),
+    CacheKeys.rideDayCurvePattern(parkId),
+    CacheKeys.predictionsYearlyResponsePattern(parkId),
     ...attractionIds.map((id) => CacheKeys.attractionHistoryPattern(id)),
     ...attractionIds.map((id) => CacheKeys.attractionIntegratedPattern(id)),
   ];
