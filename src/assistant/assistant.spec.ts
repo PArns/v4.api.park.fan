@@ -282,6 +282,16 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("open_page page how_it_works");
     expect(SYSTEM_PROMPT).toContain("# Your life");
     expect(SYSTEM_PROMPT).toContain("who you are, not lines to recite");
+    // His own top three, in order; a ranking of coasters, never of parks.
+    const top = SYSTEM_PROMPT.slice(
+      SYSTEM_PROMPT.indexOf("Your three favourite coasters"),
+    );
+    const favourites = ["VelociCoaster", "Untamed", "Taron"].map((ride) =>
+      top.indexOf(ride),
+    );
+    expect(favourites.every((at) => at > 0)).toBe(true);
+    expect([...favourites].sort((a, b) => a - b)).toEqual(favourites);
+    expect(SYSTEM_PROMPT).toContain("They rank coasters, never parks");
     expect(SYSTEM_PROMPT).toContain("At heart you are a host.");
     // The guides are his own, not a source he cites.
     expect(SYSTEM_PROMPT).not.toContain("park.fan's guides and news");
