@@ -34,6 +34,11 @@ function build(found: Record<string, unknown> | null = null) {
     })),
     findOne: jest.fn(async () => found),
     update: jest.fn(async () => undefined),
+    query: jest.fn(async (_sql: string, params: unknown[]) =>
+      ((params[0] as string[]) ?? [])
+        .filter((id) => id.startsWith("park-"))
+        .map((id) => ({ id, name: `Name of ${id}` })),
+    ),
   };
   const service = new ApiKeyService(keys as never, redis as never);
   return { service, keys, redis, store };
@@ -75,8 +80,18 @@ describe("ApiKeyService.resolve", () => {
   });
 
   it("answers a known key from Postgres once, then from Redis", async () => {
-    const row = { id: ID, usage: "commercial", requestsPerHour: 50 };
-    const resolved = { id: ID, usage: "commercial", requestsPerHour: 50 };
+    const row = {
+      id: ID,
+      usage: "commercial",
+      requestsPerHour: 50,
+      allowedParkIds: ["p1"],
+    };
+    const resolved = {
+      id: ID,
+      usage: "commercial",
+      requestsPerHour: 50,
+      allowedParkIds: ["p1"],
+    };
     const { service, keys } = build(row);
     expect(await service.resolve(key)).toEqual(resolved);
     expect(await service.resolve(key)).toEqual(resolved);
@@ -102,7 +117,12 @@ describe("ApiKeyService.resolve", () => {
 });
 
 describe("ApiKeyService.countRequest", () => {
-  const key = { id: ID, usage: "non-commercial" as const, requestsPerHour: 2 };
+  const key = {
+    id: ID,
+    usage: "non-commercial" as const,
+    requestsPerHour: 2,
+    allowedParkIds: null,
+  };
   // 10:15 UTC: 45 minutes to the next full hour.
   const at = Date.UTC(2026, 10, 11, 10, 15, 0);
 
@@ -128,5 +148,28 @@ describe("ApiKeyService.countRequest", () => {
       await service.countRequest({ ...key, requestsPerHour: null }, at),
     ).toBeNull();
     expect(redis.incr).not.toHaveBeenCalled();
+  });
+});
+
+describe("ApiKeyService parks", () => {
+  it("stores known parks once each and reads an empty list as every park", async () => {
+    const { service, keys } = build();
+    await service.create(
+      { name: "a", allowedParkIds: ["park-1", "park-1"] },
+      null,
+    );
+    expect(keys.save.mock.calls[0][0]).toMatchObject({
+      allowedParkIds: ["park-1"],
+    });
+    await service.create({ name: "b", allowedParkIds: [] }, null);
+    expect(keys.save.mock.calls[1][0]).toMatchObject({ allowedParkIds: null });
+  });
+
+  it("refuses a park that does not exist", async () => {
+    const { service, keys } = build();
+    await expect(
+      service.create({ name: "a", allowedParkIds: ["park-1", "nope"] }, null),
+    ).rejects.toThrow("Unknown park ids: nope");
+    expect(keys.save).not.toHaveBeenCalled();
   });
 });

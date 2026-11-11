@@ -1,12 +1,14 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
-import { ModuleRef } from "@nestjs/core";
+import { ModuleRef, Reflector } from "@nestjs/core";
+import { ParksService } from "../parks/parks.service";
 import type { Response } from "express";
 import {
   carriesThrottleBypassKey,
@@ -53,7 +55,41 @@ export function readPresentedApiKey(
 
 export interface ForecastRequest {
   headers: Record<string, unknown>;
+  params?: Record<string, string | undefined>;
+  query?: unknown;
   apiKey?: ResolvedApiKey;
+}
+
+/** The four slugs that name a park, as the park routes carry them. */
+export type ParkPath = [string, string, string, string];
+
+/**
+ * The park a request is about: the route's `:continent/:country/:city/:parkSlug`,
+ * or `?park=continent/country/city/park` on a route that takes one (`/verify`).
+ */
+export function requestedParkPath(request: ForecastRequest): ParkPath | null {
+  const { continent, country, city, parkSlug } = request.params ?? {};
+  if (continent && country && city && parkSlug) {
+    return [continent, country, city, parkSlug];
+  }
+  const park = (request.query as Record<string, unknown> | undefined)?.park;
+  if (typeof park !== "string") return null;
+  const segments = park.split("/").filter(Boolean);
+  return segments.length === 4 ? (segments as ParkPath) : null;
+}
+
+/** How the check finds a park's id; the guard passes `ParksService`. */
+export type ParkIdResolver = (path: ParkPath) => Promise<string | null>;
+
+export interface ForecastAccessOptions {
+  /** Resolves the requested park, for a key limited to some parks. */
+  resolveParkId?: ParkIdResolver;
+  /**
+   * The route answers without a park (`/verify` without `?park=`), so a key
+   * limited to some parks may call it. Every other route without a park in its
+   * path refuses such a key, because it could reach any park's forecasts.
+   */
+  anyPark?: boolean;
 }
 
 /**
@@ -78,6 +114,7 @@ export async function authorizeForecastRequest(
   apiKeys: ApiKeyService,
   request: ForecastRequest,
   response: Response,
+  options: ForecastAccessOptions = {},
 ): Promise<void> {
   if (isForecastSharedCacheEnabled()) {
     varyResponseByKey(response, ["X-API-Key", getThrottleBypassHeader()]);
@@ -93,6 +130,7 @@ export async function authorizeForecastRequest(
   const resolved = presented ? await apiKeys.resolve(presented) : null;
   if (resolved) {
     if (presentedWith?.source === "bearer") keepResponsePrivate(response);
+    await checkAllowedPark(resolved, request, options);
     const usage = await apiKeys.countRequest(resolved);
     if (usage && !response.headersSent) {
       response.setHeader(API_KEY_LIMIT_HEADERS.limit, String(usage.limit));
@@ -133,6 +171,49 @@ export async function authorizeForecastRequest(
 }
 
 /**
+ * Refuses a key limited to some parks when the request is about another park,
+ * or about no park on a route that could reach any. Before the hourly count, so
+ * a refused request does not use up the allowance.
+ */
+async function checkAllowedPark(
+  key: ResolvedApiKey,
+  request: ForecastRequest,
+  options: ForecastAccessOptions,
+): Promise<void> {
+  if (!key.allowedParkIds) return;
+  const path = requestedParkPath(request);
+  if (!path) {
+    if (options.anyPark) return;
+    throw new ForbiddenException({
+      error: "api-key-park-required",
+      message:
+        "This API key is limited to certain parks, so it can only call routes that name one.",
+      terms: DATA_TERMS_URL,
+    });
+  }
+  const parkId = options.resolveParkId
+    ? await options.resolveParkId(path)
+    : null;
+  if (!parkId || !key.allowedParkIds.includes(parkId)) {
+    throw new ForbiddenException({
+      error: "api-key-park-not-allowed",
+      message: "This API key does not cover this park.",
+      terms: DATA_TERMS_URL,
+    });
+  }
+}
+
+/** Finds a park's id by its slugs, through `ParksService`. */
+export function parkIdResolver(moduleRef: ModuleRef): ParkIdResolver {
+  return async (path) =>
+    (
+      await moduleRef
+        .get(ParksService, { strict: false })
+        .findByGeographicPath(...path)
+    )?.id ?? null;
+}
+
+/**
  * The key store, looked up when a request needs it rather than injected. Nest
  * builds a route's guards and interceptors with every module that mounts the
  * controller, test modules included; a constructor dependency would make each
@@ -142,10 +223,16 @@ export function apiKeyStore(moduleRef: ModuleRef): ApiKeyService {
   return moduleRef.get(ApiKeyService, { strict: false });
 }
 
+/** Set by `RequiresApiKey({ anyPark: true })`; see `ForecastAccessOptions.anyPark`. */
+export const API_KEY_ANY_PARK = "apiKeyAnyPark";
+
 /** Puts a whole route behind a data key; see `authorizeForecastRequest`. */
 @Injectable()
 export class ForecastAccessGuard implements CanActivate {
-  constructor(private readonly moduleRef: ModuleRef) {}
+  constructor(
+    private readonly moduleRef: ModuleRef,
+    private readonly reflector: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
@@ -153,6 +240,14 @@ export class ForecastAccessGuard implements CanActivate {
       apiKeyStore(this.moduleRef),
       http.getRequest<ForecastRequest>(),
       http.getResponse<Response>(),
+      {
+        resolveParkId: parkIdResolver(this.moduleRef),
+        anyPark:
+          this.reflector.get<boolean>(
+            API_KEY_ANY_PARK,
+            context.getHandler(),
+          ) === true,
+      },
     );
     return true;
   }

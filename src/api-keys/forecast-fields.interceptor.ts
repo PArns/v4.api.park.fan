@@ -14,6 +14,7 @@ import { from, map, Observable, switchMap } from "rxjs";
 import {
   apiKeyStore,
   authorizeForecastRequest,
+  parkIdResolver,
   type ForecastRequest,
 } from "./forecast-access.guard";
 import { omitPaths } from "./omit-paths";
@@ -47,7 +48,7 @@ export class ForecastFieldsInterceptor implements NestInterceptor {
       this.reflector.get<string[]>(FORECAST_FIELDS_KEY, context.getHandler()) ??
       [];
     const http = context.switchToHttp();
-    const request = http.getRequest<ForecastRequest & { query?: unknown }>();
+    const request = http.getRequest<ForecastRequest>();
 
     if (wantsForecast(request.query)) {
       return from(
@@ -55,6 +56,7 @@ export class ForecastFieldsInterceptor implements NestInterceptor {
           apiKeyStore(this.moduleRef),
           request,
           http.getResponse<Response>(),
+          { resolveParkId: parkIdResolver(this.moduleRef) },
         ),
       ).pipe(switchMap(() => next.handle()));
     }

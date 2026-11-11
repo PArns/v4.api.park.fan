@@ -62,6 +62,18 @@ until the next full hour. Each keyed answer reports `X-API-Key-Hourly-Limit`,
 not counted. Only requests that reach the API count: an answer Cloudflare serves from its cache
 does not, and its `Remaining` header is the one from when it was fetched.
 
+## Parks
+
+A key can be limited to some parks (`allowed_park_ids`, ids rather than slugs so a renamed park
+keeps its licence; null means every park). `authorizeForecastRequest` reads the park from the
+route's `:continent/:country/:city/:parkSlug`, resolves it through `ParksService` and answers 403
+`api-key-park-not-allowed` for any other park, before the request counts against the hourly
+allowance. A route that names no park (`/favorites`) answers such a key 403
+`api-key-park-required`, because it could reach any park's forecasts. `/v1/api-keys/verify` is
+the exception (`RequiresApiKey({ anyPark: true })`): it reports the key's `allowedParkIds`, and with
+`?park=continent/country/city/park` it checks that park; park.fan's MCP server asks it that way
+before it answers a forecast tool for a key.
+
 ## Caching
 
 Cloudflare caches by URL and does not see `X-API-Key`. On Pro a request header cannot be part of
@@ -123,9 +135,9 @@ If the last line ever shows a `HIT`, unset `FORECAST_SHARED_CACHE` and purge the
 
 `/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update` and
 `api-key.revoke`): `GET` lists every key, active first, with `requestsThisHour`;
-`POST { name, contact?, usage?, note?, requestsPerHour? }` returns `{ key, item }` with the key in
-clear exactly once; `PATCH /:id { requestsPerHour }` changes the allowance from the next request
-on; `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
+`POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds? }` returns `{ key, item }` with the key in
+clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds? }` changes either from the next request on
+(an unknown park id is a 400); `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
 key and its first ten characters. `ApiKeyService.resolve` caches a valid key in Redis for five
 minutes and an unknown or revoked one for one minute; a revocation deletes the cached entry, and
 `last_used_at` is written at most every ten minutes per key.

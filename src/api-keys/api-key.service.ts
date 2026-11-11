@@ -1,4 +1,9 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import type { Redis } from "ioredis";
 import { IsNull, Repository } from "typeorm";
@@ -22,6 +27,10 @@ export interface ApiKeyItem {
   prefix: string;
   /** The hourly allowance; null means only the general per-address limit. */
   requestsPerHour: number | null;
+  /** The parks the key may read; null means every park. */
+  allowedParkIds: string[] | null;
+  /** Those parks by name, for the list (list only). */
+  allowedParks?: { id: string; name: string }[] | null;
   /** Requests counted in the current clock hour (list only). */
   requestsThisHour?: number;
   createdAt: Date;
@@ -34,6 +43,13 @@ export interface ResolvedApiKey {
   id: string;
   usage: ApiKeyUsage;
   requestsPerHour: number | null;
+  allowedParkIds: string[] | null;
+}
+
+/** What `update` may change; a field left out stays as it is. */
+export interface ApiKeyPatch {
+  requestsPerHour?: number | null;
+  allowedParkIds?: string[] | null;
 }
 
 /** Where a key stands against its hourly allowance after one more request. */
@@ -79,6 +95,7 @@ function toItem(row: ApiKey): ApiKeyItem {
     note: row.note,
     prefix: row.prefix,
     requestsPerHour: row.requestsPerHour,
+    allowedParkIds: row.allowedParkIds,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
     revokedAt: row.revokedAt,
@@ -110,9 +127,11 @@ export class ApiKeyService {
       usage?: ApiKeyUsage;
       note?: string | null;
       requestsPerHour?: number | null;
+      allowedParkIds?: string[] | null;
     },
     createdBy: string | null,
   ): Promise<{ key: string; item: ApiKeyItem }> {
+    const allowedParkIds = await this.knownParkIds(input.allowedParkIds);
     const key = generateToken(API_KEY_PREFIX);
     const row = await this.keys.save(
       this.keys.create({
@@ -124,6 +143,7 @@ export class ApiKeyService {
           input.requestsPerHour === undefined
             ? DEFAULT_REQUESTS_PER_HOUR
             : input.requestsPerHour,
+        allowedParkIds,
         prefix: key.slice(0, API_KEY_VISIBLE_CHARS),
         keyHash: hashToken(key),
         createdBy,
@@ -146,25 +166,76 @@ export class ApiKeyService {
     const counts = await this.redis.mget(
       ...rows.map((row) => hourKey(row.id, hour)),
     );
+    const names = await this.parkNames(
+      rows.flatMap((row) => row.allowedParkIds ?? []),
+    );
     return rows.map((row, i) => ({
       ...toItem(row),
       requestsThisHour: Number(counts[i] ?? 0),
+      allowedParks:
+        row.allowedParkIds?.map((id) => ({ id, name: names.get(id) ?? id })) ??
+        null,
     }));
   }
 
-  /** Changes an active key's hourly allowance; null when there is no such active key. */
-  async setRequestsPerHour(
+  /**
+   * Changes an active key's hourly allowance and parks; null when there is no
+   * such active key. `before` and `after` hold only the fields that were sent.
+   */
+  async update(
     id: string,
-    requestsPerHour: number | null,
-  ): Promise<{ before: number | null; item: ApiKeyItem } | null> {
+    patch: ApiKeyPatch,
+  ): Promise<{
+    before: ApiKeyPatch;
+    after: ApiKeyPatch;
+    item: ApiKeyItem;
+  } | null> {
     const row = await this.keys.findOne({ where: { id, revokedAt: IsNull() } });
     if (!row) return null;
-    const before = row.requestsPerHour;
-    row.requestsPerHour = requestsPerHour;
+    const before: ApiKeyPatch = {};
+    const after: ApiKeyPatch = {};
+    if (patch.requestsPerHour !== undefined) {
+      before.requestsPerHour = row.requestsPerHour;
+      row.requestsPerHour = patch.requestsPerHour;
+      after.requestsPerHour = row.requestsPerHour;
+    }
+    if (patch.allowedParkIds !== undefined) {
+      before.allowedParkIds = row.allowedParkIds;
+      row.allowedParkIds = await this.knownParkIds(patch.allowedParkIds);
+      after.allowedParkIds = row.allowedParkIds;
+    }
     await this.keys.save(row);
-    // The cached lookup carries the allowance, so the change applies at once.
+    // The cached lookup carries both, so the change applies at once.
     await this.redis.del(cacheKey(row.keyHash));
-    return { before, item: toItem(row) };
+    return { before, after, item: toItem(row) };
+  }
+
+  /**
+   * The given park ids, deduplicated, after checking each names a park; null or
+   * an empty list means every park. An unknown id is a 400, because a key
+   * limited to a park that does not exist would silently open nothing.
+   */
+  private async knownParkIds(
+    ids: string[] | null | undefined,
+  ): Promise<string[] | null> {
+    if (!ids || ids.length === 0) return null;
+    const unique = [...new Set(ids)];
+    const names = await this.parkNames(unique);
+    const unknown = unique.filter((id) => !names.has(id));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Unknown park ids: ${unknown.join(", ")}`);
+    }
+    return unique;
+  }
+
+  /** Park names by id, for the ids that exist. */
+  private async parkNames(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const rows = (await this.keys.query(
+      `SELECT id, name FROM parks WHERE id = ANY($1::uuid[])`,
+      [[...new Set(ids)]],
+    )) as { id: string; name: string }[];
+    return new Map(rows.map((row) => [row.id, row.name]));
   }
 
   /**
@@ -209,6 +280,7 @@ export class ApiKeyService {
     if (cached) {
       const resolved = JSON.parse(cached) as ResolvedApiKey;
       resolved.requestsPerHour ??= null;
+      resolved.allowedParkIds ??= null;
       this.touch(resolved.id);
       return resolved;
     }
@@ -229,6 +301,7 @@ export class ApiKeyService {
       id: row.id,
       usage: row.usage,
       requestsPerHour: row.requestsPerHour,
+      allowedParkIds: row.allowedParkIds,
     };
     await this.redis.set(
       cacheKey(hash),

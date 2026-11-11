@@ -1,7 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsIn,
   IsInt,
+  IsUUID,
   IsOptional,
   IsString,
   Max,
@@ -18,6 +21,9 @@ import {
 
 /** The largest hourly allowance the admin may set; above it, use null. */
 export const MAX_REQUESTS_PER_HOUR = 1_000_000;
+
+/** More parks than this on one key is every park, which null says more plainly. */
+export const MAX_ALLOWED_PARKS = 200;
 
 /** The body of `POST /v1/admin/api-keys`. */
 export class CreateApiKeyDto {
@@ -68,19 +74,46 @@ export class CreateApiKeyDto {
   @Min(1)
   @Max(MAX_REQUESTS_PER_HOUR)
   requestsPerHour?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      "The parks (ids) the key may read forecasts for; null or absent for every park.",
+    nullable: true,
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_ALLOWED_PARKS)
+  @IsUUID("all", { each: true })
+  allowedParkIds?: string[] | null;
 }
 
-/** The body of `PATCH /v1/admin/api-keys/:id`. */
+/**
+ * The body of `PATCH /v1/admin/api-keys/:id`. A field left out stays as it is;
+ * null clears it (no per-key limit, every park).
+ */
 export class UpdateApiKeyDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
       "Requests the key may make per clock hour; null for no per-key limit.",
     nullable: true,
     example: DEFAULT_REQUESTS_PER_HOUR,
   })
-  @ValidateIf((_dto, value) => value !== null)
+  @IsOptional()
   @IsInt()
   @Min(1)
   @Max(MAX_REQUESTS_PER_HOUR)
-  requestsPerHour: number | null;
+  requestsPerHour?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      "The parks (ids) the key may read forecasts for; null for every park.",
+    nullable: true,
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_ALLOWED_PARKS)
+  @IsUUID("all", { each: true })
+  allowedParkIds?: string[] | null;
 }

@@ -1,5 +1,5 @@
 import { Controller, Get, Req } from "@nestjs/common";
-import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { ForecastRequest } from "./forecast-access.guard";
 import { RequiresApiKey } from "./requires-api-key.decorator";
 
@@ -11,14 +11,27 @@ import { RequiresApiKey } from "./requires-api-key.decorator";
 @Controller("api-keys")
 export class ApiKeysController {
   @Get("verify")
-  @RequiresApiKey()
+  @RequiresApiKey({ anyPark: true })
   @ApiOperation({
     summary: "Check a data API key",
     description:
-      "200 with the key's usage when the key in `X-API-Key` is active, 401 otherwise.",
+      "200 with the key's usage and parks when the key in `X-API-Key` is active, 401 otherwise. With `park`, 403 when the key does not cover that park.",
   })
-  @ApiResponse({ status: 200, description: "`{ valid: true, usage }`" })
+  @ApiQuery({
+    name: "park",
+    required: false,
+    description:
+      "A park as `continent/country/city/park`, e.g. `europe/germany/rust/europa-park`.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "`{ valid: true, usage, allowedParkIds }` (null: every park)",
+  })
   verify(@Req() request: ForecastRequest) {
-    return { valid: true, usage: request.apiKey?.usage ?? null };
+    return {
+      valid: true,
+      usage: request.apiKey?.usage ?? null,
+      allowedParkIds: request.apiKey?.allowedParkIds ?? null,
+    };
   }
 }

@@ -79,6 +79,7 @@ export class AdminApiKeysController {
         usage: body.usage,
         note: body.note ? stripInvisibleCharacters(body.note) : null,
         requestsPerHour: body.requestsPerHour,
+        allowedParkIds: body.allowedParkIds,
       },
       admin.userId ?? null,
     );
@@ -93,6 +94,7 @@ export class AdminApiKeysController {
         prefix: created.item.prefix,
         contact: created.item.contact,
         requestsPerHour: created.item.requestsPerHour,
+        allowedParkIds: created.item.allowedParkIds,
       },
     });
     return created;
@@ -100,9 +102,9 @@ export class AdminApiKeysController {
 
   @Patch(":id")
   @ApiOperation({
-    summary: "Change a data API key's hourly allowance",
+    summary: "Change a data API key's hourly allowance or parks",
     description:
-      "`requestsPerHour` per clock hour, or null for no per-key limit. Applies to the next request.",
+      "`requestsPerHour` per clock hour (null: no per-key limit) and `allowedParkIds` (null: every park). A field left out stays as it is. Applies to the next request.",
   })
   @ApiResponse({ status: 404, description: "No such active key" })
   async update(
@@ -112,10 +114,10 @@ export class AdminApiKeysController {
   ) {
     if (!isCanonicalUuid(id))
       throw new BadRequestException("id must be a uuid");
-    const changed = await this.apiKeys.setRequestsPerHour(
-      id,
-      body.requestsPerHour,
-    );
+    const changed = await this.apiKeys.update(id, {
+      requestsPerHour: body.requestsPerHour,
+      allowedParkIds: body.allowedParkIds,
+    });
     if (!changed) throw new NotFoundException("No such active key");
     await this.audit.record({
       actor: admin,
@@ -123,8 +125,8 @@ export class AdminApiKeysController {
       entityType: "api_key",
       entityId: changed.item.id,
       entityLabel: changed.item.name,
-      before: { requestsPerHour: changed.before },
-      after: { requestsPerHour: changed.item.requestsPerHour },
+      before: { ...changed.before },
+      after: { ...changed.after },
     });
     return { item: changed.item };
   }

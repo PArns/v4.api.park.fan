@@ -39,6 +39,18 @@ export class ApiKey {
   @Column({ name: "requests_per_hour", type: "integer", nullable: true })
   requestsPerHour: number | null;
 
+  /**
+   * The parks the key may read forecasts for; null means every park. Ids, not
+   * slugs, so a renamed park keeps its licence.
+   */
+  @Column({
+    name: "allowed_park_ids",
+    type: "uuid",
+    array: true,
+    nullable: true,
+  })
+  allowedParkIds: string[] | null;
+
   /** The first characters of the key, enough to recognise it. */
   @Column({ type: "text" })
   prefix: string;

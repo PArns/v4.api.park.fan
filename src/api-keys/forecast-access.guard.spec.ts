@@ -11,8 +11,12 @@ import {
 
 const VALID = `pfk_${"c".repeat(43)}`;
 
-function context(headers: Record<string, unknown>) {
-  const request: Record<string, unknown> = { headers };
+function context(
+  headers: Record<string, unknown>,
+  params: Record<string, string> = {},
+  query: Record<string, string> = {},
+) {
+  const request: Record<string, unknown> = { headers, params, query };
   const sent = new Map<string, unknown>();
   const response = {
     headersSent: false,
@@ -26,6 +30,7 @@ function context(headers: Record<string, unknown>) {
     sent,
     response,
     ctx: {
+      getHandler: () => undefined,
       switchToHttp: () => ({
         getRequest: () => request,
         getResponse: () => response,
@@ -34,12 +39,26 @@ function context(headers: Record<string, unknown>) {
   };
 }
 
-function guard() {
+const LIMITED = `pfk_${"e".repeat(43)}`;
+
+function guard(anyPark = false) {
   const apiKeys = {
     resolve: jest.fn(async (value: string) =>
       value === VALID
-        ? { id: "k1", usage: "non-commercial", requestsPerHour: 2 }
-        : null,
+        ? {
+            id: "k1",
+            usage: "non-commercial",
+            requestsPerHour: 2,
+            allowedParkIds: null,
+          }
+        : value === LIMITED
+          ? {
+              id: "k2",
+              usage: "commercial",
+              requestsPerHour: null,
+              allowedParkIds: ["mk-id"],
+            }
+          : null,
     ),
     countRequest: jest.fn(
       async (): Promise<{
@@ -55,9 +74,20 @@ function guard() {
       }),
     ),
   };
+  const parks = {
+    findByGeographicPath: jest.fn(async (...path: string[]) =>
+      path[3] === "magic-kingdom-park" ? { id: "mk-id" } : { id: "other-id" },
+    ),
+  };
+  const moduleRef = {
+    get: (token: { name?: string }) =>
+      token?.name === "ParksService" ? parks : apiKeys,
+  };
+  const reflector = { get: () => anyPark };
   return {
-    guard: new ForecastAccessGuard({ get: () => apiKeys } as never),
+    guard: new ForecastAccessGuard(moduleRef as never, reflector as never),
     apiKeys,
+    parks,
   };
 }
 
@@ -99,6 +129,7 @@ describe("ForecastAccessGuard", () => {
       id: "k1",
       usage: "non-commercial",
       requestsPerHour: 2,
+      allowedParkIds: null,
     });
   });
 
@@ -157,6 +188,64 @@ describe("ForecastAccessGuard", () => {
     } finally {
       delete process.env.FORECAST_BYPASS_KEY;
     }
+  });
+
+  describe("a key limited to some parks", () => {
+    const route = (park: string) => ({
+      continent: "north-america",
+      country: "united-states",
+      city: "orlando",
+      parkSlug: park,
+    });
+
+    it("reads its own parks", async () => {
+      const { guard: g } = guard();
+      const { ctx } = context(
+        { "x-api-key": LIMITED },
+        route("magic-kingdom-park"),
+      );
+      await expect(g.canActivate(ctx)).resolves.toBe(true);
+    });
+
+    it("is refused for another park, before the hourly count", async () => {
+      const { guard: g, apiKeys } = guard();
+      const { ctx } = context({ "x-api-key": LIMITED }, route("epcot"));
+      const error = (await g
+        .canActivate(ctx)
+        .catch((e: unknown) => e)) as HttpException;
+      expect(error.getStatus()).toBe(403);
+      expect(error.getResponse()).toMatchObject({
+        error: "api-key-park-not-allowed",
+      });
+      expect(apiKeys.countRequest).not.toHaveBeenCalled();
+    });
+
+    it("is refused on a route that names no park", async () => {
+      const { guard: g } = guard();
+      const { ctx } = context({ "x-api-key": LIMITED });
+      const error = (await g
+        .canActivate(ctx)
+        .catch((e: unknown) => e)) as HttpException;
+      expect(error.getResponse()).toMatchObject({
+        error: "api-key-park-required",
+      });
+    });
+
+    it("may call /verify, which checks ?park= when it is given", async () => {
+      const { guard: g } = guard(true);
+      await expect(
+        g.canActivate(context({ "x-api-key": LIMITED }).ctx),
+      ).resolves.toBe(true);
+      const other = context(
+        { "x-api-key": LIMITED },
+        {},
+        { park: "north-america/united-states/orlando/epcot" },
+      );
+      const error = (await g
+        .canActivate(other.ctx)
+        .catch((e: unknown) => e)) as HttpException;
+      expect(error.getStatus()).toBe(403);
+    });
   });
 
   it("does not count park.fan's own frontend", async () => {
