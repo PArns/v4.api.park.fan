@@ -142,7 +142,7 @@ park.fan combines these sources. Thank you for making theme park data accessible
 ## 📄 Terms of use
 
 The API is free for non-commercial use: a personal app, a fan site without advertising, a
-research project, a lesson. Name park.fan as the source and link the page the figures came from.
+research project, a lesson. Credit park.fan and link to the park or ride page you used.
 No key, no sign-up.
 
 - **The forecasts are never for commercial use.** The crowd calendar, the crowd forecast per day
