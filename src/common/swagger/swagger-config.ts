@@ -27,6 +27,15 @@ export const GLOBAL_PREFIX_OPTIONS = {
   ],
 };
 
+/**
+ * The terms of use, on park.fan because the frontend owns the legal pages:
+ * free for non-commercial use, the forecasts never for commercial use, the
+ * live data under its sources' terms. The same address as `DATA_TERMS_URL` in
+ * the frontend's `lib/agents/licensing.ts`, which its RSL licence and API
+ * catalog link to.
+ */
+export const DATA_TERMS_URL = "https://park.fan/en/impressum#data-use";
+
 export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
   return (
     new DocumentBuilder()
@@ -34,7 +43,14 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
       .setDescription(
         "Real-time theme park intelligence powered by machine learning. " +
           "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-          "for optimal theme park experiences worldwide.",
+          "for optimal theme park experiences worldwide. " +
+          "Free for non-commercial use with a credit to park.fan; the forecasts are " +
+          "never for commercial use, and live wait times stay under their sources' terms.",
+      )
+      .setTermsOfService(DATA_TERMS_URL)
+      .setLicense(
+        "Non-commercial use, forecasts never commercial",
+        DATA_TERMS_URL,
       )
       .setVersion(packageJson.version)
       .setExternalDoc("Frontend Application", "https://park.fan")
