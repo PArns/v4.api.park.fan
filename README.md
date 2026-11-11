@@ -153,15 +153,16 @@ research project, a lesson. Credit park.fan and link to the park or ride page yo
   shown, stored or passed on in a paid app, an app with subscriptions, in-app purchases or ads, a
   site with ads or affiliate links, or any product a company offers.
 - **Live data is for non-commercial use only.** Wait times, opening hours and weather come from
-  the sources above. park.fan passes them on for non-commercial use only and grants no rights to
-  them; commercial use needs an agreement with the source itself.
+  the sources above. park.fan passes them on for non-commercial use and holds no rights of its own
+  in them, so commercial use needs an agreement with the source itself.
 - **Etiquette.** Send a `User-Agent` that names your project and a way to reach you. Live waits
   change on the order of minutes; polling faster than every five minutes returns the same numbers.
 
 The full terms: **[park.fan/en/impressum#data-use](https://park.fan/en/impressum#data-use)**.
 
-The code in this repository is **UNLICENSED** — private project by
-[Patrick Arns](https://arns.dev/).
+The code in this repository is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md): free for any noncommercial purpose, commercial
+use only under a written agreement. [NOTICE.md](NOTICE.md) lists what it does not cover.
 
 <div align="center">
 
