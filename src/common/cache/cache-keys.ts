@@ -81,6 +81,35 @@ export const CacheKeys = {
    */
   bestDays: (parkId: string): string => `best-days:${parkId}`,
 
+  /**
+   * Whole route answers kept in Redis because a keyed forecast leaves the API
+   * private, so Cloudflare no longer absorbs its repeats (docs/frontend/api-keys.md).
+   * Each has a `resp:v1` segment of its own: `plan-day:h5:v2:*` already lives
+   * under `plan-day:`, and a pattern for these must not take it along.
+   */
+  calendarResponse: (
+    parkId: string,
+    from: string,
+    to: string,
+    includeHourly: string,
+    withHolidays: boolean,
+  ): string =>
+    `calendar:resp:v1:${parkId}:${from}:${to}:${includeHourly}:${withHolidays ? "h" : "-"}`,
+  calendarResponsePattern: (parkId: string): string =>
+    `calendar:resp:v1:${parkId}:*`,
+  planDayResponse: (parkId: string, date: string): string =>
+    `plan-day:resp:v1:${parkId}:${date}`,
+  planDayResponsePattern: (parkId: string): string =>
+    `plan-day:resp:v1:${parkId}:*`,
+  rideDayCurve: (parkId: string, attraction: string): string =>
+    `ride-day-curve:v1:${parkId}:${attraction}`,
+  rideDayCurvePattern: (parkId: string): string =>
+    `ride-day-curve:v1:${parkId}:*`,
+  predictionsYearlyResponse: (parkId: string, date: string): string =>
+    `predictions-yearly:resp:v1:${parkId}:${date}`,
+  predictionsYearlyResponsePattern: (parkId: string): string =>
+    `predictions-yearly:resp:v1:${parkId}:*`,
+
   /** Glob matching every schedule:* key of a park (parkId is the 3rd segment!). */
   scheduleParkPattern: (parkId: string): string => `schedule:*:${parkId}:*`,
 

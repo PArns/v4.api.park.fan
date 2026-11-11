@@ -43,6 +43,9 @@ export const PARK_CACHE_FLUSH_PATTERNS: readonly string[] = [
   "ml:dashboard:*", // ML dashboard snapshot (5min cache)
   "location:*", // /nearby shared park-coordinate index
   "best-days:*", // best-days snapshot, derived from the calendar:* month caches
+  "plan-day:resp:*", // /plan/day answers (15 min); `plan-day:h5:*` stays
+  "ride-day-curve:*", // /stats/day answers (2 min)
+  "predictions-yearly:*", // /predictions/yearly answers
   "sitemap:attractions:*", // attraction sitemap (24h)
   "ml:drift:*", // drift monitoring snapshot (30min)
   "ml:lead-mae:*", // lead-time MAE per bucket

@@ -30,13 +30,65 @@ const getThrottleTtlSeconds = (): number =>
 
 export const isThrottlingEnabled = (): boolean => getThrottleLimit() > 0;
 
-export const getThrottlerOptions = (): ThrottlerModuleOptions => [
-  {
-    // @nestjs/throttler v6 expects the window in milliseconds.
-    ttl: getThrottleTtlSeconds() * 1000,
-    limit: getThrottleLimit(),
-  },
+/**
+ * The tighter limits for callers without a data key on the public data routes
+ * (`isAnonymousDataRequest`): per minute and per hour, on top of the circuit
+ * breaker above. A data key lifts them; park.fan's own frontend skips every
+ * limit through the bypass key. 0 turns either off.
+ */
+export const ANONYMOUS_THROTTLERS = {
+  minute: "anonymous-minute",
+  hour: "anonymous-hour",
+} as const;
+
+const getAnonymousMinuteLimit = (): number =>
+  parseInt(process.env.THROTTLE_ANON_LIMIT ?? "60", 10);
+
+const getAnonymousHourLimit = (): number =>
+  parseInt(process.env.THROTTLE_ANON_HOURLY_LIMIT ?? "1000", 10);
+
+export const getThrottlerOptions = (): ThrottlerModuleOptions => {
+  const minute = getAnonymousMinuteLimit();
+  const hour = getAnonymousHourLimit();
+  return [
+    {
+      // @nestjs/throttler v6 expects the window in milliseconds.
+      ttl: getThrottleTtlSeconds() * 1000,
+      limit: getThrottleLimit(),
+    },
+    ...(minute > 0
+      ? [{ name: ANONYMOUS_THROTTLERS.minute, ttl: 60_000, limit: minute }]
+      : []),
+    ...(hour > 0
+      ? [{ name: ANONYMOUS_THROTTLERS.hour, ttl: 3_600_000, limit: hour }]
+      : []),
+  ];
+};
+
+/**
+ * The public data reads the anonymous limits apply to. A list rather than
+ * "everything": park.fan's own pages call some routes from the browser, without
+ * a key and often from one carrier-NAT address for a whole park (Parky, the
+ * site statistic, favourites, nearby, trips, push), and those keep only the
+ * circuit breaker.
+ */
+const ANONYMOUS_DATA_PATHS: readonly RegExp[] = [
+  /^\/v1\/parks(\/|$)/,
+  /^\/v1\/discovery(\/(?!nearby(\/|$))|$)/,
+  /^\/v1\/search(\/|$)/,
+  /^\/v1\/analytics\/(realtime|geo-live|ticker|best-times)(\/|$)/,
+  /^\/v1\/glossary(\/|$)/,
+  /^\/v1\/sitemap(\/|$)/,
+  /^\/v1\/page-views\/top(\/|$)/,
+  /^\/v1\/ml(\/|$)/,
 ];
+
+/** Whether a request is a public data read the anonymous limits count. */
+export function isAnonymousDataRequest(method: string, url: string): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const path = url.split("?")[0].toLowerCase();
+  return ANONYMOUS_DATA_PATHS.some((pattern) => pattern.test(path));
+}
 
 /**
  * Bypass allow-list. A request carrying the bypass header with a value

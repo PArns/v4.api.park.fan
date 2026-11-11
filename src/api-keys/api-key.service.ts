@@ -8,6 +8,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import type { Redis } from "ioredis";
 import { IsNull, Repository } from "typeorm";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { safeJsonParse } from "../common/utils/json.util";
 import { generateToken, hashToken } from "../admin/auth/token-hash.util";
 import {
   API_KEY_PREFIX,
@@ -86,6 +87,15 @@ export function looksLikeApiKey(value: string): boolean {
   return /^pfk_[A-Za-z0-9_-]{43}$/.test(value);
 }
 
+function toResolved(row: ApiKey): ResolvedApiKey {
+  return {
+    id: row.id,
+    usage: row.usage,
+    requestsPerHour: row.requestsPerHour,
+    allowedParkIds: row.allowedParkIds,
+  };
+}
+
 function toItem(row: ApiKey): ApiKeyItem {
   return {
     id: row.id,
@@ -113,6 +123,8 @@ function toItem(row: ApiKey): ApiKeyItem {
 @Injectable()
 export class ApiKeyService {
   private readonly logger = new Logger(ApiKeyService.name);
+  /** When this process last recorded each key's use. */
+  private readonly touchedAt = new Map<string, number>();
 
   constructor(
     @InjectRepository(ApiKey) private readonly keys: Repository<ApiKey>,
@@ -140,9 +152,11 @@ export class ApiKeyService {
         usage: input.usage ?? "non-commercial",
         note: input.note || null,
         requestsPerHour:
-          input.requestsPerHour === undefined
-            ? DEFAULT_REQUESTS_PER_HOUR
-            : input.requestsPerHour,
+          input.requestsPerHour !== undefined
+            ? input.requestsPerHour
+            : input.usage === "internal"
+              ? null
+              : DEFAULT_REQUESTS_PER_HOUR,
         allowedParkIds,
         prefix: key.slice(0, API_KEY_VISIBLE_CHARS),
         keyHash: hashToken(key),
@@ -205,21 +219,27 @@ export class ApiKeyService {
       after.allowedParkIds = row.allowedParkIds;
     }
     await this.keys.save(row);
-    // The cached lookup carries both, so the change applies at once.
-    await this.redis.del(cacheKey(row.keyHash));
+    // Written over the cached lookup rather than deleted: a resolve that read
+    // the old row before this save could otherwise put it back for five
+    // minutes. `resolve` stores only where nothing is cached (NX).
+    await this.cacheValid(row.keyHash, toResolved(row)).catch(() =>
+      this.redis.del(cacheKey(row.keyHash)),
+    );
     return { before, after, item: toItem(row) };
   }
 
   /**
-   * The given park ids, deduplicated, after checking each names a park; null or
-   * an empty list means every park. An unknown id is a 400, because a key
-   * limited to a park that does not exist would silently open nothing.
+   * The given park ids, lowercased and deduplicated, after checking each names
+   * a park; null means every park. An unknown id is a 400, because a key
+   * limited to a park that does not exist would silently open nothing. An
+   * empty list never reaches here: the DTOs refuse it, so removing a key's
+   * last park cannot quietly open every park.
    */
   private async knownParkIds(
     ids: string[] | null | undefined,
   ): Promise<string[] | null> {
-    if (!ids || ids.length === 0) return null;
-    const unique = [...new Set(ids)];
+    if (!ids) return null;
+    const unique = [...new Set(ids.map((id) => id.toLowerCase()))];
     const names = await this.parkNames(unique);
     const unknown = unique.filter((id) => !names.has(id));
     if (unknown.length > 0) {
@@ -247,11 +267,26 @@ export class ApiKeyService {
     key: ResolvedApiKey,
     now = Date.now(),
   ): Promise<HourlyUsage | null> {
-    if (key.requestsPerHour === null) return null;
+    if (key.requestsPerHour === null || key.usage === "internal") return null;
     const hour = currentHour(now);
     const counter = hourKey(key.id, hour);
-    const count = await this.redis.incr(counter);
-    if (count === 1) await this.redis.expire(counter, 3_700);
+    let count: number;
+    try {
+      // One round trip; the expiry is set with the first increment or not at
+      // all, so a counter never outlives its hour (EXPIRE NX, Redis 7+).
+      const replies = await this.redis
+        .multi()
+        .incr(counter)
+        .expire(counter, 3_700, "NX")
+        .exec();
+      count = Number(replies?.[0]?.[1]);
+      if (!Number.isFinite(count)) return null;
+    } catch (error: unknown) {
+      // Fail open, like every limiter here: Redis being down must not turn
+      // every keyed forecast into an error.
+      this.logger.warn(`Could not count API key ${key.id}: ${String(error)}`);
+      return null;
+    }
     return {
       limit: key.requestsPerHour,
       remaining: Math.max(0, key.requestsPerHour - count),
@@ -266,7 +301,15 @@ export class ApiKeyService {
     if (!row) return null;
     row.revokedAt = new Date();
     await this.keys.save(row);
-    await this.redis.del(cacheKey(row.keyHash));
+    // The refusal is written, not the entry deleted: a resolve that read the
+    // still-active row a moment earlier stores only where nothing is (NX), so
+    // it cannot bring the key back for the next five minutes.
+    await this.redis.set(
+      cacheKey(row.keyHash),
+      INVALID_MARKER,
+      "EX",
+      VALID_TTL_SECONDS,
+    );
     return toItem(row);
   }
 
@@ -275,42 +318,51 @@ export class ApiKeyService {
     if (!looksLikeApiKey(presented)) return null;
     const hash = hashToken(presented);
 
-    const cached = await this.redis.get(cacheKey(hash));
+    // A Redis failure reads as a miss: the key is then checked in Postgres.
+    const cached = await this.redis.get(cacheKey(hash)).catch(() => null);
     if (cached === INVALID_MARKER) return null;
-    if (cached) {
-      const resolved = JSON.parse(cached) as ResolvedApiKey;
-      resolved.requestsPerHour ??= null;
-      resolved.allowedParkIds ??= null;
-      this.touch(resolved.id);
-      return resolved;
+    const fromCache = safeJsonParse<ResolvedApiKey>(cached);
+    if (fromCache) {
+      fromCache.requestsPerHour ??= null;
+      fromCache.allowedParkIds ??= null;
+      this.touch(fromCache.id);
+      return fromCache;
     }
 
     const row = await this.keys.findOne({
       where: { keyHash: hash, revokedAt: IsNull() },
     });
     if (!row) {
-      await this.redis.set(
-        cacheKey(hash),
-        INVALID_MARKER,
-        "EX",
-        INVALID_TTL_SECONDS,
-      );
+      await this.redis
+        .set(cacheKey(hash), INVALID_MARKER, "EX", INVALID_TTL_SECONDS, "NX")
+        .catch(() => undefined);
       return null;
     }
-    const resolved: ResolvedApiKey = {
-      id: row.id,
-      usage: row.usage,
-      requestsPerHour: row.requestsPerHour,
-      allowedParkIds: row.allowedParkIds,
-    };
+    const resolved = toResolved(row);
+    await this.redis
+      .set(
+        cacheKey(hash),
+        JSON.stringify(resolved),
+        "EX",
+        VALID_TTL_SECONDS,
+        "NX",
+      )
+      .catch(() => undefined);
+    this.touch(row.id);
+    return resolved;
+  }
+
+  /** Overwrites the cached lookup of a key with its current state. */
+  private async cacheValid(
+    hash: string,
+    resolved: ResolvedApiKey,
+  ): Promise<void> {
     await this.redis.set(
       cacheKey(hash),
       JSON.stringify(resolved),
       "EX",
       VALID_TTL_SECONDS,
     );
-    this.touch(row.id);
-    return resolved;
   }
 
   /**
@@ -318,6 +370,13 @@ export class ApiKeyService {
    * the request it came from: a slow write must not delay a forecast.
    */
   private touch(id: string): void {
+    // Asked in-process first, so a busy key does not send a Redis write with
+    // every request; the Redis NX below keeps several processes to one write.
+    const now = Date.now();
+    if ((this.touchedAt.get(id) ?? 0) > now - TOUCH_INTERVAL_SECONDS * 1000) {
+      return;
+    }
+    this.touchedAt.set(id, now);
     void this.redis
       .set(touchKey(id), "1", "EX", TOUCH_INTERVAL_SECONDS, "NX")
       .then((claimed) =>

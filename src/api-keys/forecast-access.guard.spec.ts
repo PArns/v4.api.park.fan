@@ -1,6 +1,8 @@
 import { HttpException, UnauthorizedException } from "@nestjs/common";
 import {
+  checkAllowedPark,
   ForecastAccessGuard,
+  parkIdResolver,
   readPresentedApiKey,
 } from "./forecast-access.guard";
 import {
@@ -41,7 +43,7 @@ function context(
 
 const LIMITED = `pfk_${"e".repeat(43)}`;
 
-function guard(anyPark = false) {
+function guard() {
   const apiKeys = {
     resolve: jest.fn(async (value: string) =>
       value === VALID
@@ -79,15 +81,20 @@ function guard(anyPark = false) {
       path[3] === "magic-kingdom-park" ? { id: "mk-id" } : { id: "other-id" },
     ),
   };
+  const renames = { resolveAlias: jest.fn(async () => null) };
   const moduleRef = {
     get: (token: { name?: string }) =>
-      token?.name === "ParksService" ? parks : apiKeys,
+      token?.name === "ParksService"
+        ? parks
+        : token?.name === "ParkRenameService"
+          ? renames
+          : apiKeys,
   };
-  const reflector = { get: () => anyPark };
   return {
-    guard: new ForecastAccessGuard(moduleRef as never, reflector as never),
+    guard: new ForecastAccessGuard(moduleRef as never),
     apiKeys,
     parks,
+    moduleRef,
   };
 }
 
@@ -231,20 +238,45 @@ describe("ForecastAccessGuard", () => {
       });
     });
 
-    it("may call /verify, which checks ?park= when it is given", async () => {
-      const { guard: g } = guard(true);
-      await expect(
-        g.canActivate(context({ "x-api-key": LIMITED }).ctx),
-      ).resolves.toBe(true);
-      const other = context(
+    it("cannot name its park in ?park= on a route that serves any park", async () => {
+      const { guard: g } = guard();
+      const { ctx } = context(
         { "x-api-key": LIMITED },
         {},
-        { park: "north-america/united-states/orlando/epcot" },
+        { park: "north-america/united-states/orlando/magic-kingdom-park" },
       );
       const error = (await g
-        .canActivate(other.ctx)
+        .canActivate(ctx)
         .catch((e: unknown) => e)) as HttpException;
-      expect(error.getStatus()).toBe(403);
+      expect(error.getResponse()).toMatchObject({
+        error: "api-key-park-required",
+      });
+    });
+
+    it("on /verify passes without a park and checks one given as ?park=", async () => {
+      const { moduleRef } = guard();
+      const key = {
+        id: "k2",
+        usage: "commercial" as const,
+        requestsPerHour: null,
+        allowedParkIds: ["mk-id"],
+      };
+      const options = {
+        verify: true,
+        resolveParkId: parkIdResolver(moduleRef as never),
+      };
+      await expect(
+        checkAllowedPark(key, { headers: {}, query: {} }, options),
+      ).resolves.toBeUndefined();
+      const other = checkAllowedPark(
+        key,
+        {
+          headers: {},
+          query: { park: "north-america/united-states/orlando/epcot" },
+        },
+        options,
+      );
+      await expect(other).rejects.toBeInstanceOf(HttpException);
     });
   });
 

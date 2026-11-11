@@ -1,5 +1,6 @@
 import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
 import { cachedJson } from "../common/cache/redis-json-cache";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { ForecastFields } from "../api-keys/forecast-fields.interceptor";
 import {
   Controller,
@@ -94,6 +95,13 @@ const INCLUDE_HOURLY_VALUES = [
   "none",
   "all",
 ] as const;
+
+/** The query string of the request behind `res`, with its `?`, or "". */
+function queryStringOf(res: { req?: { originalUrl?: string } }): string {
+  const url = res.req?.originalUrl ?? "";
+  const at = url.indexOf("?");
+  return at >= 0 ? url.slice(at) : "";
+}
 
 /**
  * Parks Controller
@@ -560,13 +568,6 @@ export class ParksController {
     // Validate range (max 90 days)
     validateDateRange(fromDate, toDate, 90);
 
-    const response = await this.calendarService.buildCalendarResponse(
-      park,
-      fromDate,
-      toDate,
-      includeHourly || "today+tomorrow",
-    );
-
     // Payload diet: per-day `influencingHolidays` was ~98% of this response
     // (~2.25 MB) and NO consumer of this endpoint reads it (the header holiday
     // panel reads schedule[].influencingHolidays from the PARK endpoint). Strip
@@ -574,18 +575,49 @@ export class ParksController {
     // response layer so the month cache stays a single (full) variant — the win
     // is the over-the-wire payload (proxy + Next's 2 MB fetch-cache cap), not
     // Redis size. New day objects, so the shared cache entry is never mutated.
-    const includedSections = (include ?? "")
+    const withHolidays = (include ?? "")
       .split(",")
       .map((s) => s.trim())
-      .filter(Boolean);
-    if (!includedSections.includes("influencingHolidays")) {
-      response.days = response.days.map((d) => {
-        if (!d.influencingHolidays) return d;
-        const slim = { ...d };
-        delete slim.influencingHolidays;
-        return slim;
-      });
-    }
+      .includes("influencingHolidays");
+    const hourly = includeHourly || "today+tomorrow";
+
+    // The answer as served, kept in Redis: a keyed calendar leaves private, so
+    // Cloudflare no longer absorbs repeats, and the default request (a range
+    // over two part-months with today's curve) never fills the month cache.
+    // Fifteen minutes at most, and never past the hour when it may carry the
+    // hourly curve, which loses its head at every full hour (see below).
+    const answerTtl =
+      hourly === "none"
+        ? 15 * 60
+        : Math.min(15 * 60, ttlSecondsToNextBoundary(60 * 60 * 1000));
+    const response = await cachedJson(
+      this.redis,
+      CacheKeys.calendarResponse(
+        park.id,
+        fromDate.toISOString().slice(0, 10),
+        toDate.toISOString().slice(0, 10),
+        hourly,
+        withHolidays,
+      ),
+      answerTtl,
+      async () => {
+        const built = await this.calendarService.buildCalendarResponse(
+          park,
+          fromDate,
+          toDate,
+          hourly,
+        );
+        if (!withHolidays) {
+          built.days = built.days.map((d) => {
+            if (!d.influencingHolidays) return d;
+            const slim = { ...d };
+            delete slim.influencingHolidays;
+            return slim;
+          });
+        }
+        return built;
+      },
+    );
 
     // Set dynamic cache headers based on date range
     const { getCurrentDateInTimezone, secondsUntilEndOfDayInTimezone } =
@@ -1467,17 +1499,24 @@ export class ParksController {
       );
     }
 
-    // Five minutes in Redis, the same as the edge kept it before the forecast
-    // fields made the keyed answer private.
-    const curve = await cachedJson(
+    // Two minutes in Redis for the keyed answer, which leaves private; the
+    // stripped one is still cached at the edge on top of this, so the copy a
+    // reader sees stays within the edge's own five minutes plus these two.
+    // "No curve" is kept too: an unknown ride still costs a scan of the
+    // park's day before the service says so.
+    const curve = await cachedJson<RideDayCurveDto | { none: true }>(
       this.redis,
-      `ride-day-curve:${park.id}:${attraction ?? ""}`,
-      5 * 60,
-      () => this.parkHistoricalStatsService.getRideDayCurve(park, attraction),
+      CacheKeys.rideDayCurve(park.id, attraction ?? ""),
+      2 * 60,
+      async () =>
+        (await this.parkHistoricalStatsService.getRideDayCurve(
+          park,
+          attraction,
+        )) ?? { none: true },
     );
     // A park with too few measured days has no curve, and that is an answer
     // rather than a fault — the caller renders nothing.
-    if (!curve) throw new NotFoundException("No readable day curve");
+    if ("none" in curve) throw new NotFoundException("No readable day curve");
     return curve;
   }
 
@@ -1566,7 +1605,7 @@ export class ParksController {
     // answer leaves private and Cloudflare no longer absorbs the repeats.
     return cachedJson(
       this.redis,
-      `plan-day:${park.id}:${date}`,
+      CacheKeys.planDayResponse(park.id, date),
       15 * 60,
       () => this.planDayService.buildPlanDay(park, date),
       (plan) => plan.ridesUnavailable?.reason !== "data_unavailable",
@@ -1770,7 +1809,21 @@ export class ParksController {
       );
     }
 
-    return this.buildYearlyPredictionsResponse(park);
+    // Kept until the park's next midnight, an hour at most: a keyed answer
+    // leaves private, and building it costs four queries and an aggregation
+    // over every ride-day of the year. A degraded answer is not kept.
+    const { secondsUntilEndOfDayInTimezone, getCurrentDateInTimezone } =
+      await import("../common/utils/date.util");
+    return cachedJson(
+      this.redis,
+      CacheKeys.predictionsYearlyResponse(
+        park.id,
+        getCurrentDateInTimezone(park.timezone),
+      ),
+      Math.min(60 * 60, secondsUntilEndOfDayInTimezone(park.timezone)),
+      () => this.buildYearlyPredictionsResponse(park),
+      (answer) => !("isDegraded" in answer && answer.isDegraded),
+    );
   }
 
   /**
@@ -1797,7 +1850,10 @@ export class ParksController {
       predictions: dailyPredictions,
       ...(holidays && { holidays }),
       generatedAt: new Date().toISOString(),
-      ...(predictions.modelVersion === "unavailable" && { isDegraded: true }),
+      // A partial outage reads "unavailable+tft60" and is degraded too.
+      ...(predictions.modelVersion?.includes("unavailable") && {
+        isDegraded: true,
+      }),
     };
   }
 
@@ -2079,7 +2135,9 @@ export class ParksController {
         attractionSlug,
       );
       if (canonical) {
-        const query = days !== undefined ? `?days=${days}` : "";
+        // The whole query, `forecast=true` included: a keyed client that
+        // follows the redirect must get the same answer it asked for.
+        const query = queryStringOf(res);
         res.redirect(
           301,
           `/v1/parks/${canonical.continentSlug}/${canonical.countrySlug}/` +
@@ -2142,6 +2200,22 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<ParkWithAttractionsDto | undefined> {
+    // A warm payload is answered without loading the park's rides, shows and
+    // restaurants: three queries saved per repeat, which a keyed request no
+    // longer gets from Cloudflare.
+    const located = await this.parksService.findByGeographicPath(
+      continent,
+      country,
+      city,
+      parkSlug,
+    );
+    if (located) {
+      const warm = await this.parkIntegrationService.peekIntegratedResponse(
+        located.id,
+      );
+      if (warm) return warm;
+    }
+
     const park = await this.parksService.findByGeographicPathWithRelations(
       continent,
       country,
@@ -2164,7 +2238,7 @@ export class ParksController {
         res.redirect(
           301,
           `/v1/parks/${canonical.continentSlug}/${canonical.countrySlug}/` +
-            `${canonical.citySlug}/${canonical.slug}`,
+            `${canonical.citySlug}/${canonical.slug}${queryStringOf(res)}`,
         );
         return undefined;
       }

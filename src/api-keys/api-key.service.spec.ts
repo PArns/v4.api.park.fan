@@ -5,7 +5,7 @@ const ID = "33333333-3333-4333-8333-333333333333";
 
 function build(found: Record<string, unknown> | null = null) {
   const store = new Map<string, string>();
-  const redis = {
+  const redis: Record<string, jest.Mock> = {
     get: jest.fn(async (key: string) => store.get(key) ?? null),
     set: jest.fn(async (key: string, value: string, ...args: unknown[]) => {
       if (args.includes("NX") && store.has(key)) return null;
@@ -19,6 +19,25 @@ function build(found: Record<string, unknown> | null = null) {
       return next;
     }),
     expire: jest.fn(async () => 1),
+    multi: jest.fn(() => {
+      const ops: Array<() => Promise<unknown>> = [];
+      const chain = {
+        incr: (key: string) => {
+          ops.push(() => redis.incr(key));
+          return chain;
+        },
+        expire: (key: string, ...args: unknown[]) => {
+          ops.push(() => redis.expire(key, ...(args as [])));
+          return chain;
+        },
+        exec: async () => {
+          const out: Array<[null, unknown]> = [];
+          for (const op of ops) out.push([null, await op()]);
+          return out;
+        },
+      };
+      return chain;
+    }),
     mget: jest.fn(async (...keys: string[]) =>
       keys.map((key) => store.get(key) ?? null),
     ),
@@ -105,14 +124,35 @@ describe("ApiKeyService.resolve", () => {
     expect(keys.findOne).toHaveBeenCalledTimes(1);
   });
 
-  it("forgets a cached key when it is revoked", async () => {
-    const row = { id: ID, usage: "non-commercial", keyHash: hashToken(key) };
-    const { service, store } = build(row);
-    await service.resolve(key);
-    expect(store.has(`api-key:${hashToken(key)}`)).toBe(true);
+  it("refuses a key once it is revoked, even if a lookup was in flight", async () => {
+    const row = {
+      id: ID,
+      usage: "non-commercial",
+      requestsPerHour: null,
+      allowedParkIds: null,
+      keyHash: hashToken(key),
+    };
+    const { service, keys, store } = build(null);
+    let release: (value: unknown) => void = () => undefined;
+    keys.findOne
+      // The lookup of a request, held until the revocation has gone through.
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve)) as never,
+      )
+      // The revocation's own lookup.
+      .mockImplementationOnce(async () => ({ ...row }) as never);
 
+    const inFlight = service.resolve(key);
+    // Let the request reach its Postgres lookup before the admin acts.
+    while (keys.findOne.mock.calls.length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     await service.revoke(ID);
-    expect(store.has(`api-key:${hashToken(key)}`)).toBe(false);
+    release({ ...row });
+    await inFlight;
+
+    expect(store.get(`api-key:${hashToken(key)}`)).toBe("-");
+    expect(await service.resolve(key)).toBeNull();
   });
 });
 
@@ -152,19 +192,36 @@ describe("ApiKeyService.countRequest", () => {
 });
 
 describe("ApiKeyService parks", () => {
-  it("stores known parks once each and reads an empty list as every park", async () => {
+  it("stores known parks once each, lowercased, and only null means every park", async () => {
     const { service, keys } = build();
     await service.create(
-      { name: "a", allowedParkIds: ["park-1", "park-1"] },
+      { name: "a", allowedParkIds: ["park-1", "PARK-1"] },
       null,
     );
     expect(keys.save.mock.calls[0][0]).toMatchObject({
       allowedParkIds: ["park-1"],
     });
-    await service.create({ name: "b", allowedParkIds: [] }, null);
+    await service.create({ name: "b", allowedParkIds: null }, null);
     expect(keys.save.mock.calls[1][0]).toMatchObject({ allowedParkIds: null });
+    // The DTO refuses an empty list; should one reach here, it opens nothing.
+    await service.create({ name: "c", allowedParkIds: [] }, null);
+    expect(keys.save.mock.calls[2][0]).toMatchObject({ allowedParkIds: [] });
   });
 
+  it("does not count park.fan's own internal key", async () => {
+    const { service, keys, redis } = build();
+    await service.create({ name: "park.fan", usage: "internal" }, null);
+    expect(keys.save.mock.calls[0][0]).toMatchObject({ requestsPerHour: null });
+    expect(
+      await service.countRequest({
+        id: ID,
+        usage: "internal",
+        requestsPerHour: 1000,
+        allowedParkIds: null,
+      }),
+    ).toBeNull();
+    expect(redis.multi).not.toHaveBeenCalled();
+  });
   it("refuses a park that does not exist", async () => {
     const { service, keys } = build();
     await expect(

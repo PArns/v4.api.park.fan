@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsIn,
   IsInt,
@@ -83,6 +84,9 @@ export class CreateApiKeyDto {
   })
   @IsOptional()
   @IsArray()
+  // Empty is refused rather than read as "every park": removing a key's last
+  // park must not open all of them. null says every park.
+  @ArrayMinSize(1)
   @ArrayMaxSize(MAX_ALLOWED_PARKS)
   @IsUUID("all", { each: true })
   allowedParkIds?: string[] | null;
@@ -113,6 +117,9 @@ export class UpdateApiKeyDto {
   })
   @IsOptional()
   @IsArray()
+  // Empty is refused rather than read as "every park": removing a key's last
+  // park must not open all of them. null says every park.
+  @ArrayMinSize(1)
   @ArrayMaxSize(MAX_ALLOWED_PARKS)
   @IsUUID("all", { each: true })
   allowedParkIds?: string[] | null;

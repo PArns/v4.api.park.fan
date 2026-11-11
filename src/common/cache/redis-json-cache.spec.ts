@@ -41,3 +41,26 @@ describe("cachedJson", () => {
     expect(await cachedJson(r as never, "k", 60, async () => 7)).toBe(7);
   });
 });
+
+describe("cachedJson under load", () => {
+  it("builds once for concurrent misses on the same key", async () => {
+    const r = redis();
+    let builds = 0;
+    const compute = async () => {
+      builds += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { n: builds };
+    };
+    const answers = await Promise.all(
+      Array.from({ length: 5 }, () => cachedJson(r as never, "k", 60, compute)),
+    );
+    expect(builds).toBe(1);
+    expect(answers.every((a) => a.n === 1)).toBe(true);
+  });
+
+  it("rebuilds when the entry does not parse", async () => {
+    const r = redis();
+    r.store.set("k", "{not json");
+    expect(await cachedJson(r as never, "k", 60, async () => 3)).toBe(3);
+  });
+});

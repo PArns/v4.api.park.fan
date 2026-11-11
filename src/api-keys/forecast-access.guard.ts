@@ -7,8 +7,9 @@ import {
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
-import { ModuleRef, Reflector } from "@nestjs/core";
+import { ModuleRef } from "@nestjs/core";
 import { ParksService } from "../parks/parks.service";
+import { ParkRenameService } from "../parks/services/park-rename.service";
 import type { Response } from "express";
 import {
   carriesThrottleBypassKey,
@@ -65,13 +66,20 @@ export type ParkPath = [string, string, string, string];
 
 /**
  * The park a request is about: the route's `:continent/:country/:city/:parkSlug`,
- * or `?park=continent/country/city/park` on a route that takes one (`/verify`).
+ * or, only where `fromQuery` says the route takes one (`/verify`),
+ * `?park=continent/country/city/park`. Read from the query anywhere else, a
+ * park-limited key could name its own park there and reach a route that
+ * serves any park.
  */
-export function requestedParkPath(request: ForecastRequest): ParkPath | null {
+export function requestedParkPath(
+  request: ForecastRequest,
+  fromQuery = false,
+): ParkPath | null {
   const { continent, country, city, parkSlug } = request.params ?? {};
   if (continent && country && city && parkSlug) {
     return [continent, country, city, parkSlug];
   }
+  if (!fromQuery) return null;
   const park = (request.query as Record<string, unknown> | undefined)?.park;
   if (typeof park !== "string") return null;
   const segments = park.split("/").filter(Boolean);
@@ -85,11 +93,11 @@ export interface ForecastAccessOptions {
   /** Resolves the requested park, for a key limited to some parks. */
   resolveParkId?: ParkIdResolver;
   /**
-   * The route answers without a park (`/verify` without `?park=`), so a key
-   * limited to some parks may call it. Every other route without a park in its
-   * path refuses such a key, because it could reach any park's forecasts.
+   * `/verify` only: the park may come as `?park=`, and without one the key
+   * passes. Every other route without a park in its path refuses a key
+   * limited to some parks, because it could reach any park's forecasts.
    */
-  anyPark?: boolean;
+  verify?: boolean;
 }
 
 /**
@@ -175,15 +183,15 @@ export async function authorizeForecastRequest(
  * or about no park on a route that could reach any. Before the hourly count, so
  * a refused request does not use up the allowance.
  */
-async function checkAllowedPark(
+export async function checkAllowedPark(
   key: ResolvedApiKey,
   request: ForecastRequest,
   options: ForecastAccessOptions,
 ): Promise<void> {
   if (!key.allowedParkIds) return;
-  const path = requestedParkPath(request);
+  const path = requestedParkPath(request, options.verify === true);
   if (!path) {
-    if (options.anyPark) return;
+    if (options.verify) return;
     throw new ForbiddenException({
       error: "api-key-park-required",
       message:
@@ -203,14 +211,38 @@ async function checkAllowedPark(
   }
 }
 
-/** Finds a park's id by its slugs, through `ParksService`. */
+/**
+ * Finds a park's id by its slugs, through `ParksService`, and through the
+ * rename aliases when the slugs are an old path: the park route answers an old
+ * path with a 301, and a limited key must reach that redirect, not a 403.
+ */
 export function parkIdResolver(moduleRef: ModuleRef): ParkIdResolver {
-  return async (path) =>
-    (
-      await moduleRef
-        .get(ParksService, { strict: false })
-        .findByGeographicPath(...path)
-    )?.id ?? null;
+  return async ([continent, country, city, slug]) => {
+    const parks = moduleRef.get(ParksService, { strict: false });
+    const park = await parks.findByGeographicPath(
+      continent,
+      country,
+      city,
+      slug,
+    );
+    if (park) return park.id;
+    const current = await moduleRef
+      .get(ParkRenameService, { strict: false })
+      .resolveAlias({
+        continentSlug: continent,
+        countrySlug: country,
+        citySlug: city,
+        slug,
+      });
+    if (!current) return null;
+    const renamed = await parks.findByGeographicPath(
+      current.continentSlug,
+      current.countrySlug,
+      current.citySlug,
+      current.slug,
+    );
+    return renamed?.id ?? null;
+  };
 }
 
 /**
@@ -223,16 +255,10 @@ export function apiKeyStore(moduleRef: ModuleRef): ApiKeyService {
   return moduleRef.get(ApiKeyService, { strict: false });
 }
 
-/** Set by `RequiresApiKey({ anyPark: true })`; see `ForecastAccessOptions.anyPark`. */
-export const API_KEY_ANY_PARK = "apiKeyAnyPark";
-
 /** Puts a whole route behind a data key; see `authorizeForecastRequest`. */
 @Injectable()
 export class ForecastAccessGuard implements CanActivate {
-  constructor(
-    private readonly moduleRef: ModuleRef,
-    private readonly reflector: Reflector,
-  ) {}
+  constructor(private readonly moduleRef: ModuleRef) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
@@ -240,14 +266,7 @@ export class ForecastAccessGuard implements CanActivate {
       apiKeyStore(this.moduleRef),
       http.getRequest<ForecastRequest>(),
       http.getResponse<Response>(),
-      {
-        resolveParkId: parkIdResolver(this.moduleRef),
-        anyPark:
-          this.reflector.get<boolean>(
-            API_KEY_ANY_PARK,
-            context.getHandler(),
-          ) === true,
-      },
+      { resolveParkId: parkIdResolver(this.moduleRef) },
     );
     return true;
   }

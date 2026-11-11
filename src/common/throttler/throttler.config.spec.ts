@@ -1,3 +1,4 @@
+import type { ThrottlerOptions } from "@nestjs/throttler";
 import {
   getThrottleBypassHeader,
   getThrottleBypassKeys,
@@ -20,14 +21,37 @@ describe("throttler.config", () => {
     it("defaults to 300 requests / 60s (ttl expressed in ms for v6)", () => {
       delete process.env.THROTTLE_LIMIT;
       delete process.env.THROTTLE_TTL;
-      expect(getThrottlerOptions()).toEqual([{ ttl: 60000, limit: 300 }]);
+      delete process.env.THROTTLE_ANON_LIMIT;
+      delete process.env.THROTTLE_ANON_HOURLY_LIMIT;
+      expect(getThrottlerOptions()).toEqual([
+        { ttl: 60000, limit: 300 },
+        { name: "anonymous-minute", ttl: 60000, limit: 60 },
+        { name: "anonymous-hour", ttl: 3600000, limit: 1000 },
+      ]);
       expect(isThrottlingEnabled()).toBe(true);
     });
 
     it("honours THROTTLE_TTL / THROTTLE_LIMIT overrides", () => {
       process.env.THROTTLE_TTL = "30";
       process.env.THROTTLE_LIMIT = "100";
-      expect(getThrottlerOptions()).toEqual([{ ttl: 30000, limit: 100 }]);
+      expect((getThrottlerOptions() as ThrottlerOptions[])[0]).toEqual({
+        ttl: 30000,
+        limit: 100,
+      });
+    });
+
+    it("tunes or turns off each anonymous limit", () => {
+      process.env.THROTTLE_ANON_LIMIT = "30";
+      process.env.THROTTLE_ANON_HOURLY_LIMIT = "0";
+      const names = (getThrottlerOptions() as ThrottlerOptions[]).map(
+        (options) => ("name" in options ? options.name : "default"),
+      );
+      expect(names).toEqual(["default", "anonymous-minute"]);
+      expect((getThrottlerOptions() as ThrottlerOptions[])[1]).toMatchObject({
+        limit: 30,
+      });
+      delete process.env.THROTTLE_ANON_LIMIT;
+      delete process.env.THROTTLE_ANON_HOURLY_LIMIT;
     });
 
     it("THROTTLE_LIMIT=0 disables throttling", () => {

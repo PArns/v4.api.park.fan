@@ -32,15 +32,20 @@ services directly and are guarded by their own session and token.
 ## Sending a key
 
 `X-API-Key: pfk_…`, or `Authorization: Bearer pfk_…`. Never in the query string: a URL ends up in
-logs and in cache keys. `GET /v1/api-keys/verify` answers 200 with the key's `usage` for an
-active key and 401 otherwise; park.fan's MCP server uses it to check a key an agent passed on.
+logs and in cache keys.
 
 A refusal is `401` with `error: "api-key-required"` or `"api-key-invalid"`, `terms` (the URL
 above) and `WWW-Authenticate: ApiKey header="X-API-Key"`.
 
+`GET /v1/api-keys/verify` checks exactly the key presented: 200 with `usage`, `allParks` and
+`allowedParkIds` for an active key, 401 otherwise, and with `?park=continent/country/city/park` a
+403 when the key does not cover that park. It is not behind the forecast guard, whose bypass key
+would confirm any value, and it counts nothing against the allowance.
+
 ## park.fan's own frontend
 
-The frontend has a data key of its own: usage `internal`, no hourly allowance, issued in
+The frontend has a data key of its own: usage `internal`, never counted against an hourly
+allowance (a new internal key gets none), issued in
 `/admin/api-keys` and set as `API_DATA_KEY` in its server environment, which
 `getServerApiHeaders` sends as `X-API-Key` on every server call. It is revocable and listed like
 any other key.
@@ -55,7 +60,9 @@ should open nothing else. Never hand it to a data consumer.
 
 Every data key has `requests_per_hour` (default 1,000; null means only the general per-address
 limit). `ApiKeyService.countRequest` counts each request the key authorises in a Redis counter per
-key and clock hour (UTC), so the count starts over at every full hour. Over the allowance the
+key and clock hour (UTC), so the count starts over at every full hour; `INCR` and `EXPIRE … NX`
+go in one `MULTI`, so a counter never outlives its hour. If Redis fails, the request is not
+counted rather than refused. Over the allowance the
 answer is `429` with `error: "api-key-rate-limited"`, `retryAfterSeconds` and `Retry-After`
 until the next full hour. Each keyed answer reports `X-API-Key-Hourly-Limit`,
 `X-API-Key-Hourly-Remaining` and `X-API-Key-Hourly-Reset` (seconds). park.fan's own frontend is
@@ -65,14 +72,14 @@ does not, and its `Remaining` header is the one from when it was fetched.
 ## Parks
 
 A key can be limited to some parks (`allowed_park_ids`, ids rather than slugs so a renamed park
-keeps its licence; null means every park). `authorizeForecastRequest` reads the park from the
-route's `:continent/:country/:city/:parkSlug`, resolves it through `ParksService` and answers 403
+keeps its licence; null means every park, and an empty list is refused, so removing a key's last
+park cannot open them all). `authorizeForecastRequest` reads the park from the route's
+`:continent/:country/:city/:parkSlug`, resolves it through `ParksService`, and through the rename
+aliases for an old path so the route's 301 is reached, and answers 403
 `api-key-park-not-allowed` for any other park, before the request counts against the hourly
 allowance. A route that names no park (`/favorites`) answers such a key 403
-`api-key-park-required`, because it could reach any park's forecasts. `/v1/api-keys/verify` is
-the exception (`RequiresApiKey({ anyPark: true })`): it reports the key's `allowedParkIds`, and with
-`?park=continent/country/city/park` it checks that park; park.fan's MCP server asks it that way
-before it answers a forecast tool for a key.
+`api-key-park-required`, because it could reach any park's forecasts; `?park=` counts only on
+`/verify`, or a limited key could name its own park there and reach any other.
 
 ## Caching
 
@@ -85,8 +92,9 @@ rule names both headers with `passthrough`, Cloudflare keeps one copy per header
 `setHeader`, so whichever interceptor or handler sets `Cache-Control` afterwards, it leaves as
 `private`, with the `max-age` it asked for and no `s-maxage`; `CDN-Cache-Control` is dropped.
 
-**`FORECAST_SHARED_CACHE=vary`: shared per key.** `varyResponseByKey` lets a success keep the
-public policy its route chose and merges `X-API-Key` and the bypass header into every `Vary` the
+**`FORECAST_SHARED_CACHE=vary`: shared per key.** `varyResponseByKey` lets a success keep a
+public policy, capped at five minutes and without stale windows (`cappedSharedCacheControl`), since
+nothing here can purge a revoked key's copies, and merges `X-API-Key` and the bypass header into every `Vary` the
 response gets, `compression`'s `Accept-Encoding` included. A refusal or an error stays
 `private, no-store`. A key sent as `Authorization: Bearer` stays private, because the rule does
 not name that header. Turn it on only after the rule below is live and tested: without the rule
@@ -131,6 +139,17 @@ curl -sI $URL | grep -iE '^HTTP|cf-cache-status'                                
 
 If the last line ever shows a `HIT`, unset `FORECAST_SHARED_CACHE` and purge the cache.
 
+## Without a key
+
+Public data reads (`/v1/parks/**`, `/v1/discovery/**` except `nearby`, `/v1/search`, the public
+`/v1/analytics/*` reads, `/v1/glossary/**`, `/v1/sitemap/**`, `/v1/page-views/top`, `/v1/ml/**`)
+from a caller without an active data key are limited to `THROTTLE_ANON_LIMIT` per minute
+(default 60) and `THROTTLE_ANON_HOURLY_LIMIT` per hour (default 1,000) per address, on top of the
+general circuit breaker. Past one, a 429 `rate-limited` says a free key lifts it. The routes
+park.fan's own pages call from the browser (assistant, site statistic, favourites, nearby, trips,
+push) are not on the list: one carrier-NAT address can carry a whole park's visitors. A made-up
+key counts as none. `isAnonymousDataRequest` and `CfThrottlerGuard.handleRequest`.
+
 ## Issuing keys
 
 `/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update` and
@@ -139,8 +158,10 @@ If the last line ever shows a `HIT`, unset `FORECAST_SHARED_CACHE` and purge the
 clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds? }` changes either from the next request on
 (an unknown park id is a 400); `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
 key and its first ten characters. `ApiKeyService.resolve` caches a valid key in Redis for five
-minutes and an unknown or revoked one for one minute; a revocation deletes the cached entry, and
-`last_used_at` is written at most every ten minutes per key.
+minutes and an unknown one for one minute, and stores only where nothing is cached (`NX`). A
+revocation writes the refusal over the entry and a `PATCH` writes the new state, so a lookup that
+read the old row a moment earlier cannot put it back. `last_used_at` is written at most every ten
+minutes per key, and a process asks Redis about it at most that often.
 
 ## Adding a forecast
 
