@@ -239,12 +239,48 @@ describe("ApiKeyService.countRequest", () => {
     );
   });
 
-  it("counts nothing for a key without an hourly allowance", async () => {
-    const { service, redis } = build();
+  it("sets no allowance for a key without one, but counts its use", async () => {
+    const { service, store } = build();
     expect(
       await service.countRequest({ ...key, requestsPerHour: null }, at),
     ).toBeNull();
-    expect(redis.incr).not.toHaveBeenCalled();
+    expect(store.get(`api-key:day:${ID}:2026-11-11`)).toBe("1");
+    expect(store.get(`api-key:month:${ID}:2026-11`)).toBe("1");
+  });
+
+  it("lists the last days and months, oldest first, and the refusals", async () => {
+    const { service, keys, store } = build();
+    (keys as unknown as { createQueryBuilder: jest.Mock }).createQueryBuilder =
+      jest.fn(() => ({
+        orderBy: () => ({
+          addOrderBy: () => ({
+            getMany: async () => [
+              { id: ID, allowedParkIds: null, createdAt: new Date(at) },
+            ],
+          }),
+        }),
+      }));
+    // Three requests against an allowance of two: the third is refused.
+    await service.countRequest(key, at);
+    await service.countRequest(key, at);
+    await service.countRequest(key, at);
+    await new Promise((resolve) => setImmediate(resolve));
+    store.set(`api-key:day:${ID}:2026-11-10`, "7");
+    store.set(`api-key:month:${ID}:2026-10`, "40");
+
+    const [item] = await service.list(at);
+    expect(item.requestsThisHour).toBe(3);
+    expect(item.stats?.days).toHaveLength(30);
+    expect(item.stats?.days.slice(-2)).toEqual([
+      { date: "2026-11-10", requests: 7, limited: 0 },
+      { date: "2026-11-11", requests: 3, limited: 1 },
+    ]);
+    expect(item.stats?.days[0].date).toBe("2026-10-13");
+    expect(item.stats?.months.slice(-2)).toEqual([
+      { month: "2026-10", requests: 40 },
+      { month: "2026-11", requests: 3 },
+    ]);
+    expect(item.stats?.months[0].month).toBe("2025-12");
   });
 });
 
@@ -265,8 +301,8 @@ describe("ApiKeyService parks", () => {
     expect(keys.save.mock.calls[2][0]).toMatchObject({ allowedParkIds: [] });
   });
 
-  it("does not count park.fan's own internal key", async () => {
-    const { service, keys, redis } = build();
+  it("holds park.fan's own internal key to no allowance, but counts its use", async () => {
+    const { service, keys, store } = build();
     await service.create({ name: "park.fan", usage: "internal" }, null);
     expect(keys.save.mock.calls[0][0]).toMatchObject({ requestsPerHour: null });
     expect(
@@ -278,7 +314,9 @@ describe("ApiKeyService parks", () => {
         expiresAt: null,
       }),
     ).toBeNull();
-    expect(redis.multi).not.toHaveBeenCalled();
+    expect(
+      [...store.keys()].some((name) => name.startsWith(`api-key:day:${ID}:`)),
+    ).toBe(true);
   });
   it("refuses a park that does not exist", async () => {
     const { service, keys } = build();

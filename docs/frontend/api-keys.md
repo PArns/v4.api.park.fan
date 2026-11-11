@@ -69,6 +69,17 @@ until the next full hour. Each keyed answer reports `X-API-Key-Hourly-Limit`,
 not counted. Only requests that reach the API count: an answer Cloudflare serves from its cache
 does not, and its `Remaining` header is the one from when it was fetched.
 
+## Statistics
+
+`ApiKeyService.countRequest` counts every request a key makes, `internal` and unlimited keys
+included, in the same Redis round trip as the hourly allowance: per UTC day
+(`api-key:day:<id>:<YYYY-MM-DD>`, kept 32 days) and per UTC month (`api-key:month:<id>:<YYYY-MM>`,
+kept 13 months). A request its allowance refuses with 429 is counted a second time under
+`api-key:day-limited:…`. The admin list returns them as `stats` (30 days, oldest first, and 12
+months), the admin page draws them. Only requests a key got through with count: a missing,
+unknown, expired or park-refused key is not attributed to anyone. Like the allowance, the counting
+fails open.
+
 ## Parks
 
 A key can be limited to some parks (`allowed_park_ids`, ids rather than slugs so a renamed park

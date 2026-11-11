@@ -56,7 +56,8 @@ export class AdminApiKeysController {
   @Get()
   @ApiOperation({
     summary: "Every data API key, active ones first",
-    description: "Revoked keys stay in the list with `revokedAt` set.",
+    description:
+      "Revoked keys stay in the list with `revokedAt` set. Each key carries `requestsThisHour` and `stats`: its requests per UTC day for the last 30 days (with `limited`, those its hourly allowance refused) and per UTC month for the last 12.",
   })
   async list() {
     return { items: await this.apiKeys.list() };

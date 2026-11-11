@@ -36,6 +36,8 @@ export interface ApiKeyItem {
   expiresAt: Date | null;
   /** Requests counted in the current clock hour (list only). */
   requestsThisHour?: number;
+  /** Requests per UTC day and per month, for the admin's statistics (list only). */
+  stats?: ApiKeyUsageStats;
   createdAt: Date;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
@@ -64,6 +66,26 @@ export interface ApiKeyPatch {
   expiresAt?: Date | null;
 }
 
+/** One UTC day of a key's use: what it asked for, and how much of that its allowance refused. */
+export interface ApiKeyDayUsage {
+  /** `YYYY-MM-DD`, UTC. */
+  date: string;
+  requests: number;
+  /** Requests answered 429 because the hourly allowance was used up. */
+  limited: number;
+}
+
+/** A key's use as the admin list shows it: the last days, oldest first, and the last months. */
+export interface ApiKeyUsageStats {
+  days: ApiKeyDayUsage[];
+  /** `YYYY-MM`, UTC, oldest first. */
+  months: { month: string; requests: number }[];
+}
+
+/** How many days and months of use the counters keep and the list returns. */
+export const USAGE_DAYS = 30;
+export const USAGE_MONTHS = 12;
+
 /** Where a key stands against its hourly allowance after one more request. */
 export interface HourlyUsage {
   limit: number;
@@ -82,6 +104,10 @@ const TOUCH_INTERVAL_SECONDS = 600;
 const INVALID_MARKER = "-";
 
 const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+/** A day counter outlives its window by a couple of days, a month counter by a month. */
+const DAY_COUNTER_TTL_SECONDS = (USAGE_DAYS + 2) * 86_400;
+const MONTH_COUNTER_TTL_SECONDS = (USAGE_MONTHS + 1) * 31 * 86_400;
 
 const cacheKey = (hash: string): string => `api-key:${hash}`;
 const touchKey = (id: string): string => `api-key:touched:${id}`;
@@ -89,6 +115,33 @@ const touchKey = (id: string): string => `api-key:touched:${id}`;
 const hourKey = (id: string, hour: number): string =>
   `api-key:hour:${id}:${hour}`;
 const currentHour = (now: number): number => Math.floor(now / HOUR_MS);
+/** Per key and UTC day; per key, UTC day and refusal; per key and UTC month. */
+const dayKey = (id: string, date: string): string =>
+  `api-key:day:${id}:${date}`;
+const limitedKey = (id: string, date: string): string =>
+  `api-key:day-limited:${id}:${date}`;
+const monthKey = (id: string, month: string): string =>
+  `api-key:month:${id}:${month}`;
+const utcDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+/** The last `count` UTC days up to the one `now` falls on, oldest first. */
+function lastDays(now: number, count: number): string[] {
+  return Array.from({ length: count }, (_, i) =>
+    utcDate(now - (count - 1 - i) * DAY_MS),
+  );
+}
+
+/** The last `count` UTC months up to the one `now` falls on, oldest first. */
+function lastMonths(now: number, count: number): string[] {
+  const at = new Date(now);
+  return Array.from({ length: count }, (_, i) =>
+    new Date(
+      Date.UTC(at.getUTCFullYear(), at.getUTCMonth() - (count - 1 - i), 1),
+    )
+      .toISOString()
+      .slice(0, 7),
+  );
+}
 
 /**
  * A data key is the prefix and 43 base64url characters; anything else is
@@ -201,28 +254,58 @@ export class ApiKeyService {
     return { key, item: toItem(row) };
   }
 
-  /** Every key, active ones first, newest first within each group, with this hour's count. */
-  async list(): Promise<ApiKeyItem[]> {
+  /**
+   * Every key, active ones first, newest first within each group, with this
+   * hour's count and its use over the last days and months. One MGET for all
+   * of it; a Redis failure shows zeros rather than no list.
+   */
+  async list(now = Date.now()): Promise<ApiKeyItem[]> {
     const rows = await this.keys
       .createQueryBuilder("k")
       .orderBy("k.revoked_at IS NULL", "DESC")
       .addOrderBy("k.created_at", "DESC")
       .getMany();
     if (rows.length === 0) return [];
-    const hour = currentHour(Date.now());
-    const counts = await this.redis.mget(
-      ...rows.map((row) => hourKey(row.id, hour)),
-    );
+    const hour = currentHour(now);
+    const days = lastDays(now, USAGE_DAYS);
+    const months = lastMonths(now, USAGE_MONTHS);
+    const perKey = 1 + 2 * days.length + months.length;
+    const counts = await this.redis
+      .mget(
+        ...rows.flatMap((row) => [
+          hourKey(row.id, hour),
+          ...days.map((date) => dayKey(row.id, date)),
+          ...days.map((date) => limitedKey(row.id, date)),
+          ...months.map((month) => monthKey(row.id, month)),
+        ]),
+      )
+      .catch(() => [] as (string | null)[]);
     const names = await this.parkNames(
       rows.flatMap((row) => row.allowedParkIds ?? []),
     );
-    return rows.map((row, i) => ({
-      ...toItem(row),
-      requestsThisHour: Number(counts[i] ?? 0),
-      allowedParks:
-        row.allowedParkIds?.map((id) => ({ id, name: names.get(id) ?? id })) ??
-        null,
-    }));
+    return rows.map((row, i) => {
+      const at = (offset: number) => Number(counts[i * perKey + offset] ?? 0);
+      return {
+        ...toItem(row),
+        requestsThisHour: at(0),
+        stats: {
+          days: days.map((date, d) => ({
+            date,
+            requests: at(1 + d),
+            limited: at(1 + days.length + d),
+          })),
+          months: months.map((month, m) => ({
+            month,
+            requests: at(1 + 2 * days.length + m),
+          })),
+        },
+        allowedParks:
+          row.allowedParkIds?.map((id) => ({
+            id,
+            name: names.get(id) ?? id,
+          })) ?? null,
+      };
+    });
   }
 
   /**
@@ -299,25 +382,36 @@ export class ApiKeyService {
   }
 
   /**
-   * Counts one request against the key's hourly allowance. Null when the key
-   * has none. A fixed window per clock hour: simple to explain to a holder
-   * ("1,000 an hour, counted from the full hour") and one Redis call.
+   * Counts one request of the key, per clock hour for its allowance and per
+   * UTC day and month for the statistics, and says where it stands against
+   * the allowance; null when the key has none (`internal` never does), though
+   * its use is counted all the same. A fixed window per clock hour: simple to
+   * explain to a holder ("1,000 an hour, counted from the full hour") and one
+   * Redis round trip.
    */
   async countRequest(
     key: ResolvedApiKey,
     now = Date.now(),
   ): Promise<HourlyUsage | null> {
-    if (key.requestsPerHour === null || key.usage === "internal") return null;
     const hour = currentHour(now);
+    const date = utcDate(now);
     const counter = hourKey(key.id, hour);
     let count: number;
     try {
-      // One round trip; the expiry is set with the first increment or not at
-      // all, so a counter never outlives its hour (EXPIRE NX, Redis 7+).
+      // Each expiry is set with the first increment or not at all, so no
+      // counter outlives its window (EXPIRE NX, Redis 7+).
       const replies = await this.redis
         .multi()
         .incr(counter)
         .expire(counter, 3_700, "NX")
+        .incr(dayKey(key.id, date))
+        .expire(dayKey(key.id, date), DAY_COUNTER_TTL_SECONDS, "NX")
+        .incr(monthKey(key.id, date.slice(0, 7)))
+        .expire(
+          monthKey(key.id, date.slice(0, 7)),
+          MONTH_COUNTER_TTL_SECONDS,
+          "NX",
+        )
         .exec();
       count = Number(replies?.[0]?.[1]);
       if (!Number.isFinite(count)) return null;
@@ -327,12 +421,25 @@ export class ApiKeyService {
       this.logger.warn(`Could not count API key ${key.id}: ${String(error)}`);
       return null;
     }
+    if (key.requestsPerHour === null || key.usage === "internal") return null;
+    const exceeded = count > key.requestsPerHour;
+    if (exceeded) this.countLimited(key.id, date);
     return {
       limit: key.requestsPerHour,
       remaining: Math.max(0, key.requestsPerHour - count),
       resetSeconds: Math.ceil(((hour + 1) * HOUR_MS - now) / 1000),
-      exceeded: count > key.requestsPerHour,
+      exceeded,
     };
+  }
+
+  /** Records a request the allowance refused. Not awaited: a statistic must not delay a 429. */
+  private countLimited(id: string, date: string): void {
+    void this.redis
+      .multi()
+      .incr(limitedKey(id, date))
+      .expire(limitedKey(id, date), DAY_COUNTER_TTL_SECONDS, "NX")
+      .exec()
+      .catch(() => undefined);
   }
 
   /** Revokes an active key; null when there is no such active key. */
