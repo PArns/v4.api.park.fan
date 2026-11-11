@@ -1,4 +1,5 @@
 import { HttpException, UnauthorizedException } from "@nestjs/common";
+import { bypassKeyOpensForecasts } from "./api-key.constants";
 import {
   checkAllowedPark,
   ForecastAccessGuard,
@@ -227,6 +228,21 @@ describe("ForecastAccessGuard", () => {
         "x-api-key": VALID,
       });
       await expect(g.canActivate(keyed.ctx)).resolves.toBe(true);
+    } finally {
+      delete process.env.FORECAST_BYPASS_KEY;
+    }
+  });
+
+  it("reads the switch loosely, as a dashboard may store it", () => {
+    try {
+      for (const value of ['"off"', " OFF ", "false", "0", "'no'"]) {
+        process.env.FORECAST_BYPASS_KEY = value;
+        expect(bypassKeyOpensForecasts()).toBe(false);
+      }
+      for (const value of ["", "on", "true"]) {
+        process.env.FORECAST_BYPASS_KEY = value;
+        expect(bypassKeyOpensForecasts()).toBe(true);
+      }
     } finally {
       delete process.env.FORECAST_BYPASS_KEY;
     }

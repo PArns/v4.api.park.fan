@@ -47,12 +47,22 @@ export const API_KEY_LIMIT_HEADERS = {
 /** The response header that tells a key's holder when it expires (ISO 8601). */
 export const API_KEY_EXPIRES_HEADER = "X-API-Key-Expires";
 
+/** What `FORECAST_BYPASS_KEY` may say to switch the bypass off. */
+const SWITCHED_OFF = new Set(["off", "false", "0", "no"]);
+
 /**
  * Whether the throttle bypass key (`x-auth-key`) still opens the forecast
  * routes. It did before the frontend had a data key of its own; once the
  * frontend sends one (`API_DATA_KEY`), `FORECAST_BYPASS_KEY=off` leaves the
- * bypass key to what its name says, the rate limits.
+ * bypass key to what its name says, the rate limits. Read loosely (case,
+ * spaces, quotes a dashboard kept, `false`), because a value that misses
+ * silently leaves the bypass open.
  */
 export function bypassKeyOpensForecasts(): boolean {
-  return process.env.FORECAST_BYPASS_KEY !== "off";
+  const value = (process.env.FORECAST_BYPASS_KEY ?? "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim()
+    .toLowerCase();
+  return !SWITCHED_OFF.has(value);
 }
