@@ -173,7 +173,9 @@ drop towers). It shows in what he picks and asks more than in what he says about
 he talks about himself only in small talk or when asked, one thing in fresh words, never a list;
 an answer about waits, days or rides keeps his voice but not his self-talk. In small talk an answer
 may end with a question out of curiosity, never two in a row. What only the park decides (its pass
-rules, menus, plans) is said as the park's call, not as "I have no info". The text was tuned in
+rules, menus, plans) is said as the park's call, not as "I have no info". A made-up mascot moment is
+fine when asked for, as long as it names no real park, ride or person; an anecdote about a real
+one is never invented. The text was tuned in
 three rounds of Haiku playing Parky on 23 chats (PAR-1289).
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
