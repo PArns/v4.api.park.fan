@@ -48,6 +48,9 @@ What to keep in mind when giving a route a policy:
 - **Guard on `response.headersSent`.** Both interceptors skip a client that has already gone: setting a
   header then throws `ERR_HTTP_HEADERS_SENT`, which Nest logged as a 500 (48–178 a day on the
   park-detail routes). A new interceptor keeps the guard.
+- **A forecast is never shared.** `@RequiresApiKey()` and `@ForecastFields` with
+  `?forecast=true` make every `Cache-Control` the response gets `private`, whoever sets it
+  ([data API keys](../frontend/api-keys.md#caching)).
 - **A route may set its own header.** The nowcast aligns `max-age` to its `nextUpdateAt` with no
   stale window ([weather](../frontend/weather.md)).
 - **This service cannot purge Cloudflare.** A change reaches the edge when the TTL runs out, which is

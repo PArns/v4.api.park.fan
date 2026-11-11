@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsArray, IsOptional, IsNumber, Min, Max } from "class-validator";
+import { IsArray, IsIn, IsOptional, IsNumber, Min, Max } from "class-validator";
 import { Type, Transform } from "class-transformer";
 
 /**
@@ -80,4 +80,14 @@ export class FavoritesQueryDto {
   @Min(-180)
   @Max(180)
   lng?: number;
+
+  @ApiProperty({
+    description:
+      "`true` adds the attractions' forecast fields (hourlyForecast, bestVisitTimes, predictionAccuracy); needs a data key in `X-API-Key`.",
+    required: false,
+    enum: ["true", "1", "false", "0"],
+  })
+  @IsOptional()
+  @IsIn(["true", "1", "false", "0"])
+  forecast?: string;
 }

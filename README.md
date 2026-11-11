@@ -29,8 +29,8 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 | 🎡 **Parks** | `GET /parks` · `/parks/{continent}[/{country}[/{city}]]` · `/parks/popular` | Park lists by region, most-requested parks |
 | 🏰 **One park** | `GET /parks/…/{park}` | Status, opening hours, live crowd level, weather, every attraction, show and restaurant |
 | ⏱️ **Live** | `…/{park}/wait-times` | Current queues per attraction |
-| 📅 **Calendar** | `…/{park}/calendar` · `/best-days` · `/schedule` · `/seasons` · `/predictions/yearly` | Opening hours, day status, crowd forecast per day, holidays, named seasons |
-| 🗓️ **Trip planning** | `…/{park}/plan/day` | One day, ride by ride: hourly waits with source and expected error |
+| 📅 **Calendar** | `…/{park}/calendar` 🔑 · `/best-days` 🔑 · `/schedule` · `/seasons` · `/predictions/yearly` 🔑 | Opening hours, day status, crowd forecast per day, holidays, named seasons |
+| 🗓️ **Trip planning** | `…/{park}/plan/day` 🔑 | One day, ride by ride: hourly waits with source and expected error |
 | 📊 **Statistics** | `…/{park}/stats` · `/stats/hourly` · `/stats/day` | Historical park stats, the park's hourly profile, one ride's day curve |
 | 🎢 **Attractions** | `…/{park}/attractions[/{attraction}]` | Catalog list; detail with live state, forecast, typical/busy waits, ride profile |
 | 🌤️ **Weather** | `…/{park}/weather` · `/weather/forecast` · `/weather/nowcast` | Observed weather, 16-day forecast, short-term nowcast, severe-weather warnings |
@@ -43,6 +43,7 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 
 ### Conventions worth knowing
 
+- **Forecasts need a key.** 🔑 marks routes that answer only with a data key in `X-API-Key`; park detail, ride detail, `/stats/day` and `/favorites` add their forecast fields only with `?forecast=true` and a key. Keys for non-commercial use are free on request. [Details](https://github.com/PArns/v4.api.park.fan/blob/main/docs/frontend/api-keys.md).
 - **Park-local time.** Dates and "today" are in the park's own timezone (`timezone` on every park), never the caller's.
 - **Unknown is not closed.** A ride no source reports reads `UNKNOWN`; a crowd level without a baseline reads `unknown`. Neither means "closed" or "quiet".
 - **Nulls are omitted.** Fields without a value are left out of the response; add `?debug=true` to see them.
@@ -143,16 +144,17 @@ park.fan combines these sources. Thank you for making theme park data accessible
 
 The API is free for non-commercial use: a personal app, a fan site without advertising, a
 research project, a lesson. Credit park.fan and link to the park or ride page you used.
-No key, no sign-up.
 
-- **Commercial use of the forecasts needs a written agreement.** The crowd calendar, the crowd
-  forecast per day and hour, predicted wait times, best days, day plans and yearly predictions
-  come from park.fan's own models. Without an agreement they may not be shown, stored or passed on
-  in a paid app, an app with subscriptions, in-app purchases or ads, a site with ads or affiliate
-  links, or any product a company offers. Requests via the
-  [imprint](https://park.fan/en/impressum).
-- **Live data belongs to its sources.** Wait times, opening hours and weather come from the
-  sources above. park.fan grants no rights to them; reuse follows each source's own terms.
+- **Forecasts need an API key.** The crowd calendar, the crowd forecast per day and hour,
+  predicted wait times, best days, day plans and yearly predictions come from park.fan's own
+  models and are served only against a key in `X-API-Key`. A key for non-commercial use is free;
+  ask through the [imprint](https://park.fan/en/impressum).
+- **Commercial use of the forecasts needs a written agreement.** Without one they may not be
+  shown, stored or passed on in a paid app, an app with subscriptions, in-app purchases or ads, a
+  site with ads or affiliate links, or any product a company offers.
+- **Live data is for non-commercial use only.** Wait times, opening hours and weather come from
+  the sources above. park.fan passes them on for non-commercial use only and grants no rights to
+  them; commercial use needs an agreement with the source itself.
 - **Etiquette.** Send a `User-Agent` that names your project and a way to reach you. Live waits
   change on the order of minutes; polling faster than every five minutes returns the same numbers.
 

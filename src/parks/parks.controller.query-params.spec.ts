@@ -23,6 +23,7 @@ import { PopularityService } from "../popularity/popularity.service";
 import { ParkRenameService } from "./services/park-rename.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
+import { ForecastAccessGuard } from "../api-keys/forecast-access.guard";
 
 /**
  * `page`, `limit`, `days` and `includeHourly` had no pipe. `?page=abc` reached
@@ -100,7 +101,12 @@ describe("ParksController › query parameters are validated", () => {
         { provide: ParkRenameService, useValue: noop },
         { provide: REDIS_CLIENT, useValue: noop },
       ],
-    }).compile();
+    })
+      // Query validation is what these cases test; who may call a forecast
+      // route is ForecastAccessGuard's own spec.
+      .overrideGuard(ForecastAccessGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication({ logger: false });
     app.setGlobalPrefix("v1");

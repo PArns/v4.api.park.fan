@@ -1,3 +1,5 @@
+import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
+import { ForecastFields } from "../api-keys/forecast-fields.interceptor";
 import {
   Controller,
   Get,
@@ -428,6 +430,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid or range > 90 days
    */
   @Get(":continent/:country/:city/:parkSlug/calendar")
+  @RequiresApiKey()
   @ApiOperation({
     summary: "Get integrated calendar (geographic path)",
     description:
@@ -708,6 +711,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid or range > 90 days
    */
   @Get(":continent/:country/:city/:parkSlug/best-days")
+  @RequiresApiKey()
   @ApiOperation({
     summary: "Get precomputed best-days projection (geo)",
     description:
@@ -1416,6 +1420,7 @@ export class ParksController {
    * and a day-old copy of "today" is the one thing this route must never serve.
    */
   @Get(":continent/:country/:city/:parkSlug/stats/day")
+  @ForecastFields("forecast", "predicted", "forecastError")
   @UseInterceptors(new HttpCacheInterceptor(5 * 60))
   @ApiOperation({
     summary: "Get one ride's day curve",
@@ -1479,6 +1484,7 @@ export class ParksController {
    * further down.
    */
   @Get(":continent/:country/:city/:parkSlug/plan/day")
+  @RequiresApiKey()
   @UseInterceptors(
     // 15 minutes, except a day that says a dependency failed: its "try again
     // shortly" must not outlive the fault at the edge.
@@ -1664,6 +1670,7 @@ export class ParksController {
    * Returns yearly crowd predictions via geographic path.
    */
   @Get(":continent/:country/:city/:parkSlug/predictions/yearly")
+  @RequiresApiKey()
   // 24 hours, except an answer built while the forecast could not be read:
   // that one is `no-store`, so the edge does not keep an outage for a day.
   @UseInterceptors(
@@ -1975,6 +1982,7 @@ export class ParksController {
    * @throws NotFoundException if park or attraction not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions/:attractionSlug")
+  @ForecastFields("hourlyForecast", "bestVisitTimes", "predictionAccuracy")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
     summary: "Get attraction details (geo)",
@@ -2095,6 +2103,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
+  @ForecastFields("attractions[].bestVisitTimes")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "Get park by location",

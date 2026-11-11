@@ -1,17 +1,16 @@
-import { applyDecorators, UseGuards, UseInterceptors } from "@nestjs/common";
+import { applyDecorators, UseGuards } from "@nestjs/common";
 import { ApiResponse, ApiSecurity } from "@nestjs/swagger";
 import { DATA_TERMS_URL } from "./api-key.constants";
 import { ForecastAccessGuard } from "./forecast-access.guard";
-import { PrivateCacheInterceptor } from "./private-cache.interceptor";
 
 /**
- * Puts a route behind a data key: the guard, the private `Cache-Control`, and
- * the Swagger security entry. Every route that returns a forecast carries it.
+ * Puts a route behind a data key: the guard (which also keeps the answer out of
+ * shared caches) and the Swagger security entry. Every route whose answer is a
+ * forecast carries it; a route that only has forecast fields uses `ForecastFields`.
  */
 export const RequiresApiKey = (): MethodDecorator & ClassDecorator =>
   applyDecorators(
     UseGuards(ForecastAccessGuard),
-    UseInterceptors(PrivateCacheInterceptor),
     ApiSecurity("api-key"),
     ApiResponse({
       status: 401,

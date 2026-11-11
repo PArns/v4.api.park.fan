@@ -36,9 +36,10 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
         "Real-time theme park intelligence powered by machine learning. " +
           "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
           "for optimal theme park experiences worldwide. " +
-          "Free for non-commercial use with a credit to park.fan; commercial use of the " +
-          "forecasts needs a written agreement, and live wait times stay under their " +
-          "sources' terms.",
+          "Free for non-commercial use with a credit to park.fan. Forecasts need a data " +
+          "key in X-API-Key (free for non-commercial use, on request); commercial use of " +
+          "the forecasts needs a written agreement, and the live data may not be used " +
+          "commercially through park.fan.",
       )
       .setTermsOfService(DATA_TERMS_URL)
       .setLicense(
