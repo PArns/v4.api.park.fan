@@ -140,6 +140,28 @@ describe("ForecastAccessGuard", () => {
     expect(sent.get("cache-control")).toBe("private, no-store");
   });
 
+  it("counts the frontend's data key even while the bypass key would open the route", async () => {
+    const { guard: g, apiKeys } = guard();
+    const { ctx, request } = context({
+      "x-auth-key": "frontend-secret",
+      "x-api-key": VALID,
+    });
+    await expect(g.canActivate(ctx)).resolves.toBe(true);
+    expect(apiKeys.lookup).toHaveBeenCalledWith(VALID);
+    expect(apiKeys.countRequest).toHaveBeenCalled();
+    expect((request.apiKey as { id: string }).id).toBe("k1");
+  });
+
+  it("falls back to the bypass key when the data key it carries is unknown", async () => {
+    const { guard: g, apiKeys } = guard();
+    const { ctx } = context({
+      "x-auth-key": "frontend-secret",
+      "x-api-key": `pfk_${"d".repeat(43)}`,
+    });
+    await expect(g.canActivate(ctx)).resolves.toBe(true);
+    expect(apiKeys.countRequest).not.toHaveBeenCalled();
+  });
+
   it("lets an active data key through and attaches it", async () => {
     const { guard: g } = guard();
     const { ctx, request } = context({ "x-api-key": VALID });
