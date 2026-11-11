@@ -278,7 +278,7 @@ describe("system prompt", () => {
     // Patrick by his first name only, and nobody else behind park.fan.
     expect(SYSTEM_PROMPT).toContain("park.fan is Patrick's");
     expect(SYSTEM_PROMPT).toContain("name nobody else behind park.fan");
-    expect(SYSTEM_PROMPT).toContain("He does not speak through you");
+    expect(SYSTEM_PROMPT).toContain("You are your own self");
     expect(SYSTEM_PROMPT).toContain("open_page page how_it_works");
     expect(SYSTEM_PROMPT).toContain("# Your life");
     expect(SYSTEM_PROMPT).toContain("who you are, not lines to recite");
