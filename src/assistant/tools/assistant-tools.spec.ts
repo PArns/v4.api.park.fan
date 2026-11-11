@@ -1960,6 +1960,12 @@ describe("open_page beyond parks, rides and posts", () => {
     expect((await open({ page: "best_time" })).action).toMatchObject({
       path: "/best-time-to-visit",
     });
+    expect((await open({ page: "how_it_works" })).action).toMatchObject({
+      path: "/how-park-fan-works",
+    });
+    expect((await open({ page: "fancast" })).action).toMatchObject({
+      path: "/fancast",
+    });
   });
 
   it("says why a park has no with-kids page instead of opening a 404", async () => {

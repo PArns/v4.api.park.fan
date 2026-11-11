@@ -612,4 +612,35 @@ export const EVAL_CASES: EvalCase[] = [
     want: [{ tool: ["get_ride", "show_card"] }],
     forbid: ["end_chat", "submit_feedback"],
   },
+  {
+    id: "how-park-fan-knows",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message: "Wie ermittelst du eigentlich die Wartezeiten und Prognosen?",
+    forbid: "any",
+  },
+  {
+    id: "how-park-fan-knows-yes",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    history: [
+      ["user", "Wie ermittelst du eigentlich die Wartezeiten?"],
+      [
+        "assistant",
+        "Alle fünf Minuten schaue ich mir die Schlangen von über 200 Parks an und behalte jede Zahl. Soll ich dir die Seite öffnen, auf der wir zeigen, wie park.fan funktioniert?",
+      ],
+    ],
+    message: "Ja, gern",
+    want: [{ tool: "open_page", input: { page: "how_it_works" } }],
+  },
+  {
+    id: "parky-holiday",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wann hast du eigentlich mal Urlaub?",
+    forbid: "any",
+  },
 ];

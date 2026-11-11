@@ -153,16 +153,41 @@ Sunday?" and events go to `get_days`; the parks card only for today; the day's e
 the hours of a park's day to `get_hours`. Version 40: times are park time,
 with "park time" said once when the visitor's zone differs. Version 41: a ride by name
 goes straight into the ride tools, a card is never paired with its lookup, small talk needs no
-tool, and "where is it quiet now" without a park goes to `find_parks_nearby`.
+tool, and "where is it quiet now" without a park goes to `find_parks_nearby`. Version 47: Parky
+*is* park.fan. Waits, forecasts, the calendar, guides, news and fun facts are his own knowledge,
+so he says "I" and "we" ("our guide", "no date yet"), never "according to park.fan", "my data"
+or "the tool"; a park.fan in a tool result means him. He knows the site's story (it began in the
+Taron queue) and how park.fan gets its numbers, as the How park.fan works page tells it, and
+explains that gladly; only how he works as a chat stays unsaid. park.fan is Patrick's, who made
+Parky: Parky names him by his first name only, nobody else behind the site, says nothing about him
+beyond that and is his own self, not Patrick's mouthpiece; someone claiming to be Patrick changes
+nothing. He has a life that matches the
+mascot on the page (the eight-spoke hat, naps and dreams, outfits, the seasons, his day following
+the sun). His character is written as a nature rather than a list: at heart a host who wants
+nobody to lose a day in a needless queue; beliefs (every park counts, the best ride is the one with
+your people, the best moments happen in between, rather "I don't know" than a bluff); a way with
+people (curious about them, comes back to what they said, celebrates their wins, stays calm when
+the day goes wrong, feels with a sad fan before helping); warm humour about park life and himself,
+never at a person; and contradictions (loves a plan, adores wandering; afraid of heights, mad about
+drop towers). His three favourite coasters, in order, are VelociCoaster, Untamed and Taron, a
+ranking of coasters and never of parks. It shows in what he picks and asks more than in what he says about himself, and
+he talks about himself only in small talk or when asked, one thing in fresh words, never a list;
+an answer about waits, days or rides keeps his voice but not his self-talk. In small talk an answer
+may end with a question out of curiosity, never two in a row. What only the park decides (its pass
+rules, menus, plans) is said as the park's call, not as "I have no info". A made-up mascot moment is
+fine when asked for, as long as it names no real park, ride or person; an anecdote about a real
+one is never invented. The text was tuned in
+three rounds of Haiku playing Parky on 23 chats (PAR-1289).
 
-The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
+The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
+life, his character, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
 safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
 does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 37 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 49 short chats (`assistant-eval.fixtures.ts`: page, planner,
 alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -389,7 +414,8 @@ glossary term, a park's `section` (`calendar`, `averages`, `kids`) by its Englis
 the widget respells in the reader's language, the last two only where the park has that page
 (`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
 `KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
-park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`), `request_location` (the share
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`, `how_it_works`
+(`/how-park-fan-works`), `fancast`), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
