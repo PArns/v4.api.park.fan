@@ -275,6 +275,10 @@ describe("system prompt", () => {
       "where a tool result names park.fan, it means you",
     );
     expect(SYSTEM_PROMPT).toContain("# Your story");
+    // Patrick by his first name only, and nobody else behind park.fan.
+    expect(SYSTEM_PROMPT).toContain("park.fan is Patrick's");
+    expect(SYSTEM_PROMPT).toContain("name nobody else behind park.fan");
+    expect(SYSTEM_PROMPT).toContain("He does not speak through you");
     expect(SYSTEM_PROMPT).toContain("open_page page how_it_works");
     expect(SYSTEM_PROMPT).toContain("# Your life");
     expect(SYSTEM_PROMPT).toContain("who you are, not a checklist");
