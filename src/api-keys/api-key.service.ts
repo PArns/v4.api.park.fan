@@ -7,6 +7,7 @@ import { generateToken, hashToken } from "../admin/auth/token-hash.util";
 import {
   API_KEY_PREFIX,
   API_KEY_VISIBLE_CHARS,
+  DEFAULT_REQUESTS_PER_HOUR,
   type ApiKeyUsage,
 } from "./api-key.constants";
 import { ApiKey } from "./entities/api-key.entity";
@@ -19,6 +20,10 @@ export interface ApiKeyItem {
   usage: ApiKeyUsage;
   note: string | null;
   prefix: string;
+  /** The hourly allowance; null means only the general per-address limit. */
+  requestsPerHour: number | null;
+  /** Requests counted in the current clock hour (list only). */
+  requestsThisHour?: number;
   createdAt: Date;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
@@ -28,6 +33,16 @@ export interface ApiKeyItem {
 export interface ResolvedApiKey {
   id: string;
   usage: ApiKeyUsage;
+  requestsPerHour: number | null;
+}
+
+/** Where a key stands against its hourly allowance after one more request. */
+export interface HourlyUsage {
+  limit: number;
+  remaining: number;
+  /** Seconds until the next clock hour, when the count starts over. */
+  resetSeconds: number;
+  exceeded: boolean;
 }
 
 /** How long a key that was found valid is believed without asking Postgres. */
@@ -38,8 +53,14 @@ const INVALID_TTL_SECONDS = 60;
 const TOUCH_INTERVAL_SECONDS = 600;
 const INVALID_MARKER = "-";
 
+const HOUR_MS = 3_600_000;
+
 const cacheKey = (hash: string): string => `api-key:${hash}`;
 const touchKey = (id: string): string => `api-key:touched:${id}`;
+/** One counter per key and clock hour (UTC); it expires shortly after its hour. */
+const hourKey = (id: string, hour: number): string =>
+  `api-key:hour:${id}:${hour}`;
+const currentHour = (now: number): number => Math.floor(now / HOUR_MS);
 
 /**
  * A data key is the prefix and 43 base64url characters; anything else is
@@ -57,6 +78,7 @@ function toItem(row: ApiKey): ApiKeyItem {
     usage: row.usage,
     note: row.note,
     prefix: row.prefix,
+    requestsPerHour: row.requestsPerHour,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
     revokedAt: row.revokedAt,
@@ -87,6 +109,7 @@ export class ApiKeyService {
       contact?: string | null;
       usage?: ApiKeyUsage;
       note?: string | null;
+      requestsPerHour?: number | null;
     },
     createdBy: string | null,
   ): Promise<{ key: string; item: ApiKeyItem }> {
@@ -97,6 +120,10 @@ export class ApiKeyService {
         contact: input.contact || null,
         usage: input.usage ?? "non-commercial",
         note: input.note || null,
+        requestsPerHour:
+          input.requestsPerHour === undefined
+            ? DEFAULT_REQUESTS_PER_HOUR
+            : input.requestsPerHour,
         prefix: key.slice(0, API_KEY_VISIBLE_CHARS),
         keyHash: hashToken(key),
         createdBy,
@@ -107,14 +134,59 @@ export class ApiKeyService {
     return { key, item: toItem(row) };
   }
 
-  /** Every key, active ones first, newest first within each group. */
+  /** Every key, active ones first, newest first within each group, with this hour's count. */
   async list(): Promise<ApiKeyItem[]> {
     const rows = await this.keys
       .createQueryBuilder("k")
       .orderBy("k.revoked_at IS NULL", "DESC")
       .addOrderBy("k.created_at", "DESC")
       .getMany();
-    return rows.map(toItem);
+    if (rows.length === 0) return [];
+    const hour = currentHour(Date.now());
+    const counts = await this.redis.mget(
+      ...rows.map((row) => hourKey(row.id, hour)),
+    );
+    return rows.map((row, i) => ({
+      ...toItem(row),
+      requestsThisHour: Number(counts[i] ?? 0),
+    }));
+  }
+
+  /** Changes an active key's hourly allowance; null when there is no such active key. */
+  async setRequestsPerHour(
+    id: string,
+    requestsPerHour: number | null,
+  ): Promise<{ before: number | null; item: ApiKeyItem } | null> {
+    const row = await this.keys.findOne({ where: { id, revokedAt: IsNull() } });
+    if (!row) return null;
+    const before = row.requestsPerHour;
+    row.requestsPerHour = requestsPerHour;
+    await this.keys.save(row);
+    // The cached lookup carries the allowance, so the change applies at once.
+    await this.redis.del(cacheKey(row.keyHash));
+    return { before, item: toItem(row) };
+  }
+
+  /**
+   * Counts one request against the key's hourly allowance. Null when the key
+   * has none. A fixed window per clock hour: simple to explain to a holder
+   * ("1,000 an hour, counted from the full hour") and one Redis call.
+   */
+  async countRequest(
+    key: ResolvedApiKey,
+    now = Date.now(),
+  ): Promise<HourlyUsage | null> {
+    if (key.requestsPerHour === null) return null;
+    const hour = currentHour(now);
+    const counter = hourKey(key.id, hour);
+    const count = await this.redis.incr(counter);
+    if (count === 1) await this.redis.expire(counter, 3_700);
+    return {
+      limit: key.requestsPerHour,
+      remaining: Math.max(0, key.requestsPerHour - count),
+      resetSeconds: Math.ceil(((hour + 1) * HOUR_MS - now) / 1000),
+      exceeded: count > key.requestsPerHour,
+    };
   }
 
   /** Revokes an active key; null when there is no such active key. */
@@ -136,6 +208,7 @@ export class ApiKeyService {
     if (cached === INVALID_MARKER) return null;
     if (cached) {
       const resolved = JSON.parse(cached) as ResolvedApiKey;
+      resolved.requestsPerHour ??= null;
       this.touch(resolved.id);
       return resolved;
     }
@@ -152,7 +225,11 @@ export class ApiKeyService {
       );
       return null;
     }
-    const resolved: ResolvedApiKey = { id: row.id, usage: row.usage };
+    const resolved: ResolvedApiKey = {
+      id: row.id,
+      usage: row.usage,
+      requestsPerHour: row.requestsPerHour,
+    };
     await this.redis.set(
       cacheKey(hash),
       JSON.stringify(resolved),

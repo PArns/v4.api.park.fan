@@ -8,6 +8,7 @@ import {
   HttpStatus,
   NotFoundException,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from "@nestjs/common";
@@ -28,7 +29,7 @@ import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import { isCanonicalUuid } from "../common/utils/uuid-param.util";
 import { stripInvisibleCharacters } from "../common/utils/visible-text.util";
 import { ApiKeyService } from "./api-key.service";
-import { CreateApiKeyDto } from "./dto/create-api-key.dto";
+import { CreateApiKeyDto, UpdateApiKeyDto } from "./dto/create-api-key.dto";
 
 /**
  * The data keys that unlock the forecast routes, for the admin's "API keys"
@@ -77,6 +78,7 @@ export class AdminApiKeysController {
         contact: body.contact ? stripInvisibleCharacters(body.contact) : null,
         usage: body.usage,
         note: body.note ? stripInvisibleCharacters(body.note) : null,
+        requestsPerHour: body.requestsPerHour,
       },
       admin.userId ?? null,
     );
@@ -90,9 +92,41 @@ export class AdminApiKeysController {
         usage: created.item.usage,
         prefix: created.item.prefix,
         contact: created.item.contact,
+        requestsPerHour: created.item.requestsPerHour,
       },
     });
     return created;
+  }
+
+  @Patch(":id")
+  @ApiOperation({
+    summary: "Change a data API key's hourly allowance",
+    description:
+      "`requestsPerHour` per clock hour, or null for no per-key limit. Applies to the next request.",
+  })
+  @ApiResponse({ status: 404, description: "No such active key" })
+  async update(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+    @Body() body: UpdateApiKeyDto,
+  ) {
+    if (!isCanonicalUuid(id))
+      throw new BadRequestException("id must be a uuid");
+    const changed = await this.apiKeys.setRequestsPerHour(
+      id,
+      body.requestsPerHour,
+    );
+    if (!changed) throw new NotFoundException("No such active key");
+    await this.audit.record({
+      actor: admin,
+      action: "api-key.update",
+      entityType: "api_key",
+      entityId: changed.item.id,
+      entityLabel: changed.item.name,
+      before: { requestsPerHour: changed.before },
+      after: { requestsPerHour: changed.item.requestsPerHour },
+    });
+    return { item: changed.item };
   }
 
   @Delete(":id")

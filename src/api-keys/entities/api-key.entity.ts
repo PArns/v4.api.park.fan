@@ -32,6 +32,13 @@ export class ApiKey {
   @Column({ type: "text", nullable: true })
   note: string | null;
 
+  /**
+   * How many requests the key may make in one clock hour; null means only the
+   * API's general per-address limit applies.
+   */
+  @Column({ name: "requests_per_hour", type: "integer", nullable: true })
+  requestsPerHour: number | null;
+
   /** The first characters of the key, enough to recognise it. */
   @Column({ type: "text" })
   prefix: string;

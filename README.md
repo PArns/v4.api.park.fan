@@ -43,7 +43,7 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 
 ### Conventions worth knowing
 
-- **Forecasts need a key.** 🔑 marks routes that answer only with a data key in `X-API-Key`; park detail, ride detail, `/stats/day` and `/favorites` add their forecast fields only with `?forecast=true` and a key. Keys for non-commercial use are free on request. [Details](https://github.com/PArns/v4.api.park.fan/blob/main/docs/frontend/api-keys.md).
+- **Forecasts need a key.** 🔑 marks routes that answer only with a data key in `X-API-Key`; park detail, ride detail, `/stats/day` and `/favorites` add their forecast fields only with `?forecast=true` and a key. Keys for non-commercial use are free on request and come with an hourly allowance (1,000 requests unless agreed otherwise; `X-API-Key-Hourly-*` headers, 429 past it). [Details](https://github.com/PArns/v4.api.park.fan/blob/main/docs/frontend/api-keys.md).
 - **Park-local time.** Dates and "today" are in the park's own timezone (`timezone` on every park), never the caller's.
 - **Unknown is not closed.** A ride no source reports reads `UNKNOWN`; a crowd level without a baseline reads `unknown`. Neither means "closed" or "quiet".
 - **Nulls are omitted.** Fields without a value are left out of the response; add `?debug=true` to see them.

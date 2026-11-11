@@ -13,6 +13,15 @@ function build(found: Record<string, unknown> | null = null) {
       return "OK";
     }),
     del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
+    incr: jest.fn(async (key: string) => {
+      const next = Number(store.get(key) ?? 0) + 1;
+      store.set(key, String(next));
+      return next;
+    }),
+    expire: jest.fn(async () => 1),
+    mget: jest.fn(async (...keys: string[]) =>
+      keys.map((key) => store.get(key) ?? null),
+    ),
   };
   const keys = {
     create: jest.fn((value: Record<string, unknown>) => value),
@@ -50,6 +59,7 @@ describe("ApiKeyService.create", () => {
     expect(JSON.stringify(saved)).not.toContain(key);
     expect(item.prefix).toBe(key.slice(0, 10));
     expect(item.usage).toBe("non-commercial");
+    expect(item.requestsPerHour).toBe(1000);
     expect(item).not.toHaveProperty("keyHash");
   });
 });
@@ -65,9 +75,11 @@ describe("ApiKeyService.resolve", () => {
   });
 
   it("answers a known key from Postgres once, then from Redis", async () => {
-    const { service, keys } = build({ id: ID, usage: "commercial" });
-    expect(await service.resolve(key)).toEqual({ id: ID, usage: "commercial" });
-    expect(await service.resolve(key)).toEqual({ id: ID, usage: "commercial" });
+    const row = { id: ID, usage: "commercial", requestsPerHour: 50 };
+    const resolved = { id: ID, usage: "commercial", requestsPerHour: 50 };
+    const { service, keys } = build(row);
+    expect(await service.resolve(key)).toEqual(resolved);
+    expect(await service.resolve(key)).toEqual(resolved);
     expect(keys.findOne).toHaveBeenCalledTimes(1);
   });
 
@@ -86,5 +98,35 @@ describe("ApiKeyService.resolve", () => {
 
     await service.revoke(ID);
     expect(store.has(`api-key:${hashToken(key)}`)).toBe(false);
+  });
+});
+
+describe("ApiKeyService.countRequest", () => {
+  const key = { id: ID, usage: "non-commercial" as const, requestsPerHour: 2 };
+  // 10:15 UTC: 45 minutes to the next full hour.
+  const at = Date.UTC(2026, 10, 11, 10, 15, 0);
+
+  it("counts per clock hour and says when the count starts over", async () => {
+    const { service } = build();
+    expect(await service.countRequest(key, at)).toEqual({
+      limit: 2,
+      remaining: 1,
+      resetSeconds: 2700,
+      exceeded: false,
+    });
+    await service.countRequest(key, at);
+    expect((await service.countRequest(key, at))?.exceeded).toBe(true);
+    // A new hour, a new count.
+    expect((await service.countRequest(key, at + 3_600_000))?.exceeded).toBe(
+      false,
+    );
+  });
+
+  it("counts nothing for a key without an hourly allowance", async () => {
+    const { service, redis } = build();
+    expect(
+      await service.countRequest({ ...key, requestsPerHour: null }, at),
+    ).toBeNull();
+    expect(redis.incr).not.toHaveBeenCalled();
   });
 });

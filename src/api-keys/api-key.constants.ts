@@ -23,3 +23,16 @@ export type ApiKeyUsage = (typeof API_KEY_USAGES)[number];
 
 /** Characters of the key kept in clear, enough to tell two keys apart in a list. */
 export const API_KEY_VISIBLE_CHARS = API_KEY_PREFIX.length + 6;
+
+/**
+ * The hourly allowance a new key gets when the admin names none: room for an
+ * app that refreshes a few dozen parks every quarter hour, not for a mirror.
+ */
+export const DEFAULT_REQUESTS_PER_HOUR = 1000;
+
+/** The response headers that report a key's hourly allowance. */
+export const API_KEY_LIMIT_HEADERS = {
+  limit: "X-API-Key-Hourly-Limit",
+  remaining: "X-API-Key-Hourly-Remaining",
+  reset: "X-API-Key-Hourly-Reset",
+} as const;

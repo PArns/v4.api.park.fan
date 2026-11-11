@@ -45,20 +45,81 @@ call, and `authorizeForecastRequest` admits it like a data key. Do not hand that
 consumer: it also lifts the rate limits and makes the API believe the caller's
 `X-Forwarded-For` ([edge and throttling](../deployment/edge-and-throttling.md)).
 
+## Hourly allowance
+
+Every data key has `requests_per_hour` (default 1,000; null means only the general per-address
+limit). `ApiKeyService.countRequest` counts each request the key authorises in a Redis counter per
+key and clock hour (UTC), so the count starts over at every full hour. Over the allowance the
+answer is `429` with `error: "api-key-rate-limited"`, `retryAfterSeconds` and `Retry-After`
+until the next full hour. Each keyed answer reports `X-API-Key-Hourly-Limit`,
+`X-API-Key-Hourly-Remaining` and `X-API-Key-Hourly-Reset` (seconds). park.fan's own frontend is
+not counted. Only requests that reach the API count: an answer Cloudflare serves from its cache
+does not, and its `Remaining` header is the one from when it was fetched.
+
 ## Caching
 
-A keyed answer is never shared. `keepResponsePrivate` wraps the response's `setHeader`, so
-whichever interceptor or handler sets `Cache-Control` afterwards, it leaves as `private`, with the
-`max-age` it asked for and no `s-maxage`; `CDN-Cache-Control` is dropped. The guard does this
-before it decides, because a guard runs before every interceptor and its 401 would otherwise
-leave with no `Cache-Control` at all. Copies Cloudflare cached before this change live out their
-TTL; a purge of `api.park.fan` ends them at once.
+Cloudflare caches by URL and does not see `X-API-Key`. On Pro a request header cannot be part of
+the cache key (custom cache keys with headers are Enterprise only), but the Cache Rules **Vary**
+setting is available on every plan: when the origin sends `Vary: X-API-Key, X-Auth-Key` and a
+rule names both headers with `passthrough`, Cloudflare keeps one copy per header value.
+
+**Default (`FORECAST_SHARED_CACHE` unset): private.** `keepResponsePrivate` wraps the response's
+`setHeader`, so whichever interceptor or handler sets `Cache-Control` afterwards, it leaves as
+`private`, with the `max-age` it asked for and no `s-maxage`; `CDN-Cache-Control` is dropped.
+
+**`FORECAST_SHARED_CACHE=vary`: shared per key.** `varyResponseByKey` lets a success keep the
+public policy its route chose and merges `X-API-Key` and the bypass header into every `Vary` the
+response gets, `compression`'s `Accept-Encoding` included. A refusal or an error stays
+`private, no-store`. A key sent as `Authorization: Bearer` stays private, because the rule does
+not name that header. Turn it on only after the rule below is live and tested: without the rule
+Cloudflare ignores the `Vary` and hands one key's answer to every caller.
+
+Either way the guard settles the policy before it decides, because a guard runs before every
+interceptor and its 401 would otherwise leave with no `Cache-Control` at all. Copies Cloudflare
+cached before the key existed live out their TTL; a purge of `api.park.fan` ends them at once,
+and a purge by URL removes every Vary copy of that URL.
+
+### The Cloudflare rule
+
+The `vary` object goes into the Cache Rule that already makes `api.park.fan` eligible for cache
+(phase `http_request_cache_settings`), or into a new rule with the same expression placed after
+it:
+
+```json
+"action_parameters": {
+  "cache": true,
+  "vary": {
+    "default": { "action": "bypass" },
+    "headers": {
+      "x-api-key": { "action": "passthrough" },
+      "x-auth-key": { "action": "passthrough" },
+      "accept-encoding": { "action": "normalize" }
+    }
+  }
+}
+```
+
+`default: bypass` keeps any other header an answer varies on out of the cache rather than mixing
+copies. Cloudflare's documentation does not say how a request without a named header is matched,
+so the switch-on is tested, not assumed:
+
+```bash
+KEY=pfk_…   # a key from /admin/api-keys
+URL=https://api.park.fan/v1/parks/europe/germany/rust/europa-park/best-days
+curl -sI -H "X-API-Key: $KEY" $URL | grep -iE 'cf-cache-status|^vary|cache-control'   # MISS
+curl -sI -H "X-API-Key: $KEY" $URL | grep -iE 'cf-cache-status'                       # HIT
+curl -sI $URL | grep -iE '^HTTP|cf-cache-status'                                      # 401, never HIT
+```
+
+If the last line ever shows a `HIT`, unset `FORECAST_SHARED_CACHE` and purge the cache.
 
 ## Issuing keys
 
-`/v1/admin/api-keys` (owner only, audited as `api-key.create` and `api-key.revoke`): `GET` lists
-every key, active first; `POST { name, contact?, usage?, note? }` returns `{ key, item }` with the
-key in clear exactly once; `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
+`/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update` and
+`api-key.revoke`): `GET` lists every key, active first, with `requestsThisHour`;
+`POST { name, contact?, usage?, note?, requestsPerHour? }` returns `{ key, item }` with the key in
+clear exactly once; `PATCH /:id { requestsPerHour }` changes the allowance from the next request
+on; `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
 key and its first ten characters. `ApiKeyService.resolve` caches a valid key in Redis for five
 minutes and an unknown or revoked one for one minute; a revocation deletes the cached entry, and
 `last_used_at` is written at most every ten minutes per key.

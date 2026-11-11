@@ -68,6 +68,7 @@ and Cloudflare absorbs most reads before they reach the origin.
 | `THROTTLE_LIMIT`         | `300`        | requests per key per window; `0` does not register the guard, which also switches off every `@Throttle()` |
 | `THROTTLE_TTL`           | `60`         | window in seconds                                                                                         |
 | `THROTTLE_BYPASS_HEADER` | `x-auth-key` | header that carries a bypass key (lowercased)                                                             |
+| `FORECAST_SHARED_CACHE`  | unset        | `vary` lets keyed forecast answers be cached per key once the Cloudflare Vary rule is live ([data API keys](../frontend/api-keys.md#caching)) |
 | `THROTTLE_BYPASS_KEYS`   | empty        | comma-separated keys; a request carrying one skips the guard. Empty means no bypass                       |
 
 - **Counted in process memory.** No storage is configured, so the count is per container and starts
