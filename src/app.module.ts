@@ -46,6 +46,7 @@ import {
   isThrottlingEnabled,
 } from "./common/throttler/throttler.config";
 import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
+import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { MonitoringModule } from "./monitoring/monitoring.module";
 
 @Module({
@@ -116,6 +117,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     AdminModule,
     OAuthModule,
     McpModule,
+    ApiKeysModule,
   ],
   controllers: [AppController],
   providers: [

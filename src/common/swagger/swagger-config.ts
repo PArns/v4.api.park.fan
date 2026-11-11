@@ -1,5 +1,6 @@
 import { DocumentBuilder, OpenAPIObject } from "@nestjs/swagger";
 import * as packageJson from "../../../package.json";
+import { DATA_TERMS_URL } from "../../api-keys/api-key.constants";
 
 /**
  * The OpenAPI config and the route prefix, shared by `src/main.ts` (runtime
@@ -26,15 +27,6 @@ export const GLOBAL_PREFIX_OPTIONS = {
     "/.well-known/oauth-authorization-server",
   ],
 };
-
-/**
- * The terms of use, on park.fan because the frontend owns the legal pages:
- * free for non-commercial use, commercial use of the forecasts only under a
- * written agreement, the live data under its sources' terms. The same address as `DATA_TERMS_URL` in
- * the frontend's `lib/agents/licensing.ts`, which its RSL licence and API
- * catalog link to.
- */
-export const DATA_TERMS_URL = "https://park.fan/en/impressum#data-use";
 
 export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
   return (
@@ -125,6 +117,17 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
             "token (pfo_…) from /v1/oauth/token. Accepted by /v1/mcp only, read-only.",
         },
         "admin-api-token",
+      )
+      .addApiKey(
+        {
+          type: "apiKey",
+          in: "header",
+          name: "X-API-Key",
+          description:
+            "A data key (pfk_…) for the forecast routes. Free for non-commercial " +
+            "use on request; see the terms.",
+        },
+        "api-key",
       )
       .build()
   );
