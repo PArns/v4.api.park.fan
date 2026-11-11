@@ -145,11 +145,12 @@ The API is free for non-commercial use: a personal app, a fan site without adver
 research project, a lesson. Credit park.fan and link to the park or ride page you used.
 No key, no sign-up.
 
-- **The forecasts are never for commercial use.** The crowd calendar, the crowd forecast per day
-  and hour, predicted wait times, best days, day plans and yearly predictions come from park.fan's
-  own models. They may not be shown, stored or passed on in a paid app, an app with subscriptions,
-  in-app purchases or ads, a site with ads or affiliate links, or any product a company offers.
-  park.fan grants no commercial licences.
+- **Commercial use of the forecasts needs a written agreement.** The crowd calendar, the crowd
+  forecast per day and hour, predicted wait times, best days, day plans and yearly predictions
+  come from park.fan's own models. Without an agreement they may not be shown, stored or passed on
+  in a paid app, an app with subscriptions, in-app purchases or ads, a site with ads or affiliate
+  links, or any product a company offers. Requests via the
+  [imprint](https://park.fan/en/impressum).
 - **Live data belongs to its sources.** Wait times, opening hours and weather come from the
   sources above. park.fan grants no rights to them; reuse follows each source's own terms.
 - **Etiquette.** Send a `User-Agent` that names your project and a way to reach you. Live waits
