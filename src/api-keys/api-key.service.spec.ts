@@ -72,6 +72,38 @@ describe("looksLikeApiKey", () => {
   });
 });
 
+describe("ApiKeyService end dates", () => {
+  it("refuses an end date that has passed, on create and on edit", async () => {
+    const { service } = build({ id: ID, keyHash: "h", revokedAt: null });
+    const past = new Date(Date.now() - 60_000);
+    await expect(
+      service.create({ name: "x", expiresAt: past }, null),
+    ).rejects.toThrow("expiresAt must be in the future");
+    await expect(service.update(ID, { expiresAt: past })).rejects.toThrow(
+      "expiresAt must be in the future",
+    );
+  });
+
+  it("brings an expired key back with a new date, and null removes it", async () => {
+    const row = {
+      id: ID,
+      keyHash: "h",
+      revokedAt: null,
+      expiresAt: new Date(Date.now() - 60_000),
+    };
+    const { service, store } = build(row);
+    const later = new Date(Date.now() + 86_400_000);
+    const changed = await service.update(ID, { expiresAt: later });
+    expect(changed?.after.expiresAt).toEqual(later);
+    expect(JSON.parse(store.get("api-key:h") ?? "{}")).toMatchObject({
+      expiresAt: later.toISOString(),
+    });
+    expect(
+      (await service.update(ID, { expiresAt: null }))?.item.expiresAt,
+    ).toBe(null);
+  });
+});
+
 describe("ApiKeyService.create", () => {
   it("returns the key once and stores only its hash and prefix", async () => {
     const { service, keys } = build();
@@ -110,10 +142,34 @@ describe("ApiKeyService.resolve", () => {
       usage: "commercial",
       requestsPerHour: 50,
       allowedParkIds: ["p1"],
+      expiresAt: null,
     };
     const { service, keys } = build(row);
     expect(await service.resolve(key)).toEqual(resolved);
     expect(await service.resolve(key)).toEqual(resolved);
+    expect(keys.findOne).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a key at its end date, though the lookup is cached", async () => {
+    const until = new Date(Date.UTC(2026, 10, 30, 22, 59, 59));
+    const row = {
+      id: ID,
+      usage: "non-commercial",
+      requestsPerHour: 50,
+      allowedParkIds: null,
+      expiresAt: until,
+    };
+    const { service, keys } = build(row);
+    const before = until.getTime() - 1000;
+    expect(await service.lookup(key, before)).toMatchObject({
+      status: "active",
+      key: { expiresAt: until.toISOString() },
+    });
+    expect(await service.lookup(key, until.getTime())).toEqual({
+      status: "expired",
+      expiresAt: until.toISOString(),
+    });
+    expect(await service.resolve(key, until.getTime())).toBeNull();
     expect(keys.findOne).toHaveBeenCalledTimes(1);
   });
 
@@ -162,6 +218,7 @@ describe("ApiKeyService.countRequest", () => {
     usage: "non-commercial" as const,
     requestsPerHour: 2,
     allowedParkIds: null,
+    expiresAt: null,
   };
   // 10:15 UTC: 45 minutes to the next full hour.
   const at = Date.UTC(2026, 10, 11, 10, 15, 0);
@@ -218,6 +275,7 @@ describe("ApiKeyService parks", () => {
         usage: "internal",
         requestsPerHour: 1000,
         allowedParkIds: null,
+        expiresAt: null,
       }),
     ).toBeNull();
     expect(redis.multi).not.toHaveBeenCalled();

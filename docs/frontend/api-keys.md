@@ -34,11 +34,11 @@ services directly and are guarded by their own session and token.
 `X-API-Key: pfk_…`, or `Authorization: Bearer pfk_…`. Never in the query string: a URL ends up in
 logs and in cache keys.
 
-A refusal is `401` with `error: "api-key-required"` or `"api-key-invalid"`, `terms` (the URL
-above) and `WWW-Authenticate: ApiKey header="X-API-Key"`.
+A refusal is `401` with `error: "api-key-required"`, `"api-key-invalid"` or `"api-key-expired"`
+(with `expiresAt`), `terms` (the URL above) and `WWW-Authenticate: ApiKey header="X-API-Key"`.
 
-`GET /v1/api-keys/verify` checks exactly the key presented: 200 with `usage`, `allParks` and
-`allowedParkIds` for an active key, 401 otherwise, and with `?park=continent/country/city/park` a
+`GET /v1/api-keys/verify` checks exactly the key presented: 200 with `usage`, `allParks`,
+`allowedParkIds` and, for a key with an end date, `expiresAt`; 401 otherwise, and with `?park=continent/country/city/park` a
 403 when the key does not cover that park. It is not behind the forecast guard, whose bypass key
 would confirm any value, and it counts nothing against the allowance.
 
@@ -80,6 +80,15 @@ aliases for an old path so the route's 301 is reached, and answers 403
 allowance. A route that names no park (`/favorites`) answers such a key 403
 `api-key-park-required`, because it could reach any park's forecasts; `?park=` counts only on
 `/verify`, or a limited key could name its own park there and reach any other.
+
+## End date
+
+A key can carry an end date (`expires_at`, null for never), for a trial or an agreement that runs
+for a season. Each keyed answer reports it in `X-API-Key-Expires` (ISO 8601). From that moment the
+key is refused with 401 `api-key-expired`, before it counts against its allowance, and its requests
+fall under the keyless limits again; a `PATCH` with a later date brings it back, and revoking stays the way to end a
+key for good. The date sits in the cached lookup and is compared on every request, so the five
+minutes a lookup is cached never stretch it. An end date in the past is a 400 on create and edit.
 
 ## Caching
 
@@ -154,10 +163,10 @@ key counts as none. `isAnonymousDataRequest` and `CfThrottlerGuard.handleRequest
 
 `/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update` and
 `api-key.revoke`): `GET` lists every key, active first, with `requestsThisHour`;
-`POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds? }` returns `{ key, item }` with the key in
-clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds? }` changes either from the next request on
+`POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt? }` returns `{ key, item }` with the key in
+clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds?, expiresAt? }` changes any of them from the next request on
 (an unknown park id is a 400); `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
-key and its first ten characters. `ApiKeyService.resolve` caches a valid key in Redis for five
+key and its first ten characters. `ApiKeyService.lookup` caches a found key in Redis for five
 minutes and an unknown one for one minute, and stores only where nothing is cached (`NX`). A
 revocation writes the refusal over the entry and a `PATCH` writes the new state, so a lookup that
 read the old row a moment earlier cannot put it back. `last_used_at` is written at most every ten

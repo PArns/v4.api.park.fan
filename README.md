@@ -43,7 +43,7 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 
 ### Conventions worth knowing
 
-- **Forecasts need a key.** 🔑 marks routes that answer only with a data key in `X-API-Key`; park detail, ride detail, `/stats/day` and `/favorites` add their forecast fields only with `?forecast=true` and a key. Keys for non-commercial use are free on request and come with an hourly allowance (1,000 requests unless agreed otherwise; `X-API-Key-Hourly-*` headers, 429 past it). Without a key, public data reads are limited to 60 a minute and 1,000 an hour per address. [Details](https://github.com/PArns/v4.api.park.fan/blob/main/docs/frontend/api-keys.md).
+- **Forecasts need a key.** 🔑 marks routes that answer only with a data key in `X-API-Key`; park detail, ride detail, `/stats/day` and `/favorites` add their forecast fields only with `?forecast=true` and a key. Keys for non-commercial use are free on request and come with an hourly allowance (1,000 requests unless agreed otherwise; `X-API-Key-Hourly-*` headers, 429 past it) and can carry an end date (`X-API-Key-Expires`, 401 `api-key-expired` after it). Without a key, public data reads are limited to 60 a minute and 1,000 an hour per address. [Details](https://github.com/PArns/v4.api.park.fan/blob/main/docs/frontend/api-keys.md).
 - **Park-local time.** Dates and "today" are in the park's own timezone (`timezone` on every park), never the caller's.
 - **Unknown is not closed.** A ride no source reports reads `UNKNOWN`; a crowd level without a baseline reads `unknown`. Neither means "closed" or "quiet".
 - **Nulls are omitted.** Fields without a value are left out of the response; add `?debug=true` to see them.
@@ -142,27 +142,30 @@ park.fan combines these sources. Thank you for making theme park data accessible
 
 ## 📄 Terms of use
 
-The API is free for non-commercial use: a personal app, a fan site without advertising, a
-research project, a lesson. Credit park.fan and link to the park or ride page you used.
+The data is free for non-commercial use: a personal app, a fan site without advertising, a
+research project, a school assignment. Credit park.fan and link to the page of the park or ride
+the data is about.
 
-- **Forecasts need an API key.** The crowd calendar, the crowd forecast per day and hour,
-  predicted wait times, best days, day plans and yearly predictions come from park.fan's own
-  models and are served only against a key in `X-API-Key`. A key for non-commercial use is free;
+- **Forecasts need an API key.** Everything park.fan's models predict (the crowd calendar, the
+  crowd forecast per day and hour, predicted wait times, best days, day plans and yearly
+  predictions) is served only with a key in `X-API-Key`. A key for non-commercial use is free;
   ask through the [imprint](https://park.fan/en/impressum).
-- **Commercial use of the forecasts needs a written agreement.** Without one they may not be
-  shown, stored or passed on in a paid app, an app with subscriptions, in-app purchases or ads, a
+- **Commercial use of the forecasts and statistics needs a written agreement** with Patrick Arns
+  (park.fan). Without one they may not be shown, stored or passed on in a paid app, an app with subscriptions, in-app purchases or ads, a
   site with ads or affiliate links, or any product a company offers.
 - **Live data is for non-commercial use only.** Wait times, opening hours and weather come from
   the sources above. park.fan passes them on for non-commercial use and holds no rights of its own
   in them, so commercial use needs an agreement with the source itself.
+- **No training.** Neither the pages nor the forecasts may be used to train or fine-tune a model.
 - **Etiquette.** Send a `User-Agent` that names your project and a way to reach you. Live waits
   change on the order of minutes; polling faster than every five minutes returns the same numbers.
 
 The full terms: **[park.fan/en/impressum#data-use](https://park.fan/en/impressum#data-use)**.
 
 The code in this repository is source-available under the
-[PolyForm Noncommercial License 1.0.0](LICENSE.md): free for any noncommercial purpose, commercial
-use only under a written agreement. [NOTICE.md](NOTICE.md) lists what it does not cover.
+[PolyForm Noncommercial License 1.0.0](LICENSE.md): free for any non-commercial purpose, commercial
+use only under a written agreement with Patrick Arns. [NOTICE.md](NOTICE.md) lists what it does
+not cover.
 
 <div align="center">
 

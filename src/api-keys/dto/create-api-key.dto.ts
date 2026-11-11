@@ -5,6 +5,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsISO8601,
   IsUUID,
   IsOptional,
   IsString,
@@ -90,11 +91,21 @@ export class CreateApiKeyDto {
   @ArrayMaxSize(MAX_ALLOWED_PARKS)
   @IsUUID("all", { each: true })
   allowedParkIds?: string[] | null;
+
+  @ApiPropertyOptional({
+    description:
+      "When the key stops working (ISO 8601, in the future); null or absent for never.",
+    nullable: true,
+    example: "2027-06-30T21:59:59.000Z",
+  })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  expiresAt?: string | null;
 }
 
 /**
  * The body of `PATCH /v1/admin/api-keys/:id`. A field left out stays as it is;
- * null clears it (no per-key limit, every park).
+ * null clears it (no per-key limit, every park, no end date).
  */
 export class UpdateApiKeyDto {
   @ApiPropertyOptional({
@@ -123,4 +134,14 @@ export class UpdateApiKeyDto {
   @ArrayMaxSize(MAX_ALLOWED_PARKS)
   @IsUUID("all", { each: true })
   allowedParkIds?: string[] | null;
+
+  @ApiPropertyOptional({
+    description:
+      "When the key stops working (ISO 8601, in the future); null for never. A new date brings an expired key back.",
+    nullable: true,
+    example: "2027-06-30T21:59:59.000Z",
+  })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  expiresAt?: string | null;
 }

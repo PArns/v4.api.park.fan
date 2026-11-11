@@ -33,12 +33,12 @@ export function buildSwaggerConfig(): Omit<OpenAPIObject, "paths"> {
     new DocumentBuilder()
       .setTitle("park.fan API v4")
       .setDescription(
-        "Real-time theme park intelligence powered by machine learning. " +
-          "Aggregating wait times, weather forecasts, park schedules, and ML predictions " +
-          "for optimal theme park experiences worldwide. " +
-          "Free for non-commercial use with a credit to park.fan. Forecasts need a data " +
-          "key in X-API-Key (free for non-commercial use, on request); commercial use of " +
-          "the forecasts needs a written agreement, and the live data may not be used " +
+        "Live wait times, opening hours, weather, statistics and crowd forecasts for " +
+          "around 200 theme parks. Free for non-commercial use with a credit to park.fan. " +
+          "Forecasts need a data key in X-API-Key (free for non-commercial use, on " +
+          "request); without a key, reads are limited to 60 a minute and 1,000 an hour " +
+          "per address. Commercial use of the forecasts and statistics needs a written " +
+          "agreement with Patrick Arns (park.fan), and the live data may not be used " +
           "commercially through park.fan.",
       )
       .setTermsOfService(DATA_TERMS_URL)

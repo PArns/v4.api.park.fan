@@ -51,6 +51,13 @@ export class ApiKey {
   })
   allowedParkIds: string[] | null;
 
+  /**
+   * When the key stops working; null means never. A key past it is refused
+   * like a revoked one, but a new date brings it back.
+   */
+  @Column({ name: "expires_at", type: "timestamptz", nullable: true })
+  expiresAt: Date | null;
+
   /** The first characters of the key, enough to recognise it. */
   @Column({ type: "text" })
   prefix: string;

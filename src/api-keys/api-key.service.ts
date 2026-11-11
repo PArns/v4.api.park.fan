@@ -32,6 +32,8 @@ export interface ApiKeyItem {
   allowedParkIds: string[] | null;
   /** Those parks by name, for the list (list only). */
   allowedParks?: { id: string; name: string }[] | null;
+  /** When the key stops working; null means never. */
+  expiresAt: Date | null;
   /** Requests counted in the current clock hour (list only). */
   requestsThisHour?: number;
   createdAt: Date;
@@ -45,12 +47,21 @@ export interface ResolvedApiKey {
   usage: ApiKeyUsage;
   requestsPerHour: number | null;
   allowedParkIds: string[] | null;
+  /** ISO 8601, so the cached copy reads back the same; null means never. */
+  expiresAt: string | null;
 }
+
+/** What a presented value turned out to be. */
+export type ApiKeyLookup =
+  | { status: "active"; key: ResolvedApiKey }
+  | { status: "expired"; expiresAt: string }
+  | { status: "unknown" };
 
 /** What `update` may change; a field left out stays as it is. */
 export interface ApiKeyPatch {
   requestsPerHour?: number | null;
   allowedParkIds?: string[] | null;
+  expiresAt?: Date | null;
 }
 
 /** Where a key stands against its hourly allowance after one more request. */
@@ -93,7 +104,25 @@ function toResolved(row: ApiKey): ResolvedApiKey {
     usage: row.usage,
     requestsPerHour: row.requestsPerHour,
     allowedParkIds: row.allowedParkIds,
+    expiresAt: row.expiresAt?.toISOString() ?? null,
   };
+}
+
+/** Whether a key's end date has passed. */
+export function isExpired(key: ResolvedApiKey, now = Date.now()): boolean {
+  return key.expiresAt !== null && Date.parse(key.expiresAt) <= now;
+}
+
+/**
+ * Refuses an end date that has already passed: a key that would be born
+ * expired is a mistake, and taking a key out of use is what revoking is for.
+ */
+function futureExpiry(expiresAt: Date | null | undefined): Date | null {
+  if (!expiresAt) return null;
+  if (expiresAt.getTime() <= Date.now()) {
+    throw new BadRequestException("expiresAt must be in the future");
+  }
+  return expiresAt;
 }
 
 function toItem(row: ApiKey): ApiKeyItem {
@@ -106,6 +135,7 @@ function toItem(row: ApiKey): ApiKeyItem {
     prefix: row.prefix,
     requestsPerHour: row.requestsPerHour,
     allowedParkIds: row.allowedParkIds,
+    expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
     revokedAt: row.revokedAt,
@@ -115,10 +145,10 @@ function toItem(row: ApiKey): ApiKeyItem {
 /**
  * Issues, lists, revokes and checks the keys that unlock the forecast routes.
  *
- * Every forecast request asks `resolve`, so the answer is cached in Redis both
- * ways: a valid key for five minutes, an unknown or revoked one for one. A
- * revocation deletes the valid entry at once, so the five minutes only ever
- * apply to keys that are still good.
+ * Every forecast request asks `lookup`, so the answer is cached in Redis both
+ * ways: a found key for five minutes, an unknown one for one. A revocation or
+ * an edit writes over the cached entry at once, and an end date is compared on
+ * every read, so the five minutes never keep a key alive past either.
  */
 @Injectable()
 export class ApiKeyService {
@@ -140,9 +170,11 @@ export class ApiKeyService {
       note?: string | null;
       requestsPerHour?: number | null;
       allowedParkIds?: string[] | null;
+      expiresAt?: Date | null;
     },
     createdBy: string | null,
   ): Promise<{ key: string; item: ApiKeyItem }> {
+    const expiresAt = futureExpiry(input.expiresAt);
     const allowedParkIds = await this.knownParkIds(input.allowedParkIds);
     const key = generateToken(API_KEY_PREFIX);
     const row = await this.keys.save(
@@ -158,6 +190,7 @@ export class ApiKeyService {
               ? null
               : DEFAULT_REQUESTS_PER_HOUR,
         allowedParkIds,
+        expiresAt,
         prefix: key.slice(0, API_KEY_VISIBLE_CHARS),
         keyHash: hashToken(key),
         createdBy,
@@ -193,8 +226,10 @@ export class ApiKeyService {
   }
 
   /**
-   * Changes an active key's hourly allowance and parks; null when there is no
-   * such active key. `before` and `after` hold only the fields that were sent.
+   * Changes an active key's hourly allowance, parks and end date; null when
+   * there is no such key or it was revoked. An expired key counts as active
+   * here, so a new end date brings it back. `before` and `after` hold only the
+   * fields that were sent.
    */
   async update(
     id: string,
@@ -217,6 +252,11 @@ export class ApiKeyService {
       before.allowedParkIds = row.allowedParkIds;
       row.allowedParkIds = await this.knownParkIds(patch.allowedParkIds);
       after.allowedParkIds = row.allowedParkIds;
+    }
+    if (patch.expiresAt !== undefined) {
+      before.expiresAt = row.expiresAt;
+      row.expiresAt = futureExpiry(patch.expiresAt);
+      after.expiresAt = row.expiresAt;
     }
     await this.keys.save(row);
     // Written over the cached lookup rather than deleted: a resolve that read
@@ -313,43 +353,59 @@ export class ApiKeyService {
     return toItem(row);
   }
 
-  /** The active key behind a presented value, or null. */
-  async resolve(presented: string): Promise<ResolvedApiKey | null> {
-    if (!looksLikeApiKey(presented)) return null;
+  /** The active key behind a presented value, or null: unknown, revoked or expired. */
+  async resolve(
+    presented: string,
+    now = Date.now(),
+  ): Promise<ResolvedApiKey | null> {
+    const found = await this.lookup(presented, now);
+    return found.status === "active" ? found.key : null;
+  }
+
+  /**
+   * What a presented value is: an active key, a key past its end date (so the
+   * refusal can say so), or nothing usable. The end date travels in the cached
+   * entry and is compared on every read, so a key stops at its date, not up to
+   * five minutes later.
+   */
+  async lookup(presented: string, now = Date.now()): Promise<ApiKeyLookup> {
+    if (!looksLikeApiKey(presented)) return { status: "unknown" };
     const hash = hashToken(presented);
 
     // A Redis failure reads as a miss: the key is then checked in Postgres.
     const cached = await this.redis.get(cacheKey(hash)).catch(() => null);
-    if (cached === INVALID_MARKER) return null;
-    const fromCache = safeJsonParse<ResolvedApiKey>(cached);
-    if (fromCache) {
-      fromCache.requestsPerHour ??= null;
-      fromCache.allowedParkIds ??= null;
-      this.touch(fromCache.id);
-      return fromCache;
-    }
-
-    const row = await this.keys.findOne({
-      where: { keyHash: hash, revokedAt: IsNull() },
-    });
-    if (!row) {
+    if (cached === INVALID_MARKER) return { status: "unknown" };
+    let resolved = safeJsonParse<ResolvedApiKey>(cached);
+    if (resolved) {
+      resolved.requestsPerHour ??= null;
+      resolved.allowedParkIds ??= null;
+      resolved.expiresAt ??= null;
+    } else {
+      const row = await this.keys.findOne({
+        where: { keyHash: hash, revokedAt: IsNull() },
+      });
+      if (!row) {
+        await this.redis
+          .set(cacheKey(hash), INVALID_MARKER, "EX", INVALID_TTL_SECONDS, "NX")
+          .catch(() => undefined);
+        return { status: "unknown" };
+      }
+      resolved = toResolved(row);
       await this.redis
-        .set(cacheKey(hash), INVALID_MARKER, "EX", INVALID_TTL_SECONDS, "NX")
+        .set(
+          cacheKey(hash),
+          JSON.stringify(resolved),
+          "EX",
+          VALID_TTL_SECONDS,
+          "NX",
+        )
         .catch(() => undefined);
-      return null;
     }
-    const resolved = toResolved(row);
-    await this.redis
-      .set(
-        cacheKey(hash),
-        JSON.stringify(resolved),
-        "EX",
-        VALID_TTL_SECONDS,
-        "NX",
-      )
-      .catch(() => undefined);
-    this.touch(row.id);
-    return resolved;
+    if (isExpired(resolved, now)) {
+      return { status: "expired", expiresAt: resolved.expiresAt as string };
+    }
+    this.touch(resolved.id);
+    return { status: "active", key: resolved };
   }
 
   /** Overwrites the cached lookup of a key with its current state. */

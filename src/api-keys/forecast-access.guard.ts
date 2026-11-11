@@ -16,13 +16,18 @@ import {
   getThrottleBypassHeader,
 } from "../common/throttler/throttler.config";
 import {
+  API_KEY_EXPIRES_HEADER,
   API_KEY_HEADER,
   API_KEY_LIMIT_HEADERS,
   API_KEY_PREFIX,
   DATA_TERMS_URL,
   bypassKeyOpensForecasts,
 } from "./api-key.constants";
-import { ApiKeyService, type ResolvedApiKey } from "./api-key.service";
+import {
+  ApiKeyService,
+  type ApiKeyLookup,
+  type ResolvedApiKey,
+} from "./api-key.service";
 import {
   isForecastSharedCacheEnabled,
   keepResponsePrivate,
@@ -116,7 +121,8 @@ export interface ForecastAccessOptions {
  *
  * A data key also counts against its hourly allowance; over it, the answer is
  * a 429 with `Retry-After` until the next full hour. park.fan's own frontend is
- * not counted.
+ * not counted. A key with an end date reports it in `X-API-Key-Expires`, and
+ * past it is refused with `api-key-expired`.
  */
 export async function authorizeForecastRequest(
   apiKeys: ApiKeyService,
@@ -135,10 +141,14 @@ export async function authorizeForecastRequest(
 
   const presentedWith = readPresentedApiKeyWithSource(request.headers);
   const presented = presentedWith?.key ?? null;
-  const resolved = presented ? await apiKeys.resolve(presented) : null;
-  if (resolved) {
+  const found = presented ? await apiKeys.lookup(presented) : null;
+  if (found?.status === "active") {
+    const resolved = found.key;
     if (presentedWith?.source === "bearer") keepResponsePrivate(response);
     await checkAllowedPark(resolved, request, options);
+    if (resolved.expiresAt && !response.headersSent) {
+      response.setHeader(API_KEY_EXPIRES_HEADER, resolved.expiresAt);
+    }
     const usage = await apiKeys.countRequest(resolved);
     if (usage && !response.headersSent) {
       response.setHeader(API_KEY_LIMIT_HEADERS.limit, String(usage.limit));
@@ -169,11 +179,31 @@ export async function authorizeForecastRequest(
   if (!response.headersSent) {
     response.setHeader("WWW-Authenticate", 'ApiKey header="X-API-Key"');
   }
-  throw new UnauthorizedException({
-    error: presented ? "api-key-invalid" : "api-key-required",
-    message: presented
-      ? "This API key is unknown or revoked."
-      : "Forecasts need an API key in the X-API-Key header. Keys for non-commercial use are free on request.",
+  throw keyRefusal(
+    found,
+    "Forecasts need an API key in the X-API-Key header. Keys for non-commercial use are free on request.",
+  );
+}
+
+/**
+ * The 401 for a request without an active key: none sent, one past its end
+ * date, or one that is unknown or revoked.
+ */
+export function keyRefusal(
+  found: ApiKeyLookup | null,
+  whenMissing: string,
+): UnauthorizedException {
+  if (found?.status === "expired") {
+    return new UnauthorizedException({
+      error: "api-key-expired",
+      message: `This API key expired on ${found.expiresAt}.`,
+      expiresAt: found.expiresAt,
+      terms: DATA_TERMS_URL,
+    });
+  }
+  return new UnauthorizedException({
+    error: found ? "api-key-invalid" : "api-key-required",
+    message: found ? "This API key is unknown or revoked." : whenMissing,
     terms: DATA_TERMS_URL,
   });
 }

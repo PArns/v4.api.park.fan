@@ -44,6 +44,9 @@ export const API_KEY_LIMIT_HEADERS = {
   reset: "X-API-Key-Hourly-Reset",
 } as const;
 
+/** The response header that tells a key's holder when it expires (ISO 8601). */
+export const API_KEY_EXPIRES_HEADER = "X-API-Key-Expires";
+
 /**
  * Whether the throttle bypass key (`x-auth-key`) still opens the forecast
  * routes. It did before the frontend had a data key of its own; once the

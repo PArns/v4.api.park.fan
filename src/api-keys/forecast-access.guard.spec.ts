@@ -42,25 +42,37 @@ function context(
 }
 
 const LIMITED = `pfk_${"e".repeat(43)}`;
+const EXPIRED = `pfk_${"f".repeat(43)}`;
+const LIMITED_UNTIL = "2099-06-30T21:59:59.000Z";
 
 function guard() {
   const apiKeys = {
-    resolve: jest.fn(async (value: string) =>
+    lookup: jest.fn(async (value: string) =>
       value === VALID
         ? {
-            id: "k1",
-            usage: "non-commercial",
-            requestsPerHour: 2,
-            allowedParkIds: null,
+            status: "active",
+            key: {
+              id: "k1",
+              usage: "non-commercial",
+              requestsPerHour: 2,
+              allowedParkIds: null,
+              expiresAt: null,
+            },
           }
         : value === LIMITED
           ? {
-              id: "k2",
-              usage: "commercial",
-              requestsPerHour: null,
-              allowedParkIds: ["mk-id"],
+              status: "active",
+              key: {
+                id: "k2",
+                usage: "commercial",
+                requestsPerHour: null,
+                allowedParkIds: ["mk-id"],
+                expiresAt: LIMITED_UNTIL,
+              },
             }
-          : null,
+          : value === EXPIRED
+            ? { status: "expired", expiresAt: "2026-01-31T22:59:59.000Z" }
+            : { status: "unknown" },
     ),
     countRequest: jest.fn(
       async (): Promise<{
@@ -124,7 +136,7 @@ describe("ForecastAccessGuard", () => {
     const { guard: g, apiKeys } = guard();
     const { ctx, sent } = context({ "x-auth-key": "frontend-secret" });
     await expect(g.canActivate(ctx)).resolves.toBe(true);
-    expect(apiKeys.resolve).not.toHaveBeenCalled();
+    expect(apiKeys.lookup).not.toHaveBeenCalled();
     expect(sent.get("cache-control")).toBe("private, no-store");
   });
 
@@ -137,6 +149,7 @@ describe("ForecastAccessGuard", () => {
       usage: "non-commercial",
       requestsPerHour: 2,
       allowedParkIds: null,
+      expiresAt: null,
     });
   });
 
@@ -205,13 +218,14 @@ describe("ForecastAccessGuard", () => {
       parkSlug: park,
     });
 
-    it("reads its own parks", async () => {
+    it("reads its own parks, and is told when the key ends", async () => {
       const { guard: g } = guard();
-      const { ctx } = context(
+      const { ctx, sent } = context(
         { "x-api-key": LIMITED },
         route("magic-kingdom-park"),
       );
       await expect(g.canActivate(ctx)).resolves.toBe(true);
+      expect(sent.get("x-api-key-expires")).toBe(LIMITED_UNTIL);
     });
 
     it("is refused for another park, before the hourly count", async () => {
@@ -260,6 +274,7 @@ describe("ForecastAccessGuard", () => {
         usage: "commercial" as const,
         requestsPerHour: null,
         allowedParkIds: ["mk-id"],
+        expiresAt: null,
       };
       const options = {
         verify: true,
@@ -332,6 +347,19 @@ describe("ForecastAccessGuard", () => {
     expect((error as UnauthorizedException).getResponse()).toMatchObject({
       error: "api-key-invalid",
     });
+  });
+
+  it("refuses a key past its end date as expired, naming the date", async () => {
+    const { guard: g, apiKeys } = guard();
+    const { ctx, sent } = context({ "x-api-key": EXPIRED });
+    const error = await g.canActivate(ctx).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect((error as UnauthorizedException).getResponse()).toMatchObject({
+      error: "api-key-expired",
+      expiresAt: "2026-01-31T22:59:59.000Z",
+    });
+    expect(sent.get("www-authenticate")).toBeDefined();
+    expect(apiKeys.countRequest).not.toHaveBeenCalled();
   });
 });
 

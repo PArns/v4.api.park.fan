@@ -31,6 +31,11 @@ import { stripInvisibleCharacters } from "../common/utils/visible-text.util";
 import { ApiKeyService } from "./api-key.service";
 import { CreateApiKeyDto, UpdateApiKeyDto } from "./dto/create-api-key.dto";
 
+/** An ISO 8601 date from a body, as a Date; null and absent pass through. */
+function toDate(value: string | null | undefined): Date | null | undefined {
+  return value === null || value === undefined ? value : new Date(value);
+}
+
 /**
  * The data keys that unlock the forecast routes, for the admin's "API keys"
  * page. Owner only: a key decides who may use park.fan's forecasts, which is a
@@ -80,6 +85,7 @@ export class AdminApiKeysController {
         note: body.note ? stripInvisibleCharacters(body.note) : null,
         requestsPerHour: body.requestsPerHour,
         allowedParkIds: body.allowedParkIds,
+        expiresAt: toDate(body.expiresAt),
       },
       admin.userId ?? null,
     );
@@ -95,6 +101,7 @@ export class AdminApiKeysController {
         contact: created.item.contact,
         requestsPerHour: created.item.requestsPerHour,
         allowedParkIds: created.item.allowedParkIds,
+        expiresAt: created.item.expiresAt,
       },
     });
     return created;
@@ -102,9 +109,9 @@ export class AdminApiKeysController {
 
   @Patch(":id")
   @ApiOperation({
-    summary: "Change a data API key's hourly allowance or parks",
+    summary: "Change a data API key's hourly allowance, parks or end date",
     description:
-      "`requestsPerHour` per clock hour (null: no per-key limit) and `allowedParkIds` (null: every park). A field left out stays as it is. Applies to the next request.",
+      "`requestsPerHour` per clock hour (null: no per-key limit), `allowedParkIds` (null: every park) and `expiresAt` (null: never; a new date brings an expired key back). A field left out stays as it is. Applies to the next request.",
   })
   @ApiResponse({ status: 404, description: "No such active key" })
   async update(
@@ -117,6 +124,7 @@ export class AdminApiKeysController {
     const changed = await this.apiKeys.update(id, {
       requestsPerHour: body.requestsPerHour,
       allowedParkIds: body.allowedParkIds,
+      expiresAt: toDate(body.expiresAt),
     });
     if (!changed) throw new NotFoundException("No such active key");
     await this.audit.record({

@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Get,
-  Req,
-  Res,
-  UnauthorizedException,
-} from "@nestjs/common";
+import { Controller, Get, Req, Res } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import {
   ApiOperation,
@@ -14,10 +8,10 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import type { Response } from "express";
-import { DATA_TERMS_URL } from "./api-key.constants";
 import { ApiKeyService } from "./api-key.service";
 import {
   checkAllowedPark,
+  keyRefusal,
   parkIdResolver,
   readPresentedApiKey,
   type ForecastRequest,
@@ -45,7 +39,7 @@ export class ApiKeysController {
   @ApiOperation({
     summary: "Check a data API key",
     description:
-      "200 when the key in `X-API-Key` is active, 401 otherwise. With `park`, 403 when the key does not cover that park. `allParks` says whether the key covers every park; otherwise `allowedParkIds` lists them.",
+      "200 when the key in `X-API-Key` is active, 401 otherwise (`api-key-expired` past its end date). With `park`, 403 when the key does not cover that park. `allParks` says whether the key covers every park; otherwise `allowedParkIds` lists them. `expiresAt` is the end date, absent for a key that does not expire.",
   })
   @ApiQuery({
     name: "park",
@@ -55,7 +49,8 @@ export class ApiKeysController {
   })
   @ApiResponse({
     status: 200,
-    description: "`{ valid: true, usage, allParks, allowedParkIds }`",
+    description:
+      "`{ valid: true, usage, allParks, allowedParkIds, expiresAt? }`",
   })
   async verify(
     @Req() request: ForecastRequest,
@@ -63,16 +58,11 @@ export class ApiKeysController {
   ) {
     keepResponsePrivate(response);
     const presented = readPresentedApiKey(request.headers);
-    const key = presented ? await this.apiKeys.resolve(presented) : null;
-    if (!key) {
-      throw new UnauthorizedException({
-        error: presented ? "api-key-invalid" : "api-key-required",
-        message: presented
-          ? "This API key is unknown or revoked."
-          : "Send the key to check in the X-API-Key header.",
-        terms: DATA_TERMS_URL,
-      });
+    const found = presented ? await this.apiKeys.lookup(presented) : null;
+    if (found?.status !== "active") {
+      throw keyRefusal(found, "Send the key to check in the X-API-Key header.");
     }
+    const key = found.key;
     await checkAllowedPark(key, request, {
       verify: true,
       resolveParkId: parkIdResolver(this.moduleRef),
@@ -83,6 +73,7 @@ export class ApiKeysController {
       usage: key.usage,
       allParks: key.allowedParkIds === null,
       allowedParkIds: key.allowedParkIds ?? [],
+      ...(key.expiresAt && { expiresAt: key.expiresAt }),
     };
   }
 }

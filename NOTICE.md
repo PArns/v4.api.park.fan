@@ -3,7 +3,7 @@
 Required Notice: Copyright Patrick Arns (https://park.fan)
 
 The source code in this repository is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE.md). Any noncommercial purpose is permitted.
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). Any non-commercial purpose is permitted.
 Commercial use needs a written agreement with Patrick Arns: https://park.fan/en/impressum
 
 Not covered by that licence:
