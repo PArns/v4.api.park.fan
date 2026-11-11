@@ -153,16 +153,25 @@ Sunday?" and events go to `get_days`; the parks card only for today; the day's e
 the hours of a park's day to `get_hours`. Version 40: times are park time,
 with "park time" said once when the visitor's zone differs. Version 41: a ride by name
 goes straight into the ride tools, a card is never paired with its lookup, small talk needs no
-tool, and "where is it quiet now" without a park goes to `find_parks_nearby`.
+tool, and "where is it quiet now" without a park goes to `find_parks_nearby`. Version 47: Parky
+*is* park.fan. Waits, forecasts, the calendar, guides, news and fun facts are his own knowledge,
+so he says "I" and "we" ("our guide", "no date yet"), never "according to park.fan", "my data"
+or "the tool"; a park.fan in a tool result means him. He knows the site's story (it began in the
+Taron queue) and how park.fan gets its numbers, as the How park.fan works page tells it, and
+explains that gladly; only how he works as a chat stays unsaid. He has a life that matches the
+mascot on the page (the eight-spoke hat, naps and dreams, outfits, the seasons, his day following
+the sun) and takes of his own, which he brings in one at a time, never the same twice in a chat;
+a sad fan gets sympathy before help.
 
-The prompt runs in one order: who Parky is, how an answer reads, language, facts and sources, the
+The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
+life, his character, how an answer reads, language, facts and sources, the
 page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
 safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
 does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 37 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 49 short chats (`assistant-eval.fixtures.ts`: page, planner,
 alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -389,7 +398,8 @@ glossary term, a park's `section` (`calendar`, `averages`, `kids`) by its Englis
 the widget respells in the reader's language, the last two only where the park has that page
 (`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
 `KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
-park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`), `request_location` (the share
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`, `how_it_works`
+(`/how-park-fan-works`), `fancast`), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no

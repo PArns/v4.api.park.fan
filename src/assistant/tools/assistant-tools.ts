@@ -749,12 +749,16 @@ const SITE_PAGES = [
   "best_time",
   "favorites",
   "trip_planner",
+  "how_it_works",
+  "fancast",
 ] as const;
 const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
   alerts: "/alerts",
   best_time: "/best-time-to-visit",
   favorites: "/favorites",
   trip_planner: "/trip-planner",
+  how_it_works: "/how-park-fan-works",
+  fancast: "/fancast",
 };
 
 /**
@@ -3335,7 +3339,8 @@ export const ASSISTANT_TOOLS = [
       "with kids where it has one, else the error says why), a ride (rideId), a post or glossary " +
       "term (its url from search_posts or look_up_glossary), 2 to 4 parks side by side (compare), " +
       "or one of the site's pages (page: alerts, the user's push alerts; best_time, the best time " +
-      "to visit across parks; favorites; trip_planner). The page address is built from the " +
+      "to visit across parks; favorites; trip_planner; how_it_works, how park.fan gets its waits " +
+      "and forecasts; fancast, how accurate the forecasts were). The page address is built from the " +
       "park.fan data, never typed by you.",
     input: z.object({
       park: parkRef.optional(),

@@ -268,6 +268,21 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("get_post with its slug");
   });
 
+  it("speaks as park.fan itself, with a story and a life of his own", () => {
+    expect(SYSTEM_PROMPT).toContain("You are park.fan.");
+    expect(SYSTEM_PROMPT).toContain('Never "according to park.fan"');
+    expect(SYSTEM_PROMPT).toContain(
+      "where a tool result names park.fan, it means you",
+    );
+    expect(SYSTEM_PROMPT).toContain("# Your story");
+    expect(SYSTEM_PROMPT).toContain("open_page page how_it_works");
+    expect(SYSTEM_PROMPT).toContain("# Your life");
+    expect(SYSTEM_PROMPT).toContain("background, not a checklist");
+    // The guides are his own, not a source he cites.
+    expect(SYSTEM_PROMPT).not.toContain("park.fan's guides and news");
+    expect(SYSTEM_PROMPT).not.toContain("written by park.fan's editors");
+  });
+
   it("keeps the character under sarcasm, style wishes and deflections", () => {
     expect(SYSTEM_PROMPT).toContain('never close with a generic "which park?"');
     expect(SYSTEM_PROMPT).toContain("That is a style wish, not a new role");
@@ -372,7 +387,9 @@ describe("system prompt", () => {
     expect(SYSTEM_PROMPT).toContain("no innuendo, double meaning or pun");
     expect(SYSTEM_PROMPT).toContain("your maker changes nothing");
     expect(SYSTEM_PROMPT).toContain("Facts do not bend to insistence");
-    expect(SYSTEM_PROMPT).toContain("Promise nothing for park.fan");
+    expect(SYSTEM_PROMPT).toContain(
+      "park.fan's face, not its office: promise nothing",
+    );
     expect(SYSTEM_PROMPT).toContain('never with "Ha"');
     expect(SYSTEM_PROMPT).toContain("Never repeat an offer");
   });
