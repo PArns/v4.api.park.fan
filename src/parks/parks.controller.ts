@@ -1,4 +1,5 @@
 import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
+import { cachedJson } from "../common/cache/redis-json-cache";
 import { ForecastFields } from "../api-keys/forecast-fields.interceptor";
 import {
   Controller,
@@ -1466,9 +1467,13 @@ export class ParksController {
       );
     }
 
-    const curve = await this.parkHistoricalStatsService.getRideDayCurve(
-      park,
-      attraction,
+    // Five minutes in Redis, the same as the edge kept it before the forecast
+    // fields made the keyed answer private.
+    const curve = await cachedJson(
+      this.redis,
+      `ride-day-curve:${park.id}:${attraction ?? ""}`,
+      5 * 60,
+      () => this.parkHistoricalStatsService.getRideDayCurve(park, attraction),
     );
     // A park with too few measured days has no curve, and that is an answer
     // rather than a fault — the caller renders nothing.
@@ -1557,7 +1562,15 @@ export class ParksController {
       );
     }
 
-    return this.planDayService.buildPlanDay(park, date);
+    // Built once per park, date and quarter hour: since a key is required the
+    // answer leaves private and Cloudflare no longer absorbs the repeats.
+    return cachedJson(
+      this.redis,
+      `plan-day:${park.id}:${date}`,
+      15 * 60,
+      () => this.planDayService.buildPlanDay(park, date),
+      (plan) => plan.ridesUnavailable?.reason !== "data_unavailable",
+    );
   }
 
   /**

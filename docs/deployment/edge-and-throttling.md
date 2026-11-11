@@ -68,6 +68,7 @@ and Cloudflare absorbs most reads before they reach the origin.
 | `THROTTLE_LIMIT`         | `300`        | requests per key per window; `0` does not register the guard, which also switches off every `@Throttle()` |
 | `THROTTLE_TTL`           | `60`         | window in seconds                                                                                         |
 | `THROTTLE_BYPASS_HEADER` | `x-auth-key` | header that carries a bypass key (lowercased)                                                             |
+| `FORECAST_BYPASS_KEY`    | unset        | `off` stops the bypass key from opening the forecast routes, once the frontend sends its own data key ([data API keys](../frontend/api-keys.md#parkfans-own-frontend)) |
 | `FORECAST_SHARED_CACHE`  | unset        | `vary` lets keyed forecast answers be cached per key once the Cloudflare Vary rule is live ([data API keys](../frontend/api-keys.md#caching)) |
 | `THROTTLE_BYPASS_KEYS`   | empty        | comma-separated keys; a request carrying one skips the guard. Empty means no bypass                       |
 

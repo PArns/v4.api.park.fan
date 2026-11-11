@@ -141,6 +141,24 @@ describe("ForecastAccessGuard", () => {
     expect(over.sent.get("cache-control")).toBe("private, no-store");
   });
 
+  it("stops admitting the bypass key once FORECAST_BYPASS_KEY=off", async () => {
+    process.env.FORECAST_BYPASS_KEY = "off";
+    try {
+      const { guard: g } = guard();
+      const bypass = context({ "x-auth-key": "frontend-secret" });
+      const error = await g.canActivate(bypass.ctx).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UnauthorizedException);
+
+      const keyed = context({
+        "x-auth-key": "frontend-secret",
+        "x-api-key": VALID,
+      });
+      await expect(g.canActivate(keyed.ctx)).resolves.toBe(true);
+    } finally {
+      delete process.env.FORECAST_BYPASS_KEY;
+    }
+  });
+
   it("does not count park.fan's own frontend", async () => {
     const { guard: g, apiKeys } = guard();
     await g.canActivate(context({ "x-auth-key": "frontend-secret" }).ctx);

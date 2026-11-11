@@ -17,8 +17,15 @@ export const API_KEY_PREFIX = "pfk_";
 /** The request header a data key travels in. `Authorization: Bearer` works too. */
 export const API_KEY_HEADER = "x-api-key";
 
-/** What a key was issued for; text in the table, so a third kind needs no migration. */
-export const API_KEY_USAGES = ["non-commercial", "commercial"] as const;
+/**
+ * What a key was issued for; text in the table, so another kind needs no
+ * migration. `internal` is park.fan's own frontend.
+ */
+export const API_KEY_USAGES = [
+  "non-commercial",
+  "commercial",
+  "internal",
+] as const;
 export type ApiKeyUsage = (typeof API_KEY_USAGES)[number];
 
 /** Characters of the key kept in clear, enough to tell two keys apart in a list. */
@@ -36,3 +43,13 @@ export const API_KEY_LIMIT_HEADERS = {
   remaining: "X-API-Key-Hourly-Remaining",
   reset: "X-API-Key-Hourly-Reset",
 } as const;
+
+/**
+ * Whether the throttle bypass key (`x-auth-key`) still opens the forecast
+ * routes. It did before the frontend had a data key of its own; once the
+ * frontend sends one (`API_DATA_KEY`), `FORECAST_BYPASS_KEY=off` leaves the
+ * bypass key to what its name says, the rate limits.
+ */
+export function bypassKeyOpensForecasts(): boolean {
+  return process.env.FORECAST_BYPASS_KEY !== "off";
+}

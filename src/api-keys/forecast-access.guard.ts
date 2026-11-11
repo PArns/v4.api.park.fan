@@ -17,6 +17,7 @@ import {
   API_KEY_LIMIT_HEADERS,
   API_KEY_PREFIX,
   DATA_TERMS_URL,
+  bypassKeyOpensForecasts,
 } from "./api-key.constants";
 import { ApiKeyService, type ResolvedApiKey } from "./api-key.service";
 import {
@@ -56,9 +57,10 @@ export interface ForecastRequest {
 }
 
 /**
- * Admits park.fan's own frontend (the throttle bypass key it sends on every
- * server-side call) or the holder of an active data key, and refuses everyone
- * else with a 401 that says where the terms are.
+ * Admits the holder of an active data key, park.fan's own frontend included,
+ * and refuses everyone else with a 401 that says where the terms are. Until
+ * `FORECAST_BYPASS_KEY=off`, the throttle bypass key the frontend sends on
+ * every server-side call opens the routes too.
  *
  * The cache policy is settled first, whatever the outcome, because a guard runs
  * before every interceptor and its 401 would otherwise leave with no
@@ -82,7 +84,9 @@ export async function authorizeForecastRequest(
   } else {
     keepResponsePrivate(response);
   }
-  if (carriesThrottleBypassKey(request.headers)) return;
+  if (bypassKeyOpensForecasts() && carriesThrottleBypassKey(request.headers)) {
+    return;
+  }
 
   const presentedWith = readPresentedApiKeyWithSource(request.headers);
   const presented = presentedWith?.key ?? null;
