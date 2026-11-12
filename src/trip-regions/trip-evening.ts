@@ -40,6 +40,12 @@ export const SHORT_TRANSFER_MINUTES = 15;
 const VIEW_MINUTES = 30;
 /** The end of an evening at a venue that publishes no typical hours. */
 const DEFAULT_EVENING_END = "22:00";
+/**
+ * The latest a suggested evening at a venue runs, even where the venue stays open later
+ * (CityWalk to 02:00): the plan suggests a dinner and a stroll, not a night out, and a park day
+ * follows.
+ */
+const LATEST_VENUE_EVENING_END = "23:00";
 /** Most evenings a day offers: the suggestion and two alternatives. */
 const MAX_ALTERNATIVES = 2;
 
@@ -409,7 +415,10 @@ function venueCandidates(
       });
       to = show.minute + VIEW_MINUTES;
     } else if (venue.typicalHours) {
-      to = typicalClose(venue.typicalHours);
+      to = Math.min(
+        typicalClose(venue.typicalHours),
+        hhmm(LATEST_VENUE_EVENING_END) as number,
+      );
       if (to - arrival < MIN_EVENING_MINUTES) continue;
     } else {
       to = hhmm(DEFAULT_EVENING_END) as number;

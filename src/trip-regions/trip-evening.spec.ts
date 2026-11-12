@@ -288,6 +288,11 @@ describe("Universal", () => {
     });
   });
 
+  it("ends a CityWalk evening at 23:00 though CityWalk stays open later", () => {
+    const epic = { ...parks, [EPIC]: open("09:00", "18:00") };
+    expect(evening(EPIC, epic, "base")?.to).toMatch(/T23:00:00/);
+  });
+
   it("pairs Epic with nobody on a hop day", () => {
     expect(hopPairs(ORLANDO, LEGS, [USF, IOA, EPIC])).toEqual([[USF, IOA]]);
   });

@@ -683,7 +683,9 @@ district (Disney Springs, CityWalk, ICON Park) open at least 90 minutes after ar
 typical hours (ICON Park has none: its evening ends at 22:00); a fireworks view (the BoardWalk for
 EPCOT, the Polynesian beach for Magic Kingdom) only on a night that park has fireworks starting
 within two hours of arrival and no party night. A view ranks first, then the shorter transfer. A
-view's `to` is half an hour after the fireworks start.
+view's `to` is half an hour after the fireworks start; a district's `to` is its typical close, but
+never past 23:00 (CityWalk stays open to 02:00, and the plan suggests a dinner, not a night out,
+before another park day).
 
 **Alternatives**, at most two: with a hopper, the next hop park and the best venue, then the rest
 of either; with a base ticket, the next venues.
