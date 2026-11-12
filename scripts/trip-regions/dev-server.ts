@@ -275,8 +275,11 @@ async function seasonsFor(
   return out;
 }
 
-/** Production's park routes answer at most this many days; a longer read is stitched. */
-const UPSTREAM_SPAN_DAYS = 90;
+/**
+ * Production's park routes refuse a range over 90 days, and a span of 90 calendar days that
+ * crosses a DST change measures longer than that, so the shim stitches 89-day spans.
+ */
+const UPSTREAM_SPAN_DAYS = 89;
 
 function spans(from: string, to: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
