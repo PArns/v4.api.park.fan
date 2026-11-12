@@ -49,6 +49,8 @@ export interface TripParkDay {
 /** What the plan reads beside the public fields; never sent. */
 export interface TripParkDayInternal extends TripParkDay {
   dayHours?: number;
+  /** `headlinerWait` before rounding, for ranking days; never sent. */
+  waitExact?: number;
   earlyUnknown?: boolean;
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
 }
@@ -81,7 +83,7 @@ export interface CalendarDayLike {
   status: TripDayStatus;
   crowdLevel: string;
   hours?: { openingTime: string; closingTime: string; isInferred: boolean };
-  headlinerForecast?: { avgWait: number; actual?: boolean };
+  headlinerForecast?: { avgWait: number; exactWait?: number; actual?: boolean };
   weather?: {
     tempMax: number;
     rainChance: number;
@@ -96,6 +98,8 @@ export interface LastYearEntry {
   c: string;
   /** Mean of the headliners' measured day-P90, rounded to five. */
   w?: number;
+  /** The same mean unrounded, for ranking (absent in older snapshots). */
+  x?: number;
 }
 
 const round5 = (min: number): number => Math.round(min / 5) * 5;
@@ -241,11 +245,15 @@ export function toLastYearEntry(day: CalendarDayLike): LastYearEntry {
   if (day.status === "CLOSED" || day.crowdLevel === "closed") {
     return { c: "closed" };
   }
-  const w =
-    day.headlinerForecast?.actual === true
-      ? round5(day.headlinerForecast.avgWait)
-      : undefined;
-  return { c: day.crowdLevel, ...(w != null && { w }) };
+  const measured =
+    day.headlinerForecast?.actual === true ? day.headlinerForecast : undefined;
+  const w = measured ? round5(measured.avgWait) : undefined;
+  const x = measured?.exactWait;
+  return {
+    c: day.crowdLevel,
+    ...(w != null && { w }),
+    ...(x != null && { x }),
+  };
 }
 
 export interface ParkDayInput {
@@ -365,6 +373,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
   if (date >= today && ((forecast && !forecast.actual) || rated)) {
     if (forecast && !forecast.actual) {
       out.headlinerWait = round5(forecast.avgWait);
+      if (forecast.exactWait != null) out.waitExact = forecast.exactWait;
     }
     out.crowdLevel = level ?? "unknown";
     out.basis =
@@ -378,6 +387,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
   ) {
     out.crowdLevel = input.lastYear.c;
     if (input.lastYear.w != null) out.headlinerWait = input.lastYear.w;
+    if (input.lastYear.x != null) out.waitExact = input.lastYear.x;
     out.basis = "last_year";
   }
 
@@ -397,6 +407,7 @@ export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
     dayHours: _dayHours,
     earlyUnknown: _earlyUnknown,
     weather: _weather,
+    waitExact: _waitExact,
     ...rest
   } = day;
   return rest;

@@ -1,10 +1,13 @@
 import { ApiPropertyOptional, ApiProperty } from "@nestjs/swagger";
 import {
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
 } from "class-validator";
 import { HOTEL_KINDS } from "../regions";
 
@@ -29,6 +32,19 @@ export class TripCalendarQueryDto {
   @IsOptional()
   @Matches(DATE, { message: `to ${DATE_MESSAGE}` })
   to?: string;
+}
+
+/** `GET /v1/trip-regions/:region/best-days` */
+export class TripBestDaysQueryDto extends TripCalendarQueryDto {
+  @ApiPropertyOptional({
+    description: "Quietest days per park (1–31).",
+    default: 5,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(31)
+  limit?: number;
 }
 
 /** `GET /v1/trip-regions/:region/plan` */
@@ -90,17 +106,34 @@ export class TripPlanQueryDto {
 
   @ApiPropertyOptional({
     enum: ["0", "1"],
-    default: "0",
+    default: "1",
     description: "Keep each resort's days in one block.",
   })
   @IsOptional()
   @IsIn(["0", "1", "true", "false"])
   blocks?: string;
 
-  @ApiPropertyOptional({ enum: ["avoid", "allow", "prefer"], default: "avoid" })
+  @ApiPropertyOptional({
+    enum: ["want", "any"],
+    default: "any",
+    description:
+      "`want`: a night the day guests lose the evening show to a party is used only when " +
+      "nothing else fits. `any`: a day is priced by the hours a day guest gets.",
+  })
   @IsOptional()
-  @IsIn(["avoid", "allow", "prefer"])
-  parties?: string;
+  @IsIn(["want", "any"])
+  fireworks?: string;
+
+  @ApiPropertyOptional({
+    enum: ["auto", "fixed"],
+    default: "auto",
+    description:
+      "`auto`: parks listed without a count may get a second visit where the trip has " +
+      "park days to spare after its rest days. Explicit `slug:n` counts never change.",
+  })
+  @IsOptional()
+  @IsIn(["auto", "fixed"])
+  split?: string;
 
   @ApiPropertyOptional({
     description:

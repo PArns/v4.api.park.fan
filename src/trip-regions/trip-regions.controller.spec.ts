@@ -8,6 +8,7 @@ import { ParksService } from "../parks/parks.service";
 import { CalendarService } from "../parks/services/calendar.service";
 import { ParkSeasonService } from "../parks/services/park-season.service";
 import { ApiKeyService } from "../api-keys/api-key.service";
+import { PredictionLeadSnapshotService } from "../ml/services/prediction-lead-snapshot.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import {
   addIsoDays,
@@ -164,6 +165,10 @@ describe("TripRegionsController", () => {
           useValue: { forParksInRange: jest.fn(async () => []) },
         },
         { provide: REDIS_CLIENT, useValue: redis },
+        {
+          provide: PredictionLeadSnapshotService,
+          useValue: { getLeadTimeMae: jest.fn(async () => 14) },
+        },
         {
           provide: ApiKeyService,
           useValue: {
@@ -341,7 +346,14 @@ describe("TripRegionsController", () => {
       expect(res.body.days).toHaveLength(8);
       expect(res.body.days[0].kind).toBe("arrival");
       expect(res.body.days[7].kind).toBe("departure");
-      expect(res.body.totals.visits).toBe(4);
+      // EPCOT, listed without a count, gets the day the trip has to spare
+      // after its one rest day; MK's explicit two stay two.
+      expect(res.body.meta.split).toEqual([
+        { slug: "epcot", visits: 2, auto: true },
+      ]);
+      expect(res.body.totals.visits).toBe(5);
+      expect(res.body.totals.expectedError).toBe(14);
+      expect(typeof res.body.totals.orderMatters).toBe("boolean");
       const mkDates = res.body.parks.find(
         (p: { slug: string }) => p.slug === "magic-kingdom-park",
       ).dates;

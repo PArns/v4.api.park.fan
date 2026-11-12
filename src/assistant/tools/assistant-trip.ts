@@ -81,7 +81,6 @@ const REASONS: Record<Exclude<PlanReason, PerkKind>, string> = {
   runner_up_close: "another day is nearly as good",
   weekday: "a weekday",
   holiday_ends: "a holiday or school break just ended",
-  party_night: "a party night, as asked",
   water_park_weather: "warm and dry",
   busiest_day_spared: "rests on a busy day",
   rest_after_streak: "rest after a run of park days",
@@ -90,6 +89,8 @@ const REASONS: Record<Exclude<PlanReason, PerkKind>, string> = {
 
 const WARNINGS: Record<PlanWarning, string> = {
   party_night_short_hours: "party night: day guests leave at the early close",
+  fireworks_missed:
+    "party night: day guests miss the evening show; no other day fitted",
   hours_not_published: "hours not published yet",
   estimate_last_year: "estimate from last year, not a forecast",
   long_range: "long-range forecast, less sure",
@@ -217,7 +218,8 @@ const HUB_PARAMS = [
   "hotel",
   "area",
   "blocks",
-  "parties",
+  "fireworks",
+  "split",
   "rest",
   "hop",
   "arrival",
@@ -233,7 +235,8 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   hotel: /^[a-z_]+$/,
   area: /^[a-z_]+$/,
   blocks: /^[01]$/,
-  parties: /^(avoid|allow|prefer)$/,
+  fireworks: /^(want|any)$/,
+  split: /^(auto|fixed)$/,
   rest: /^(auto|none|max:[1-9])$/,
   hop: /^[01]$/,
   arrival: /^(free|park)$/,
@@ -249,11 +252,14 @@ function hubQuery(q: NormalizedPlanQuery): string {
   const values: Partial<Record<(typeof HUB_PARAMS)[number], string>> = {
     from: q.from,
     to: q.to,
-    parks: q.parks.map((p) => `${p.slug}:${p.visits}`).join(","),
+    parks: q.parks
+      .map((p) => (p.explicit ? `${p.slug}:${p.visits}` : p.slug))
+      .join(","),
     hotel: q.hotel,
     ...(q.area && { area: q.area }),
     blocks: q.blocks ? "1" : "0",
-    parties: q.parties,
+    fireworks: q.fireworks,
+    split: q.split,
     rest: q.rest.mode === "max" ? `max:${q.rest.n}` : q.rest.mode,
     hop: q.hop ? "1" : "0",
     arrival: q.arrival,

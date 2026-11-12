@@ -2771,7 +2771,12 @@ export const ASSISTANT_TOOLS = [
         .describe("Whose perks count; default the area's"),
       area: z.enum(ORLANDO_AREAS).optional().describe("Where they stay"),
       blocks: z.boolean().optional().describe("Each resort's days together"),
-      parties: z.enum(["avoid", "allow", "prefer"]).optional(),
+      fireworks: z
+        .enum(["want", "any"])
+        .optional()
+        .describe(
+          "want: keep the evening show, no party nights unless nothing else fits; any (default): price by the hours",
+        ),
       rest: z
         .string()
         .regex(/^(auto|none|max:[1-9])$/)
@@ -2842,7 +2847,7 @@ export const ASSISTANT_TOOLS = [
         arrival: input.arrival,
         departure: input.departure,
         blocks: flag(input.blocks),
-        parties: input.parties,
+        fireworks: input.fireworks,
         rest: input.rest,
         hop: flag(input.hop),
         lock: locks.length > 0 ? locks.join(",") : undefined,

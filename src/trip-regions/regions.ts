@@ -62,6 +62,12 @@ export interface RegionParkConfig {
   /** One of the region's headliner parks: picked by default in the planner. */
   headliner: boolean;
   /**
+   * With `split=auto`, the order in which parks listed without a count get a
+   * second visit when the trip has days to spare (1 first). A curated planning
+   * call: the parks with the most to do and the longest queues. Absent: never.
+   */
+  secondVisitRank?: number;
+  /**
    * Where a drive to this park ends, which is not always its gate: Magic
    * Kingdom's car park is the Transportation and Ticket Center across the Seven
    * Seas Lagoon, Volcano Bay has none of its own. Picked so OSRM snaps it to the
@@ -246,6 +252,7 @@ export const ORLANDO: RegionConfig = {
       group: "walt-disney-world",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 1,
       carPark: {
         latitude: 28.4057,
         longitude: -81.579,
@@ -260,6 +267,7 @@ export const ORLANDO: RegionConfig = {
       group: "walt-disney-world",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 2,
       carPark: {
         latitude: 28.3786,
         longitude: -81.5487,
@@ -273,6 +281,7 @@ export const ORLANDO: RegionConfig = {
       group: "walt-disney-world",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 5,
       carPark: {
         latitude: 28.3577,
         longitude: -81.5555,
@@ -286,6 +295,7 @@ export const ORLANDO: RegionConfig = {
       group: "walt-disney-world",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 7,
       carPark: {
         latitude: 28.361,
         longitude: -81.588,
@@ -325,6 +335,7 @@ export const ORLANDO: RegionConfig = {
       group: "universal-orlando",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 6,
       carPark: {
         latitude: 28.4738,
         longitude: -81.462,
@@ -338,6 +349,7 @@ export const ORLANDO: RegionConfig = {
       group: "universal-orlando",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 4,
       carPark: {
         latitude: 28.4738,
         longitude: -81.462,
@@ -351,6 +363,7 @@ export const ORLANDO: RegionConfig = {
       group: "universal-orlando",
       type: "theme_park",
       headliner: true,
+      secondVisitRank: 3,
       carPark: {
         latitude: 28.4425,
         longitude: -81.443,

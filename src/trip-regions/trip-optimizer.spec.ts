@@ -40,7 +40,7 @@ const BASE_OPTIONS: PlanOptions = {
   departure: "park",
   blocks: false,
   blockGroups: ["walt-disney-world", "universal-orlando", "seaworld-orlando"],
-  parties: "avoid",
+  fireworks: "any",
   rest: { mode: "none" },
   hop: false,
   hopPairs: [],
@@ -293,20 +293,34 @@ describe("optimizeTrip", () => {
       expect(new Set(placement(plan)["magic-kingdom-park"]).size).toBe(3);
     });
 
-    it("spreads two visits apart when it costs less than the penalty", () => {
-      // Days 1 and 2 are the quietest, back to back; day 4 is 10 dearer.
+    it("keeps two visits a day apart, however much the back-to-back days save", () => {
+      // Days 1 and 2 are far the quietest, back to back; the rule wins.
       const plan = optimizeTrip(
         input(5, [park("magic-kingdom-park", 2)], {
-          "magic-kingdom-park": [80, 20, 25, 90, 35],
+          "magic-kingdom-park": [80, 10, 12, 90, 70],
         }),
       );
+      // Apart, the cheapest pair is days 1 and 4 (10 + 70), not 1 and 2 (22).
       expect(placement(plan)["magic-kingdom-park"]).toEqual([
         "2026-12-01",
         "2026-12-04",
       ]);
+      expect(plan.exact).toBe(true);
       expect(
         plan.days.some((d) => d.warnings.includes("adjacent_repeat")),
       ).toBe(false);
+    });
+
+    it("keeps three visits apart in a week, with other parks between", () => {
+      const plan = optimizeTrip(
+        input(6, [park("magic-kingdom-park", 3), park("epcot", 2)], {
+          "magic-kingdom-park": [10, 10, 10, 50, 50, 50],
+          epcot: [50, 50, 50, 10, 10, 10],
+        }),
+      );
+      expect(adjacentRepeats(plan)).toBe(0);
+      expect(plan.unplaced).toEqual([]);
+      expect(plan.exact).toBe(true);
     });
 
     it("warns when back-to-back visits are the only way", () => {
@@ -716,35 +730,23 @@ describe("optimizeTrip", () => {
     });
   });
 
-  describe("party nights", () => {
+  describe("fireworks", () => {
     // Day 1 is a party night: the day guests leave at 18:00 (9 h, not 13 h).
     const party = (i: number): PlanCell =>
       i === 1
         ? open(30, { dayHours: 9, evening: { kind: "ticketed_event" } })
         : open(i === 0 ? 38 : 60, { dayHours: 13 });
 
-    it("avoids a party night unless it is much quieter", () => {
+    it("any: prices a party night by the hours the day guest gets", () => {
+      // 30 × 13/9 = 43.3 against 38.
       const plan = optimizeTrip(
         input(3, [park("magic-kingdom-park")], { "magic-kingdom-park": party }),
       );
       expect(placement(plan)["magic-kingdom-park"]).toEqual(["2026-11-30"]);
     });
 
-    it("prefers a party night when asked to, with the reason", () => {
-      const plan = optimizeTrip(
-        input(
-          3,
-          [park("magic-kingdom-park")],
-          { "magic-kingdom-park": party },
-          { parties: "prefer" },
-        ),
-      );
-      expect(placement(plan)["magic-kingdom-park"]).toEqual(["2026-12-01"]);
-      expect(plan.days[1].reasons).toContain("party_night");
-    });
-
-    it("warns about the short day when a party night is planned anyway", () => {
-      // Far quieter than the other days: 10 × 13/9 × 1.25 = 18 still wins.
+    it("any: plans a party night that is quiet enough, and says the day is short", () => {
+      // 10 × 13/9 = 14.4 against 60.
       const quietParty = (i: number): PlanCell =>
         i === 1
           ? open(10, { dayHours: 9, evening: { kind: "ticketed_event" } })
@@ -758,18 +760,66 @@ describe("optimizeTrip", () => {
       expect(plan.days[1].warnings).toContain("party_night_short_hours");
     });
 
+    it("want: keeps off a party night however quiet, while another day fits", () => {
+      const quietParty = (i: number): PlanCell =>
+        i === 1
+          ? open(10, { dayHours: 9, evening: { kind: "ticketed_event" } })
+          : open(80, { dayHours: 13 });
+      const plan = optimizeTrip(
+        input(
+          3,
+          [park("magic-kingdom-park")],
+          { "magic-kingdom-park": quietParty },
+          { fireworks: "want" },
+        ),
+      );
+      expect(placement(plan)["magic-kingdom-park"]).not.toContain("2026-12-01");
+    });
+
+    it("want: uses a party night only when nothing else fits, with fireworks_missed", () => {
+      // EPCOT is pinned to day 0, so day 1, the party night, is MK's only day.
+      const plan = optimizeTrip(
+        input(
+          2,
+          [park("magic-kingdom-park"), park("epcot")],
+          {
+            "magic-kingdom-park": (i) =>
+              i === 1
+                ? open(30, { dayHours: 9, evening: { kind: "ticketed_event" } })
+                : open(40, { dayHours: 13 }),
+            epcot: [20, 20],
+          },
+          {
+            fireworks: "want",
+            locks: [{ target: "epcot", date: "2026-11-30" }],
+          },
+        ),
+      );
+      expect(placement(plan)).toEqual({
+        "magic-kingdom-park": ["2026-12-01"],
+        epcot: ["2026-11-30"],
+      });
+      expect(plan.days[1].warnings).toContain("fireworks_missed");
+      expect(plan.days[1].warnings).not.toContain("party_night_short_hours");
+    });
+
     it("does not charge an After Hours night that leaves the day as long as usual", () => {
       const afterHours = (i: number): PlanCell =>
         i === 1
           ? open(30, { dayHours: 13, evening: { kind: "ticketed_event" } })
           : open(32, { dayHours: 13 });
-      const plan = optimizeTrip(
-        input(3, [park("magic-kingdom-park")], {
-          "magic-kingdom-park": afterHours,
-        }),
-      );
-      expect(placement(plan)["magic-kingdom-park"]).toEqual(["2026-12-01"]);
-      expect(plan.days[1].warnings).not.toContain("party_night_short_hours");
+      for (const fireworks of ["any", "want"] as const) {
+        const plan = optimizeTrip(
+          input(
+            3,
+            [park("magic-kingdom-park")],
+            { "magic-kingdom-park": afterHours },
+            { fireworks },
+          ),
+        );
+        expect(placement(plan)["magic-kingdom-park"]).toEqual(["2026-12-01"]);
+        expect(plan.days[1].warnings).toEqual([]);
+      }
     });
   });
 
