@@ -14,6 +14,7 @@ import { dayCost, medianDayHours, type PlanCell } from "./trip-optimizer";
 import { buildLegs, regionMatrix } from "./travel";
 import {
   buildParkDay,
+  closeMinute,
   closesEarly,
   usualCloseMinute,
   lastYearDateFor,
@@ -266,10 +267,40 @@ export function referenceRange(
 }
 
 /**
+ * A park's usual day around a date, from its open days in the reference span:
+ * the median day-guest hours and close over the days **without** a ticketed
+ * evening (from the feed or a season), because in party season nearly every
+ * other night at Magic Kingdom closes at 18:00 and a median over them would
+ * call 18:00 usual. Where every day of the span has one, the longest day and
+ * the latest close stand in; a party night can never drag the reference down.
+ */
+export function usualDay(
+  near: Array<{ date: string; c: TripParkDayInternal }>,
+): { hours?: number; close?: number } {
+  const full = near.filter(({ c }) => c.evening?.kind !== "ticketed_event");
+  if (full.length > 0) {
+    return {
+      hours: medianDayHours(full.map((o) => o.c)),
+      close: usualCloseMinute(
+        full.map((o) => ({ date: o.date, closesAt: o.c.closesAt })),
+      ),
+    };
+  }
+  const hours = near.map((o) => o.c.dayHours ?? 0).filter((h) => h > 0);
+  const closes = near
+    .filter((o) => o.c.closesAt)
+    .map((o) => closeMinute(o.date, o.c.closesAt as string));
+  return {
+    ...(hours.length > 0 && { hours: Math.max(...hours) }),
+    ...(closes.length > 0 && { close: Math.max(...closes) }),
+  };
+}
+
+/**
  * Sets, on each wanted day of one park, its usual hours (`usualHours`) and,
  * where the day guests leave at least `CLOSES_EARLY_MINUTES` before the
- * usual close, `closesEarly` with that close; both read off the park's open
- * days within {@link REFERENCE_DAYS}.
+ * usual close, `closesEarly` with that close; both from {@link usualDay} over
+ * the park's open days within {@link REFERENCE_DAYS}.
  */
 function markUsualDay(
   cells: Map<string, TripParkDayInternal>,
@@ -277,18 +308,17 @@ function markUsualDay(
 ): void {
   const open = [...cells]
     .filter(([, c]) => c.status === "OPERATING" && c.closesAt)
-    .map(([date, c]) => ({ date, c, closesAt: c.closesAt }));
+    .map(([date, c]) => ({ date, c }));
   for (const date of wanted) {
     const c = cells.get(date);
     if (!c) continue;
     const lo = addIsoDays(date, -REFERENCE_DAYS);
     const hi = addIsoDays(date, REFERENCE_DAYS);
-    const near = open.filter((o) => o.date >= lo && o.date <= hi);
-    const usualHours = medianDayHours(near.map((o) => o.c));
-    if (usualHours) c.usualHours = usualHours;
+    const usual = usualDay(open.filter((o) => o.date >= lo && o.date <= hi));
+    if (usual.hours) c.usualHours = usual.hours;
     if (
       c.status === "OPERATING" &&
-      closesEarly(date, c.closesAt, usualCloseMinute(near))
+      closesEarly(date, c.closesAt, usual.close)
     ) {
       c.closesEarly = true;
       c.dayGuestCloseAt = c.closesAt;

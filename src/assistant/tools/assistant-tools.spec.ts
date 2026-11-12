@@ -1448,7 +1448,7 @@ describe("compare_parks", () => {
             findById: jest.fn(async (id: string) =>
               parks.find((row) => row.id === id),
             ),
-            getScheduleForDate: jest.fn(async () => []),
+            getSchedule: jest.fn(async () => []),
           },
         ],
         [CalendarService, { buildCalendarResponse: calendarFor }],

@@ -120,8 +120,9 @@ import {
   closesEarly,
   isoInZone,
   readDaySlots,
-  usualCloseMinute,
+  scheduleRowDate,
 } from "../../trip-regions/trip-calendar.util";
+import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import {
   HUB_PATH,
@@ -1614,9 +1615,17 @@ async function comparedParkDay(
   );
   const [{ days, coverage, hasOperatingSchedule }, rows] = await Promise.all([
     calendarDays(ctx, park, window),
-    // Only the evening row is read from it; without the rows the close alone decides.
+    // The fortnight's evening rows: a party night is no usual day. Without
+    // them the closes alone decide.
     Promise.resolve()
-      .then(() => ctx.get(ParksService).getScheduleForDate(park.id, day))
+      .then(() => {
+        const { fromDate, toDate } = parseDateRange(
+          window[0],
+          window[window.length - 1],
+          { timezone: park.timezone },
+        );
+        return ctx.get(ParksService).getSchedule(park.id, fromDate, toDate);
+      })
       .catch(() => []),
   ]);
   const found = days.get(day);
@@ -1649,26 +1658,35 @@ function dayGuestEarlyClose(
   days: Map<string, CalendarDay>,
   rows: Parameters<typeof readDaySlots>[0],
 ): { closes: string; usualClose: string } | null {
-  const closes = [...days.values()]
+  const rowsOn = (date: string) =>
+    rows.filter((r) => scheduleRowDate(r, park.timezone) === date);
+  const near = [...days.values()]
     .filter((d) => d.status === "OPERATING" && d.hours && !d.hours.isInferred)
     .map((d) => ({
       date: d.date,
-      closesAt: isoInZone(d.hours!.closingTime, park.timezone),
+      c: {
+        status: "OPERATING" as const,
+        hoursPublished: true,
+        crowdLevel: d.crowdLevel,
+        basis: "none" as const,
+        closesAt: isoInZone(d.hours!.closingTime, park.timezone),
+        evening: readDaySlots(rowsOn(d.date), park.timezone, "early_entry")
+          .evening,
+      },
     }));
-  const today = closes.find((d) => d.date === day);
-  const usual = usualCloseMinute(closes);
+  const today = near.find((d) => d.date === day);
+  const usual = usualDay(near).close;
   if (!today || usual === undefined) return null;
-  const party =
-    readDaySlots(rows, park.timezone, "early_entry").evening?.kind ===
-    "ticketed_event";
+  const closesAt = today.c.closesAt;
+  const party = today.c.evening?.kind === "ticketed_event";
   const early =
-    closesEarly(day, today.closesAt, usual) ||
-    (party && closeMinute(day, today.closesAt) < usual);
+    closesEarly(day, closesAt, usual) ||
+    (party && closeMinute(day, closesAt) < usual);
   if (!early) return null;
   const clock = (minute: number) =>
     `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(Math.round(minute % 60)).padStart(2, "0")}`;
   return {
-    closes: clock(closeMinute(day, today.closesAt)),
+    closes: clock(closeMinute(day, closesAt)),
     usualClose: clock(usual),
   };
 }

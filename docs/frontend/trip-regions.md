@@ -273,7 +273,8 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   fallback for a party the feed does not list.
 - **`closesEarly: true`** with **`dayGuestCloseAt`** (park offset) marks a day whose day-guest close
   is at least two hours before the park's usual close: the median over its open days within 14
-  days of that date, whatever window was asked for.
+  days of that date that have no ticketed evening (whatever window was asked for), so a party season
+  where every other night closes at 18:00 cannot make 18:00 usual; with no such day, the latest close.
 - **`best`** names per resort (`walt-disney-world`, `universal-orlando`, `seaworld-orlando`, never the
   day trips) the OPERATING theme park with the lowest day cost ([below](#how-a-day-is-priced));
   ties go to the longer day-guest day, then the lower level. Absent for a resort on `last_year`
@@ -306,8 +307,8 @@ One cost, `dayCost` in `trip-optimizer.ts`, for the plan, the calendar's `best`,
 Parky. A park's day costs its headliners' **unrounded** mean wait (the calendar's `exactWait`; the
 rounded `headlinerWait` is only shown, because a ranking decided by rounding to five is a tie the
 rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
-median day-guest hours over its open days within 14 days of the date ÷ that day's hours, at least
-1, at most 1.5. So a party night at 18:00 against a usual 23:00 costs up to half as much again,
+median day-guest hours over its open days within 14 days of the date without a ticketed evening
+(the longest day where every day has one; `usualDay`) ÷ that day's hours, at least 1, at most 1.5. So a party night at 18:00 against a usual 23:00 costs up to half as much again,
 and is the pick only when its waits are low enough to make up for the hours. A Disney After Hours
 night after a normal close costs nothing extra. On top, in the plan only: the hotel's perks take a
 fixed share off, `fireworks=want` adds 500 to a night that costs the evening show, and a day
