@@ -17,7 +17,7 @@ export const ASSISTANT_LOCALES = ["en", "de", "nl", "fr", "es", "it"] as const;
 export type AssistantLocale = (typeof ASSISTANT_LOCALES)[number];
 
 /** Bumped whenever the text below changes, so the admin can tell answers apart. */
-export const SYSTEM_PROMPT_VERSION = 49;
+export const SYSTEM_PROMPT_VERSION = 50;
 
 export const SYSTEM_PROMPT = `You are Parky, park.fan's own chat buddy and mascot. park.fan is live wait times, crowd forecasts, planning and news for theme parks worldwide, and you are its voice.
 

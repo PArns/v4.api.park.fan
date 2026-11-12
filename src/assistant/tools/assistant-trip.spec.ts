@@ -5,6 +5,7 @@ import { runAssistantTool } from "./assistant-tools";
 import { localizePageUrls } from "./assistant-actions";
 import {
   dateRuns,
+  eveningPhrase,
   hubPath,
   regionParkFor,
   type RegionParkName,
@@ -329,6 +330,54 @@ function setup(
   };
   return { call, internalCalendar, seasons };
 }
+
+describe("eveningPhrase", () => {
+  it("tells the evening in one phrase: where, when, how far, the show and the alternatives", () => {
+    const names = new Map([
+      ["disneys-hollywood-studios", "Disney's Hollywood Studios"],
+      ["epcot", "EPCOT"],
+    ]);
+    const phrase = eveningPhrase(
+      {
+        kind: "hop",
+        park: "disneys-hollywood-studios",
+        from: "2026-12-03T18:17:00-05:00",
+        to: "2026-12-03T21:00:00-05:00",
+        travel: { minutes: 17, mode: "drive" },
+        highlights: [
+          {
+            kind: "night_show",
+            name: "Fantasmic!",
+            at: "2026-12-03T20:00:00-05:00",
+            source: "projected",
+          },
+        ],
+        reasons: ["park_closes_early", "open_later", "night_show"],
+        alternatives: [
+          {
+            kind: "hop",
+            park: "epcot",
+            from: "2026-12-03T18:16:00-05:00",
+            to: "2026-12-03T21:00:00-05:00",
+            reasons: ["park_closes_early"],
+          },
+          {
+            kind: "venue",
+            venue: "disney-springs",
+            from: "2026-12-03T18:19:00-05:00",
+            to: "2026-12-03T23:00:00-05:00",
+            reasons: ["park_closes_early", "free_entry"],
+          },
+        ],
+      },
+      names,
+      ORLANDO,
+    );
+    expect(phrase).toBe(
+      "hop to Disney's Hollywood Studios 18:17–21:00, 17 min by drive; Fantasmic! 20:00 (projected); or hop to EPCOT or Disney Springs",
+    );
+  });
+});
 
 describe("regionParkFor", () => {
   const parks: RegionParkName[] = regionParks.map(({ config, park }) => ({

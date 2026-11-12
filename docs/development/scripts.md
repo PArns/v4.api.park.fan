@@ -51,7 +51,7 @@ the same jobs run from tracked code:
 routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions/:region`,
 `/calendar`, `/best-days`, `/plan`, `/when` and `/school-breaks`, and `POST
 /v1/parks/…/plan/optimize`, by running the API's own modules (`trip-region.assembly`,
-`trip-best-days`, `trip-plan.assembly`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
+`trip-best-days`, `trip-plan.assembly`, `trip-evening`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
 `trip-school-breaks`, the day optimizer's `engine`) on production's public answers (`/calendar`,
 `/schedule`, `/seasons`, `/plan/day`, read in spans of at most 90 days) and, for the school
 breaks, on OpenHolidays and the curated sets through the sync's own `openHolidaysSchoolRows`, and
@@ -73,7 +73,8 @@ and wiring and no rule of its own, so its answers are the API's for the same dat
   production's `/schedule` carries no `description`, so a gap-filled CLOSED day past the published
   hours reads as stated; `headlinerWait` ranks on the rounded figure until the calendar's
   `exactWait` is deployed; the day optimizer gets no `ridesInWorks` and its request is not
-  validated; `expectedError` reads `/plan/day`'s `leadTimeMae` per planned date.
+  validated; `expectedError` reads `/plan/day`'s `leadTimeMae` per planned date, and the
+  evenings' night shows `/plan/day`'s `shows` for each park and evening the plan asks for.
 
 ## Running a local script
 
