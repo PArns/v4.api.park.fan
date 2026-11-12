@@ -127,6 +127,9 @@ export const CacheKeys = {
     `trip-regions:calendar:v1:${region}:${from}:${to}`,
   tripRegionPlan: (region: string, query: string): string =>
     `trip-regions:plan:v1:${region}:${query}`,
+  /** `/when` by its normalized query, six hours (`TRIP_WHEN_TTL`). */
+  tripRegionWhen: (region: string, query: string): string =>
+    `trip-regions:when:v1:${region}:${query}`,
   tripLastYearMonth: (parkId: string, ym: string): string =>
     `trip-regions:last-year:v1:${parkId}:${ym}`,
   tripForecastUntil: (parkId: string): string =>

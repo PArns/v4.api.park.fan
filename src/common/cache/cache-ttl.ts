@@ -34,6 +34,13 @@ export const CALENDAR_WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
 export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
 
 /**
+ * A `/when` answer (docs/frontend/trip-regions-when.md): six hours. It ranks a
+ * year of windows by plans that the twice-daily warmup refreshes, and a whole
+ * year is a few hundred milliseconds of planning to rebuild.
+ */
+export const TRIP_WHEN_TTL = 6 * 60 * 60;
+
+/**
  * A past month's measured figures, kept for the `last_year` days. A month that
  * has passed does not change, and unlike the month caches it is not evicted by
  * a schedule sync (that is about future hours), so a week is safe and spares

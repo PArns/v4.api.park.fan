@@ -18,6 +18,15 @@ import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
+import { TripWhenService } from "./trip-when.service";
+import type { TripWhen } from "./trip-when";
+import type { TripSchoolBreaks } from "./trip-school-breaks";
+import {
+  TripSchoolBreaksDto,
+  TripSchoolBreaksQueryDto,
+  TripWhenDto,
+  TripWhenQueryDto,
+} from "./dto/trip-when.dto";
 import {
   TripBestDaysQueryDto,
   TripCalendarQueryDto,
@@ -52,6 +61,7 @@ export class TripRegionsController {
   constructor(
     private readonly regions: TripRegionService,
     private readonly plans: TripPlanService,
+    private readonly whens: TripWhenService,
   ) {}
 
   @Get(":region")
@@ -149,5 +159,58 @@ export class TripRegionsController {
     const body = await this.plans.plan(region, query);
     if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
     return body;
+  }
+  @Get(":region/when")
+  @RequiresApiKey()
+  @ApiOperation({
+    summary: "The best dates for a trip of given parks and length",
+    description:
+      "Ranks every window of `days` days in the search range (default today … +365, at most " +
+      "366 days) by the plan `/plan` would give it, and returns the best `limit`, at least " +
+      "`gap` days apart, with the year strip by ISO week and calendar month. `within` keeps " +
+      "the windows inside a school-holiday region's breaks (`/school-breaks`). Cached six hours.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, type: TripWhenDto })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Bad range (over 366 days, past a year, in the past), days outside 3–21, unknown within code, or invalid trip options",
+  })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  async when(
+    @Param("region") region: string,
+    @Query() query: TripWhenQueryDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<TripWhen> {
+    const body = await this.whens.when(region, query);
+    if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
+    return body;
+  }
+
+  @Get(":region/school-breaks")
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
+  @ApiOperation({
+    summary: "School breaks of the visitors' home regions, by stored region code",
+    description:
+      "Per holiday region its breaks in the range (default today … +365), each widened over the " +
+      "weekends at its edges, and `through`, the last day the stored data reaches. The codes are " +
+      "the ones `/when?within=` accepts. No forecast, so no key. Cache: an hour in the browser, " +
+      "a day at the edge.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, type: TripSchoolBreaksDto })
+  @ApiResponse({ status: 400, description: "Bad range or country list" })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  schoolBreaks(
+    @Param("region") region: string,
+    @Query() query: TripSchoolBreaksQueryDto,
+  ): Promise<TripSchoolBreaks> {
+    return this.whens.schoolBreaks(
+      region,
+      query.from,
+      query.to,
+      query.countries,
+    );
   }
 }
