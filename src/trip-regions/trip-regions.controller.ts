@@ -6,7 +6,13 @@ import {
   Res,
   UseInterceptors,
 } from "@nestjs/common";
-import { ApiOperation, ApiParam, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+  ApiExtraModels,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import type { Response } from "express";
 import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
@@ -18,6 +24,7 @@ import {
 } from "./dto/trip-region-query.dto";
 import {
   TripCalendarDto,
+  TripParkDayDto,
   TripPlanDto,
   TripRegionDto,
 } from "./dto/trip-region-response.dto";
@@ -37,6 +44,7 @@ const KEYED_CACHE_CONTROL =
  * need a data key. Contract: docs/frontend/trip-regions.md.
  */
 @ApiTags("trip-regions")
+@ApiExtraModels(TripParkDayDto)
 @Controller("trip-regions")
 export class TripRegionsController {
   constructor(

@@ -594,8 +594,12 @@ class TripOptimizer {
     let useBlocks = options.blocks;
     let best: SearchResult | null = null;
     for (let attempt = 0; attempt <= units.length; attempt++) {
+      // A failed attempt's loosened rules are not the plan's.
+      const relaxedBefore = new Set(this.relaxed);
       best = this.searchAll(pool, lockedUnitDay, available, useBlocks);
       if (best) break;
+      this.relaxed.clear();
+      relaxedBefore.forEach((r) => this.relaxed.add(r));
       if (useBlocks) {
         // No order of the resorts fits (closed days, locks): plan without blocks.
         this.relaxed.add("blocks_relaxed");
