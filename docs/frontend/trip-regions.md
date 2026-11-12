@@ -278,9 +278,13 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   days of that date that have no ticketed evening (whatever window was asked for), so a party season
   where every other night closes at 18:00 cannot make 18:00 usual; with no such day, the latest close.
 - **`best`** names per resort (`walt-disney-world`, `universal-orlando`, `seaworld-orlando`, never the
-  day trips) the OPERATING theme park with the lowest day cost ([below](#how-a-day-is-priced));
-  ties go to the longer day-guest day, then the lower level. Absent for a resort on `last_year`
-  days and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
+  day trips) the open theme park with the lowest day cost ([below](#how-a-day-is-priced));
+  ties go to the longer day-guest day, then the lower level. A day whose hours are not published
+  yet (`UNKNOWN`, `hoursPublished: false`) counts when its figure is a `forecast` or `long_range`:
+  it is priced as the park's usual day (`usualHours`, else no hours factor), since its real hours
+  are not known, and the day says **`bestHoursUnpublished: true`** so the client can add "hours not
+  published yet". From January 2027 that is every Disney and Universal day. Absent for a resort on
+  `last_year` days and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
   `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
   Kingdom's party night on 24 November 2026, 40 minutes but out at 18:00, against Animal Kingdom's
   full day at 45).

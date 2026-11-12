@@ -144,9 +144,15 @@ by the key guard). It answers 400 for:
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
   it. It includes extreme heat and the hurricane season
   ([how a day is priced](./trip-regions.md#how-a-day-is-priced)): a peak-season window ranks
-  behind an equal one outside the season. Windows are compared by that sum per visit, rounded to
-  the minute; within the same minute a `forecast` window goes before a `mixed` one before a
-  `last_year` one, then the lower exact sum, then the earlier window.
+  behind an equal one outside the season. Windows are compared by that sum per visit, and
+  **windows within 3 minutes of each other count as equal** (`WHEN_TIE_MINUTES`; a forecast's
+  error is about 17 minutes per ride, so a smaller lead says nothing): from the cheapest window
+  left, it and every window within 3 minutes of it form a tier, ordered by comfort, `forecast`
+  before `mixed` before `last_year`, then the lower `penalties` (heat plus hurricane), then the
+  exact sum and the earlier window; then the next tier from the cheapest window left. So a
+  February window on a forecast at 36 ranks above a late-August one at 34 from last year, in the
+  heat and the hurricane peak. Days without published hours are ranked on their figures like any
+  other (priced as open, above).
 - **`penalties`** (`{ heat?, hurricane? }`): what heat and the hurricane season added to the
   ranking, in minutes per park day, one decimal, absent when both are zero. `headlinerWait` never
   includes them, so the client can say "ranked lower: hurricane peak" beside a plain figure.
@@ -220,8 +226,8 @@ Every start date in the range is a candidate. A lower bound per visit ranks them
 with its rules dropped, i.e. the cheapest assignment of the window's visits to distinct days (Hungarian),
 a visit left out at 1000; where the plan may pair parks on a hop day, each visit on its park's
 cheapest days at the hop day's half price instead, all priced with the season terms. The full
-optimizer then plans candidates in bound order until the next bound, rounded per visit, lands in a
-later minute than the `limit`-th window kept, and windows closer than `gap` days to a better kept
+optimizer then plans candidates in bound order (per visit) until the next bound passes the start
+of the `limit`-th kept window's tier by more than 3 minutes (the pruning bound widened by the tie), and windows closer than `gap` days to a better kept
 one are dropped (the greedy rule, in ranking order). That is exact: every window left unplanned
 scores at least its bound, behind the last one returned. The specs check it
 against planning every window.

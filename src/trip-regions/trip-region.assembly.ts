@@ -88,6 +88,8 @@ export interface InternalCalendarDay {
   best?: Record<string, string>;
   /** Per resort in `best`, whether the pick has the lowest raw wait too. */
   bestWhy?: Record<string, BestWhy>;
+  /** A pick in `best` is on a day whose hours are not published yet (priced as the usual day). */
+  bestHoursUnpublished?: true;
   parks: Record<string, TripParkDayInternal>;
 }
 
@@ -345,9 +347,15 @@ export type BestWhy = "shortest_wait" | "closes_early_elsewhere";
 export function bestOfDay(
   region: RegionConfig,
   parks: Record<string, TripParkDayInternal>,
-): { best: Record<string, string>; why: Record<string, BestWhy> } {
+): {
+  best: Record<string, string>;
+  why: Record<string, BestWhy>;
+  /** A pick's day has no published hours yet. */
+  unpublished: boolean;
+} {
   const best: Record<string, string> = {};
   const why: Record<string, BestWhy> = {};
+  let unpublished = false;
   for (const group of region.groups) {
     if (group.kind !== "resort") continue;
     const candidates = region.parks
@@ -355,18 +363,28 @@ export function bestOfDay(
       .map((p) => ({ slug: p.slug, day: parks[p.slug] }))
       .filter(
         (c) =>
-          c.day?.status === "OPERATING" &&
+          (c.day?.status === "OPERATING" || c.day?.status === "UNKNOWN") &&
           (c.day.basis === "forecast" || c.day.basis === "long_range") &&
           rankWait(c.day) !== undefined,
       )
       .map((c) => ({
         ...c,
-        cost: dayCost(planCellOf(c.day), { type: "theme_park" }),
+        // A day without published hours keeps its forecast; it is priced as
+        // the park's usual day, the one thing known about its hours.
+        hours: c.day.dayHours ?? c.day.usualHours,
+        cost: dayCost(
+          {
+            ...planCellOf(c.day),
+            status: "OPERATING",
+            dayHours: c.day.dayHours ?? c.day.usualHours,
+          },
+          { type: "theme_park" },
+        ),
       }))
       .sort(
         (a, b) =>
           a.cost - b.cost ||
-          (b.day.dayHours ?? 0) - (a.day.dayHours ?? 0) ||
+          (b.hours ?? 0) - (a.hours ?? 0) ||
           levelRank(a.day.crowdLevel) - levelRank(b.day.crowdLevel) ||
           a.slug.localeCompare(b.slug),
       );
@@ -376,12 +394,13 @@ export function bestOfDay(
       ...candidates.map((c) => rankWait(c.day) as number),
     );
     best[group.key] = pick.slug;
+    if (pick.day.status === "UNKNOWN") unpublished = true;
     why[group.key] =
       (rankWait(pick.day) as number) <= lowestRaw
         ? "shortest_wait"
         : "closes_early_elsewhere";
   }
-  return { best, why };
+  return { best, why, unpublished };
 }
 
 export interface AssembleCalendarInput {
@@ -475,7 +494,7 @@ export function assembleRegionCalendar(
         cell.warnings = ["extreme_heat"];
       }
     }
-    const { best, why } = bestOfDay(region, parks);
+    const { best, why, unpublished } = bestOfDay(region, parks);
     return {
       date,
       isHoliday: flags?.isHoliday ?? false,
@@ -483,6 +502,7 @@ export function assembleRegionCalendar(
       ...(flags?.schoolVacationUnknown && { schoolVacationUnknown: true }),
       ...(holidays.length > 0 && { holidays }),
       ...(Object.keys(best).length > 0 && { best, bestWhy: why }),
+      ...(unpublished && { bestHoursUnpublished: true as const }),
       parks,
     };
   });

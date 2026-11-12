@@ -171,6 +171,12 @@ export class TripCalendarDayDto {
     },
   })
   bestWhy?: Record<string, "shortest_wait" | "closes_early_elsewhere">;
+  @ApiPropertyOptional({
+    description:
+      "A pick in `best` is on a day whose hours are not published yet: chosen on its forecast, " +
+      "priced as the park's usual day.",
+  })
+  bestHoursUnpublished?: true;
   @ApiProperty({
     description: "One entry per region park, keyed by slug.",
     type: "object",

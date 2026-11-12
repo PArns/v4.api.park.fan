@@ -260,6 +260,61 @@ describe("/when", () => {
     }
   });
 
+  it("ranks Feb 16–25 on a forecast above a hot, peak-season late August from last year within 3 minutes", () => {
+    // 36 minutes on a forecast in mid-February; 28 from last year in late
+    // August, 32 °C normals and the hurricane peak: about 35 a visit, within
+    // 3 minutes of February, so the forecast goes first.
+    const from = "2027-02-01";
+    const n = 222;
+    const cal = flat(from, n);
+    cal.days.forEach((d, i) => {
+      for (const slug of parks) {
+        const c = d.parks[slug];
+        const feb = d.date >= "2027-02-16" && d.date <= "2027-02-25";
+        const aug = d.date >= "2027-08-23" && d.date <= "2027-09-01";
+        const wait = feb ? 36 : aug ? 28 : 60;
+        c.headlinerWait = Math.round(wait / 5) * 5;
+        c.waitExact = wait;
+        if (aug) {
+          c.basis = "last_year";
+          c.weather = { tempMax: 32, basis: "climate_normal" };
+        }
+        void i;
+      }
+    });
+    const result = findTripDates({
+      region: ORLANDO,
+      calendar: cal,
+      query: {
+        from,
+        to: cal.days[n - 1].date,
+        days: 10,
+        limit: 3,
+        gap: 7,
+        plan: normalizePlanQuery(
+          ORLANDO,
+          ORLANDO.parks.map((p) => p.slug),
+          { from, to: addIsoDays(from, 9), parks: parks.join(",") },
+          "2027-01-01",
+        ),
+      },
+    });
+    const [first, second, third] = result.windows;
+    // Two February windows (split=auto gives each park a second visit; every
+    // window from 11 to 20 February plans all four on the 36-minute days).
+    for (const feb of [first, second]) {
+      expect(feb.from >= "2027-02-11" && feb.from <= "2027-02-20").toBe(true);
+      expect(feb.basis).toBe("forecast");
+      expect(feb.headlinerWait).toBe(36);
+    }
+    expect(third.from >= "2027-08-17" && third.from <= "2027-09-01").toBe(true);
+    expect(third.basis).toBe("last_year");
+    expect(third.headlinerWait).toBeLessThan(second.headlinerWait as number);
+    expect(third.warnings).toEqual(
+      expect.arrayContaining(["extreme_heat", "hurricane_peak"]),
+    );
+  });
+
   it("prefers a forecast window over a last-year one when their figures are equal", () => {
     // Out of the hurricane season; the first 20 days read last year.
     const result = run(

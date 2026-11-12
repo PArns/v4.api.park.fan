@@ -80,13 +80,67 @@ describe("bestOfDay", () => {
     expect(
       bestOfDay(ORLANDO, {
         "magic-kingdom-park": cell(40, 40, { basis: "last_year" }),
-        epcot: cell(40, 40, { status: "UNKNOWN" }),
+        epcot: cell(40, 40, {
+          status: "UNKNOWN",
+          hoursPublished: false,
+          basis: "last_year",
+        }),
         "universal-studios-florida": {
           status: "OPERATING",
           hoursPublished: true,
           crowdLevel: "unknown",
           basis: "none",
         },
+      }).best,
+    ).toEqual({});
+  });
+});
+
+describe("best on days whose hours are not published", () => {
+  // February 2027: Disney has published hours to 21 January, so its days are
+  // UNKNOWN with a long-range forecast; Universal's too.
+  const unpublished = (wait: number, over: Partial<TripParkDayInternal> = {}) =>
+    cell(Math.round(wait / 5) * 5, wait, {
+      status: "UNKNOWN",
+      hoursPublished: false,
+      basis: "long_range",
+      dayHours: undefined,
+      usualHours: 11,
+      ...over,
+    });
+
+  it("picks on the forecast, priced as the usual day, and says the hours are unpublished", () => {
+    const {
+      best,
+      why,
+      unpublished: flagged,
+    } = bestOfDay(ORLANDO, {
+      "magic-kingdom-park": unpublished(41.5),
+      "disneys-animal-kingdom-theme-park": unpublished(33.2),
+      "universal-studios-florida": unpublished(38),
+      "universal-islands-of-adventure": unpublished(44),
+    });
+    expect(best).toEqual({
+      "walt-disney-world": "disneys-animal-kingdom-theme-park",
+      "universal-orlando": "universal-studios-florida",
+    });
+    expect(why["walt-disney-world"]).toBe("shortest_wait");
+    expect(flagged).toBe(true);
+  });
+
+  it("keeps a published day's pick unflagged and leaves last year's days out", () => {
+    expect(
+      bestOfDay(ORLANDO, {
+        "magic-kingdom-park": cell(40, 40),
+        "disneys-animal-kingdom-theme-park": cell(45, 45),
+      }).unpublished,
+    ).toBe(false);
+    expect(
+      bestOfDay(ORLANDO, {
+        "magic-kingdom-park": unpublished(41.5, { basis: "last_year" }),
+        "disneys-animal-kingdom-theme-park": unpublished(33.2, {
+          basis: "last_year",
+        }),
       }).best,
     ).toEqual({});
   });

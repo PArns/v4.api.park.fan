@@ -56,6 +56,12 @@ export const WHEN_DEFAULT_DAYS = 10;
 export const WHEN_DEFAULT_LIMIT = 5;
 export const WHEN_MAX_LIMIT = 10;
 export const WHEN_DEFAULT_GAP = 7;
+/**
+ * Windows whose cost per visit lies this close count as equal and are ordered
+ * by comfort instead: a forecast's error is about 17 minutes per ride, so a
+ * 3-minute lead says nothing a forecast-versus-last-year difference does not.
+ */
+export const WHEN_TIE_MINUTES = 3;
 
 /**
  * What a visit the window cannot hold adds to its score: the scale of the
@@ -432,10 +438,12 @@ const daysApart = (a: string, b: string): number =>
 interface Evaluated {
   index: number;
   score: number;
-  /** The score per visit, rounded: windows in one bucket are equal but for their basis. */
-  bucket: number;
+  /** The score per visit: windows within {@link WHEN_TIE_MINUTES} of it are equal. */
+  perVisit: number;
   basis: WhenBasis;
   basisRank: number;
+  /** Heat and hurricane minutes per park day: comfort, between equal windows. */
+  penaltyTotal: number;
   /** The plan's mean over its park days, without its penalties. */
   figure?: number;
   penalties?: PlanPenalties;
@@ -464,27 +472,70 @@ function allowedStarts(
  * The windows in score order, each at least `gap` days from every better one
  * kept; at most `limit`.
  */
-export function selectWindows<
-  T extends {
-    index: number;
-    score: number;
-    bucket?: number;
-    basisRank?: number;
-  },
->(evaluated: readonly T[], limit: number, gap: number): T[] {
-  const sorted = [...evaluated].sort(
-    (a, b) =>
-      (a.bucket ?? a.score) - (b.bucket ?? b.score) ||
-      (a.basisRank ?? 0) - (b.basisRank ?? 0) ||
-      a.score - b.score ||
-      a.index - b.index,
-  );
+export function selectWindows<T extends Rankable>(
+  evaluated: readonly T[],
+  limit: number,
+  gap: number,
+): T[] {
   const kept: T[] = [];
-  for (const e of sorted) {
+  for (const e of rankWindows(evaluated)) {
     if (kept.length >= limit) break;
     if (kept.every((k) => Math.abs(k.index - e.index) >= gap)) kept.push(e);
   }
   return kept;
+}
+
+interface Rankable {
+  index: number;
+  score: number;
+  perVisit?: number;
+  basisRank?: number;
+  penaltyTotal?: number;
+}
+
+/**
+ * The ranking's tiers. From the cheapest window left (by cost per visit), it
+ * and every window within {@link WHEN_TIE_MINUTES} of it count as equal and
+ * form a tier, ordered by comfort: forecast before mixed before last year,
+ * then the lower heat and hurricane penalty, then the exact cost and the
+ * earlier start. Then the next tier from the cheapest window left.
+ */
+function tiersOf<T extends Rankable>(
+  evaluated: readonly T[],
+): Array<{ start: number; items: T[] }> {
+  const cost = (e: T) => e.perVisit ?? e.score;
+  const left = [...evaluated].sort(
+    (a, b) => cost(a) - cost(b) || a.index - b.index,
+  );
+  const tiers: Array<{ start: number; items: T[] }> = [];
+  while (left.length > 0) {
+    const start = cost(left[0]);
+    const items = left.filter((e) => cost(e) <= start + WHEN_TIE_MINUTES);
+    items.sort(
+      (a, b) =>
+        (a.basisRank ?? 0) - (b.basisRank ?? 0) ||
+        (a.penaltyTotal ?? 0) - (b.penaltyTotal ?? 0) ||
+        a.score - b.score ||
+        a.index - b.index,
+    );
+    tiers.push({ start, items });
+    left.splice(0, items.length);
+  }
+  return tiers;
+}
+
+/** The ranking order: the tiers one after the other. */
+export function rankWindows<T extends Rankable>(evaluated: readonly T[]): T[] {
+  return tiersOf(evaluated).flatMap((t) => t.items);
+}
+
+/** The cost per visit the tier holding `e` starts from. */
+function tierStartOf<T extends Rankable>(
+  evaluated: readonly T[],
+  e: T,
+): number {
+  const tier = tiersOf(evaluated).find((t) => t.items.includes(e));
+  return tier ? tier.start : (e.perVisit ?? e.score);
 }
 
 /** The search over every window; see the module comment. */
@@ -623,9 +674,10 @@ export function findTripDates(input: WhenInput): TripWhen {
     const evaluated: Evaluated = {
       index: i,
       score,
-      bucket: Math.round(score / visitCount(i)),
+      perVisit: score / visitCount(i),
       basis,
       basisRank: BASIS_RANK[basis],
+      penaltyTotal: (penalties?.heat ?? 0) + (penalties?.hurricane ?? 0),
       ...(parkDays > 0 && { figure: shown / parkDays }),
       ...(penalties && { penalties }),
       plan,
@@ -638,7 +690,7 @@ export function findTripDates(input: WhenInput): TripWhen {
   const starts = query.within
     ? allowedStarts(dates, length, query.within)
     : allStarts;
-  // In order of the bound per visit, the unit the ranking's buckets use.
+  // In order of the bound per visit, the unit the ranking's tiers use.
   const candidates = starts
     .map((index) => ({
       index,
@@ -660,8 +712,10 @@ export function findTripDates(input: WhenInput): TripWhen {
     }
     if (kept.length >= query.limit) {
       const last = kept[kept.length - 1];
-      // Every candidate from here on lands in a later bucket than the last kept.
-      if (Math.round(candidate.perVisit) > last.bucket) break;
+      // A candidate past the last kept's tier by its bound cannot enter that
+      // tier or any before it, nor start one: neither can any after it.
+      const start = tierStartOf(searchedWindows, last);
+      if (candidate.perVisit > start + WHEN_TIE_MINUTES) break;
     }
     searchedWindows.push(evaluate(candidate.index));
     kept = selectWindows(searchedWindows, query.limit, query.gap);

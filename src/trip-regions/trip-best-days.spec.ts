@@ -156,4 +156,33 @@ describe("regionBestDays", () => {
     ]);
     expect(groups[2].quiet).toEqual([]);
   });
+
+  it("ranks days whose hours are not published on their forecast", () => {
+    const cal = calendar(5, {
+      "magic-kingdom-park": (i) =>
+        cell(40 + i * 5, 40 + i * 5, {
+          status: "UNKNOWN",
+          hoursPublished: false,
+          basis: "long_range",
+          dayHours: undefined,
+        }),
+      "disneys-animal-kingdom-theme-park": (i) =>
+        cell(35 + i * 5, 35 + i * 5, {
+          status: "UNKNOWN",
+          hoursPublished: false,
+          basis: "long_range",
+          dayHours: undefined,
+        }),
+    });
+    const result = regionBestDays(ORLANDO, cal, 3);
+    expect(result.parks[0].quiet.map((d) => d.headlinerWait)).toEqual([
+      40, 45, 50,
+    ]);
+    expect(
+      result.groups.find((g) => g.key === "walt-disney-world")?.quiet,
+    ).toHaveLength(3);
+    expect(cal.days[0].best?.["walt-disney-world"]).toBe(
+      "disneys-animal-kingdom-theme-park",
+    );
+  });
 });
