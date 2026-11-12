@@ -223,9 +223,13 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 }
 ```
 
-- **`headlinerWait`** is the day's mean expected standby wait of the park's headliners (the
-  calendar's `headlinerForecast.avgWait`), rounded to five minutes. It is the optimizer's cost and
-  the one number a day is compared by across parks. It is not a total and not a peak.
+- **`headlinerWait`** is the calendar's `headlinerForecast.avgWait`, rounded to five minutes: the
+  daily model predicts each headliner's wait at its busy time of the day (a day peak per ride),
+  and this is the mean of those across the park's headliners. It is the optimizer's cost and the
+  one number a day is compared by across parks. Call it "the big rides' wait at their busiest";
+  it is not a total, not the wait at every hour and not the longest single queue. An hourly curve
+  of the same day (`/plan/day`) runs lower for most of the day, so never put the two side by side
+  without saying which is which.
 - **`crowdLevel`** is the calendar's own level for that park (the day against that park's typical
   day), so two parks' levels say how each compares with itself, not with each other. Compare parks
   by `headlinerWait`.
