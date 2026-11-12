@@ -78,6 +78,8 @@ const HEADLINER_FORECAST_TOP_N = 5;
 
 // Round wait minutes to the nearest 5 — user-facing figures read cleaner in 5-min steps.
 const round5 = (min: number): number => Math.round(min / 5) * 5;
+// The unrounded mean, kept for ranking days (`HeadlinerForecast.exactWait`).
+const round1 = (min: number): number => Math.round(min * 10) / 10;
 
 /**
  * Calendar Service
@@ -1365,9 +1367,9 @@ export class CalendarService {
       if (preds.length === 0) continue;
 
       // Average across ALL predicted headliners (matches the crowd-level numerator).
-      const avgWait = round5(
-        preds.reduce((sum, p) => sum + p.predictedWaitTime, 0) / preds.length,
-      );
+      const mean =
+        preds.reduce((sum, p) => sum + p.predictedWaitTime, 0) / preds.length;
+      const avgWait = round5(mean);
 
       // Top rides by expected wait — only those we can name (unnamed = noise).
       const rides = preds
@@ -1382,7 +1384,7 @@ export class CalendarService {
         }));
 
       if (rides.length === 0) continue;
-      result.set(date, { avgWait, rides });
+      result.set(date, { avgWait, exactWait: round1(mean), rides });
     }
 
     return result;
@@ -1409,9 +1411,8 @@ export class CalendarService {
     for (const [date, entries] of dailyPeaks) {
       if (entries.length === 0) continue;
 
-      const avgWait = round5(
-        entries.reduce((sum, e) => sum + e.peak, 0) / entries.length,
-      );
+      const mean = entries.reduce((sum, e) => sum + e.peak, 0) / entries.length;
+      const avgWait = round5(mean);
       const rides = entries
         .filter((e) => names.has(e.attractionId))
         .sort((a, b) => b.peak - a.peak)
@@ -1423,7 +1424,12 @@ export class CalendarService {
         }));
 
       if (rides.length === 0) continue;
-      result.set(date, { avgWait, rides, actual: true });
+      result.set(date, {
+        avgWait,
+        exactWait: round1(mean),
+        rides,
+        actual: true,
+      });
     }
     return result;
   }

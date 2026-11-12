@@ -17,7 +17,11 @@ import { safeJsonParse } from "../common/utils/json.util";
 import { addIsoDays } from "../common/utils/date.util";
 import type { Park } from "../parks/entities/park.entity";
 import type { CalendarService } from "../parks/services/calendar.service";
-import { toLastYearEntry, type LastYearEntry } from "./trip-calendar.util";
+import {
+  toLastYearEntry,
+  type CalendarDayLike,
+  type LastYearEntry,
+} from "./trip-calendar.util";
 
 export type LastYearMonth = Record<string, LastYearEntry>;
 
@@ -37,6 +41,19 @@ export function shiftMonth(ym: string, delta: number): string {
   const [y, m] = ym.split("-").map(Number);
   const index = y * 12 + (m - 1) + delta;
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}`;
+}
+
+/** A past month's calendar days reduced to the snapshot (days before today only). */
+export function lastYearMonthFromDays(
+  days: CalendarDayLike[],
+  today: string,
+): LastYearMonth {
+  const snapshot: LastYearMonth = {};
+  for (const day of days) {
+    if (day.date >= today) continue;
+    snapshot[day.date] = toLastYearEntry(day);
+  }
+  return snapshot;
 }
 
 /** Reads the snapshots of several months; a missing one is absent from the map. */
@@ -76,11 +93,7 @@ export async function writeLastYearMonth(
     new Date(`${last}T12:00:00.000Z`),
     "none",
   );
-  const snapshot: LastYearMonth = {};
-  for (const day of response.days) {
-    if (day.date >= today) continue;
-    snapshot[day.date] = toLastYearEntry(day);
-  }
+  const snapshot = lastYearMonthFromDays(response.days, today);
   if (last < today) {
     // Up to a day of spread, so the week's expiries of 80 months do not all
     // fall into the same warmup run.

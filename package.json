@@ -16,6 +16,7 @@
     "start:prod": "node dist/main",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
+    "trip-regions:dev": "TS_NODE_COMPILER_OPTIONS='{\"rootDir\":\".\"}' ts-node -T -r tsconfig-paths/register scripts/trip-regions/dev-server.ts",
     "changelog:check": "ts-node -r tsconfig-paths/register src/common/utils/changelog-merge.ts check",
     "changelog:merge": "ts-node -r tsconfig-paths/register src/common/utils/changelog-merge.ts merge",
     "assistant:eval": "ts-node --files -r tsconfig-paths/register src/assistant/assistant-eval.ts",

@@ -19,9 +19,11 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import {
+  TripBestDaysQueryDto,
   TripCalendarQueryDto,
   TripPlanQueryDto,
 } from "./dto/trip-region-query.dto";
+import type { TripBestDays } from "./trip-best-days";
 import {
   TripCalendarDto,
   TripParkDayDto,
@@ -90,6 +92,38 @@ export class TripRegionsController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<TripCalendarDto> {
     const body = await this.regions.calendar(region, query.from, query.to);
+    if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
+    return body;
+  }
+
+  @Get(":region/best-days")
+  @RequiresApiKey()
+  @ApiOperation({
+    summary:
+      "Per park its quietest and busiest days, per resort the quietest dates",
+    description:
+      "Read off the region calendar for the window (default today … +30, at most 92 days), " +
+      "ranked on the unrounded headliner wait; a night the day guests lose to a party ranks " +
+      "behind every full day. `last_year` days are included with their basis.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, description: "The best days" })
+  @ApiResponse({
+    status: 400,
+    description: "Bad date, range over 92 days or past a year",
+  })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  async bestDays(
+    @Param("region") region: string,
+    @Query() query: TripBestDaysQueryDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<TripBestDays> {
+    const body = await this.regions.bestDays(
+      region,
+      query.from,
+      query.to,
+      query.limit ?? 5,
+    );
     if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
     return body;
   }

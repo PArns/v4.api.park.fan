@@ -8,6 +8,7 @@ import { ParksService } from "../parks/parks.service";
 import { CalendarService } from "../parks/services/calendar.service";
 import { ParkSeasonService } from "../parks/services/park-season.service";
 import { ApiKeyService } from "../api-keys/api-key.service";
+import { PredictionLeadSnapshotService } from "../ml/services/prediction-lead-snapshot.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import {
   addIsoDays,
@@ -165,6 +166,10 @@ describe("TripRegionsController", () => {
         },
         { provide: REDIS_CLIENT, useValue: redis },
         {
+          provide: PredictionLeadSnapshotService,
+          useValue: { getLeadTimeMae: jest.fn(async () => 14) },
+        },
+        {
           provide: ApiKeyService,
           useValue: {
             lookup: jest.fn(async (value: string) =>
@@ -320,6 +325,43 @@ describe("TripRegionsController", () => {
     });
   });
 
+  describe("GET /v1/trip-regions/:region/best-days", () => {
+    it("needs a data key", async () => {
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/best-days")
+        .expect(401);
+      expect(JSON.stringify(res.body)).toContain("api-key-required");
+    });
+
+    it("names each park's quietest and busiest days and each resort's best dates", async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/best-days?from=${day(1)}&to=${day(10)}&limit=3`,
+        )
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(res.headers["cache-control"]).toMatch(/^private/);
+      expect(res.body.meta).toMatchObject({ from: day(1), to: day(10) });
+      const mk = res.body.parks.find(
+        (p: { slug: string }) => p.slug === "magic-kingdom-park",
+      );
+      expect(mk.quiet).toHaveLength(3);
+      expect(mk.busy).toHaveLength(2);
+      expect(res.body.groups.map((g: { key: string }) => g.key)).toEqual([
+        "walt-disney-world",
+        "universal-orlando",
+        "seaworld-orlando",
+      ]);
+    });
+
+    it("refuses a limit out of range with 400", async () => {
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/best-days?limit=0")
+        .set("X-API-Key", KEY)
+        .expect(400);
+    });
+  });
+
   describe("GET /v1/trip-regions/:region/plan", () => {
     it("needs a data key", async () => {
       const res = await request(app.getHttpServer())
@@ -341,7 +383,14 @@ describe("TripRegionsController", () => {
       expect(res.body.days).toHaveLength(8);
       expect(res.body.days[0].kind).toBe("arrival");
       expect(res.body.days[7].kind).toBe("departure");
-      expect(res.body.totals.visits).toBe(4);
+      // EPCOT, listed without a count, gets the day the trip has to spare
+      // after its one rest day; MK's explicit two stay two.
+      expect(res.body.meta.split).toEqual([
+        { slug: "epcot", visits: 2, auto: true },
+      ]);
+      expect(res.body.totals.visits).toBe(5);
+      expect(res.body.totals.expectedError).toBe(14);
+      expect(typeof res.body.totals.orderMatters).toBe("boolean");
       const mkDates = res.body.parks.find(
         (p: { slug: string }) => p.slug === "magic-kingdom-park",
       ).dates;

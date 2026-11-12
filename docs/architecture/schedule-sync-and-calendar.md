@@ -67,13 +67,16 @@ A cache hit carries no `RateLimit-*` header and never reaches the limiter. Rules
   Nights evening as `TICKETED_EVENT`. On 2026-10-26, 3,107 park-days at 73 parks held more than one row
   and none held two day-status rows (PAR-1005). Readers pick the day's status by type
   (`pickDayStatusEntry` / `dayStatusRank`, `src/common/utils/schedule.util.ts`), never the first row.
-- **Known limit: one row per type and day.** The upsert key is `date|scheduleType`, so two event rows
-  of one type on one day collapse into one. Walt Disney World sends Early Entry (08:30–09:00) and a
-  party night (19:00–24:00) both as `TICKETED_EVENT`: one survives, and which one alternates between
-  syncs, because both payload entries are compared with the same stale existing row and the batch
-  update keeps the last. The trip-region calendar works around it with the curated seasons
-  ([trip regions](../frontend/trip-regions.md)); the fix (an event row keyed by its start time too,
-  with the same-type dedup and a retraction of event rows to match) is open work.
+- **An event row is keyed by its start too** (`scheduleRowKey`, `src/parks/utils/schedule-dedup.sql.ts`).
+  A day-status row is one per day and type; an event row is one per day, type and start, because one
+  day can hold several: Walt Disney World sends Early Entry (08:30–09:00) and a party night
+  (19:00–24:00) both as `TICKETED_EVENT`. Keyed by day and type alone, until PAR-1290, one of the
+  two survived, and which one alternated between syncs (both payload entries were compared with the
+  same stale row and the batch update kept the last). The same-type dedup partitions event rows by
+  their start, the merge path (`migrateScheduleEntries`) compares it, and inside answered months a
+  future event row the source no longer names is retracted, so a party moved from 19:00 to 18:30
+  leaves no 19:00 row behind. No entity or index change: the index on park, day and type is not
+  unique.
 - **Park-level only.** Both `saveScheduleData` and `fillScheduleGaps` read and delete only
   `attractionId IS NULL` rows: a per-ride row is a different statement by a different writer. Without the
   filter the sync handed ride rows the park's hours, and the gap fill rewrote ride schedules by the park's
