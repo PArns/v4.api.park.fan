@@ -191,7 +191,9 @@ Evening Hours, Express Unlimited at the Premier hotels) are the only facts the p
 itself. After a plan the one offer is the hub with the plan or the trip in the planner, and the
 action rule covers every `plan_` tool but `plan_vacation`, which only reads. It adds about 1,150
 characters to the prompt and 3,700 to the tool list (the three tools, `plan_trip`'s `days`,
-`open_page`'s hub), roughly 1,300 tokens of the cached prefix.
+`open_page`'s hub), roughly 1,300 tokens of the cached prefix. Version 49 routes "when should we go" for
+known parks and a length, without dates, to `find_trip_dates`, and has Parky ask for the visitor's
+school-holiday region only when they travel in school breaks.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -201,7 +203,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 61 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 65 short chats (`assistant-eval.fixtures.ts`: page, planner,
 alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -482,7 +484,7 @@ undo did not work he says the day changed since and offers to make the change by
 
 ### Orlando: the vacation planner in the chat
 
-Three lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
+Four lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
 `TripPlanService` directly, no HTTP and no data key (Parky is park.fan's own page). They turn
 every code those routes send into a short English phrase the model translates
 (`tools/assistant-trip.ts`), so nothing is left for it to decode. A park is named as the model
@@ -509,6 +511,22 @@ name contains the words ("Epic"), several as candidates, else the site's park se
 - **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
+- **`find_trip_dates`** (status `forecast`): when to go
+  ([when to go](trip-regions-when.md)). `year` (the part from today to a year ahead) or `from`/`to`,
+  `days` (3–21, default 10), `parks` (`{ park, visits? }`; a park without `visits` may get a second
+  visit by `split=auto`, as on the hub), `within` (a code from `/school-breaks`: `DE-NW`, `NL-GR`,
+  `GB-ENG`, `BE-NL`, `FR-ZC`, `AT-WI` …), the plan options (`hotel`, `area`, `blocks`, `fireworks`,
+  `split`, `rest`, `hop`, `arrival`, `departure`) and `limit`. It runs `TripWhenService.when` (six
+  hours in Redis), a refusal as the route's own sentence (an unknown `within` names the codes its
+  country has). Per window: `from`/`to` with their weekdays, `headlinerWait`, `rangeAverageWait`,
+  `percentBelowAverage`, `basis` in words and `lastYear: true` where the figures are last year's,
+  `why` and `watch` (the reasons and warnings as short phrases; hurricane season "a fact about the
+  season, not a forecast"), `events`, and `hubUrl`, the hub with that window's plan under the plan
+  route's own parameter names (`hubUrl` above). Then `within` (the breaks and how far the data
+  reaches), `noWindow` when none fits, and the year strip as `months` (`headlinerWait`,
+  `lastYear`, `climate` as "high/low °C, mm", the count of US school-break days, `partyNights`,
+  `hurricaneSeason`), with `monthsMean` saying what the numbers are. Four eval cases (German and
+  English, with and without a school-holiday region) cover the routing.
 - **`get_park_events`** (status `forecast`): one `park`, or all Orlando parks without it, `from`
   and `to` (31 days by default, at most 92). For Orlando, from the region calendar: the curated
   seasons overlapping the window (name, or the kind's when it has none; kind, `status`, `runs`,

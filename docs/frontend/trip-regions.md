@@ -5,6 +5,8 @@ The contract behind park.fan's Orlando hub and its vacation planner, and behind 
 side by side, and the plan that puts each chosen park on the trip day where its headliners queue
 least. Open it before reading one of the three routes or changing the optimizer. Code:
 `src/trip-regions/`.
+When to go (every window of a trip in a range, ranked by its plan) and the visitors' school
+breaks: [trip regions: when](./trip-regions-when.md).
 
 A region is curated in code (`regions.ts`), not synced: which parks belong to Orlando is a planning
 decision (LEGOLAND Florida is in Winter Haven, Busch Gardens in Tampa, both day trips from an
@@ -570,8 +572,9 @@ hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once.
 
-The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +6 instead
-of +3, records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
+The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
+of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
+month caches), records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
 and keeps the past months the `last_year` days read (−6 … −2; the current and previous month are
 in the ordinary window) as week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a

@@ -49,10 +49,13 @@ the same jobs run from tracked code:
 
 `pnpm trip-regions:dev` serves `http://localhost:3001` for the frontend while the trip-region
 routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions/:region`,
-`/calendar`, `/best-days` and `/plan`, and `POST /v1/parks/…/plan/optimize`, by running the API's
-own modules (`trip-region.assembly`, `trip-best-days`, `trip-plan.assembly`, `trip-optimizer`, the
-day optimizer's `engine`) on production's public answers (`/calendar`, `/schedule`, `/seasons`,
-`/plan/day`), and passes every other path to `https://api.park.fan` unchanged. It adds fetching
+`/calendar`, `/best-days`, `/plan`, `/when` and `/school-breaks`, and `POST
+/v1/parks/…/plan/optimize`, by running the API's own modules (`trip-region.assembly`,
+`trip-best-days`, `trip-plan.assembly`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
+`trip-school-breaks`, the day optimizer's `engine`) on production's public answers (`/calendar`,
+`/schedule`, `/seasons`, `/plan/day`, read in spans of at most 90 days) and, for the school
+breaks, on OpenHolidays and the curated sets through the sync's own `openHolidaysSchoolRows`, and
+passes every other path to `https://api.park.fan` unchanged. It adds fetching
 and wiring and no rule of its own, so its answers are the API's for the same data.
 
 - **Key:** the calendar, plan day and plan routes need a data key. In the Claude Code container the

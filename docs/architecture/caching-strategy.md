@@ -79,7 +79,7 @@ to refresh), popular CLOSED parks (top 50 by `PopularityService`), then the rest
 | --- | --- |
 | `live-cache-warmup`, after every wait-times run | parks, top 1000 attractions (`warmupTopAttractions`: user traffic plus the rides with the most `queue_data` rows in 7 days), occupancy, geo discovery, global and park statistics ([job queues](job-queues.md#the-wait-times-run-and-its-warmup)) |
 | `generate-hourly` predictions | parks opening in the next 12 h (`warmupUpcomingParks`) |
-| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+6, their last forecast day, and the last-year snapshots of −6…−2 where missing ([below](#what-the-trip-regions-add)) |
+| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −6…−2 where missing ([below](#what-the-trip-regions-add)) |
 
 ### What the trip regions add
 
@@ -89,8 +89,9 @@ geographic path in `regionOfPark`) are warmed further than the rest. Estimated f
 not measured; read the real figure off the warmup's own line (`✅ Calendar warmup complete: … in …s`)
 on the first runs after the deploy.
 
-- **Months +4…+6: 48 more month builds per run** (3 × 16) on top of about 1,000 (5 months × ~200
-  parks), about 5 %. A future month that far out costs no ML call (the park's daily serving
+- **Months +4…+13: 160 more month builds per run** (10 × 16) on top of about 1,000 (5 months × ~200
+  parks), about 16 %; +7…+13 were added for `/when` ([when to go](../frontend/trip-regions-when.md)),
+  which reads a whole year at once. A future month that far out costs no ML call (the park's daily serving
   predictions are cached by the run's first month) and no `queue_data` scan: about eight indexed
   reads (schedule, weather, measured-operation verdicts, maintenance windows, headliner names) and
   cached lookups, so some 400 light queries a run.
