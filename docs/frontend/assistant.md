@@ -331,7 +331,11 @@ ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_P
 `parks`. Each park's day comes from the calendar every park page shows
 (`CalendarService.buildCalendarResponse`, six parks at a time, `CALENDAR_BATCH`), so every park is
 rated by the same typical-day-peak level. `ranked` holds the open parks quietest first (a tie by
-the headliners' expected peak), `unrated` the open ones without a level, `closed` and `notKnown`
+the headliners' expected peak; a park whose day guests must leave early, its close two hours or
+more before its usual close over the surrounding fortnight or a party night after an earlier close,
+carries `closesEarlyForDayGuests` with its `usualClose` and moves behind any full-day park within
+15 minutes of its wait, the rule [trip regions](./trip-regions.md#how-a-day-is-priced) prices a
+day by; the prompt asks Parky to say so), `unrated` the open ones without a level, `closed` and `notKnown`
 the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
 in `notKnown` and costs the rest nothing, and so does one whose published schedule names no status
 for the day, with that reason (`get_days` gives such a day the same `why`).
@@ -487,7 +491,7 @@ name contains the words ("Epic"), several as candidates, else the site's park se
 (`resolvePark`); a park found outside Orlando is refused with that reason.
 
 - **`plan_vacation`** (status `forecast`): `from`, `to`, optional `parks` (`{ park, visits 1–3 }`,
-  default the seven headliner parks), `hotel`, `area`, `blocks`, `parties`, `rest`, `hop`,
+  default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `rest`, `hop`,
   `arrival`, `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
   and `plan` (an hour in Redis by the normalized query), a refusal of either (over 21 days, 16
   visits, more visits than days without `hop`, a lock outside the trip) as the route's own
@@ -502,7 +506,7 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `searchCutShort` when the plan is not proven best, `hubUrl` and `reserve`, the `[{ park: id,
   date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 9,000
   characters (`assistant-trip.spec.ts`).
-- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&parties=…&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
+- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
 - **`get_park_events`** (status `forecast`): one `park`, or all Orlando parks without it, `from`

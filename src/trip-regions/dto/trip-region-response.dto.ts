@@ -135,6 +135,15 @@ export class TripParkDayDto {
     description: "The curated closure season behind a CLOSED day.",
   })
   closedBy?: string;
+  @ApiPropertyOptional({
+    description:
+      "The day guests leave at least two hours before the park's median close in the window.",
+  })
+  closesEarly?: true;
+  @ApiPropertyOptional({
+    description: "The day guests' close on such a day (park offset).",
+  })
+  dayGuestCloseAt?: string;
 }
 
 export class TripCalendarDayDto {
@@ -143,6 +152,25 @@ export class TripCalendarDayDto {
   @ApiProperty() isSchoolVacation: boolean;
   @ApiPropertyOptional() schoolVacationUnknown?: boolean;
   @ApiPropertyOptional({ type: [String] }) holidays?: string[];
+  @ApiPropertyOptional({
+    description:
+      "Per resort group, the park of the day by the plan's day cost (the unrounded headliner " +
+      "wait, dearer where day guests leave early). Absent on last-year days.",
+    type: "object",
+    additionalProperties: { type: "string" },
+  })
+  best?: Record<string, string>;
+  @ApiPropertyOptional({
+    description:
+      "Per group in `best`: `shortest_wait`, or `closes_early_elsewhere` when the lowest raw " +
+      "wait was a park that closes early.",
+    type: "object",
+    additionalProperties: {
+      type: "string",
+      enum: ["shortest_wait", "closes_early_elsewhere"],
+    },
+  })
+  bestWhy?: Record<string, "shortest_wait" | "closes_early_elsewhere">;
   @ApiProperty({
     description: "One entry per region park, keyed by slug.",
     type: "object",

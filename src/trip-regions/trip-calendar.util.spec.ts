@@ -73,7 +73,6 @@ function input(over: Partial<ParkDayInput> = {}): ParkDayInput {
     seasons: [],
     publishedHoursUntil: "2027-01-21",
     earlyKind: "early_entry",
-    hasEarlySlots: true,
     longRangeAfterDays: 60,
     ...over,
   };
@@ -154,7 +153,7 @@ describe("readDaySlots", () => {
         TZ,
         "early_entry",
       ),
-    ).toEqual({ eveningFromTicketedRow: false });
+    ).toEqual({});
     const overlap = readDaySlots(
       [
         row("OPERATING", "2026-12-01", "09:00", "18:00"),
@@ -231,7 +230,7 @@ describe("buildParkDay", () => {
     expect(out.dayHours).toBe(9);
   });
 
-  it("calls the early slot unknown, not absent, when the feed kept the evening row", () => {
+  it("names no early slot where the feed has none, and claims none", () => {
     const out = buildParkDay(
       input({
         rows: [
@@ -241,11 +240,10 @@ describe("buildParkDay", () => {
       }),
     );
     expect(out.early).toBeUndefined();
-    expect(out.earlyUnknown).toBe(true);
-    expect(toPublicParkDay(out)).not.toHaveProperty("earlyUnknown");
+    expect(out.evening?.kind).toBe("ticketed_event");
   });
 
-  it("takes the evening from the season when the early row overwrote the party", () => {
+  it("takes the evening from the season where the feed has no evening row", () => {
     const out = buildParkDay(
       input({
         date: "2026-11-24",

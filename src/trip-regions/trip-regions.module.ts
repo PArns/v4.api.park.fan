@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ParksModule } from "../parks/parks.module";
 import { ParkSeasonsModule } from "../parks/park-seasons.module";
+import { MLModule } from "../ml/ml.module";
 import { TripRegionsController } from "./trip-regions.controller";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
@@ -12,7 +13,7 @@ import { TripPlanService } from "./trip-plan.service";
  * directly rather than importing this module.
  */
 @Module({
-  imports: [ParksModule, ParkSeasonsModule],
+  imports: [ParksModule, ParkSeasonsModule, MLModule],
   controllers: [TripRegionsController],
   providers: [TripRegionService, TripPlanService],
   exports: [TripRegionService],

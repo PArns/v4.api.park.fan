@@ -17,6 +17,7 @@ import {
   type InternalRegionCalendar,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import type { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ORLANDO } from "../../trip-regions/regions";
 import { isoInZone } from "../../trip-regions/trip-calendar.util";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
@@ -239,7 +240,13 @@ function setup(
   const internalCalendar = jest
     .spyOn(regions, "internalCalendar")
     .mockImplementation(async (_region, from, to) => build(from, to));
-  const plans = new TripPlanService(regions, redis);
+  const plans = new TripPlanService(
+    regions,
+    {
+      getLeadTimeMae: jest.fn(async () => null),
+    } as unknown as PredictionLeadSnapshotService,
+    redis,
+  );
   const seasons = {
     forParkInRange: jest.fn(async () => [
       {
@@ -417,7 +424,7 @@ describe("plan_vacation", () => {
       "EPCOT International Food & Wine Festival (expected)",
     ]);
     expect(json?.hubUrl).toBe(
-      `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=0&parties=avoid&rest=auto&hop=0&arrival=free&departure=free#planner`,
+      `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=1&fireworks=any&split=auto&rest=auto&hop=0&arrival=free&departure=free#planner`,
     );
     expect(json?.reserve).toHaveLength(3);
     expect(json?.reserve).toContainEqual({

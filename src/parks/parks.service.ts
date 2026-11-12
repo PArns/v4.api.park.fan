@@ -53,7 +53,9 @@ import {
 } from "./utils/merge-dependencies";
 import {
   crossTypeConflictSql,
+  EVENT_TYPES,
   sameTypeDuplicateSql,
+  scheduleRowKey,
 } from "./utils/schedule-dedup.sql";
 import {
   recordScheduleDayVersions,
@@ -1594,15 +1596,20 @@ export class ParksService {
         .andWhere("schedule.attractionId IS NULL")
         .getRawMany();
       for (const row of existingRows) {
-        const key = `${row.date}|${row.scheduleType}`;
+        const key = scheduleRowKey(
+          row.date,
+          row.scheduleType,
+          row.openingTime ? new Date(row.openingTime) : null,
+        );
         if (!existingByKey.has(key)) {
           existingByKey.set(key, row);
         }
       }
     }
 
-    // Keyed by date|type so duplicate pairs within one payload collapse (last wins),
-    // mirroring the previous insert-then-update behaviour.
+    // Keyed by `scheduleRowKey` (day and type; for an event row its start too)
+    // so duplicate entries within one payload collapse (last wins) while Early
+    // Entry and a party night on one day stay two rows.
     const toInsert = new Map<string, Partial<ScheduleEntry>>();
     const toUpdate: Array<{ id: string; data: Partial<ScheduleEntry> }> = [];
 
@@ -1667,7 +1674,7 @@ export class ParksService {
         isBridgeDay: holidayInfo.isBridgeDay,
       };
 
-      const key = `${dateStr}|${scheduleType}`;
+      const key = scheduleRowKey(dateStr, scheduleType, openingTime);
       const existing = existingByKey.get(key);
 
       if (!existing) {
@@ -1825,6 +1832,65 @@ export class ParksService {
             `no longer names as operating, in ${answeredMonths.length} answered month(s): ${shown}` +
             `${dates.length > 10 ? ` (+${dates.length - 10} more)` : ""}`,
         );
+      }
+    }
+
+    // 4c. Retraction of event rows the source stopped naming.
+    //
+    // Event rows are keyed by their start (`scheduleRowKey`), so a party night
+    // the park moves from 19:00 to 18:30 is a new row, and the 19:00 one would
+    // otherwise stay beside it. Same bounds as 4b: answered months only, future
+    // park-local days only, park-level rows only. Kept apart from 4b's
+    // OPERATING delete because a day-status row and an event row vanish for
+    // different reasons and are told apart differently.
+    if (answeredMonths.length > 0 && parkLocalToday) {
+      const named = new Set(
+        normalizedEntries
+          .filter((e) =>
+            (EVENT_TYPES as readonly string[]).includes(e.scheduleType),
+          )
+          .map((e) =>
+            scheduleRowKey(
+              e.dateStr,
+              e.scheduleType,
+              e.entry.openingTime ? new Date(e.entry.openingTime) : null,
+            ),
+          ),
+      );
+      const eventTypes = EVENT_TYPES.map((t) => `'${t}'`).join(", ");
+      const held: Array<{
+        id: string;
+        date: string;
+        scheduleType: string;
+        openingTime: Date | string | null;
+      }> = await this.scheduleRepository.query(
+        `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, "scheduleType", "openingTime"
+           FROM schedule_entries
+          WHERE "parkId" = $1::uuid
+            AND "attractionId" IS NULL
+            AND "scheduleType" IN (${eventTypes})
+            AND to_char(date, 'YYYY-MM') = ANY($2::text[])
+            AND to_char(date, 'YYYY-MM-DD') > $3`,
+        [parkId, answeredMonths, parkLocalToday],
+      );
+      const stale = held
+        .filter(
+          (row) =>
+            !named.has(
+              scheduleRowKey(
+                row.date,
+                row.scheduleType,
+                row.openingTime ? new Date(row.openingTime) : null,
+              ),
+            ),
+        )
+        .map((row) => row.id);
+      if (stale.length > 0) {
+        await this.scheduleRepository.query(
+          `DELETE FROM schedule_entries WHERE id = ANY($1::uuid[])`,
+          [stale],
+        );
+        retractedCount += stale.length;
       }
     }
 

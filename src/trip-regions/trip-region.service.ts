@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  Inject,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { CacheKeys } from "../common/cache/cache-keys";
@@ -15,7 +9,6 @@ import { DbJobBudget, mapWithDbBudget } from "../common/utils/db-job-budget";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
-  isRealIsoDate,
 } from "../common/utils/date.util";
 import { parseDateRange } from "../common/utils/date-parsing.util";
 import { frontendParkPath } from "../common/utils/frontend-url.util";
@@ -25,39 +18,41 @@ import { ParkSeasonService } from "../parks/services/park-season.service";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import { toPublicSeason } from "../parks/park-seasons.controller";
 import type { Park } from "../parks/entities/park.entity";
-import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
-import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import {
   findRegion,
   type RegionConfig,
   type RegionParkConfig,
 } from "./regions";
-import { buildLegs, regionMatrix } from "./travel";
+import type { ScheduleRowLike } from "./trip-calendar.util";
 import {
-  buildParkDay,
-  lastYearDateFor,
-  readDaySlots,
-  scheduleRowDate,
-  toPublicParkDay,
-  type ScheduleRowLike,
-  type SeasonLike,
-  type TripParkDayInternal,
-} from "./trip-calendar.util";
-import {
-  monthOf,
   readLastYearMonths,
   writeLastYearMonth,
   type LastYearMonth,
 } from "./last-year-snapshot";
+import {
+  assembleRegionCalendar,
+  describeRegion,
+  lastYearMonthsNeeded,
+  MAX_CALENDAR_DAYS,
+  publicCalendar,
+  referenceRange,
+  validateWindow,
+  type InternalRegionCalendar,
+  type ParkCalendarSource,
+  type RegionParkRecord,
+} from "./trip-region.assembly";
+import { regionBestDays, type TripBestDays } from "./trip-best-days";
 import type {
   TripCalendarDto,
   TripRegionDto,
 } from "./dto/trip-region-response.dto";
 
-/** The calendar route's window: at most this many days. */
-export const MAX_CALENDAR_DAYS = 92;
-/** Nothing is planned or shown further ahead than this. */
-export const MAX_DAYS_AHEAD = 365;
+export {
+  MAX_CALENDAR_DAYS,
+  MAX_DAYS_AHEAD,
+  type InternalCalendarDay,
+  type InternalRegionCalendar,
+} from "./trip-region.assembly";
 
 /** How long a resolved list of a region's parks is reused. */
 const RESOLVE_TTL_MS = 10 * 60 * 1000;
@@ -70,30 +65,26 @@ export interface ResolvedRegionPark {
   park: Park;
 }
 
-export interface InternalCalendarDay {
-  date: string;
-  isHoliday: boolean;
-  isSchoolVacation: boolean;
-  schoolVacationUnknown?: boolean;
-  holidays?: string[];
-  parks: Record<string, TripParkDayInternal>;
+/** A database park as the assembly reads it. */
+function toRecord({ config, park }: ResolvedRegionPark): RegionParkRecord {
+  return {
+    config,
+    id: park.id,
+    slug: park.slug,
+    name: resolveCuratedPark(park).name,
+    path: frontendParkPath(park) ?? "",
+    latitude: Number(park.latitude),
+    longitude: Number(park.longitude),
+    timezone: park.timezone,
+    destinationId: park.destinationId ?? null,
+    destinationName: park.destination?.name ?? null,
+  };
 }
-
-/** The region calendar as the plan reads it; the route serves a projection. */
-export interface InternalRegionCalendar {
-  meta: TripCalendarDto["meta"];
-  parks: string[];
-  days: InternalCalendarDay[];
-  seasons: TripCalendarDto["seasons"];
-}
-
-const stripMarks = (name: string): string =>
-  name.replace(/[®™©]/g, "").replace(/\s+/g, " ").trim();
 
 /**
- * The trip regions: the region itself (parks, groups, hotel areas, travel) and
- * its calendar, every park's days side by side. The plan is `TripPlanService`'s.
- * Contract: docs/frontend/trip-regions.md.
+ * The trip regions: the region itself, its calendar and its best days, read
+ * from the database and Redis and assembled by `trip-region.assembly.ts`. The
+ * plan is `TripPlanService`'s. Contract: docs/frontend/trip-regions.md.
  */
 @Injectable()
 export class TripRegionService {
@@ -121,6 +112,16 @@ export class TripRegionService {
   /** The region's today, in its own timezone. */
   today(region: RegionConfig): string {
     return getCurrentDateInTimezone(region.timezone);
+  }
+
+  /** Checks a window against the region's today; 400 otherwise. */
+  validateWindow(
+    region: RegionConfig,
+    from: string,
+    to: string,
+    maxDays: number,
+  ): void {
+    validateWindow(from, to, maxDays, this.today(region));
   }
 
   /**
@@ -156,110 +157,14 @@ export class TripRegionService {
     return parks;
   }
 
-  // ── GET /v1/trip-regions/:region ─────────────────────────────────────────
-
+  /** `GET /v1/trip-regions/:region` */
   async describe(slug: string): Promise<TripRegionDto> {
     const region = this.region(slug);
     const parks = await this.resolveParks(region);
-    const present = new Set(parks.map((p) => p.config.slug));
-    const points = new Set([
-      ...present,
-      ...region.hotelAreas.map((h) => `hotel:${h.key}`),
-    ]);
-    const matrix = regionMatrix(region);
-
-    return {
-      slug: region.slug,
-      name: region.name,
-      timezone: region.timezone,
-      groups: region.groups
-        .filter((g) => parks.some((p) => p.config.group === g.key))
-        .map((g) => ({
-          key: g.key,
-          name: this.groupName(
-            g.name,
-            parks.filter((p) => p.config.group === g.key).map((p) => p.park),
-          ),
-          kind: g.kind,
-        })),
-      parks: parks.map(({ config, park }) => ({
-        id: park.id,
-        slug: park.slug,
-        name: resolveCuratedPark(park).name,
-        path: frontendParkPath(park) ?? "",
-        group: config.group,
-        type: config.type,
-        headliner: config.headliner,
-        latitude: Number(park.latitude),
-        longitude: Number(park.longitude),
-        timezone: park.timezone,
-      })),
-      hotelAreas: region.hotelAreas.map((area) => ({
-        key: area.key,
-        name: area.name,
-        latitude: area.latitude,
-        longitude: area.longitude,
-        perks: [...new Set(region.perks[area.hotel].map((r) => r.perk))],
-      })),
-      travel: {
-        source: matrix.source,
-        computedOn: matrix.computedOn,
-        attribution: matrix.attribution,
-        basis: matrix.basis,
-        legs: buildLegs(region).filter(
-          (leg) => points.has(leg.from) && points.has(leg.to),
-        ),
-      },
-    };
+    return describeRegion(region, parks.map(toRecord));
   }
 
-  /**
-   * A group's name: the `destinations` row its parks share when they share one
-   * (the operator's own name, marks stripped), else the curated name.
-   */
-  private groupName(curated: string, parks: Park[]): string {
-    const ids = new Set(parks.map((p) => p.destinationId));
-    const destination = parks[0]?.destination;
-    if (ids.size === 1 && destination?.name) {
-      return stripMarks(destination.name);
-    }
-    return curated;
-  }
-
-  // ── GET /v1/trip-regions/:region/calendar ────────────────────────────────
-
-  /**
-   * Checks a window against the region's today: real dates, in order, from
-   * today to a year ahead, at most `maxDays` long. 400 otherwise.
-   */
-  validateWindow(
-    region: RegionConfig,
-    from: string,
-    to: string,
-    maxDays: number,
-  ): void {
-    for (const [name, value] of [
-      ["from", from],
-      ["to", to],
-    ] as const) {
-      if (!isRealIsoDate(value)) {
-        throw new BadRequestException(`${name} is not a date the calendar has`);
-      }
-    }
-    const today = this.today(region);
-    if (from < today) {
-      throw new BadRequestException(`from must not be before today (${today})`);
-    }
-    if (to < from) throw new BadRequestException("to must not be before from");
-    const last = addIsoDays(today, MAX_DAYS_AHEAD);
-    if (to > last) {
-      throw new BadRequestException(`to must not be after ${last}`);
-    }
-    if (addIsoDays(from, maxDays - 1) < to) {
-      throw new BadRequestException(`The window is at most ${maxDays} days`);
-    }
-  }
-
+  /** `GET /v1/trip-regions/:region/calendar` */
   async calendar(
     slug: string,
     fromQuery?: string,
@@ -269,16 +174,22 @@ export class TripRegionService {
     const from = fromQuery ?? this.today(region);
     const to = toQuery ?? addIsoDays(from, 30);
     this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
-    const internal = await this.internalCalendar(region, from, to);
-    return {
-      ...internal,
-      days: internal.days.map((day) => ({
-        ...day,
-        parks: Object.fromEntries(
-          Object.entries(day.parks).map(([s, d]) => [s, toPublicParkDay(d)]),
-        ),
-      })),
-    };
+    return publicCalendar(await this.internalCalendar(region, from, to));
+  }
+
+  /** `GET /v1/trip-regions/:region/best-days` */
+  async bestDays(
+    slug: string,
+    fromQuery: string | undefined,
+    toQuery: string | undefined,
+    limit: number,
+  ): Promise<TripBestDays> {
+    const region = this.region(slug);
+    const from = fromQuery ?? this.today(region);
+    const to = toQuery ?? addIsoDays(from, 30);
+    this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
+    const calendar = await this.internalCalendar(region, from, to);
+    return regionBestDays(region, calendar, limit);
   }
 
   /** The region calendar with the plan's fields, an hour in Redis. */
@@ -308,11 +219,14 @@ export class TripRegionService {
   ): Promise<InternalRegionCalendar> {
     const today = this.today(region);
     const parks = await this.resolveParks(region);
-    const { fromDate, toDate } = parseDateRange(from, to, {
+    // Read with the reference span, so each day is priced against the
+    // park's usual day around it, whatever window was asked for.
+    const reference = referenceRange(from, to);
+    const { fromDate, toDate } = parseDateRange(reference.from, reference.to, {
       timezone: region.timezone,
     });
 
-    const perPark = await mapWithDbBudget(
+    const sources: ParkCalendarSource[] = await mapWithDbBudget(
       parks,
       async (rp) => {
         const [calendar, rows] = await Promise.all([
@@ -331,13 +245,25 @@ export class TripRegionService {
               return [];
             }),
         ]);
-        const lastYear = await this.lastYearFor(rp.park, calendar.days, today);
-        return { rp, calendar, rows: rows as ScheduleRowLike[], lastYear };
+        const lastYear = await this.lastYearFor(
+          rp.park,
+          lastYearMonthsNeeded(
+            calendar.days.filter((d) => d.date >= from && d.date <= to),
+            today,
+          ),
+          today,
+        );
+        return {
+          park: toRecord(rp),
+          calendar,
+          rows: rows as ScheduleRowLike[],
+          lastYear,
+        };
       },
       REGION_PARK_BUDGET,
     );
 
-    const [seasonRows, forecastUntil] = await Promise.all([
+    const [seasons, forecastUntil] = await Promise.all([
       this.parkSeasonService.forParksInRange(
         parks.map((p) => p.park.id),
         from,
@@ -347,124 +273,30 @@ export class TripRegionService {
         .mget(...parks.map((p) => CacheKeys.tripForecastUntil(p.park.id)))
         .catch(() => [] as Array<string | null>),
     ]);
-    const slugById = new Map(parks.map((p) => [p.park.id, p.config.slug]));
-    const seasonsByPark = new Map<string, SeasonLike[]>();
-    for (const s of seasonRows) {
-      const list = seasonsByPark.get(s.parkId) ?? [];
-      list.push(s);
-      seasonsByPark.set(s.parkId, list);
-    }
 
-    const earlyKindOf = new Map(
-      region.groups.map((g) => [g.key, g.earlyKind] as const),
-    );
-    const dates: string[] = [];
-    for (let d = from; d <= to; d = addIsoDays(d, 1)) dates.push(d);
-
-    const cells = new Map<string, Map<string, TripParkDayInternal>>();
-    const coverage: Record<string, string | null> = {};
-    for (const { rp, calendar, rows, lastYear } of perPark) {
-      const tz = rp.park.timezone || region.timezone;
-      const earlyKind = earlyKindOf.get(rp.config.group) ?? "early_entry";
-      const rowsByDate = new Map<string, ScheduleRowLike[]>();
-      for (const row of rows) {
-        const d = scheduleRowDate(row, tz);
-        rowsByDate.set(d, [...(rowsByDate.get(d) ?? []), row]);
-      }
-      const hasEarlySlots = [...rowsByDate.values()].some(
-        (dayRows) => !!readDaySlots(dayRows, tz, earlyKind).early,
-      );
-      const byDate = new Map(calendar.days.map((d) => [d.date, d]));
-      const publishedHoursUntil = calendar.meta.scheduleCoverage?.to ?? null;
-      coverage[rp.config.slug] = publishedHoursUntil;
-      const seasons = seasonsByPark.get(rp.park.id) ?? [];
-      const parkCells = new Map<string, TripParkDayInternal>();
-      for (const date of dates) {
-        const ly = lastYearDateFor(date);
-        parkCells.set(
-          date,
-          buildParkDay({
-            date,
-            today,
-            timezone: tz,
-            day: byDate.get(date),
-            rows: rowsByDate.get(date) ?? [],
-            seasons,
-            publishedHoursUntil,
-            earlyKind,
-            hasEarlySlots,
-            longRangeAfterDays: SERVING_TFT_DAYS,
-            lastYear: lastYear.get(monthOf(ly))?.[ly],
-          }),
-        );
-      }
-      cells.set(rp.config.slug, parkCells);
-    }
-
-    // The day's holiday flags are the region's: read them off its first park.
-    const flagsFrom = perPark[0]?.calendar.days ?? [];
-    const flagsByDate = new Map<string, CalendarDay>(
-      flagsFrom.map((d) => [d.date, d]),
-    );
-    const days: InternalCalendarDay[] = dates.map((date) => {
-      const flags = flagsByDate.get(date);
-      const holidays = [...new Set((flags?.events ?? []).map((e) => e.name))];
-      return {
-        date,
-        isHoliday: flags?.isHoliday ?? false,
-        isSchoolVacation: flags?.isSchoolVacation ?? false,
-        ...(flags?.schoolVacationUnknown && { schoolVacationUnknown: true }),
-        ...(holidays.length > 0 && { holidays }),
-        parks: Object.fromEntries(
-          parks.map((p) => [
-            p.config.slug,
-            cells.get(p.config.slug)?.get(date) as TripParkDayInternal,
-          ]),
-        ),
-      };
+    return assembleRegionCalendar({
+      region,
+      from,
+      to,
+      today,
+      computedAt: new Date().toISOString(),
+      sources,
+      seasons: seasons.map((s) => ({ ...toPublicSeason(s), parkId: s.parkId })),
+      forecastUntil: forecastUntil as Array<string | null>,
     });
-
-    const until = (forecastUntil as Array<string | null>)
-      .filter((d): d is string => !!d && isRealIsoDate(d))
-      .sort();
-    return {
-      meta: {
-        region: region.slug,
-        timezone: region.timezone,
-        from,
-        to,
-        computedAt: new Date().toISOString(),
-        ...(until.length > 0 && { forecastUntil: until[until.length - 1] }),
-        publishedHoursUntil: coverage,
-      },
-      parks: parks.map((p) => p.config.slug),
-      days,
-      seasons: seasonRows.map((s) => ({
-        ...toPublicSeason(s),
-        parkSlug: slugById.get(s.parkId),
-      })),
-    };
   }
 
   /**
-   * The last-year snapshots a window needs: for each day without a forecast,
-   * the same weekday a year back. Read from Redis; a month the warmup has not
-   * written yet is built here once and kept.
+   * The last-year snapshots a window needs, from Redis; a month the warmup
+   * has not written yet is built here once and kept.
    */
   private async lastYearFor(
     park: Park,
-    days: CalendarDay[],
+    months: string[],
     today: string,
   ): Promise<Map<string, LastYearMonth>> {
-    const months = new Set<string>();
-    for (const day of days) {
-      if (day.date < today) continue;
-      if (day.headlinerForecast && !day.headlinerForecast.actual) continue;
-      const ly = lastYearDateFor(day.date);
-      if (ly < today) months.add(monthOf(ly));
-    }
-    if (months.size === 0) return new Map();
-    const found = await readLastYearMonths(this.redis, park.id, [...months]);
+    if (months.length === 0) return new Map();
+    const found = await readLastYearMonths(this.redis, park.id, months);
     for (const ym of months) {
       if (found.has(ym)) continue;
       const built = await writeLastYearMonth(

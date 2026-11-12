@@ -1,7 +1,7 @@
 /**
  * The trip optimizer: which park goes on which day of a vacation so that the
  * headliners queue least, under the visitor's rules (blocks per resort, rest
- * days, park hopping, party nights, hotel perks, pinned days).
+ * days, park hopping, fireworks, hotel perks, pinned days).
  *
  * Pure: no Nest, no clock, no I/O. `TripPlanService` reads the region calendar
  * and hands this module plain cells; everything here is a function of its input,
@@ -66,12 +66,16 @@ export const PlanCostModel = {
   flatDayCost: 30,
   /** A short day (party night) costs up to this much more. */
   hoursFactorCap: 1.5,
-  /** `parties=avoid`: a shortened party night costs this much more again. */
-  partyAvoidFactor: 1.25,
-  /** `parties=prefer`: a party night costs this much, the hours left aside. */
-  partyPreferFactor: 0.8,
-  /** Two visits of one park on consecutive days. */
-  adjacentRepeatPenalty: 40,
+  /**
+   * `fireworks=want`: a night the day guests lose the evening show to a
+   * ticketed event is used only when nothing else fits.
+   */
+  fireworksMissedPenalty: 500,
+  /**
+   * Two visits of one park on consecutive days. The search keeps repeats a day
+   * apart as a rule; this is what a plan pays where no placement can.
+   */
+  adjacentRepeatPenalty: 5000,
   /** A hop day: half of each park plus the move between them. */
   hopTransferPenalty: 10,
   /** Flat days: warm and dry is cheaper, cool or wet dearer. */
@@ -88,13 +92,18 @@ export type PlanBasis = "forecast" | "long_range" | "last_year" | "none";
 export interface PlanCell {
   status: PlanDayStatus;
   headlinerWait?: number;
+  /** `headlinerWait` before rounding; the cost and every comparison read it. */
+  exactWait?: number;
   crowdLevel?: string;
   basis: PlanBasis;
   /** Hours the day guest has: the OPERATING row's open to close. */
   dayHours?: number;
+  /**
+   * The park's usual day-guest hours around this date, from the calendar
+   * (independent of the window asked for); preferred over a window median.
+   */
+  usualHours?: number;
   early?: { kind: string };
-  /** The feed's early row was lost to the evening one (see the calendar). */
-  earlyUnknown?: boolean;
   evening?: { kind: "ticketed_event" | "extended_evening" };
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
 }
@@ -123,7 +132,8 @@ export interface PlanLock {
 export type RestOption =
   { mode: "auto" } | { mode: "none" } | { mode: "max"; n: number };
 
-export type PartiesOption = "avoid" | "allow" | "prefer";
+/** `want`: keep the evening show (no party nights); `any`: price the hours only. */
+export type FireworksOption = "want" | "any";
 
 export interface PlanOptions {
   arrival: "free" | "park";
@@ -131,7 +141,7 @@ export interface PlanOptions {
   blocks: boolean;
   /** The groups `blocks` keeps together (the resorts; day trips stay free). */
   blockGroups: string[];
-  parties: PartiesOption;
+  fireworks: FireworksOption;
   rest: RestOption;
   hop: boolean;
   /** Parks that may share a hop day: same resort, a short leg. */
@@ -154,7 +164,6 @@ export type PlanReason =
   | "weekday"
   | "holiday_ends"
   | PerkKind
-  | "party_night"
   | "water_park_weather"
   | "busiest_day_spared"
   | "rest_after_streak"
@@ -162,6 +171,7 @@ export type PlanReason =
 
 export type PlanWarning =
   | "party_night_short_hours"
+  | "fireworks_missed"
   | "hours_not_published"
   | "estimate_last_year"
   | "long_range"
@@ -203,10 +213,17 @@ export interface PlannedParkSummary {
   alternatives: PlanAlternative[];
 }
 
+/** A plan whose order saves less than this per ride is "any order will do". */
+export const ORDER_MATTERS_MINUTES = 3;
+
 export interface PlanTotals {
   headlinerWait?: number;
   averageDayWait?: number;
   savedMinutesPerRide?: number;
+  /** The typical error of the planned days' forecasts, per ride (`trip-plan.assembly.ts`). */
+  expectedError?: number;
+  /** The planned order saves at least {@link ORDER_MATTERS_MINUTES} per ride. */
+  orderMatters: boolean;
   parkDays: number;
   visits: number;
   restDays: number;
@@ -269,6 +286,10 @@ interface StructureResult {
   provable: boolean;
 }
 
+/** The wait a cell is costed and compared by: unrounded where known. */
+const waitOf = (c: PlanCell): number | undefined =>
+  c.exactWait ?? c.headlinerWait;
+
 const median = (values: number[]): number | undefined => {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
@@ -302,6 +323,98 @@ export function weatherFactor(weather: PlanCell["weather"]): {
     return { factor: PlanCostModel.coolWetFactor, warmDry: false };
   }
   return { factor: 1, warmDry: false };
+}
+
+/**
+ * What a day's cost is read against: the park and the window it is compared
+ * in. The plan, the calendar's `best` and `/best-days` all price a day with
+ * {@link dayCost}; the one model is described in docs/frontend/trip-regions.md
+ * ("How a day is priced").
+ */
+export interface DayCostContext {
+  type: TripParkType;
+  /** The park's median day-guest hours over the window's OPERATING days. */
+  medianHours?: number;
+  /** The park's median wait over the window, for an open day without a figure. */
+  neutralWait?: number;
+  /** Default `any`. */
+  fireworks?: FireworksOption;
+  /** The product of (1 − share) of the hotel perks that day; 1 without a hotel. */
+  perkFactor?: number;
+}
+
+/**
+ * How much shorter the day guest's day is than the park's usual one: the
+ * median hours ÷ that day's hours, at least 1, at most
+ * {@link PlanCostModel.hoursFactorCap}. 1 when either is unknown.
+ */
+export function hoursFactor(
+  cell: Pick<PlanCell, "dayHours" | "usualHours">,
+  medianHours: number | undefined,
+): number {
+  const usual = cell.usualHours ?? medianHours;
+  if (!usual || !cell.dayHours || cell.dayHours <= 0) return 1;
+  return Math.min(
+    PlanCostModel.hoursFactorCap,
+    Math.max(1, usual / cell.dayHours),
+  );
+}
+
+/**
+ * The day guests lose the evening to a ticketed event: a party night that
+ * closes the park early. An After Hours night after a normal close does not.
+ */
+export function losesEvening(
+  cell: Pick<PlanCell, "dayHours" | "evening" | "usualHours">,
+  medianHours: number | undefined,
+): boolean {
+  return (
+    cell.evening?.kind === "ticketed_event" &&
+    hoursFactor(cell, medianHours) > 1
+  );
+}
+
+/** The median of a park's day-guest hours over its OPERATING days. */
+export function medianDayHours(
+  cells: Array<Pick<PlanCell, "status" | "dayHours">>,
+): number | undefined {
+  return median(
+    cells
+      .filter((c) => c.status === "OPERATING" && c.dayHours)
+      .map((c) => c.dayHours as number),
+  );
+}
+
+/**
+ * A park's cost on one day, in minutes of headliner wait: the unrounded wait,
+ * multiplied by how much shorter the day guest's day is than usual (a party
+ * night at 18:00 costs more than its waits), by the hotel's perks, plus a
+ * penalty for a day without published hours and, with `fireworks=want`, for a
+ * night that costs the evening show. A water park or reservation park is a
+ * flat day the weather moves. Infinity when the park is closed.
+ */
+export function dayCost(cell: PlanCell, ctx: DayCostContext): number {
+  if (cell.status === "CLOSED") return Infinity;
+  const unknown =
+    cell.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
+  if (ctx.type !== "theme_park") {
+    return (
+      PlanCostModel.flatDayCost * weatherFactor(cell.weather).factor + unknown
+    );
+  }
+  const base =
+    waitOf(cell) ??
+    (ctx.neutralWait ?? PlanCostModel.defaultNeutralWait) +
+      PlanCostModel.noFigurePenalty;
+  const missed =
+    ctx.fireworks === "want" && losesEvening(cell, ctx.medianHours)
+      ? PlanCostModel.fireworksMissedPenalty
+      : 0;
+  return (
+    base * hoursFactor(cell, ctx.medianHours) * (ctx.perkFactor ?? 1) +
+    unknown +
+    missed
+  );
 }
 
 /** The longest run of `true` in a list. */
@@ -363,16 +476,13 @@ class TripOptimizer {
       this.parkBySlug.set(park.slug, park);
       const cells = this.dates.map((d) => this.cell(park.slug, d));
       const waits = cells
-        .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-        .map((c) => c.headlinerWait as number);
+        .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+        .map((c) => waitOf(c) as number);
       this.neutral.set(
         park.slug,
         median(waits) ?? PlanCostModel.defaultNeutralWait,
       );
-      const hours = cells
-        .filter((c) => c.status === "OPERATING" && c.dayHours)
-        .map((c) => c.dayHours as number);
-      const mh = median(hours);
+      const mh = medianDayHours(cells);
       if (mh) this.medianHours.set(park.slug, mh);
     }
     const rest = input.options.rest;
@@ -399,33 +509,30 @@ class TripOptimizer {
     for (const rule of this.input.options.perkRules) {
       if (!rule.parks.includes(slug)) continue;
       let applies = false;
-      let shown = true;
       if (rule.needs === "always") applies = true;
       else if (rule.needs === "extended_evening") {
         applies = c.evening?.kind === "extended_evening";
       } else if (c.early) {
         applies = true;
-      } else if (c.earlyUnknown) {
-        // The early row was overwritten by the evening one in the feed: count
-        // the perk so a party night is not charged twice, but do not claim it.
-        applies = true;
-        shown = false;
       }
       if (!applies) continue;
       factor *= 1 - PERK_SHARE[rule.perk];
-      if (shown && !listed.includes(rule.perk)) listed.push(rule.perk);
+      if (!listed.includes(rule.perk)) listed.push(rule.perk);
     }
     return { listed, factor };
   }
 
+  /**
+   * The day guests lose the evening to a ticketed event: a party night that
+   * closes the park early (an After Hours night after a normal close does not).
+   */
+  losesEvening(slug: string, c: PlanCell): boolean {
+    return losesEvening(c, this.medianHours.get(slug));
+  }
+
   /** The hours factor: how much shorter the day guest's day is than usual. */
   hoursFactor(slug: string, c: PlanCell): number {
-    const usual = this.medianHours.get(slug);
-    if (!usual || !c.dayHours || c.dayHours <= 0) return 1;
-    return Math.min(
-      PlanCostModel.hoursFactorCap,
-      Math.max(1, usual / c.dayHours),
-    );
+    return hoursFactor(c, this.medianHours.get(slug));
   }
 
   /** The cost of one park on one trip day; Infinity when it is closed. */
@@ -440,33 +547,14 @@ class TripOptimizer {
 
   private computeCost(slug: string, date: string): number {
     const park = this.parkBySlug.get(slug);
-    const c = this.cell(slug, date);
-    if (!park || c.status === "CLOSED") return Infinity;
-    const unknown =
-      c.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
-    if (park.type !== "theme_park") {
-      return (
-        PlanCostModel.flatDayCost * weatherFactor(c.weather).factor + unknown
-      );
-    }
-    const base =
-      c.headlinerWait ??
-      (this.neutral.get(slug) ?? PlanCostModel.defaultNeutralWait) +
-        PlanCostModel.noFigurePenalty;
-    const hours = this.hoursFactor(slug, c);
-    const party = c.evening?.kind === "ticketed_event";
-    const { parties } = this.input.options;
-    let factor: number;
-    if (party && parties === "prefer") {
-      factor = PlanCostModel.partyPreferFactor;
-    } else {
-      factor =
-        hours *
-        (party && hours > 1 && parties === "avoid"
-          ? PlanCostModel.partyAvoidFactor
-          : 1);
-    }
-    return base * factor * this.perks(slug, date).factor + unknown;
+    if (!park) return Infinity;
+    return dayCost(this.cell(slug, date), {
+      type: park.type,
+      medianHours: this.medianHours.get(slug),
+      neutralWait: this.neutral.get(slug),
+      fireworks: this.input.options.fireworks,
+      perkFactor: this.perks(slug, date).factor,
+    });
   }
 
   rowCost(row: Row, day: number): number {
@@ -942,33 +1030,120 @@ class TripOptimizer {
     spares: number,
     limit: number,
   ): StructureResult {
-    let dayOf = rowToCol.map((col) => available[col]);
-    let provable = true;
+    const plain = rowToCol.map((col) => available[col]);
+    const keepsRule = (dayOf: number[]) =>
+      longestRun(this.parkDayFlags(dayOf)) <= limit;
 
-    if (longestRun(this.parkDayFlags(dayOf)) > limit) {
-      const count = this.countPatterns(
-        kinds,
-        spares,
-        limit,
-        REST_EXACT_LIMIT + 1,
-      );
-      const found =
-        count <= REST_EXACT_LIMIT
-          ? this.exactRest(rows, available, matrix, kinds, spares, limit)
-          : this.localRest(rows, available, matrix, kinds, spares, limit);
-      if (count > REST_EXACT_LIMIT || found.cutShort) provable = false;
-      // No spare pattern within the rule leaves every visit an open day here.
-      if (!found.dayOf) return { solution: null, provable };
-      dayOf = found.dayOf;
+    if (keepsRule(plain) && this.adjacency(rows, plain) === 0) {
+      return { solution: this.objective(rows, plain), provable: true };
+    }
+    if (keepsRule(plain)) {
+      // Only repeats sit back to back: keep them apart over every day first.
+      const apart = this.assignApart(rows, available, matrix);
+      if (apart.dayOf && keepsRule(apart.dayOf)) {
+        return {
+          solution: this.objective(rows, apart.dayOf),
+          provable: !apart.cutShort,
+        };
+      }
     }
 
-    let solution = this.objective(rows, dayOf);
+    const count = this.countPatterns(
+      kinds,
+      spares,
+      limit,
+      REST_EXACT_LIMIT + 1,
+    );
+    const found =
+      count <= REST_EXACT_LIMIT
+        ? this.exactRest(rows, available, matrix, kinds, spares, limit)
+        : this.localRest(rows, available, matrix, kinds, spares, limit);
+    let provable = count <= REST_EXACT_LIMIT && !found.cutShort;
+    // No spare pattern within the rule leaves every visit an open day here.
+    if (!found.dayOf) return { solution: null, provable };
+
+    let solution = this.objective(rows, found.dayOf);
     if (solution.objective > solution.base) {
-      // The Hungarian does not see the repeat penalty; a local search can.
+      // No placement keeps every repeat apart: spread them as far as moves can.
       solution = this.spreadRepeats(rows, available, matrix, solution, limit);
       provable = false;
     }
     return { solution, provable };
+  }
+
+  /**
+   * The cheapest assignment that keeps every park's visits off consecutive
+   * days, by branch and bound on the Hungarian: where park p sits on day d and
+   * d + 1, one branch forbids p on d and the other on d + 1, and every
+   * placement that keeps the rule is in one of them. A branch whose bound is
+   * no better than the best found is cut. `dayOf` is null when no placement
+   * keeps the rule.
+   */
+  private assignApart(
+    rows: Row[],
+    colDays: number[],
+    matrix: number[][],
+  ): { dayOf: number[] | null; cost: number; cutShort: boolean } {
+    let best: { dayOf: number[]; cost: number } | null = null;
+    let cutShort = false;
+    const walk = (forbidden: Map<string, Set<number>>) => {
+      if (!this.budgetLeft()) {
+        cutShort = true;
+        return;
+      }
+      const m = matrix.map((row, r) =>
+        row.map((value, c) =>
+          rows[r].units.some((u) => forbidden.get(u.slug)?.has(colDays[c]))
+            ? Infinity
+            : value,
+        ),
+      );
+      const result = this.solve(m);
+      if (!result.feasible) return;
+      if (best && result.cost >= best.cost - 1e-9) return;
+      const dayOf = result.rowToCol.map((c) => colDays[c]);
+      const clash = this.firstClash(rows, dayOf);
+      if (!clash) {
+        best = { dayOf, cost: result.cost };
+        return;
+      }
+      for (const day of [clash.day, clash.day + 1]) {
+        const next = new Map(forbidden);
+        next.set(
+          clash.slug,
+          new Set([...(forbidden.get(clash.slug) ?? []), day]),
+        );
+        walk(next);
+      }
+    };
+    walk(new Map());
+    const found = best as { dayOf: number[]; cost: number } | null;
+    return {
+      dayOf: found ? found.dayOf : null,
+      cost: found ? found.cost : Infinity,
+      cutShort,
+    };
+  }
+
+  /** The first park found on two consecutive days, by its earlier day. */
+  private firstClash(
+    rows: Row[],
+    dayOf: number[],
+  ): { slug: string; day: number } | null {
+    const days = new Map<string, Set<number>>();
+    rows.forEach((row, r) => {
+      for (const u of row.units) {
+        const set = days.get(u.slug) ?? new Set<number>();
+        set.add(dayOf[r]);
+        days.set(u.slug, set);
+      }
+    });
+    for (const [slug, set] of days) {
+      for (const day of [...set].sort((a, b) => a - b)) {
+        if (set.has(day + 1)) return { slug, day };
+      }
+    }
+    return null;
   }
 
   /** Per trip day: "break" (no park possible), "forced" (a lock), or "choice". */
@@ -1041,10 +1216,14 @@ class TripOptimizer {
       if (!spare.has(day)) cols.push(col);
     });
     const sub = matrix.map((row) => cols.map((c) => row[c]));
+    const colDays = cols.map((c) => available[c]);
+    const apart = this.assignApart(rows, colDays, sub);
+    if (apart.dayOf) return { dayOf: apart.dayOf, cost: apart.cost };
+    // No placement on these days keeps the repeats apart: the plain cheapest.
     const result = this.solve(sub);
     if (!result.feasible) return null;
     return {
-      dayOf: result.rowToCol.map((k) => available[cols[k]]),
+      dayOf: result.rowToCol.map((k) => colDays[k]),
       cost: result.cost,
     };
   }
@@ -1279,8 +1458,8 @@ class TripOptimizer {
       mean(
         themeParks
           .map((p) => this.cell(p.slug, this.dates[i]))
-          .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-          .map((c) => c.headlinerWait as number),
+          .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+          .map((c) => waitOf(c) as number),
       );
     const availBusy = available
       .map((i) => busyness(i))
@@ -1377,11 +1556,12 @@ class TripOptimizer {
             i,
             visitDates.get(u.slug) ?? [],
           ).forEach((r) => reasons.add(r));
-          if (c.evening?.kind === "ticketed_event") {
-            if (options.parties === "prefer") reasons.add("party_night");
-            else if (this.hoursFactor(u.slug, c) > 1) {
-              warnings.add("party_night_short_hours");
-            }
+          if (this.losesEvening(u.slug, c)) {
+            warnings.add(
+              options.fireworks === "want"
+                ? "fireworks_missed"
+                : "party_night_short_hours",
+            );
           }
         } else if (weatherFactor(c.weather).warmDry) {
           reasons.add("water_park_weather");
@@ -1440,16 +1620,17 @@ class TripOptimizer {
     day: number,
     plannedDates: string[],
   ): PlanReason[] {
-    const chosen = this.cell(slug, this.dates[day]).headlinerWait;
+    const chosen = waitOf(this.cell(slug, this.dates[day]));
     if (chosen == null) return [];
     const others: number[] = [];
     let quietest = true;
     this.dates.forEach((date, i) => {
       if (i === day) return;
       const c = this.cell(slug, date);
-      if (c.status === "CLOSED" || c.headlinerWait == null) return;
-      if (c.headlinerWait < chosen) quietest = false;
-      if (!plannedDates.includes(date)) others.push(c.headlinerWait);
+      const wait = waitOf(c);
+      if (c.status === "CLOSED" || wait == null) return;
+      if (wait < chosen) quietest = false;
+      if (!plannedDates.includes(date)) others.push(wait);
     });
     const reasons: PlanReason[] = [];
     if (quietest) reasons.push("quietest_in_window");
@@ -1498,13 +1679,13 @@ class TripOptimizer {
     for (const [day, row] of rowOnDay) {
       for (const u of row.units) {
         visits++;
-        const wait = this.cell(u.slug, this.dates[day]).headlinerWait;
+        const wait = waitOf(this.cell(u.slug, this.dates[day]));
         if (wait == null) continue;
         const windowMean = mean(
           this.dates
             .map((date) => this.cell(u.slug, date))
-            .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-            .map((c) => c.headlinerWait as number),
+            .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+            .map((c) => waitOf(c) as number),
         );
         if (windowMean == null) continue;
         planned.push(wait);
@@ -1524,12 +1705,71 @@ class TripOptimizer {
         averageDayWait != null && {
           savedMinutesPerRide: Math.round(averageDayWait - headlinerWait),
         }),
+      orderMatters:
+        headlinerWait != null &&
+        averageDayWait != null &&
+        Math.round(averageDayWait) - Math.round(headlinerWait) >=
+          ORDER_MATTERS_MINUTES,
       parkDays: days.filter((d) => d.kind === "park" || d.kind === "hop")
         .length,
       visits,
       restDays: days.filter((d) => d.kind === "rest").length,
     };
   }
+}
+
+/** `rest=auto` on a trip this long or longer keeps a rest day per five days. */
+export const LONG_TRIP_DAYS = 8;
+
+/**
+ * How many more visits a trip has room for once the rest days the rest rule
+ * keeps are set aside: the days a park can go on (not a free arrival or
+ * departure day, not a pinned rest day), less the visits, less the rest days.
+ * `rest=auto` keeps a run of park days to four and, on a trip of eight days or
+ * more, one rest day per five days (pinned rest days count); `rest=max:n` keeps
+ * the runs to n; `rest=none` keeps none. `split=auto` gives this room to
+ * second visits (`trip-plan.assembly.ts`).
+ */
+export function extraVisitRoom(input: PlanInput): number {
+  const { days, options, parks } = input;
+  const n = days.length;
+  const lockedDates = new Set(
+    options.locks.filter((l) => l.target !== "rest").map((l) => l.date),
+  );
+  const restDates = new Set(
+    options.locks.filter((l) => l.target === "rest").map((l) => l.date),
+  );
+  const open = days.map((d, i) => {
+    if (restDates.has(d.date)) return false;
+    const free =
+      (i === 0 && options.arrival === "free") ||
+      (i === n - 1 && n > 1 && options.departure === "free");
+    return !free || lockedDates.has(d.date);
+  });
+  const available = open.filter(Boolean).length;
+  const limit =
+    options.rest.mode === "auto"
+      ? DEFAULT_MAX_STREAK
+      : options.rest.mode === "max"
+        ? options.rest.n
+        : Infinity;
+  let streakRest = 0;
+  if (Number.isFinite(limit)) {
+    let run = 0;
+    for (const isOpen of [...open, false]) {
+      if (isOpen) run++;
+      else {
+        streakRest += Math.floor(run / (limit + 1));
+        run = 0;
+      }
+    }
+  }
+  const ratioRest =
+    options.rest.mode === "auto" && n >= LONG_TRIP_DAYS
+      ? Math.max(0, Math.floor(n / 5) - restDates.size)
+      : 0;
+  const visits = parks.reduce((sum, p) => sum + p.visits, 0);
+  return Math.max(0, available - visits - Math.max(streakRest, ratioRest));
 }
 
 /** Plans a trip; see the module comment and docs/frontend/trip-regions.md. */

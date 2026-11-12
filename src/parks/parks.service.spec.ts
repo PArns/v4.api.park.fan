@@ -890,6 +890,178 @@ describe("ParksService", () => {
     });
   });
 
+  describe("saveScheduleData — Early Entry and a party night on one day (PAR-1290)", () => {
+    const parkId = "11111111-2222-3333-4444-555555555555";
+    const DAY = "2026-11-24";
+    // As ThemeParks.wiki sends Magic Kingdom's day: both events are TICKETED_EVENT.
+    const early = {
+      date: DAY,
+      type: "TICKETED_EVENT",
+      openingTime: `${DAY}T07:30:00-05:00`,
+      closingTime: `${DAY}T08:00:00-05:00`,
+      description: "Early Entry",
+    };
+    const operating = {
+      date: DAY,
+      type: "OPERATING",
+      openingTime: `${DAY}T08:00:00-05:00`,
+      closingTime: `${DAY}T18:00:00-05:00`,
+    };
+    const party = {
+      date: DAY,
+      type: "TICKETED_EVENT",
+      openingTime: `${DAY}T19:00:00-05:00`,
+      closingTime: "2026-11-25T00:00:00-05:00",
+      description: "Special Ticketed Event",
+    };
+    const stored = (entry: typeof early, id: string) => ({
+      id,
+      date: DAY,
+      scheduleType: "TICKETED_EVENT",
+      openingTime: new Date(entry.openingTime),
+      closingTime: new Date(entry.closingTime),
+      description: entry.description,
+      purchases: null,
+      isHoliday: false,
+      holidayName: null,
+      isBridgeDay: false,
+    });
+
+    beforeEach(() => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "US",
+        regionCode: "FL",
+        timezone: "America/New_York",
+      });
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      // The feed answers, so the silent-feed guard leaves the day alone.
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        Promise.resolve(sql === PARK_OBSERVED_READING_SQL ? [{ seen: 1 }] : []),
+      );
+    });
+
+    it("stores both events of a day, also when the payload repeats them", async () => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+      // The generic endpoint and the month endpoint both carry the day.
+      await service.saveScheduleData(parkId, [
+        early,
+        operating,
+        party,
+        early,
+        operating,
+        party,
+      ]);
+
+      const [inserted] = mockScheduleRepository.save.mock.calls[0] as [
+        Array<{ scheduleType: string; description: string | null }>,
+      ];
+      expect(
+        inserted
+          .filter((r) => r.scheduleType === "TICKETED_EVENT")
+          .map((r) => r.description)
+          .sort(),
+      ).toEqual(["Early Entry", "Special Ticketed Event"]);
+    });
+
+    it("leaves both stored events alone on the next sync instead of trading one for the other", async () => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([
+          stored(early, "aaaaaaaa-0000-4000-8000-000000000001"),
+          stored(party, "aaaaaaaa-0000-4000-8000-000000000002"),
+          {
+            ...stored(early, "aaaaaaaa-0000-4000-8000-000000000003"),
+            scheduleType: "OPERATING",
+            openingTime: new Date(operating.openingTime),
+            closingTime: new Date(operating.closingTime),
+            description: null,
+          },
+        ]),
+      );
+
+      await service.saveScheduleData(parkId, [
+        early,
+        operating,
+        party,
+        early,
+        operating,
+        party,
+      ]);
+
+      expect(mockScheduleRepository.save).not.toHaveBeenCalled();
+      const updates = mockScheduleRepository.query.mock.calls.filter(
+        ([sql]: [string]) => sql.includes("UPDATE schedule_entries s"),
+      );
+      expect(updates).toEqual([]);
+    });
+
+    it("retracts an event row the source stopped naming in an answered month", async () => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+      const future = new Date(Date.now() + 40 * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      const moved = {
+        ...party,
+        date: future,
+        openingTime: `${future}T18:30:00-05:00`,
+        closingTime: `${future}T23:30:00-05:00`,
+      };
+      // On file: the party at its old start, 19:00.
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.includes(
+            "SELECT id, to_char(date, 'YYYY-MM-DD') AS date, \"scheduleType\"",
+          )
+            ? [
+                {
+                  id: "bbbbbbbb-0000-4000-8000-000000000001",
+                  date: future,
+                  scheduleType: "TICKETED_EVENT",
+                  openingTime: new Date(`${future}T19:00:00-05:00`),
+                },
+                {
+                  id: "bbbbbbbb-0000-4000-8000-000000000002",
+                  date: future,
+                  scheduleType: "TICKETED_EVENT",
+                  openingTime: new Date(`${future}T18:30:00-05:00`),
+                },
+              ]
+            : sql === PARK_OBSERVED_READING_SQL
+              ? [{ seen: 1 }]
+              : [],
+        ),
+      );
+
+      await service.saveScheduleData(parkId, [moved], [future.slice(0, 7)]);
+
+      const deletes = mockScheduleRepository.query.mock.calls.filter(
+        ([sql]: [string]) =>
+          sql.includes(
+            "DELETE FROM schedule_entries WHERE id = ANY($1::uuid[])",
+          ),
+      );
+      expect(deletes).toHaveLength(1);
+      expect(deletes[0][1]).toEqual([["bbbbbbbb-0000-4000-8000-000000000001"]]);
+    });
+
+    it("retracts no event row without an answered month", async () => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+      await service.saveScheduleData(parkId, [early, operating, party]);
+      const reads = mockScheduleRepository.query.mock.calls.filter(
+        ([sql]: [string]) =>
+          sql.includes("\"scheduleType\" IN ('TICKETED_EVENT'"),
+      );
+      expect(reads).toEqual([]);
+    });
+  });
+
   describe("saveScheduleData — the holiday flags follow the calendar's rule", () => {
     const parkId = "11111111-2222-3333-4444-555555555555";
     const christmas = {

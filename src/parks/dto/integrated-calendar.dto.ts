@@ -287,6 +287,16 @@ export class HeadlinerForecast {
   avgWait: number;
 
   @ApiProperty({
+    required: false,
+    description:
+      "`avgWait` before rounding, to one decimal. For ranking days only: two days that " +
+      "both read 40 are not equally busy, and a rank decided by the rounding is a tie the " +
+      "rounding invented. Show `avgWait`.",
+    example: 41.3,
+  })
+  exactWait?: number;
+
+  @ApiProperty({
     description:
       "Top headliner rides for this day, sorted by wait desc (minutes, rounded to 5).",
     type: () => [HeadlinerWaitForecast],
