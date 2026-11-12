@@ -2894,7 +2894,8 @@ export const ASSISTANT_TOOLS = [
     description:
       "An Orlando trip day by day: which park when, so the big rides queue least, with rest " +
       "days, hotel perks and party nights. Per day the parks with headlinerWait, crowd level, " +
-      "basis, hours, perks, events, travel and why; totals; hubUrl (the Orlando hub with this " +
+      "basis, hours, perks, events, travel and why, and evening where the park closes early " +
+      "(a second park with a hopper ticket, else a free venue); totals; hubUrl (the Orlando hub with this " +
       "plan) and reserve (plan_trip's days). Up to 21 days and 16 visits; parks default to the " +
       "7 big Disney and Universal parks.",
     input: z.object({
@@ -2927,10 +2928,18 @@ export const ASSISTANT_TOOLS = [
         .regex(/^(auto|none|max:[1-9])$/)
         .optional()
         .describe("auto, none, or max:n park days in a row"),
+      ticket: z
+        .enum(["base", "hopper"])
+        .optional()
+        .describe(
+          "hopper: Disney Park Hopper or Universal park-to-park (Universal Studios and Islands of Adventure, not Epic); base (default): one park a day",
+        ),
       hop: z
         .boolean()
         .optional()
-        .describe("Two parks of a resort a day, for more visits than days"),
+        .describe(
+          "Two parks of a resort a day, for more visits than days; needs ticket hopper",
+        ),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       locks: z
@@ -2994,6 +3003,7 @@ export const ASSISTANT_TOOLS = [
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
         rest: input.rest,
+        ticket: input.ticket,
         hop: flag(input.hop),
         lock: locks.length > 0 ? locks.join(",") : undefined,
       };
