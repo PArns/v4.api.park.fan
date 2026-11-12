@@ -710,6 +710,43 @@ export const EVAL_CASES: EvalCase[] = [
     ],
   },
   {
+    id: "orlando-when-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir wollen zu Disney und Universal, wann am besten 2027?",
+    want: [{ tool: "find_trip_dates" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-when-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We want to do Disney and Universal. When is the best time in 2027?",
+    want: [{ tool: "find_trip_dates" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-when-within-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message:
+      "Wir wollen zu Disney und Universal, wann am besten in den NRW-Sommerferien 2027?",
+    want: [{ tool: "find_trip_dates", input: { within: "DE-NW" } }],
+  },
+  {
+    id: "orlando-when-within-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We live in North Rhine-Westphalia and can only go in the summer school holidays 2027. When should we do Disney and Universal?",
+    want: [{ tool: "find_trip_dates", input: { within: "DE-NW" } }],
+  },
+  {
     id: "orlando-one-day-de",
     locale: "de",
     pagePath: "/de",

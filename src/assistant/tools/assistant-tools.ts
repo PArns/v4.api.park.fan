@@ -124,6 +124,15 @@ import {
 } from "../../trip-regions/trip-calendar.util";
 import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { TripWhenService } from "../../trip-regions/trip-when.service";
+import { normalizeWhenQuery } from "../../trip-regions/trip-when.assembly";
+import {
+  WHEN_MAX_DAYS,
+  WHEN_MAX_LIMIT,
+  WHEN_MAX_RANGE_DAYS,
+  WHEN_MIN_DAYS,
+} from "../../trip-regions/trip-when";
+import type { TripWhenQueryDto } from "../../trip-regions/dto/trip-when.dto";
 import {
   HUB_PATH,
   hubPath,
@@ -131,6 +140,7 @@ import {
   seasonsSummary,
   slotsSummary,
   travelSummary,
+  tripDatesSummary,
   vacationItinerary,
   type AmbiguousRegionPark,
   type RegionParkName,
@@ -2983,6 +2993,130 @@ export const ASSISTANT_TOOLS = [
         names,
         ids: new Map(parks.map((p) => [p.slug, p.id])),
       });
+    },
+  }),
+  // find_trip_dates: when to go, for a trip whose parks and length are known
+  // (docs/frontend/trip-regions-when.md).
+  tool({
+    name: "find_trip_dates",
+    status: "forecast",
+    description:
+      "When to go to Orlando: ranks every trip window of the given length in a range (a year, " +
+      "or from/to; at most a year ahead) by the plan it would get, and returns the best windows " +
+      "with headlinerWait against the range's average, why, what to watch, events, lastYear " +
+      "where the figures are last year's, and hubUrl; plus the months. within: a school-holiday " +
+      "region code (DE-NW, NL-GR for the Dutch north, GB-ENG, BE-NL, BE-FR, FR-ZA/ZB/ZC, AT-WI, " +
+      "…) keeps the windows inside its breaks. Parks default to the 7 big Disney and Universal parks.",
+    input: z.object({
+      year: z
+        .number()
+        .int()
+        .min(2026)
+        .max(2030)
+        .optional()
+        .describe("A calendar year instead of from/to"),
+      from: isoDay.optional(),
+      to: isoDay.optional(),
+      days: z
+        .number()
+        .int()
+        .min(WHEN_MIN_DAYS)
+        .max(WHEN_MAX_DAYS)
+        .optional()
+        .describe("Trip days, arrival and departure included; default 10"),
+      parks: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            visits: z.number().int().min(1).max(MAX_VISITS_PER_PARK).optional(),
+          }),
+        )
+        .min(1)
+        .max(MAX_PARK_DAYS)
+        .optional(),
+      within: z
+        .string()
+        .regex(/^[A-Za-z]{2}(-[\p{L}\p{N}]{1,12}){1,2}$/u)
+        .optional()
+        .describe(
+          "The visitor's school-holiday region, when they travel in school breaks",
+        ),
+      hotel: z.enum(HOTEL_KINDS).optional(),
+      area: z.enum(ORLANDO_AREAS).optional(),
+      blocks: z.boolean().optional(),
+      fireworks: z.enum(["want", "any"]).optional(),
+      split: z.enum(["auto", "fixed"]).optional(),
+      rest: z
+        .string()
+        .regex(/^(auto|none|max:[1-9])$/)
+        .optional(),
+      hop: z.boolean().optional(),
+      arrival: z.enum(["free", "park"]).optional(),
+      departure: z.enum(["free", "park"]).optional(),
+      limit: z.number().int().min(1).max(WHEN_MAX_LIMIT).optional(),
+    }),
+    run: async (input, ctx) => {
+      const { regions, region, parks } = await orlando(ctx);
+      ctx.notePark?.(region.timezone);
+      const today = regions.today(region);
+      let from = input.from;
+      let to = input.to;
+      if (input.year && !from && !to) {
+        const last = addIsoDays(today, WHEN_MAX_RANGE_DAYS - 1);
+        from = `${input.year}-01-01` > today ? `${input.year}-01-01` : today;
+        to = `${input.year}-12-31` < last ? `${input.year}-12-31` : last;
+        if (from > to) {
+          throw new McpToolError(
+            `${input.year} is outside today … a year ahead (${today} … ${last})`,
+          );
+        }
+      }
+      let parkList: string | undefined;
+      if (input.parks) {
+        const listed: string[] = [];
+        for (const { park: reference, visits } of input.parks) {
+          const found = await orlandoPark(
+            ctx,
+            reference,
+            parks,
+            "find_trip_dates covers the Orlando parks only",
+          );
+          if ("ambiguous" in found) return found;
+          listed.push(visits ? `${found.slug}:${visits}` : found.slug);
+        }
+        parkList = [...new Set(listed)].join(",");
+      }
+      const flag = (value: boolean | undefined) =>
+        value === undefined ? undefined : value ? "1" : "0";
+      const query: TripWhenQueryDto = {
+        from,
+        to,
+        days: input.days,
+        parks: parkList,
+        within: input.within,
+        hotel: input.hotel,
+        area: input.area,
+        blocks: flag(input.blocks),
+        fireworks: input.fireworks,
+        split: input.split,
+        rest: input.rest,
+        hop: flag(input.hop),
+        arrival: input.arrival,
+        departure: input.departure,
+        limit: input.limit,
+      };
+      const result = await tripCall(() =>
+        ctx.get(TripWhenService).when(region.slug, query),
+      );
+      const normalized = await tripCall(() =>
+        normalizeWhenQuery(
+          region,
+          parks.map((p) => p.slug),
+          query,
+          today,
+        ),
+      );
+      return tripDatesSummary({ result, plan: normalized.plan });
     },
   }),
   tool({

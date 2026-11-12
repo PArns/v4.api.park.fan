@@ -18,6 +18,11 @@ import type { PerkKind, RegionConfig } from "../../trip-regions/regions";
 import type { TripLeg } from "../../trip-regions/travel";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
 import { ASSISTANT_LOCALES } from "../system-prompt";
+import type {
+  TripWhen,
+  WhenReason,
+  WhenWarning,
+} from "../../trip-regions/trip-when";
 
 /**
  * Parky's side of the Orlando hub (docs/frontend/trip-regions.md): the trip plan, the region's
@@ -649,5 +654,118 @@ export function travelSummary(
         "the resort's own transport; minutes are estimates, waiting included",
     }),
     source: `drive: OpenStreetMap via OSRM, ${attribution}`,
+  };
+}
+
+// ── find_trip_dates (docs/frontend/trip-regions-when.md) ─────────────────────
+
+const WHEN_REASONS: Record<WhenReason, string> = {
+  no_school_break: "no US school break",
+  after_holidays: "just after a US school break",
+  before_spring_break: "before the US spring break",
+  festival: "a festival or holiday season runs",
+  long_days: "long opening hours",
+  mild_weather:
+    "mild and fairly dry on average (climate normals, not a forecast)",
+};
+
+const WHEN_WARNINGS: Record<WhenWarning, string> = {
+  school_break: "US school break: busier",
+  hurricane_season:
+    "hurricane season (June to November), a fact about the season, not a forecast",
+  party_nights: "party nights close a park early for day guests",
+  fireworks_missed: "a planned night loses the evening show to a party",
+  hours_not_published: "opening hours not published yet",
+  estimate_last_year: "figures from last year, not a forecast",
+  water_park_closed: "a chosen water park is closed for its season",
+};
+
+const WHEN_BASIS: Record<string, string> = {
+  forecast: "forecast",
+  mixed: "partly forecast, partly last year",
+  last_year: "last year's figures, not a forecast",
+  none: "no figure",
+};
+
+/**
+ * The best trip windows as the model retells them: dates with weekdays, the
+ * plan's figure against the range's average, why and what to watch in words,
+ * a `lastYear` flag where the figures are last year's, the events, and each
+ * window's hub URL with the plan options; then the year strip by month.
+ */
+export function tripDatesSummary(input: {
+  result: TripWhen;
+  plan: NormalizedPlanQuery;
+}) {
+  const { result, plan } = input;
+  const seasonNames = new Map(
+    result.seasons.map((s) => [String(s.id), seasonName(s)] as const),
+  );
+  const within = result.meta.within;
+  return {
+    range: { from: result.meta.from, to: result.meta.to },
+    tripDays: result.meta.days,
+    headlinerWaitMeans:
+      "the planned park days' mean of the big rides' wait at their busiest, in minutes, early closings and hotel perks priced in",
+    ...(within && {
+      within: {
+        region: within.name,
+        breaks: within.periods.map((p) => `${p.from}..${p.to} ${p.name}`),
+        ...(within.through && { knownUntil: within.through }),
+      },
+    }),
+    ...(result.windows.length === 0 && {
+      noWindow: within
+        ? "no school break in the range is long enough for the trip"
+        : "no window fits",
+    }),
+    windows: result.windows.map((w) => {
+      const events = w.seasons
+        .map((id) => seasonNames.get(id))
+        .filter((name): name is string => !!name);
+      return {
+        from: `${w.from} (${weekdayOf(w.from)})`,
+        to: `${w.to} (${weekdayOf(w.to)})`,
+        ...(w.headlinerWait != null && { headlinerWait: w.headlinerWait }),
+        ...(w.rangeAverageWait != null && {
+          rangeAverageWait: w.rangeAverageWait,
+        }),
+        ...(w.headlinerWait != null &&
+          w.rangeAverageWait && {
+            percentBelowAverage: Math.round(
+              (100 * (w.rangeAverageWait - w.headlinerWait)) /
+                w.rangeAverageWait,
+            ),
+          }),
+        basis: WHEN_BASIS[w.basis] ?? w.basis,
+        ...(w.basis === "last_year" && { lastYear: true }),
+        ...(w.reasons.length > 0 && {
+          why: w.reasons.map((r) => WHEN_REASONS[r] ?? r),
+        }),
+        ...(w.warnings.length > 0 && {
+          watch: w.warnings.map((x) => WHEN_WARNINGS[x] ?? x),
+        }),
+        ...(events.length > 0 && { events }),
+        hubUrl: hubUrl({ ...plan, from: w.from, to: w.to }),
+      };
+    }),
+    months: result.months.map((m) => ({
+      month: m.month,
+      ...(m.headlinerWait != null && { headlinerWait: m.headlinerWait }),
+      ...(m.basis === "last_year" && { lastYear: true }),
+      ...(m.climate && {
+        climate: `${m.climate.tempMax}/${m.climate.tempMin} °C, ${m.climate.precipitationMm} mm`,
+      }),
+      ...(m.usSchoolBreakDays.length > 0 && {
+        usSchoolBreakDays: m.usSchoolBreakDays.length,
+      }),
+      ...(m.partyNights > 0 && { partyNights: m.partyNights }),
+      ...(m.hurricaneSeason && { hurricaneSeason: true }),
+    })),
+    monthsMean:
+      "headlinerWait: each chosen park on its best day of the week, meaned; climate: the 2015-2024 normals at Magic Kingdom (high/low, month's rain), never a forecast",
+    ...(!result.meta.search.exact && {
+      searchCutShort: "good windows, not proven the best",
+    }),
   };
 }

@@ -17,6 +17,9 @@ import {
   type InternalRegionCalendar,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import { TripWhenService } from "../../trip-regions/trip-when.service";
+import type { HolidaysService } from "../../holidays/holidays.service";
+import type { WeatherService } from "../../parks/weather.service";
 import type { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ORLANDO } from "../../trip-regions/regions";
 import { isoInZone } from "../../trip-regions/trip-calendar.util";
@@ -264,9 +267,36 @@ function setup(
       },
     ]),
   };
+  const whens = new TripWhenService(
+    regions,
+    {
+      getHolidays: jest.fn(async (country: string) =>
+        country === "DE"
+          ? Array.from({ length: 11 }, (_, k) => ({
+              date: day(20 + k),
+              name: "Summer Holidays",
+              country: "DE",
+              region: "DE-NW",
+              holidayType: "school",
+              isNationwide: false,
+            }))
+          : [],
+      ),
+      getSchoolHolidayCoverage: jest.fn(async () => ({
+        regional: new Map([["DE|NW", day(300)]]),
+        national: new Map(),
+        countryAny: new Map([["DE", day(300)]]),
+      })),
+    } as unknown as HolidaysService,
+    {
+      getClimateNormals: jest.fn(async () => null),
+    } as unknown as WeatherService,
+    redis,
+  );
   const providers = new Map<unknown, unknown>([
     [TripRegionService, regions],
     [TripPlanService, plans],
+    [TripWhenService, whens],
     [ParksService, parks],
     [ParkSeasonService, seasons],
     [
@@ -498,6 +528,98 @@ describe("plan_vacation", () => {
     });
     expect(crowded.isError).toBe(true);
     expect(crowded.content).toMatch(/More park visits than trip days/);
+  });
+});
+
+/** Every day of a range open at both parks, the waits rising and falling over the weeks. */
+function longCalendar(from: string, to: string): InternalRegionCalendar {
+  const days = [];
+  for (let date = from, i = 0; date <= to; date = addIsoDays(date, 1), i++) {
+    const cell = (wait: number): TripParkDayInternal => ({
+      status: "OPERATING",
+      hoursPublished: true,
+      crowdLevel: "moderate",
+      headlinerWait: Math.round(wait / 5) * 5,
+      waitExact: wait,
+      basis: i > 30 ? "last_year" : "forecast",
+      dayHours: 12,
+    });
+    days.push({
+      date,
+      isHoliday: false,
+      isSchoolVacation: false,
+      parks: {
+        "magic-kingdom-park": cell(50 + 15 * Math.sin(i / 5)),
+        epcot: cell(40 + 10 * Math.cos(i / 4)),
+      },
+    });
+  }
+  return {
+    meta: {
+      region: "orlando",
+      timezone: TZ,
+      from,
+      to,
+      computedAt: "",
+      publishedHoursUntil: {},
+    },
+    parks: ["magic-kingdom-park", "epcot"],
+    days,
+    seasons: [],
+  };
+}
+
+describe("find_trip_dates", () => {
+  const trip = {
+    from: day(1),
+    to: day(45),
+    days: 5,
+    parks: [{ park: "Magic Kingdom" }, { park: "epcot" }],
+  };
+
+  it("retells the best windows with their figures, phrases and hub links, and the months", async () => {
+    const { call } = setup(longCalendar);
+    const { json } = await call("find_trip_dates", { ...trip, limit: 3 });
+    expect(json?.tripDays).toBe(5);
+    expect(json?.windows).toHaveLength(3);
+    for (const w of json?.windows ?? []) {
+      expect(w.from).toMatch(/^\d{4}-\d{2}-\d{2} \(\w+day\)$/);
+      expect(typeof w.headlinerWait).toBe("number");
+      expect(typeof w.rangeAverageWait).toBe("number");
+      expect(w.hubUrl).toMatch(
+        /\/orlando\?from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}&parks=epcot,magic-kingdom-park&.*#planner$/,
+      );
+      expect(hubPath(w.hubUrl)).not.toBeNull();
+      for (const phrase of [...(w.why ?? []), ...(w.watch ?? [])]) {
+        expect(phrase).not.toMatch(/_/);
+      }
+    }
+    expect(json?.months.length).toBeGreaterThan(0);
+    expect(json?.months[0].month).toMatch(/^\d{4}-\d{2}$/);
+    expect(json?.windows.some((w: { lastYear?: boolean }) => w.lastYear)).toBe(
+      json?.windows.some((w: { basis: string }) => w.basis.startsWith("last")),
+    );
+  });
+
+  it("keeps the windows in the school break it is given", async () => {
+    const { call } = setup(longCalendar);
+    const { json } = await call("find_trip_dates", {
+      ...trip,
+      within: "DE-NW",
+    });
+    expect(json?.within.region).toBe("Nordrhein-Westfalen");
+    for (const w of json?.windows ?? []) {
+      expect(w.from.slice(0, 10) >= json?.within.breaks[0].slice(0, 10)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("refuses an unknown school-holiday region with the route's sentence", async () => {
+    const { call } = setup(longCalendar);
+    const result = await call("find_trip_dates", { ...trip, within: "DE-XX" });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("DE-NW");
   });
 });
 

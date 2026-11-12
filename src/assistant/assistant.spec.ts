@@ -744,6 +744,7 @@ describe("assistant tools", () => {
       "compare_parks",
       "get_days",
       "plan_vacation",
+      "find_trip_dates",
       "get_park_events",
       "get_travel_time",
       "search_posts",

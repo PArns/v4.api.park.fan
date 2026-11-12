@@ -4,6 +4,9 @@ import request from "supertest";
 import { TripRegionsController } from "./trip-regions.controller";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
+import { TripWhenService } from "./trip-when.service";
+import { HolidaysService } from "../holidays/holidays.service";
+import { WeatherService } from "../parks/weather.service";
 import { ParksService } from "../parks/parks.service";
 import { CalendarService } from "../parks/services/calendar.service";
 import { ParkSeasonService } from "../parks/services/park-season.service";
@@ -155,6 +158,34 @@ describe("TripRegionsController", () => {
       providers: [
         TripRegionService,
         TripPlanService,
+        TripWhenService,
+        {
+          provide: HolidaysService,
+          useValue: {
+            // NRW has a school break from day 10 to day 20 (a Saturday-to-Sunday stretch or not).
+            getHolidays: jest.fn(async (country: string) =>
+              country === "DE"
+                ? Array.from({ length: 11 }, (_, k) => ({
+                    date: day(10 + k),
+                    name: "Autumn Holidays",
+                    country: "DE",
+                    region: "DE-NW",
+                    holidayType: "school",
+                    isNationwide: false,
+                  }))
+                : [],
+            ),
+            getSchoolHolidayCoverage: jest.fn(async () => ({
+              regional: new Map([["DE|NW", day(300)]]),
+              national: new Map(),
+              countryAny: new Map([["DE", day(300)]]),
+            })),
+          },
+        },
+        {
+          provide: WeatherService,
+          useValue: { getClimateNormals: jest.fn(async () => null) },
+        },
         {
           provide: ParksService,
           useValue: { findByGeographicPath, getSchedule },
@@ -464,6 +495,114 @@ describe("TripRegionsController", () => {
       await request(app.getHttpServer())
         .get(`/v1/trip-regions/orlando/plan?${qs}`)
         .set("X-API-Key", KEY)
+        .expect(400);
+    });
+  });
+  describe("GET /v1/trip-regions/:region/when", () => {
+    const parks = "parks=epcot,magic-kingdom-park";
+
+    it("needs a data key", async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando/when?${parks}`)
+        .expect(401);
+      expect(JSON.stringify(res.body)).toContain("api-key-required");
+    });
+
+    it("ranks the windows of a range and caches the answer by its query", async () => {
+      const qs = `from=${day(1)}&to=${day(40)}&days=5&${parks}&limit=3&gap=5`;
+      const res = await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando/when?${qs}`)
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(res.headers["cache-control"]).toMatch(/^private, max-age=3600/);
+      expect(res.body.meta).toMatchObject({
+        region: "orlando",
+        from: day(1),
+        to: day(40),
+        days: 5,
+        search: { exact: true, windows: 36 },
+      });
+      expect(res.body.windows).toHaveLength(3);
+      expect(res.body.windows[0]).toMatchObject({ rank: 1 });
+      expect(res.body.windows[0].plan.days).toHaveLength(5);
+      expect(res.body.weeks.length).toBeGreaterThan(4);
+      expect(res.body.months[0]).toHaveProperty("hurricaneSeason");
+
+      const calls = buildCalendarResponse.mock.calls.length;
+      await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/when?gap=5&limit=3&parks=magic-kingdom-park,epcot&days=5&to=${day(40)}&from=${day(1)}`,
+        )
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(buildCalendarResponse.mock.calls.length).toBe(calls);
+    });
+
+    it("keeps the windows inside a school break with within", async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/when?from=${day(1)}&to=${day(40)}&days=4&${parks}&within=DE-NW`,
+        )
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(res.body.meta.within).toMatchObject({
+        code: "DE-NW",
+        name: "Nordrhein-Westfalen",
+      });
+      const [period] = res.body.meta.within.periods;
+      expect(res.body.windows.length).toBeGreaterThan(0);
+      for (const w of res.body.windows) {
+        expect(w.from >= period.from && w.to <= period.to).toBe(true);
+      }
+    });
+
+    it.each([
+      ["a range past a year", `from=${day(1)}&to=${day(370)}`],
+      ["a range in the past", `from=${day(-3)}`],
+      ["a trip of two days", "days=2"],
+      ["a trip of 22 days", "days=22"],
+      ["a range shorter than the trip", `from=${day(1)}&to=${day(3)}&days=7`],
+      ["an unknown within code", "within=DE-XX"],
+      ["a malformed within code", "within=nrw"],
+      ["more than ten windows", "limit=11"],
+      ["an unknown parameter", "budget=low"],
+      ["a lock, which a window cannot take", `lock=epcot@${day(2)}`],
+    ])("refuses %s with 400", async (_what, qs) => {
+      await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando/when?${parks}&${qs}`)
+        .set("X-API-Key", KEY)
+        .expect(400);
+    });
+  });
+
+  describe("GET /v1/trip-regions/:region/school-breaks", () => {
+    it("answers without a key, by stored region code, a day at the edge", async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/school-breaks?from=${day(1)}&to=${day(60)}`,
+        )
+        .expect(200);
+      expect(res.headers["cdn-cache-control"]).toContain("max-age=86400");
+      const nrw = res.body.regions.find(
+        (r: { code: string }) => r.code === "DE-NW",
+      );
+      expect(nrw).toMatchObject({
+        country: "DE",
+        name: "Nordrhein-Westfalen",
+        through: day(300),
+      });
+      expect(nrw.periods).toHaveLength(1);
+      expect(nrw.periods[0].from <= day(10)).toBe(true);
+      expect(nrw.periods[0].to >= day(20)).toBe(true);
+      // Countries whose stored data does not reach far enough are left out.
+      expect(
+        res.body.regions.every((r: { country: string }) => r.country === "DE"),
+      ).toBe(true);
+    });
+
+    it("refuses a malformed country list with 400", async () => {
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/school-breaks?countries=Germany")
         .expect(400);
     });
   });
