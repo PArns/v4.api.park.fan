@@ -14,9 +14,12 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/plan/day?date=YYYY-MM-DD
   like a closed park. Unknown park: **404**.
 - **Cached 15 minutes** at the edge (`HttpCacheInterceptor`), except a response
   whose `ridesUnavailable.reason` is `data_unavailable`: that one is sent
-  `no-store`, so a transient fault does not outlive itself at the edge. There is
-  no origin-side response cache; the pieces underneath (calendar month, hourly
-  profile, ML predictions, H5 profiles) each have their own.
+  `no-store`, so a transient fault does not outlive itself at the edge. At the
+  origin the built day is kept 15 minutes in Redis
+  (`plan-day:resp:v1:<park>:<date>`, `src/parks/services/plan-day-cache.ts`), the
+  entry [`/plan/optimize`](./optimize.md) plans against too; the pieces underneath
+  (calendar month, hourly profile, ML predictions, H5 profiles) each have their
+  own.
 
 Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.ts`.
 
@@ -58,6 +61,7 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 - The forward archive captures d0–d7 plus d10/14/21/30/45/60/90 daily via
   `buildPlanDayWithShadow` — see [forward archive](../../ml/forward-archive/capture.md).
 - The `plan-day-coverage` job — see [availability](./availability.md#the-number-is-watched).
+- The day optimizer behind [`/plan/optimize`](./optimize.md), from the same cache.
 
 ## Parts
 
@@ -69,6 +73,7 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 - [opens-at.md](./opens-at.md) — `opensAt`, `opensAtConfidence`, `runsOnWeekdays`
 - [accuracy.md](./accuracy.md) — `accuracy`, `expectedError`, `leadTimeMae`
 - [shows.md](./shows.md) — `shows[]`: scheduled vs projected, how far ahead, positions
+- [optimize.md](./optimize.md) — `POST …/plan/optimize`: the trip planner's day optimizer, which plans against this day
 
 ## Related
 

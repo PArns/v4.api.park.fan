@@ -15,6 +15,7 @@ holder of a data key. Live and historical data stay open without a key.
 | `…/{park}/calendar`, `/best-days`          | 401                                                                               | the full answer                 |
 | `…/{park}/predictions/yearly`, `/plan/day` | 401                                                                               | the full answer                 |
 | `/v1/trip-regions/…/calendar`, `/plan`     | 401                                                                               | the full answer                 |
+| `…/{park}/plan/optimize` (POST)            | 401                                                                               | the full answer, `no-store`     |
 | `…/{park}` (park detail)                   | the answer without `attractions[].bestVisitTimes`                                 | all of it with `?forecast=true` |
 | `…/{park}/attractions/{slug}`              | without `hourlyForecast`, `bestVisitTimes`, `predictionAccuracy`                  | all of it with `?forecast=true` |
 | `…/{park}/stats/day`                       | without `forecast`, `predicted`, `forecastError`                                  | all of it with `?forecast=true` |

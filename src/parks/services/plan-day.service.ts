@@ -74,6 +74,7 @@ import {
   isCuratedOutOfService,
   rideWorksPeriods,
   worksPeriodCovering,
+  worksPeriodOn,
   type RideWorksPeriods,
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
@@ -321,6 +322,41 @@ export class PlanDayService {
       if (window) out.push({ id: ride.id, name: ride.name, window });
     }
     return out;
+  }
+
+  /**
+   * The rides a curated works window shuts on `dateStr`, by slug and name, as
+   * park.fan's relay adds them to `/plan/day` (`ridesInWorks`) and the day
+   * optimizer reads them: an entry for one is held still instead of priced as
+   * a ride with no curve. Unlike {@link ridesInMaintenance} it answers for any
+   * date, since the caller decides what a past day means.
+   */
+  async ridesInWorks(
+    park: Park,
+    dateStr: string,
+  ): Promise<
+    Array<{
+      attractionSlug: string;
+      attractionName: string;
+      worksPeriod: WorksPeriod;
+    }>
+  > {
+    const out: Array<{
+      attractionSlug: string;
+      attractionName: string;
+      worksPeriod: WorksPeriod;
+    }> = [];
+    for (const attraction of await this.attractions(park)) {
+      const window = worksPeriodOn(attraction, dateStr);
+      if (window) {
+        out.push({
+          attractionSlug: attraction.slug,
+          attractionName: attraction.name,
+          worksPeriod: window,
+        });
+      }
+    }
+    return out.sort((a, b) => a.attractionName.localeCompare(b.attractionName));
   }
 
   /**

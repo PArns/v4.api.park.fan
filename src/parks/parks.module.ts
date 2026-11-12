@@ -116,6 +116,7 @@ import { PopularityModule } from "../popularity/popularity.module";
   ],
   exports: [
     ParksService,
+    PlanDayService,
     WeatherService,
     WeatherWarningsService,
     ParkIntegrationService,
