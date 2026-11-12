@@ -4,6 +4,7 @@ import {
   eachDayAtNoonInTimezone,
   formatInParkTimezone,
   isRealIsoDate,
+  lastYearDays,
 } from "./date.util";
 import { parseDateRange } from "./date-parsing.util";
 
@@ -150,5 +151,30 @@ describe("isRealIsoDate", () => {
   });
   it("rejects a non-string", () => {
     expect(isRealIsoDate(["2026-01-01"])).toBe(false);
+  });
+});
+
+describe("lastYearDays", () => {
+  it("keeps the date and finds the nearest day of the same weekday", () => {
+    // Saturday 2026-11-07: a year back the 7th is a Friday, the Saturday is the 8th.
+    expect(lastYearDays("2026-11-07")).toEqual({
+      sameDate: "2025-11-07",
+      sameWeekday: "2025-11-08",
+    });
+    // Halloween 2026 is a Saturday; 2025-10-31 a Friday, so Saturday 2025-11-01.
+    expect(lastYearDays("2026-10-31").sameWeekday).toBe("2025-11-01");
+    // Across a leap day: Monday 2029-03-05 → Monday 2028-03-06 (the 5th is a Sunday).
+    expect(lastYearDays("2029-03-05")).toEqual({
+      sameDate: "2028-03-05",
+      sameWeekday: "2028-03-06",
+    });
+    expect(lastYearDays("2028-02-29").sameDate).toBe("2027-02-28");
+    for (const date of ["2026-01-01", "2026-06-15", "2027-12-31"]) {
+      const { sameDate, sameWeekday } = lastYearDays(date);
+      const dow = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+      expect(dow(sameWeekday)).toBe(dow(date));
+      const off = Math.abs(Date.parse(sameWeekday) - Date.parse(sameDate));
+      expect(off).toBeLessThanOrEqual(3 * 86_400_000);
+    }
   });
 });

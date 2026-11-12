@@ -44,6 +44,7 @@ import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
+  lastYearDays,
 } from "../../common/utils/date.util";
 import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
@@ -1046,25 +1047,6 @@ async function dayCard(
       }),
     },
   );
-}
-
-/**
- * The days a year before `date` (YYYY-MM-DD) worth comparing: the same date (29 February becomes
- * the 28th), and the day of the same weekday nearest to it, at most three days off, because a
- * Saturday says more about a Saturday than the date does. Calendar days only, no clock.
- */
-export function lastYearDays(date: string): {
-  sameDate: string;
-  sameWeekday: string;
-} {
-  const [year, month, day] = date.split("-");
-  const sameDate = `${Number(year) - 1}-${month}-${month === "02" && day === "29" ? "28" : day}`;
-  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
-  const ahead = (weekday(date) - weekday(sameDate) + 7) % 7;
-  return {
-    sameDate,
-    sameWeekday: addIsoDays(sameDate, ahead > 3 ? ahead - 7 : ahead),
-  };
 }
 
 /** One past day for `get_park_history` as the calendar serves it, or null without one. */

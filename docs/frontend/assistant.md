@@ -273,7 +273,7 @@ reading today (`findCurrentStatusByPark`); without one they are null, never a gu
 
 `get_park_history` answers "how busy was it on this date last year": the same date a year back
 (29 February becomes the 28th) and the nearest day of the same weekday, at most three days off
-(`lastYearDays`). Both come from the calendar's own history path
+(`lastYearDays`, `src/common/utils/date.util.ts`). Both come from the calendar's own history path
 (`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
 day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
 headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
