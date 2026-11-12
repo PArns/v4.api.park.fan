@@ -478,9 +478,12 @@ function start(): void {
           res.writeHead(err.status, { "Content-Type": "application/json" });
           res.end(err.body);
         } else {
-          const message = err instanceof Error ? err.message : String(err);
+          // The detail goes to this terminal only; a caller learns nothing about the shim's internals.
+          console.error(err);
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ statusCode: 500, message }));
+          res.end(
+            JSON.stringify({ statusCode: 500, message: "Internal server error" }),
+          );
         }
       } finally {
         console.log(
