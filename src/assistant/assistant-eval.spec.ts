@@ -45,6 +45,24 @@ describe("assistant eval", () => {
     ).toMatch(/get_post with/);
   });
 
+  it("checks the answer where a case asks: a rule applies only when its trigger matches", () => {
+    const c: EvalCase = {
+      ...base,
+      answer: [{ when: "magic kingdom", must: "18[:.]00" }],
+    };
+    expect(judge(c, [], "Animal Kingdom is your best pick.")).toBeNull();
+    expect(
+      judge(
+        c,
+        [],
+        "Magic Kingdom, but day guests leave at 18:00 for the party.",
+      ),
+    ).toBeNull();
+    expect(judge(c, [], "Go to Magic Kingdom, it is the quietest.")).toMatch(
+      /answer without/,
+    );
+  });
+
   it("fails a forbidden call: listed, any action, or any tool at all", () => {
     expect(judge({ ...base, forbid: "any" }, [])).toBeNull();
     expect(

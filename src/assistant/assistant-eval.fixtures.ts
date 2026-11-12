@@ -26,6 +26,12 @@ export interface EvalCase {
   forbid?: string[] | "actions" | "any";
   /** Canned results by tool name, for the calls before the last wanted one. */
   results?: Record<string, unknown>;
+  /**
+   * What the final answer, after the canned results, must say: each `must`
+   * (a case-insensitive regex) has to match whenever its `when` matches, or
+   * always without one. For the few rules a tool choice cannot show.
+   */
+  answer?: Array<{ when?: string; must: string }>;
 }
 
 const PHL_ID = "0b8f3c1e-7d2a-4c55-9a61-2f1e3d4c5b6a";
@@ -722,6 +728,58 @@ export const EVAL_CASES: EvalCase[] = [
     allowBefore: ["search_parks"],
     want: [{ tool: "compare_parks" }],
     forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-best-disney-park-early-close-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    now: "2026-11-12 10:15",
+    message: "Which Disney park is best on Tue 24 Nov?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+    // As compare_parks ranks the day: Magic Kingdom's party night (40 min, out
+    // at 18:00) behind Animal Kingdom's full day (45 min).
+    results: {
+      compare_parks: {
+        date: "2026-11-24",
+        ranked: [
+          {
+            name: "Disney's Animal Kingdom Theme Park",
+            opens: "2026-11-24 08:00",
+            closes: "2026-11-24 20:00",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 45,
+            schoolVacation: true,
+          },
+          {
+            name: "Magic Kingdom Park",
+            opens: "2026-11-24 08:00",
+            closes: "2026-11-24 18:00",
+            closesEarlyForDayGuests: true,
+            usualClose: "23:00",
+            crowdLevel: "low",
+            expectedPeakWaitMinutes: 40,
+            schoolVacation: true,
+          },
+          {
+            name: "EPCOT",
+            opens: "2026-11-24 09:00",
+            closes: "2026-11-24 21:00",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 55,
+          },
+        ],
+        unrated: [],
+        closed: [],
+        hoursNotPublished: [],
+      },
+    },
+    // Magic Kingdom may be named, but never without its early close.
+    answer: [
+      { when: "magic kingdom", must: "18[:.]00|6(:00)?\\s*(pm|p\\.m\\.)" },
+    ],
   },
   {
     id: "orlando-christmas-party-de",
