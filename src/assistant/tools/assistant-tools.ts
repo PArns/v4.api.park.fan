@@ -108,7 +108,12 @@ import {
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
 import type { TripPlanQueryDto } from "../../trip-regions/dto/trip-region-query.dto";
-import { HOTEL_KINDS, hotelPoint, ORLANDO } from "../../trip-regions/regions";
+import {
+  HOTEL_KINDS,
+  hotelPoint,
+  ORLANDO,
+  regionOfPark,
+} from "../../trip-regions/regions";
 import {
   MAX_PARK_DAYS,
   MAX_TRIP_DAYS,
@@ -134,6 +139,7 @@ import {
 } from "../../trip-regions/trip-when";
 import type { TripWhenQueryDto } from "../../trip-regions/dto/trip-when.dto";
 import {
+  heatAndHurricaneWatch,
   HUB_PATH,
   hubPath,
   regionParkFor,
@@ -1780,6 +1786,22 @@ async function orlandoPark(
   return inRegion;
 }
 
+/** An Orlando park's heat and hurricane warnings on a compared day; nothing elsewhere. */
+function orlandoWatch(
+  park: Park,
+  day: { date?: string; weather?: { tempMax?: number; basis?: string } | null },
+): { watch?: string[] } {
+  const region = regionOfPark(park);
+  const config = region?.parks.find((p) => p.slug === park.slug);
+  if (!config || !day.date) return {};
+  const watch = heatAndHurricaneWatch(
+    day.date,
+    day.weather,
+    config.type === "theme_park",
+  );
+  return watch.length > 0 ? { watch } : {};
+}
+
 /** A trip route's 400 or 404 as a refusal the model reads. */
 async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
   try {
@@ -2667,6 +2689,7 @@ export const ASSISTANT_TOOLS = [
         expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
         holiday: d.holiday,
         schoolVacation: d.schoolVacation,
+        ...orlandoWatch(park, d),
       });
       // Past a park's published schedule its status is the calendar's estimate, never a fact.
       const inSchedule = known.filter((d) => "published" in d && d.published);
