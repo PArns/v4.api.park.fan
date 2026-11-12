@@ -3,13 +3,17 @@
  * they are deployed, on production data. The frontend points its API base at
  * http://localhost:3001 and gets:
  *
- * - `GET /v1/trip-regions/:region`, `/calendar`, `/best-days`, `/plan`
+ * - `GET /v1/trip-regions/:region`, `/calendar`, `/best-days`, `/plan`,
+ *   `/when`, `/school-breaks`
  * - `POST /v1/parks/:continent/:country/:city/:park/plan/optimize`
  *
  * answered by the same modules the API runs (`trip-region.assembly`,
- * `trip-best-days`, `trip-plan.assembly`, `trip-optimizer`, the day
- * optimizer's `engine`), fed from production's public routes (`/calendar`,
- * `/schedule`, `/seasons`, `/plan/day`) instead of the database and Redis.
+ * `trip-best-days`, `trip-plan.assembly`, `trip-optimizer`, `trip-when`,
+ * `trip-when.assembly`, `trip-school-breaks`, the day optimizer's `engine`),
+ * fed from production's public routes (`/calendar`, `/schedule`, `/seasons`,
+ * `/plan/day`, each read in spans of at most 90 days) instead of the database
+ * and Redis, and the school breaks from OpenHolidays and the curated sets
+ * through the sync's own `openHolidaysSchoolRows`.
  * Every other path is passed through to production unchanged. The shim adds
  * fetching and wiring and no rule of its own, so it cannot drift.
  *
@@ -30,7 +34,10 @@
  *   gap-filled CLOSED day past the published hours reads as stated; there is
  *   no `forecastUntil` (it is the warmup's Redis key) and no group name from
  *   the `destinations` table (the curated names stand in); the day optimizer
- *   gets no `ridesInWorks` and its request is not validated.
+ *   gets no `ridesInWorks` and its request is not validated. `/when` reads its
+ *   climate normals off Magic Kingdom's calendar days marked `climate_normal`,
+ *   so the first two weeks (a forecast there) have none; its school coverage
+ *   is what OpenHolidays holds for the next two years, not the database's.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -75,6 +82,36 @@ import {
   TripPlanQueryDto,
 } from "../../src/trip-regions/dto/trip-region-query.dto";
 import { runDayOptimizer } from "../../src/planner/day-optimizer/engine";
+import { findTripDates } from "../../src/trip-regions/trip-when";
+import {
+  CLIMATE_REFERENCE_PARK,
+  normalizeWhenQuery,
+  whenRange,
+} from "../../src/trip-regions/trip-when.assembly";
+import {
+  countryOfCode,
+  DEFAULT_SCHOOL_BREAK_COUNTRIES,
+  defaultSchoolBreakCountries,
+  resolveWithin,
+  schoolBreakRegions,
+  type SchoolRowLike,
+  type TripSchoolBreaks,
+} from "../../src/trip-regions/trip-school-breaks";
+import {
+  TripSchoolBreaksQueryDto,
+  TripWhenQueryDto,
+} from "../../src/trip-regions/dto/trip-when.dto";
+import { openHolidaysSchoolRows } from "../../src/holidays/holidays.service";
+import {
+  CURATED_HOLIDAY_SETS,
+  expandCuratedHolidays,
+} from "../../src/holidays/data/curated-holidays";
+import {
+  buildSchoolCoverage,
+  type SchoolCoverage,
+} from "../../src/common/utils/holiday.utils";
+import type { ClimateNormals } from "../../src/external-apis/weather/climate-normals";
+import type { OpenHolidaysEntry } from "../../src/external-apis/open-holidays/open-holidays.types";
 import { dayClockFor } from "../../src/planner/plan-optimize.service";
 
 const UPSTREAM = (process.env.DEV_UPSTREAM ?? "https://api.park.fan").replace(
@@ -238,6 +275,50 @@ async function seasonsFor(
   return out;
 }
 
+/** Production's park routes answer at most this many days; a longer read is stitched. */
+const UPSTREAM_SPAN_DAYS = 90;
+
+function spans(from: string, to: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (let f = from; f <= to; f = addIsoDays(f, UPSTREAM_SPAN_DAYS)) {
+    const t = addIsoDays(f, UPSTREAM_SPAN_DAYS - 1);
+    out.push([f, t < to ? t : to]);
+  }
+  return out;
+}
+
+/** A park's `/calendar` over any range, read in spans. */
+async function parkCalendar(
+  base: string,
+  from: string,
+  to: string,
+): Promise<ParkCalendarSource["calendar"]> {
+  const parts = await Promise.all(
+    spans(from, to).map(([f, t]) =>
+      upstreamJson<ParkCalendarSource["calendar"]>(
+        `${base}/calendar?from=${f}&to=${t}&includeHourly=none`,
+      ),
+    ),
+  );
+  return { ...parts[0], days: parts.flatMap((p) => p.days) };
+}
+
+/** A park's `/schedule` rows over any range, read in spans. */
+async function parkSchedule(
+  base: string,
+  from: string,
+  to: string,
+): Promise<ScheduleRowLike[]> {
+  const parts = await Promise.all(
+    spans(from, to).map(([f, t]) =>
+      upstreamJson<{ schedule: ScheduleRowLike[] }>(
+        `${base}/schedule?from=${f}&to=${t}`,
+      ).catch(() => ({ schedule: [] as ScheduleRowLike[] })),
+    ),
+  );
+  return parts.flatMap((p) => p.schedule);
+}
+
 /** The calendar as `TripRegionService.buildCalendar` assembles it, from production. */
 async function regionCalendar(
   region: RegionConfig,
@@ -252,12 +333,8 @@ async function regionCalendar(
     parks.map(async (park) => {
       const base = parkBase(park.config);
       const [calendar, schedule] = await Promise.all([
-        upstreamJson<ParkCalendarSource["calendar"]>(
-          `${base}/calendar?from=${ref.from}&to=${ref.to}&includeHourly=none`,
-        ),
-        upstreamJson<{ schedule: ScheduleRowLike[] }>(
-          `${base}/schedule?from=${ref.from}&to=${ref.to}`,
-        ).catch(() => ({ schedule: [] as ScheduleRowLike[] })),
+        parkCalendar(base, ref.from, ref.to),
+        parkSchedule(base, ref.from, ref.to),
       ]);
       const lastYear = new Map<string, LastYearMonth>();
       const wanted = calendar.days.filter(
@@ -270,7 +347,7 @@ async function regionCalendar(
         ).catch(() => null);
         if (past) lastYear.set(ym, lastYearMonthFromDays(past.days, today));
       }
-      return { park, calendar, rows: schedule.schedule, lastYear };
+      return { park, calendar, rows: schedule, lastYear };
     }),
   );
   const seasons = (
@@ -286,6 +363,125 @@ async function regionCalendar(
     seasons,
     forecastUntil: [],
   });
+}
+
+/** OpenHolidays, where the holiday sync reads the school breaks from. */
+const OPEN_HOLIDAYS = "https://openholidaysapi.org";
+/** How far ahead the shim reads school rows: what the coverage dates are read off. */
+const SCHOOL_DAYS_AHEAD = 730;
+
+/**
+ * A country's school rows as the sync would store them: OpenHolidays through
+ * `openHolidaysSchoolRows`, plus the curated sets' school rows.
+ */
+async function schoolRows(
+  country: string,
+  today: string,
+): Promise<SchoolRowLike[]> {
+  const to = addIsoDays(today, SCHOOL_DAYS_AHEAD);
+  const key = `${OPEN_HOLIDAYS}/SchoolHolidays?countryIsoCode=${country}&validFrom=${today}&validTo=${to}&languageIsoCode=EN`;
+  const hit = cache.get(key);
+  let entries: Promise<OpenHolidaysEntry[]>;
+  if (hit && Date.now() - hit.at < CACHE_MS) {
+    entries = hit.value as Promise<OpenHolidaysEntry[]>;
+  } else {
+    entries = fetch(key, { headers: { Accept: "application/json" } }).then(
+      async (res) =>
+        res.ok ? ((await res.json()) as OpenHolidaysEntry[]) : [],
+    );
+    cache.set(key, { at: Date.now(), value: entries });
+    entries.catch(() => cache.delete(key));
+  }
+  const curated = CURATED_HOLIDAY_SETS.filter((set) => set.country === country)
+    .flatMap(expandCuratedHolidays)
+    .filter((row) => row.holidayType === "school");
+  return [...openHolidaysSchoolRows(await entries, country), ...curated].map(
+    (row) => ({
+      date: row.date.toISOString().slice(0, 10),
+      name: row.name,
+      country: row.country,
+      region: row.region ?? null,
+      holidayType: row.holidayType,
+      isNationwide: row.isNationwide,
+    }),
+  );
+}
+
+/** `MAX(date) GROUP BY country, region` over the rows, as the coverage query reads it. */
+function coverageOf(rows: SchoolRowLike[]): SchoolCoverage {
+  const through = new Map<
+    string,
+    { country: string; region: string | null; through: string }
+  >();
+  for (const row of rows) {
+    const key = `${row.country}|${row.region ?? ""}`;
+    const seen = through.get(key);
+    if (!seen || seen.through < row.date) {
+      through.set(key, {
+        country: row.country,
+        region: row.region,
+        through: row.date,
+      });
+    }
+  }
+  return buildSchoolCoverage([...through.values()]);
+}
+
+/** `/school-breaks` for the countries, from OpenHolidays and the curated sets. */
+async function schoolBreaksFor(
+  countries: string[] | null,
+  from: string,
+  to: string,
+  today: string,
+): Promise<TripSchoolBreaks> {
+  const asked = countries ?? DEFAULT_SCHOOL_BREAK_COUNTRIES;
+  const rows = new Map<string, SchoolRowLike[]>();
+  for (const country of asked)
+    rows.set(country, await schoolRows(country, today));
+  const coverage = coverageOf([...rows.values()].flat());
+  const chosen = countries ?? defaultSchoolBreakCountries(coverage, today);
+  return schoolBreakRegions(chosen, rows, coverage, from, to);
+}
+
+/** The reference park's climate normals, off its calendar days marked `climate_normal`. */
+async function climateOf(
+  region: RegionConfig,
+  from: string,
+  to: string,
+): Promise<ClimateNormals | null> {
+  const config = region.parks.find((p) => p.slug === CLIMATE_REFERENCE_PARK);
+  if (!config) return null;
+  const ref = referenceRange(from, to);
+  const calendar = await parkCalendar(parkBase(config), ref.from, ref.to).catch(
+    () => null,
+  );
+  if (!calendar) return null;
+  const normals: ClimateNormals = {};
+  for (const day of calendar.days as Array<{
+    date: string;
+    weather?: {
+      basis?: string;
+      tempMax?: number;
+      tempMin?: number;
+      precipitationMm?: number;
+      snowMm?: number;
+      windMax?: number;
+      icon?: number;
+    };
+  }>) {
+    const w = day.weather;
+    if (w?.basis !== "climate_normal") continue;
+    normals[day.date.slice(5, 10)] = {
+      temperatureMax: w.tempMax ?? null,
+      temperatureMin: w.tempMin ?? null,
+      precipitationSum: w.precipitationMm ?? null,
+      rainSum: null,
+      snowfallSum: w.snowMm ?? null,
+      windSpeedMax: w.windMax ?? null,
+      weatherCode: w.icon ?? null,
+    };
+  }
+  return Object.keys(normals).length > 0 ? normals : null;
 }
 
 /** Query validation exactly as the API's ValidationPipe runs it. */
@@ -330,7 +526,7 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
 /** The routes the shim answers itself; null for everything it passes on. */
 async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
   const trip =
-    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan))?\/?$/.exec(
+    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|when|school-breaks))?\/?$/.exec(
       url.pathname,
     );
   if (trip && req.method === "GET") {
@@ -355,6 +551,48 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
           region,
           await regionCalendar(region, from, to),
           q.limit ?? 5,
+        );
+      }
+      case "when": {
+        const q = await query(TripWhenQueryDto, url);
+        const { from, to } = whenRange(q.from, q.to, today);
+        const within = q.within
+          ? resolveWithin(
+              q.within,
+              await schoolBreaksFor([countryOfCode(q.within)], from, to, today),
+            )
+          : undefined;
+        const parks = await regionParks(region);
+        const normalized = normalizeWhenQuery(
+          region,
+          parks.map((p) => p.config.slug),
+          q,
+          today,
+          within,
+        );
+        const result = findTripDates({
+          region,
+          calendar: await regionCalendar(region, from, to),
+          query: normalized,
+          climate: await climateOf(region, from, to),
+          climatePark: CLIMATE_REFERENCE_PARK,
+          clock: () => performance.now(),
+        });
+        return {
+          ...result,
+          meta: { ...result.meta, computedAt: new Date().toISOString() },
+        };
+      }
+      case "school-breaks": {
+        const q = await query(TripSchoolBreaksQueryDto, url);
+        const { from, to } = whenRange(q.from, q.to, today);
+        return schoolBreaksFor(
+          q.countries
+            ? [...new Set(q.countries.toUpperCase().split(","))]
+            : null,
+          from,
+          to,
+          today,
         );
       }
       case "plan": {
@@ -482,7 +720,10 @@ function start(): void {
           console.error(err);
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(
-            JSON.stringify({ statusCode: 500, message: "Internal server error" }),
+            JSON.stringify({
+              statusCode: 500,
+              message: "Internal server error",
+            }),
           );
         }
       } finally {

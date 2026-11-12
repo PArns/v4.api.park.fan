@@ -191,7 +191,8 @@ export class TripRegionsController {
   @Get(":region/school-breaks")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
-    summary: "School breaks of the visitors' home regions, by stored region code",
+    summary:
+      "School breaks of the visitors' home regions, by stored region code",
     description:
       "Per holiday region its breaks in the range (default today … +365), each widened over the " +
       "weekends at its edges, and `through`, the last day the stored data reaches. The codes are " +

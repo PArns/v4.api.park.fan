@@ -527,17 +527,27 @@ export function findTripDates(input: WhenInput): TripWhen {
       if (day.parks.length === 0) continue;
       const calendarDay = days[i + daysApart(dates[i], day.date)];
       const rank = day.parks.map((v) =>
-        priceOf(q, rules, pricing.get(v.slug) as ParkPricing, calendarDay, false),
+        priceOf(
+          q,
+          rules,
+          pricing.get(v.slug) as ParkPricing,
+          calendarDay,
+          false,
+        ),
       );
       const show = day.parks.map((v) =>
-        priceOf(q, rules, pricing.get(v.slug) as ParkPricing, calendarDay, true),
+        priceOf(
+          q,
+          rules,
+          pricing.get(v.slug) as ParkPricing,
+          calendarDay,
+          true,
+        ),
       );
       const row = (costs: number[]) =>
         costs.length === 1
           ? costs[0]
-          : 0.5 * costs[0] +
-            0.5 * costs[1] +
-            PlanCostModel.hopTransferPenalty;
+          : 0.5 * costs[0] + 0.5 * costs[1] + PlanCostModel.hopTransferPenalty;
       score += row(rank);
       shown += row(show);
       parkDays++;
@@ -934,8 +944,9 @@ function monthStrip(input: WhenInput, weeks: WeekFigure[]): TripWhenMonth[] {
 
 /**
  * A calendar month's normals: the mean high and low and the month's total
- * precipitation (the daily normals summed). No `rainDays`: a normal is a mean
- * per calendar day, and a mean of 3 mm does not say on how many days it rains.
+ * precipitation (the mean daily normal times the month's days, which is their
+ * sum when every day has one). No `rainDays`: a normal is a mean per calendar
+ * day, and a mean of 3 mm does not say on how many days it rains.
  */
 function monthClimate(
   climate: ClimateNormals | null | undefined,
@@ -961,7 +972,10 @@ function monthClimate(
   return {
     tempMax: round1(high),
     tempMin: round1(low),
-    precipitationMm: Math.round(rain.reduce((s, v) => s + v, 0)),
+    precipitationMm: Math.round(
+      (mean(rain) as number) *
+        new Date(Date.UTC(2027, Number(mm), 0)).getUTCDate(),
+    ),
     basis: "climate_normal",
     period: CLIMATE_NORMAL_PERIOD,
   };

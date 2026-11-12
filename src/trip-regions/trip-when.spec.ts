@@ -192,9 +192,7 @@ describe("findTripDates", () => {
       for (const a of starts) {
         for (const b of starts) {
           if (a === b) continue;
-          const apart = Math.abs(
-            (Date.parse(a) - Date.parse(b)) / 86_400_000,
-          );
+          const apart = Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
           expect(apart).toBeGreaterThanOrEqual(gap);
         }
       }
@@ -269,7 +267,9 @@ describe("findTripDates", () => {
 
   it("prices a day without published hours as if open, and says so", () => {
     const cal = calendar("2027-02-01", 30, HEADLINERS, (_slug, i) =>
-      i >= 10 ? { status: "UNKNOWN", hoursPublished: false, dayHours: undefined } : {},
+      i >= 10
+        ? { status: "UNKNOWN", hoursPublished: false, dayHours: undefined }
+        : {},
     );
     const result = findTripDates(input(cal, 7, { limit: 10, gap: 1 }));
     const late = result.windows.find((w) => w.from >= "2027-02-11");

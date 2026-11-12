@@ -7,10 +7,7 @@
 import { BadRequestException } from "@nestjs/common";
 import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
-import {
-  normalizePlanQuery,
-  planCacheQuery,
-} from "./trip-plan.assembly";
+import { normalizePlanQuery, planCacheQuery } from "./trip-plan.assembly";
 import {
   WHEN_DEFAULT_DAYS,
   WHEN_DEFAULT_GAP,

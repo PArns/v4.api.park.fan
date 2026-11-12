@@ -1,16 +1,5 @@
-import {
-  ApiProperty,
-  ApiPropertyOptional,
-  OmitType,
-} from "@nestjs/swagger";
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  Matches,
-  Max,
-  Min,
-} from "class-validator";
+import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
+import { IsIn, IsInt, IsOptional, Matches, Max, Min } from "class-validator";
 import { TripPlanQueryDto } from "./trip-region-query.dto";
 import {
   WHEN_DEFAULT_DAYS,
@@ -114,7 +103,8 @@ export class TripSchoolBreaksQueryDto {
   from?: string;
 
   @ApiPropertyOptional({
-    description: "Last day, included. Defaults to from + 365; at most 366 days.",
+    description:
+      "Last day, included. Defaults to from + 365; at most 366 days.",
     example: "2027-12-31",
   })
   @IsOptional()
@@ -186,7 +176,8 @@ export class SchoolBreakRegionDto {
   @ApiProperty({ example: "DE" }) country: string;
   @ApiProperty({
     nullable: true,
-    description: "The last day the stored data reaches; later breaks are unknown.",
+    description:
+      "The last day the stored data reaches; later breaks are unknown.",
   })
   through: string | null;
   @ApiProperty({ type: () => [SchoolBreakPeriodDto] })

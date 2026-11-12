@@ -152,7 +152,7 @@ export function schoolBreakPeriods(
   for (const date of dates) {
     // A break that ends on a Friday and one that starts the Monday after are one stretch.
     let joins = !!last;
-    for (let d = last ? addIsoDays(last, 1) : date; joins && d < date; ) {
+    for (let d = last ? addIsoDays(last, 1) : date; joins && d < date;) {
       joins = isWeekend(d);
       d = addIsoDays(d, 1);
     }
