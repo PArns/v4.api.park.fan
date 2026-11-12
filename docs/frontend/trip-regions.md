@@ -10,11 +10,16 @@ A region is curated in code (`regions.ts`), not synced: which parks belong to Or
 decision (LEGOLAND Florida is in Winter Haven, Busch Gardens in Tampa, both day trips from an
 Orlando hotel), not a fact any feed carries. Orlando is the only region.
 
-| Route                                   | Key  | Cache                                                   | What                                            |
-| --------------------------------------- | ---- | ------------------------------------------------------- | ----------------------------------------------- |
-| `GET /v1/trip-regions/:region`          | none | an hour in the browser, a day at the edge               | parks, groups, hotel areas, travel times        |
-| `GET /v1/trip-regions/:region/calendar` | data | private, an hour; Redis an hour                         | every park's days side by side, with its events |
-| `GET /v1/trip-regions/:region/plan`     | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
+| Route                                    | Key  | Cache                                                   | What                                            |
+| ---------------------------------------- | ---- | ------------------------------------------------------- | ----------------------------------------------- |
+| `GET /v1/trip-regions/:region`           | none | an hour in the browser, a day at the edge               | parks, groups, hotel areas, travel times        |
+| `GET /v1/trip-regions/:region/calendar`  | data | private, an hour; Redis an hour                         | every park's days side by side, with its events |
+| `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
+| `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
+
+Before the routes are deployed, `pnpm trip-regions:dev` serves all four on `localhost:3001` from
+production's data through the same modules
+([the dev shim](../development/scripts.md#the-trip-region-dev-shim)).
 
 The two keyed routes ask for `public, max-age=3600, stale-while-revalidate=86400` like `/best-days`,
 and the key guard makes that private: Cloudflare caches by URL and ignores `X-API-Key`
@@ -260,12 +265,22 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   close is the evening, anything else is left out. `closesAt` is always the day guests' close, so
   a party night shows the early close; a Disney After Hours night (a ticketed event after a
   normal close) does not shorten it.
-- **The feed keeps one `TICKETED_EVENT` row per day**, so on a day with Early Entry and a party one
-  of the two is lost (see [schedule sync](../architecture/schedule-sync-and-calendar.md)). Where the
-  evening row is missing, a curated season that runs that date, is `confirmed` or `announced`, has
-  `separateTicket` and evening `opensAt`/`closesAt` supplies it (`source: "season"`). Where the
-  early row is the one lost, `early` is left out rather than invented: the day's early slot is
-  unknown, not absent.
+- **Where the feed has no evening row**, a curated season that runs that date, is `confirmed` or
+  `announced`, has `separateTicket` and evening `opensAt`/`closesAt` supplies it
+  (`source: "season"`). Until PAR-1290 the sync kept one `TICKETED_EVENT` row per day and lost
+  either Early Entry or the party; it now keeps both
+  ([schedule sync](../architecture/schedule-sync-and-calendar.md)), and the season stays the
+  fallback for a party the feed does not list.
+- **`closesEarly: true`** with **`dayGuestCloseAt`** (park offset) marks a day whose day-guest close
+  is at least two hours before the park's usual close: the median over its open days within 14
+  days of that date, whatever window was asked for.
+- **`best`** names per resort (`walt-disney-world`, `universal-orlando`, `seaworld-orlando`, never the
+  day trips) the OPERATING theme park with the lowest day cost ([below](#how-a-day-is-priced));
+  ties go to the longer day-guest day, then the lower level. Absent for a resort on `last_year`
+  days and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
+  `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
+  Kingdom's party night on 24 November 2026, 40 minutes but out at 18:00, against Animal Kingdom's
+  full day at 45).
 - **A day past `publishedHoursUntil`** (the park's last published operating day, `null` when it has
   none) is `UNKNOWN` with `hoursPublished: false`, never `CLOSED`
   ([absent facts](../rules/absent-facts.md)): the calendar's off-season rule is an inference, and
@@ -285,21 +300,93 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   the region's, read off its first park. `schoolVacationUnknown: true` past the last stored school
   calendar, as on the park calendar.
 
+## How a day is priced
+
+One cost, `dayCost` in `trip-optimizer.ts`, for the plan, the calendar's `best`, `/best-days` and
+Parky. A park's day costs its headliners' **unrounded** mean wait (the calendar's `exactWait`; the
+rounded `headlinerWait` is only shown, because a ranking decided by rounding to five is a tie the
+rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
+median day-guest hours over its open days within 14 days of the date ÷ that day's hours, at least
+1, at most 1.5. So a party night at 18:00 against a usual 23:00 costs up to half as much again,
+and is the pick only when its waits are low enough to make up for the hours. A Disney After Hours
+night after a normal close costs nothing extra. On top, in the plan only: the hotel's perks take a
+fixed share off, `fireworks=want` adds 500 to a night that costs the evening show, and a day
+without published hours adds 1000. Water parks and Discovery Cove are a flat day the weather
+moves. The constants are `PlanCostModel`.
+
+## The best days (`GET /v1/trip-regions/orlando/best-days?from=&to=&limit=5`)
+
+Read off the calendar for the window (default today … +30, at most 92 days), so it says nothing the
+calendar does not.
+
+```jsonc
+{
+  "meta": {
+    "region": "orlando",
+    "timezone": "America/New_York",
+    "from": "…",
+    "to": "…",
+    "computedAt": "…",
+    "forecastUntil": "…",
+  },
+  "parks": [
+    {
+      "slug": "magic-kingdom-park",
+      "basis": "forecast",
+      "quiet": [
+        {
+          "date": "2026-11-26",
+          "headlinerWait": 35,
+          "crowdLevel": "low",
+          "basis": "forecast",
+          "reasons": ["school_break", "early_entry", "quietest_in_window"],
+        },
+      ],
+      "busy": [{ "…": "the 2 dearest days" }],
+      "flat": { "min": 40, "max": 45 },
+    },
+  ],
+  "groups": [
+    {
+      "key": "walt-disney-world",
+      "quiet": [
+        {
+          "date": "2026-11-26",
+          "slug": "magic-kingdom-park",
+          "headlinerWait": 35,
+        },
+      ],
+    },
+  ],
+}
+```
+
+- **`quiet`** (`limit` long) and **`busy`** (two) rank a park's days by their day cost. A night the
+  day guests lose to a party ranks behind every full day whatever its waits. `last_year` days take
+  part with their basis; label them.
+- **`basis`** is the basis most of the park's ranked days have. **`flat`** is set when the window's
+  rounded waits spread less than ten minutes: there is no better day to name.
+- **`groups[].quiet`**: per resort, the three dates whose `best` park costs least.
+- **Reasons:** `weekday`, `holiday_ends`, `school_break`, `party_night_short_hours`,
+  `closes_early` (a short day that is no party night), `extended_evening`, `early_entry` or
+  `early_park_admission`, `long_range`, `estimate_last_year`, `quietest_in_window`.
+
 ## The plan (`GET /v1/trip-regions/orlando/plan`)
 
-| Parameter    | Example                                              | Meaning                                                                                                                              |
-| ------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `from`, `to` | `2026-11-28`, `2026-12-06`                           | the trip, arrival and departure day included; at most 21 days, from today to a year ahead                                            |
-| `parks`      | `magic-kingdom-park:2,epcot,universal-epic-universe` | the parks and how many visits each (default 1, at most 3); default: the headliner parks; at most 16 visits                           |
-| `hotel`      | `disney`                                             | `disney`, `disney_deluxe`, `universal`, `universal_premier`, `offsite`: which perks count; default: the area's hotel, else `offsite` |
-| `area`       | `disney`                                             | a `hotelAreas` key: each day's travel is read from there; without it the days carry no travel                                        |
-| `arrival`    | `free`                                               | `free` (no park on the arrival day, default) or `park`                                                                               |
-| `departure`  | `free`                                               | the same for the last day                                                                                                            |
-| `blocks`     | `1`                                                  | each resort's days in one block, in the best order                                                                                   |
-| `parties`    | `avoid`                                              | `avoid` (default), `allow`, `prefer`: party nights at Magic Kingdom and the like                                                     |
-| `rest`       | `auto`                                               | `auto` (default, below), `none`, or `max:3` (at most three park days in a row)                                                       |
-| `hop`        | `1`                                                  | allow two parks on one day where the trip is shorter than its visits                                                                 |
-| `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                             |
+| Parameter    | Example                                              | Meaning                                                                                                                                 |
+| ------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `from`, `to` | `2026-11-28`, `2026-12-06`                           | the trip, arrival and departure day included; at most 21 days, from today to a year ahead                                               |
+| `parks`      | `magic-kingdom-park:2,epcot,universal-epic-universe` | the parks and how many visits each (default 1, at most 3); default: the headliner parks; at most 16 visits                              |
+| `hotel`      | `disney`                                             | `disney`, `disney_deluxe`, `universal`, `universal_premier`, `offsite`: which perks count; default: the area's hotel, else `offsite`    |
+| `area`       | `disney`                                             | a `hotelAreas` key: each day's travel is read from there; without it the days carry no travel                                           |
+| `arrival`    | `free`                                               | `free` (no park on the arrival day, default) or `park`                                                                                  |
+| `departure`  | `free`                                               | the same for the last day                                                                                                               |
+| `blocks`     | `1`                                                  | each resort's days in one block, in the best order (default `1`)                                                                        |
+| `fireworks`  | `any`                                                | `any` (default): a day is priced by the hours a day guest gets; `want`: a night that costs the evening show only when nothing else fits |
+| `split`      | `auto`                                               | `auto` (default): parks listed without a count may get a second visit where the trip has days to spare; `fixed`: never                  |
+| `rest`       | `auto`                                               | `auto` (default, below), `none`, or `max:3` (at most three park days in a row)                                                          |
+| `hop`        | `1`                                                  | allow two parks on one day where the trip is shorter than its visits                                                                    |
+| `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                                |
 
 More visits than trip days is a 400 without `hop` (with it, more than two a day). A lock on a park
 not in `parks` or outside the trip is a 400; a lock the plan cannot keep (the park is closed that
@@ -393,6 +480,8 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "headlinerWait": 41, // mean over the planned visits
     "averageDayWait": 52, // the same parks on an average open day of the window
     "savedMinutesPerRide": 11, // the difference: per headliner ride, not per day
+    "expectedError": 15, // the measured forecast error at those leads, per ride
+    "orderMatters": true, // savedMinutesPerRide ≥ 3
     "parkDays": 7,
     "visits": 8,
     "restDays": 1,
@@ -403,25 +492,23 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
 }
 ```
 
-**The objective.** Minimize the sum over planned visits of the cost of that park on that day, in
-minutes of `headlinerWait`. The cost is `headlinerWait`, multiplied up where the day is shorter for
-the day guest than the park's median day in the window (the median hours ÷ that day's hours,
-capped at 1.5; a party night that closes at 18:00 costs more), by 1.25 more on such a night with
-`parties=avoid`, and by 0.8 instead of either with `parties=prefer`. A hotel perk takes a fixed
-share off the day it applies: `early_entry` and `early_park_admission` 5 %, `extended_evening`
-10 %, `express_included` 60 % (Express Unlimited with a stay at the Royal Pacific, Hard Rock and
-Portofino Bay hotels, Universal Studios and Islands of Adventure only). An early slot the feed lost
-to a party row still counts, so a party night is not charged twice, but is not listed. An open day
-without a figure costs the park's median day plus 5. A park is never put on a `CLOSED` day, and an
-`UNKNOWN` day costs 1000 more, so it is used only when nothing else is left (with a warning).
-Water parks and Discovery Cove have no meaningful queues: their day costs a flat 30, × 0.8 when
-warm and dry (`tempMax` at least 27 °C, under 2 mm of rain) and × 1.25 when cool (under 22 °C) or
-wet, so they fill the days the theme parks spare. The constants are `PlanCostModel` in
-`trip-optimizer.ts`.
+**The objective.** Minimize the sum over planned visits of their [day cost](#how-a-day-is-priced).
+A hotel perk takes a fixed share off the day it applies: `early_entry` and `early_park_admission`
+5 %, `extended_evening` 10 %, `express_included` 60 % (Express Unlimited with a stay at the Royal
+Pacific, Hard Rock and Portofino Bay hotels, Universal Studios and Islands of Adventure only). A
+park is never put on a `CLOSED` day, and an `UNKNOWN` day only when nothing else is left (with a
+warning). With `fireworks=want` a party night that sends day guests home early is used only when
+nothing else fits, with `fireworks_missed`; with `any` it carries `party_night_short_hours`.
 
-**Repeat visits.** A park takes up to three visits, never two on one day. Two visits on
-consecutive days cost 40 more, so they stay apart unless nothing else fits, and the second day then
-carries `adjacent_repeat`. When the trip has too few days for its visits, a repeat visit is
+**Second visits (`split=auto`).** Parks listed without a count, and the default headliners, get a
+second visit in the curated order (`secondVisitRank`: Magic Kingdom, EPCOT, Epic Universe, Islands
+of Adventure, Hollywood Studios, Universal Studios, Animal Kingdom) while the trip has park days
+left after the rest days `rest` keeps and the park has two open days. A written `slug:n` never
+changes. `meta.split` lists `{ slug, visits, auto: true }` for each park that got one.
+
+**Repeat visits.** A park takes up to three visits, never two on one day, and at least a day apart:
+the search keeps the gap as a rule (branch and bound on the assignment) and breaks it only where no
+placement can, with `adjacent_repeat` on the second day. When the trip has too few days for its visits, a repeat visit is
 dropped before a park loses its only one (`unplaced`, `no_day_left`).
 
 **Rest days.** Every available day the visits do not need is a rest day, and the optimizer puts the
@@ -458,17 +545,21 @@ short. When no order of the resorts fits (closed days, locks), the plan is made 
 
 **`reasons` and `warnings`** are codes the client translates. Reasons: `quietest_in_window`,
 `runner_up_close` (another day is within five minutes), `weekday`, `holiday_ends`, the hotel perks
-(`early_entry`, `early_park_admission`, `extended_evening`, `express_included`), `party_night`
-(`parties=prefer`), `water_park_weather`, `busiest_day_spared`, `rest_after_streak`, `locked`.
-Warnings: `party_night_short_hours`, `hours_not_published`, `estimate_last_year`, `long_range`,
+(`early_entry`, `early_park_admission`, `extended_evening`, `express_included`),
+`water_park_weather`, `busiest_day_spared`, `rest_after_streak`, `locked`. Warnings:
+`party_night_short_hours`, `fireworks_missed`, `hours_not_published`, `estimate_last_year`, `long_range`,
 `no_forecast`, `adjacent_repeat`, `long_streak`. `unplaced[].reason`: `no_open_day` (closed on every
 day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[].reason`:
 `outside_trip`, `closed`, `day_taken`, `no_visit_left`.
 
 **`totals`** compare like with like: the planned visits' mean `headlinerWait` against, for the same
 visits, the mean over every open day of the window of that park. `savedMinutesPerRide` is that
-difference, per headliner ride. Show it as such; it is not hours saved per day. `parkDays` counts
-days with a park, `visits` the visits placed.
+difference, per headliner ride. Show it as such; it is not hours saved per day. `orderMatters` is
+false when it is under 3 minutes: any order will do. `expectedError` is the measured error of the
+served daily forecast at the planned visits' lead times (`leadTimeMae`,
+[reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so
+the two can be read side by side; absent where nothing is measured at those distances (a `last_year`
+visit never counts). `parkDays` counts days with a park, `visits` the visits placed.
 
 ## Caching and cost
 
