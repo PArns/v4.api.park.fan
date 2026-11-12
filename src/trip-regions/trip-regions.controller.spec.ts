@@ -325,6 +325,43 @@ describe("TripRegionsController", () => {
     });
   });
 
+  describe("GET /v1/trip-regions/:region/best-days", () => {
+    it("needs a data key", async () => {
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/best-days")
+        .expect(401);
+      expect(JSON.stringify(res.body)).toContain("api-key-required");
+    });
+
+    it("names each park's quietest and busiest days and each resort's best dates", async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/best-days?from=${day(1)}&to=${day(10)}&limit=3`,
+        )
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(res.headers["cache-control"]).toMatch(/^private/);
+      expect(res.body.meta).toMatchObject({ from: day(1), to: day(10) });
+      const mk = res.body.parks.find(
+        (p: { slug: string }) => p.slug === "magic-kingdom-park",
+      );
+      expect(mk.quiet).toHaveLength(3);
+      expect(mk.busy).toHaveLength(2);
+      expect(res.body.groups.map((g: { key: string }) => g.key)).toEqual([
+        "walt-disney-world",
+        "universal-orlando",
+        "seaworld-orlando",
+      ]);
+    });
+
+    it("refuses a limit out of range with 400", async () => {
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/best-days?limit=0")
+        .set("X-API-Key", KEY)
+        .expect(400);
+    });
+  });
+
   describe("GET /v1/trip-regions/:region/plan", () => {
     it("needs a data key", async () => {
       const res = await request(app.getHttpServer())

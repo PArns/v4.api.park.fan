@@ -225,6 +225,7 @@ export function planInput(
         status: c.status,
         basis: c.basis,
         ...(c.headlinerWait != null && { headlinerWait: c.headlinerWait }),
+        ...(c.waitExact != null && { exactWait: c.waitExact }),
         ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
         ...(c.dayHours != null && { dayHours: c.dayHours }),
         ...(c.early && { early: { kind: c.early.kind } }),

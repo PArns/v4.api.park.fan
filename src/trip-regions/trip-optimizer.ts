@@ -92,6 +92,8 @@ export type PlanBasis = "forecast" | "long_range" | "last_year" | "none";
 export interface PlanCell {
   status: PlanDayStatus;
   headlinerWait?: number;
+  /** `headlinerWait` before rounding; the cost and every comparison read it. */
+  exactWait?: number;
   crowdLevel?: string;
   basis: PlanBasis;
   /** Hours the day guest has: the OPERATING row's open to close. */
@@ -281,6 +283,10 @@ interface StructureResult {
   provable: boolean;
 }
 
+/** The wait a cell is costed and compared by: unrounded where known. */
+const waitOf = (c: PlanCell): number | undefined =>
+  c.exactWait ?? c.headlinerWait;
+
 const median = (values: number[]): number | undefined => {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
@@ -375,8 +381,8 @@ class TripOptimizer {
       this.parkBySlug.set(park.slug, park);
       const cells = this.dates.map((d) => this.cell(park.slug, d));
       const waits = cells
-        .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-        .map((c) => c.headlinerWait as number);
+        .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+        .map((c) => waitOf(c) as number);
       this.neutral.set(
         park.slug,
         median(waits) ?? PlanCostModel.defaultNeutralWait,
@@ -472,7 +478,7 @@ class TripOptimizer {
       );
     }
     const base =
-      c.headlinerWait ??
+      waitOf(c) ??
       (this.neutral.get(slug) ?? PlanCostModel.defaultNeutralWait) +
         PlanCostModel.noFigurePenalty;
     const hours = this.hoursFactor(slug, c);
@@ -1384,8 +1390,8 @@ class TripOptimizer {
       mean(
         themeParks
           .map((p) => this.cell(p.slug, this.dates[i]))
-          .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-          .map((c) => c.headlinerWait as number),
+          .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+          .map((c) => waitOf(c) as number),
       );
     const availBusy = available
       .map((i) => busyness(i))
@@ -1546,16 +1552,17 @@ class TripOptimizer {
     day: number,
     plannedDates: string[],
   ): PlanReason[] {
-    const chosen = this.cell(slug, this.dates[day]).headlinerWait;
+    const chosen = waitOf(this.cell(slug, this.dates[day]));
     if (chosen == null) return [];
     const others: number[] = [];
     let quietest = true;
     this.dates.forEach((date, i) => {
       if (i === day) return;
       const c = this.cell(slug, date);
-      if (c.status === "CLOSED" || c.headlinerWait == null) return;
-      if (c.headlinerWait < chosen) quietest = false;
-      if (!plannedDates.includes(date)) others.push(c.headlinerWait);
+      const wait = waitOf(c);
+      if (c.status === "CLOSED" || wait == null) return;
+      if (wait < chosen) quietest = false;
+      if (!plannedDates.includes(date)) others.push(wait);
     });
     const reasons: PlanReason[] = [];
     if (quietest) reasons.push("quietest_in_window");
@@ -1604,13 +1611,13 @@ class TripOptimizer {
     for (const [day, row] of rowOnDay) {
       for (const u of row.units) {
         visits++;
-        const wait = this.cell(u.slug, this.dates[day]).headlinerWait;
+        const wait = waitOf(this.cell(u.slug, this.dates[day]));
         if (wait == null) continue;
         const windowMean = mean(
           this.dates
             .map((date) => this.cell(u.slug, date))
-            .filter((c) => c.status !== "CLOSED" && c.headlinerWait != null)
-            .map((c) => c.headlinerWait as number),
+            .filter((c) => c.status !== "CLOSED" && waitOf(c) != null)
+            .map((c) => waitOf(c) as number),
         );
         if (windowMean == null) continue;
         planned.push(wait);
