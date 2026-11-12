@@ -2,7 +2,10 @@ import { ScheduleType } from "../entities/schedule-entry.entity";
 import {
   CONFLICT_TYPES,
   crossTypeConflictSql,
+  EVENT_TYPES,
+  sameScheduleRowSql,
   sameTypeDuplicateSql,
+  scheduleRowKey,
 } from "./schedule-dedup.sql";
 
 /**
@@ -31,6 +34,16 @@ describe("schedule dedup statements", () => {
         expect(columns).toContain(`"parkId"`);
         expect(columns).toContain("date");
         expect(columns).toContain(`"scheduleType"`);
+      },
+    );
+
+    it.each(["global", "park"] as const)(
+      "keeps an event row's start in the %s partition, so Early Entry and a party night both stay",
+      (scope) => {
+        const columns = partitionOf(sameTypeDuplicateSql(scope));
+        expect(columns).toContain(`"openingTime"`);
+        expect(columns).toContain(`"scheduleType" = 'TICKETED_EVENT'`);
+        expect(columns).not.toContain("'OPERATING'");
       },
     );
 
@@ -141,5 +154,37 @@ describe("schedule dedup statements", () => {
     expect(stripped(crossTypeConflictSql("park"))).toBe(
       stripped(crossTypeConflictSql("global")),
     );
+  });
+});
+
+describe("scheduleRowKey", () => {
+  const early = new Date("2026-11-24T12:30:00Z");
+  const party = new Date("2026-11-25T00:00:00Z");
+
+  it("tells two events of one type and day apart by their start", () => {
+    expect(scheduleRowKey("2026-11-24", "TICKETED_EVENT", early)).not.toBe(
+      scheduleRowKey("2026-11-24", "TICKETED_EVENT", party),
+    );
+    expect(scheduleRowKey("2026-11-24", "TICKETED_EVENT", early)).toBe(
+      scheduleRowKey("2026-11-24", "TICKETED_EVENT", new Date(early.getTime())),
+    );
+  });
+
+  it("keeps one day-status row per type and day, whatever its hours", () => {
+    for (const type of CONFLICT_TYPES) {
+      expect(scheduleRowKey("2026-11-24", type, early)).toBe(
+        scheduleRowKey("2026-11-24", type, party),
+      );
+    }
+    expect(EVENT_TYPES).not.toContain(ScheduleType.OPERATING);
+  });
+
+  it("matches the merge path's same-row test", () => {
+    const sql = sameScheduleRowSql("w", "l");
+    expect(sql).toContain(
+      'w."attractionId" IS NOT DISTINCT FROM l."attractionId"',
+    );
+    expect(sql).toContain('w."openingTime"');
+    expect(sql).toContain('l."openingTime"');
   });
 });

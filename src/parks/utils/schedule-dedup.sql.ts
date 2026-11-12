@@ -28,8 +28,52 @@ import { ScheduleType } from "../entities/schedule-entry.entity";
 export type ScheduleDedupScope = "global" | "park";
 
 /**
+ * The types that say what else happens on a day (an early hour, a party night,
+ * a private event), as opposed to the day-status types in `CONFLICT_TYPES`.
+ * One day can hold several of one type: Walt Disney World sends Early Entry
+ * (08:30–09:00) and a party night (19:00–24:00) both as `TICKETED_EVENT`.
+ */
+export const EVENT_TYPES: readonly ScheduleType[] = [
+  ScheduleType.TICKETED_EVENT,
+  ScheduleType.PRIVATE_EVENT,
+  ScheduleType.EXTRA_HOURS,
+  ScheduleType.INFO,
+  ScheduleType.MAINTENANCE,
+];
+
+const isEventType = (type: string): boolean =>
+  (EVENT_TYPES as readonly string[]).includes(type);
+
+/**
+ * The identity of a park-level schedule row, which the sync upserts by and the
+ * dedup keeps one of: day and type for a day-status row, day, type and start
+ * for an event row. Keyed by day and type alone, a day with Early Entry and a
+ * party night kept one `TICKETED_EVENT` row, and which one alternated between
+ * syncs (PAR-1290). `null` start is a key of its own.
+ */
+export function scheduleRowKey(
+  date: string,
+  type: string,
+  openingTime: Date | null | undefined,
+): string {
+  if (!isEventType(type)) return `${date}|${type}`;
+  return `${date}|${type}|${openingTime ? openingTime.toISOString() : "-"}`;
+}
+
+/** The SQL twin of {@link scheduleRowKey}'s start: an event row's opening, else nothing. */
+function eventStartSql(alias = ""): string {
+  // An OR chain rather than `IN (…)`: the merge path's spec keeps every
+  // `IN (` out of its statement, where a row-wise IN once hid park-level rows.
+  const isEvent = EVENT_TYPES.map(
+    (t) => `${alias}"scheduleType" = '${t}'`,
+  ).join(" OR ");
+  return `CASE WHEN ${isEvent} THEN ${alias}"openingTime" END`;
+}
+
+/**
  * Phase 1 — rows that state the same thing twice: identical park, day, ride and
- * type. Keeps the most recently written one.
+ * type, and for an event row the same start ({@link scheduleRowKey}). Keeps the
+ * most recently written one.
  */
 export function sameTypeDuplicateSql(scope: ScheduleDedupScope): string {
   const parkFilter = scope === "park" ? `WHERE "parkId" = $1::uuid` : "";
@@ -40,7 +84,8 @@ export function sameTypeDuplicateSql(scope: ScheduleDedupScope): string {
         SELECT id FROM (
           SELECT id,
                  ROW_NUMBER() OVER (
-                   PARTITION BY "parkId", date, "attractionId", "scheduleType"
+                   PARTITION BY "parkId", date, "attractionId", "scheduleType",
+                                ${eventStartSql()}
                    ORDER BY "updatedAt" DESC
                  ) as rn
           FROM schedule_entries
@@ -119,4 +164,16 @@ export function crossTypeConflictSql(scope: ScheduleDedupScope): string {
       DELETE FROM schedule_entries
       WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
     `;
+}
+
+/**
+ * The merge path's same-row test (`migrateScheduleEntries`): a loser row is
+ * dropped when the winner holds a row of the same identity — day, type, ride,
+ * and for an event row its start.
+ */
+export function sameScheduleRowSql(winner: string, loser: string): string {
+  return `${winner}."date" = ${loser}."date"
+             AND ${winner}."scheduleType" = ${loser}."scheduleType"
+             AND ${winner}."attractionId" IS NOT DISTINCT FROM ${loser}."attractionId"
+             AND ${eventStartSql(`${winner}.`)} IS NOT DISTINCT FROM ${eventStartSql(`${loser}.`)}`;
 }

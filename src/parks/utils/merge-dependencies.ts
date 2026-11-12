@@ -1,6 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { aggregateIdSql } from "../../queues/processors/hourly-aggregate.sql";
 import { HYPERTABLES } from "../../database/hypertables";
+import { sameScheduleRowSql } from "./schedule-dedup.sql";
 
 export type MergeStrategy =
   "move" | "discard" | "winner-authoritative" | "custom";
@@ -1911,9 +1912,7 @@ export async function migrateScheduleEntries(
          AND EXISTS (
            SELECT 1 FROM schedule_entries winner
            WHERE winner."parkId" = $1
-             AND winner."date" = loser."date"
-             AND winner."scheduleType" = loser."scheduleType"
-             AND winner."attractionId" IS NOT DISTINCT FROM loser."attractionId"
+             AND ${sameScheduleRowSql("winner", "loser")}
          )`,
     [winnerParkId, loserParkId],
   );
