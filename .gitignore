@@ -38,12 +38,13 @@ lerna-debug.log*
 .env.*
 
 # Debug scripts with DB credentials (keep local only); README, the production
-# psql wrapper and the backup scripts are tracked
+# psql wrapper, the backup scripts and the trip-region scripts are tracked
 scripts/*
 !scripts/README.md
 !scripts/prod-psql.sh
 !scripts/backup/
 !scripts/python-deps/
+!scripts/trip-regions/
 scripts/backup/*.env
 
 # Temporary markdown files (docs/ is re-included below)
