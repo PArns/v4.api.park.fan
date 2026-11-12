@@ -458,7 +458,7 @@ export function vacationItinerary(input: {
     region: region.name,
     trip: { from: query.from, to: query.to, days: days.length },
     headlinerWaitMeans:
-      "the big rides' mean expected wait at their busiest, in minutes",
+      "the big rides' wait at their busiest, in minutes, meaned over the park's headliners; not the wait at every hour",
     ...(area && { travelFrom: `the hotel area ${area.name}` }),
 
     days,
