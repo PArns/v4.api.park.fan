@@ -28,6 +28,7 @@ import {
   type TripLeg,
 } from "./travel";
 import {
+  planCellOf,
   validateWindow,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
@@ -221,18 +222,7 @@ export function planInput(
     for (const day of calendar.days) {
       const c = day.parks[s];
       if (!c) continue;
-      const cell: PlanCell = {
-        status: c.status,
-        basis: c.basis,
-        ...(c.headlinerWait != null && { headlinerWait: c.headlinerWait }),
-        ...(c.waitExact != null && { exactWait: c.waitExact }),
-        ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
-        ...(c.dayHours != null && { dayHours: c.dayHours }),
-        ...(c.early && { early: { kind: c.early.kind } }),
-        ...(c.earlyUnknown && { earlyUnknown: true }),
-        ...(c.evening && { evening: { kind: c.evening.kind } }),
-        ...(c.weather && { weather: c.weather }),
-      };
+      const cell: PlanCell = planCellOf(c);
       cells[s][day.date] = cell;
     }
   }

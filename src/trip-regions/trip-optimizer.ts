@@ -99,8 +99,6 @@ export interface PlanCell {
   /** Hours the day guest has: the OPERATING row's open to close. */
   dayHours?: number;
   early?: { kind: string };
-  /** The feed's early row was lost to the evening one (see the calendar). */
-  earlyUnknown?: boolean;
   evening?: { kind: "ticketed_event" | "extended_evening" };
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
 }
@@ -322,6 +320,97 @@ export function weatherFactor(weather: PlanCell["weather"]): {
   return { factor: 1, warmDry: false };
 }
 
+/**
+ * What a day's cost is read against: the park and the window it is compared
+ * in. The plan, the calendar's `best` and `/best-days` all price a day with
+ * {@link dayCost}; the one model is described in docs/frontend/trip-regions.md
+ * ("How a day is priced").
+ */
+export interface DayCostContext {
+  type: TripParkType;
+  /** The park's median day-guest hours over the window's OPERATING days. */
+  medianHours?: number;
+  /** The park's median wait over the window, for an open day without a figure. */
+  neutralWait?: number;
+  /** Default `any`. */
+  fireworks?: FireworksOption;
+  /** The product of (1 − share) of the hotel perks that day; 1 without a hotel. */
+  perkFactor?: number;
+}
+
+/**
+ * How much shorter the day guest's day is than the park's usual one: the
+ * median hours ÷ that day's hours, at least 1, at most
+ * {@link PlanCostModel.hoursFactorCap}. 1 when either is unknown.
+ */
+export function hoursFactor(
+  cell: Pick<PlanCell, "dayHours">,
+  medianHours: number | undefined,
+): number {
+  if (!medianHours || !cell.dayHours || cell.dayHours <= 0) return 1;
+  return Math.min(
+    PlanCostModel.hoursFactorCap,
+    Math.max(1, medianHours / cell.dayHours),
+  );
+}
+
+/**
+ * The day guests lose the evening to a ticketed event: a party night that
+ * closes the park early. An After Hours night after a normal close does not.
+ */
+export function losesEvening(
+  cell: Pick<PlanCell, "dayHours" | "evening">,
+  medianHours: number | undefined,
+): boolean {
+  return (
+    cell.evening?.kind === "ticketed_event" &&
+    hoursFactor(cell, medianHours) > 1
+  );
+}
+
+/** The median of a park's day-guest hours over its OPERATING days. */
+export function medianDayHours(
+  cells: Array<Pick<PlanCell, "status" | "dayHours">>,
+): number | undefined {
+  return median(
+    cells
+      .filter((c) => c.status === "OPERATING" && c.dayHours)
+      .map((c) => c.dayHours as number),
+  );
+}
+
+/**
+ * A park's cost on one day, in minutes of headliner wait: the unrounded wait,
+ * multiplied by how much shorter the day guest's day is than usual (a party
+ * night at 18:00 costs more than its waits), by the hotel's perks, plus a
+ * penalty for a day without published hours and, with `fireworks=want`, for a
+ * night that costs the evening show. A water park or reservation park is a
+ * flat day the weather moves. Infinity when the park is closed.
+ */
+export function dayCost(cell: PlanCell, ctx: DayCostContext): number {
+  if (cell.status === "CLOSED") return Infinity;
+  const unknown =
+    cell.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
+  if (ctx.type !== "theme_park") {
+    return (
+      PlanCostModel.flatDayCost * weatherFactor(cell.weather).factor + unknown
+    );
+  }
+  const base =
+    waitOf(cell) ??
+    (ctx.neutralWait ?? PlanCostModel.defaultNeutralWait) +
+      PlanCostModel.noFigurePenalty;
+  const missed =
+    ctx.fireworks === "want" && losesEvening(cell, ctx.medianHours)
+      ? PlanCostModel.fireworksMissedPenalty
+      : 0;
+  return (
+    base * hoursFactor(cell, ctx.medianHours) * (ctx.perkFactor ?? 1) +
+    unknown +
+    missed
+  );
+}
+
 /** The longest run of `true` in a list. */
 function longestRun(flags: boolean[]): number {
   let best = 0;
@@ -387,10 +476,7 @@ class TripOptimizer {
         park.slug,
         median(waits) ?? PlanCostModel.defaultNeutralWait,
       );
-      const hours = cells
-        .filter((c) => c.status === "OPERATING" && c.dayHours)
-        .map((c) => c.dayHours as number);
-      const mh = median(hours);
+      const mh = medianDayHours(cells);
       if (mh) this.medianHours.set(park.slug, mh);
     }
     const rest = input.options.rest;
@@ -417,21 +503,15 @@ class TripOptimizer {
     for (const rule of this.input.options.perkRules) {
       if (!rule.parks.includes(slug)) continue;
       let applies = false;
-      let shown = true;
       if (rule.needs === "always") applies = true;
       else if (rule.needs === "extended_evening") {
         applies = c.evening?.kind === "extended_evening";
       } else if (c.early) {
         applies = true;
-      } else if (c.earlyUnknown) {
-        // The early row was overwritten by the evening one in the feed: count
-        // the perk so a party night is not charged twice, but do not claim it.
-        applies = true;
-        shown = false;
       }
       if (!applies) continue;
       factor *= 1 - PERK_SHARE[rule.perk];
-      if (shown && !listed.includes(rule.perk)) listed.push(rule.perk);
+      if (!listed.includes(rule.perk)) listed.push(rule.perk);
     }
     return { listed, factor };
   }
@@ -441,19 +521,12 @@ class TripOptimizer {
    * closes the park early (an After Hours night after a normal close does not).
    */
   losesEvening(slug: string, c: PlanCell): boolean {
-    return (
-      c.evening?.kind === "ticketed_event" && this.hoursFactor(slug, c) > 1
-    );
+    return losesEvening(c, this.medianHours.get(slug));
   }
 
   /** The hours factor: how much shorter the day guest's day is than usual. */
   hoursFactor(slug: string, c: PlanCell): number {
-    const usual = this.medianHours.get(slug);
-    if (!usual || !c.dayHours || c.dayHours <= 0) return 1;
-    return Math.min(
-      PlanCostModel.hoursFactorCap,
-      Math.max(1, usual / c.dayHours),
-    );
+    return hoursFactor(c, this.medianHours.get(slug));
   }
 
   /** The cost of one park on one trip day; Infinity when it is closed. */
@@ -468,25 +541,14 @@ class TripOptimizer {
 
   private computeCost(slug: string, date: string): number {
     const park = this.parkBySlug.get(slug);
-    const c = this.cell(slug, date);
-    if (!park || c.status === "CLOSED") return Infinity;
-    const unknown =
-      c.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
-    if (park.type !== "theme_park") {
-      return (
-        PlanCostModel.flatDayCost * weatherFactor(c.weather).factor + unknown
-      );
-    }
-    const base =
-      waitOf(c) ??
-      (this.neutral.get(slug) ?? PlanCostModel.defaultNeutralWait) +
-        PlanCostModel.noFigurePenalty;
-    const hours = this.hoursFactor(slug, c);
-    const missed =
-      this.input.options.fireworks === "want" && this.losesEvening(slug, c)
-        ? PlanCostModel.fireworksMissedPenalty
-        : 0;
-    return base * hours * this.perks(slug, date).factor + unknown + missed;
+    if (!park) return Infinity;
+    return dayCost(this.cell(slug, date), {
+      type: park.type,
+      medianHours: this.medianHours.get(slug),
+      neutralWait: this.neutral.get(slug),
+      fireworks: this.input.options.fireworks,
+      perkFactor: this.perks(slug, date).factor,
+    });
   }
 
   rowCost(row: Row, day: number): number {

@@ -44,6 +44,12 @@ export interface TripParkDay {
   seasons?: string[];
   /** The curated closure season that makes the day CLOSED. */
   closedBy?: string;
+  /**
+   * The day guests must leave at least two hours before the park's median
+   * close in the window (a party night, a short winter day), with that close.
+   */
+  closesEarly?: true;
+  dayGuestCloseAt?: string;
 }
 
 /** What the plan reads beside the public fields; never sent. */
@@ -51,7 +57,6 @@ export interface TripParkDayInternal extends TripParkDay {
   dayHours?: number;
   /** `headlinerWait` before rounding, for ranking days; never sent. */
   waitExact?: number;
-  earlyUnknown?: boolean;
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
 }
 
@@ -143,10 +148,6 @@ const isStatement = (season: SeasonLike): boolean =>
  * schedule rows by their time of day against the OPERATING row: a slot that
  * ends by the opening is the early one, a slot that starts at or after the day
  * guests' close is the evening. Without an OPERATING row nothing can be placed.
- *
- * `earlyUnknown`: the feed keys rows by (date, type), so a day with Early Entry
- * and a party night keeps one TICKETED_EVENT row. When that row is the evening
- * one, the early slot is not absent, it is unknown.
  */
 export function readDaySlots(
   rows: ScheduleRowLike[],
@@ -157,14 +158,13 @@ export function readDaySlots(
   close?: Date;
   early?: TripSlot<EarlyKind>;
   evening?: TripSlot<EveningKind>;
-  eveningFromTicketedRow: boolean;
 } {
   const operating = rows.find(
     (r) => r.scheduleType === "OPERATING" && r.openingTime && r.closingTime,
   );
   const open = asDate(operating?.openingTime ?? null);
   const close = asDate(operating?.closingTime ?? null);
-  if (!open || !close) return { eveningFromTicketedRow: false };
+  if (!open || !close) return {};
 
   let early: { row: ScheduleRowLike; start: Date; end: Date } | undefined;
   let evening: { row: ScheduleRowLike; start: Date; end: Date } | undefined;
@@ -201,7 +201,6 @@ export function readDaySlots(
         closesAt: isoInZone(evening.end, timezone),
       },
     }),
-    eveningFromTicketedRow: evening?.row.scheduleType === "TICKETED_EVENT",
   };
 }
 
@@ -268,8 +267,6 @@ export interface ParkDayInput {
   /** `scheduleCoverage.to`: the park's last published operating day. */
   publishedHoursUntil: string | null;
   earlyKind: EarlyKind;
-  /** The park has an early slot on another day of the window. */
-  hasEarlySlots: boolean;
   /** Days ahead past which the forecast is the long-range model's. */
   longRangeAfterDays: number;
   /** The same weekday a year back, from the last-year snapshot. */
@@ -352,13 +349,6 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
       out.evening =
         slots.evening ?? seasonEvening(seasons, date, slots.close, timezone);
       if (!out.evening) delete out.evening;
-      if (
-        !slots.early &&
-        input.hasEarlySlots &&
-        (slots.eveningFromTicketedRow || out.evening?.source === "season")
-      ) {
-        out.earlyUnknown = true;
-      }
     } else if (day?.hours && !day.hours.isInferred) {
       out.opensAt = isoInZone(day.hours.openingTime, timezone);
       out.closesAt = isoInZone(day.hours.closingTime, timezone);
@@ -405,7 +395,6 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
 export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
   const {
     dayHours: _dayHours,
-    earlyUnknown: _earlyUnknown,
     weather: _weather,
     waitExact: _waitExact,
     ...rest

@@ -2,7 +2,11 @@ import { addIsoDays } from "../common/utils/date.util";
 import { ORLANDO } from "./regions";
 import { regionBestDays } from "./trip-best-days";
 import type { TripParkDayInternal } from "./trip-calendar.util";
-import { bestOfDay, type InternalRegionCalendar } from "./trip-region.assembly";
+import {
+  bestOfDay,
+  windowMedianHours,
+  type InternalRegionCalendar,
+} from "./trip-region.assembly";
 
 const START = "2026-12-07"; // a Monday
 
@@ -32,17 +36,20 @@ function calendar(
     isSchoolVacation?: boolean;
   } = () => ({}),
 ): InternalRegionCalendar {
-  const days = Array.from({ length: n }, (_, i) => {
-    const cells = Object.fromEntries(
+  const bare = Array.from({ length: n }, (_, i) => ({
+    date: addIsoDays(START, i),
+    isHoliday: flags(i).isHoliday ?? false,
+    isSchoolVacation: flags(i).isSchoolVacation ?? false,
+    parks: Object.fromEntries(
       Object.entries(parks).map(([slug, f]) => [slug, f(i)]),
-    );
-    return {
-      date: addIsoDays(START, i),
-      isHoliday: flags(i).isHoliday ?? false,
-      isSchoolVacation: flags(i).isSchoolVacation ?? false,
-      best: bestOfDay(ORLANDO, cells),
-      parks: cells,
-    };
+    ),
+  }));
+  const medians = new Map(
+    Object.keys(parks).map((slug) => [slug, windowMedianHours(bare, slug)]),
+  );
+  const days = bare.map((d) => {
+    const { best, why } = bestOfDay(ORLANDO, d.parks, medians);
+    return { ...d, best, bestWhy: why };
   });
   return {
     meta: {
@@ -58,51 +65,6 @@ function calendar(
     seasons: [],
   };
 }
-
-describe("bestOfDay", () => {
-  it("picks per resort the lowest unrounded wait, never a day trip", () => {
-    const best = bestOfDay(ORLANDO, {
-      "magic-kingdom-park": cell(40, 41.2),
-      epcot: cell(40, 38.9),
-      "universal-studios-florida": cell(30, 30),
-      "legoland-florida": cell(10, 10),
-    });
-    expect(best).toEqual({
-      "walt-disney-world": "epcot",
-      "universal-orlando": "universal-studios-florida",
-    });
-  });
-
-  it("breaks a tie on the longer day, then the lower level", () => {
-    expect(
-      bestOfDay(ORLANDO, {
-        "magic-kingdom-park": cell(40, 40, { dayHours: 9 }),
-        epcot: cell(40, 40, { dayHours: 12 }),
-      })["walt-disney-world"],
-    ).toBe("epcot");
-    expect(
-      bestOfDay(ORLANDO, {
-        "magic-kingdom-park": cell(40, 40, { crowdLevel: "low" }),
-        epcot: cell(40, 40, { crowdLevel: "high" }),
-      })["walt-disney-world"],
-    ).toBe("magic-kingdom-park");
-  });
-
-  it("leaves a resort out on last-year days and where no park has a figure", () => {
-    expect(
-      bestOfDay(ORLANDO, {
-        "magic-kingdom-park": cell(40, 40, { basis: "last_year" }),
-        epcot: cell(40, 40, { status: "UNKNOWN" }),
-        "universal-studios-florida": {
-          status: "OPERATING",
-          hoursPublished: true,
-          crowdLevel: "unknown",
-          basis: "none",
-        },
-      }),
-    ).toEqual({});
-  });
-});
 
 describe("regionBestDays", () => {
   it("ranks on the unrounded wait, puts party nights behind full days, names the busiest", () => {

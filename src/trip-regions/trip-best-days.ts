@@ -3,18 +3,24 @@
  * days of a window, per resort the quietest dates to go at all. Read off the
  * region calendar, so it says nothing the calendar does not. Pure.
  *
- * Ranked on the unrounded headliner wait (`exactWait`): `headlinerWait` is
- * rounded to five minutes, and a ranking decided by that rounding is a tie the
- * rounding invented (park.fan, docs/rules/the-quietest-weekday-is-the-parks-quiet-end.md).
+ * Ranked on the plan's own day cost (`dayCost`): the unrounded headliner wait
+ * (`headlinerWait` is rounded to five minutes, and a ranking decided by that
+ * rounding is a tie the rounding invented; park.fan,
+ * docs/rules/the-quietest-weekday-is-the-parks-quiet-end.md), dearer where the
+ * day guests must leave early. A night the day guests lose to a party ranks
+ * behind every full day whatever its waits.
  */
 import { addIsoDays } from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
 import type { TripBasis, TripParkDayInternal } from "./trip-calendar.util";
 import {
+  planCellOf,
   rankWait,
+  windowMedianHours,
   type InternalCalendarDay,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
+import { dayCost, losesEvening } from "./trip-optimizer";
 
 /** A flat window: the rounded waits spread less than this. */
 export const FLAT_SPREAD_MINUTES = 10;
@@ -28,6 +34,7 @@ export type BestDayReason =
   | "holiday_ends"
   | "school_break"
   | "party_night_short_hours"
+  | "closes_early"
   | "extended_evening"
   | "early_entry"
   | "early_park_admission"
@@ -76,13 +83,6 @@ const BASIS_ORDER: TripBasis[] = [
   "none",
 ];
 
-const median = (values: number[]): number | undefined => {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-};
-
 const weekdayOf = (date: string): number =>
   new Date(`${date}T12:00:00Z`).getUTCDay();
 
@@ -90,6 +90,8 @@ interface Candidate {
   date: string;
   day: TripParkDayInternal;
   wait: number;
+  /** `dayCost`: what the ranking reads. */
+  cost: number;
   /** The day guests lose the evening to a ticketed event. */
   shortened: boolean;
 }
@@ -101,6 +103,12 @@ export function regionBestDays(
   limit: number,
 ): TripBestDays {
   const dayByDate = new Map(calendar.days.map((d) => [d.date, d]));
+  const medianHours = new Map(
+    calendar.parks.map((slug) => [
+      slug,
+      windowMedianHours(calendar.days, slug),
+    ]),
+  );
   const parks = calendar.parks.map((slug) =>
     parkBestDays(slug, calendar.days, dayByDate, limit),
   );
@@ -113,10 +121,14 @@ export function regionBestDays(
         .flatMap((d) => {
           const slug = d.best?.[g.key];
           const park = slug ? d.parks[slug] : undefined;
-          const wait = park ? rankWait(park) : undefined;
-          return slug && park?.headlinerWait != null && wait != null
-            ? [{ date: d.date, slug, headlinerWait: park.headlinerWait, wait }]
-            : [];
+          if (!slug || park?.headlinerWait == null) return [];
+          const wait = dayCost(planCellOf(park), {
+            type: "theme_park",
+            medianHours: medianHours.get(slug),
+          });
+          return [
+            { date: d.date, slug, headlinerWait: park.headlinerWait, wait },
+          ];
         })
         .sort((a, b) => a.wait - b.wait || a.date.localeCompare(b.date))
         .slice(0, GROUP_QUIET_DATES)
@@ -146,33 +158,30 @@ function parkBestDays(
   limit: number,
 ): TripBestDaysPark {
   const all = days.map((d) => ({ date: d.date, day: d.parks[slug] }));
-  const usualHours = median(
-    all
-      .filter((c) => c.day?.status === "OPERATING" && c.day.dayHours)
-      .map((c) => c.day.dayHours as number),
-  );
+  const medianHours = windowMedianHours(days, slug);
   const candidates: Candidate[] = all.flatMap(({ date, day }) => {
     const wait = day ? rankWait(day) : undefined;
     if (!day || day.status === "CLOSED" || wait === undefined) return [];
     if (day.headlinerWait == null) return [];
-    const shortened =
-      day.evening?.kind === "ticketed_event" &&
-      !!usualHours &&
-      !!day.dayHours &&
-      day.dayHours < usualHours;
-    return [{ date, day, wait, shortened }];
+    const cell = planCellOf(day);
+    const cost = dayCost(
+      { ...cell, status: "OPERATING" },
+      { type: "theme_park", medianHours },
+    );
+    const shortened = losesEvening(cell, medianHours);
+    return [{ date, day, wait, cost, shortened }];
   });
 
   const quietOrder = [...candidates].sort(
     (a, b) =>
       Number(a.shortened) - Number(b.shortened) ||
-      a.wait - b.wait ||
+      a.cost - b.cost ||
       (b.day.dayHours ?? 0) - (a.day.dayHours ?? 0) ||
       a.date.localeCompare(b.date),
   );
   const quietest = quietOrder.find((c) => !c.shortened) ?? quietOrder[0];
   const busyOrder = [...candidates].sort(
-    (a, b) => b.wait - a.wait || a.date.localeCompare(b.date),
+    (a, b) => b.cost - a.cost || a.date.localeCompare(b.date),
   );
 
   const describe = (c: Candidate): BestDay => ({
@@ -225,6 +234,7 @@ function reasonsFor(
   }
   if (info?.isSchoolVacation) reasons.push("school_break");
   if (c.shortened) reasons.push("party_night_short_hours");
+  else if (c.day.closesEarly) reasons.push("closes_early");
   if (c.day.evening?.kind === "extended_evening") {
     reasons.push("extended_evening");
   }

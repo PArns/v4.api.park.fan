@@ -859,23 +859,6 @@ describe("optimizeTrip", () => {
       expect(withEarly.days[0].reasons).toContain("early_entry");
     });
 
-    it("counts but does not claim an early entry the feed lost to the evening row", () => {
-      const plan = optimizeTrip(
-        input(
-          2,
-          [park("magic-kingdom-park")],
-          {
-            "magic-kingdom-park": (i) =>
-              i === 0 ? open(42, { earlyUnknown: true }) : open(40),
-          },
-          { perkRules: ORLANDO.perks.disney },
-        ),
-      );
-      expect(placement(plan)["magic-kingdom-park"]).toEqual(["2026-11-30"]);
-      expect(plan.days[0].perks).toBeUndefined();
-      expect(plan.days[0].reasons).not.toContain("early_entry");
-    });
-
     it("gives Express at the premier hotels to Universal Studios and Islands only", () => {
       const plan = optimizeTrip(
         input(
