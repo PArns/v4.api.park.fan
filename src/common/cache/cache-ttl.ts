@@ -25,3 +25,18 @@ export const CALENDAR_WARMUP_MONTH_TTL = 13 * 60 * 60;
  * the note on the best-days snapshot's TTL.
  */
 export const CALENDAR_WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
+
+/**
+ * A trip region's calendar and plan answers: an hour, the edge lifetime the
+ * contract gives them (docs/frontend/trip-regions.md). They are assembled from
+ * the month caches above, so an hour is the most they lag a warmup.
+ */
+export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
+
+/**
+ * A past month's measured figures, kept for the `last_year` days. A month that
+ * has passed does not change, and unlike the month caches it is not evicted by
+ * a schedule sync (that is about future hours), so a week is safe and spares
+ * the warmup rebuilding five past months per park twice a day.
+ */
+export const TRIP_LAST_YEAR_TTL = 7 * 24 * 60 * 60;

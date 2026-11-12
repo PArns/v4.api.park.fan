@@ -110,6 +110,21 @@ export const CacheKeys = {
   predictionsYearlyResponsePattern: (parkId: string): string =>
     `predictions-yearly:resp:v1:${parkId}:*`,
 
+  /**
+   * Trip regions (`src/trip-regions/`). The calendar and the plan are whole
+   * answers kept an hour; the two below are written by the calendar warmup and
+   * read by the calendar: a past month's measured figures for the `last_year`
+   * days, and the last day a region park's calendar carries a forecast.
+   */
+  tripRegionCalendar: (region: string, from: string, to: string): string =>
+    `trip-regions:calendar:v1:${region}:${from}:${to}`,
+  tripRegionPlan: (region: string, query: string): string =>
+    `trip-regions:plan:v1:${region}:${query}`,
+  tripLastYearMonth: (parkId: string, ym: string): string =>
+    `trip-regions:last-year:v1:${parkId}:${ym}`,
+  tripForecastUntil: (parkId: string): string =>
+    `trip-regions:forecast-until:v1:${parkId}`,
+
   /** Glob matching every schedule:* key of a park (parkId is the 3rd segment!). */
   scheduleParkPattern: (parkId: string): string => `schedule:*:${parkId}:*`,
 

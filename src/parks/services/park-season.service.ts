@@ -250,6 +250,24 @@ export class ParkSeasonService {
       .getMany();
   }
 
+  /** The seasons of several parks overlapping a range, in one query. */
+  async forParksInRange(
+    parkIds: string[],
+    from: string,
+    to: string,
+  ): Promise<ParkSeason[]> {
+    if (parkIds.length === 0) return [];
+    return this.seasons
+      .createQueryBuilder("season")
+      .where("season.parkId IN (:...parkIds)", { parkIds })
+      .andWhere("season.startDate <= :to AND season.endDate >= :from", {
+        from,
+        to,
+      })
+      .orderBy("season.startDate", "ASC")
+      .getMany();
+  }
+
   // ── validation ────────────────────────────────────────────────────────────
 
   private async normalize(

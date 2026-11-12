@@ -617,3 +617,26 @@ export function findRegion(slug: string): RegionConfig | null {
 export function hotelPoint(key: string): string {
   return `hotel:${key}`;
 }
+
+/** The geographic path of a park, as `parks` stores it. */
+export interface ParkPathLike {
+  continentSlug?: string | null;
+  countrySlug?: string | null;
+  citySlug?: string | null;
+  slug?: string | null;
+}
+
+/** The region a park belongs to, matched on its full geographic path, or null. */
+export function regionOfPark(park: ParkPathLike): RegionConfig | null {
+  for (const region of Object.values(TRIP_REGIONS)) {
+    const found = region.parks.some(
+      (p) =>
+        p.slug === park.slug &&
+        p.city === park.citySlug &&
+        p.country === park.countrySlug &&
+        p.continent === park.continentSlug,
+    );
+    if (found) return region;
+  }
+  return null;
+}

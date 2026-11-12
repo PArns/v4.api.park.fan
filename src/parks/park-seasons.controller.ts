@@ -132,7 +132,7 @@ export interface PublicParkSeason {
   confirmedAt: string | null;
 }
 
-function toPublicSeason(season: ParkSeason): PublicParkSeason {
+export function toPublicSeason(season: ParkSeason): PublicParkSeason {
   return {
     id: season.id,
     kind: season.kind,
