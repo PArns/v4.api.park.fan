@@ -54,6 +54,7 @@ import {
   lastYearMonthsNeeded,
   MAX_CALENDAR_DAYS,
   publicCalendar,
+  referenceRange,
   validateWindow,
   type InternalRegionCalendar,
   type ParkCalendarSource,
@@ -245,19 +246,24 @@ async function regionCalendar(
 ): Promise<InternalRegionCalendar> {
   const today = getCurrentDateInTimezone(region.timezone);
   const parks = await regionParks(region);
+  // The window and its reference span, as TripRegionService reads them.
+  const ref = referenceRange(from, to);
   const sources: ParkCalendarSource[] = await Promise.all(
     parks.map(async (park) => {
       const base = parkBase(park.config);
       const [calendar, schedule] = await Promise.all([
         upstreamJson<ParkCalendarSource["calendar"]>(
-          `${base}/calendar?from=${from}&to=${to}&includeHourly=none`,
+          `${base}/calendar?from=${ref.from}&to=${ref.to}&includeHourly=none`,
         ),
         upstreamJson<{ schedule: ScheduleRowLike[] }>(
-          `${base}/schedule?from=${from}&to=${to}`,
+          `${base}/schedule?from=${ref.from}&to=${ref.to}`,
         ).catch(() => ({ schedule: [] as ScheduleRowLike[] })),
       ]);
       const lastYear = new Map<string, LastYearMonth>();
-      for (const ym of lastYearMonthsNeeded(calendar.days, today)) {
+      const wanted = calendar.days.filter(
+        (d) => d.date >= from && d.date <= to,
+      );
+      for (const ym of lastYearMonthsNeeded(wanted, today)) {
         const { first, last } = monthBounds(ym);
         const past = await upstreamJson<ParkCalendarSource["calendar"]>(
           `${base}/calendar?from=${first}&to=${last}&includeHourly=none`,

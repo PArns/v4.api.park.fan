@@ -2,11 +2,7 @@ import { addIsoDays } from "../common/utils/date.util";
 import { ORLANDO } from "./regions";
 import { regionBestDays } from "./trip-best-days";
 import type { TripParkDayInternal } from "./trip-calendar.util";
-import {
-  bestOfDay,
-  windowMedianHours,
-  type InternalRegionCalendar,
-} from "./trip-region.assembly";
+import { bestOfDay, type InternalRegionCalendar } from "./trip-region.assembly";
 
 const START = "2026-12-07"; // a Monday
 
@@ -23,6 +19,7 @@ function cell(
     waitExact: exact,
     basis: "forecast",
     dayHours: 12,
+    usualHours: 12,
     ...over,
   };
 }
@@ -44,11 +41,8 @@ function calendar(
       Object.entries(parks).map(([slug, f]) => [slug, f(i)]),
     ),
   }));
-  const medians = new Map(
-    Object.keys(parks).map((slug) => [slug, windowMedianHours(bare, slug)]),
-  );
   const days = bare.map((d) => {
-    const { best, why } = bestOfDay(ORLANDO, d.parks, medians);
+    const { best, why } = bestOfDay(ORLANDO, d.parks);
     return { ...d, best, bestWhy: why };
   });
   return {
