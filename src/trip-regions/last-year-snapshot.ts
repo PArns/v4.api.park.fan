@@ -82,11 +82,14 @@ export async function writeLastYearMonth(
     snapshot[day.date] = toLastYearEntry(day);
   }
   if (last < today) {
+    // Up to a day of spread, so the week's expiries of 80 months do not all
+    // fall into the same warmup run.
+    const spread = Math.floor(Math.random() * 24 * 60 * 60);
     await redis.set(
       CacheKeys.tripLastYearMonth(park.id, ym),
       JSON.stringify(snapshot),
       "EX",
-      TRIP_LAST_YEAR_TTL,
+      TRIP_LAST_YEAR_TTL + spread,
     );
   }
   return snapshot;

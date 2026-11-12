@@ -67,6 +67,13 @@ A cache hit carries no `RateLimit-*` header and never reaches the limiter. Rules
   Nights evening as `TICKETED_EVENT`. On 2026-10-26, 3,107 park-days at 73 parks held more than one row
   and none held two day-status rows (PAR-1005). Readers pick the day's status by type
   (`pickDayStatusEntry` / `dayStatusRank`, `src/common/utils/schedule.util.ts`), never the first row.
+- **Known limit: one row per type and day.** The upsert key is `date|scheduleType`, so two event rows
+  of one type on one day collapse into one. Walt Disney World sends Early Entry (08:30–09:00) and a
+  party night (19:00–24:00) both as `TICKETED_EVENT`: one survives, and which one alternates between
+  syncs, because both payload entries are compared with the same stale existing row and the batch
+  update keeps the last. The trip-region calendar works around it with the curated seasons
+  ([trip regions](../frontend/trip-regions.md)); the fix (an event row keyed by its start time too,
+  with the same-type dedup and a retraction of event rows to match) is open work.
 - **Park-level only.** Both `saveScheduleData` and `fillScheduleGaps` read and delete only
   `attractionId IS NULL` rows: a per-ride row is a different statement by a different writer. Without the
   filter the sync handed ride rows the park's hours, and the gap fill rewrote ride schedules by the park's

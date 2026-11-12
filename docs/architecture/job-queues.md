@@ -31,7 +31,7 @@ find what runs when, or before adding a queue or a cron.
 | `live-cache-warmup` | after each wait-times run | Park, top-1000 attraction and occupancy caches ([caching](caching-strategy.md#cache-warmup)) |
 | `park-metadata` / `sync-all-parks` | 03:00 | Park metadata, geocoding, schedules for every wiki park; chains `children-metadata` (no cron of its own since PAR-875) |
 | `park-metadata` / `sync-schedules-only` | 15:00 | Schedules only ([schedule sync](schedule-sync-and-calendar.md)); `sync-park-schedule` and `fill-all-gaps` run on demand |
-| `park-metadata` / `warmup-calendar-daily` | 08:00, 20:00 | Calendar months and the `/best-days` snapshot ([caching](caching-strategy.md#cache-warmup)) |
+| `park-metadata` / `warmup-calendar-daily` | 08:00, 20:00 | Calendar months and the `/best-days` snapshot; a trip region's parks to +6 months, plus their last-year snapshots ([caching](caching-strategy.md#cache-warmup), [what the regions add](caching-strategy.md#what-the-trip-regions-add)) |
 | `park-metadata` / `decay-popularity` | 00:00 | Decays the popularity sorted sets |
 | `children-metadata` / `sync-attraction-details` | Sun 05:30 | Attraction detail sync, ~4 h; a run a deploy stopped resumes after the last ride it finished (see below) |
 | `six-flags-heights` / `sync-heights` | Mon 03:00 | Ride heights the wiki lacks |
