@@ -92,6 +92,8 @@ function planQueryOf(
     split: query.split,
     rest: query.rest,
     hop: query.hop,
+    // `hop` only counts with a hopper ticket, so the ticket has to travel with it.
+    ticket: query.ticket,
   };
 }
 

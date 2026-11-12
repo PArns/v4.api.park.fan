@@ -14,6 +14,7 @@ import {
   type TicketKind,
 } from "./trip-evening";
 import { normalizePlanQuery, planInput } from "./trip-plan.assembly";
+import { normalizeWhenQuery } from "./trip-when.assembly";
 
 const TZ = ORLANDO.timezone;
 const FROM = "2026-12-01";
@@ -329,5 +330,22 @@ describe("the hopper ticket in the plan query", () => {
     );
     expect(q).toMatchObject({ ticket: "hopper", hop: true, warnings: [] });
     expect(q.evenings).toBe(true);
+  });
+
+  it("passes the ticket through /when, so hop=1 counts there too", () => {
+    const when = normalizeWhenQuery(
+      ORLANDO,
+      [MK, EPCOT, HS],
+      {
+        from: FROM,
+        to: addIsoDays(FROM, 20),
+        days: 3,
+        parks: `${MK},${EPCOT},${HS}`,
+        hop: "1",
+        ticket: "hopper",
+      },
+      "2026-11-12",
+    );
+    expect(when.plan).toMatchObject({ ticket: "hopper", hop: true });
   });
 });
