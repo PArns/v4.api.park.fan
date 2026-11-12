@@ -37,12 +37,13 @@ import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
 /** Calendar months warmed ahead of the current one, for every park. */
 const CALENDAR_MONTHS_AHEAD = 3;
 /**
- * A trip region's parks are warmed a year ahead: the region calendar
- * (docs/frontend/trip-regions.md) serves a year, and `/when`
+ * A trip region's parks are warmed a year ahead and a month more: the region
+ * calendar (docs/frontend/trip-regions.md) serves a year and reads two weeks
+ * past its last day for the usual day (`referenceRange`), and `/when`
  * (docs/frontend/trip-regions-when.md) reads all of it at once. Months past the
  * forecast (about six) are cheap to build: no forecast to merge, only hours.
  */
-const REGION_CALENDAR_MONTHS_AHEAD = 12;
+const REGION_CALENDAR_MONTHS_AHEAD = 13;
 /**
  * And their past months, back to this one, are kept as last-year snapshots:
  * the region calendar's days past the forecast (months 7–12) read the same
@@ -59,7 +60,7 @@ const REGION_LAST_YEAR_MONTHS_BACK = 6;
  *
  * Strategy:
  * - Parks: Warm up OPERATING parks or parks opening within 12h
- * - Calendar: Warm up calendar months −1…+3 twice a day for all parks, −1…+12 plus last-year
+ * - Calendar: Warm up calendar months −1…+3 twice a day for all parks, −1…+13 plus last-year
  *   snapshots for a trip region's parks (warmup-calendar-daily job)
  * - Attractions: Warm up top 100 most popular attractions (based on queue data frequency)
  * - Skip if cache is fresh (< 2 min old) to avoid redundant work
@@ -213,7 +214,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
 
   /**
    * Warm up calendar cache for one park: -1 month to +3 months (park timezone),
-   * to +12 for a trip region's park (see {@link warmTripRegionPark}).
+   * to +13 for a trip region's park (see {@link warmTripRegionPark}).
    * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
    * Called from warmupCalendarForAllParks (background warmup every 12h).
    *
@@ -239,7 +240,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         fromM += 12;
         fromY -= 1;
       }
-      // To: last day of (current + 3 months), +12 for a trip region's park.
+      // To: last day of (current + 3 months), +13 for a trip region's park.
       const region = regionOfPark(park);
       let endM =
         m + (region ? REGION_CALENDAR_MONTHS_AHEAD : CALENDAR_MONTHS_AHEAD);

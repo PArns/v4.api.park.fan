@@ -15,8 +15,11 @@
  * spring and autumn breaks (measured 2026-11-12). Offering them would turn a
  * gap in our data into "no school break".
  */
+import { BadRequestException } from "@nestjs/common";
 import { addIsoDays } from "../common/utils/date.util";
-import type { SchoolBreakPeriod } from "./trip-when";
+import type { SchoolCoverage } from "../common/utils/holiday.utils";
+import { normalizeRegionCode } from "../common/utils/region.util";
+import type { SchoolBreakPeriod, WhenWithin } from "./trip-when";
 
 /** A holiday row as this module reads it. */
 export interface SchoolRowLike {
@@ -174,4 +177,99 @@ export function storedCodes(rows: readonly SchoolRowLike[]): string[] {
         .map((r) => r.region as string),
     ),
   ].sort();
+}
+
+/**
+ * The days to read a country's rows for: the range and three days either
+ * side, so a break that ends just before `from` still joins its weekend.
+ */
+export function schoolRowsSpan(
+  from: string,
+  to: string,
+): { from: string; to: string } {
+  return { from: addIsoDays(from, -3), to: addIsoDays(to, 3) };
+}
+
+/**
+ * The last day a region's own or its country's nationwide school rows reach;
+ * null when neither has a row. Unlike the calendar's coverage it never falls
+ * back to another region of the country: a code with no rows of its own has
+ * no known breaks, not the neighbours'.
+ */
+export function coveredThrough(
+  coverage: SchoolCoverage,
+  country: string,
+  code: string,
+): string | null {
+  const region = normalizeRegionCode(code);
+  const dates = [
+    region ? coverage.regional.get(`${country}|${region}`) : undefined,
+    coverage.national.get(country),
+  ].filter((d): d is string => !!d);
+  return dates.length > 0 ? dates.sort()[dates.length - 1] : null;
+}
+
+/** The default countries whose stored school data reaches {@link MIN_COVERAGE_DAYS} ahead. */
+export function defaultSchoolBreakCountries(
+  coverage: SchoolCoverage,
+  today: string,
+): string[] {
+  const horizon = addIsoDays(today, MIN_COVERAGE_DAYS);
+  return DEFAULT_SCHOOL_BREAK_COUNTRIES.filter(
+    (c) => (coverage.countryAny.get(c) ?? "") >= horizon,
+  );
+}
+
+/** `/school-breaks`: every region of the countries, its breaks in [from, to], how far its data reaches. */
+export function schoolBreakRegions(
+  countries: readonly string[],
+  rowsByCountry: ReadonlyMap<string, readonly SchoolRowLike[]>,
+  coverage: SchoolCoverage,
+  from: string,
+  to: string,
+): TripSchoolBreaks {
+  const regions: SchoolBreakRegion[] = [];
+  for (const country of countries) {
+    const rows = (rowsByCountry.get(country) ?? []).filter(
+      (r) => r.holidayType === "school",
+    );
+    const listed =
+      SCHOOL_BREAK_REGIONS[country] ??
+      storedCodes(rows).map((code) => ({ code, name: code }));
+    for (const { code, name } of listed) {
+      regions.push({
+        code,
+        name,
+        country,
+        through: coveredThrough(coverage, country, code),
+        periods: schoolBreakPeriods(rows, code, from, to),
+      });
+    }
+  }
+  return { regions };
+}
+
+/** The country a `within` code belongs to. */
+export const countryOfCode = (code: string): string =>
+  code.slice(0, 2).toUpperCase();
+
+/** A `within` code as `/school-breaks` lists it for its country; 400 otherwise. */
+export function resolveWithin(
+  code: string,
+  breaks: TripSchoolBreaks,
+): WhenWithin {
+  const found = breaks.regions.find(
+    (r) => r.code.toUpperCase() === code.toUpperCase(),
+  );
+  if (found) return found;
+  const country = countryOfCode(code);
+  const known = breaks.regions
+    .filter((r) => r.country === country)
+    .map((r) => r.code)
+    .join(", ");
+  throw new BadRequestException(
+    known
+      ? `within: ${code} is not a school-holiday region; ${country} has ${known}`
+      : `within: no school-holiday regions for ${country}`,
+  );
 }
