@@ -101,6 +101,13 @@ export const CacheKeys = {
     `plan-day:resp:v1:${parkId}:${date}`,
   planDayResponsePattern: (parkId: string): string =>
     `plan-day:resp:v1:${parkId}:*`,
+  /**
+   * The rides a works window shuts on a planned day, beside the plan the
+   * optimizer reads. Under the response's own prefix, so whatever evicts the
+   * plan (`planDayResponsePattern`) evicts this with it.
+   */
+  planDayRidesInWorks: (parkId: string, date: string): string =>
+    `plan-day:resp:v1:${parkId}:${date}:works`,
   rideDayCurve: (parkId: string, attraction: string): string =>
     `ride-day-curve:v1:${parkId}:${attraction}`,
   rideDayCurvePattern: (parkId: string): string =>
