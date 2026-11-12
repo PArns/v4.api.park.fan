@@ -21,6 +21,10 @@ import type {
 } from "../../trip-regions/trip-optimizer";
 import type { PerkKind, RegionConfig } from "../../trip-regions/regions";
 import type { TripLeg } from "../../trip-regions/travel";
+import type {
+  EveningOption,
+  PlanEvening,
+} from "../../trip-regions/trip-evening";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
 import { ASSISTANT_LOCALES } from "../system-prompt";
 import type {
@@ -267,6 +271,7 @@ const HUB_PARAMS = [
   "fireworks",
   "split",
   "rest",
+  "ticket",
   "hop",
   "arrival",
   "departure",
@@ -284,6 +289,7 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   fireworks: /^(want|any)$/,
   split: /^(auto|fixed)$/,
   rest: /^(auto|none|max:[1-9])$/,
+  ticket: /^(base|hopper)$/,
   hop: /^[01]$/,
   arrival: /^(free|park)$/,
   departure: /^(free|park)$/,
@@ -307,6 +313,7 @@ function hubQuery(q: NormalizedPlanQuery): string {
     fireworks: q.fireworks,
     split: q.split,
     rest: q.rest.mode === "max" ? `max:${q.rest.n}` : q.rest.mode,
+    ...(q.ticket === "hopper" && { ticket: q.ticket }),
     hop: q.hop ? "1" : "0",
     arrival: q.arrival,
     departure: q.departure,
@@ -378,7 +385,41 @@ export interface TripPlanLike {
 type PlanDayWithTravel = PlannedDay & {
   travel?: TripLeg;
   between?: TripLeg;
+  evening?: PlanEvening;
 };
+
+/**
+ * A plan day's evening in one short phrase: where, when, how far, what is on,
+ * and the alternatives by name. "projected": the show time is last same
+ * weekday's, not a published one.
+ */
+export function eveningPhrase(
+  evening: PlanEvening,
+  names: ReadonlyMap<string, string>,
+  region: RegionConfig,
+): string {
+  const placeOf = (o: EveningOption): string =>
+    o.kind === "hop"
+      ? `hop to ${names.get(o.park ?? "") ?? o.park}`
+      : (region.venues.find((v) => v.key === o.venue)?.name ?? o.venue ?? "");
+  const tz = region.timezone;
+  const travel = evening.travel
+    ? `, ${evening.travel.minutes} min by ${evening.travel.mode}`
+    : "";
+  const shows = (evening.highlights ?? [])
+    .filter((h) => h.name && h.at)
+    .map(
+      (h) =>
+        `${h.kind === "fireworks_view" ? `view of ${h.name}` : h.name} ${clock(h.at as string, tz)}${h.source === "projected" ? " (projected)" : ""}`,
+    );
+  const free = evening.reasons.includes("free_entry") ? ", free entry" : "";
+  const others = (evening.alternatives ?? []).map(placeOf);
+  return [
+    `${placeOf(evening)} ${clockRange(evening.from, evening.to, tz)}${travel}${free}`,
+    ...shows,
+    ...(others.length > 0 ? [`or ${others.join(" or ")}`] : []),
+  ].join("; ");
+}
 
 /** A leg as a plan day tells it: the minutes, the distance, how, and where the drive ends. */
 function legOf(leg: TripLeg | undefined) {
@@ -512,6 +553,9 @@ export function vacationItinerary(input: {
       ...(between && { between }),
       ...(why.length > 0 && { why }),
       ...(watch(day).length > 0 && { watch: watch(day) }),
+      ...(day.evening && {
+        evening: eveningPhrase(day.evening, names, region),
+      }),
     };
   });
   const area = region.hotelAreas.find((a) => a.key === query.area);
@@ -553,6 +597,12 @@ export function vacationItinerary(input: {
     }),
     ...(plan.meta.exact === false && {
       searchCutShort: "a good plan, not proven the best",
+    }),
+    ...((plan.meta.warnings as string[] | undefined)?.includes(
+      "hop_needs_hopper",
+    ) && {
+      hopIgnored:
+        "two parks a day need a hopper ticket (ticket hopper); planned one park a day",
     }),
     hubUrl: hubUrl(query),
     // What plan_trip's days take to put the trip into the planner, by id: two parks can share a slug.

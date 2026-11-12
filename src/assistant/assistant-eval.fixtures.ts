@@ -115,6 +115,31 @@ const ORLANDO_PLAN_RESULT = {
   ],
 };
 
+/** A plan with Animal Kingdom closing early and a Park Hopper evening after it. */
+const ORLANDO_HOPPER_RESULT = {
+  region: "Orlando",
+  trip: { from: "2027-03-03", to: "2027-03-10", days: 8 },
+  days: [
+    {
+      date: "2027-03-08",
+      weekday: "Monday",
+      kind: "park",
+      parks: [
+        {
+          park: "Disney's Animal Kingdom Theme Park",
+          headlinerWait: 40,
+          hours: "08:00–18:00",
+        },
+      ],
+      evening:
+        "hop to Disney's Hollywood Studios 18:17–21:00, 17 min by drive; Fantasmic! 20:00 (projected); or hop to EPCOT or Disney Springs",
+    },
+  ],
+  hubUrl:
+    "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&ticket=hopper#planner",
+  reserve: [{ park: "disneys-animal-kingdom-theme-park", date: "2027-03-08" }],
+};
+
 export const EVAL_CASES: EvalCase[] = [
   {
     id: "post-express-pass",
@@ -863,6 +888,29 @@ export const EVAL_CASES: EvalCase[] = [
     allowBefore: ["plan_vacation"],
     want: [{ tool: "plan_trip", input: { days: "*" } }],
     results: { plan_vacation: ORLANDO_PLAN_RESULT },
+  },
+  {
+    id: "orlando-hopper-evening-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?"],
+      [
+        "assistant",
+        "So würde ich es machen: Mittwoch, 3. März Anreise. Donnerstag Magic Kingdom, Freitag EPCOT, Samstag Pause, Sonntag Hollywood Studios, Montag, 8. März Animal Kingdom, Dienstag Islands of Adventure, Mittwoch, 10. März Abreise.",
+      ],
+    ],
+    message:
+      "Wir haben Park Hopper, was machen wir abends nach Animal Kingdom?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10", ticket: "hopper" },
+      },
+    ],
+    results: { plan_vacation: ORLANDO_HOPPER_RESULT },
+    answer: [{ must: "Hollywood Studios|Fantasmic" }],
   },
   {
     id: "orlando-plan-into-planner-en",

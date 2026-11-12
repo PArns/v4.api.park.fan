@@ -77,6 +77,13 @@ import {
 import type { ScheduleRowLike } from "../../src/trip-regions/trip-calendar.util";
 import * as plan from "../../src/trip-regions/trip-plan.assembly";
 import {
+  eveningShowsWanted,
+  eveningTriggers,
+  showsKey,
+  type EveningShow,
+  type EveningShows,
+} from "../../src/trip-regions/trip-evening";
+import {
   TripBestDaysQueryDto,
   TripCalendarQueryDto,
   TripPlanQueryDto,
@@ -622,10 +629,36 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
           ).catch(() => null);
           leadMae.set(lead, day?.leadTimeMae ?? null);
         }
+        // The evenings' night shows, as `/plan/day` lists them.
+        const shows: EveningShows = new Map();
+        const configs = new Map(parks.map((p) => [p.config.slug, p.config]));
+        const wanted = normalized.evenings
+          ? eveningShowsWanted(
+              region,
+              calendar,
+              eveningTriggers(
+                region,
+                calendar,
+                optimized.plan.days,
+                normalized,
+              ),
+            )
+          : [];
+        await Promise.all(
+          wanted.map(async ({ park, date }) => {
+            const config = configs.get(park);
+            if (!config) return;
+            const day = await upstreamJson<{ shows?: EveningShow[] }>(
+              `${parkBase(config)}/plan/day?date=${date}`,
+            ).catch(() => null);
+            shows.set(showsKey(park, date), day?.shows ?? []);
+          }),
+        );
         return plan.planResponse(region, normalized, calendar, optimized, {
           computedAt: new Date().toISOString(),
           today,
           leadMae,
+          shows,
         });
       }
     }

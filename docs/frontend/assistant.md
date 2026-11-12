@@ -495,8 +495,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
 (`resolvePark`); a park found outside Orlando is refused with that reason.
 
 - **`plan_vacation`** (status `forecast`): `from`, `to`, optional `parks` (`{ park, visits 1–3 }`,
-  default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `rest`, `hop`,
-  `arrival`, `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
+  default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `rest`, `ticket`
+  (`base` or `hopper`: Disney's Park Hopper or Universal's park-to-park), `hop` (only with
+  `ticket: "hopper"`), `arrival`, `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
   and `plan` (an hour in Redis by the normalized query), a refusal of either (over 21 days, 16
   visits, more visits than days without `hop`, a lock outside the trip) as the route's own
   sentence, then reads the same region calendar for the hours and events (a cache hit). Per day:
@@ -506,13 +507,17 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `events` (with `(expected)` or `(announced)` where not confirmed), `holidays`, `travel` from the
   `area` (`travelFrom` once) and `between` on a hop day, `why` (the reasons; a perk's is in
   `perks`) and `watch` (the warnings; `last_year` reads "estimate from last year, not a
-  forecast"). Then `totals` with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
-  `searchCutShort` when the plan is not proven best, `hubUrl` and `reserve`, the hurricane season
+  forecast"), and `evening` where the park closes early: one phrase with the hop park or venue,
+  its time on the park's clock, the travel, a show with `(projected)` where its time is last same
+  weekday's, and the alternatives by name ([evenings](trip-regions.md#evenings)). Then `totals`
+  with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
+  `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
+  hopper ticket, `hubUrl` and `reserve`, the hurricane season
 said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
 every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
   date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 9,000
   characters (`assistant-trip.spec.ts`).
-- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
+- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
 - **`find_trip_dates`** (status `forecast`): when to go

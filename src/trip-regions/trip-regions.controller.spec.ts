@@ -12,6 +12,7 @@ import { CalendarService } from "../parks/services/calendar.service";
 import { ParkSeasonService } from "../parks/services/park-season.service";
 import { ApiKeyService } from "../api-keys/api-key.service";
 import { PredictionLeadSnapshotService } from "../ml/services/prediction-lead-snapshot.service";
+import { PlanDayService } from "../parks/services/plan-day.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import {
   addIsoDays,
@@ -199,6 +200,10 @@ describe("TripRegionsController", () => {
         {
           provide: PredictionLeadSnapshotService,
           useValue: { getLeadTimeMae: jest.fn(async () => 14) },
+        },
+        {
+          provide: PlanDayService,
+          useValue: { showsOn: jest.fn(async () => []) },
         },
         {
           provide: ApiKeyService,

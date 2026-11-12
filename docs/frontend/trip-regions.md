@@ -80,6 +80,29 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
       "perks": ["early_entry"],
     },
   ],
+  "venues": [
+    {
+      "key": "disney-springs",
+      "name": "Disney Springs",
+      "group": "walt-disney-world",
+      "kind": "district", // district | viewpoint | resort_area
+      "latitude": 28.3706,
+      "longitude": -81.5152,
+      "typicalHours": { "opens": "10:00", "closes": "23:00" }, // typical, not the day's
+      "free": true,
+      "url": "https://disneyworld.disney.go.com/destinations/disney-springs/",
+      "notes": "shops and restaurants; entry and parking free",
+    },
+    {
+      "key": "polynesian-beach",
+      "name": "Disney's Polynesian Village Resort beach",
+      "group": "walt-disney-world",
+      "kind": "viewpoint",
+      "viewOf": "magic-kingdom-park", // whose fireworks it looks at
+      "free": true,
+      "url": "https://disneyworld.disney.go.com/resorts/polynesian-resort/",
+    },
+  ],
   "travel": {
     "source": "osrm",
     "computedOn": "2026-11-12",
@@ -152,6 +175,16 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
   `international_drive`, `lake_buena_vista` (Hotel Plaza Boulevard by Disney Springs) and
   `kissimmee` (US-192). An area's `perks` are those of the hotel a stay there usually means;
   the plan's `hotel` parameter decides which count.
+- **Venues** are where an evening goes outside the parks, curated in `regions.ts` with the
+  operator's page as `url`: Disney Springs (`district`), Disney's BoardWalk (`resort_area`, a view
+  of EPCOT's fireworks), the Polynesian beach (`viewpoint` across the lagoon from Magic Kingdom, on
+  the resort monorail; at busy times Disney admits hotel guests and diners only), Universal
+  CityWalk (`district`) and ICON Park on International Drive (`district`, for the SeaWorld group).
+  `typicalHours` are typical, never the day's, and absent where the venue's own hours vary by
+  shop. Their legs are `venue:<key>`, to and from the parks of their own resort only: OSRM's drive,
+  with the walk from Universal Studios and Islands of Adventure to CityWalk, the walk from EPCOT's
+  International Gateway to the BoardWalk and the monorail from Magic Kingdom to the Polynesian as
+  curated alternatives.
 
 ## The days (`GET /v1/trip-regions/orlando/calendar?from=&to=`)
 
@@ -425,10 +458,14 @@ calendar does not.
 | `fireworks`  | `any`                                                | `any` (default): a day is priced by the hours a day guest gets; `want`: a night that costs the evening show only when nothing else fits |
 | `split`      | `auto`                                               | `auto` (default): parks listed without a count may get a second visit where the trip has days to spare; `fixed`: never                  |
 | `rest`       | `auto`                                               | `auto` (default, below), `none`, or `max:3` (at most three park days in a row)                                                          |
-| `hop`        | `1`                                                  | allow two parks on one day where the trip is shorter than its visits                                                                    |
+| `ticket`     | `hopper`                                             | `base` (default): one park a day; `hopper`: Disney's Park Hopper or Universal's park-to-park (see [Evenings](#evenings))                |
+| `hop`        | `1`                                                  | allow two parks on one day where the trip is shorter than its visits; only with `ticket=hopper`                                         |
+| `evenings`   | `1`                                                  | `1` (default): an `evening` on park days that end early ([Evenings](#evenings)); `0`: none                                              |
 | `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                                |
 
-More visits than trip days is a 400 without `hop` (with it, more than two a day). A lock on a park
+More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
+`ticket=hopper` is ignored: the plan keeps one park a day and `meta.warnings` says
+`hop_needs_hopper`. A lock on a park
 not in `parks` or outside the trip is a 400; a lock the plan cannot keep (the park is closed that
 day, the day is already pinned, more locks than visits) is listed in `ignoredLocks`.
 
@@ -441,6 +478,8 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "computedAt": "…",
     "objective": "headliner_wait",
     "exact": true,
+    "ticket": "base", // base | hopper
+    "warnings": ["hop_needs_hopper"], // absent when empty
   },
   "days": [
     {
@@ -467,6 +506,16 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
       "perks": ["early_park_admission"], // perks this hotel gets that day
       "reasons": ["quietest_in_window", "weekday"],
       "warnings": [],
+      "evening": {
+        // Epic Universe closes at 18:00; a one-park ticket, so a venue
+        "kind": "venue", // hop | venue
+        "venue": "universal-citywalk",
+        "from": "2026-11-30T18:11:00-05:00", // arrival: the park's close plus the travel
+        "to": "2026-12-01T02:00:00-05:00", // CityWalk's typical close
+        "travel": { "minutes": 11, "mode": "drive" },
+        "highlights": [{ "kind": "dining" }, { "kind": "shopping" }],
+        "reasons": ["park_closes_early", "open_later", "free_entry", "short_transfer"],
+      },
     },
     {
       "date": "2026-12-01",
@@ -563,7 +612,8 @@ same way. `rest=none` keeps no rule and gives the spare days no reasons. `rest@d
 day; a free arrival or departure day stays `arrival`/`departure`, also when `arrival=park` left it
 empty.
 
-**Hop days.** With `hop=1` and more visits than days, two theme parks of the same resort whose
+**Hop days.** With `ticket=hopper`, `hop=1` and more visits than days, two theme parks one hopper
+ticket covers (Disney's four; Universal Studios and Islands of Adventure, never Epic Universe) whose
 leg is under 30 minutes door to door (the drive plus its transfers, or a timed alternative) may
 share a day: `kind: "hop"`, each park `part: "half"` with its own figures, `between` the leg. A hop
 day costs half of each park plus 10. Water parks and Discovery Cove never hop. Pinned visits are
@@ -604,13 +654,61 @@ served daily forecast at the planned visits' lead times (`leadTimeMae`,
 the two can be read side by side; absent where nothing is measured at those distances (a `last_year`
 visit never counts). `parkDays` counts days with a park, `visits` the visits placed.
 
+## Evenings
+
+A park day that ends early gets an `evening`: what the guest can do after it with their ticket.
+It is added after the search (`trip-evening.ts`) and never changes a day's park, its cost or the
+order. `evenings=0` leaves it out.
+
+**When.** A `park` day whose park, with published hours, lets day guests out before 20:00, or at
+least two hours before the latest close among its resort's open parks that day. A party night at
+Magic Kingdom (day guests out at 18:00) is one. Never on rest, hop, arrival or departure days, nor
+on the trip's first or last day, and never on a day without published hours.
+
+**`ticket=hopper`: a second park** (`kind: "hop"`). One the hopper covers (Disney's four theme
+parks; Universal Studios and Islands of Adventure), not the day's park, open at least 90 minutes
+after the guest arrives, within 35 minutes door to door, and not on a party night. The travel is
+the resort's own timed transport where it has one (the monorail, the Skyliner, the walk), else the
+drive with its transfers. Ranked by a night show after arrival, then the lower day level and
+headliner wait (the plan has no hourly crowd for the evening), then the shorter transfer. `to` is
+that park's day-guest close.
+
+**Universal's park-to-park** covers Universal Studios and Islands of Adventure: the official
+store's "2-Park 1-Day Park-to-Park Ticket" names those two, and Epic Universe sells as a one-park
+ticket. Whether a multi-day ticket allows a hop into Epic Universe could not be verified, so it is
+never hopped to or from.
+
+**`ticket=base`, and the alternatives: a venue** (`kind: "venue"`) of the day park's resort. A
+district (Disney Springs, CityWalk, ICON Park) open at least 90 minutes after arrival by its
+typical hours (ICON Park has none: its evening ends at 22:00); a fireworks view (the BoardWalk for
+EPCOT, the Polynesian beach for Magic Kingdom) only on a night that park has fireworks starting
+within two hours of arrival and no party night. A view ranks first, then the shorter transfer. A
+view's `to` is half an hour after the fireworks start.
+
+**Alternatives**, at most two: with a hopper, the next hop park and the best venue, then the rest
+of either; with a base ticket, the next venues.
+
+**Highlights.** `night_show` and `fireworks` (a hop park's), `fireworks_view` (a viewpoint's),
+`dining`, `shopping` (a venue's). A show is named only from the shows data `/plan/day` serves, for
+the curated night shows of each park in `regions.ts` (Magic Kingdom's Happily Ever After and Disney
+Starlight, EPCOT's Luminous, Hollywood Studios' Fantasmic!, Wonderful World of Animation and
+Disney Movie Magic); `at` is its first time after arrival and `source` says whether that is a
+published showtime (`scheduled`) or last same weekday's (`projected`), which no feed publishes
+ahead. Without a time from that data no show is named and no fireworks view is suggested. On a
+party night Magic Kingdom's projected times are not read: day guests are gone and the night's
+fireworks are the party's.
+
+**`reasons`**: `park_closes_early` (always first), `open_later`, `night_show`, `free_entry`,
+`fireworks_view`, `short_transfer` (15 minutes or less).
+
 ## Caching and cost
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
 hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
-calendar for its trip once.
+calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
+each day that gets one (`PlanDayService.showsOn`, four at a time).
 
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the

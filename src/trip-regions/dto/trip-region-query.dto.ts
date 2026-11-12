@@ -147,14 +147,38 @@ export class TripPlanQueryDto {
   rest?: string;
 
   @ApiPropertyOptional({
+    enum: ["base", "hopper"],
+    default: "base",
+    description:
+      "The visitor's ticket. `hopper`: Disney's Park Hopper or Universal's park-to-park " +
+      "(Universal Studios and Islands of Adventure, never Epic Universe); it allows `hop=1` " +
+      "and a second park in the evening.",
+  })
+  @IsOptional()
+  @IsIn(["base", "hopper"])
+  ticket?: string;
+
+  @ApiPropertyOptional({
     enum: ["0", "1"],
     default: "0",
     description:
-      "Allow two parks of one resort on a day when the trip is shorter than its parks.",
+      "Allow two parks of one resort on a day when the trip is shorter than its parks. " +
+      "Only with `ticket=hopper`; otherwise ignored with the warning `hop_needs_hopper`.",
   })
   @IsOptional()
   @IsIn(["0", "1", "true", "false"])
   hop?: string;
+
+  @ApiPropertyOptional({
+    enum: ["0", "1"],
+    default: "1",
+    description:
+      "Suggest an evening on park days that end early: a hop park with `ticket=hopper`, " +
+      "else one of the resort's free venues.",
+  })
+  @IsOptional()
+  @IsIn(["0", "1", "true", "false"])
+  evenings?: string;
 
   @ApiPropertyOptional({
     description:

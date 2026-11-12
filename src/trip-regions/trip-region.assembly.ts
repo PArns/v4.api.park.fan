@@ -9,7 +9,11 @@ import { BadRequestException } from "@nestjs/common";
 import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
 import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import type { PublicParkSeason } from "../parks/park-seasons.controller";
-import type { RegionConfig, RegionParkConfig } from "./regions";
+import {
+  venuePoint,
+  type RegionConfig,
+  type RegionParkConfig,
+} from "./regions";
 import {
   heatOf,
   dayCost,
@@ -149,9 +153,12 @@ export function describeRegion(
   region: RegionConfig,
   parks: RegionParkRecord[],
 ): TripRegionDto {
+  const groups = new Set(parks.map((p) => p.config.group));
+  const venues = region.venues.filter((v) => groups.has(v.group));
   const points = new Set([
     ...parks.map((p) => p.config.slug),
     ...region.hotelAreas.map((h) => `hotel:${h.key}`),
+    ...venues.map((v) => venuePoint(v.key)),
   ]);
   const matrix = regionMatrix(region);
   return {
@@ -186,6 +193,19 @@ export function describeRegion(
       latitude: area.latitude,
       longitude: area.longitude,
       perks: [...new Set(region.perks[area.hotel].map((r) => r.perk))],
+    })),
+    venues: venues.map((v) => ({
+      key: v.key,
+      name: v.name,
+      group: v.group,
+      kind: v.kind,
+      latitude: v.latitude,
+      longitude: v.longitude,
+      ...(v.typicalHours && { typicalHours: v.typicalHours }),
+      free: v.free,
+      url: v.url,
+      ...(v.notes && { notes: v.notes }),
+      ...(v.viewOf && { viewOf: v.viewOf }),
     })),
     travel: {
       source: matrix.source,
@@ -229,7 +249,7 @@ const LEVEL_ORDER = [
   "very_high",
   "extreme",
 ];
-const levelRank = (level: string): number => {
+export const levelRank = (level: string): number => {
   const i = LEVEL_ORDER.indexOf(level);
   return i < 0 ? LEVEL_ORDER.length : i;
 };

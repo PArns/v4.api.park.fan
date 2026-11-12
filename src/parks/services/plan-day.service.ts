@@ -909,6 +909,15 @@ export class PlanDayService {
   }
 
   /**
+   * A park's shows on a date, scheduled or projected, as `/plan/day` lists
+   * them: for callers that need the showtimes without the rest of the day
+   * (the trip plan's evenings, `src/trip-regions/trip-evening.ts`).
+   */
+  showsOn(park: Park, dateStr: string): Promise<PlanDayShowDto[]> {
+    return this.buildShows(park, dateStr, null, null);
+  }
+
+  /**
    * A show time as minutes into the operating day. With `wrap` set, a time up
    * to the closing hour belongs to the far side of midnight and counts 24 h
    * later; a time between closing and opening stays on the wall clock, and so
