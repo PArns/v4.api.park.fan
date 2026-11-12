@@ -57,6 +57,12 @@ export interface TripParkDayInternal extends TripParkDay {
   dayHours?: number;
   /** `headlinerWait` before rounding, for ranking days; never sent. */
   waitExact?: number;
+  /**
+   * The park's usual day-guest hours around this date (the median over its
+   * open days within `REFERENCE_DAYS`), which `dayCost` reads a short day
+   * against. Never sent.
+   */
+  usualHours?: number;
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
 }
 
@@ -239,6 +245,48 @@ export function seasonEvening(
   return undefined;
 }
 
+/** A day "closes early" when the day guests leave this long before the usual close. */
+export const CLOSES_EARLY_MINUTES = 120;
+
+/**
+ * Minutes after the day's own midnight of a park-local ISO close
+ * (`2026-11-24T18:00:00-05:00`); a close past midnight reads over 24 h.
+ */
+export function closeMinute(date: string, closesAt: string): number {
+  const [closeDate, time] = closesAt.split("T");
+  const [h, m] = time.split(":").map(Number);
+  const days = Math.round(
+    (Date.parse(`${closeDate}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) /
+      86_400_000,
+  );
+  return days * 1440 + h * 60 + m;
+}
+
+/** A park's usual close over some open days: the median of their closes. */
+export function usualCloseMinute(
+  days: Array<{ date: string; closesAt?: string }>,
+): number | undefined {
+  const minutes = days
+    .filter((d): d is { date: string; closesAt: string } => !!d.closesAt)
+    .map((d) => closeMinute(d.date, d.closesAt))
+    .sort((a, b) => a - b);
+  if (minutes.length === 0) return undefined;
+  const mid = Math.floor(minutes.length / 2);
+  return minutes.length % 2
+    ? minutes[mid]
+    : (minutes[mid - 1] + minutes[mid]) / 2;
+}
+
+/** The day guests leave at least {@link CLOSES_EARLY_MINUTES} before the usual close. */
+export function closesEarly(
+  date: string,
+  closesAt: string | undefined,
+  usual: number | undefined,
+): boolean {
+  if (!closesAt || usual === undefined) return false;
+  return closeMinute(date, closesAt) <= usual - CLOSES_EARLY_MINUTES;
+}
+
 /** A past calendar day reduced to what `last_year` needs. */
 export function toLastYearEntry(day: CalendarDayLike): LastYearEntry {
   if (day.status === "CLOSED" || day.crowdLevel === "closed") {
@@ -397,6 +445,7 @@ export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
     dayHours: _dayHours,
     weather: _weather,
     waitExact: _waitExact,
+    usualHours: _usualHours,
     ...rest
   } = day;
   return rest;

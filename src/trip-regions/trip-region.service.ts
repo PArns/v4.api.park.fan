@@ -35,6 +35,7 @@ import {
   lastYearMonthsNeeded,
   MAX_CALENDAR_DAYS,
   publicCalendar,
+  referenceRange,
   validateWindow,
   type InternalRegionCalendar,
   type ParkCalendarSource,
@@ -218,7 +219,10 @@ export class TripRegionService {
   ): Promise<InternalRegionCalendar> {
     const today = this.today(region);
     const parks = await this.resolveParks(region);
-    const { fromDate, toDate } = parseDateRange(from, to, {
+    // Read with the reference span, so each day is priced against the
+    // park's usual day around it, whatever window was asked for.
+    const reference = referenceRange(from, to);
+    const { fromDate, toDate } = parseDateRange(reference.from, reference.to, {
       timezone: region.timezone,
     });
 
@@ -243,7 +247,10 @@ export class TripRegionService {
         ]);
         const lastYear = await this.lastYearFor(
           rp.park,
-          lastYearMonthsNeeded(calendar.days, today),
+          lastYearMonthsNeeded(
+            calendar.days.filter((d) => d.date >= from && d.date <= to),
+            today,
+          ),
           today,
         );
         return {

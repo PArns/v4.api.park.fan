@@ -290,6 +290,14 @@ describe("TripRegionsController", () => {
         to: day(5),
       });
       expect(res.body.days).toHaveLength(5);
+      // Read with fourteen days either side, so each day is priced against
+      // the park's usual day, not against the window asked for.
+      const calls = buildCalendarResponse.mock.calls;
+      const [, readFrom, readTo] = calls[calls.length - 1];
+      expect((readFrom as Date).toISOString().slice(0, 10)).toBe(day(1 - 14));
+      expect((readTo as Date).getTime()).toBeGreaterThan(
+        Date.parse(`${day(5 + 14)}T00:00:00Z`),
+      );
       const party = res.body.days[2].parks["magic-kingdom-park"];
       expect(party).toMatchObject({
         status: "OPERATING",

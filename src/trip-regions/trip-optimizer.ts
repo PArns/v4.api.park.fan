@@ -98,6 +98,11 @@ export interface PlanCell {
   basis: PlanBasis;
   /** Hours the day guest has: the OPERATING row's open to close. */
   dayHours?: number;
+  /**
+   * The park's usual day-guest hours around this date, from the calendar
+   * (independent of the window asked for); preferred over a window median.
+   */
+  usualHours?: number;
   early?: { kind: string };
   evening?: { kind: "ticketed_event" | "extended_evening" };
   weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
@@ -344,13 +349,14 @@ export interface DayCostContext {
  * {@link PlanCostModel.hoursFactorCap}. 1 when either is unknown.
  */
 export function hoursFactor(
-  cell: Pick<PlanCell, "dayHours">,
+  cell: Pick<PlanCell, "dayHours" | "usualHours">,
   medianHours: number | undefined,
 ): number {
-  if (!medianHours || !cell.dayHours || cell.dayHours <= 0) return 1;
+  const usual = cell.usualHours ?? medianHours;
+  if (!usual || !cell.dayHours || cell.dayHours <= 0) return 1;
   return Math.min(
     PlanCostModel.hoursFactorCap,
-    Math.max(1, medianHours / cell.dayHours),
+    Math.max(1, usual / cell.dayHours),
   );
 }
 
@@ -359,7 +365,7 @@ export function hoursFactor(
  * closes the park early. An After Hours night after a normal close does not.
  */
 export function losesEvening(
-  cell: Pick<PlanCell, "dayHours" | "evening">,
+  cell: Pick<PlanCell, "dayHours" | "evening" | "usualHours">,
   medianHours: number | undefined,
 ): boolean {
   return (

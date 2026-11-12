@@ -16,7 +16,6 @@ import type { TripBasis, TripParkDayInternal } from "./trip-calendar.util";
 import {
   planCellOf,
   rankWait,
-  windowMedianHours,
   type InternalCalendarDay,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
@@ -103,12 +102,6 @@ export function regionBestDays(
   limit: number,
 ): TripBestDays {
   const dayByDate = new Map(calendar.days.map((d) => [d.date, d]));
-  const medianHours = new Map(
-    calendar.parks.map((slug) => [
-      slug,
-      windowMedianHours(calendar.days, slug),
-    ]),
-  );
   const parks = calendar.parks.map((slug) =>
     parkBestDays(slug, calendar.days, dayByDate, limit),
   );
@@ -122,10 +115,7 @@ export function regionBestDays(
           const slug = d.best?.[g.key];
           const park = slug ? d.parks[slug] : undefined;
           if (!slug || park?.headlinerWait == null) return [];
-          const wait = dayCost(planCellOf(park), {
-            type: "theme_park",
-            medianHours: medianHours.get(slug),
-          });
+          const wait = dayCost(planCellOf(park), { type: "theme_park" });
           return [
             { date: d.date, slug, headlinerWait: park.headlinerWait, wait },
           ];
@@ -158,7 +148,6 @@ function parkBestDays(
   limit: number,
 ): TripBestDaysPark {
   const all = days.map((d) => ({ date: d.date, day: d.parks[slug] }));
-  const medianHours = windowMedianHours(days, slug);
   const candidates: Candidate[] = all.flatMap(({ date, day }) => {
     const wait = day ? rankWait(day) : undefined;
     if (!day || day.status === "CLOSED" || wait === undefined) return [];
@@ -166,9 +155,9 @@ function parkBestDays(
     const cell = planCellOf(day);
     const cost = dayCost(
       { ...cell, status: "OPERATING" },
-      { type: "theme_park", medianHours },
+      { type: "theme_park" },
     );
-    const shortened = losesEvening(cell, medianHours);
+    const shortened = losesEvening(cell, undefined);
     return [{ date, day, wait, cost, shortened }];
   });
 

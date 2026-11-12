@@ -14,6 +14,9 @@ import { dayCost, medianDayHours, type PlanCell } from "./trip-optimizer";
 import { buildLegs, regionMatrix } from "./travel";
 import {
   buildParkDay,
+  closeMinute,
+  closesEarly,
+  usualCloseMinute,
   lastYearDateFor,
   scheduleRowDate,
   toPublicParkDay,
@@ -237,59 +240,90 @@ export function planCellOf(c: TripParkDayInternal): PlanCell {
     ...(c.waitExact != null && { exactWait: c.waitExact }),
     ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
     ...(c.dayHours != null && { dayHours: c.dayHours }),
+    ...(c.usualHours != null && { usualHours: c.usualHours }),
     ...(c.early && { early: { kind: c.early.kind } }),
     ...(c.evening && { evening: { kind: c.evening.kind } }),
     ...(c.weather && { weather: c.weather }),
   };
 }
 
-/** A day is "closes early" when the day guests leave this long before the usual close. */
-export const CLOSES_EARLY_MINUTES = 120;
+/**
+ * Days either side of a date that give a park's usual day there: its median
+ * day-guest hours and close over its open days in that span. A fixed span
+ * around each date, read whatever window was asked for, so a one-day request
+ * and a month's answer price the same day alike.
+ */
+export const REFERENCE_DAYS = 14;
 
-/** Minutes after the day's own midnight of an ISO close (a close past midnight is over 24 h). */
-function closeMinute(date: string, iso: string): number {
-  const [closeDate, time] = iso.split("T");
-  const [h, m] = time.split(":").map(Number);
-  const days = Math.round(
-    (Date.parse(`${closeDate}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) /
-      86_400_000,
-  );
-  return days * 1440 + h * 60 + m;
+/** The dates a window's answer must read: the window and its reference span. */
+export function referenceRange(
+  from: string,
+  to: string,
+): { from: string; to: string } {
+  return {
+    from: addIsoDays(from, -REFERENCE_DAYS),
+    to: addIsoDays(to, REFERENCE_DAYS),
+  };
 }
 
 /**
- * Marks the days of one park whose day-guest close is at least
- * {@link CLOSES_EARLY_MINUTES} before the park's median close over the
- * window's OPERATING days.
+ * A park's usual day around a date, from its open days in the reference span:
+ * the median day-guest hours and close over the days **without** a ticketed
+ * evening (from the feed or a season), because in party season nearly every
+ * other night at Magic Kingdom closes at 18:00 and a median over them would
+ * call 18:00 usual. Where every day of the span has one, the longest day and
+ * the latest close stand in; a party night can never drag the reference down.
  */
-function markEarlyCloses(cells: Map<string, TripParkDayInternal>): void {
-  const closes = [...cells]
+export function usualDay(
+  near: Array<{ date: string; c: TripParkDayInternal }>,
+): { hours?: number; close?: number } {
+  const full = near.filter(({ c }) => c.evening?.kind !== "ticketed_event");
+  if (full.length > 0) {
+    return {
+      hours: medianDayHours(full.map((o) => o.c)),
+      close: usualCloseMinute(
+        full.map((o) => ({ date: o.date, closesAt: o.c.closesAt })),
+      ),
+    };
+  }
+  const hours = near.map((o) => o.c.dayHours ?? 0).filter((h) => h > 0);
+  const closes = near
+    .filter((o) => o.c.closesAt)
+    .map((o) => closeMinute(o.date, o.c.closesAt as string));
+  return {
+    ...(hours.length > 0 && { hours: Math.max(...hours) }),
+    ...(closes.length > 0 && { close: Math.max(...closes) }),
+  };
+}
+
+/**
+ * Sets, on each wanted day of one park, its usual hours (`usualHours`) and,
+ * where the day guests leave at least `CLOSES_EARLY_MINUTES` before the
+ * usual close, `closesEarly` with that close; both from {@link usualDay} over
+ * the park's open days within {@link REFERENCE_DAYS}.
+ */
+function markUsualDay(
+  cells: Map<string, TripParkDayInternal>,
+  wanted: string[],
+): void {
+  const open = [...cells]
     .filter(([, c]) => c.status === "OPERATING" && c.closesAt)
-    .map(([date, c]) => ({
-      c,
-      minute: closeMinute(date, c.closesAt as string),
-    }));
-  if (closes.length === 0) return;
-  const sorted = closes.map((x) => x.minute).sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const usual =
-    sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-  for (const { c, minute } of closes) {
-    if (minute <= usual - CLOSES_EARLY_MINUTES) {
+    .map(([date, c]) => ({ date, c }));
+  for (const date of wanted) {
+    const c = cells.get(date);
+    if (!c) continue;
+    const lo = addIsoDays(date, -REFERENCE_DAYS);
+    const hi = addIsoDays(date, REFERENCE_DAYS);
+    const usual = usualDay(open.filter((o) => o.date >= lo && o.date <= hi));
+    if (usual.hours) c.usualHours = usual.hours;
+    if (
+      c.status === "OPERATING" &&
+      closesEarly(date, c.closesAt, usual.close)
+    ) {
       c.closesEarly = true;
       c.dayGuestCloseAt = c.closesAt;
     }
   }
-}
-
-/** A park's median day-guest hours over a window, for `dayCost`. */
-export function windowMedianHours(
-  days: Array<{ parks: Record<string, TripParkDayInternal> }>,
-  slug: string,
-): number | undefined {
-  return medianDayHours(
-    days.map((d) => d.parks[slug]).filter((c): c is TripParkDayInternal => !!c),
-  );
 }
 
 export type BestWhy = "shortest_wait" | "closes_early_elsewhere";
@@ -306,7 +340,6 @@ export type BestWhy = "shortest_wait" | "closes_early_elsewhere";
 export function bestOfDay(
   region: RegionConfig,
   parks: Record<string, TripParkDayInternal>,
-  medianHours: Map<string, number | undefined>,
 ): { best: Record<string, string>; why: Record<string, BestWhy> } {
   const best: Record<string, string> = {};
   const why: Record<string, BestWhy> = {};
@@ -323,10 +356,7 @@ export function bestOfDay(
       )
       .map((c) => ({
         ...c,
-        cost: dayCost(planCellOf(c.day), {
-          type: "theme_park",
-          medianHours: medianHours.get(c.slug),
-        }),
+        cost: dayCost(planCellOf(c.day), { type: "theme_park" }),
       }))
       .sort(
         (a, b) =>
@@ -376,6 +406,13 @@ export function assembleRegionCalendar(
   );
   const dates: string[] = [];
   for (let d = from; d <= to; d = addIsoDays(d, 1)) dates.push(d);
+  // The reference span the sources were read for (`referenceRange`); a day
+  // outside the wanted window is built only to price the wanted ones.
+  const reference = referenceRange(from, to);
+  const span: string[] = [];
+  for (let d = reference.from; d <= reference.to; d = addIsoDays(d, 1)) {
+    span.push(d);
+  }
 
   const cells = new Map<string, Map<string, TripParkDayInternal>>();
   const coverage: Record<string, string | null> = {};
@@ -392,7 +429,7 @@ export function assembleRegionCalendar(
     coverage[park.config.slug] = publishedHoursUntil;
     const seasons = seasonsByPark.get(park.id) ?? [];
     const parkCells = new Map<string, TripParkDayInternal>();
-    for (const date of dates) {
+    for (const date of span) {
       const ly = lastYearDateFor(date);
       parkCells.set(
         date,
@@ -410,16 +447,10 @@ export function assembleRegionCalendar(
         }),
       );
     }
-    markEarlyCloses(parkCells);
+    markUsualDay(parkCells, dates);
     cells.set(park.config.slug, parkCells);
   }
 
-  const medianHours = new Map(
-    sources.map((src) => [
-      src.park.config.slug,
-      medianDayHours([...(cells.get(src.park.config.slug)?.values() ?? [])]),
-    ]),
-  );
   // The day's holiday flags are the region's: read them off its first park.
   const flagsByDate = new Map(
     (sources[0]?.calendar.days ?? []).map((d) => [d.date, d]),
@@ -433,7 +464,7 @@ export function assembleRegionCalendar(
         cells.get(s.park.config.slug)?.get(date) as TripParkDayInternal,
       ]),
     );
-    const { best, why } = bestOfDay(region, parks, medianHours);
+    const { best, why } = bestOfDay(region, parks);
     return {
       date,
       isHoliday: flags?.isHoliday ?? false,

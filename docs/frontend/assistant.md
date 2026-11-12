@@ -331,7 +331,11 @@ ahead): a `country` (with `city` to narrow it, at most 30 parks, `MAX_COMPARED_P
 `parks`. Each park's day comes from the calendar every park page shows
 (`CalendarService.buildCalendarResponse`, six parks at a time, `CALENDAR_BATCH`), so every park is
 rated by the same typical-day-peak level. `ranked` holds the open parks quietest first (a tie by
-the headliners' expected peak), `unrated` the open ones without a level, `closed` and `notKnown`
+the headliners' expected peak; a park whose day guests must leave early, its close two hours or
+more before its usual close over the surrounding fortnight or a party night after an earlier close,
+carries `closesEarlyForDayGuests` with its `usualClose` and moves behind any full-day park within
+15 minutes of its wait, the rule [trip regions](./trip-regions.md#how-a-day-is-priced) prices a
+day by; the prompt asks Parky to say so), `unrated` the open ones without a level, `closed` and `notKnown`
 the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
 in `notKnown` and costs the rest nothing, and so does one whose published schedule names no status
 for the day, with that reason (`get_days` gives such a day the same `why`).

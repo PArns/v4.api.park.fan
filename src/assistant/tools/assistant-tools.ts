@@ -32,6 +32,7 @@ import {
 } from "../../parks/services/best-days.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
+import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
 import { ShowsService } from "../../shows/shows.service";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -114,6 +115,14 @@ import {
   MAX_VISITS_PER_PARK,
 } from "../../trip-regions/trip-optimizer";
 import { buildLegs, findLeg, regionMatrix } from "../../trip-regions/travel";
+import {
+  closeMinute,
+  closesEarly,
+  isoInZone,
+  readDaySlots,
+  scheduleRowDate,
+} from "../../trip-regions/trip-calendar.util";
+import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import {
   HUB_PATH,
@@ -1600,11 +1609,25 @@ async function comparedParkDay(
       why: `park.fan looks ahead ${DAYS_AHEAD} days`,
     };
   }
-  const { days, coverage, hasOperatingSchedule } = await calendarDays(
-    ctx,
-    park,
-    [day],
+  // A week either side: the park's usual close, which a day guest's close is read against.
+  const window = Array.from({ length: 15 }, (_, i) =>
+    addIsoDays(day, i - EARLY_CLOSE_WINDOW_DAYS),
   );
+  const [{ days, coverage, hasOperatingSchedule }, rows] = await Promise.all([
+    calendarDays(ctx, park, window),
+    // The fortnight's evening rows: a party night is no usual day. Without
+    // them the closes alone decide.
+    Promise.resolve()
+      .then(() => {
+        const { fromDate, toDate } = parseDateRange(
+          window[0],
+          window[window.length - 1],
+          { timezone: park.timezone },
+        );
+        return ctx.get(ParksService).getSchedule(park.id, fromDate, toDate);
+      })
+      .catch(() => []),
+  ]);
   const found = days.get(day);
   if (!found) return { park, day, why: "the calendar has no such day" };
   return {
@@ -1615,7 +1638,89 @@ async function comparedParkDay(
       hasOperatingSchedule && coverage.to !== null && day <= coverage.to,
     // Null for a park that publishes no hours at all, whatever the coverage says.
     publishedUntil: hasOperatingSchedule ? coverage.to : null,
+    earlyClose: dayGuestEarlyClose(park, day, days, rows),
   };
+}
+
+/** Days either side of a compared day that give a park's usual close. */
+const EARLY_CLOSE_WINDOW_DAYS = 7;
+
+/**
+ * Whether the day guests must leave early on a day, read the way the trip
+ * calendar reads it (`trip-calendar.util.ts`): the OPERATING close two hours or
+ * more before the park's usual close over the surrounding fortnight, or a
+ * ticketed evening (a party night) after a close earlier than usual. Null
+ * when the day is a full one or its close is unknown.
+ */
+function dayGuestEarlyClose(
+  park: Park,
+  day: string,
+  days: Map<string, CalendarDay>,
+  rows: Parameters<typeof readDaySlots>[0],
+): { closes: string; usualClose: string } | null {
+  const rowsOn = (date: string) =>
+    rows.filter((r) => scheduleRowDate(r, park.timezone) === date);
+  const near = [...days.values()]
+    .filter((d) => d.status === "OPERATING" && d.hours && !d.hours.isInferred)
+    .map((d) => ({
+      date: d.date,
+      c: {
+        status: "OPERATING" as const,
+        hoursPublished: true,
+        crowdLevel: d.crowdLevel,
+        basis: "none" as const,
+        closesAt: isoInZone(d.hours!.closingTime, park.timezone),
+        evening: readDaySlots(rowsOn(d.date), park.timezone, "early_entry")
+          .evening,
+      },
+    }));
+  const today = near.find((d) => d.date === day);
+  const usual = usualDay(near).close;
+  if (!today || usual === undefined) return null;
+  const closesAt = today.c.closesAt;
+  const party = today.c.evening?.kind === "ticketed_event";
+  const early =
+    closesEarly(day, closesAt, usual) ||
+    (party && closeMinute(day, closesAt) < usual);
+  if (!early) return null;
+  const clock = (minute: number) =>
+    `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(Math.round(minute % 60)).padStart(2, "0")}`;
+  return {
+    closes: clock(closeMinute(day, closesAt)),
+    usualClose: clock(usual),
+  };
+}
+
+/** Parks whose expected waits are this close count as alike, and a full day goes first. */
+const SIMILAR_WAIT_MINUTES = 15;
+
+/**
+ * A park the day guests must leave early moves behind every full-day park
+ * with a similar expected wait (within {@link SIMILAR_WAIT_MINUTES}), so a party
+ * night's quieter queues do not win on minutes the visitor cannot use.
+ */
+function behindFullDays<
+  T extends {
+    found: { expectedPeakWaitMinutes?: number };
+    earlyClose?: unknown;
+  },
+>(sorted: T[]): T[] {
+  const out = [...sorted];
+  for (let moved = true; moved;) {
+    moved = false;
+    for (let i = 0; i + 1 < out.length; i++) {
+      const [a, b] = [out[i], out[i + 1]];
+      const gap = Math.abs(
+        (a.found.expectedPeakWaitMinutes ?? 0) -
+          (b.found.expectedPeakWaitMinutes ?? 0),
+      );
+      if (a.earlyClose && !b.earlyClose && gap <= SIMILAR_WAIT_MINUTES) {
+        [out[i], out[i + 1]] = [b, a];
+        moved = true;
+      }
+    }
+  }
+  return out;
 }
 
 /** The hotel areas `plan_vacation` and `get_travel_time` take. */
@@ -2458,7 +2563,9 @@ export const ASSISTANT_TOOLS = [
       'or 2 to 10 parks. For "which park is quietest on Saturday", "where in Germany on 28 ' +
       'June", "which of these three". Closed parks (with the day each opens next), open ones ' +
       "without a rating and parks whose hours for that day are not published yet are listed " +
-      "apart, each with the reason, never as quiet. Today by default, up to a year ahead; one " +
+      "apart, each with the reason, never as quiet. A park whose day guests must leave early " +
+      "(closesEarlyForDayGuests, with its usualClose) ranks behind a full day within 15 minutes. " +
+      "Today by default, up to a year ahead; one " +
       "park's best days are get_best_days, its particular days get_days.",
     input: z.object({
       country: z
@@ -2534,12 +2641,17 @@ export const ASSISTANT_TOOLS = [
         (d): d is Read & { found: ReturnType<typeof compactDay> } =>
           "found" in d && d.found !== undefined,
       );
-      const row = ({ park, found: d }: (typeof known)[number]) => ({
+      const row = ({ park, found: d, ...rest }: (typeof known)[number]) => ({
         id: park.id,
         name: park.name,
         city: park.city,
         opens: d.opens,
         closes: d.closes,
+        ...("earlyClose" in rest &&
+          rest.earlyClose && {
+            closesEarlyForDayGuests: true,
+            usualClose: rest.earlyClose.usualClose,
+          }),
         hoursInferred: d.hoursInferred,
         crowdLevel: d.crowdLevel,
         expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
@@ -2567,14 +2679,14 @@ export const ASSISTANT_TOOLS = [
       );
       return {
         date: date ?? read[0]?.day ?? null,
-        ranked: [...rated]
-          .sort(
+        ranked: behindFullDays(
+          [...rated].sort(
             (a, b) =>
               rank(a) - rank(b) ||
               (a.found.expectedPeakWaitMinutes ?? 0) -
                 (b.found.expectedPeakWaitMinutes ?? 0),
-          )
-          .map(row),
+          ),
+        ).map(row),
         unrated: open
           .filter((d) => !rated.includes(d))
           .map((d) => ({ ...row(d), why: "no crowd rating for that day" })),
