@@ -13,6 +13,7 @@ import {
 } from "../../attractions/utils/curated-out-of-service.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
+import { HUB_PATH } from "./assistant-trip";
 
 /**
  * Parky's actions on the page: what the browser does for it, never the API. A tool returns an
@@ -433,6 +434,11 @@ export type ClientAction =
       on: boolean;
     }
   | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
+  /** A trip across parks, a hop day's two parks on one date: one entry per park and day. */
+  | {
+      type: "planner_reserve_trip";
+      days: Array<{ park: PlannerPark; date: string }>;
+    }
   | { type: "planner_undo"; park: PlannerPark; date: string }
   | { type: "planner_share" }
   /** The same page in another of the site's languages, carried out once the answer is complete. */
@@ -510,12 +516,14 @@ export function siteOnlyPath(url: string): string | null {
 /**
  * Every park and ride page url in `value`, at any depth, in the chat's language: the handlers
  * build `https://park.fan/parks/…`, which would link a Dutch answer to the English page. Only
- * `/parks/` is rewritten; its localized subpages (the calendar's `calendrier-temps-attente`)
- * are not built here. Cards carry site-only paths, which the widget localizes itself.
+ * `/parks/` and the Orlando hub (`/orlando`, the same word in every language) are rewritten; a
+ * park's localized subpages (the calendar's `calendrier-temps-attente`) are not built here.
+ * Cards carry site-only paths, which the widget localizes itself.
  */
 export function localizePageUrls(value: unknown, locale: string): unknown {
   if (!(ASSISTANT_LOCALES as readonly string[]).includes(locale)) return value;
   const parks = `${getFrontendUrl()}/parks/`;
+  const hub = `${getFrontendUrl()}${HUB_PATH}`;
   // LocationService hands out API paths (`/v1/parks/<geo>/<park>[/<ride>]`), which mirror the
   // page paths one to one; as they stand the model would link the JSON.
   const apiParks = "/v1/parks/";
@@ -523,6 +531,9 @@ export function localizePageUrls(value: unknown, locale: string): unknown {
     if (typeof item === "string") {
       if (item.startsWith(parks)) {
         return `${getFrontendUrl()}/${locale}/parks/${item.slice(parks.length)}`;
+      }
+      if (item.startsWith(hub) && /^(?:$|[/?#])/.test(item.slice(hub.length))) {
+        return `${getFrontendUrl()}/${locale}${item.slice(getFrontendUrl().length)}`;
       }
       return item.startsWith(apiParks)
         ? `${getFrontendUrl()}/${locale}/parks/${item.slice(apiParks.length)}`

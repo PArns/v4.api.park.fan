@@ -76,6 +76,39 @@ const PLAN: PlannerSnapshot = {
 
 const PUSH_READY: AlertsSnapshot = { push: "ready", rides: [], shows: [] };
 
+const HUB_SUBJECT =
+  "park.fan's Orlando hub: a crowd calendar of all Orlando parks and the vacation planner";
+
+/** A plan_vacation answer as the next turn's history holds it: text only, no tool result. */
+const ORLANDO_PLAN_ANSWER =
+  "So würde ich es machen: Mittwoch, 3. März Anreise. Donnerstag, 4. März Magic Kingdom, Freitag EPCOT, Samstag Epic Universe, Sonntag Pause, Montag Islands of Adventure, Dienstag Hollywood Studios, Mittwoch, 10. März Abreise. Soll ich dir die Tage in deinen Tagesplaner legen?";
+
+/** What plan_vacation returns when the eval lets Parky look the plan up again. */
+const ORLANDO_PLAN_RESULT = {
+  region: "Orlando",
+  trip: { from: "2027-03-03", to: "2027-03-10", days: 8 },
+  days: [
+    {
+      date: "2027-03-04",
+      weekday: "Thursday",
+      kind: "park",
+      parks: [{ park: "Magic Kingdom Park", headlinerWait: 45 }],
+    },
+    {
+      date: "2027-03-05",
+      weekday: "Friday",
+      kind: "park",
+      parks: [{ park: "EPCOT", headlinerWait: 35 }],
+    },
+  ],
+  hubUrl:
+    "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:1#planner",
+  reserve: [
+    { park: "magic-kingdom-park", date: "2027-03-04" },
+    { park: "epcot", date: "2027-03-05" },
+  ],
+};
+
 export const EVAL_CASES: EvalCase[] = [
   {
     id: "post-express-pass",
@@ -642,5 +675,156 @@ export const EVAL_CASES: EvalCase[] = [
     pageSubject: "the park.fan home page",
     message: "Wann hast du eigentlich mal Urlaub?",
     forbid: "any",
+  },
+  {
+    id: "orlando-vacation-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10" },
+      },
+    ],
+  },
+  {
+    id: "orlando-vacation-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We're in Orlando from March 3 to 10. Which park should we do on which day?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10" },
+      },
+    ],
+  },
+  {
+    id: "orlando-one-day-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Welcher Park ist am Samstag am leersten in Orlando?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-one-day-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message: "Which Orlando park is the least busy on Saturday?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-christmas-party-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    message: "Wann ist die Christmas Party?",
+    want: [{ tool: "get_park_events" }],
+  },
+  {
+    id: "orlando-christmas-party-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    message: "When is the Christmas party?",
+    want: [{ tool: "get_park_events" }],
+  },
+  {
+    id: "orlando-travel-time-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wie weit ist es vom Magic Kingdom zum Epic Universe?",
+    want: [{ tool: "get_travel_time", input: { from: "*", to: "*" } }],
+  },
+  {
+    id: "orlando-travel-time-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message: "How far is it from Magic Kingdom to Epic Universe?",
+    want: [{ tool: "get_travel_time", input: { from: "*", to: "*" } }],
+  },
+  {
+    id: "orlando-plan-into-planner-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?"],
+      ["assistant", ORLANDO_PLAN_ANSWER],
+    ],
+    message: "Pack das in meinen Planer",
+    allowBefore: ["plan_vacation"],
+    want: [{ tool: "plan_trip", input: { days: "*" } }],
+    results: { plan_vacation: ORLANDO_PLAN_RESULT },
+  },
+  {
+    id: "orlando-plan-into-planner-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "We're in Orlando from March 3 to 10, which park on which day?"],
+      [
+        "assistant",
+        "Here's my pick: arrive Wednesday 3 March, Magic Kingdom on Thursday, EPCOT on Friday, Epic Universe on Saturday, a rest day on Sunday, Islands of Adventure on Monday, Hollywood Studios on Tuesday, and fly home on Wednesday 10 March. Shall I put the days into your planner?",
+      ],
+    ],
+    message: "Yes, put that in my planner",
+    allowBefore: ["plan_vacation"],
+    want: [{ tool: "plan_trip", input: { days: "*" } }],
+    results: { plan_vacation: ORLANDO_PLAN_RESULT },
+  },
+  {
+    id: "orlando-hub-and-epic-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      [
+        "user",
+        "Welcher Tag vom 3. bis 10. März ist im Magic Kingdom am besten?",
+      ],
+      [
+        "assistant",
+        "Am entspanntesten wird der Donnerstag, 4. März: die großen Bahnen liegen im Schnitt bei 45 Minuten.",
+      ],
+    ],
+    message: "und für Epic?",
+    want: [
+      {
+        tool: ["plan_vacation", "get_days", "compare_parks", "get_best_days"],
+      },
+    ],
+  },
+  {
+    id: "orlando-hub-and-epic-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Which day from March 3 to 10 is best for Magic Kingdom?"],
+      [
+        "assistant",
+        "Thursday 4 March looks calmest: the big rides average 45 minutes at their busiest.",
+      ],
+    ],
+    message: "and for Epic?",
+    want: [
+      {
+        tool: ["plan_vacation", "get_days", "compare_parks", "get_best_days"],
+      },
+    ],
   },
 ];

@@ -109,6 +109,38 @@ const SITE_PAGES: Record<string, string> = {
   "how-park-fan-works": "the page on how park.fan works",
 };
 
+/** The Orlando hub, `/<locale>/orlando`: "orlando" reads the same in every language. */
+const ORLANDO_HUB =
+  "park.fan's Orlando hub: a crowd calendar of all Orlando parks and the vacation planner";
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** The hub, or one of its month pages (`/orlando/<yyyy>/<m>`); null for any other path under it. */
+function orlandoPage(rest: string[]): string | null {
+  if (rest.length === 0) return ORLANDO_HUB;
+  const [year, month, more] = rest;
+  const m = Number(month);
+  if (more !== undefined || !/^\d{4}$/.test(year) || !/^\d{1,2}$/.test(month)) {
+    return null;
+  }
+  return m >= 1 && m <= 12
+    ? `${ORLANDO_HUB}, showing ${MONTHS[m - 1]} ${year}`
+    : null;
+}
+
 /** Brand overviews under `/parks/`, where a continent's slug would be. */
 const PARK_GROUPS: Record<string, string> = {
   "six-flags": "the overview of the Six Flags parks",
@@ -160,6 +192,10 @@ function parsePage(pagePath: string): Page | null {
       kind: "site",
       text: `the list of parks in the ${scope} with slug "${slug}"`,
     };
+  }
+  if (section === "orlando") {
+    const text = orlandoPage(rest);
+    return text ? { kind: "site", text } : null;
   }
   const [slug] = rest;
   if (section === "news" && slug && slug !== "page") {

@@ -70,9 +70,13 @@ names nothing as an empty value for ten minutes; a park's sub-pages share the pa
 down means a direct lookup; a failed or missed lookup, or one slower than 1.5 seconds, falls back to
 the slug hint (`the park with slug "phantasialand"`). Pages without a subject (home, the parks lists
 by continent, country or city, search, trip planner, favorites, the news, blog and glossary indexes,
-`/parky`) are named from the path alone. The prompt's "The page" section has Parky read an
+`/parky`) are named from the path alone. So is the Orlando hub, `/<locale>/orlando` ("park.fan's
+Orlando hub: a crowd calendar of all Orlando parks and the vacation planner"), with ", showing
+December 2026" on a month page (`/<locale>/orlando/2026/12`); "orlando" is the same word in every
+language, and any other path under it names nothing. The prompt's "The page" section has Parky read an
 unqualified question ("Why?", "Saturday or Sunday?") as one about that subject and look it up
-instead of asking.
+instead of asking; on the hub, a question about a park or a day ("and for Epic?") goes to the
+Orlando tools.
 
 ## Times in park time
 
@@ -177,7 +181,17 @@ may end with a question out of curiosity, never two in a row. What only the park
 rules, menus, plans) is said as the park's call, not as "I have no info". A made-up mascot moment is
 fine when asked for, as long as it names no real park, ride or person; an anecdote about a real
 one is never invented. The text was tuned in
-three rounds of Haiku playing Parky on 23 chats (PAR-1289).
+three rounds of Haiku playing Parky on 23 chats (PAR-1289). Version 48 adds Orlando (below): a
+trip of several days or parks goes to `plan_vacation`, one day across the parks stays
+`compare_parks`, seasons, party nights and the early and evening slots to `get_park_events`,
+distances to `get_travel_time`; Orlando parks are compared by `headlinerWait`, never by crowd
+level; a party night is quieter but closes early for day guests; `basis: "last_year"` is said as
+an estimate from last year. The four hotel perks (Early Entry, Early Park Admission, Extended
+Evening Hours, Express Unlimited at the Premier hotels) are the only facts the prompt states
+itself. After a plan the one offer is the hub with the plan or the trip in the planner, and the
+action rule covers every `plan_` tool but `plan_vacation`, which only reads. It adds about 1,150
+characters to the prompt and 3,700 to the tool list (the three tools, `plan_trip`'s `days`,
+`open_page`'s hub), roughly 1,300 tokens of the cached prefix.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -187,7 +201,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 49 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 61 short chats (`assistant-eval.fixtures.ts`: page, planner,
 alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -335,7 +349,8 @@ the park's `pageUrl`. A food stop goes into the plan with `plan_add_block`.
 
 Park and ride page URLs reach the model in the chat's language: `localizePageUrls`
 (`tools/assistant-actions.ts`), run on every result in `runAssistantTool`, turns
-`https://park.fan/parks/…` into `https://park.fan/<locale>/parks/…`. It touches nothing else, so a
+`https://park.fan/parks/…` into `https://park.fan/<locale>/parks/…`, and the Orlando hub's
+`https://park.fan/orlando…` into `https://park.fan/<locale>/orlando…`. It touches nothing else, so a
 localized subpage (the calendar's `calendrier-temps-attente`) is never built by guessing. Cards carry
 site-only paths without a locale, which the widget localizes.
 
@@ -415,7 +430,9 @@ the widget respells in the reader's language, the last two only where the park h
 (`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
 `KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
 park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`, `how_it_works`
-(`/how-park-fan-works`), `fancast`), `request_location` (the share
+(`/how-park-fan-works`), `fancast`, `orlando` (the hub); a `plan_vacation` `hubUrl` as `url` opens
+the hub with that plan, `/orlando?from=…#planner`, rebuilt from the plan parameters it holds
+(`hubPath`), so nothing else rides along), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
@@ -450,6 +467,7 @@ planner actions carry; times are `HH:MM` on the park's clock.
 | `plan_mark_done`    | `{ type: "planner_mark_done", park, date, entryIds, done }`                                |
 | `plan_clear_day`    | `{ type: "planner_clear_day", park, date }` (input `confirmed: true`, after a yes)         |
 | `plan_trip`         | `{ type: "planner_reserve_days", park, dates }` (1 to 6, deduplicated, sorted)             |
+| `plan_trip` `days`  | `{ type: "planner_reserve_trip", days: [{ park, date }] }` (1 to 16, by date, deduplicated) |
 | `plan_undo`         | `{ type: "planner_undo", park, date }`                                                     |
 | `plan_share`        | `{ type: "planner_share" }` (refused with nothing planned)                                 |
 
@@ -457,6 +475,56 @@ planner actions carry; times are `HH:MM` on the park's clock.
 showtimes that day; `get_shows` lists each show's `slug` for it. `plan_undo` takes back Parky's
 own last change to the day, and the widget refuses it when the visitor changed the day since; Parky sees only the snapshot, so when a visitor says the
 undo did not work he says the day changed since and offers to make the change by hand.
+
+### Orlando: the vacation planner in the chat
+
+Three lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
+`TripPlanService` directly, no HTTP and no data key (Parky is park.fan's own page). They turn
+every code those routes send into a short English phrase the model translates
+(`tools/assistant-trip.ts`), so nothing is left for it to decode. A park is named as the model
+likes it: a region park's slug, id, name or curated abbreviation, else the one region park whose
+name contains the words ("Epic"), several as candidates, else the site's park search
+(`resolvePark`); a park found outside Orlando is refused with that reason.
+
+- **`plan_vacation`** (status `forecast`): `from`, `to`, optional `parks` (`{ park, visits 1–3 }`,
+  default the seven headliner parks), `hotel`, `area`, `blocks`, `parties`, `rest`, `hop`,
+  `arrival`, `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
+  and `plan` (an hour in Redis by the normalized query), a refusal of either (over 21 days, 16
+  visits, more visits than days without `hop`, a lock outside the trip) as the route's own
+  sentence, then reads the same region calendar for the hours and events (a cache hit). Per day:
+  `date`, `weekday`, `kind`, each park with `headlinerWait`, `crowdLevel`, `basis`, `hours` and a
+  ticketed `partyNight` on the park's clock (`09:00–22:00`, written in code in the region's zone,
+  since the row has its date; `timesIn` names the zone), the hotel's `perks` by name, the curated
+  `events` (with `(expected)` or `(announced)` where not confirmed), `holidays`, `travel` from the
+  `area` (`travelFrom` once) and `between` on a hop day, `why` (the reasons; a perk's is in
+  `perks`) and `watch` (the warnings; `last_year` reads "estimate from last year, not a
+  forecast"). Then `totals` with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
+  `searchCutShort` when the plan is not proven best, `hubUrl` and `reserve`, the `[{ park: id,
+  date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 9,000
+  characters (`assistant-trip.spec.ts`).
+- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&parties=…&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
+  the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
+  route does; `localizePageUrls` adds the locale.
+- **`get_park_events`** (status `forecast`): one `park`, or all Orlando parks without it, `from`
+  and `to` (31 days by default, at most 92). For Orlando, from the region calendar: the curated
+  seasons overlapping the window (name, or the kind's when it has none; kind, `status`, `runs`,
+  the window's `onlyOn` days of a season on select days, `separateTicket`, `hours`) with
+  `statusMeans` for the statuses present (`expected` is last year's pattern, nothing announced),
+  and the `slots` per park and kind as date ranges: an early slot by its length (it moves with
+  the opening), an evening by its hours and, for a ticketed night, `dayGuestsLeave`. A park
+  elsewhere gets its seasons from `ParkSeasonService.forParkInRange` and no slots, with the
+  reason.
+- **`get_travel_time`** (status `parks`): `from` a park or `area` a hotel area, `to` a park. The
+  leg from `buildLegs`: `km`, `minutes` (a drive without traffic), `via` and `plusMinutes` where
+  the drive ends short of the gate (the TTC, Universal's garages), `doorToDoorMinutes`, the
+  resort's own `alternatives` with their minutes, `via`, a park-to-park ticket where needed, and
+  the OSRM attribution as `source`. A pair outside Orlando is refused: there is no data.
+
+`open_page` opens the hub (`page: "orlando"`, or a `hubUrl` as `url`), and `plan_trip` with `days`
+reserves a whole trip across parks at once (`planner_reserve_trip`, each park through
+`planPark`); both fall under the action rule. The status `planner` would have the widget say
+"adding it to your day planner" while `plan_vacation` only reads, so the two lookups say
+`forecast` ("flipping through the calendar") and `get_travel_time` `parks`.
 
 ### Push alerts in the chat
 

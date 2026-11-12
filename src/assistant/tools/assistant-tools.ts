@@ -1,13 +1,15 @@
-import type { Type } from "@nestjs/common";
+import { HttpException, type Type } from "@nestjs/common";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
-import type {
-  FunFactLocale,
-  FunFacts,
+import {
+  resolveAbbreviations,
+  resolveCuratedPark,
+  type FunFactLocale,
+  type FunFacts,
 } from "../../parks/utils/curated-park-facts.util";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
@@ -99,6 +101,32 @@ import { AssistantRecordsService } from "../assistant-records.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { FEEDBACK_KINDS } from "../entities/site-feedback.entity";
 import { AssistantConversation } from "../entities/assistant-conversation.entity";
+import {
+  MAX_CALENDAR_DAYS,
+  TripRegionService,
+} from "../../trip-regions/trip-region.service";
+import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import type { TripPlanQueryDto } from "../../trip-regions/dto/trip-region-query.dto";
+import { HOTEL_KINDS, hotelPoint, ORLANDO } from "../../trip-regions/regions";
+import {
+  MAX_PARK_DAYS,
+  MAX_TRIP_DAYS,
+  MAX_VISITS_PER_PARK,
+} from "../../trip-regions/trip-optimizer";
+import { buildLegs, findLeg, regionMatrix } from "../../trip-regions/travel";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
+import {
+  HUB_PATH,
+  hubPath,
+  regionParkFor,
+  seasonsSummary,
+  slotsSummary,
+  travelSummary,
+  vacationItinerary,
+  type AmbiguousRegionPark,
+  type RegionParkName,
+  type SeasonRow,
+} from "./assistant-trip";
 
 /** How long a session may not chat after Parky ended one of its chats. */
 export const CHAT_END_COOLDOWN_MINUTES = 15;
@@ -126,6 +154,7 @@ import {
   PLANNER_BLOCK_ICONS,
   planPark,
   plannerPark,
+  type PlannerPark,
   siteOnlyPath,
   type AssistantCard,
   type ClientAction,
@@ -752,6 +781,7 @@ const SITE_PAGES = [
   "trip_planner",
   "how_it_works",
   "fancast",
+  "orlando",
 ] as const;
 const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
   alerts: "/alerts",
@@ -760,6 +790,7 @@ const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
   trip_planner: "/trip-planner",
   how_it_works: "/how-park-fan-works",
   fancast: "/fancast",
+  orlando: HUB_PATH,
 };
 
 /**
@@ -1586,6 +1617,64 @@ async function comparedParkDay(
     publishedUntil: hasOperatingSchedule ? coverage.to : null,
   };
 }
+
+/** The hotel areas `plan_vacation` and `get_travel_time` take. */
+const ORLANDO_AREAS = ORLANDO.hotelAreas.map((area) => area.key) as [
+  string,
+  ...string[],
+];
+
+/** The days `get_park_events` reads when given no end: a month. */
+const DEFAULT_EVENT_DAYS = 31;
+
+/** The Orlando region and its parks as the database has them, named as the site names them. */
+async function orlando(ctx: AssistantToolContext) {
+  const regions = ctx.get(TripRegionService);
+  const region = regions.region(ORLANDO.slug);
+  const resolved = await regions.resolveParks(region);
+  const parks: RegionParkName[] = resolved.map(({ config, park }) => ({
+    slug: config.slug,
+    id: park.id,
+    name: resolveCuratedPark(park).name,
+    abbreviations: resolveAbbreviations(park),
+  }));
+  return {
+    regions,
+    region,
+    parks,
+    names: new Map(parks.map((p) => [p.slug, p.name])),
+  };
+}
+
+/**
+ * The Orlando park a reference names, else the candidates. A park elsewhere is refused with
+ * `elsewhere`, so the model says what is missing instead of guessing.
+ */
+async function orlandoPark(
+  ctx: AssistantToolContext,
+  reference: string,
+  parks: readonly RegionParkName[],
+  elsewhere: string,
+): Promise<RegionParkName | AmbiguousRegionPark | AmbiguousPark> {
+  const matched = regionParkFor(reference, parks);
+  if (matched) return matched;
+  const found = await resolvePark(mcp(ctx), reference);
+  if (isAmbiguous(found)) return found;
+  const inRegion = parks.find((p) => p.id === found.id);
+  if (!inRegion) throw new McpToolError(`${found.name}: ${elsewhere}`);
+  return inRegion;
+}
+
+/** A trip route's 400 or 404 as a refusal the model reads. */
+async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof HttpException) throw new McpToolError(error.message);
+    throw error;
+  }
+}
+
 export const ASSISTANT_TOOLS = [
   tool({
     name: "search_parks",
@@ -2655,6 +2744,272 @@ export const ASSISTANT_TOOLS = [
     },
   }),
   tool({
+    name: "plan_vacation",
+    status: "forecast",
+    description:
+      "An Orlando trip day by day: which park when, so the big rides queue least, with rest " +
+      "days, hotel perks and party nights. Per day the parks with headlinerWait, crowd level, " +
+      "basis, hours, perks, events, travel and why; totals; hubUrl (the Orlando hub with this " +
+      "plan) and reserve (plan_trip's days). Up to 21 days and 16 visits; parks default to the " +
+      "7 big Disney and Universal parks.",
+    input: z.object({
+      from: isoDay.describe("Arrival day"),
+      to: isoDay.describe("Departure day"),
+      parks: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            visits: z.number().int().min(1).max(MAX_VISITS_PER_PARK).default(1),
+          }),
+        )
+        .min(1)
+        .max(MAX_PARK_DAYS)
+        .optional(),
+      hotel: z
+        .enum(HOTEL_KINDS)
+        .optional()
+        .describe("Whose perks count; default the area's"),
+      area: z.enum(ORLANDO_AREAS).optional().describe("Where they stay"),
+      blocks: z.boolean().optional().describe("Each resort's days together"),
+      parties: z.enum(["avoid", "allow", "prefer"]).optional(),
+      rest: z
+        .string()
+        .regex(/^(auto|none|max:[1-9])$/)
+        .optional()
+        .describe("auto, none, or max:n park days in a row"),
+      hop: z
+        .boolean()
+        .optional()
+        .describe("Two parks of a resort a day, for more visits than days"),
+      arrival: z.enum(["free", "park"]).optional(),
+      departure: z.enum(["free", "park"]).optional(),
+      locks: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120).describe('A park, or "rest"'),
+            date: isoDay,
+          }),
+        )
+        .max(MAX_TRIP_DAYS)
+        .optional()
+        .describe("Days the user fixed"),
+    }),
+    run: async (input, ctx) => {
+      if (daysBetween(input.from, input.to) + 1 > MAX_TRIP_DAYS) {
+        throw new McpToolError(
+          `A plan covers at most ${MAX_TRIP_DAYS} days, arrival and departure included; plan the trip in parts`,
+        );
+      }
+      const { regions, region, parks, names } = await orlando(ctx);
+      ctx.notePark?.(region.timezone);
+      const orlandoOnly = "plan_vacation plans the Orlando parks only";
+      let parkList: string | undefined;
+      if (input.parks) {
+        const visits = new Map<string, number>();
+        for (const { park: reference, visits: count } of input.parks) {
+          const found = await orlandoPark(ctx, reference, parks, orlandoOnly);
+          if ("ambiguous" in found) return found;
+          visits.set(
+            found.slug,
+            Math.min(
+              MAX_VISITS_PER_PARK,
+              (visits.get(found.slug) ?? 0) + count,
+            ),
+          );
+        }
+        parkList = [...visits]
+          .map(([slug, count]) => `${slug}:${count}`)
+          .join(",");
+      }
+      const locks: string[] = [];
+      for (const lock of input.locks ?? []) {
+        if (lock.park.trim().toLowerCase() === "rest") {
+          locks.push(`rest@${lock.date}`);
+          continue;
+        }
+        const found = await orlandoPark(ctx, lock.park, parks, orlandoOnly);
+        if ("ambiguous" in found) return found;
+        locks.push(`${found.slug}@${lock.date}`);
+      }
+      const flag = (value: boolean | undefined) =>
+        value === undefined ? undefined : value ? "1" : "0";
+      const query: TripPlanQueryDto = {
+        from: input.from,
+        to: input.to,
+        parks: parkList,
+        hotel: input.hotel,
+        area: input.area,
+        arrival: input.arrival,
+        departure: input.departure,
+        blocks: flag(input.blocks),
+        parties: input.parties,
+        rest: input.rest,
+        hop: flag(input.hop),
+        lock: locks.length > 0 ? locks.join(",") : undefined,
+      };
+      const plans = ctx.get(TripPlanService);
+      const normalized = await tripCall(() =>
+        plans.normalize(region.slug, query),
+      );
+      const plan = await tripCall(() => plans.plan(region.slug, query));
+      // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
+      const calendar = await regions.internalCalendar(
+        region,
+        normalized.from,
+        normalized.to,
+      );
+      return vacationItinerary({
+        plan,
+        calendar,
+        query: normalized,
+        region,
+        names,
+        ids: new Map(parks.map((p) => [p.slug, p.id])),
+      });
+    },
+  }),
+  tool({
+    name: "get_park_events",
+    status: "forecast",
+    description:
+      "The named seasons and events (food festivals, Christmas or Halloween party nights, " +
+      "Horror Nights, a closure) of one park, or of all Orlando parks without park, each " +
+      "confirmed, announced or expected (last year's pattern). For Orlando also the days with " +
+      "Early Entry, Early Park Admission, Extended Evening Hours and party nights, and when day " +
+      "guests leave. The next 31 days by default, up to 92.",
+    input: z.object({
+      park: z.string().min(2).max(120).optional(),
+      from: isoDay.optional(),
+      to: isoDay.optional(),
+    }),
+    run: async ({ park: reference, from, to }, ctx) => {
+      const { regions, region, parks, names } = await orlando(ctx);
+      let slug: string | null = null;
+      let elsewhere: Park | null = null;
+      if (reference) {
+        const matched = regionParkFor(reference, parks);
+        if (matched && "ambiguous" in matched) return matched;
+        if (matched) {
+          slug = matched.slug;
+        } else {
+          const found = await resolvePark(mcp(ctx), reference);
+          if (isAmbiguous(found)) return found;
+          const inRegion = parks.find((p) => p.id === found.id);
+          if (inRegion) slug = inRegion.slug;
+          else elsewhere = found;
+        }
+      }
+      if (elsewhere) {
+        const today = getCurrentDateInTimezone(elsewhere.timezone);
+        const first = from ?? today;
+        const last = to ?? addIsoDays(first, DEFAULT_EVENT_DAYS - 1);
+        if (first < today || last < first) {
+          throw new McpToolError(`Pick days from ${today} on, in order`);
+        }
+        if (
+          daysBetween(first, last) >= MAX_CALENDAR_DAYS ||
+          last > addIsoDays(today, DAYS_AHEAD)
+        ) {
+          throw new McpToolError(
+            `Pick at most ${MAX_CALENDAR_DAYS} days, up to a year ahead`,
+          );
+        }
+        const seasons = await ctx
+          .get(ParkSeasonService)
+          .forParkInRange(elsewhere.id, first, last);
+        const name = elsewhere.name;
+        return {
+          scope: name,
+          from: first,
+          to: last,
+          ...seasonsSummary(
+            seasons.map((s) => ({ ...s, parkName: name })),
+            first,
+            last,
+          ),
+          slots:
+            "early and evening hours per day are known for the Orlando parks only; get_days has this park's days",
+        };
+      }
+      ctx.notePark?.(region.timezone);
+      const first = from ?? regions.today(region);
+      const last = to ?? addIsoDays(first, DEFAULT_EVENT_DAYS - 1);
+      await tripCall(() =>
+        regions.validateWindow(region, first, last, MAX_CALENDAR_DAYS),
+      );
+      const calendar = await regions.internalCalendar(region, first, last);
+      const seasons = (calendar.seasons as unknown as SeasonRow[])
+        .filter((s) => !slug || s.parkSlug === slug)
+        .map((s) => ({
+          ...s,
+          parkName: names.get(s.parkSlug ?? "") ?? s.parkSlug ?? "",
+        }));
+      return {
+        scope: slug ? names.get(slug) : region.name,
+        from: first,
+        to: last,
+        ...seasonsSummary(seasons, first, last),
+        slots: slotsSummary(
+          calendar.days,
+          slug ? [slug] : calendar.parks,
+          names,
+          region.timezone,
+        ),
+        slotsWhy:
+          "slots come with the published opening hours; a day past them lists none yet",
+      };
+    },
+  }),
+  tool({
+    name: "get_travel_time",
+    status: "parks",
+    description:
+      "Between two Orlando parks, or from a hotel area to a park: km and minutes of a drive " +
+      "without traffic, where it parks (Magic Kingdom: the TTC), and the resort's own " +
+      "transport (monorail, Skyliner, boat, bus, Hogwarts Express, walking). Orlando only.",
+    input: z.object({
+      from: z.string().min(2).max(120).optional(),
+      area: z.enum(ORLANDO_AREAS).optional().describe("Instead of from"),
+      to: z.string().min(2).max(120),
+    }),
+    run: async ({ from, area, to }, ctx) => {
+      if (!from === !area) {
+        throw new McpToolError("Give either from (a park) or area");
+      }
+      const { region, parks } = await orlando(ctx);
+      const orlandoOnly =
+        "park.fan has travel times between the Orlando parks and from Orlando hotel areas only, none for this park";
+      const target = await orlandoPark(ctx, to, parks, orlandoOnly);
+      if ("ambiguous" in target) return target;
+      let start: { point: string; name: string };
+      if (area) {
+        const hotelArea = region.hotelAreas.find((a) => a.key === area);
+        start = { point: hotelPoint(area), name: hotelArea?.name ?? area };
+      } else {
+        const found = await orlandoPark(
+          ctx,
+          from as string,
+          parks,
+          orlandoOnly,
+        );
+        if ("ambiguous" in found) return found;
+        start = { point: found.slug, name: found.name };
+      }
+      if (start.point === target.slug) {
+        throw new McpToolError("That is the same park");
+      }
+      const leg = findLeg(buildLegs(region), start.point, target.slug);
+      if (!leg)
+        throw new McpToolError("park.fan has no travel time for this pair");
+      return travelSummary(
+        leg,
+        start.name,
+        target.name,
+        regionMatrix(region).attribution,
+      );
+    },
+  }),
+  tool({
     name: "search_posts",
     status: "posts",
     description:
@@ -3319,11 +3674,13 @@ export const ASSISTANT_TOOLS = [
       "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or " +
       "slug; with section its wait-time calendar, its average waits or its page for a visit " +
       "with kids where it has one, else the error says why), a ride (rideId), a post or glossary " +
-      "term (its url from search_posts or look_up_glossary), 2 to 4 parks side by side (compare), " +
-      "or one of the site's pages (page: alerts, the user's push alerts; best_time, the best time " +
-      "to visit across parks; favorites; trip_planner; how_it_works, how park.fan gets its waits " +
-      "and forecasts; fancast, how accurate the forecasts were). The page address is built from the " +
-      "park.fan data, never typed by you.",
+      "term (its url from search_posts or look_up_glossary), the Orlando hub with a plan (url: " +
+      "plan_vacation's hubUrl), 2 to 4 parks side by side (compare), or one of the site's pages " +
+      "(page: alerts, the user's push alerts; best_time, the best time to visit across parks; " +
+      "favorites; trip_planner; how_it_works, how park.fan gets its waits and forecasts; " +
+      "fancast, how accurate the forecasts were; orlando, the Orlando hub with its crowd " +
+      "calendar and vacation planner). The page address is built from the park.fan data, never " +
+      "typed by you.",
     input: z.object({
       park: parkRef.optional(),
       section: z
@@ -3342,7 +3699,7 @@ export const ASSISTANT_TOOLS = [
         .max(400)
         .optional()
         .describe(
-          "A post's or glossary term's url, exactly as a tool returned it",
+          "A post's or glossary term's url, or a hubUrl, exactly as a tool returned it",
         ),
       compare: z
         .array(parkRef)
@@ -3386,8 +3743,10 @@ export const ASSISTANT_TOOLS = [
           base && section ? `${base}/${PARK_SECTION_SEGMENTS[section]}` : base;
       } else if (url) {
         const candidate = siteOnlyPath(url);
-        // Posts and glossary terms only; parks and rides go by id, so no address is guessed.
-        path = candidate && CONTENT_PATH.test(candidate) ? candidate : null;
+        // Posts, glossary terms and the hub with a plan only; parks and rides go by id, so no
+        // address is guessed.
+        path =
+          candidate && CONTENT_PATH.test(candidate) ? candidate : hubPath(url);
       } else if (compare) {
         const found = await Promise.all(
           compare.map((reference) => resolvePark(mcp(ctx), reference)),
@@ -3984,13 +4343,57 @@ export const ASSISTANT_TOOLS = [
     name: "plan_trip",
     status: "planner",
     description:
-      "Reserve several days at one park in the trip planner at once (a trip), empty days the " +
-      "user fills later.",
+      "Reserve days in the trip planner at once, empty days the user fills later: several days " +
+      "at one park, or a trip across parks (days, as plan_vacation's reserve).",
     input: z.object({
-      park: parkRef,
-      dates: z.array(planDate).min(1).max(6),
+      park: parkRef.optional(),
+      dates: z.array(planDate).min(1).max(6).optional(),
+      days: z
+        .array(z.object({ park: z.string().min(2).max(120), date: planDate }))
+        .min(1)
+        .max(MAX_PARK_DAYS)
+        .optional()
+        .describe("Instead of park and dates"),
     }),
-    run: async ({ park: reference, dates }, ctx) => {
+    run: async ({ park: reference, dates, days }, ctx) => {
+      if (days) {
+        if (reference || dates) {
+          throw new McpToolError("Give either park and dates, or days");
+        }
+        const byReference = new Map<string, PlannerPark>();
+        for (const { park: ref } of days) {
+          if (byReference.has(ref)) continue;
+          const park = await planPark(mcp(ctx), ref);
+          if ("ambiguous" in park) return park;
+          byReference.set(ref, park);
+        }
+        const seen = new Set<string>();
+        const trip = days
+          .map(({ park: ref, date }) => ({
+            park: byReference.get(ref) as PlannerPark,
+            date,
+          }))
+          .filter(({ park, date }) => {
+            const key = `${park.slug}@${date}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .sort(
+            (a, b) =>
+              a.date.localeCompare(b.date) ||
+              a.park.slug.localeCompare(b.park.slug),
+          );
+        return new ActionOutcome(
+          { type: "planner_reserve_trip", days: trip },
+          {
+            reserved: trip.map(({ park, date }) => ({ park: park.name, date })),
+          },
+        );
+      }
+      if (!reference || !dates) {
+        throw new McpToolError("Give either park and dates, or days");
+      }
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
       const unique = [...new Set(dates)].sort();

@@ -16,10 +16,13 @@ import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
 import { ASSISTANT_TOOL_PARAMS } from "./tools/assistant-tools";
 import { EVAL_CASES, type EvalCase } from "./assistant-eval.fixtures";
 
-/** Tools that change the page, the plan, the alerts or the chat: what "actions" forbids. */
+/**
+ * Tools that change the page, the plan, the alerts or the chat: what "actions" forbids.
+ * `plan_vacation` only reads, whatever its prefix says.
+ */
 export const ACTION_TOOLS = ASSISTANT_TOOL_PARAMS.map((t) => t.name).filter(
   (name) =>
-    name.startsWith("plan_") ||
+    (name.startsWith("plan_") && name !== "plan_vacation") ||
     [
       "open_page",
       "set_ride_alert",
