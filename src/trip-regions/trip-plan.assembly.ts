@@ -32,6 +32,11 @@ import {
   validateWindow,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
+import {
+  planEvenings,
+  type EveningShows,
+  type TicketKind,
+} from "./trip-evening";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
 import type { TripPlanDto } from "./dto/trip-region-response.dto";
 
@@ -49,8 +54,13 @@ export interface NormalizedPlanQuery {
   fireworks: FireworksOption;
   split: "auto" | "fixed";
   rest: RestOption;
+  ticket: TicketKind;
+  /** `hop=1` with a hopper ticket; without one it is dropped with a warning. */
   hop: boolean;
+  evenings: boolean;
   locks: PlanLock[];
+  /** `hop_needs_hopper`: `hop=1` came without `ticket=hopper` and was ignored. */
+  warnings: Array<"hop_needs_hopper">;
 }
 
 /** A plan before its answer is written: the optimizer's result and what split added. */
@@ -111,7 +121,9 @@ export function normalizePlanQuery(
   }
   parks.sort((a, b) => a.slug.localeCompare(b.slug));
 
-  const hop = flag(query.hop, false);
+  const ticket: TicketKind = query.ticket === "hopper" ? "hopper" : "base";
+  const hopAsked = flag(query.hop, false);
+  const hop = hopAsked && ticket === "hopper";
   const parkDays = parks.reduce((s, p) => s + p.visits, 0);
   if (parkDays > MAX_PARK_DAYS) {
     throw new BadRequestException(
@@ -122,7 +134,7 @@ export function normalizePlanQuery(
     throw new BadRequestException(
       hop
         ? "More park visits than two a day"
-        : "More park visits than trip days: set hop=1 or choose fewer",
+        : "More park visits than trip days: set ticket=hopper&hop=1 or choose fewer",
     );
   }
 
@@ -180,8 +192,11 @@ export function normalizePlanQuery(
     fireworks: query.fireworks === "want" ? "want" : "any",
     split: query.split === "fixed" ? "fixed" : "auto",
     rest,
+    ticket,
     hop,
+    evenings: flag(query.evenings, true),
     locks,
+    warnings: hopAsked && !hop ? ["hop_needs_hopper"] : [],
   };
 }
 
@@ -203,6 +218,8 @@ export function planCacheQuery(q: NormalizedPlanQuery): string {
     q.rest.mode === "max" ? `max:${q.rest.n}` : q.rest.mode,
     q.hop ? 1 : 0,
     q.locks.map((l) => `${l.target}@${l.date}`).join(","),
+    q.ticket,
+    q.evenings ? 1 : 0,
   ].join("|");
 }
 
@@ -377,18 +394,35 @@ export interface PlanResponseContext {
    * where nothing is measured at that distance.
    */
   leadMae: Map<number, number | null>;
+  /**
+   * The night shows the evenings read, by `showsKey(park, date)`: what
+   * `eveningShowsWanted` asked for, from the shows data. Absent: no show is
+   * named and no fireworks view is suggested.
+   */
+  shows?: EveningShows;
 }
 
 /** The plan route's answer. */
 export function planResponse(
   region: RegionConfig,
   q: NormalizedPlanQuery,
-  _calendar: InternalRegionCalendar,
+  calendar: InternalRegionCalendar,
   trip: OptimizedTrip,
   ctx: PlanResponseContext,
 ): TripPlanDto {
   const { plan } = trip;
   const legs = buildLegs(region);
+  const evenings = q.evenings
+    ? planEvenings({
+        region,
+        calendar,
+        legs,
+        days: plan.days,
+        trip: { from: q.from, to: q.to },
+        ticket: q.ticket,
+        shows: ctx.shows ?? new Map(),
+      })
+    : new Map();
   const errors = plan.days.flatMap((day) =>
     visitsOf(day).flatMap((visit) => {
       if (visit.basis !== "forecast" && visit.basis !== "long_range") return [];
@@ -410,10 +444,16 @@ export function planResponse(
       exact: plan.exact,
       ...(plan.relaxed.length > 0 && { relaxed: plan.relaxed }),
       ...(trip.split.length > 0 && { split: trip.split }),
+      ticket: q.ticket,
+      ...(q.warnings.length > 0 && { warnings: q.warnings }),
     },
-    days: plan.days.map((day) =>
-      withTravel(day, legs, q.area),
-    ) as unknown as Array<Record<string, unknown>>,
+    days: plan.days.map((day) => {
+      const evening = evenings.get(day.date);
+      return {
+        ...withTravel(day, legs, q.area),
+        ...(evening && { evening }),
+      };
+    }) as unknown as Array<Record<string, unknown>>,
     parks: plan.parks as unknown as Array<Record<string, unknown>>,
     totals: {
       headlinerWait: plan.totals.headlinerWait,

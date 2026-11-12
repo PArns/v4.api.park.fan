@@ -21,6 +21,7 @@ import { TripWhenService } from "../../trip-regions/trip-when.service";
 import type { HolidaysService } from "../../holidays/holidays.service";
 import type { WeatherService } from "../../parks/weather.service";
 import type { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
+import type { PlanDayService } from "../../parks/services/plan-day.service";
 import { ORLANDO } from "../../trip-regions/regions";
 import { isoInZone } from "../../trip-regions/trip-calendar.util";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
@@ -248,6 +249,7 @@ function setup(
     {
       getLeadTimeMae: jest.fn(async () => null),
     } as unknown as PredictionLeadSnapshotService,
+    { showsOn: jest.fn(async () => []) } as unknown as PlanDayService,
     redis,
   );
   const seasons = {

@@ -127,6 +127,35 @@ export interface CuratedLeg {
   replacesDrive?: { mode: TransportMode; minutes: number; km?: number };
 }
 
+/** A place for an evening outside the parks. */
+export interface VenueConfig extends LatLng {
+  key: string;
+  name: string;
+  /** The resort group whose evenings it serves. */
+  group: string;
+  kind: "district" | "viewpoint" | "resort_area";
+  /** Typical, not published per day: the venue's own page has the day's. */
+  typicalHours?: { opens: string; closes: string };
+  /** No admission: walking in costs nothing. */
+  free: boolean;
+  url: string;
+  notes?: string;
+  /** A viewpoint: the park whose fireworks it looks at. */
+  viewOf?: string;
+  highlights?: Array<"dining" | "shopping">;
+}
+
+/**
+ * A nighttime spectacular of a park, by its `shows.slug`. Curated from the
+ * operator's pages; its time on a day comes from the shows data
+ * (`PlanDayService.showsOn`), never from here.
+ */
+export interface NightShowConfig {
+  slug: string;
+  name: string;
+  kind: "fireworks" | "night_show";
+}
+
 export interface RegionConfig {
   slug: string;
   name: string;
@@ -136,6 +165,17 @@ export interface RegionConfig {
   hotelAreas: HotelAreaConfig[];
   perks: Record<HotelKind, PerkRule[]>;
   legs: CuratedLeg[];
+  venues: VenueConfig[];
+  /**
+   * The parks one hopper ticket lets a guest move between on a day. Disney's
+   * Park Hopper: the four theme parks. Universal's park-to-park: Universal
+   * Studios and Islands of Adventure (the official store's "2-Park 1-Day
+   * Park-to-Park Ticket"); Epic Universe sells as a one-park ticket and is
+   * never hopped to or from here (whether a multi-day ticket allows it is not
+   * verified). Water parks need their own add-on and are left out.
+   */
+  hopperSets: string[][];
+  nightShows: Record<string, NightShowConfig[]>;
 }
 
 const US = { continent: "north-america", country: "united-states" } as const;
@@ -463,6 +503,113 @@ export const ORLANDO: RegionConfig = {
       },
     },
   ],
+  venues: [
+    {
+      key: "disney-springs",
+      name: "Disney Springs",
+      group: "walt-disney-world",
+      kind: "district",
+      latitude: 28.3706,
+      longitude: -81.5152,
+      typicalHours: { opens: "10:00", closes: "23:00" },
+      free: true,
+      url: "https://disneyworld.disney.go.com/destinations/disney-springs/",
+      notes: "shops and restaurants; entry and parking free",
+      highlights: ["dining", "shopping"],
+    },
+    {
+      key: "disney-boardwalk",
+      name: "Disney's BoardWalk",
+      group: "walt-disney-world",
+      kind: "resort_area",
+      latitude: 28.3672,
+      longitude: -81.5552,
+      free: true,
+      url: "https://disneyworld.disney.go.com/destinations/boardwalk/",
+      notes:
+        "a lakeside promenade by EPCOT's International Gateway; EPCOT's fireworks are seen from it",
+      viewOf: "epcot",
+      highlights: ["dining"],
+    },
+    {
+      key: "polynesian-beach",
+      name: "Disney's Polynesian Village Resort beach",
+      group: "walt-disney-world",
+      kind: "viewpoint",
+      latitude: 28.4049,
+      longitude: -81.5827,
+      free: true,
+      url: "https://disneyworld.disney.go.com/resorts/polynesian-resort/",
+      notes:
+        "across the lagoon from Magic Kingdom, on the resort monorail; at busy times Disney admits hotel guests and diners only",
+      viewOf: "magic-kingdom-park",
+      highlights: ["dining"],
+    },
+    {
+      key: "universal-citywalk",
+      name: "Universal CityWalk",
+      group: "universal-orlando",
+      kind: "district",
+      latitude: 28.4738,
+      longitude: -81.462,
+      typicalHours: { opens: "11:00", closes: "02:00" },
+      free: true,
+      url: "https://www.universalorlando.com/web/en/us/universal-citywalk",
+      notes:
+        "between Universal Studios and Islands of Adventure, by the parking garages; entry free, parking paid",
+      highlights: ["dining", "shopping"],
+    },
+    {
+      key: "icon-park",
+      name: "ICON Park, International Drive",
+      group: "seaworld-orlando",
+      kind: "district",
+      latitude: 28.4433,
+      longitude: -81.4686,
+      free: true,
+      url: "https://iconparkorlando.com/",
+      notes: "entry free, attractions paid; hours vary by venue",
+      highlights: ["dining", "shopping"],
+    },
+  ],
+  hopperSets: [
+    DISNEY_THEME_PARKS,
+    ["universal-studios-florida", "universal-islands-of-adventure"],
+  ],
+  nightShows: {
+    "magic-kingdom-park": [
+      {
+        slug: "happily-ever-after",
+        name: "Happily Ever After",
+        kind: "fireworks",
+      },
+      {
+        slug: "disney-starlight-dream-the-night-away",
+        name: "Disney Starlight: Dream the Night Away",
+        kind: "night_show",
+      },
+    ],
+    epcot: [
+      {
+        slug: "luminous-the-symphony-of-us",
+        name: "Luminous The Symphony of Us",
+        kind: "fireworks",
+      },
+    ],
+    "disneys-hollywood-studios": [
+      { slug: "fantasmic", name: "Fantasmic!", kind: "night_show" },
+      {
+        slug: "wonderful-world-of-animation",
+        name: "Wonderful World of Animation",
+        kind: "night_show",
+      },
+      {
+        slug: "disney-movie-magic",
+        name: "Disney Movie Magic",
+        kind: "night_show",
+      },
+    ],
+  },
   hotelAreas: [
     {
       key: "disney",
@@ -603,6 +750,30 @@ export const ORLANDO: RegionConfig = {
       alternatives: [{ mode: "bus", name: "Universal shuttle" }],
     },
     {
+      from: "venue:universal-citywalk",
+      to: "universal-studios-florida",
+      replacesDrive: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    },
+    {
+      from: "venue:universal-citywalk",
+      to: "universal-islands-of-adventure",
+      replacesDrive: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    },
+    {
+      from: "venue:disney-boardwalk",
+      to: "epcot",
+      alternatives: [
+        { mode: "walk", minutes: 10, via: "international_gateway" },
+      ],
+    },
+    {
+      from: "venue:polynesian-beach",
+      to: "magic-kingdom-park",
+      alternatives: [{ mode: "monorail", minutes: 10 }],
+    },
+    {
       from: "hotel:universal",
       to: "universal-studios-florida",
       alternatives: [{ mode: "walk", minutes: 15, via: "citywalk" }],
@@ -652,4 +823,9 @@ export function regionOfPark(park: ParkPathLike): RegionConfig | null {
     if (found) return region;
   }
   return null;
+}
+
+/** `venue:<key>`, the form a leg's `from`/`to` takes for a venue. */
+export function venuePoint(key: string): string {
+  return `venue:${key}`;
 }

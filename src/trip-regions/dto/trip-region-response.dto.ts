@@ -41,6 +41,35 @@ export class TripHotelAreaDto {
   perks: string[];
 }
 
+export class TripVenueHoursDto {
+  @ApiProperty({ example: "10:00" }) opens: string;
+  @ApiProperty({ example: "23:00" }) closes: string;
+}
+
+export class TripVenueDto {
+  @ApiProperty({ example: "disney-springs" }) key: string;
+  @ApiProperty({ example: "Disney Springs" }) name: string;
+  @ApiProperty({ example: "walt-disney-world" }) group: string;
+  @ApiProperty({ enum: ["district", "viewpoint", "resort_area"] })
+  kind: "district" | "viewpoint" | "resort_area";
+  @ApiProperty() latitude: number;
+  @ApiProperty() longitude: number;
+  @ApiPropertyOptional({
+    type: () => TripVenueHoursDto,
+    description:
+      "Typical park-local hours, not the day's: the venue's own page has those.",
+  })
+  typicalHours?: TripVenueHoursDto;
+  @ApiProperty({ description: "No admission to walk in." }) free: boolean;
+  @ApiProperty() url: string;
+  @ApiPropertyOptional() notes?: string;
+  @ApiPropertyOptional({
+    description: "A fireworks view: the park whose fireworks it looks at.",
+    example: "epcot",
+  })
+  viewOf?: string;
+}
+
 export class TripTransportAlternativeDto {
   @ApiProperty({
     enum: ["monorail", "skyliner", "boat", "bus", "walk", "train"],
@@ -91,6 +120,12 @@ export class TripRegionDto {
   @ApiProperty({ type: () => [TripRegionParkDto] }) parks: TripRegionParkDto[];
   @ApiProperty({ type: () => [TripHotelAreaDto] })
   hotelAreas: TripHotelAreaDto[];
+  @ApiProperty({
+    type: () => [TripVenueDto],
+    description:
+      "Places for an evening outside the parks; travel legs to them are `venue:<key>`.",
+  })
+  venues: TripVenueDto[];
   @ApiProperty({ type: () => TripTravelDto }) travel: TripTravelDto;
 }
 
@@ -211,14 +246,16 @@ export class TripCalendarDto {
 
 export class TripPlanDto {
   @ApiProperty({
-    description: "region, from, to, computedAt, objective, exact, relaxed",
+    description:
+      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, warnings",
     type: "object",
     additionalProperties: true,
   })
   meta: Record<string, unknown>;
   @ApiProperty({
     description:
-      "One entry per trip day: arrival | park | hop | rest | departure",
+      "One entry per trip day: arrival | park | hop | rest | departure. A park day that " +
+      "ends early carries `evening` (a hop park or a venue, with up to two alternatives).",
     type: "array",
     items: { type: "object" },
   })

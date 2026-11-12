@@ -104,9 +104,24 @@ export function doorToDoorMinutes(leg: TripLeg): number {
 }
 
 /**
- * The parks that may share a hop day: theme parks of the same resort whose
- * leg is under {@link HOP_MAX_MINUTES} door to door. Water parks and
- * Discovery Cove take a whole day and never hop.
+ * Whether one hopper ticket covers both parks: the same set of the region's
+ * `hopperSets` (Disney's four theme parks; Universal Studios and Islands of
+ * Adventure, never Epic Universe).
+ */
+export function sameHopperSet(
+  region: RegionConfig,
+  a: string,
+  b: string,
+): boolean {
+  return (
+    a !== b && region.hopperSets.some((s) => s.includes(a) && s.includes(b))
+  );
+}
+
+/**
+ * The parks that may share a hop day: theme parks one hopper ticket covers
+ * ({@link sameHopperSet}) whose leg is under {@link HOP_MAX_MINUTES} door to
+ * door. Water parks and Discovery Cove take a whole day and never hop.
  */
 export function hopPairs(
   region: RegionConfig,
@@ -123,7 +138,7 @@ export function hopPairs(
   const pairs: Array<[string, string]> = [];
   for (let i = 0; i < parks.length; i++) {
     for (let j = i + 1; j < parks.length; j++) {
-      if (parks[i].group !== parks[j].group) continue;
+      if (!sameHopperSet(region, parks[i].slug, parks[j].slug)) continue;
       const leg = findLeg(legs, parks[i].slug, parks[j].slug);
       if (leg && doorToDoorMinutes(leg) < HOP_MAX_MINUTES) {
         pairs.push([parks[i].slug, parks[j].slug]);

@@ -6,7 +6,18 @@ import { TRIP_REGION_RESPONSE_TTL } from "../common/cache/cache-ttl";
 import { safeJsonParse } from "../common/utils/json.util";
 import { SingleFlight } from "../common/utils/single-flight.util";
 import { PredictionLeadSnapshotService } from "../ml/services/prediction-lead-snapshot.service";
+import { PlanDayService } from "../parks/services/plan-day.service";
+import { DbJobBudget, mapWithDbBudget } from "../common/utils/db-job-budget";
 import { TripRegionService } from "./trip-region.service";
+import {
+  eveningShowsWanted,
+  eveningTriggers,
+  showsKey,
+  type EveningShows,
+} from "./trip-evening";
+import type { RegionConfig } from "./regions";
+import type { InternalRegionCalendar } from "./trip-region.assembly";
+import type { OptimizedTrip } from "./trip-plan.assembly";
 import {
   normalizePlanQuery,
   optimizePlan,
@@ -26,6 +37,9 @@ export type { NormalizedPlanQuery } from "./trip-plan.assembly";
  * at the planned visits' leads. Cached an hour by the normalized query.
  * Contract: docs/frontend/trip-regions.md.
  */
+/** Show reads of one plan at once: one per park and evening. */
+const SHOWS_BUDGET = new DbJobBudget(4);
+
 @Injectable()
 export class TripPlanService {
   private readonly logger = new Logger(TripPlanService.name);
@@ -34,6 +48,7 @@ export class TripPlanService {
   constructor(
     private readonly regions: TripRegionService,
     private readonly leadSnapshots: PredictionLeadSnapshotService,
+    private readonly planDay: PlanDayService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -90,6 +105,49 @@ export class TripPlanService {
       computedAt: new Date().toISOString(),
       today,
       leadMae,
+      shows: q.evenings
+        ? await this.eveningShows(region, q, calendar, trip)
+        : undefined,
     });
+  }
+
+  /** The night shows of the parks the plan's evenings may name. */
+  private async eveningShows(
+    region: RegionConfig,
+    q: NormalizedPlanQuery,
+    calendar: InternalRegionCalendar,
+    trip: OptimizedTrip,
+  ): Promise<EveningShows> {
+    const wanted = eveningShowsWanted(
+      region,
+      calendar,
+      eveningTriggers(region, calendar, trip.plan.days, q),
+    );
+    const shows: EveningShows = new Map();
+    if (wanted.length === 0) return shows;
+    const parks = new Map(
+      (await this.regions.resolveParks(region)).map((p) => [
+        p.config.slug,
+        p.park,
+      ]),
+    );
+    await mapWithDbBudget(
+      wanted,
+      async ({ park, date }) => {
+        const entity = parks.get(park);
+        if (!entity) return;
+        const list = await this.planDay
+          .showsOn(entity, date)
+          .catch((err: Error) => {
+            this.logger.warn(
+              `Evening shows unavailable for ${park}: ${err.message}`,
+            );
+            return [];
+          });
+        shows.set(showsKey(park, date), list);
+      },
+      SHOWS_BUDGET,
+    );
+    return shows;
   }
 }
