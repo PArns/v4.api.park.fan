@@ -50,6 +50,11 @@ export interface TripParkDay {
    */
   closesEarly?: true;
   dayGuestCloseAt?: string;
+  /**
+   * `extreme_heat`: a theme park's day whose high (forecast, else the climate
+   * normal) passes the plan's heat threshold (`HeatModel` in the optimizer).
+   */
+  warnings?: Array<"extreme_heat">;
 }
 
 /** What the plan reads beside the public fields; never sent. */
@@ -63,7 +68,13 @@ export interface TripParkDayInternal extends TripParkDay {
    * against. Never sent.
    */
   usualHours?: number;
-  weather?: { tempMax?: number; precipitationMm?: number; icon?: number };
+  weather?: {
+    tempMax?: number;
+    precipitationMm?: number;
+    icon?: number;
+    /** `climate_normal` past the forecast's reach (the calendar's own marker). */
+    basis?: "forecast" | "climate_normal";
+  };
 }
 
 /** A schedule row as `ParksService.getSchedule` returns it. */
@@ -100,6 +111,7 @@ export interface CalendarDayLike {
     rainChance: number;
     precipitationMm?: number;
     icon: number;
+    basis?: "forecast" | "climate_normal";
   };
 }
 
@@ -434,6 +446,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
       tempMax: day.weather.tempMax,
       precipitationMm: day.weather.precipitationMm ?? day.weather.rainChance,
       icon: day.weather.icon,
+      ...(day.weather.basis && { basis: day.weather.basis }),
     };
   }
   return out;

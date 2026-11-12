@@ -14,7 +14,12 @@ import {
   type RegionConfig,
   type RegionParkConfig,
 } from "./regions";
-import { dayCost, medianDayHours, type PlanCell } from "./trip-optimizer";
+import {
+  heatOf,
+  dayCost,
+  medianDayHours,
+  type PlanCell,
+} from "./trip-optimizer";
 import { buildLegs, regionMatrix } from "./travel";
 import {
   buildParkDay,
@@ -484,6 +489,12 @@ export function assembleRegionCalendar(
         cells.get(s.park.config.slug)?.get(date) as TripParkDayInternal,
       ]),
     );
+    for (const s of sources) {
+      const cell = parks[s.park.config.slug];
+      if (s.park.config.type === "theme_park" && cell && heatOf(cell.weather)) {
+        cell.warnings = ["extreme_heat"];
+      }
+    }
     const { best, why } = bestOfDay(region, parks);
     return {
       date,

@@ -846,12 +846,13 @@ describe("optimizeTrip", () => {
           [park("magic-kingdom-park")],
           {
             "magic-kingdom-park": (i) =>
-              i === 0 ? open(42, { early }) : open(40),
+              i === 0 ? open(41.5, { early }) : open(40),
           },
           { perkRules: ORLANDO.perks.disney },
         ),
       );
-      // 42 × 0.95 = 39.9 beats 40.
+      // 41.5 × 0.95 = 39.4, plus 0.4 for the last day of the hurricane
+      // season, beats 40 on 1 December.
       expect(placement(withEarly)["magic-kingdom-park"]).toEqual([
         "2026-11-30",
       ]);

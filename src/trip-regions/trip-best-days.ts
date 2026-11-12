@@ -19,7 +19,7 @@ import {
   type InternalCalendarDay,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
-import { dayCost, losesEvening } from "./trip-optimizer";
+import { dayCost, heatOf, losesEvening } from "./trip-optimizer";
 
 /** A flat window: the rounded waits spread less than this. */
 export const FLAT_SPREAD_MINUTES = 10;
@@ -38,6 +38,7 @@ export type BestDayReason =
   | "early_entry"
   | "early_park_admission"
   | "long_range"
+  | "extreme_heat"
   | "quietest_in_window"
   | "estimate_last_year";
 
@@ -115,7 +116,10 @@ export function regionBestDays(
           const slug = d.best?.[g.key];
           const park = slug ? d.parks[slug] : undefined;
           if (!slug || park?.headlinerWait == null) return [];
-          const wait = dayCost(planCellOf(park), { type: "theme_park" });
+          const wait = dayCost(planCellOf(park), {
+            type: "theme_park",
+            date: d.date,
+          });
           return [
             { date: d.date, slug, headlinerWait: park.headlinerWait, wait },
           ];
@@ -155,7 +159,7 @@ function parkBestDays(
     const cell = planCellOf(day);
     const cost = dayCost(
       { ...cell, status: "OPERATING" },
-      { type: "theme_park" },
+      { type: "theme_park", date },
     );
     const shortened = losesEvening(cell, undefined);
     return [{ date, day, wait, cost, shortened }];
@@ -228,6 +232,7 @@ function reasonsFor(
     reasons.push("extended_evening");
   }
   if (c.day.early) reasons.push(c.day.early.kind);
+  if (heatOf(c.day.weather)) reasons.push("extreme_heat");
   if (c.day.basis === "long_range") reasons.push("long_range");
   if (c.day.basis === "last_year") reasons.push("estimate_last_year");
   if (quietest) reasons.push("quietest_in_window");

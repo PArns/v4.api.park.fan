@@ -317,6 +317,39 @@ fixed share off, `fireworks=want` adds 500 to a night that costs the evening sho
 without published hours adds 1000. Water parks and Discovery Cove are a flat day the weather
 moves. The constants are `PlanCostModel`.
 
+Two terms price the season, in every route alike (`dayCostParts` names them):
+
+- **Extreme heat** (`HeatModel`), theme parks only. The day's high is the forecast where the
+  calendar has one (`weather.basis: "forecast"`, about 16 days), else the climate normal for the
+  date (`climate_normal`, the same 2015–2024 ERA5 normals `months[]` reads). A forecast high counts
+  from **35 °C**: Magic Kingdom's daily normals top out at 32.1 °C (late June) and run 30.9 °C at the
+  June–October median (measured 2026-11-12), so 35 °C is clearly hotter than a usual summer day. A
+  normal counts from **31.5 °C**, the top fifth of those June–October normals ("typically very
+  hot", late June to mid-July), at half the weight: a normal is a mean over 70 days of ten
+  summers, flatter than any one day, and says less about the day a visitor gets. The cost is
+  multiplied by 1 + 0.08 per degree above the threshold (half that for a normal), at most 1.4: a
+  36 °C forecast is 8 % dearer, 38 °C 24 %. Water parks and Discovery Cove take none: a hot dry
+  day is already their good day (× 0.8), and that bonus is not doubled. The calendar's park day
+  says `warnings: ["extreme_heat"]`, a best day has the reason `extreme_heat`, a plan day the
+  warning.
+- **The hurricane season** (`HURRICANE_WEIGHTS`), 1 June to 30 November, adds **8 minutes ×
+  the date's weight** to every park's day: weight 1 at the peak, by half month 0.05 / 0.1 in June,
+  0.15 / 0.2 in July, 0.4 / 0.8 in August (the peak starting on the 15th), 1 / 1 in September,
+  0.8 / 0.4 in October, 0.15 / 0.05 in November. The shape follows the National Hurricane
+  Center's climatology (nhc.noaa.gov/climo, 1991–2020: first named storm mid to late June, first
+  hurricane early to mid August, peak 10 September, most activity mid-August to mid-October); the
+  weights are curated relative to that peak, not NHC figures, and never a forecast. Eight minutes
+  at the peak is about a fifth of a typical headliner figure, enough to rank a September window
+  behind an equal May one without hiding a genuinely quieter one. Within one date every park
+  carries the same minutes, so the calendar's `best` is unchanged; across dates (`/best-days`,
+  the plan's days, `/when`'s windows) it counts. A plan day says `hurricane_season`, or
+  `hurricane_peak` from 15 August to 15 October.
+
+Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
+window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
+(`{ heat?, hurricane? }`, minutes per park day, one decimal, absent when zero) say what the
+ranking added, so a client can say "ranked lower: hurricane peak".
+
 ## The best days (`GET /v1/trip-regions/orlando/best-days?from=&to=&limit=5`)
 
 Read off the calendar for the window (default today … +30, at most 92 days), so it says nothing the
@@ -551,13 +584,16 @@ short. When no order of the resorts fits (closed days, locks), the plan is made 
 (`early_entry`, `early_park_admission`, `extended_evening`, `express_included`),
 `water_park_weather`, `busiest_day_spared`, `rest_after_streak`, `locked`. Warnings:
 `party_night_short_hours`, `fireworks_missed`, `hours_not_published`, `estimate_last_year`, `long_range`,
-`no_forecast`, `adjacent_repeat`, `long_streak`. `unplaced[].reason`: `no_open_day` (closed on every
+`no_forecast`, `adjacent_repeat`, `long_streak`, `extreme_heat`, `hurricane_season`, `hurricane_peak`
+([how a day is priced](#how-a-day-is-priced)). `unplaced[].reason`: `no_open_day` (closed on every
 day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[].reason`:
 `outside_trip`, `closed`, `day_taken`, `no_visit_left`.
 
 **`totals`** compare like with like: the planned visits' mean `headlinerWait` against, for the same
 visits, the mean over every open day of the window of that park. `savedMinutesPerRide` is that
-difference, per headliner ride. Show it as such; it is not hours saved per day. `orderMatters` is
+difference, per headliner ride. Show it as such; it is not hours saved per day. `penalties`
+(`{ heat?, hurricane? }`, minutes per park day) is what heat and the hurricane season added to the
+plan's cost, never to these waits; absent when zero. `orderMatters` is
 false when it is under 3 minutes: any order will do. `expectedError` is the measured error of the
 served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so

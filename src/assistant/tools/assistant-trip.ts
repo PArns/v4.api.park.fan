@@ -7,6 +7,11 @@ import type {
   InternalCalendarDay,
   InternalRegionCalendar,
 } from "../../trip-regions/trip-region.service";
+import {
+  heatOf,
+  hurricaneWeight,
+  isHurricanePeak,
+} from "../../trip-regions/trip-optimizer";
 import type {
   PlanReason,
   PlanWarning,
@@ -80,6 +85,39 @@ export function regionParkFor(
   };
 }
 
+/** The heat and hurricane warnings in words, shared by every Orlando tool. */
+const HEAT_PHRASE = "extreme heat: hotter than a usual summer day";
+const HURRICANE_PHRASE =
+  "hurricane season (June to November), a fact about the season, not a forecast";
+const HURRICANE_PEAK_PHRASE =
+  "peak of the hurricane season (mid-August to mid-October), a fact about the season, not a forecast";
+
+/**
+ * An Orlando day's heat and hurricane warnings as phrases, from the calendar
+ * day's weather (forecast, else the climate normal) and its date, for a tool
+ * that reads the park calendar directly (`compare_parks`).
+ */
+export function heatAndHurricaneWatch(
+  date: string,
+  weather: { tempMax?: number; basis?: string } | null | undefined,
+  themePark: boolean,
+): string[] {
+  const watch: string[] = [];
+  if (
+    themePark &&
+    weather &&
+    heatOf({
+      tempMax: weather.tempMax,
+      basis: weather.basis === "climate_normal" ? "climate_normal" : "forecast",
+    })
+  ) {
+    watch.push(HEAT_PHRASE);
+  }
+  if (isHurricanePeak(date)) watch.push(HURRICANE_PEAK_PHRASE);
+  else if (hurricaneWeight(date) > 0) watch.push(HURRICANE_PHRASE);
+  return watch;
+}
+
 /** The plan's reasons in words; a perk's reason is the day's `perks`, named once. */
 const REASONS: Record<Exclude<PlanReason, PerkKind>, string> = {
   quietest_in_window: "its quietest day of the trip",
@@ -102,6 +140,9 @@ const WARNINGS: Record<PlanWarning, string> = {
   no_forecast: "no figure yet",
   adjacent_repeat: "second visit the day after the first",
   long_streak: "over four park days in a row",
+  extreme_heat: HEAT_PHRASE,
+  hurricane_season: HURRICANE_PHRASE,
+  hurricane_peak: HURRICANE_PEAK_PHRASE,
 };
 
 /** A hotel perk's name on a plan day; the prompt says what each one is. */
@@ -393,6 +434,19 @@ function plannedPark(
   };
 }
 
+/** The hurricane season is said once per trip (`season`), not on every day of it. */
+const HURRICANE_WARNINGS = new Set<PlanWarning>([
+  "hurricane_season",
+  "hurricane_peak",
+]);
+
+/** A plan day's warnings in words, the hurricane season left to the trip's `season`. */
+function watch(day: PlannedDay): string[] {
+  return day.warnings
+    .filter((w) => !HURRICANE_WARNINGS.has(w))
+    .map((w) => WARNINGS[w]);
+}
+
 /**
  * The plan as the model retells it: each day with its weekday, kind, parks and their figures,
  * hours and events, the travel, and why it was chosen and what to watch, in words; the totals;
@@ -457,9 +511,7 @@ export function vacationItinerary(input: {
       ...(travel && { travel }),
       ...(between && { between }),
       ...(why.length > 0 && { why }),
-      ...(day.warnings.length > 0 && {
-        watch: day.warnings.map((w) => WARNINGS[w]),
-      }),
+      ...(watch(day).length > 0 && { watch: watch(day) }),
     };
   });
   const area = region.hotelAreas.find((a) => a.key === query.area);
@@ -471,12 +523,18 @@ export function vacationItinerary(input: {
     headlinerWaitMeans:
       "the big rides' wait at their busiest, in minutes, meaned over the park's headliners; not the wait at every hour",
     ...(area && { travelFrom: `the hotel area ${area.name}` }),
+    ...((planned.some((d) => d.warnings.includes("hurricane_peak")) && {
+      season: HURRICANE_PEAK_PHRASE,
+    }) ||
+      (planned.some((d) => d.warnings.includes("hurricane_season")) && {
+        season: HURRICANE_PHRASE,
+      })),
 
     days,
     totals: {
       ...totals,
       means:
-        "headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day",
+        "headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; penalties: minutes a park day that heat and the hurricane season added to the plan's cost, not to the waits",
     },
     ...(plan.unplaced.length > 0 && {
       notPlaced: plan.unplaced.map((u) => ({
@@ -671,8 +729,9 @@ const WHEN_REASONS: Record<WhenReason, string> = {
 
 const WHEN_WARNINGS: Record<WhenWarning, string> = {
   school_break: "US school break: busier",
-  hurricane_season:
-    "hurricane season (June to November), a fact about the season, not a forecast",
+  hurricane_season: HURRICANE_PHRASE,
+  hurricane_peak: HURRICANE_PEAK_PHRASE,
+  extreme_heat: "extreme heat on a planned park day",
   party_nights: "party nights close a park early for day guests",
   fireworks_missed: "a planned night loses the evening show to a party",
   hours_not_published: "opening hours not published yet",
@@ -706,7 +765,7 @@ export function tripDatesSummary(input: {
     range: { from: result.meta.from, to: result.meta.to },
     tripDays: result.meta.days,
     headlinerWaitMeans:
-      "the planned park days' mean of the big rides' wait at their busiest, in minutes, early closings and hotel perks priced in",
+      "the planned park days' mean of the big rides' wait at their busiest, in minutes, early closings and hotel perks priced in; heat and the hurricane season rank a window lower (rankedLowerBy) but are not in it",
     ...(within && {
       within: {
         region: within.name,
@@ -746,6 +805,13 @@ export function tripDatesSummary(input: {
           watch: w.warnings.map((x) => WHEN_WARNINGS[x] ?? x),
         }),
         ...(events.length > 0 && { events }),
+        ...(w.penalties && {
+          rankedLowerBy: [
+            w.penalties.hurricane &&
+              `hurricane season, ${w.penalties.hurricane} min a park day`,
+            w.penalties.heat && `heat, ${w.penalties.heat} min a park day`,
+          ].filter(Boolean),
+        }),
         hubUrl: hubUrl({ ...plan, from: w.from, to: w.to }),
       };
     }),

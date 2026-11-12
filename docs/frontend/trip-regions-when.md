@@ -77,7 +77,8 @@ by the key guard). It answers 400 for:
       "rank": 1,
       "from": "2027-02-16",
       "to": "2027-02-25",
-      "headlinerWait": 34, // the window's plan: mean over its park days
+      "headlinerWait": 34, // the window's plan: mean over its park days, without penalties
+      "penalties": { "hurricane": 6.4, "heat": 1.2 }, // minutes per park day the ranking added; absent when none
       "rangeAverageWait": 44, // the same trip's plan, averaged over the range's windows
       "basis": "forecast", // forecast | mixed | last_year | none
       "reasons": ["no_school_break", "after_holidays", "mild_weather"],
@@ -141,7 +142,14 @@ by the key guard). It answers 400 for:
   days (a hop day counts once, half of each park plus the move).
 - **The ranking** is the plan's sum over its park days, plus 1000 for each visit the window cannot
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
-  it. Ties go to the earlier window.
+  it. It includes extreme heat and the hurricane season
+  ([how a day is priced](./trip-regions.md#how-a-day-is-priced)): a peak-season window ranks
+  behind an equal one outside the season. Windows are compared by that sum per visit, rounded to
+  the minute; within the same minute a `forecast` window goes before a `mixed` one before a
+  `last_year` one, then the lower exact sum, then the earlier window.
+- **`penalties`** (`{ heat?, hurricane? }`): what heat and the hurricane season added to the
+  ranking, in minutes per park day, one decimal, absent when both are zero. `headlinerWait` never
+  includes them, so the client can say "ranked lower: hurricane peak" beside a plain figure.
 - **`rangeAverageWait`** is the same trip's plan figure meaned over the range's windows, so "27 %
   below the range's average" compares like with like. It plans every `averageStride`-th window
   (about 26 over any range, every other week of a year), not all of them: on the 2027 production
@@ -169,6 +177,8 @@ by the key guard). It answers 400 for:
   - `dayGuestHours`: the mean day-guest open hours over the month's OPERATING days of the chosen
     headliner parks, one decimal; absent where no hours are published.
   - `hurricaneSeason`: June to November.
+
+  `weeks` and `months` show the plain figures, without the heat and hurricane terms.
 - **Reasons** (the client translates the codes and shows nothing for an unknown one):
   - `no_school_break`: no day of the window is a US school break and none is unknown;
   - `after_holidays`: and a school break ended within 7 days before it;
@@ -183,7 +193,10 @@ by the key guard). It answers 400 for:
 
   **Warnings**:
   - `school_break`: a day of the window is a US school break;
-  - `hurricane_season`: the window touches June to November, a fact about the season;
+  - `hurricane_season`: the window touches 1 June to 30 November, a fact about the season;
+  - `hurricane_peak`: and touches its peak, 15 August to 15 October;
+  - `extreme_heat`: a planned theme-park day is extremely hot (a forecast from 35 °C, else a
+    climate normal from 31.5 °C);
   - `party_nights` (with `closesEarlyDays`, the planned park days that close early): a planned day
     closes early for a ticketed evening;
   - `fireworks_missed`: with `fireworks=want`, a planned night loses the evening show anyway;
@@ -203,13 +216,14 @@ by the key guard). It answers 400 for:
 
 ## How it is computed
 
-Every start date in the range is a candidate. A lower bound ranks them all: the plan with its
-rules dropped, i.e. the cheapest assignment of the window's visits to distinct days (Hungarian),
+Every start date in the range is a candidate. A lower bound per visit ranks them all: the plan
+with its rules dropped, i.e. the cheapest assignment of the window's visits to distinct days (Hungarian),
 a visit left out at 1000; where the plan may pair parks on a hop day, each visit on its park's
-cheapest days at the hop day's half price instead. The full optimizer then plans candidates in
-bound order until the next bound cannot beat the `limit`-th window kept, and windows closer than
-`gap` days to a better kept one are dropped (the greedy rule, in score order). That is exact: every
-window left unplanned scores at least its bound, behind the last one returned. The specs check it
+cheapest days at the hop day's half price instead, all priced with the season terms. The full
+optimizer then plans candidates in bound order until the next bound, rounded per visit, lands in a
+later minute than the `limit`-th window kept, and windows closer than `gap` days to a better kept
+one are dropped (the greedy rule, in ranking order). That is exact: every window left unplanned
+scores at least its bound, behind the last one returned. The specs check it
 against planning every window.
 
 **Time.** On the 2027 production data (7 headliner parks, 2027-01-01 … 2027-11-12, 307 windows) a

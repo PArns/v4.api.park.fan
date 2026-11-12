@@ -337,7 +337,9 @@ the headliners' expected peak; a park whose day guests must leave early, its clo
 more before its usual close over the surrounding fortnight or a party night after an earlier close,
 carries `closesEarlyForDayGuests` with its `usualClose` and moves behind any full-day park within
 15 minutes of its wait, the rule [trip regions](./trip-regions.md#how-a-day-is-priced) prices a
-day by; the prompt asks Parky to say so), `unrated` the open ones without a level, `closed` and `notKnown`
+day by; the prompt asks Parky to say so; an Orlando park's row also carries `watch`, the extreme
+heat of a theme park's day and the hurricane season or its peak as short phrases, from the same
+`heatOf` and season table), `unrated` the open ones without a level, `closed` and `notKnown`
 the rest by name; an `unknown` level is never ranked as quiet. A park whose calendar fails lands
 in `notKnown` and costs the rest nothing, and so does one whose published schedule names no status
 for the day, with that reason (`get_days` gives such a day the same `why`).
@@ -505,7 +507,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `area` (`travelFrom` once) and `between` on a hop day, `why` (the reasons; a perk's is in
   `perks`) and `watch` (the warnings; `last_year` reads "estimate from last year, not a
   forecast"). Then `totals` with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
-  `searchCutShort` when the plan is not proven best, `hubUrl` and `reserve`, the `[{ park: id,
+  `searchCutShort` when the plan is not proven best, `hubUrl` and `reserve`, the hurricane season
+said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
+every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
   date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 9,000
   characters (`assistant-trip.spec.ts`).
 - **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
@@ -525,7 +529,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   route's own parameter names (`hubUrl` above). Then `within` (the breaks and how far the data
   reaches), `noWindow` when none fits, and the year strip as `months` (`headlinerWait`,
   `lastYear`, `climate` as "high/low °C, mm", the count of US school-break days, `partyNights`,
-  `hurricaneSeason`), with `monthsMean` saying what the numbers are. Four eval cases (German and
+  `hurricaneSeason`), with `monthsMean` saying what the numbers are. A window the season ranked
+  lower carries `rankedLowerBy` ("hurricane season, 6.4 min a park day"); `extreme_heat` and
+  `hurricane_peak` read as short phrases in `watch`. Four eval cases (German and
   English, with and without a school-holiday region) cover the routing.
 - **`get_park_events`** (status `forecast`): one `park`, or all Orlando parks without it, `from`
   and `to` (31 days by default, at most 92). For Orlando, from the region calendar: the curated
