@@ -58,6 +58,7 @@ import {
   type TicketSuggestion,
 } from "./trip-tickets";
 import { parksOf } from "./tickets";
+import { catalogVersionOf } from "./ticket-catalog";
 
 /** The plan's options after validation, in one canonical form. */
 export interface NormalizedPlanQuery {
@@ -86,6 +87,8 @@ export interface NormalizedPlanQuery {
   hopperResorts: string[];
   /** `blocks` was written in the query: it then holds for owned tickets' resorts too. */
   blocksWritten: boolean;
+  /** The ticket catalog's version the plan is made with: part of every cache key. */
+  catalogVersion: string;
 }
 
 /** A plan before its answer is written: the optimizer's result and what split added. */
@@ -267,6 +270,7 @@ export function normalizePlanQuery(
     tickets,
     hopperResorts,
     blocksWritten: query.blocks !== undefined,
+    catalogVersion: catalogVersionOf(region),
   };
 }
 
@@ -298,6 +302,8 @@ export function planCacheQuery(q: NormalizedPlanQuery): string {
           q.blocksWritten ? "b" : "-",
         ]
       : []),
+    // An edited ticket rule never serves a plan made under the old one.
+    `catalog:${q.catalogVersion}`,
   ].join("|");
 }
 
@@ -765,6 +771,7 @@ export function planResponse(
       ...(q.hopperResorts.length > 0 && { hopper: q.hopperResorts }),
       ...(tickets.summaries.length > 0 && { tickets: tickets.summaries }),
       ...(trip.mixing && { mixing: trip.mixing }),
+      ticketCatalog: q.catalogVersion,
       ...(tickets.suggestions.length > 0 && {
         ticketSuggestion: tickets.suggestions,
       }),

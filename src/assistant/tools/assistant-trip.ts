@@ -971,8 +971,10 @@ const WHEN_BASIS: Record<string, string> = {
 export function tripDatesSummary(input: {
   result: TripWhen;
   plan: NormalizedPlanQuery;
+  /** The region with its ticket catalog, for the products' names. */
+  region: RegionConfig;
 }) {
-  const { result, plan } = input;
+  const { result, plan, region } = input;
   const seasonNames = new Map(
     result.seasons.map((s) => [String(s.id), seasonName(s)] as const),
   );
@@ -1032,7 +1034,7 @@ export function tripDatesSummary(input: {
         ...(w.ticketSuggestion && {
           ticketsToBuy: w.ticketSuggestion.map(
             (s) =>
-              `${productOf({ slug: result.meta.region }, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
+              `${productOf(region, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
           ),
         }),
         hubUrl: hubUrl({ ...plan, from: w.from, to: w.to }),

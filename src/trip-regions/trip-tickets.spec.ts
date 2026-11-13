@@ -17,6 +17,13 @@ import {
 import type { TripParkDayInternal } from "./trip-calendar.util";
 import type { InternalRegionCalendar } from "./trip-region.assembly";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
+import { seedCatalog, withCatalog } from "./ticket-catalog";
+import {
+  ORLANDO_TICKETS,
+  publicTicketCatalog,
+  seedLinksOf,
+  shopUrlOf,
+} from "./tickets";
 
 const TODAY = "2026-11-12";
 const FROM = "2027-02-01";
@@ -180,8 +187,14 @@ describe("tickets= in the query", () => {
     expect(planCacheQuery(a)).toBe(planCacheQuery(b));
     const none = normalizePlanQuery(ORLANDO, KNOWN, query({}), TODAY);
     expect(planCacheQuery(none)).not.toBe(planCacheQuery(a));
-    // A plan without tickets keeps the key it had.
-    expect(planCacheQuery(none).split("|")).toHaveLength(15);
+    // A plan without tickets keeps the key it had, plus the catalog's version.
+    const parts = planCacheQuery(none).split("|");
+    expect(parts).toHaveLength(16);
+    expect(parts[15]).toBe(`catalog:${none.catalogVersion}`);
+    // Another catalog version is another key: an edited rule never serves an old plan.
+    expect(planCacheQuery({ ...none, catalogVersion: "edited" })).not.toBe(
+      planCacheQuery(none),
+    );
   });
 
   it("keeps ticket=hopper as plan first with every resort's hopper, and hopper= per resort", () => {
@@ -398,6 +411,7 @@ describe("the hopper verdict", () => {
 
 describe("owned tickets in the answer", () => {
   it("lists each owned ticket, its days and why some are unused", () => {
+    const magic = ORLANDO_TICKETS.find((t) => t.id === "wdw-uk-14-day-magic")!;
     const { meta, body } = answer({
       parks: DISNEY.join(","),
       split: "fixed",
@@ -415,8 +429,12 @@ describe("owned tickets in the answer", () => {
         unusedDays: 10,
         unusedReason: "parks_fewer_than_days",
         warnings: [],
+        // The seeded links, in their order: Attraction Tickets' pages first, the official shop last.
+        links: seedLinksOf(magic),
+        shopUrl: shopUrlOf(magic),
       },
     ]);
+    expect(meta.ticketCatalog).toMatch(/^[0-9a-f]{12}$/);
     expect(meta.ticketSuggestion).toBeUndefined();
     expect(
       (body.days as any[])
@@ -477,6 +495,63 @@ describe("owned tickets in the answer", () => {
       recommended: false,
       why: ["no_gain"],
     });
+  });
+});
+
+describe("an archived product", () => {
+  /** The region with one product archived in its loaded catalog. */
+  const archivedRegion = (id: string) =>
+    withCatalog(ORLANDO, {
+      region: "orlando",
+      version: "edited",
+      products: seedCatalog(ORLANDO).products.map((p) =>
+        p.id === id ? { ...p, archived: true as const } : p,
+      ),
+    });
+
+  it("is still read by tickets=, and its ticket says it was archived", () => {
+    const region = archivedRegion("wdw-uk-14-day-magic");
+    const q = normalizePlanQuery(
+      region,
+      KNOWN,
+      query({ parks: DISNEY.join(","), tickets: "wdw-uk-14-day-magic" }),
+      TODAY,
+    );
+    expect(q.catalogVersion).toBe("edited");
+    const cal = calendar(q.from, q.to);
+    const trip = optimizePlan(region, q, cal);
+    const body = planResponse(region, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+    });
+    const meta = body.meta as Record<string, any>;
+    expect(meta.tickets[0].warnings).toContain("product_archived");
+    expect(meta.ticketCatalog).toBe("edited");
+  });
+
+  it("is never suggested and leaves the catalog route", () => {
+    const region = archivedRegion("wdw-date-based");
+    const q = normalizePlanQuery(
+      region,
+      KNOWN,
+      query({ parks: DISNEY.join(","), split: "fixed" }),
+      TODAY,
+    );
+    const cal = calendar(q.from, q.to);
+    const trip = optimizePlan(region, q, cal);
+    const body = planResponse(region, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+    });
+    const products = ((body.meta as any).ticketSuggestion as any[]).map(
+      (s) => s.product,
+    );
+    expect(products).not.toContain("wdw-date-based");
+    expect(publicTicketCatalog(region).map((p) => p.id)).not.toContain(
+      "wdw-date-based",
+    );
   });
 });
 

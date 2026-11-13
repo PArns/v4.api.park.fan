@@ -18,6 +18,7 @@ Orlando hotel), not a fact any feed carries. Orlando is the only region.
 | `GET /v1/trip-regions/:region/calendar`  | data | private, an hour; Redis an hour                         | every park's days side by side, with its events |
 | `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
 | `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
+| `GET /v1/trip-regions/:region/tickets`   | none | five minutes at the edge, ten more stale                | the ticket catalog ([tickets](#tickets))        |
 
 Before the routes are deployed, `pnpm trip-regions:dev` serves all four on `localhost:3001` from
 production's data through the same modules
@@ -725,10 +726,33 @@ each ticket's rules: its days lie inside its window, it is used on no more days 
 park it caps gets no more days, and two parks share a day only on a ticket that hops between them.
 The rules come from the operators' terms as researched for late 2026 and 2027 (PAR-1298); where a
 rule is uncertain the plan takes the safe side, listed [below](#uncertain-rules). No prices,
-anywhere: `shopUrl` links the operator's shop. Code: `src/trip-regions/tickets.ts` (the catalog)
-and the optimizer.
+anywhere: `links` lead to where a ticket is bought, the operator's shop among them (`shopUrl`).
 
-### The catalog (`tickets` on `GET /v1/trip-regions/orlando`)
+**The catalog is data, edited in the admin** (`ticket_products`, [editing](#editing-the-catalog)):
+products, their purchase links and every rule below change without a deploy.
+`src/trip-regions/tickets.ts` is only the seed the table starts from. Code:
+`ticket-catalog.service.ts` (the one provider), `trip-tickets.ts` and the optimizer.
+
+### The catalog (`GET /v1/trip-regions/orlando/tickets`)
+
+Open, no key. **Clients read the catalog here.** It is cached five minutes at the edge plus ten of
+stale-while-revalidate (`public, max-age=300, s-maxage=300, stale-while-revalidate=600`), so an edit
+reaches every reader within 15 minutes, and the frontend's tag `trip-tickets:orlando` is revalidated
+on every edit and again after the edge window ([publishing](#editing-the-catalog)). The region route
+`GET /v1/trip-regions/orlando` still carries `tickets` for older clients, but its own headers keep it
+a day at the edge (`s-maxage=86400`, ours, not a Cloudflare rule), so an edit can take that long to
+show there.
+
+```jsonc
+{
+  "region": "orlando",
+  "version": "3f9c2a1b7d4e", // changes with every edit; plans and /when are cached by it
+  "updatedAt": "2026-11-20T09:12:00.000Z", // the newest edit
+  "tickets": [/* the active products, in the admin's order, each as below */],
+}
+```
+
+A product:
 
 ```jsonc
 {
@@ -774,10 +798,37 @@ and the optimizer.
     },
   ],
   "confidence": "medium", // high | medium | low: how well the researched sources agree
-  "shopUrl": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
+  "description": "One to five park days …", // optional, English, not translated
+  "links": [
+    {
+      "seller": "Universal Orlando Resort", // the seller's own name, not translated
+      "url": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
+      "official": true, // the operator's own shop: exactly one per product
+      "sponsored": false,
+    },
+    {
+      "seller": "Attraction Tickets",
+      "url": "https://www.attractiontickets.com/…",
+      "sponsored": true, // an affiliate link: show it as such, rel="sponsored"
+      "markets": ["uk"], // absent: everyone
+      "locales": ["en"], // absent: every locale
+    },
+  ],
+  "shopUrl": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets", // the official link's url
   "notes": "Windows from authorized resellers quoting Universal's terms …",
 }
 ```
+
+- **`links`**: where to buy. Exactly one is the operator's own shop (`official: true`), whose url is
+  also `shopUrl`. `sponsored: true` marks an affiliate or paid link: the client labels it and links
+  it `rel="sponsored noopener"`. `markets` and `locales` say whom a link is for (a UK seller for
+  `uk`, a German page for `de`); a link without them is for everyone. **The array order is the
+  display order:** among the links that suit the reader equally (those for their locale or market
+  first, then those for everyone), the client shows them in the order given, so the admin decides
+  which link comes first. Every url is `https`. Purchase links show the sellers that the visitor
+  comes from park.fan: the client renders them with `referrerPolicy="origin"` and never with
+  `noreferrer`.
+- **`description`**: an optional sentence about the product, in English, as the admin wrote it.
 
 - **`windowTable`** lists, for each length on sale, the calendar days the ticket may be used in,
   counted from its start date. **`windowDays`** stands in for a product without a day count but with
@@ -808,7 +859,11 @@ annual passes; SeaWorld's single day, Two Park, Three-Day Three Park, Four Parks
 3-Visit and Ultimate tickets, the Fun Card and the annual passes; Discovery Cove with and without
 its sister parks; Busch Gardens' single day and Fun Card; LEGOLAND's 1- and 2-day tickets, the
 Merlin 7 attractions ticket and its pass. A UK tour operator's combo is its component tickets, each
-listed on its own.
+listed on its own. That is the seed; what the route lists is whatever the admin keeps active.
+
+**An archived product** (`active: false` in the admin) leaves the catalog route and is never
+suggested, but `tickets=` still takes it, since a shared link or a ticket already bought may name
+it: the ticket then warns `product_archived`. A product is never deleted while plans may name it.
 
 ### Owned tickets (`tickets=`)
 
@@ -952,7 +1007,7 @@ For each resort with park days on plan first, the plan as made (blocks as today)
         "unusedDays": 8, // absent when 0 and for a pass
         "unusedReason": "parks_fewer_than_days", // with unusedDays
         "allowanceVisits": 1, // water-park visits on the allowance; absent when none
-        "warnings": [], // blockouts_unchecked | park_reservation_needed | covers_no_planned_park
+        "warnings": [], // blockouts_unchecked | park_reservation_needed | covers_no_planned_park | product_archived
       },
     ],
     "ticketSuggestion": [
@@ -1047,15 +1102,105 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   `window_outside_trip` (the trip holds fewer days of the window than the ticket has: it starts
   before or ends after it) and `no_open_day` (its parks were closed on the days left).
 - **Days without a ticket**: arrival, departure and rest days carry no `ticket`; a park with no
-  product in the catalog for its days (none today) would carry none either.
+  product in the catalog for its days (none in the seed; an edit could leave one) carries none
+  either.
 - **Codes.** `meta.relaxed`: `ticket_window_relaxed`. Day warnings: `outside_ticket_window`.
   `unplaced[].reason`: `no_ticket_day`. `meta.warnings`: `blockouts_unchecked`. Ticket warnings:
   `blockouts_unchecked`, `park_reservation_needed`, `covers_no_planned_park` (the ticket covers none
-  of the planned parks).
+  of the planned parks), `product_archived` (the product left the catalog; its rules still apply).
 - **Cache.** The plan's Redis key includes the canonical `tickets` value (each item in its full
-  form, in the order given), so the same tickets written two ways are one entry.
+  form, in the order given), so the same tickets written two ways are one entry, and the catalog's
+  `version`, so an edited rule never serves a plan made under the old one (`/when` likewise). The
+  answer names that version as `meta.ticketCatalog`.
+- **Links in the answer.** Each `meta.tickets[]` entry and each `ticketSuggestion[]` carries its
+  product's `links` and `shopUrl` (the official link), so the client needs no second lookup.
 - **`/when`** takes `tickets` without dates (each window searches the starts) and `suggest=1` for a
   suggestion per window ([when to go](./trip-regions-when.md#tickets)).
+
+### Editing the catalog
+
+The products live in `ticket_products`, one row per product and region, edited under
+`/v1/admin/content/regions/:region/tickets` ([admin endpoints](../admin/endpoints.md)). Reads need any
+admin role, writes `editor`.
+
+| Method | Path                      | What                                                              |
+| ------ | ------------------------- | ----------------------------------------------------------------- |
+| GET    | `…/tickets`               | every product, archived ones too, in order, with `version`        |
+| GET    | `…/tickets/:slug`         | one product                                                       |
+| POST   | `…/tickets`               | create (201), last in the region; `slug` fixed from then on       |
+| PATCH  | `…/tickets/:slug`         | change any field but `slug`; `null` clears an optional one        |
+| POST   | `…/tickets/:slug/archive` | `active: false` (a PATCH with `active: true` brings it back)      |
+| PUT    | `…/tickets/order`         | `{ slugs: [...] }`: every product of the region, in the new order |
+| POST   | `…/tickets/validate`      | the form's live check; `?slug=<slug>` checks an edit of it        |
+
+An admin product is the public one plus `slug` (the public `id`), `region`, `active`, `sortOrder`,
+`suggestRank` (the order plan first tries a resort's products in, lower first; `null`: never
+suggested), `sources` (`[{ url, title?, accessed?, note? }]`, the research behind it, admin only),
+`createdAt`, `updatedAt` and `updatedBy`. A write body is that shape without `id`, `shopUrl` (taken
+from the official link) and the stamps.
+
+**Writing.** Problem messages are English and meant to be shown as they come.
+
+- **Where a new product goes.** A POST without `sortOrder` (or with `null`) puts the product last in
+  its region: the highest `sortOrder` there plus 10. A `sortOrder` in the body is kept as given, and
+  `PUT …/order` numbers the region 10, 20, 30 … again.
+- **What a PATCH changes.** A field the body leaves out stays as stored; a field it gives replaces
+  the stored one, and the merged product is checked whole. `null` clears an optional field:
+  `description`, `notes`, `blockoutUrl`, `reservationUrl`, `until`, `suggestRank` (never suggested),
+  `pass`, `blockouts`, `windowDays`, `allowance`, `onSale`, `hopSets`, `caps`, `reservedDayParks`
+  and `sources`, and inside them a link's `markets`, `locales` and `official`, a source's `title`,
+  `accessed` and `note`, an `onSale` range's `from` or `to`, a set's or cap's `ticketDays`. A
+  required field sent as `null` is refused at its path (`name`: "is required"); `active` takes only
+  `true` or `false`; `sortOrder: null` keeps the product where it is.
+- **Checking an edit.** `POST …/validate` checks the body as a new product, whose `slug` must be
+  free in the region. With `?slug=<slug>` it checks an edit of that product exactly as the PATCH
+  would: the body is merged onto the stored product (a partial body works, `null` clears), the
+  product's own slug is no conflict, a different `slug` in the body is refused (`path: "slug"`),
+  and an unknown `<slug>` answers 404.
+
+**Checks.** A write is refused with a 400 that lists every problem by its path (`{ statusCode: 400,
+message, problems: [{ path: "windowTable[2].window", message }] }`), and `…/validate` answers
+`{ ok, problems, dryRun }` with the same list:
+
+- `slug` kebab-case, at most 60 characters, unique in the region; `name` 1–120 characters,
+  `description` at most 1,000, `notes` at most 2,000;
+- `resort` a group of the region; `markets` a non-empty subset of `us`, `uk`, `intl`; `parks` region
+  parks, at least one, none twice;
+- `days` `"unlimited"` or `{ min, max }` with 1 ≤ min ≤ max ≤ 30; `windowTable` exactly one row per
+  length from `min` to `max`, each `window` at least its `days`, never shorter than the row before,
+  at most 366; `windowDays` only with unlimited days; `pass` only with unlimited days and no
+  `windowDays`;
+- `hopping: "none"` without `hopSets`, otherwise at least one set; every set at least two of the
+  product's `parks`; every cap's parks the product's, `max` from 0 to `days.max`; `ticketDays` inside
+  `days`;
+- `allowance.parks` region parks outside `parks`, `visits` at least 1 or `"days"`; `reservedDayParks`
+  among `parks`;
+- `onSale` real dates, `from` ≤ `to`; `until` a real date;
+- `links` 1–10, exactly one `official`; `seller` 1–80 characters; `markets` and `locales` from their
+  lists (`en`, `de`, `nl`, `fr`, `es`, `it`); every url (links, `blockoutUrl`, `reservationUrl`,
+  `sources`) an absolute `https` url of at most 500 characters, without user or password;
+- `suggestRank` an integer 0–1000 or `null`; `confidence` `high`, `medium` or `low`.
+
+**The dry run.** A product that passes the checks is planned on a fixed sample trip (10 days from
+its first start on sale, a synthetic calendar with every park open): once owned (its shortest length,
+with its hopper where it has one) and once plan first with the product in the catalog. A plan that
+throws refuses the write (`path: "dryRun.owned"` or `"dryRun.planFirst"`); a product sold for no
+start in the coming year skips the owned run and says so.
+
+**Publishing**, in the order of [publish outside-in](../rules/publish-outside-in.md): the row is
+written, the region's catalog leaves Redis and the memory of the instance that wrote it (the others
+let go of theirs within 30 seconds), the frontend's tag `trip-tickets:<region>` is revalidated, and
+again after `CDN_SETTLE_MS`. Every write leaves an audit row (`ticket_product.create`, `.update`,
+`.archive`, `.reorder`) with the product before and after.
+
+**The seed.** At boot, a region whose `ticket_products` has no row gets the products of
+`tickets.ts`, once (a second instance booting at the same time inserts nothing twice), and the log
+says so. Each seeded product gets plain links from `ticket-seed-links.ts`, in this order: the
+cheapest authorized seller the research found, then Attraction Tickets' pages for the product
+(`locales` set where a page is for one site language), then the official link; a link that repeats
+one before it is left out. The research's bundles are not seeded as products. A seeded link is never `sponsored` and carries no affiliate or
+tracking parameter. The seed runs only on an empty table: a region that has rows is never touched
+again, and every later change, links included, is made in the admin.
 
 ### Uncertain rules
 

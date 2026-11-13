@@ -19,6 +19,10 @@ import { AssistantModule } from "../../assistant/assistant.module";
 import { FunFactTranslationService } from "./fun-fact-translation.service";
 import { FunFactTranslationProcessor } from "./fun-fact-translation.processor";
 import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.processor";
+import { TicketProductRecord } from "../../trip-regions/entities/ticket-product.entity";
+import { TripRegionsModule } from "../../trip-regions/trip-regions.module";
+import { AdminTicketService } from "./admin-ticket.service";
+import { AdminTicketsController } from "./admin-tickets.controller";
 
 /**
  * The editing half of the admin.
@@ -37,6 +41,7 @@ import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.pr
       AttractionRideProfile,
       ParkSlugAlias,
       AttractionSlugAlias,
+      TicketProductRecord,
     ]),
     RedisModule,
     RevalidationModule,
@@ -47,8 +52,14 @@ import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.pr
     ParkSeasonsModule,
     // Parky's key, model and daily budget, for the fun-fact translation.
     AssistantModule,
+    // The ticket catalog's provider and the regions it is checked against.
+    TripRegionsModule,
   ],
-  controllers: [AdminContentController, AdminRedirectsController],
+  controllers: [
+    AdminContentController,
+    AdminRedirectsController,
+    AdminTicketsController,
+  ],
   providers: [
     AdminCurationService,
     AdminRedirectService,
@@ -57,6 +68,7 @@ import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.pr
     FunFactTranslationService,
     FunFactTranslationProcessor,
     EftelingMaintenanceSyncProcessor,
+    AdminTicketService,
   ],
   exports: [AdminCurationService],
 })

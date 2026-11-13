@@ -49,7 +49,7 @@ the same jobs run from tracked code:
 
 `pnpm trip-regions:dev` serves `http://localhost:3001` for the frontend while the trip-region
 routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions/:region`,
-`/calendar`, `/best-days`, `/plan`, `/when` and `/school-breaks`, and `POST
+`/calendar`, `/best-days`, `/plan`, `/when`, `/school-breaks` and `/tickets`, and `POST
 /v1/parks/…/plan/optimize`, by running the API's own modules (`trip-region.assembly`,
 `trip-best-days`, `trip-plan.assembly`, `trip-evening`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
 `trip-school-breaks`, the day optimizer's `engine`) on production's public answers (`/calendar`,
@@ -67,6 +67,9 @@ and wiring and no rule of its own, so its answers are the API's for the same dat
   production already has (same park, kind and name, overlapping dates).
 - **Cache:** each production answer is kept 15 minutes in memory; a cold calendar takes a few
   seconds.
+- **Tickets:** the shim has no database, so its ticket catalog is the seed (`tickets.ts` with
+  `ticket-seed-links.ts`, `seedCatalog`), put on the region the way `TicketCatalogService` puts
+  the table's. An edit made in production's admin shows on production's `/tickets`, not here.
 - **Where it differs from the deployed API**, because production does not serve the input:
   no `meta.forecastUntil` (the warmup's Redis key); group names are the curated ones
   (`SeaWorld Orlando`), not the `destinations` rows (`SeaWorld Parks and Resorts Orlando`);

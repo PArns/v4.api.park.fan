@@ -41,6 +41,12 @@ export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
 export const TRIP_WHEN_TTL = 6 * 60 * 60;
 
 /**
+ * A trip region's ticket catalog in Redis. An admin write evicts it, so the
+ * hour only bounds a write made outside the admin (a raw UPDATE).
+ */
+export const TRIP_TICKETS_TTL = 60 * 60;
+
+/**
  * A past month's measured figures, kept for the `last_year` days. A month that
  * has passed does not change, and unlike the month caches it is not evicted by
  * a schedule sync (that is about future hours), so a week is safe and spares

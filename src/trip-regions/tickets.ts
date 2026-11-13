@@ -1,15 +1,19 @@
 /**
- * The ticket catalog of a trip region: which tickets the region's operators
- * sell, which parks a ticket day covers, the calendar days a ticket's use may
- * spread over, its hopping and its caps. Curated in code like `regions.ts`,
- * from the operators' terms as researched for late 2026 and 2027 (PAR-1298);
- * where a rule could not be settled, the entry keeps the side that cannot plan
- * a day the ticket does not allow and says so in `notes`. No prices.
+ * A trip region's ticket products and the helpers that read their rules:
+ * which parks a ticket day covers, the calendar days a ticket's use may spread
+ * over, its hopping and its caps. No prices.
  *
- * Products that differ only in price (child and adult, the seasonal price of a
- * date) are one entry. The contract and how the plan reads each field:
- * docs/frontend/trip-regions.md#tickets.
+ * The catalog is data, edited in the admin (`ticket_products`,
+ * `TicketCatalogService`), and reaches every reader on the region object
+ * (`RegionConfig.tickets`). The list below is only its **seed**: the products
+ * as researched for late 2026 and 2027 (PAR-1298), written to the table once
+ * for a region that has no row, and the catalog of a reader without a
+ * database (the dev shim, the specs). Where a rule could not be settled, an
+ * entry keeps the side that cannot plan a day the ticket does not allow and
+ * says so in `notes`. Products that differ only in price are one entry. The
+ * contract and how the plan reads each field: docs/frontend/trip-regions.md#tickets.
  */
+import { TICKET_SEED_LINKS, type SeedLinkEntry } from "./ticket-seed-links";
 
 export type TicketMarket = "us" | "uk" | "intl";
 
@@ -38,6 +42,44 @@ export interface TicketCap extends ByLength {
   /** Days on which any of `parks` is visited; 0: the length does not cover them. */
   max: number;
 }
+
+/** Where a ticket is bought; exactly one link of a product is the operator's own shop. */
+export interface TicketLink {
+  /** The seller's own name, not translated. */
+  seller: string;
+  url: string;
+  official?: true;
+  /** An affiliate or paid link. */
+  sponsored: boolean;
+  /** Whom it is for; absent: everyone. */
+  markets?: TicketMarket[];
+  /** The site languages it is for; absent: every one. */
+  locales?: string[];
+}
+
+/** The fields of a product the optimizer reads: `ticket_products.rules`. */
+export const TICKET_RULE_KEYS = [
+  "markets",
+  "parks",
+  "days",
+  "windowTable",
+  "windowDays",
+  "anchor",
+  "hopping",
+  "hopSets",
+  "caps",
+  "allowance",
+  "reservedDayParks",
+  "onSale",
+  "until",
+  "pass",
+  "blockouts",
+] as const;
+
+export type TicketRules = Pick<
+  TicketProduct,
+  (typeof TICKET_RULE_KEYS)[number]
+>;
 
 export interface TicketProduct {
   id: string;
@@ -73,7 +115,12 @@ export interface TicketProduct {
   /** Where passholders reserve their park. */
   reservationUrl?: string;
   confidence: "high" | "medium" | "low";
+  /** The official link's url. */
   shopUrl: string;
+  /** Where to buy it, in order; the seed has the official shop only. */
+  links?: TicketLink[];
+  /** A sentence about the product, in English. */
+  description?: string;
   notes?: string;
   /**
    * Plan first: the order a resort's products are tried in when the plan
@@ -81,6 +128,11 @@ export interface TicketProduct {
    * suggested. Not served.
    */
   suggest?: number;
+  /**
+   * Archived in the admin: off the catalog route and never suggested, but an
+   * owned ticket may still name it.
+   */
+  archived?: true;
 }
 
 const MK = "magic-kingdom-park";
@@ -787,20 +839,108 @@ export const TICKET_CATALOGS: Record<string, TicketProduct[]> = {
   orlando: ORLANDO_TICKETS,
 };
 
-/** A region's ticket catalog; empty for a region without one. */
-export function ticketCatalog(region: { slug: string }): TicketProduct[] {
+/** A region's seed catalog: the products the table starts from; empty without one. */
+export function seedTickets(region: { slug: string }): TicketProduct[] {
   return Object.prototype.hasOwnProperty.call(TICKET_CATALOGS, region.slug)
     ? TICKET_CATALOGS[region.slug]
     : [];
 }
 
-/** The catalog as `GET /v1/trip-regions/:region` serves it: the internal `suggest` left out. */
+/**
+ * A region's catalog: the one loaded from the admin's table and carried on
+ * the region (`TicketCatalogService.withTickets`), else the seed, which is
+ * what a reader without a database plans with.
+ */
+export function ticketCatalog(region: {
+  slug: string;
+  tickets?: TicketProduct[];
+}): TicketProduct[] {
+  return region.tickets ?? seedTickets(region);
+}
+
+/** The seller an Attraction Tickets seed link names. */
+export const ATTRACTION_TICKETS_SELLER = "Attraction Tickets";
+
+/**
+ * A seed product's links from its entry in `ticket-seed-links.ts`, in display
+ * order: the cheapest authorized seller, then Attraction Tickets' pages (each
+ * for its locale, or for all), then the operator's own shop (`official`). A
+ * link that repeats one before it (the cheapest seller is Attraction Tickets,
+ * or the operator itself) is left out. Never sponsored. Without an entry, the
+ * product's `shopUrl` is the official link, named by its host.
+ */
+export function seedLinksFrom(
+  entry: SeedLinkEntry | undefined,
+  product: Pick<TicketProduct, "shopUrl">,
+): TicketLink[] {
+  const official: TicketLink = {
+    seller: entry?.official.seller ?? new URL(product.shopUrl).host,
+    url: entry?.official.url ?? product.shopUrl,
+    official: true,
+    sponsored: false,
+  };
+  const links: TicketLink[] = [];
+  if (entry?.cheapest) {
+    links.push({
+      seller: entry.cheapest.seller,
+      url: entry.cheapest.url,
+      sponsored: false,
+    });
+  }
+  for (const page of entry?.attractionTickets ?? []) {
+    links.push({
+      seller: ATTRACTION_TICKETS_SELLER,
+      url: page.url,
+      sponsored: false,
+      ...(page.locale && { locales: [page.locale] }),
+    });
+  }
+  const seen = new Set<string>([official.url]);
+  const unique = links.filter((l) => {
+    if (seen.has(l.url)) return false;
+    seen.add(l.url);
+    return true;
+  });
+  return [...unique, official];
+}
+
+/** A seed product's links (`seedLinksFrom` on its entry). */
+export function seedLinksOf(product: TicketProduct): TicketLink[] {
+  return seedLinksFrom(
+    TICKET_SEED_LINKS.find((e) => e.productId === product.id),
+    product,
+  );
+}
+
+/** A product's links: its own (the admin's), else the seed's. */
+export function linksOf(product: TicketProduct): TicketLink[] {
+  return product.links && product.links.length > 0
+    ? product.links
+    : seedLinksOf(product);
+}
+
+/** The url of a product's official link: its `shopUrl` in every answer. */
+export function shopUrlOf(product: TicketProduct): string {
+  return linksOf(product).find((l) => l.official)?.url ?? product.shopUrl;
+}
+
+/**
+ * The catalog as the routes serve it: the active products in order, the
+ * internal `suggest` and `archived` left out, `links` always there.
+ */
 export function publicTicketCatalog(region: {
   slug: string;
-}): Array<Omit<TicketProduct, "suggest">> {
-  return ticketCatalog(region).map(({ suggest: _suggest, ...product }) => ({
-    ...product,
-  }));
+  tickets?: TicketProduct[];
+}): Array<
+  Omit<TicketProduct, "suggest" | "archived"> & { links: TicketLink[] }
+> {
+  return ticketCatalog(region)
+    .filter((p) => !p.archived)
+    .map(({ suggest: _suggest, archived: _archived, ...product }) => ({
+      ...product,
+      shopUrl: shopUrlOf(product),
+      links: linksOf(product),
+    }));
 }
 
 const appliesTo = (rule: ByLength, days: number): boolean =>

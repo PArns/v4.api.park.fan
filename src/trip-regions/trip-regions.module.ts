@@ -1,4 +1,7 @@
 import { Module } from "@nestjs/common";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { TicketProductRecord } from "./entities/ticket-product.entity";
+import { TicketCatalogService } from "./ticket-catalog.service";
 import { ParksModule } from "../parks/parks.module";
 import { ParkSeasonsModule } from "../parks/park-seasons.module";
 import { MLModule } from "../ml/ml.module";
@@ -15,9 +18,20 @@ import { TripWhenService } from "./trip-when.service";
  * directly rather than importing this module.
  */
 @Module({
-  imports: [ParksModule, ParkSeasonsModule, MLModule, HolidaysModule],
+  imports: [
+    ParksModule,
+    ParkSeasonsModule,
+    MLModule,
+    HolidaysModule,
+    TypeOrmModule.forFeature([TicketProductRecord]),
+  ],
   controllers: [TripRegionsController],
-  providers: [TripRegionService, TripPlanService, TripWhenService],
-  exports: [TripRegionService],
+  providers: [
+    TripRegionService,
+    TripPlanService,
+    TripWhenService,
+    TicketCatalogService,
+  ],
+  exports: [TripRegionService, TicketCatalogService],
 })
 export class TripRegionsModule {}

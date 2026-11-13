@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { CacheKeys } from "../common/cache/cache-keys";
@@ -46,6 +52,13 @@ import type {
   TripCalendarDto,
   TripRegionDto,
 } from "./dto/trip-region-response.dto";
+import type { TripTicketCatalogDto } from "./dto/trip-tickets.dto";
+import { TicketCatalogService } from "./ticket-catalog.service";
+import {
+  seedCatalog,
+  ticketCatalogResponse,
+  withCatalog,
+} from "./ticket-catalog";
 
 export {
   MAX_CALENDAR_DAYS,
@@ -100,6 +113,8 @@ export class TripRegionService {
     private readonly calendarService: CalendarService,
     private readonly parkSeasonService: ParkSeasonService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    // Absent only where a spec builds the service by hand: it then plans with the seed.
+    @Optional() private readonly tickets?: TicketCatalogService,
   ) {}
 
   /** The region a slug names; 404 when there is none. */
@@ -107,6 +122,24 @@ export class TripRegionService {
     const region = findRegion(slug);
     if (!region) throw new NotFoundException(`No trip region "${slug}"`);
     return region;
+  }
+
+  /**
+   * The region with its ticket catalog on it, as the plan, `/when`, the
+   * region and tickets routes and Parky read it; 404 for an unknown region.
+   */
+  async regionWithTickets(slug: string): Promise<RegionConfig> {
+    const region = this.region(slug);
+    return this.tickets
+      ? this.tickets.withTickets(region)
+      : withCatalog(region, seedCatalog(region));
+  }
+
+  /** `GET /v1/trip-regions/:region/tickets` */
+  async ticketCatalog(slug: string): Promise<TripTicketCatalogDto> {
+    return ticketCatalogResponse(
+      await this.regionWithTickets(slug),
+    ) as TripTicketCatalogDto;
   }
 
   /** The region's today, in its own timezone. */
@@ -159,7 +192,7 @@ export class TripRegionService {
 
   /** `GET /v1/trip-regions/:region` */
   async describe(slug: string): Promise<TripRegionDto> {
-    const region = this.region(slug);
+    const region = await this.regionWithTickets(slug);
     const parks = await this.resolveParks(region);
     return describeRegion(region, parks.map(toRecord));
   }
