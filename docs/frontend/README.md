@@ -35,7 +35,7 @@ page for the field or endpoint you are reading or changing.
 | [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                       |
 | [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`                                                             |
 | [trips](./trips.md)                                               | `/v1/trips`: stored plans, the id as credential, write limits                                                   |
-| [trip-regions](./trip-regions.md)                                 | `/v1/trip-regions/*`: a region's parks and travel times, its days side by side, the optimized vacation plan     |
+| [trip-regions](./trip-regions.md)                                 | `/v1/trip-regions/*`: the regions, a region's parks and travel times, its days side by side, the optimized vacation plan |
 | [trip-regions-when](./trip-regions-when.md)                       | `/v1/trip-regions/:region/when` and `/school-breaks`: the best dates for a trip, the year strip, school breaks  |
 | [assistant](./assistant.md)                                       | `/v1/assistant/*`: Parky's chat, tools, limits, the sealed Claude key, site feedback                            |
 | [push](./push.md)                                                 | `/v1/push*`: subscriptions, topics, ride alerts, followed shows, quiet hours                                    |
