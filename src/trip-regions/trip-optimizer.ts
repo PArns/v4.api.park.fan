@@ -364,6 +364,8 @@ export const ORDER_MATTERS_MINUTES = 3;
 
 export interface PlanTotals {
   headlinerWait?: number;
+  /** `headlinerWait` unrounded: what two plans of one trip are compared by. Not served. */
+  exactWait?: number;
   averageDayWait?: number;
   savedMinutesPerRide?: number;
   /** The typical error of the planned days' forecasts, per ride (`trip-plan.assembly.ts`). */
@@ -2428,6 +2430,7 @@ class TripOptimizer {
     return {
       ...(headlinerWait != null && {
         headlinerWait: Math.round(headlinerWait),
+        exactWait: headlinerWait,
       }),
       ...(averageDayWait != null && {
         averageDayWait: Math.round(averageDayWait),

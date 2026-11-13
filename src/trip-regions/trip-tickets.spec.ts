@@ -75,10 +75,13 @@ const query = (over: Partial<TripPlanQueryDto>): TripPlanQueryDto => ({
   ...over,
 });
 
-/** The plan route's answer for a query, on the default calendar. */
-function answer(over: Partial<TripPlanQueryDto>) {
+/** The plan route's answer for a query, on the default calendar or the given cells. */
+function answer(
+  over: Partial<TripPlanQueryDto>,
+  cellFor?: (slug: string, i: number) => TripParkDayInternal,
+) {
   const q = normalizePlanQuery(ORLANDO, KNOWN, query(over), TODAY);
-  const cal = calendar(q.from, q.to);
+  const cal = calendar(q.from, q.to, cellFor);
   const trip = optimizePlan(ORLANDO, q, cal);
   const body = planResponse(ORLANDO, q, cal, trip, {
     computedAt: "t",
@@ -354,6 +357,32 @@ describe("the hopper verdict", () => {
     expect(v.why).toEqual(["hop_days", "fits_more_parks", "saves_minutes"]);
   });
 
+  it("does not recommend hop days that fit nothing more and save under 3 minutes a ride", () => {
+    const withHopper = {
+      days: [
+        hopDay("2027-02-02", ["magic-kingdom-park", 40], ["epcot", 40]),
+        parkDay("2027-02-03", "disneys-hollywood-studios", 40),
+      ],
+      unplaced: [],
+    } as unknown as OptimizedPlan;
+    const without = {
+      days: [
+        parkDay("2027-02-02", "magic-kingdom-park", 45),
+        parkDay("2027-02-03", "epcot", 40),
+        parkDay("2027-02-04", "disneys-hollywood-studios", 40),
+      ],
+      unplaced: [],
+    } as unknown as OptimizedPlan;
+    const v = hopperVerdict(withHopper, without, new Set(DISNEY), []);
+    expect(v).toMatchObject({
+      recommended: false,
+      hopDays: 1,
+      savedMinutes: 5,
+      savedMinutesPerRide: 2,
+      why: ["no_gain"],
+    });
+  });
+
   it("finds no gain where nothing differs", () => {
     const plan = {
       days: [parkDay("2027-02-02", "epcot", 40)],
@@ -448,6 +477,104 @@ describe("owned tickets in the answer", () => {
       recommended: false,
       why: ["no_gain"],
     });
+  });
+});
+
+describe("owned tickets' resorts mix only when it pays", () => {
+  const UNIVERSAL = [USF, IOA, EPIC];
+  const both =
+    "wdw-uk-14-day-magic@2027-02-01,uor-uk-three-park-adventure@2027-02-01";
+  /** Disney quiet on even days and Universal on odd ones, by `gap` minutes. */
+  const alternating =
+    (gap: number) =>
+    (slug: string, i: number): TripParkDayInternal => {
+      const disney = DISNEY.includes(slug);
+      const quiet = disney ? i % 2 === 0 : i % 2 === 1;
+      return {
+        status: "OPERATING",
+        hoursPublished: true,
+        crowdLevel: "moderate",
+        headlinerWait: 40,
+        waitExact: quiet ? 30 : 30 + gap,
+        basis: "forecast",
+        dayHours: 12,
+      };
+    };
+  // Nine visits in twelve park days: blocks cannot put them all on quiet days.
+  const parks = [
+    "magic-kingdom-park:2",
+    "epcot:2",
+    "disneys-hollywood-studios",
+    "disneys-animal-kingdom-theme-park",
+    ...UNIVERSAL,
+  ].join(",");
+
+  it("mixes where that saves at least 3 minutes a ride", () => {
+    const { meta } = answer(
+      { parks, split: "fixed", tickets: both },
+      alternating(30),
+    );
+    expect(meta.mixing.used).toBe(true);
+    expect(meta.mixing.savedMinutesPerRide).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the resorts in blocks where mixing saves less", () => {
+    const { meta, body } = answer(
+      { parks, split: "fixed", tickets: both },
+      alternating(1),
+    );
+    expect(meta.mixing.used).toBe(false);
+    expect(meta.mixing.savedMinutesPerRide).toBeLessThan(3);
+    const universal = (body.days as any[])
+      .map((d, i) =>
+        d.parks.some((p: any) => UNIVERSAL.includes(p.slug)) ? i : -1,
+      )
+      .filter((i) => i >= 0);
+    const disney = (body.days as any[])
+      .map((d, i) =>
+        d.parks.some((p: any) => DISNEY.includes(p.slug)) ? i : -1,
+      )
+      .filter((i) => i >= 0);
+    expect(
+      universal.every(
+        (i) => i < Math.min(...disney) || i > Math.max(...disney),
+      ),
+    ).toBe(true);
+  });
+
+  it("follows blocks written in the query either way", () => {
+    expect(
+      answer(
+        { parks, split: "fixed", tickets: both, blocks: "1" },
+        alternating(30),
+      ).meta.mixing,
+    ).toEqual({ used: false });
+    expect(
+      answer(
+        { parks, split: "fixed", tickets: both, blocks: "0" },
+        alternating(1),
+      ).meta.mixing,
+    ).toEqual({ used: true });
+  });
+
+  it("numbers an every-day ticket's days by its window and gives its window", () => {
+    const { meta, body } = answer({
+      parks: UNIVERSAL.join(","),
+      split: "fixed",
+      tickets: "uor-uk-three-park-adventure@2027-02-01",
+    });
+    expect(meta.tickets[0]).toMatchObject({ usedDays: 3, windowDays: 14 });
+    expect(meta.tickets[0].unusedDays).toBeUndefined();
+    expect(meta.tickets[0].unusedReason).toBeUndefined();
+    for (const d of (body.days as any[]).filter((x) => x.ticket === "t1")) {
+      const day =
+        Math.round(
+          (Date.parse(`${d.date}T00:00:00Z`) -
+            Date.parse("2027-02-01T00:00:00Z")) /
+            86_400_000,
+        ) + 1;
+      expect(d.ticketDay).toBe(day);
+    }
   });
 });
 

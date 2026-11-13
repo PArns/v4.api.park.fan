@@ -1,6 +1,7 @@
 import { ORLANDO } from "./regions";
 import {
   allowanceOf,
+  everyDay,
   hopSetsOf,
   onSaleAt,
   ORLANDO_TICKETS,
@@ -137,6 +138,16 @@ describe("the Orlando ticket catalog", () => {
     expect(onSaleAt(allParks, "2026-12-01")).toBe(false);
     expect(onSaleAt(allParks, "2027-04-01")).toBe(true);
     expect(onSaleAt(product("wdw-date-based"), "2027-08-01")).toBe(true);
+  });
+
+  it("tells every-day products from counted ones", () => {
+    expect(everyDay(product("uor-uk-all-parks"), 14)).toBe(true);
+    expect(everyDay(product("seaworld-four-parks-14-day"), "unlimited")).toBe(
+      true,
+    );
+    expect(everyDay(product("wdw-uk-14-day-magic"), 14)).toBe(false);
+    expect(everyDay(product("uor-epic-1-day"), 1)).toBe(false);
+    expect(everyDay(product("wdw-annual-pass"), "unlimited")).toBe(false);
   });
 
   it("serves the catalog without the suggestion order", () => {

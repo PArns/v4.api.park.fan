@@ -877,6 +877,25 @@ export function allowanceOf(
   return { parks: product.allowance.parks, visits };
 }
 
+/**
+ * An every-day product: a window of several days, each of them usable (the
+ * UK 14-day Universal tickets, SeaWorld's Four Parks), where a day reads as
+ * the window's day ("day 10 of 14"), not as one counted off. Not a pass.
+ */
+export function everyDay(
+  product: TicketProduct,
+  days: number | "unlimited",
+): boolean {
+  if (product.pass) return false;
+  const window = windowOf(product, days);
+  return (
+    window !== undefined &&
+    Number.isFinite(window) &&
+    window > 1 &&
+    (days === "unlimited" || window === days)
+  );
+}
+
 /** Whether a product is sold for a start date (`onSale`; no limit known: always). */
 export function onSaleAt(product: TicketProduct, date: string): boolean {
   if (!product.onSale) return true;

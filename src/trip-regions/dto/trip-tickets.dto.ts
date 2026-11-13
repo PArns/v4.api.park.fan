@@ -216,6 +216,11 @@ export class TripPlanTicketDto {
   startChosen?: true;
   @ApiPropertyOptional({ description: "The window's last day." }) end?: string;
   @ApiProperty() usedDays: number;
+  @ApiPropertyOptional({
+    description:
+      "An every-day ticket's window (Universal's UK 14-day tickets), given instead of `unusedDays`.",
+  })
+  windowDays?: number;
   @ApiPropertyOptional() unusedDays?: number;
   @ApiPropertyOptional({
     enum: [

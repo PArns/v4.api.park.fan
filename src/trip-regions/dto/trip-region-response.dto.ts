@@ -261,8 +261,9 @@ export class TripCalendarDto {
 export class TripPlanDto {
   @ApiProperty({
     description:
-      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, tickets " +
-      "(TripPlanTicketDto[]), ticketSuggestion (TripTicketSuggestionDto[]), warnings",
+      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, hopper, tickets " +
+      "(TripPlanTicketDto[]), mixing ({ used, savedMinutesPerRide? }), ticketSuggestion " +
+      "(TripTicketSuggestionDto[]), warnings",
     type: "object",
     additionalProperties: true,
   })

@@ -11,6 +11,7 @@ import type { RegionConfig } from "./regions";
 import {
   allowanceOf,
   capsOf,
+  everyDay,
   hopSetsOf,
   onSaleAt,
   parksOf,
@@ -19,11 +20,12 @@ import {
   windowOf,
   type TicketProduct,
 } from "./tickets";
-import type {
-  OptimizedPlan,
-  PlanTicket,
-  PlannedDay,
-  PlannedTicket,
+import {
+  ORDER_MATTERS_MINUTES,
+  type OptimizedPlan,
+  type PlanTicket,
+  type PlannedDay,
+  type PlannedTicket,
 } from "./trip-optimizer";
 import { hopPairs, type TripLeg } from "./travel";
 
@@ -31,11 +33,11 @@ import { hopPairs, type TripLeg } from "./travel";
 export const MAX_TICKETS = 6;
 
 /**
- * `savedMinutes` from this many minutes recommends the hopper on its own: a
- * forecast's error is about 17 minutes per ride, so less over a whole trip is
- * no saving a visitor would notice.
+ * A hopper saving of this many minutes per ride recommends it on its own: the
+ * threshold under which the plan says "any order will do". A saving summed
+ * over a trip would sit inside the forecast's error (about 17 minutes a ride).
  */
-export const HOPPER_SAVED_MINUTES = 15;
+export const HOPPER_SAVED_PER_RIDE = ORDER_MATTERS_MINUTES;
 
 /** Trips this long or longer get the UK 14-day tickets as an alternative. */
 export const LONG_STAY_DAYS = 10;
@@ -566,6 +568,8 @@ export function suggestTickets(input: SuggestionInput): {
     chooseTickets(products, visits).forEach((chosen, k) => {
       const id = `suggested:${group.key}${k > 0 ? `:${k + 1}` : ""}`;
       const { product, fit } = chosen;
+      const start = chosen.visits[0].date;
+      const windowDay = everyDay(product, fit.days);
       let n = 0;
       for (const v of chosen.visits) {
         const allowance = !v.parks.every((p) =>
@@ -575,10 +579,12 @@ export function suggestTickets(input: SuggestionInput): {
           days.set(v.date, { ticket: id, ticketAllowance: true });
         } else {
           n++;
-          days.set(v.date, { ticket: id, ticketDay: n });
+          days.set(v.date, {
+            ticket: id,
+            ticketDay: windowDay ? daysBetween(start, v.date) + 1 : n,
+          });
         }
       }
-      const start = chosen.visits[0].date;
       const alternatives = alternativesFor(
         catalog,
         group.key,
@@ -703,12 +709,16 @@ export function hopperVerdict(
   const savedMinutes = Math.max(0, Math.round(saved));
   const savedMinutesPerRide =
     common > 0 ? Math.max(0, Math.round(saved / common)) : 0;
+  // A hop day alone is no reason: it recommends through what it fits or saves.
+  const recommended =
+    eveningHopList.length > 0 ||
+    fitsOnlyWithHopper.length > 0 ||
+    savedMinutesPerRide >= HOPPER_SAVED_PER_RIDE;
   const why: HopperVerdict["why"] = [];
   if (eveningHopList.length > 0) why.push("evening_hops");
   if (hopDayList.length > 0) why.push("hop_days");
   if (fitsOnlyWithHopper.length > 0) why.push("fits_more_parks");
-  if (savedMinutes >= HOPPER_SAVED_MINUTES) why.push("saves_minutes");
-  const recommended = why.length > 0;
+  if (savedMinutesPerRide >= HOPPER_SAVED_PER_RIDE) why.push("saves_minutes");
   return {
     recommended,
     savedMinutes,
@@ -817,6 +827,8 @@ export interface TicketSummary {
   startChosen?: true;
   end?: string;
   usedDays: number;
+  /** An every-day product's window, instead of `unusedDays`. */
+  windowDays?: number;
   unusedDays?: number;
   unusedReason?:
     | "window_outside_trip"
@@ -865,8 +877,13 @@ export function ticketSummaries(input: TicketSummaryInput): TicketSummary[] {
       warnings.push("covers_no_planned_park");
     }
     const days = o.days === "unlimited" ? undefined : o.days;
+    const windowDays = everyDay(product, o.days)
+      ? windowOf(product, o.days)
+      : undefined;
     const unused =
-      days !== undefined ? Math.max(0, days - planned.usedDays) : 0;
+      days !== undefined && windowDays === undefined
+        ? Math.max(0, days - planned.usedDays)
+        : 0;
     let unusedReason: TicketSummary["unusedReason"];
     if (unused > 0 && days !== undefined) {
       // The visitor's visits of its parks, second visits included.
@@ -905,6 +922,7 @@ export function ticketSummaries(input: TicketSummaryInput): TicketSummary[] {
             ...(planned.end && { end: planned.end }),
           }),
       usedDays: planned.usedDays,
+      ...(windowDays !== undefined && { windowDays }),
       ...(unused > 0 && { unusedDays: unused, unusedReason }),
       ...(planned.allowanceVisits > 0 && {
         allowanceVisits: planned.allowanceVisits,

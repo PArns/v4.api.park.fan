@@ -8,6 +8,7 @@ import { BadRequestException } from "@nestjs/common";
 import { HOTEL_KINDS, type HotelKind, type RegionConfig } from "./regions";
 import {
   extraVisitRoom,
+  ORDER_MATTERS_MINUTES,
   MAX_PARK_DAYS,
   MAX_TRIP_DAYS,
   MAX_VISITS_PER_PARK,
@@ -95,7 +96,19 @@ export interface OptimizedTrip {
   visits?: Map<string, number>;
   /** Owned tickets whose second visits stopped for the trip's rest days. */
   restKept?: Set<string>;
+  /** Owned tickets' resorts kept in blocks (`blockOwned`), as the plan was made. */
+  blockOwned?: boolean;
+  /** With owned tickets: whether their resorts mix, and what mixing saved per ride. */
+  mixing?: { used: boolean; savedMinutesPerRide?: number };
 }
+
+/**
+ * Owned tickets' resorts mix only where that saves at least this many minutes
+ * per ride over the same plan in blocks: below it the order says nothing a
+ * forecast's error does not, and a trip that switches resorts every day for
+ * nothing is worse to live.
+ */
+export const MIX_MIN_PER_RIDE = ORDER_MATTERS_MINUTES;
 
 /** What a second plan changes: the hopper of one resort or one owned ticket. */
 export type PlanOverrides = ReplanChange;
@@ -295,6 +308,7 @@ export function planInput(
   calendar: InternalRegionCalendar,
   visits: Map<string, number>,
   change?: PlanOverrides,
+  blockOwned = q.blocks && q.blocksWritten,
 ): PlanInput {
   const configs = new Map(region.parks.map((p) => [p.slug, p]));
   const legs = buildLegs(region);
@@ -348,7 +362,7 @@ export function planInput(
       blockGroups: region.groups
         .filter((g) => g.kind === "resort")
         .map((g) => g.key),
-      blockOwned: q.blocks && q.blocksWritten,
+      blockOwned,
       fireworks: q.fireworks,
       rest: q.rest,
       // A second plan's switched hopper may hop where the visitor did not ask.
@@ -453,7 +467,7 @@ export function optimizePlan(
   calendar: InternalRegionCalendar,
 ): OptimizedTrip {
   const { visits, byTicket, restKept } = splitVisits(region, q, calendar);
-  const plan = optimizeTrip(planInput(region, q, calendar, visits));
+  const { plan, blockOwned, mixing } = planMixing(region, q, calendar, visits);
   const split = q.parks
     .filter((p) => (visits.get(p.slug) ?? p.visits) !== p.visits)
     .map((p) => ({
@@ -462,7 +476,59 @@ export function optimizePlan(
       auto: true as const,
       ...(byTicket.has(p.slug) && { ticket: byTicket.get(p.slug) }),
     }));
-  return { plan, split, visits, restKept };
+  return {
+    plan,
+    split,
+    visits,
+    restKept,
+    blockOwned,
+    ...(mixing && { mixing }),
+  };
+}
+
+/**
+ * The plan, and with owned tickets whether their resorts mix. `blocks=1`
+ * written keeps them in blocks, `blocks=0` lets them mix; by default the trip
+ * is planned both ways and mixes only where that places more visits, or as
+ * many saving at least {@link MIX_MIN_PER_RIDE} minutes per ride.
+ */
+function planMixing(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+  visits: Map<string, number>,
+): Pick<OptimizedTrip, "plan" | "blockOwned" | "mixing"> {
+  if (q.tickets.length === 0 || q.blocksWritten || !q.blocks) {
+    const blockOwned = q.blocks && q.blocksWritten;
+    return {
+      plan: optimizeTrip(
+        planInput(region, q, calendar, visits, undefined, blockOwned),
+      ),
+      blockOwned,
+      ...(q.tickets.length > 0 && { mixing: { used: !blockOwned } }),
+    };
+  }
+  const blocked = optimizeTrip(
+    planInput(region, q, calendar, visits, undefined, true),
+  );
+  const free = optimizeTrip(
+    planInput(region, q, calendar, visits, undefined, false),
+  );
+  const saved = (blocked.totals.exactWait ?? 0) - (free.totals.exactWait ?? 0);
+  const mix =
+    free.totals.visits > blocked.totals.visits ||
+    (free.totals.visits === blocked.totals.visits && saved >= MIX_MIN_PER_RIDE);
+  return {
+    plan: mix ? free : blocked,
+    blockOwned: !mix,
+    mixing: {
+      used: mix,
+      savedMinutesPerRide:
+        free.totals.visits === blocked.totals.visits
+          ? Math.max(0, Math.round(saved))
+          : 0,
+    },
+  };
 }
 
 /** The plan again with one resort's or one ticket's hopper switched, on the same visits. */
@@ -474,7 +540,9 @@ export function replanTrip(
   change: PlanOverrides,
 ): OptimizedPlan {
   const visits = trip.visits ?? new Map(q.parks.map((p) => [p.slug, p.visits]));
-  return optimizeTrip(planInput(region, q, calendar, visits, change));
+  return optimizeTrip(
+    planInput(region, q, calendar, visits, change, trip.blockOwned),
+  );
 }
 
 /**
@@ -635,6 +703,19 @@ export function planTickets(
   return { summaries, suggestions, days, warnings };
 }
 
+/**
+ * An every-day ticket's day is the day of its window ("day 10 of 14"), not
+ * the count of its days used so far.
+ */
+function windowDayOf(
+  day: PlannedDay,
+  summaries: PlanTicketParts["summaries"],
+): Partial<PlannedDay> {
+  const t = summaries.find((s) => s.id === day.ticket);
+  if (!t?.windowDays || !t.start || day.ticketDay === undefined) return {};
+  return { ticketDay: daysBetween(t.start, day.date) + 1 };
+}
+
 /** The plan route's answer. */
 export function planResponse(
   region: RegionConfig,
@@ -683,6 +764,7 @@ export function planResponse(
       ticket: q.ticket,
       ...(q.hopperResorts.length > 0 && { hopper: q.hopperResorts }),
       ...(tickets.summaries.length > 0 && { tickets: tickets.summaries }),
+      ...(trip.mixing && { mixing: trip.mixing }),
       ...(tickets.suggestions.length > 0 && {
         ticketSuggestion: tickets.suggestions,
       }),
@@ -692,7 +774,9 @@ export function planResponse(
       const evening = evenings.get(day.date);
       return {
         ...withTravel(day, legs, q.area),
-        ...(!day.ticket && tickets.days.get(day.date)),
+        ...(day.ticket
+          ? windowDayOf(day, tickets.summaries)
+          : tickets.days.get(day.date)),
         ...(evening && { evening }),
       };
     }) as unknown as Array<Record<string, unknown>>,

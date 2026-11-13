@@ -863,10 +863,13 @@ the parks it covers.
   the same ticket. Universal's 3- to 5-day park-to-park and the UK tickets hop to Epic Universe
   too (Universal's terms since 2026); plan first with `ticket=hopper` keeps Universal Studios and
   Islands of Adventure only, as before.
-- **Blocks.** The windows replace `blocks` for the resorts the owned tickets cover: by default two
-  wide windows (two 14-day tickets) let their resorts mix where that saves waiting. `blocks=1`
-  written in the query keeps them together as well, each resort in one block inside its window;
-  `blocks` (default or written) keeps applying to the resorts on plan first.
+- **Mixing resorts.** Inside their windows, owned tickets' resorts may mix where that saves waiting,
+  and only then: the trip is planned once with each resort in one block and once free, and the
+  free plan is used where it places more visits, or as many saving at least 3 minutes per ride
+  (the plan's "any order will do" threshold; a smaller lead sits inside a forecast's error).
+  `meta.mixing` says `{ used, savedMinutesPerRide }`. `blocks=1` written in the query keeps the
+  blocks and `blocks=0` mixes, without the comparison (`meta.mixing` then has no
+  `savedMinutesPerRide`). `blocks` keeps applying to the resorts on plan first as before.
 - **Allowances.** A water-park visit on the UK Magic Tickets' or the Plus option's allowance uses no
   ticket day; it lies in the window and counts against the allowance.
 - **When nothing fits**, the plan relaxes in this order and says so: it puts a visit outside its
@@ -907,10 +910,11 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   - `hopDayList` (`[{ date, parks }]`, the two parks of each hop day), `eveningHopList`
     (`[{ date, parks }]`, the day's park, then the evening's), `fitsOnlyWithHopper` (the parks of
     the visits in `fitsMoreParks`, a park once per visit);
-  - `recommended`: one of `eveningHops`, `hopDays`, `fitsMoreParks` is at least 1, or
-    `savedMinutes` at least 15;
-  - `why`: `evening_hops`, `hop_days`, `fits_more_parks`, `saves_minutes`; `no_gain` when not
-    recommended.
+  - `recommended`: an evening hop, a park only the hopper fits (`fitsOnlyWithHopper` not
+    empty), or `savedMinutesPerRide` of at least 3. A hop day alone does not recommend it, nor a
+    saving summed over the trip: 15 minutes over five days is 3 a ride, inside a forecast's error;
+  - `why`: `evening_hops`, `hop_days`, `fits_more_parks`, `saves_minutes` (3 minutes a ride or
+    more); `no_gain` when not recommended.
 
   With the hopper already on for that resort (`ticket=hopper`, or the resort in `hopper=`) the
   comparison is against the plan without it.
@@ -933,6 +937,7 @@ For each resort with park days on plan first, the plan as made (blocks as today)
     "…": "…",
     "ticket": "base", // plan first's option, for the parks no owned ticket covers
     "hopper": ["universal-orlando"], // plan-first resorts planned with the hopper; absent when none
+    "mixing": { "used": true, "savedMinutesPerRide": 4 }, // with owned tickets
     "tickets": [
       {
         "id": "t1", // t1 … t6 in the order of `tickets=`
@@ -999,7 +1004,7 @@ For each resort with park days on plan first, the plan as made (blocks as today)
       "kind": "park",
       "parks": [{ "slug": "epcot", "part": "full" }],
       "ticket": "t1", // the owned ticket's id, or a suggestion's id
-      "ticketDay": 2, // the 2nd of its 14 days
+      "ticketDay": 2, // the 2nd of its 14 days (an every-day ticket: the window's day)
       "…": "…",
     },
     {
@@ -1028,6 +1033,12 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   picked: its first used day, from which the window reaches furthest.
 - **`hopper`** of an owned ticket is `true`, `false` or `"unknown"` (`.h?`); with `"unknown"`,
   **`hopperVerdict`** has the shape of a suggestion's `hopper`.
+- **Every-day tickets**: a product whose window has as many days as it sells, or that sells no
+  day count but has a window (Universal's UK 14-day tickets, SeaWorld's Four Parks, Discovery Cove
+  with its sister parks), has no days to count off. Its days' `ticketDay` is the day of the window
+  ("day 10 of 14"), counted from `start`, and its `meta.tickets[]` entry gives `usedDays` and
+  **`windowDays`** instead of `unusedDays` and `unusedReason`. A suggestion of one numbers its days
+  the same way.
 - **`unusedReason`**, with `unusedDays`: `parks_fewer_than_days` (the planned parks have every
   visit they get, second visits included, and need fewer days), `rest_days_kept` (the trip's rest
   rule kept the days second visits could have filled), or, where the visits would fill it,
