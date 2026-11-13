@@ -792,8 +792,10 @@ and the optimizer.
 - **`reservedDayParks`**: parks used only on the start date, Discovery Cove's reserved day.
 - **`onSale`** (`[{ from?, to? }]`): the start dates the product is sold for; absent when no limit
   is known. **`until`**: the last day a pass or Fun Card is valid.
-- **`pass: true`**: an annual pass or Fun Card, unlimited days, no window, blockout dates not
-  checked.
+- **`pass: true`**: an annual pass or Fun Card, unlimited days, no window. **`blockouts: true`**:
+  blockout dates apply to some or all of its versions (the passes, the Fun Cards, the 2-Day
+  Park-to-Park + 1 Day Epic promotion); the plan does not check them, and an owned one says
+  `blockouts_unchecked`.
 
 The v1 catalog: Walt Disney World date-based (1–10 days, `.h` Park Hopper) and with the Plus option
 (Water Park and Sports; `.h` Park Hopper Plus), the 4-Park Magic Ticket, the UK 14-Day and 7-Day
@@ -857,7 +859,8 @@ plan first; with `tickets` an owned ticket decides for the parks it covers.
   visit beyond a ticket's days or caps is left out with `no_ticket_day` at once.
 
 **Passes** have no window and no day count. Their blockout dates are not known here: the ticket's
-`warnings` and, once, `meta.warnings` say `blockouts_unchecked`; a Disney pass also says
+`warnings` and, once, `meta.warnings` say `blockouts_unchecked` (so does any product with
+`blockouts`); a Disney pass also says
 `park_reservation_needed` (passholders reserve their first park). Epic Universe is in no Universal
 pass, so an Epic visit with a pass is planned plan first and gets an Epic day ticket suggested.
 

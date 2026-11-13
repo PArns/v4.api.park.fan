@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { TripTicketProductDto } from "./trip-tickets.dto";
 
 /**
  * The three trip-region answers, for Swagger. The contract and every rule
@@ -127,6 +128,13 @@ export class TripRegionDto {
   })
   venues: TripVenueDto[];
   @ApiProperty({ type: () => TripTravelDto }) travel: TripTravelDto;
+  @ApiProperty({
+    type: () => [TripTicketProductDto],
+    description:
+      "The ticket catalog: what the operators sell, the window, hopping and caps of each " +
+      "(docs/frontend/trip-regions.md#tickets). No prices.",
+  })
+  tickets: TripTicketProductDto[];
 }
 
 export class TripSlotDto {

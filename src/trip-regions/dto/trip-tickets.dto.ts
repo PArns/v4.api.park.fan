@@ -129,6 +129,10 @@ export class TripTicketProductDto {
     description: "An annual pass or Fun Card: unlimited days, no window.",
   })
   pass?: true;
+  @ApiPropertyOptional({
+    description: "Blockout dates apply; the plan does not check them.",
+  })
+  blockouts?: true;
   @ApiProperty({ enum: ["high", "medium", "low"] })
   confidence: "high" | "medium" | "low";
   @ApiProperty() shopUrl: string;

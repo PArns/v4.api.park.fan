@@ -21,6 +21,7 @@ import {
   type PlanCell,
 } from "./trip-optimizer";
 import { buildLegs, regionMatrix } from "./travel";
+import { publicTicketCatalog } from "./tickets";
 import {
   buildParkDay,
   closeMinute,
@@ -216,6 +217,7 @@ export function describeRegion(
         (leg) => points.has(leg.from) && points.has(leg.to),
       ),
     },
+    tickets: publicTicketCatalog(region),
   };
 }
 
