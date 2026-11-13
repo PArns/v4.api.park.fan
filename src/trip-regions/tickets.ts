@@ -859,6 +859,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
   },
 ];
 
+/** Each region's seed, under its slug; a region without one starts with an empty catalog. */
 export const TICKET_CATALOGS: Record<string, TicketProduct[]> = {
   orlando: ORLANDO_TICKETS,
 };
