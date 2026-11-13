@@ -39,6 +39,20 @@ export interface TicketCap extends ByLength {
   max: number;
 }
 
+/** Where a ticket is bought; exactly one link of a product is the operator's own shop. */
+export interface TicketLink {
+  /** The seller's own name, not translated. */
+  seller: string;
+  url: string;
+  official?: true;
+  /** An affiliate or paid link. */
+  sponsored: boolean;
+  /** Whom it is for; absent: everyone. */
+  markets?: TicketMarket[];
+  /** The site languages it is for; absent: every one. */
+  locales?: string[];
+}
+
 export interface TicketProduct {
   id: string;
   /** The operator's product name, not translated. */
@@ -73,7 +87,12 @@ export interface TicketProduct {
   /** Where passholders reserve their park. */
   reservationUrl?: string;
   confidence: "high" | "medium" | "low";
+  /** The official link's url. */
   shopUrl: string;
+  /** Where to buy it, in order; the seed has the official shop only. */
+  links?: TicketLink[];
+  /** A sentence about the product, in English. */
+  description?: string;
   notes?: string;
   /**
    * Plan first: the order a resort's products are tried in when the plan
@@ -794,12 +813,39 @@ export function ticketCatalog(region: { slug: string }): TicketProduct[] {
     : [];
 }
 
-/** The catalog as `GET /v1/trip-regions/:region` serves it: the internal `suggest` left out. */
+/** The operators' shops in the seed, by host: the seller a seeded official link names. */
+const SELLERS: Record<string, string> = {
+  "disneyworld.disney.go.com": "Walt Disney World",
+  "www.disneyholidays.co.uk": "Disney Holidays UK",
+  "www.universalorlando.com": "Universal Orlando Resort",
+  "ukstore.universalorlando.com": "Universal Orlando UK store",
+  "seaworld.com": "SeaWorld Orlando",
+  "buschgardens.com": "Busch Gardens Tampa Bay",
+  "discoverycove.com": "Discovery Cove",
+  "www.legoland.com": "LEGOLAND Florida",
+};
+
+/** A product's links: its own, else its shop as the one official link. */
+export function linksOf(product: TicketProduct): TicketLink[] {
+  if (product.links && product.links.length > 0) return product.links;
+  const host = new URL(product.shopUrl).host;
+  return [
+    {
+      seller: SELLERS[host] ?? host,
+      url: product.shopUrl,
+      official: true,
+      sponsored: false,
+    },
+  ];
+}
+
+/** The catalog as the routes serve it: the internal `suggest` left out, `links` always there. */
 export function publicTicketCatalog(region: {
   slug: string;
-}): Array<Omit<TicketProduct, "suggest">> {
+}): Array<Omit<TicketProduct, "suggest"> & { links: TicketLink[] }> {
   return ticketCatalog(region).map(({ suggest: _suggest, ...product }) => ({
     ...product,
+    links: linksOf(product),
   }));
 }
 

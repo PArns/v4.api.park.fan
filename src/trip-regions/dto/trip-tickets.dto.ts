@@ -57,6 +57,40 @@ export class TripTicketAllowanceDto {
   visits: number | "days";
 }
 
+/** Where a ticket is bought. */
+export class TripTicketLinkDto {
+  @ApiProperty({
+    example: "Walt Disney World",
+    description: "The seller's own name, not translated.",
+  })
+  seller: string;
+  @ApiProperty({
+    example: "https://disneyworld.disney.go.com/admission/tickets/",
+  })
+  url: string;
+  @ApiPropertyOptional({
+    description: "The operator's own shop: exactly one link per product.",
+  })
+  official?: true;
+  @ApiProperty({
+    description:
+      'An affiliate or paid link: label it and link it rel="sponsored".',
+  })
+  sponsored: boolean;
+  @ApiPropertyOptional({
+    type: [String],
+    enum: ["us", "uk", "intl"],
+    description: "Whom the link is for; absent: everyone.",
+  })
+  markets?: Array<"us" | "uk" | "intl">;
+  @ApiPropertyOptional({
+    type: [String],
+    enum: ["en", "de", "nl", "fr", "es", "it"],
+    description: "The site languages it is for; absent: every one.",
+  })
+  locales?: string[];
+}
+
 export class TripTicketOnSaleDto {
   @ApiPropertyOptional({ example: "2027-01-03" }) from?: string;
   @ApiPropertyOptional({ example: "2027-05-22" }) to?: string;
@@ -143,8 +177,31 @@ export class TripTicketProductDto {
   reservationUrl?: string;
   @ApiProperty({ enum: ["high", "medium", "low"] })
   confidence: "high" | "medium" | "low";
-  @ApiProperty() shopUrl: string;
+  @ApiPropertyOptional({
+    description:
+      "A sentence about the product, in English, as the admin wrote it.",
+  })
+  description?: string;
+  @ApiProperty({
+    type: () => [TripTicketLinkDto],
+    description: "Where to buy it, in order; exactly one is `official`.",
+  })
+  links: TripTicketLinkDto[];
+  @ApiProperty({ description: "The official link's url." }) shopUrl: string;
   @ApiPropertyOptional() notes?: string;
+}
+
+/** `GET /v1/trip-regions/:region/tickets`: the active products, in order. */
+export class TripTicketCatalogDto {
+  @ApiProperty({ example: "orlando" }) region: string;
+  @ApiProperty({
+    example: "3f9c2a1b7d4e",
+    description: "Changes with every edit; plans and /when are cached by it.",
+  })
+  version: string;
+  @ApiPropertyOptional({ description: "The newest edit." }) updatedAt?: string;
+  @ApiProperty({ type: () => [TripTicketProductDto] })
+  tickets: TripTicketProductDto[];
 }
 
 export class TripTicketHopDto {
@@ -239,9 +296,12 @@ export class TripPlanTicketDto {
       "blockouts_unchecked",
       "park_reservation_needed",
       "covers_no_planned_park",
+      "product_archived",
     ],
   })
   warnings: string[];
+  @ApiProperty({ type: () => [TripTicketLinkDto] }) links: TripTicketLinkDto[];
+  @ApiProperty({ description: "The official link's url." }) shopUrl: string;
 }
 
 export class TripTicketAlternativeDto {
@@ -274,7 +334,8 @@ export class TripTicketSuggestionDto {
       "What the hopper option adds; products with an optional hopper only.",
   })
   hopper?: TripTicketHopperDto;
-  @ApiProperty() shopUrl: string;
+  @ApiProperty({ description: "The official link's url." }) shopUrl: string;
+  @ApiProperty({ type: () => [TripTicketLinkDto] }) links: TripTicketLinkDto[];
   @ApiPropertyOptional({ type: () => [TripTicketAlternativeDto] })
   alternatives?: TripTicketAlternativeDto[];
   @ApiPropertyOptional({
