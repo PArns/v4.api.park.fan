@@ -411,3 +411,83 @@ describe("selectWindows", () => {
     expect(kept.map((k) => k.index)).toEqual([3, 9]);
   });
 });
+
+describe("tickets on /when", () => {
+  /** A `/when` input with the trip's tickets read as `/when` reads them: no dates. */
+  function ticketInput(
+    cal: InternalRegionCalendar,
+    length: number,
+    parks: string[],
+    plan: Record<string, string>,
+    suggest = false,
+  ): WhenInput {
+    const from = cal.days[0].date;
+    const to = cal.days[cal.days.length - 1].date;
+    const q = normalizePlanQuery(
+      ORLANDO,
+      ORLANDO.parks.map((p) => p.slug),
+      {
+        from,
+        to: addIsoDays(from, length - 1),
+        parks: parks.join(","),
+        ...plan,
+      },
+      TODAY,
+      { from, to, starts: false },
+    );
+    return {
+      region: ORLANDO,
+      calendar: cal,
+      query: { from, to, days: length, limit: 3, gap: 7, plan: q, suggest },
+    };
+  }
+
+  it("binds owned tickets in each window and lists them in short", () => {
+    const cal = calendar("2027-01-04", 40);
+    const result = findTripDates(
+      ticketInput(cal, 10, HEADLINERS, {
+        tickets: "wdw-uk-14-day-magic,uor-uk-three-park-adventure",
+      }),
+    );
+    expect(result.windows.length).toBeGreaterThan(0);
+    for (const w of result.windows) {
+      const [disney, universal] = w.tickets ?? [];
+      expect(disney.id).toBe("t1");
+      expect(disney.start! >= w.from && disney.start! <= w.to).toBe(true);
+      expect(universal).toMatchObject({ id: "t2", windowDays: 14 });
+      expect(universal.unusedDays).toBeUndefined();
+      expect(w.ticketSuggestion).toBeUndefined();
+    }
+  });
+
+  it("ranks windows a ticket is not sold for behind the ones it is", () => {
+    // The Three Park Adventure Ticket is sold for starts to 2027-03-31.
+    const cal = calendar("2027-03-15", 40, UNIVERSAL);
+    const result = findTripDates(
+      ticketInput(cal, 5, UNIVERSAL, {
+        tickets: "uor-uk-three-park-adventure",
+        split: "fixed",
+      }),
+    );
+    expect(result.windows[0].from <= "2027-03-31").toBe(true);
+    for (const w of result.windows) {
+      if (w.from > "2027-03-31") {
+        expect(w.warnings).toContain("ticket_window_relaxed");
+      } else {
+        expect(w.warnings).not.toContain("ticket_window_relaxed");
+      }
+    }
+  });
+
+  it("gives each returned window plan first's tickets with suggest=1", () => {
+    const cal = calendar("2027-01-04", 30);
+    const result = findTripDates(
+      ticketInput(cal, 8, HEADLINERS, { split: "fixed" }, true),
+    );
+    for (const w of result.windows) {
+      const resorts = (w.ticketSuggestion ?? []).map((s) => s.resort);
+      expect(resorts).toContain("walt-disney-world");
+      expect(resorts).toContain("universal-orlando");
+    }
+  });
+});

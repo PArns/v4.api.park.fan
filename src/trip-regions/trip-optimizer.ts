@@ -699,6 +699,8 @@ class TripOptimizer {
   private relaxWindows = false;
   /** The penalty of the structure being solved, which every objective adds. */
   private activePenalty: Structure["penalty"] | null = null;
+  /** Owned tickets with no start on sale in the trip: every day on them is outside. */
+  private readonly offSale = new Set<number>();
 
   constructor(private readonly input: PlanInput) {
     this.tickets = input.tickets ?? [];
@@ -1169,6 +1171,7 @@ class TripOptimizer {
     const ti = row.units[0].ticket;
     if (ti === undefined) return false;
     const t = this.tickets[ti];
+    if (this.offSale.has(ti)) return true;
     const reserved = this.dayIndexOf(t.reservedDay);
     if (
       reserved !== undefined &&
@@ -1210,7 +1213,10 @@ class TripOptimizer {
           (s0) => s0 <= reserved && reserved <= s0 + t.window - 1,
         );
       }
-      if (starts.length === 0 && this.relaxWindows) starts = all;
+      if (starts.length === 0 && this.relaxWindows) {
+        this.offSale.add(ti);
+        starts = [0];
+      }
       const last = n - t.window;
       const late = starts.filter((s0) => s0 > last);
       starts = starts.filter((s0) => s0 <= last);
@@ -1240,16 +1246,71 @@ class TripOptimizer {
   }
 
   /**
+   * With the owned tickets' resorts in blocks: a ticket whose rows all lie in
+   * one block can use its window only inside it, so of the starts whose
+   * windows reach the same days of the block one is enough, and a start that
+   * reaches fewer of them than another is beaten by it. While the windows are
+   * kept, a window missing the block is no start at all.
+   */
+  private inBlock(
+    ti: number,
+    rows: Row[],
+    starts: number[],
+    segmentOf: string[] | undefined,
+  ): number[] {
+    const t = this.tickets[ti];
+    if (!segmentOf || !Number.isFinite(t.window) || starts.length <= 1) {
+      return starts;
+    }
+    const groups = new Set(
+      rows.filter((r) => r.units[0].ticket === ti).map((r) => this.rowGroup(r)),
+    );
+    if (groups.size !== 1) return starts;
+    const [group] = groups;
+    const lo = segmentOf.indexOf(group);
+    if (lo < 0) return starts;
+    const hi = segmentOf.lastIndexOf(group);
+    const reach = (s0: number): [number, number] => [
+      Math.max(s0, lo),
+      Math.min(s0 + t.window - 1, hi),
+    ];
+    const kept: number[] = [];
+    const seen: Array<[number, number]> = [];
+    for (const s0 of [...starts].sort((a, b) => a - b)) {
+      const [a, b] = reach(s0);
+      if (a > b) {
+        if (this.relaxWindows) kept.push(s0);
+        continue;
+      }
+      const beaten = starts.some((o) => {
+        if (o === s0) return false;
+        const [c, d] = reach(o);
+        return c <= a && d >= b && (c < a || d > b);
+      });
+      if (beaten || seen.some(([c, d]) => c === a && d === b)) continue;
+      seen.push([a, b]);
+      kept.push(s0);
+    }
+    return kept;
+  }
+
+  /**
    * One mask (or, with the windows relaxed, one penalty) per combination of
    * the owned tickets' starts.
    */
   private ticketStructures(
     rows: Row[],
     available: number[],
+    segmentOf?: string[],
   ): Array<Pick<Structure, "mask" | "penalty" | "starts">> {
     if (this.tickets.length === 0) return [{ mask: () => false, starts: [] }];
     const options = this.tickets.map((_, ti) =>
-      this.startCandidates(ti, rows, available),
+      this.inBlock(
+        ti,
+        rows,
+        this.startCandidates(ti, rows, available),
+        segmentOf,
+      ),
     );
     if (options.some((o) => o.length === 0)) return [];
     const combos: number[][] = [];
@@ -1350,12 +1411,15 @@ class TripOptimizer {
           .map((u) => ({ units: [u] })),
       ];
       if (rows.length > available.length) continue;
-      const blocks = this.blockMasks(rows, useBlocks);
-      for (const ticket of this.ticketStructures(rows, available)) {
-        for (const block of blocks) {
+      for (const block of this.blockMasks(rows, useBlocks)) {
+        for (const ticket of this.ticketStructures(
+          rows,
+          available,
+          block.segmentOf,
+        )) {
           structures.push({
             rows,
-            mask: (row, day) => ticket.mask(row, day) || block(row, day),
+            mask: (row, day) => ticket.mask(row, day) || block.mask(row, day),
             ...(ticket.penalty && { penalty: ticket.penalty }),
             starts: ticket.starts,
             dropped,
@@ -1590,14 +1654,18 @@ class TripOptimizer {
   }
 
   /**
-   * One mask per block structure: `true` where a row may not go. Without
-   * `blocks`, or with one resort, a single structure with no mask.
+   * One mask per block structure: `true` where a row may not go, with the
+   * group each day's block belongs to. Without `blocks`, or with one resort,
+   * a single structure with no mask.
    */
   private blockMasks(
     rows: Row[],
     useBlocks: boolean,
-  ): Array<(row: Row, day: number) => boolean> {
-    const none = [() => false];
+  ): Array<{
+    mask: (row: Row, day: number) => boolean;
+    segmentOf?: string[];
+  }> {
+    const none = [{ mask: () => false }];
     if (!useBlocks) return none;
     const blockable = new Set(this.input.options.blockGroups);
     // An owned ticket's window replaces its resort's block, unless the query
@@ -1614,7 +1682,10 @@ class TripOptimizer {
       ),
     ].sort();
     if (groups.length <= 1) return none;
-    const masks: Array<(row: Row, day: number) => boolean> = [];
+    const masks: Array<{
+      mask: (row: Row, day: number) => boolean;
+      segmentOf: string[];
+    }> = [];
     for (const order of permutations(groups)) {
       for (const starts of compositions(this.n, order.length)) {
         const segmentOf = new Array<string>(this.n);
@@ -1622,10 +1693,13 @@ class TripOptimizer {
           const end = k + 1 < starts.length ? starts[k + 1] : this.n;
           for (let d = start; d < end; d++) segmentOf[d] = order[k];
         });
-        masks.push((row, day) => {
-          if (!planFirst(row)) return false;
-          const group = this.rowGroup(row);
-          return blockable.has(group) && segmentOf[day] !== group;
+        masks.push({
+          mask: (row, day) => {
+            if (!planFirst(row)) return false;
+            const group = this.rowGroup(row);
+            return blockable.has(group) && segmentOf[day] !== group;
+          },
+          segmentOf,
         });
       }
     }

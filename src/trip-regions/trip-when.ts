@@ -37,8 +37,14 @@ import {
 import {
   autoSplit,
   optimizePlan,
+  planTickets,
   type NormalizedPlanQuery,
+  type OptimizedTrip,
 } from "./trip-plan.assembly";
+import { buildLegs } from "./travel";
+import { planEvenings } from "./trip-evening";
+import { everyDay, windowOf } from "./tickets";
+import { productOf, type TicketSuggestion } from "./trip-tickets";
 import {
   planCellOf,
   type InternalCalendarDay,
@@ -125,7 +131,8 @@ export type WhenWarning =
   | "fireworks_missed"
   | "hours_not_published"
   | "estimate_last_year"
-  | "water_park_closed";
+  | "water_park_closed"
+  | "ticket_window_relaxed";
 
 /** One school break of a holiday region, weekends at its edges included. */
 export interface SchoolBreakPeriod {
@@ -152,6 +159,8 @@ export interface WhenQuery {
   /** The trip each window is planned for; its `from`/`to` are replaced per window. */
   plan: NormalizedPlanQuery;
   within?: WhenWithin;
+  /** Plan first's suggested tickets on each returned window. */
+  suggest?: boolean;
 }
 
 export interface WhenInput {
@@ -188,6 +197,20 @@ export interface TripWhenWindow {
     days: Array<{ date: string; kind: PlannedDay["kind"]; parks: string[] }>;
     unplaced?: string[];
   };
+  /** The owned tickets as the window's plan used them, in short. */
+  tickets?: WhenTicket[];
+  /** With `suggest=1`: plan first's tickets for the window. */
+  ticketSuggestion?: TicketSuggestion[];
+}
+
+/** An owned ticket in a window's plan: `meta.tickets` of `/plan`, in short. */
+export interface WhenTicket {
+  id: string;
+  start?: string;
+  end?: string;
+  usedDays: number;
+  unusedDays?: number;
+  windowDays?: number;
 }
 
 export interface TripWhenWeek {
@@ -261,8 +284,8 @@ export function planWindow(
   region: RegionConfig,
   q: NormalizedPlanQuery,
   calendar: InternalRegionCalendar,
-): OptimizedPlan {
-  return optimizePlan(region, q, calendar).plan;
+): OptimizedTrip {
+  return optimizePlan(region, q, calendar);
 }
 
 /** The visits the plan gives each park in a window (`split=auto` may add some). */
@@ -448,6 +471,7 @@ interface Evaluated {
   figure?: number;
   penalties?: PlanPenalties;
   plan: OptimizedPlan;
+  trip: OptimizedTrip;
 }
 
 /** Start indexes whose window lies inside one of the school breaks (all without `within`). */
@@ -639,7 +663,8 @@ export function findTripDates(input: WhenInput): TripWhen {
   const evaluate = (i: number): Evaluated => {
     const hit = planned.get(i);
     if (hit) return hit;
-    const plan = planWindow(region, windowQuery(i), windowCalendar(i));
+    const trip = planWindow(region, windowQuery(i), windowCalendar(i));
+    const plan = trip.plan;
     const pricing = pricingAt(i);
     let score = 0;
     let shown = 0;
@@ -668,7 +693,11 @@ export function findTripDates(input: WhenInput): TripWhen {
       hurricane += prices.reduce((sum, p) => sum + share * p.hurricane, 0);
       parkDays++;
     }
-    score += UNPLACED_VISIT_COST * plan.unplaced.length;
+    // A day outside an owned ticket's window counts as a visit the window cannot hold.
+    const outside = plan.days.filter((d) =>
+      d.warnings.includes("outside_ticket_window"),
+    ).length;
+    score += UNPLACED_VISIT_COST * (plan.unplaced.length + outside);
     const basis = basisOf(bases);
     const penalties = penaltiesOf(heat, hurricane, parkDays);
     const evaluated: Evaluated = {
@@ -681,6 +710,7 @@ export function findTripDates(input: WhenInput): TripWhen {
       ...(parkDays > 0 && { figure: shown / parkDays }),
       ...(penalties && { penalties }),
       plan,
+      trip,
     };
     planned.set(i, evaluated);
     return evaluated;
@@ -738,9 +768,10 @@ export function findTripDates(input: WhenInput): TripWhen {
   const rangeHours = mean(
     days.flatMap((d) => headlinerHours(region, slugs, d)),
   );
-  const windows = kept.map((e, rank) =>
-    describeWindow(input, e, rank + 1, rangeAverage, rangeHours),
-  );
+  const windows = kept.map((e, rank) => ({
+    ...describeWindow(input, e, rank + 1, rangeAverage, rangeHours),
+    ...windowTickets(input, e, windowQuery(e.index), windowCalendar(e.index)),
+  }));
   const weeks = weekStrip(input, rules);
   const months = monthStrip(input, weeks);
 
@@ -783,6 +814,59 @@ export function findTripDates(input: WhenInput): TripWhen {
 }
 
 // ── a window's answer ───────────────────────────────────────────────────────
+
+/**
+ * A window's ticket parts: the owned tickets in short, and with `suggest=1`
+ * plan first's suggestion, its hopper verdict's evenings read without show
+ * times.
+ */
+function windowTickets(
+  input: WhenInput,
+  e: Evaluated,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+): Pick<TripWhenWindow, "tickets" | "ticketSuggestion"> {
+  const { region } = input;
+  const tickets: WhenTicket[] = e.plan.tickets.map((t, i) => {
+    const owned = q.tickets[i];
+    const product = productOf(region, owned.product);
+    const window =
+      product && everyDay(product, owned.days)
+        ? windowOf(product, owned.days)
+        : undefined;
+    const unused =
+      window === undefined && owned.days !== "unlimited"
+        ? owned.days - t.usedDays
+        : 0;
+    return {
+      id: t.id,
+      ...(t.start && !product?.pass && { start: t.start, end: t.end }),
+      usedDays: t.usedDays,
+      ...(unused > 0 && { unusedDays: unused }),
+      ...(window !== undefined && { windowDays: window }),
+    };
+  });
+  let ticketSuggestion: TicketSuggestion[] = [];
+  if (input.query.suggest) {
+    const legs = buildLegs(region);
+    ticketSuggestion = planTickets(region, q, calendar, e.trip, (hopSetsOn) =>
+      planEvenings({
+        region,
+        calendar,
+        legs,
+        days: e.plan.days,
+        trip: { from: q.from, to: q.to },
+        ticket: q.ticket,
+        hopSetsOn,
+        shows: new Map(),
+      }),
+    ).suggestions;
+  }
+  return {
+    ...(tickets.length > 0 && { tickets }),
+    ...(ticketSuggestion.length > 0 && { ticketSuggestion }),
+  };
+}
 
 /** The day-guest hours of the chosen headliner parks on a day. */
 function headlinerHours(
@@ -939,6 +1023,9 @@ function describeWindow(
     e.plan.unplaced.some((u) => waterParks.includes(u.slug))
   ) {
     warnings.push("water_park_closed");
+  }
+  if (e.plan.relaxed.includes("ticket_window_relaxed")) {
+    warnings.push("ticket_window_relaxed");
   }
 
   const unplaced = e.plan.unplaced.map((u) => u.slug);

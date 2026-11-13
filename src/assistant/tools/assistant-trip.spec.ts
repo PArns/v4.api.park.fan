@@ -515,6 +515,32 @@ describe("plan_vacation", () => {
     expect(json?.totals.means).toMatch(/per headliner ride, not per day/);
   });
 
+  it("plans with the tickets they hold and names the one to buy for the rest", async () => {
+    const { call } = setup();
+    const { json } = await call("plan_vacation", {
+      ...trip,
+      tickets: "wdw-date-based.2.h?",
+    });
+    expect(json?.tickets).toEqual([
+      expect.objectContaining({
+        id: "t1",
+        ticket: "Walt Disney World date-based theme park ticket",
+        used: "2 of 2 days",
+        hopper: expect.stringMatching(/^not known, planned without; /),
+      }),
+    ]);
+    const disneyDays = json?.days.filter((d: { ticket?: string }) =>
+      d.ticket?.startsWith("t1 day"),
+    );
+    expect(disneyDays).toHaveLength(2);
+    expect(json?.ticketsToBuy).toEqual([
+      expect.objectContaining({
+        ticket: "Universal Epic Universe 1-Day ticket",
+      }),
+    ]);
+    expect(json?.hubUrl).toContain("&tickets=wdw-date-based.2.h%3F");
+  });
+
   it("names a hotel's perk and the travel from its area", async () => {
     const { call } = setup();
     const { json } = await call("plan_vacation", {
@@ -553,7 +579,8 @@ describe("plan_vacation", () => {
     });
     expect(json?.days).toHaveLength(21);
     expect(json?.reserve).toHaveLength(16);
-    expect(content.length).toBeLessThan(9_000);
+    // Tickets to buy included; a result is cut at 12,000.
+    expect(content.length).toBeLessThan(10_000);
   });
 
   it("refuses a trip over three weeks, a park outside Orlando and a plan the route refuses", async () => {

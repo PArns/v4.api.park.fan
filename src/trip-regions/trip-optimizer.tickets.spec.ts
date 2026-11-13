@@ -357,3 +357,23 @@ describe("the optimizer with owned tickets", () => {
     expect(datesOf(plan, SW)).toEqual([day(1)]);
   });
 });
+
+describe("an owned ticket with no start on sale in the trip", () => {
+  it("puts its days outside its window and says so", () => {
+    const parks = [park(USF)];
+    const plan = optimizeTrip(
+      input(4, parks, {}, [
+        ticket({
+          id: "t1",
+          parks: [USF, IOA, EPIC],
+          days: 14,
+          window: 14,
+          startOptions: [],
+        }),
+      ]),
+    );
+    expect(plan.relaxed).toContain("ticket_window_relaxed");
+    const usf = plan.days.find((d) => d.parks[0]?.slug === USF);
+    expect(usf?.warnings).toContain("outside_ticket_window");
+  });
+});
