@@ -180,8 +180,14 @@ describe("tickets= in the query", () => {
     expect(planCacheQuery(a)).toBe(planCacheQuery(b));
     const none = normalizePlanQuery(ORLANDO, KNOWN, query({}), TODAY);
     expect(planCacheQuery(none)).not.toBe(planCacheQuery(a));
-    // A plan without tickets keeps the key it had.
-    expect(planCacheQuery(none).split("|")).toHaveLength(15);
+    // A plan without tickets keeps the key it had, plus the catalog's version.
+    const parts = planCacheQuery(none).split("|");
+    expect(parts).toHaveLength(16);
+    expect(parts[15]).toBe(`catalog:${none.catalogVersion}`);
+    // Another catalog version is another key: an edited rule never serves an old plan.
+    expect(planCacheQuery({ ...none, catalogVersion: "edited" })).not.toBe(
+      planCacheQuery(none),
+    );
   });
 
   it("keeps ticket=hopper as plan first with every resort's hopper, and hopper= per resort", () => {
@@ -415,8 +421,19 @@ describe("owned tickets in the answer", () => {
         unusedDays: 10,
         unusedReason: "parks_fewer_than_days",
         warnings: [],
+        links: [
+          {
+            seller: "Disney Holidays UK",
+            url: "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
+            official: true,
+            sponsored: false,
+          },
+        ],
+        shopUrl:
+          "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
       },
     ]);
+    expect(meta.ticketCatalog).toMatch(/^[0-9a-f]{12}$/);
     expect(meta.ticketSuggestion).toBeUndefined();
     expect(
       (body.days as any[])

@@ -8,10 +8,12 @@
  * Orlando hotel. So it lives in code and is changed by a pull request, like the
  * rest of `docs/frontend/trip-regions.md`.
  *
- * This file imports nothing on purpose: `scripts/trip-regions/build-travel-matrix.mjs`
- * imports it straight from Node (type stripping) to read the coordinates, so the
- * matrix and the region can never disagree about where a car park is.
+ * This file imports nothing at run time on purpose: `scripts/trip-regions/build-travel-matrix.mjs`
+ * imports it straight from Node (type stripping, which erases the one type import) to
+ * read the coordinates, so the matrix and the region can never disagree about where a
+ * car park is.
  */
+import type { TicketProduct } from "./tickets";
 
 /** What kind of day a park is: queues worth optimizing, or a flat-cost day. */
 export type TripParkType = "theme_park" | "water_park" | "reservation_park";
@@ -176,6 +178,16 @@ export interface RegionConfig {
    */
   hopperSets: string[][];
   nightShows: Record<string, NightShowConfig[]>;
+  /**
+   * The ticket catalog as loaded from the admin's table, archived products
+   * included (`TicketCatalogService.withTickets`); absent: the seed in
+   * `tickets.ts`. Never set in this file.
+   */
+  tickets?: TicketProduct[];
+  /** The catalog's version: plans and `/when` are cached by it. */
+  ticketsVersion?: string;
+  /** The newest edit of the catalog. */
+  ticketsUpdatedAt?: string;
 }
 
 const US = { continent: "north-america", country: "united-states" } as const;

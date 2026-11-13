@@ -47,7 +47,7 @@ export class TripWhenService {
   ) {}
 
   async when(slug: string, query: TripWhenQueryDto): Promise<TripWhen> {
-    const region = this.regions.region(slug);
+    const region = await this.regions.regionWithTickets(slug);
     const today = this.regions.today(region);
     const { from, to } = whenRange(query.from, query.to, today);
     const within = query.within

@@ -57,7 +57,13 @@ export class TripPlanService {
     slug: string,
     query: TripPlanQueryDto,
   ): Promise<NormalizedPlanQuery> {
-    const region = this.regions.region(slug);
+    return this.normalizeIn(await this.regions.regionWithTickets(slug), query);
+  }
+
+  private async normalizeIn(
+    region: RegionConfig,
+    query: TripPlanQueryDto,
+  ): Promise<NormalizedPlanQuery> {
     const parks = await this.regions.resolveParks(region);
     return normalizePlanQuery(
       region,
@@ -68,12 +74,14 @@ export class TripPlanService {
   }
 
   async plan(slug: string, query: TripPlanQueryDto): Promise<TripPlanDto> {
-    const q = await this.normalize(slug, query);
+    // One catalog for the whole request: the version in the key is the one planned with.
+    const region = await this.regions.regionWithTickets(slug);
+    const q = await this.normalizeIn(region, query);
     const key = CacheKeys.tripRegionPlan(slug, planCacheQuery(q));
     const cached = safeJsonParse<TripPlanDto>(await this.redis.get(key));
     if (cached) return cached;
     return this.flight.run(key, async () => {
-      const built = await this.build(slug, q);
+      const built = await this.build(region, q);
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)
         .catch(() => undefined);
@@ -82,10 +90,9 @@ export class TripPlanService {
   }
 
   private async build(
-    slug: string,
+    region: RegionConfig,
     q: NormalizedPlanQuery,
   ): Promise<TripPlanDto> {
-    const region = this.regions.region(slug);
     const today = this.regions.today(region);
     const calendar = await this.regions.internalCalendar(region, q.from, q.to);
     const trip = optimizePlan(region, q, calendar);

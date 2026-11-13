@@ -12,12 +12,15 @@ import {
   allowanceOf,
   capsOf,
   everyDay,
+  linksOf,
+  shopUrlOf,
   hopSetsOf,
   onSaleAt,
   parksOf,
   sellsDays,
   ticketCatalog,
   windowOf,
+  type TicketLink,
   type TicketProduct,
 } from "./tickets";
 import {
@@ -69,8 +72,11 @@ function datesFrom(from: string, to: string): string[] {
 }
 
 /** The catalog's product, or undefined. */
+/** What reads a catalog: a region, with the catalog loaded on it or not (the seed). */
+type CatalogRegion = { slug: string; tickets?: TicketProduct[] };
+
 export function productOf(
-  region: { slug: string },
+  region: CatalogRegion,
   id: string,
 ): TicketProduct | undefined {
   return ticketCatalog(region).find((p) => p.id === id);
@@ -234,7 +240,7 @@ export function canonicalTickets(tickets: OwnedTicket[]): string {
 }
 
 /** Whether an owned ticket hops: its option on (or included) and a hop set at its length. */
-export function ownedHops(region: { slug: string }, t: OwnedTicket): boolean {
+export function ownedHops(region: CatalogRegion, t: OwnedTicket): boolean {
   const product = productOf(region, t.product);
   return (
     !!product &&
@@ -245,7 +251,7 @@ export function ownedHops(region: { slug: string }, t: OwnedTicket): boolean {
 
 /** The hop sets an owned ticket gives a day, for its evenings. */
 export function ownedHopSets(
-  region: { slug: string },
+  region: CatalogRegion,
   t: OwnedTicket,
   hopper = t.hopper === true,
 ): string[][] {
@@ -357,6 +363,7 @@ export interface TicketSuggestion {
   extraDays?: number;
   hopper?: HopperVerdict;
   shopUrl: string;
+  links: TicketLink[];
   alternatives?: TicketAlternative[];
   notCoveredBy?: string[];
 }
@@ -378,12 +385,13 @@ const parksOfDay = (d: PlannedDay): string[] => d.parks.map((p) => p.slug);
 
 /** The resort whose products a park's suggestion comes from (the first suggested product covering it). */
 export function suggestionResortOf(
-  region: { slug: string },
+  region: CatalogRegion,
   slug: string,
 ): string | undefined {
   return ticketCatalog(region).find(
     (p) =>
       p.suggest !== undefined &&
+      !p.archived &&
       (p.parks.includes(slug) || !!p.allowance?.parks.includes(slug)),
   )?.resort;
 }
@@ -559,6 +567,7 @@ export function suggestTickets(input: SuggestionInput): {
         (p) =>
           p.resort === group.key &&
           p.suggest !== undefined &&
+          !p.archived &&
           p.markets.includes("us"),
       )
       .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
@@ -606,7 +615,8 @@ export function suggestTickets(input: SuggestionInput): {
         parks: [...new Set(chosen.visits.flatMap((v) => v.parks))].sort(),
         ...(fit.extra > 0 && { extraDays: fit.extra }),
         ...(verdict && { hopper: verdict }),
-        shopUrl: product.shopUrl,
+        shopUrl: shopUrlOf(product),
+        links: linksOf(product),
         ...(alternatives.length > 0 && { alternatives }),
         ...(notCoveredBy.length > 0 && { notCoveredBy }),
       });
@@ -629,7 +639,8 @@ function alternativesFor(
   const start = visits[0].date;
   const out: TicketAlternative[] = [];
   for (const p of catalog) {
-    if (p.resort !== resort || p.pass || p.days === "unlimited") continue;
+    if (p.resort !== resort || p.pass || p.archived) continue;
+    if (p.days === "unlimited") continue;
     if (
       tripDays >= LONG_STAY_DAYS &&
       !p.markets.includes("us") &&
@@ -837,8 +848,13 @@ export interface TicketSummary {
     | "parks_fewer_than_days";
   allowanceVisits?: number;
   warnings: Array<
-    "blockouts_unchecked" | "park_reservation_needed" | "covers_no_planned_park"
+    | "blockouts_unchecked"
+    | "park_reservation_needed"
+    | "covers_no_planned_park"
+    | "product_archived"
   >;
+  links: TicketLink[];
+  shopUrl: string;
 }
 
 export interface TicketSummaryInput {
@@ -876,6 +892,7 @@ export function ticketSummaries(input: TicketSummaryInput): TicketSummary[] {
     if (!input.parks.some((p) => covered.includes(p))) {
       warnings.push("covers_no_planned_park");
     }
+    if (product.archived) warnings.push("product_archived");
     const days = o.days === "unlimited" ? undefined : o.days;
     const windowDays = everyDay(product, o.days)
       ? windowOf(product, o.days)
@@ -928,6 +945,8 @@ export function ticketSummaries(input: TicketSummaryInput): TicketSummary[] {
         allowanceVisits: planned.allowanceVisits,
       }),
       warnings,
+      links: linksOf(product),
+      shopUrl: shopUrlOf(product),
     };
   });
 }

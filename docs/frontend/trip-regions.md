@@ -819,11 +819,13 @@ A product:
 }
 ```
 
-- **`links`**: where to buy, in the admin's order; exactly one is the operator's own shop
-  (`official: true`), whose url is also `shopUrl`. `sponsored: true` marks an affiliate or paid
-  link: the client labels it and links it `rel="sponsored noopener"`. `markets` and `locales` say
-  whom a link is for (a UK seller for `uk`, a German page for `de`); a link without them is for
-  everyone. Every url is `https`.
+- **`links`**: where to buy. Exactly one is the operator's own shop (`official: true`), whose url is
+  also `shopUrl`. `sponsored: true` marks an affiliate or paid link: the client labels it and links
+  it `rel="sponsored noopener"`. `markets` and `locales` say whom a link is for (a UK seller for
+  `uk`, a German page for `de`); a link without them is for everyone. **The array order is the
+  display order:** among the links that suit the reader equally (those for their locale or market
+  first, then those for everyone), the client shows them in the order given, so the admin decides
+  which link comes first. Every url is `https`.
 - **`description`**: an optional sentence about the product, in English, as the admin wrote it.
 
 - **`windowTable`** lists, for each length on sale, the calendar days the ticket may be used in,
@@ -1172,7 +1174,11 @@ again after `CDN_SETTLE_MS`. Every write leaves an audit row (`ticket_product.cr
 
 **The seed.** At boot, a region whose `ticket_products` has no row gets the products of
 `tickets.ts`, once (a second instance booting at the same time inserts nothing twice), and the log
-says so. A region that has rows is never touched again: from then on the admin is the source.
+says so. Each seeded product gets plain links from `ticket-seed-links.ts`: the cheapest authorized
+seller the research found first, where that is not the operator's own shop, then the official
+link. A seeded link is never `sponsored` and carries no affiliate or
+tracking parameter. The seed runs only on an empty table: a region that has rows is never touched
+again, and every later change, links included, is made in the admin.
 
 ### Uncertain rules
 
