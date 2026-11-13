@@ -103,6 +103,20 @@ export class CuratedDataProcessor {
     }
   }
 
+  /**
+   * The delayed revalidation of other tags, after the CDN window: the ticket
+   * catalog's `trip-tickets:<region>` (`AdminTicketService.publish`).
+   */
+  @Process("revalidate-tags")
+  async handleRevalidateTags(job: Job<{ tags?: string[] }>): Promise<void> {
+    const tags = (job.data?.tags ?? []).filter((t) => typeof t === "string");
+    if (tags.length === 0) return;
+    this.logger.log(
+      `♻️ Re-revalidating ${tags.join(", ")} after the CDN window...`,
+    );
+    await this.revalidationService.revalidateTags(tags);
+  }
+
   /** The delayed half of {@link publish} — see the reasoning there. */
   @Process("revalidate-parks")
   async handleRevalidateParks(_job: Job): Promise<void> {

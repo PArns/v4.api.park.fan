@@ -17,6 +17,8 @@ import {
 import type { TripParkDayInternal } from "./trip-calendar.util";
 import type { InternalRegionCalendar } from "./trip-region.assembly";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
+import { seedCatalog, withCatalog } from "./ticket-catalog";
+import { publicTicketCatalog } from "./tickets";
 
 const TODAY = "2026-11-12";
 const FROM = "2027-02-01";
@@ -494,6 +496,63 @@ describe("owned tickets in the answer", () => {
       recommended: false,
       why: ["no_gain"],
     });
+  });
+});
+
+describe("an archived product", () => {
+  /** The region with one product archived in its loaded catalog. */
+  const archivedRegion = (id: string) =>
+    withCatalog(ORLANDO, {
+      region: "orlando",
+      version: "edited",
+      products: seedCatalog(ORLANDO).products.map((p) =>
+        p.id === id ? { ...p, archived: true as const } : p,
+      ),
+    });
+
+  it("is still read by tickets=, and its ticket says it was archived", () => {
+    const region = archivedRegion("wdw-uk-14-day-magic");
+    const q = normalizePlanQuery(
+      region,
+      KNOWN,
+      query({ parks: DISNEY.join(","), tickets: "wdw-uk-14-day-magic" }),
+      TODAY,
+    );
+    expect(q.catalogVersion).toBe("edited");
+    const cal = calendar(q.from, q.to);
+    const trip = optimizePlan(region, q, cal);
+    const body = planResponse(region, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+    });
+    const meta = body.meta as Record<string, any>;
+    expect(meta.tickets[0].warnings).toContain("product_archived");
+    expect(meta.ticketCatalog).toBe("edited");
+  });
+
+  it("is never suggested and leaves the catalog route", () => {
+    const region = archivedRegion("wdw-date-based");
+    const q = normalizePlanQuery(
+      region,
+      KNOWN,
+      query({ parks: DISNEY.join(","), split: "fixed" }),
+      TODAY,
+    );
+    const cal = calendar(q.from, q.to);
+    const trip = optimizePlan(region, q, cal);
+    const body = planResponse(region, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+    });
+    const products = ((body.meta as any).ticketSuggestion as any[]).map(
+      (s) => s.product,
+    );
+    expect(products).not.toContain("wdw-date-based");
+    expect(publicTicketCatalog(region).map((p) => p.id)).not.toContain(
+      "wdw-date-based",
+    );
   });
 });
 
