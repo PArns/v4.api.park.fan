@@ -825,7 +825,9 @@ A product:
   `uk`, a German page for `de`); a link without them is for everyone. **The array order is the
   display order:** among the links that suit the reader equally (those for their locale or market
   first, then those for everyone), the client shows them in the order given, so the admin decides
-  which link comes first. Every url is `https`.
+  which link comes first. Every url is `https`. Purchase links show the sellers that the visitor
+  comes from park.fan: the client renders them with `referrerPolicy="origin"` and never with
+  `noreferrer`.
 - **`description`**: an optional sentence about the product, in English, as the admin wrote it.
 
 - **`windowTable`** lists, for each length on sale, the calendar days the ticket may be used in,
@@ -1174,9 +1176,10 @@ again after `CDN_SETTLE_MS`. Every write leaves an audit row (`ticket_product.cr
 
 **The seed.** At boot, a region whose `ticket_products` has no row gets the products of
 `tickets.ts`, once (a second instance booting at the same time inserts nothing twice), and the log
-says so. Each seeded product gets plain links from `ticket-seed-links.ts`: the cheapest authorized
-seller the research found first, where that is not the operator's own shop, then the official
-link. A seeded link is never `sponsored` and carries no affiliate or
+says so. Each seeded product gets plain links from `ticket-seed-links.ts`, in this order: the
+cheapest authorized seller the research found, then Attraction Tickets' pages for the product
+(`locales` set where a page is for one site language), then the official link; a link that repeats
+one before it is left out. The research's bundles are not seeded as products. A seeded link is never `sponsored` and carries no affiliate or
 tracking parameter. The seed runs only on an empty table: a region that has rows is never touched
 again, and every later change, links included, is made in the admin.
 

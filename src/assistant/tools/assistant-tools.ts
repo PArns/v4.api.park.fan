@@ -1774,7 +1774,8 @@ const DEFAULT_EVENT_DAYS = 31;
 /** The Orlando region and its parks as the database has them, named as the site names them. */
 async function orlando(ctx: AssistantToolContext) {
   const regions = ctx.get(TripRegionService);
-  const region = regions.region(ORLANDO.slug);
+  // With its ticket catalog: the product names and links Parky gives are the admin's.
+  const region = await regions.regionWithTickets(ORLANDO.slug);
   const resolved = await regions.resolveParks(region);
   const parks: RegionParkName[] = resolved.map(({ config, park }) => ({
     slug: config.slug,
@@ -3198,7 +3199,7 @@ export const ASSISTANT_TOOLS = [
           today,
         ),
       );
-      return tripDatesSummary({ result, plan: normalized.plan });
+      return tripDatesSummary({ result, plan: normalized.plan, region });
     },
   }),
   tool({

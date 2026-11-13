@@ -858,11 +858,16 @@ export function ticketCatalog(region: {
   return region.tickets ?? seedTickets(region);
 }
 
+/** The seller an Attraction Tickets seed link names. */
+export const ATTRACTION_TICKETS_SELLER = "Attraction Tickets";
+
 /**
- * A seed product's links from its entry in `ticket-seed-links.ts`: the
- * cheapest authorized seller first where it is not the operator's shop, then
- * the official one. Never sponsored. Without an entry, the product's
- * `shopUrl` is the official link, named by its host.
+ * A seed product's links from its entry in `ticket-seed-links.ts`, in display
+ * order: the cheapest authorized seller, then Attraction Tickets' pages (each
+ * for its locale, or for all), then the operator's own shop (`official`). A
+ * link that repeats one before it (the cheapest seller is Attraction Tickets,
+ * or the operator itself) is left out. Never sponsored. Without an entry, the
+ * product's `shopUrl` is the official link, named by its host.
  */
 export function seedLinksFrom(
   entry: SeedLinkEntry | undefined,
@@ -874,17 +879,29 @@ export function seedLinksFrom(
     official: true,
     sponsored: false,
   };
-  const cheapest: TicketLink[] =
-    entry?.cheapest && entry.cheapest.url !== official.url
-      ? [
-          {
-            seller: entry.cheapest.seller,
-            url: entry.cheapest.url,
-            sponsored: false,
-          },
-        ]
-      : [];
-  return [...cheapest, official];
+  const links: TicketLink[] = [];
+  if (entry?.cheapest) {
+    links.push({
+      seller: entry.cheapest.seller,
+      url: entry.cheapest.url,
+      sponsored: false,
+    });
+  }
+  for (const page of entry?.attractionTickets ?? []) {
+    links.push({
+      seller: ATTRACTION_TICKETS_SELLER,
+      url: page.url,
+      sponsored: false,
+      ...(page.locale && { locales: [page.locale] }),
+    });
+  }
+  const seen = new Set<string>([official.url]);
+  const unique = links.filter((l) => {
+    if (seen.has(l.url)) return false;
+    seen.add(l.url);
+    return true;
+  });
+  return [...unique, official];
 }
 
 /** A seed product's links (`seedLinksFrom` on its entry). */
