@@ -197,7 +197,12 @@ school-holiday region only when they travel in school breaks. Version 51 (PAR-12
 the tickets a visitor already holds go into `plan_vacation`'s `tickets` (an unknown hopper as
 `.h?`), without them the plan's `ticketsToBuy` is what to buy and never a price, and the prompt
 states the few ticket facts Parky may give without a tool (a Disney ticket's window, the UK 14-Day
-Magic Ticket, Epic Universe on Universal's 1- and 2-day tickets and in no pass).
+Magic Ticket, Epic Universe on Universal's 1- and 2-day tickets and in no pass). Version 52
+(PAR-1302) makes the trip tools regional: `plan_vacation`, `find_trip_dates`, `get_park_events`
+and `get_travel_time` take a `region` (Orlando without it), the prompt's trip routing speaks of a
+trip region with Orlando's facts kept as Orlando's, and what differs by region (the perks' names,
+the storm and rainy seasons, whose school breaks) comes with each tool's result instead of the
+prompt.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -488,10 +493,19 @@ showtimes that day; `get_shows` lists each show's `slug` for it. `plan_undo` tak
 own last change to the day, and the widget refuses it when the visitor changed the day since; Parky sees only the snapshot, so when a visitor says the
 undo did not work he says the day changed since and offers to make the change by hand.
 
-### Orlando: the vacation planner in the chat
+### The trip regions: the vacation planner in the chat
 
 Four lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
-`TripPlanService` directly, no HTTP and no data key (Parky is park.fan's own page). They turn
+`TripPlanService` directly, no HTTP and no data key (Parky is park.fan's own page). Each takes
+`region` (`orlando`, and every region of `regions.ts`; Orlando without it), and a park of another
+trip region is refused with the region to call again with. What differs by region is read off
+the region: a hotel perk by its `perkNames` (Happy Entry, Extra Magic Time), the storm season by
+its kind and months ("typhoon season (August to October), a fact about the season, not a
+forecast"), the rainy season once per trip in `season`, whose school breaks a `/when` window and
+month count ("no Japanese school break"), the climate park the months read, the hub at
+`/<region slug>`, and a leg's source (OSRM's drive, or curated from timetables). `hotel`, `area`
+and `hopper` are the region's own values, checked by the plan route, whose refusal names them;
+the tool descriptions list Orlando's. They turn
 every code those routes send into a short English phrase the model translates
 (`tools/assistant-trip.ts`), so nothing is left for it to decode. A park is named as the model
 likes it: a region park's slug, id, name or curated abbreviation, else the one region park whose
