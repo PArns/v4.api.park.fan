@@ -7,20 +7,16 @@ import type {
   InternalCalendarDay,
   InternalRegionCalendar,
 } from "../../trip-regions/trip-region.service";
-import {
-  heatOf,
-  hurricaneWeight,
-  isHurricanePeak,
-} from "../../trip-regions/trip-optimizer";
+import { heatOf, stormWarning } from "../../trip-regions/trip-optimizer";
 import type {
-  PlanReason,
-  PlanWarning,
+  PlanDayReason,
   PlannedDay,
   PlannedParkVisit,
   PlanTotals,
 } from "../../trip-regions/trip-optimizer";
-import type { PerkKind, RegionConfig } from "../../trip-regions/regions";
-import type { TripLeg } from "../../trip-regions/travel";
+import { TRIP_REGIONS, type RegionConfig } from "../../trip-regions/regions";
+import { stormSeasonSpan } from "../../trip-regions/trip-region.assembly";
+import { travelSource, type TripLeg } from "../../trip-regions/travel";
 import type {
   EveningOption,
   PlanEvening,
@@ -36,21 +32,18 @@ import {
   type TicketSuggestion,
 } from "../../trip-regions/trip-tickets";
 import type { WhenTicket } from "../../trip-regions/trip-when";
-import type {
-  TripWhen,
-  WhenReason,
-  WhenWarning,
-} from "../../trip-regions/trip-when";
+import type { TripWhen, WhenReason } from "../../trip-regions/trip-when";
 
 /**
- * Parky's side of the Orlando hub (docs/frontend/trip-regions.md): the trip plan, the region's
- * events and its travel legs turned into what the model retells, and the hub's address with a
- * plan in its query. Pure: the tools in `assistant-tools.ts` read the services and pass the
- * results in. Every code the trip routes send becomes a short English phrase here, which the
- * model translates; nothing is left for it to decode.
+ * Parky's side of the trip regions' hubs (docs/frontend/trip-regions.md): the trip plan, the
+ * region's events and its travel legs turned into what the model retells, and the hub's address
+ * with a plan in its query. Pure: the tools in `assistant-tools.ts` read the services and pass
+ * the results in. Every code the trip routes send becomes a short English phrase here, which the
+ * model translates; nothing is left for it to decode. What differs by region (the storm season,
+ * the perks' names, whose school breaks) is read off the region.
  */
 
-/** A region park as the Orlando tools name and match it. */
+/** A region park as the trip tools name and match it. */
 export interface RegionParkName {
   slug: string;
   id: string;
@@ -93,24 +86,67 @@ export function regionParkFor(
   if (partial.length === 0) return null;
   return {
     ambiguous: true,
-    hint: "Several Orlando parks match; call again with one slug",
+    hint: "Several parks of the region match; call again with one slug",
     parks: partial.map(({ slug, name }) => ({ slug, name })),
   };
 }
 
-/** The heat and hurricane warnings in words, shared by every Orlando tool. */
+/** The heat warning in words, the same in every region. */
 const HEAT_PHRASE = "extreme heat: hotter than a usual summer day";
-const HURRICANE_PHRASE =
-  "hurricane season (June to November), a fact about the season, not a forecast";
-const HURRICANE_PEAK_PHRASE =
-  "peak of the hurricane season (mid-August to mid-October), a fact about the season, not a forecast";
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** A `MM-DD` as a month's part: "early June", "mid-August", "late October". */
+function partOfMonth(md: string): string {
+  const month = MONTH_NAMES[Number(md.slice(0, 2)) - 1];
+  const day = Number(md.slice(3, 5));
+  if (day <= 10) return `early ${month}`;
+  if (day <= 20) return `mid-${month}`;
+  return `late ${month}`;
+}
 
 /**
- * An Orlando day's heat and hurricane warnings as phrases, from the calendar
- * day's weather (forecast, else the climate normal) and its date, for a tool
- * that reads the park calendar directly (`compare_parks`).
+ * The region's season phrases: its storm season and peak (Orlando's "hurricane season (June to
+ * November)", Japan's typhoons) and its rainy season, by the warning code each stands for.
  */
-export function heatAndHurricaneWatch(
+export function seasonPhrases(region: RegionConfig): Record<string, string> {
+  const out: Record<string, string> = {};
+  const storm = region.weather.storm;
+  if (storm) {
+    const span = stormSeasonSpan(storm);
+    const month = (md: string) => MONTH_NAMES[Number(md.slice(0, 2)) - 1];
+    out[`${storm.kind}_season`] =
+      `${storm.kind} season (${month(span.from)} to ${month(span.to)}), a fact about the season, not a forecast`;
+    out[`${storm.kind}_peak`] =
+      `peak of the ${storm.kind} season (${partOfMonth(span.peak.from)} to ${partOfMonth(span.peak.to)}), a fact about the season, not a forecast`;
+  }
+  const rainy = region.weather.notes?.find((n) => n.kind === "rainy_season");
+  if (rainy) {
+    out.rainy_season = `rainy season (${partOfMonth(rainy.from)} to ${partOfMonth(rainy.to)}): showers likely, a note about the season, not a forecast`;
+  }
+  return out;
+}
+
+/**
+ * A region day's heat and storm warnings as phrases, from the calendar day's weather (forecast,
+ * else the climate normal) and its date, for a tool that reads the park calendar directly
+ * (`compare_parks`).
+ */
+export function heatAndStormWatch(
+  region: RegionConfig,
   date: string,
   weather: { tempMax?: number; basis?: string } | null | undefined,
   themePark: boolean,
@@ -119,20 +155,24 @@ export function heatAndHurricaneWatch(
   if (
     themePark &&
     weather &&
-    heatOf({
-      tempMax: weather.tempMax,
-      basis: weather.basis === "climate_normal" ? "climate_normal" : "forecast",
-    })
+    heatOf(
+      {
+        tempMax: weather.tempMax,
+        basis:
+          weather.basis === "climate_normal" ? "climate_normal" : "forecast",
+      },
+      region.weather.heat,
+    )
   ) {
     watch.push(HEAT_PHRASE);
   }
-  if (isHurricanePeak(date)) watch.push(HURRICANE_PEAK_PHRASE);
-  else if (hurricaneWeight(date) > 0) watch.push(HURRICANE_PHRASE);
+  const storm = stormWarning(region.weather.storm, date);
+  if (storm) watch.push(seasonPhrases(region)[storm]);
   return watch;
 }
 
 /** The plan's reasons in words; a perk's reason is the day's `perks`, named once. */
-const REASONS: Record<Exclude<PlanReason, PerkKind>, string> = {
+const REASONS: Record<PlanDayReason, string> = {
   quietest_in_window: "its quietest day of the trip",
   runner_up_close: "another day is nearly as good",
   weekday: "a weekday",
@@ -143,30 +183,29 @@ const REASONS: Record<Exclude<PlanReason, PerkKind>, string> = {
   locked: "pinned by the user",
 };
 
-const WARNINGS: Record<PlanWarning, string> = {
-  party_night_short_hours: "party night: day guests leave at the early close",
-  fireworks_missed:
-    "party night: day guests miss the evening show; no other day fitted",
-  hours_not_published: "hours not published yet",
-  estimate_last_year: "estimate from last year, not a forecast",
-  long_range: "long-range forecast, less sure",
-  no_forecast: "no figure yet",
-  adjacent_repeat: "second visit the day after the first",
-  long_streak: "over four park days in a row",
-  extreme_heat: HEAT_PHRASE,
-  hurricane_season: HURRICANE_PHRASE,
-  hurricane_peak: HURRICANE_PEAK_PHRASE,
-  outside_ticket_window:
-    "outside the ticket's valid dates: no day inside them fitted",
-};
+/** A plan day's warnings in words, the region's seasons included. */
+function warningPhrases(region: RegionConfig): Record<string, string> {
+  return {
+    party_night_short_hours: "party night: day guests leave at the early close",
+    fireworks_missed:
+      "party night: day guests miss the evening show; no other day fitted",
+    hours_not_published: "hours not published yet",
+    estimate_last_year: "estimate from last year, not a forecast",
+    long_range: "long-range forecast, less sure",
+    no_forecast: "no figure yet",
+    adjacent_repeat: "second visit the day after the first",
+    long_streak: "over four park days in a row",
+    extreme_heat: HEAT_PHRASE,
+    outside_ticket_window:
+      "outside the ticket's valid dates: no day inside them fitted",
+    ...seasonPhrases(region),
+  };
+}
 
-/** A hotel perk's name on a plan day; the prompt says what each one is. */
-const PERKS: Record<PerkKind, string> = {
-  early_entry: "Early Entry",
-  early_park_admission: "Early Park Admission",
-  extended_evening: "Extended Evening Hours",
-  express_included: "Express Unlimited",
-};
+/** A hotel perk's name on a plan day, the region's own; the prompt says what Orlando's are. */
+function perkName(region: RegionConfig, perk: string): string {
+  return region.perkNames[perk] ?? perk;
+}
 
 const UNPLACED: Record<string, string> = {
   no_open_day:
@@ -204,7 +243,7 @@ const TICKET_WARNINGS: Record<string, string> = {
   covers_no_planned_park: "covers none of the planned parks",
 };
 
-/** The before-opening and evening slots, as get_park_events names them. */
+/** The before-opening and evening slots, as get_park_events names them; others by the region's perk name. */
 const SLOTS: Record<string, string> = {
   early_entry: "Early Entry (Disney resort hotel guests)",
   early_park_admission: "Early Park Admission (Universal hotel guests)",
@@ -212,6 +251,11 @@ const SLOTS: Record<string, string> = {
   ticketed_event:
     "ticketed evening event, a separate ticket; day guests leave at dayGuestsLeave",
 };
+
+/** A slot's name: Orlando's curated phrase, else the region's perk name, else its code. */
+function slotName(region: RegionConfig | undefined, kind: string): string {
+  return SLOTS[kind] ?? region?.perkNames[kind] ?? kind;
+}
 
 /** A season without a name of its own goes by its kind, as the site's label does. */
 const SEASON_KINDS: Record<string, string> = {
@@ -329,8 +373,16 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   hopper: /^[a-z0-9-]+(,[a-z0-9-]+)*$/,
 };
 
-/** The hub's path; "orlando" reads the same in every language. */
-export const HUB_PATH = "/orlando";
+/**
+ * A region's hub on the site: `/<region slug>`, the same in every language. Orlando's,
+ * `/orlando`, is the one live; each region's hub must sit at its slug.
+ */
+export function hubPathOf(region: Pick<RegionConfig, "slug">): string {
+  return `/${region.slug}`;
+}
+
+/** Orlando's hub, `/orlando`. */
+export const HUB_PATH = hubPathOf({ slug: "orlando" });
 
 /** The plan's query string in the hub's parameter names, from the normalized plan. */
 function hubQuery(q: NormalizedPlanQuery): string {
@@ -374,9 +426,9 @@ function readableQuery(params: URLSearchParams): string {
     .replace(/%40/g, "@");
 }
 
-/** The hub with a plan in its query, where the planner reads it, opened at the planner. */
-export function hubUrl(q: NormalizedPlanQuery): string {
-  return `${getFrontendUrl()}${HUB_PATH}?${hubQuery(q)}#planner`;
+/** The region's hub with a plan in its query, where the planner reads it, opened at the planner. */
+export function hubUrl(region: RegionConfig, q: NormalizedPlanQuery): string {
+  return `${getFrontendUrl()}${hubPathOf(region)}?${hubQuery(q)}#planner`;
 }
 
 /**
@@ -405,7 +457,13 @@ export function hubPath(url: string): string | null {
   ) {
     segments.shift();
   }
-  if (segments.length !== 1 || `/${segments[0]}` !== HUB_PATH) return null;
+  const hub = `/${segments[0]}`;
+  if (
+    segments.length !== 1 ||
+    !Object.values(TRIP_REGIONS).some((r) => hubPathOf(r) === hub)
+  ) {
+    return null;
+  }
   if (parsed.hash && parsed.hash !== "#planner") return null;
   const params = new URLSearchParams();
   for (const [name, value] of parsed.searchParams) {
@@ -414,7 +472,7 @@ export function hubPath(url: string): string | null {
     params.set(name, value);
   }
   const query = readableQuery(params);
-  return query ? `${HUB_PATH}?${query}#planner` : HUB_PATH;
+  return query ? `${hub}?${query}#planner` : hub;
 }
 
 /** The plan as `TripPlanService.plan` returns it, in the optimizer's own types. */
@@ -492,9 +550,10 @@ function plannedPark(
   cell: TripParkDayInternal | undefined,
   names: ReadonlyMap<string, string>,
   seasonNames: ReadonlyMap<string, string>,
-  timezone: string,
+  region: RegionConfig,
   hop: boolean,
 ) {
+  const timezone = region.timezone;
   const events = (cell?.seasons ?? [])
     .map((id) => seasonNames.get(id))
     .filter((name): name is string => !!name);
@@ -502,6 +561,7 @@ function plannedPark(
   return {
     park: names.get(visit.slug) ?? visit.slug,
     ...(hop && { part: "half day" }),
+    ...(visit.part === "evening" && { part: "evening, on an evening ticket" }),
     ...(visit.headlinerWait != null && { headlinerWait: visit.headlinerWait }),
     ...(visit.crowdLevel && { crowdLevel: visit.crowdLevel }),
     ...(visit.basis && { basis: visit.basis }),
@@ -513,23 +573,55 @@ function plannedPark(
       partyNight: clockRange(party.opensAt, party.closesAt, timezone),
     }),
     ...(visit.perks?.length && {
-      perks: visit.perks.map((p) => PERKS[p]),
+      perks: visit.perks.map((p) => perkName(region, p)),
     }),
     ...(events.length > 0 && { events }),
   };
 }
 
-/** The hurricane season is said once per trip (`season`), not on every day of it. */
-const HURRICANE_WARNINGS = new Set<PlanWarning>([
+/** The storm and rainy seasons are said once per trip (`season`), not on every day of it. */
+const SEASON_WARNINGS = new Set<string>([
   "hurricane_season",
   "hurricane_peak",
+  "typhoon_season",
+  "typhoon_peak",
+  "rainy_season",
 ]);
 
-/** A plan day's warnings in words, the hurricane season left to the trip's `season`. */
-function watch(day: PlannedDay): string[] {
+/** A plan day's warnings in words, the seasons left to the trip's `season`. */
+function watch(day: PlannedDay, phrases: Record<string, string>): string[] {
   return day.warnings
-    .filter((w) => !HURRICANE_WARNINGS.has(w))
-    .map((w) => WARNINGS[w]);
+    .filter((w) => !SEASON_WARNINGS.has(w))
+    .map((w) => phrases[w] ?? w);
+}
+
+/**
+ * The trip's season in one phrase: the storm season's peak, else the season, where a planned
+ * day touches it, and the rainy season; undefined when none applies.
+ */
+function tripSeason(
+  region: RegionConfig,
+  days: readonly PlannedDay[],
+): string | undefined {
+  const phrases = seasonPhrases(region);
+  const kind = region.weather.storm?.kind;
+  const has = (code: string) =>
+    days.some((d) => d.warnings.includes(code as never));
+  const parts = [
+    kind && has(`${kind}_peak`)
+      ? phrases[`${kind}_peak`]
+      : kind && has(`${kind}_season`)
+        ? phrases[`${kind}_season`]
+        : undefined,
+    has("rainy_season") ? phrases.rainy_season : undefined,
+  ].filter((p): p is string => !!p);
+  return parts.length > 0 ? parts.join("; ") : undefined;
+}
+
+/** "heat and the hurricane season", or heat alone in a region without a storm season. */
+function penaltiesMean(region: RegionConfig): string {
+  const kind = region.weather.storm?.kind;
+  return kind ? `heat and the ${kind} season` : "heat";
 }
 
 /**
@@ -546,6 +638,7 @@ export function vacationItinerary(input: {
   ids: ReadonlyMap<string, string>;
 }) {
   const { plan, calendar, query, region, names, ids } = input;
+  const phrases = warningPhrases(region);
   const byDate = new Map<string, InternalCalendarDay>(
     calendar.days.map((day) => [day.date, day]),
   );
@@ -583,14 +676,14 @@ export function vacationItinerary(input: {
         calendarDay?.parks[visit.slug],
         names,
         seasonNames,
-        region.timezone,
+        region,
         hop,
       );
     });
     const travel = legOf(day.travel);
     const between = legOf(day.between);
     const why = day.reasons
-      .filter((r): r is Exclude<PlanReason, PerkKind> => !(r in PERKS))
+      .filter((r): r is PlanDayReason => r in REASONS)
       .map((r) => REASONS[r]);
     return {
       date: day.date,
@@ -601,7 +694,8 @@ export function vacationItinerary(input: {
       ...(travel && { travel }),
       ...(between && { between }),
       ...(why.length > 0 && { why }),
-      ...(watch(day).length > 0 && { watch: watch(day) }),
+      ...(watch(day, phrases).length > 0 && { watch: watch(day, phrases) }),
+      ...(day.entryFrom && { entersAt: day.entryFrom }),
       ...(day.evening && {
         evening: eveningPhrase(day.evening, names, region),
       }),
@@ -617,18 +711,14 @@ export function vacationItinerary(input: {
     headlinerWaitMeans:
       "the big rides' wait at their busiest, in minutes, meaned over the park's headliners; not the wait at every hour",
     ...(area && { travelFrom: `the hotel area ${area.name}` }),
-    ...((planned.some((d) => d.warnings.includes("hurricane_peak")) && {
-      season: HURRICANE_PEAK_PHRASE,
-    }) ||
-      (planned.some((d) => d.warnings.includes("hurricane_season")) && {
-        season: HURRICANE_PHRASE,
-      })),
+    ...(tripSeason(region, planned) && {
+      season: tripSeason(region, planned),
+    }),
 
     days,
     totals: {
       ...totals,
-      means:
-        "headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; penalties: minutes a park day that heat and the hurricane season added to the plan's cost, not to the waits",
+      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; penalties: minutes a park day that ${penaltiesMean(region)} added to the plan's cost, not to the waits`,
     },
     ...(plan.unplaced.length > 0 && {
       notPlaced: plan.unplaced.map((u) => ({
@@ -675,7 +765,7 @@ export function vacationItinerary(input: {
       hopIgnored:
         "two parks a day need a hopper ticket (ticket hopper); planned one park a day",
     }),
-    hubUrl: hubUrl(query),
+    hubUrl: hubUrl(region, query),
     // What plan_trip's days take to put the trip into the planner, by id: two parks can share a slug.
     reserve: (plan.days as unknown as PlannedDay[]).flatMap((day) =>
       day.parks.map((p) => ({
@@ -749,6 +839,13 @@ function ownedTicketSummary(
   };
 }
 
+/** Whom an alternative is sold to, where not to everyone: "(UK/Ireland only)" in Orlando. */
+function marketNote(region: RegionConfig, markets: readonly string[]): string {
+  if (markets.includes(region.ticketMarkets.home)) return "";
+  if (markets.includes("uk")) return " (UK/Ireland only)";
+  return ` (${markets.join(", ")} only)`;
+}
+
 function suggestionSummary(
   s: TicketSuggestion,
   region: RegionConfig,
@@ -767,7 +864,7 @@ function suggestionSummary(
     ...(s.alternatives?.length && {
       alternatives: s.alternatives.map(
         (a) =>
-          `${productOf(region, a.product)?.name ?? a.product}${a.markets.includes("us") ? "" : " (UK/Ireland only)"}`,
+          `${productOf(region, a.product)?.name ?? a.product}${marketNote(region, a.markets)}`,
       ),
     }),
     ...(withShop && { shop: s.shopUrl }),
@@ -837,6 +934,7 @@ export function slotsSummary(
   slugs: readonly string[],
   names: ReadonlyMap<string, string>,
   timezone: string,
+  region?: RegionConfig,
 ) {
   const groups = new Map<
     string,
@@ -859,7 +957,11 @@ export function slotsSummary(
         );
         add(
           `${slug}|${cell.early.kind}|${minutes}`,
-          { park, slot: SLOTS[cell.early.kind], minutesBeforeOpening: minutes },
+          {
+            park,
+            slot: slotName(region, cell.early.kind),
+            minutesBeforeOpening: minutes,
+          },
           day.date,
         );
       }
@@ -874,7 +976,7 @@ export function slotsSummary(
           `${slug}|${cell.evening.kind}|${from}|${until}|${leave}`,
           {
             park,
-            slot: SLOTS[cell.evening.kind],
+            slot: slotName(region, cell.evening.kind),
             hours: `${from}–${until}`,
             ...(leave && { dayGuestsLeave: leave }),
           },
@@ -894,8 +996,9 @@ export function travelSummary(
   leg: TripLeg,
   fromName: string,
   toName: string,
-  attribution: string,
+  region: RegionConfig,
 ) {
+  const source = travelSource(region);
   const via = viaOf(leg.via);
   return {
     from: fromName,
@@ -903,6 +1006,7 @@ export function travelSummary(
     minutes: leg.minutes,
     ...(leg.km != null && { km: leg.km }),
     mode: leg.mode,
+    ...(leg.name && { line: leg.name }),
     ...(leg.mode === "drive" && {
       basis: "a drive with no traffic; real traffic adds to it",
     }),
@@ -925,35 +1029,56 @@ export function travelSummary(
       alternativesMeans:
         "the resort's own transport; minutes are estimates, waiting included",
     }),
-    source: `drive: OpenStreetMap via OSRM, ${attribution}`,
+    source:
+      source.source === "osrm" && leg.source !== "curated"
+        ? `drive: OpenStreetMap via OSRM, ${source.attribution ?? ""}`
+        : source.source === "curated"
+          ? `curated from timetables and the operators' pages, checked ${source.computedOn}`
+          : "curated from the operators' pages",
   };
 }
 
 // ── find_trip_dates (docs/frontend/trip-regions-when.md) ─────────────────────
 
-const WHEN_REASONS: Record<WhenReason, string> = {
-  no_school_break: "no US school break",
-  after_holidays: "just after a US school break",
-  before_spring_break: "before the US spring break",
-  festival: "a festival or holiday season runs",
-  long_days: "long opening hours",
-  mild_weather:
-    "mild and fairly dry on average (climate normals, not a forecast)",
+/** Whose school breaks fill a region's parks, by the country its parks are in. */
+const SCHOOL_OF_COUNTRY: Record<string, string> = {
+  "united-states": "US",
+  japan: "Japanese",
+  france: "French",
 };
 
-const WHEN_WARNINGS: Record<WhenWarning, string> = {
-  school_break: "US school break: busier",
-  hurricane_season: HURRICANE_PHRASE,
-  hurricane_peak: HURRICANE_PEAK_PHRASE,
-  extreme_heat: "extreme heat on a planned park day",
-  party_nights: "party nights close a park early for day guests",
-  fireworks_missed: "a planned night loses the evening show to a party",
-  hours_not_published: "opening hours not published yet",
-  estimate_last_year: "figures from last year, not a forecast",
-  water_park_closed: "a chosen water park is closed for its season",
-  ticket_window_relaxed:
-    "a visit lies outside its ticket's valid dates: no day inside them fitted",
-};
+/** "US" in Orlando: the school breaks a region's own visitors take; "local" where unknown. */
+function localSchool(region: RegionConfig): string {
+  return SCHOOL_OF_COUNTRY[region.parks[0]?.country ?? ""] ?? "local";
+}
+
+function whenReasons(region: RegionConfig): Record<WhenReason, string> {
+  const school = localSchool(region);
+  return {
+    no_school_break: `no ${school} school break`,
+    after_holidays: `just after a ${school} school break`,
+    before_spring_break: `before the ${school} spring break`,
+    festival: "a festival or holiday season runs",
+    long_days: "long opening hours",
+    mild_weather:
+      "mild and fairly dry on average (climate normals, not a forecast)",
+  };
+}
+
+function whenWarnings(region: RegionConfig): Record<string, string> {
+  return {
+    school_break: `${localSchool(region)} school break: busier`,
+    ...seasonPhrases(region),
+    extreme_heat: "extreme heat on a planned park day",
+    party_nights: "party nights close a park early for day guests",
+    fireworks_missed: "a planned night loses the evening show to a party",
+    hours_not_published: "opening hours not published yet",
+    estimate_last_year: "figures from last year, not a forecast",
+    water_park_closed: "a chosen water park is closed for its season",
+    ticket_window_relaxed:
+      "a visit lies outside its ticket's valid dates: no day inside them fitted",
+  };
+}
 
 const WHEN_BASIS: Record<string, string> = {
   forecast: "forecast",
@@ -973,8 +1098,15 @@ export function tripDatesSummary(input: {
   plan: NormalizedPlanQuery;
   /** The region with its ticket catalog, for the products' names. */
   region: RegionConfig;
+  /** The region's park names, for the climate park; absent: its slug. */
+  names?: ReadonlyMap<string, string>;
 }) {
   const { result, plan, region } = input;
+  const reasons = whenReasons(region);
+  const warnings = whenWarnings(region);
+  const storm = region.weather.storm?.kind;
+  const climatePark =
+    input.names?.get(region.weather.climatePark) ?? region.weather.climatePark;
   const seasonNames = new Map(
     result.seasons.map((s) => [String(s.id), seasonName(s)] as const),
   );
@@ -982,8 +1114,7 @@ export function tripDatesSummary(input: {
   return {
     range: { from: result.meta.from, to: result.meta.to },
     tripDays: result.meta.days,
-    headlinerWaitMeans:
-      "the planned park days' mean of the big rides' wait at their busiest, in minutes, early closings and hotel perks priced in; heat and the hurricane season rank a window lower (rankedLowerBy) but are not in it",
+    headlinerWaitMeans: `the planned park days' mean of the big rides' wait at their busiest, in minutes, early closings and hotel perks priced in; ${penaltiesMean(region)} rank a window lower (rankedLowerBy) but are not in it`,
     ...(within && {
       within: {
         region: within.name,
@@ -1017,16 +1148,17 @@ export function tripDatesSummary(input: {
         basis: WHEN_BASIS[w.basis] ?? w.basis,
         ...(w.basis === "last_year" && { lastYear: true }),
         ...(w.reasons.length > 0 && {
-          why: w.reasons.map((r) => WHEN_REASONS[r] ?? r),
+          why: w.reasons.map((r) => reasons[r] ?? r),
         }),
         ...(w.warnings.length > 0 && {
-          watch: w.warnings.map((x) => WHEN_WARNINGS[x] ?? x),
+          watch: w.warnings.map((x) => warnings[x] ?? x),
         }),
         ...(events.length > 0 && { events }),
         ...(w.penalties && {
           rankedLowerBy: [
-            w.penalties.hurricane &&
-              `hurricane season, ${w.penalties.hurricane} min a park day`,
+            storm &&
+              w.penalties[storm] &&
+              `${storm} season, ${w.penalties[storm]} min a park day`,
             w.penalties.heat && `heat, ${w.penalties.heat} min a park day`,
           ].filter(Boolean),
         }),
@@ -1037,7 +1169,7 @@ export function tripDatesSummary(input: {
               `${productOf(region, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
           ),
         }),
-        hubUrl: hubUrl({ ...plan, from: w.from, to: w.to }),
+        hubUrl: hubUrl(region, { ...plan, from: w.from, to: w.to }),
       };
     }),
     months: result.months.map((m) => ({
@@ -1047,14 +1179,15 @@ export function tripDatesSummary(input: {
       ...(m.climate && {
         climate: `${m.climate.tempMax}/${m.climate.tempMin} °C, ${m.climate.precipitationMm} mm`,
       }),
-      ...(m.usSchoolBreakDays.length > 0 && {
-        usSchoolBreakDays: m.usSchoolBreakDays.length,
+      ...(m.localSchoolBreakDays.length > 0 && {
+        schoolBreakDays: m.localSchoolBreakDays.length,
       }),
       ...(m.partyNights > 0 && { partyNights: m.partyNights }),
       ...(m.hurricaneSeason && { hurricaneSeason: true }),
+      ...(m.typhoonSeason && { typhoonSeason: true }),
+      ...(m.rainySeason && { rainySeason: true }),
     })),
-    monthsMean:
-      "headlinerWait: each chosen park on its best day of the week, meaned; climate: the 2015-2024 normals at Magic Kingdom (high/low, month's rain), never a forecast",
+    monthsMean: `headlinerWait: each chosen park on its best day of the week, meaned; climate: the 2015-2024 normals at ${climatePark} (high/low, month's rain), never a forecast; schoolBreakDays: days of ${localSchool(region)} school breaks`,
     ...(!result.meta.search.exact && {
       searchCutShort: "good windows, not proven the best",
     }),

@@ -38,6 +38,7 @@ import {
   TripParkDayDto,
   TripPlanDto,
   TripRegionDto,
+  TripRegionListDto,
 } from "./dto/trip-region-response.dto";
 import {
   TripPlanTicketDto,
@@ -55,10 +56,11 @@ const KEYED_CACHE_CONTROL =
   "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400";
 
 /**
- * Trip regions: a curated region of parks (Orlando), its days side by side and
- * the plan that puts each park on its quietest trip day. The region route is
- * static facts and stays open; the calendar and the plan carry forecasts and
- * need a data key. Contract: docs/frontend/trip-regions.md.
+ * Trip regions: curated regions of parks (Orlando, Southern California, Japan,
+ * Paris), their days side by side and the plan that puts each park on its
+ * quietest trip day. The list and the region route are static facts and stay
+ * open; the calendar and the plan carry forecasts and need a data key.
+ * Contract: docs/frontend/trip-regions.md.
  */
 @ApiTags("trip-regions")
 @ApiExtraModels(
@@ -75,14 +77,28 @@ export class TripRegionsController {
     private readonly whens: TripWhenService,
   ) {}
 
+  @Get()
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
+  @ApiOperation({
+    summary: "Every trip region: slug, name, timezone, park count and groups",
+    description:
+      "For the site's navigation: one entry per region with a planner, in a fixed order. " +
+      "`parkCount` is the region route's `parks`. No key. Cache: an hour in the browser, " +
+      "a day at the edge.",
+  })
+  @ApiResponse({ status: 200, type: TripRegionListDto })
+  list(): Promise<TripRegionListDto> {
+    return this.regions.list();
+  }
+
   @Get(":region")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
     summary: "A trip region: its parks, groups, hotel areas and travel times",
     description:
       "No forecast figures, so no key. Travel times are a drive with no traffic from " +
-      "OpenStreetMap (OSRM), stored in code; `alternatives` are the resort's own transport. " +
-      "Cache: an hour in the browser, a day at the edge.",
+      "OpenStreetMap (OSRM) or curated from timetables (`travel.source`), stored in code; " +
+      "`alternatives` are the resort's own transport. Cache: an hour in the browser, a day at the edge.",
   })
   @ApiParam({ name: "region", example: "orlando" })
   @ApiResponse({ status: 200, type: TripRegionDto })

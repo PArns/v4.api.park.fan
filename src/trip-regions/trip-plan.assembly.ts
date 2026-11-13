@@ -5,7 +5,7 @@
  * docs/frontend/trip-regions.md.
  */
 import { BadRequestException } from "@nestjs/common";
-import { HOTEL_KINDS, type HotelKind, type RegionConfig } from "./regions";
+import { hotelKinds, type HotelKind, type RegionConfig } from "./regions";
 import {
   extraVisitRoom,
   ORDER_MATTERS_MINUTES,
@@ -217,11 +217,10 @@ export function normalizePlanQuery(
       `${area} is not a hotel area of ${region.name}`,
     );
   }
-  const hotel = (query.hotel ?? areaConfig?.hotel ?? "offsite") as HotelKind;
-  if (!HOTEL_KINDS.includes(hotel)) {
-    throw new BadRequestException(
-      `hotel must be one of ${HOTEL_KINDS.join(", ")}`,
-    );
+  const hotel: HotelKind = query.hotel ?? areaConfig?.hotel ?? "offsite";
+  const hotels = hotelKinds(region);
+  if (!hotels.includes(hotel)) {
+    throw new BadRequestException(`hotel must be one of ${hotels.join(", ")}`);
   }
 
   const rest: RestOption =
@@ -376,6 +375,7 @@ export function planInput(
       hopPairs: planFirstPairs,
       perkRules: region.perks[q.hotel],
       locks: q.locks,
+      weather: region.weather,
     },
     ...(q.tickets.length > 0 && {
       tickets: planTicketsOf(region, q.tickets, dates, legs, hopperTicket),

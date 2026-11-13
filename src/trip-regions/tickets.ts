@@ -15,7 +15,20 @@
  */
 import { TICKET_SEED_LINKS, type SeedLinkEntry } from "./ticket-seed-links";
 
-export type TicketMarket = "us" | "uk" | "intl";
+/**
+ * Whom a product or a link is sold to: a code of the region's
+ * `ticketMarkets` (Orlando: `us` sold to anyone, `uk` UK and Ireland residents
+ * only, `intl` sellers abroad).
+ */
+export type TicketMarket = string;
+
+/** The kinds of day a ticket may be used on (`validDays`). */
+export const TICKET_DAY_KINDS = ["weekday", "weekend", "holiday"] as const;
+/**
+ * `weekday`: Monday to Friday that is no public holiday; `weekend`: Saturday
+ * and Sunday; `holiday`: a public holiday of the region's calendar.
+ */
+export type TicketDayKind = (typeof TICKET_DAY_KINDS)[number];
 
 export interface TicketDaysRange {
   min: number;
@@ -74,6 +87,8 @@ export const TICKET_RULE_KEYS = [
   "until",
   "pass",
   "blockouts",
+  "entryFrom",
+  "validDays",
 ] as const;
 
 export type TicketRules = Pick<
@@ -110,6 +125,15 @@ export interface TicketProduct {
   pass?: true;
   /** Blockout dates apply and are not checked. */
   blockouts?: true;
+  /**
+   * The ticket admits from this park-local time only (`HH:MM`): an evening
+   * ticket, Tokyo Disney Resort's Early Evening Passport (15:00) or Weeknight
+   * Passport (17:00). A day on it is the evening of the day. Never suggested
+   * by plan first, which plans whole days.
+   */
+  entryFrom?: string;
+  /** The kinds of day it may be used on; absent: every day. */
+  validDays?: TicketDayKind[];
   /** The operator's page with the blockout calendar. */
   blockoutUrl?: string;
   /** Where passholders reserve their park. */
@@ -1034,6 +1058,28 @@ export function everyDay(
     window > 1 &&
     (days === "unlimited" || window === days)
   );
+}
+
+/** `HH:MM` as minutes after midnight; undefined for anything else. */
+export function minuteOfClock(value: string | undefined): number | undefined {
+  const m = value ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value) : null;
+  return m ? Number(m[1]) * 60 + Number(m[2]) : undefined;
+}
+
+/**
+ * The kinds of day a date is (`validDays`): `weekend` on Saturday and Sunday,
+ * `holiday` on a public holiday, `weekday` on any other day.
+ */
+export function dayKindsOf(day: {
+  weekday: number;
+  isHoliday: boolean;
+}): TicketDayKind[] {
+  const kinds: TicketDayKind[] = [];
+  const weekend = day.weekday === 0 || day.weekday === 6;
+  if (weekend) kinds.push("weekend");
+  if (day.isHoliday) kinds.push("holiday");
+  if (!weekend && !day.isHoliday) kinds.push("weekday");
+  return kinds;
 }
 
 /** Whether a product is sold for a start date (`onSale`; no limit known: always). */

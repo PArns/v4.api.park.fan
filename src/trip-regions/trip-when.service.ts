@@ -10,7 +10,7 @@ import { WeatherService } from "../parks/weather.service";
 import { TripRegionService } from "./trip-region.service";
 import { findTripDates, type TripWhen } from "./trip-when";
 import {
-  CLIMATE_REFERENCE_PARK,
+  climateParkOf,
   normalizeWhenQuery,
   whenCacheQuery,
   whenRange,
@@ -70,9 +70,8 @@ export class TripWhenService {
     if (cached) return cached;
     return this.flight.run(key, async () => {
       const calendar = await this.regions.internalCalendar(region, from, to);
-      const reference = resolved.find(
-        (p) => p.config.slug === CLIMATE_REFERENCE_PARK,
-      );
+      const climatePark = climateParkOf(region);
+      const reference = resolved.find((p) => p.config.slug === climatePark);
       const climate = reference
         ? await this.weather
             .getClimateNormals(reference.park.id)
@@ -86,7 +85,7 @@ export class TripWhenService {
         calendar,
         query: q,
         climate,
-        climatePark: CLIMATE_REFERENCE_PARK,
+        climatePark,
         clock: () => performance.now(),
       });
       const built: TripWhen = {

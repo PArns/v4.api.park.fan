@@ -9,7 +9,6 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
-import { HOTEL_KINDS } from "../regions";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_MESSAGE = "must be a YYYY-MM-DD date";
@@ -84,12 +83,15 @@ export class TripPlanQueryDto {
   parks?: string;
 
   @ApiPropertyOptional({
-    enum: HOTEL_KINDS,
     description:
-      "Which hotel perks count. Defaults to the hotel the `area` usually means, else `offsite`.",
+      "Which hotel perks count: one of the region's hotel kinds (the region route's `hotels`; Orlando: disney, disney_deluxe, universal, universal_premier, offsite). Defaults to the hotel the `area` usually means, else `offsite`.",
+    example: "disney",
   })
   @IsOptional()
-  @IsIn(HOTEL_KINDS)
+  @MaxLength(200)
+  @Matches(/^[a-z0-9_-]+(,[a-z0-9_-]+)*$/, {
+    message: "hotel must be a hotel kind of the region",
+  })
   hotel?: string;
 
   @ApiPropertyOptional({

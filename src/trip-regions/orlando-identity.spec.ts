@@ -351,12 +351,34 @@ function answers() {
     regionBestDays(ORLANDO, slice(year, "2027-01-10", "2027-02-20"), 5),
     regionBestDays(ORLANDO, slice(year, "2027-08-01", "2027-10-30"), 5),
   ];
-  return JSON.parse(JSON.stringify({ plans, when, bestDays })) as unknown;
+  return JSON.parse(JSON.stringify({ plans, when, bestDays })) as Answers;
+}
+
+interface Answers {
+  plans: unknown[];
+  when: Array<{ months: Array<Record<string, unknown>> }>;
+  bestDays: unknown[];
+}
+
+/**
+ * The fields the multi-region contract added to Orlando's answers, each a new
+ * name for a value Orlando already sent: `/when`'s months carry the region's
+ * own school breaks as `localSchoolBreakDays` beside `usSchoolBreakDays`.
+ * Checked equal, then left out of the comparison.
+ */
+function withoutAliases(answers: Answers): Answers {
+  for (const when of answers.when) {
+    for (const month of when.months) {
+      expect(month.localSchoolBreakDays).toEqual(month.usSchoolBreakDays);
+      delete month.localSchoolBreakDays;
+    }
+  }
+  return answers;
 }
 
 describe("Orlando's answers", () => {
   it("are the answers the code gave before the multi-region refactor", () => {
-    const now = answers();
+    const now = withoutAliases(answers());
     if (process.env.WRITE_ORLANDO_IDENTITY === "1") {
       writeFileSync(FIXTURE, `${JSON.stringify(now)}\n`);
     }

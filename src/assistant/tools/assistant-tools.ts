@@ -112,17 +112,17 @@ import {
   type TripPlanQueryDto,
 } from "../../trip-regions/dto/trip-region-query.dto";
 import {
-  HOTEL_KINDS,
   hotelPoint,
   ORLANDO,
   regionOfPark,
+  TRIP_REGIONS,
 } from "../../trip-regions/regions";
 import {
   MAX_PARK_DAYS,
   MAX_TRIP_DAYS,
   MAX_VISITS_PER_PARK,
 } from "../../trip-regions/trip-optimizer";
-import { buildLegs, findLeg, regionMatrix } from "../../trip-regions/travel";
+import { buildLegs, findLeg } from "../../trip-regions/travel";
 import {
   closeMinute,
   closesEarly,
@@ -142,7 +142,7 @@ import {
 } from "../../trip-regions/trip-when";
 import type { TripWhenQueryDto } from "../../trip-regions/dto/trip-when.dto";
 import {
-  heatAndHurricaneWatch,
+  heatAndStormWatch,
   HUB_PATH,
   hubPath,
   regionParkFor,
@@ -1742,16 +1742,40 @@ function behindFullDays<
   return out;
 }
 
-/** The hotel areas `plan_vacation` and `get_travel_time` take. */
-const ORLANDO_AREAS = ORLANDO.hotelAreas.map((area) => area.key) as [
-  string,
-  ...string[],
-];
+/** The trip regions the trip tools take (`region`), Orlando first. */
+const REGION_SLUGS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
 
-/** The resorts plan first's hopper is given per resort (`hopper=`). */
-const ORLANDO_RESORTS = ORLANDO.groups
-  .filter((g) => g.kind === "resort")
-  .map((g) => g.key) as [string, ...string[]];
+/** The trip regions' names in one phrase: "Orlando", "Orlando, Japan and Paris". */
+function tripRegionNames(): string {
+  const names = Object.values(TRIP_REGIONS).map((r) => r.name);
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The `region` every trip tool takes; Orlando without it, as before regions were many. */
+const regionInput = z
+  .enum(REGION_SLUGS)
+  .optional()
+  .describe(`The trip region: ${REGION_SLUGS.join(", ")}; default orlando`);
+
+/** A hotel kind, validated by the region (Orlando's in the description). */
+const hotelInput = z
+  .string()
+  .regex(/^[a-z0-9_]+$/)
+  .optional()
+  .describe(
+    `Whose perks count; default the area's. Orlando: ${Object.keys(ORLANDO.perks).join(", ")}`,
+  );
+
+/** A hotel area of the region, validated by it (Orlando's in the description). */
+const areaInput = z
+  .string()
+  .regex(/^[a-z0-9_-]+$/)
+  .optional()
+  .describe(
+    `Where they stay, a hotel area of the region. Orlando: ${ORLANDO.hotelAreas.map((a) => a.key).join(", ")}`,
+  );
 
 /**
  * How Parky writes the tickets a visitor holds: the compact form of `tickets=`
@@ -1760,22 +1784,22 @@ const ORLANDO_RESORTS = ORLANDO.groups
 const TICKETS_DESCRIPTION =
   "Tickets they already have, comma-separated: product[.days][.h|.h?][@first day]. .h: with " +
   "Park Hopper or park-to-park; .h?: they don't know (planned without, the result says what " +
-  "it would add). Products: wdw-date-based.1-10, wdw-date-based-plus.2-10 (water parks), " +
+  "it would add). Orlando's products: wdw-date-based.1-10, wdw-date-based-plus.2-10 (water parks), " +
   "wdw-uk-14-day-magic, wdw-uk-7-day-magic, wdw-4-park-magic, wdw-annual-pass, " +
   "uor-date-based.1-5, uor-date-based-volcano-bay.3-5, uor-1-day-plus-epic, uor-epic-1-day, " +
   "uor-uk-all-parks, uor-uk-three-park-adventure, uor-annual-pass, seaworld-1-day, " +
   "seaworld-two-park, seaworld-three-park-3-day, seaworld-uk-3-visit, discovery-cove, " +
-  "legoland-1-day, legoland-2-day; the rest in the Orlando hub's ticket list. Without a " +
-  "first day the plan picks it";
+  "legoland-1-day, legoland-2-day; the rest in the Orlando hub's ticket list. Another " +
+  "region's ids: an unknown id is answered with the region's list. Without a first day the plan picks it";
 
 /** The days `get_park_events` reads when given no end: a month. */
 const DEFAULT_EVENT_DAYS = 31;
 
-/** The Orlando region and its parks as the database has them, named as the site names them. */
-async function orlando(ctx: AssistantToolContext) {
+/** A trip region and its parks as the database has them, named as the site names them. */
+async function tripRegion(ctx: AssistantToolContext, slug = ORLANDO.slug) {
   const regions = ctx.get(TripRegionService);
   // With its ticket catalog: the product names and links Parky gives are the admin's.
-  const region = await regions.regionWithTickets(ORLANDO.slug);
+  const region = await regions.regionWithTickets(slug);
   const resolved = await regions.resolveParks(region);
   const parks: RegionParkName[] = resolved.map(({ config, park }) => ({
     slug: config.slug,
@@ -1792,10 +1816,11 @@ async function orlando(ctx: AssistantToolContext) {
 }
 
 /**
- * The Orlando park a reference names, else the candidates. A park elsewhere is refused with
- * `elsewhere`, so the model says what is missing instead of guessing.
+ * The region park a reference names, else the candidates. A park elsewhere is refused with
+ * `elsewhere`, and a park of another trip region names that region, so the model says what is
+ * missing, or calls again with the right region, instead of guessing.
  */
-async function orlandoPark(
+async function regionPark(
   ctx: AssistantToolContext,
   reference: string,
   parks: readonly RegionParkName[],
@@ -1806,19 +1831,27 @@ async function orlandoPark(
   const found = await resolvePark(mcp(ctx), reference);
   if (isAmbiguous(found)) return found;
   const inRegion = parks.find((p) => p.id === found.id);
-  if (!inRegion) throw new McpToolError(`${found.name}: ${elsewhere}`);
+  if (!inRegion) {
+    const other = regionOfPark(found);
+    throw new McpToolError(
+      other
+        ? `${found.name} is in the trip region ${other.slug}: call again with region ${other.slug}`
+        : `${found.name}: ${elsewhere}`,
+    );
+  }
   return inRegion;
 }
 
-/** An Orlando park's heat and hurricane warnings on a compared day; nothing elsewhere. */
-function orlandoWatch(
+/** A trip region park's heat and storm warnings on a compared day; nothing elsewhere. */
+function regionWatch(
   park: Park,
   day: { date?: string; weather?: { tempMax?: number; basis?: string } | null },
 ): { watch?: string[] } {
   const region = regionOfPark(park);
   const config = region?.parks.find((p) => p.slug === park.slug);
-  if (!config || !day.date) return {};
-  const watch = heatAndHurricaneWatch(
+  if (!region || !config || !day.date) return {};
+  const watch = heatAndStormWatch(
+    region,
     day.date,
     day.weather,
     config.type === "theme_park",
@@ -2713,7 +2746,7 @@ export const ASSISTANT_TOOLS = [
         expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
         holiday: d.holiday,
         schoolVacation: d.schoolVacation,
-        ...orlandoWatch(park, d),
+        ...regionWatch(park, d),
       });
       // Past a park's published schedule its status is the calendar's estimate, never a fact.
       const inSchedule = known.filter((d) => "published" in d && d.published);
@@ -2916,15 +2949,17 @@ export const ASSISTANT_TOOLS = [
     name: "plan_vacation",
     status: "forecast",
     description:
-      "An Orlando trip day by day: which park when, so the big rides queue least, with rest " +
-      "days, hotel perks and party nights. Per day the parks with headlinerWait, crowd level, " +
-      "basis, hours, perks, events, travel and why, and evening where the park closes early " +
-      "(a second park with a hopper ticket, else a free venue); totals; hubUrl (the Orlando hub with this " +
-      "plan) and reserve (plan_trip's days). Up to 21 days and 16 visits; parks default to the " +
-      "7 big Disney and Universal parks. With tickets they already have, each ticket's valid dates " +
-      "and days bind the plan (tickets); without, ticketsToBuy says which ticket the plan needs " +
-      "per resort and whether a hopper is worth adding.",
+      "A trip in a trip region (Orlando by default) day by day: which park when, so the big " +
+      "rides queue least, with rest days, hotel perks and party nights. Per day the parks with " +
+      "headlinerWait, crowd level, basis, hours, perks, events, travel and why, and evening where " +
+      "the park closes early (a second park with a hopper ticket, else a free venue); totals; " +
+      "hubUrl (the region's hub with this plan) and reserve (plan_trip's days). Up to 21 days and " +
+      "16 visits; parks default to the region's headliners (Orlando: the 7 big Disney and " +
+      "Universal parks). With tickets they already have, each ticket's valid dates and days bind " +
+      "the plan (tickets); without, ticketsToBuy says which ticket the plan needs per resort and " +
+      "whether a hopper is worth adding.",
     input: z.object({
+      region: regionInput,
       from: isoDay.describe("Arrival day"),
       to: isoDay.describe("Departure day"),
       parks: z
@@ -2937,11 +2972,8 @@ export const ASSISTANT_TOOLS = [
         .min(1)
         .max(MAX_PARK_DAYS)
         .optional(),
-      hotel: z
-        .enum(HOTEL_KINDS)
-        .optional()
-        .describe("Whose perks count; default the area's"),
-      area: z.enum(ORLANDO_AREAS).optional().describe("Where they stay"),
+      hotel: hotelInput,
+      area: areaInput,
       blocks: z.boolean().optional().describe("Each resort's days together"),
       fireworks: z
         .enum(["want", "any"])
@@ -2961,9 +2993,11 @@ export const ASSISTANT_TOOLS = [
           "Without tickets: hopper plans every resort with Disney Park Hopper or Universal park-to-park (Universal Studios and Islands of Adventure, not Epic); base (default): one park a day",
         ),
       hopper: z
-        .array(z.enum(ORLANDO_RESORTS))
+        .array(z.string().regex(/^[a-z0-9-]+$/))
         .optional()
-        .describe("Without tickets: the resorts planned with the hopper"),
+        .describe(
+          "Without tickets: the resorts planned with the hopper (Orlando: walt-disney-world, universal-orlando)",
+        ),
       tickets: z
         .string()
         .regex(TICKETS_PATTERN)
@@ -2994,14 +3028,17 @@ export const ASSISTANT_TOOLS = [
           `A plan covers at most ${MAX_TRIP_DAYS} days, arrival and departure included; plan the trip in parts`,
         );
       }
-      const { regions, region, parks, names } = await orlando(ctx);
+      const { regions, region, parks, names } = await tripRegion(
+        ctx,
+        input.region,
+      );
       ctx.notePark?.(region.timezone);
-      const orlandoOnly = "plan_vacation plans the Orlando parks only";
+      const orlandoOnly = `plan_vacation plans the ${region.name} parks only`;
       let parkList: string | undefined;
       if (input.parks) {
         const visits = new Map<string, number>();
         for (const { park: reference, visits: count } of input.parks) {
-          const found = await orlandoPark(ctx, reference, parks, orlandoOnly);
+          const found = await regionPark(ctx, reference, parks, orlandoOnly);
           if ("ambiguous" in found) return found;
           visits.set(
             found.slug,
@@ -3021,7 +3058,7 @@ export const ASSISTANT_TOOLS = [
           locks.push(`rest@${lock.date}`);
           continue;
         }
-        const found = await orlandoPark(ctx, lock.park, parks, orlandoOnly);
+        const found = await regionPark(ctx, lock.park, parks, orlandoOnly);
         if ("ambiguous" in found) return found;
         locks.push(`${found.slug}@${lock.date}`);
       }
@@ -3071,13 +3108,15 @@ export const ASSISTANT_TOOLS = [
     name: "find_trip_dates",
     status: "forecast",
     description:
-      "When to go to Orlando: ranks every trip window of the given length in a range (a year, " +
-      "or from/to; at most a year ahead) by the plan it would get, and returns the best windows " +
-      "with headlinerWait against the range's average, why, what to watch, events, lastYear " +
-      "where the figures are last year's, and hubUrl; plus the months. within: a school-holiday " +
-      "region code (DE-NW, NL-GR for the Dutch north, GB-ENG, BE-NL, BE-FR, FR-ZA/ZB/ZC, AT-WI, " +
-      "…) keeps the windows inside its breaks. Parks default to the 7 big Disney and Universal parks.",
+      "When to go to a trip region (Orlando by default): ranks every trip window of the given " +
+      "length in a range (a year, or from/to; at most a year ahead) by the plan it would get, and " +
+      "returns the best windows with headlinerWait against the range's average, why, what to " +
+      "watch, events, lastYear where the figures are last year's, and hubUrl; plus the months. " +
+      "within: a school-holiday region code (DE-NW, NL-GR for the Dutch north, GB-ENG, BE-NL, " +
+      "BE-FR, FR-ZA/ZB/ZC, AT-WI, ES-MD, IT-LO, …) keeps the windows inside its breaks. Parks " +
+      "default to the region's headliners.",
     input: z.object({
+      region: regionInput,
       year: z
         .number()
         .int()
@@ -3111,8 +3150,8 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "The visitor's school-holiday region, when they travel in school breaks",
         ),
-      hotel: z.enum(HOTEL_KINDS).optional(),
-      area: z.enum(ORLANDO_AREAS).optional(),
+      hotel: hotelInput,
+      area: areaInput,
       blocks: z.boolean().optional(),
       fireworks: z.enum(["want", "any"]).optional(),
       split: z.enum(["auto", "fixed"]).optional(),
@@ -3137,7 +3176,10 @@ export const ASSISTANT_TOOLS = [
         .describe("Name the tickets each window's plan needs"),
     }),
     run: async (input, ctx) => {
-      const { regions, region, parks } = await orlando(ctx);
+      const { regions, region, parks, names } = await tripRegion(
+        ctx,
+        input.region,
+      );
       ctx.notePark?.(region.timezone);
       const today = regions.today(region);
       let from = input.from;
@@ -3156,11 +3198,11 @@ export const ASSISTANT_TOOLS = [
       if (input.parks) {
         const listed: string[] = [];
         for (const { park: reference, visits } of input.parks) {
-          const found = await orlandoPark(
+          const found = await regionPark(
             ctx,
             reference,
             parks,
-            "find_trip_dates covers the Orlando parks only",
+            `find_trip_dates covers the ${region.name} parks only`,
           );
           if ("ambiguous" in found) return found;
           listed.push(visits ? `${found.slug}:${visits}` : found.slug);
@@ -3199,7 +3241,12 @@ export const ASSISTANT_TOOLS = [
           today,
         ),
       );
-      return tripDatesSummary({ result, plan: normalized.plan, region });
+      return tripDatesSummary({
+        result,
+        plan: normalized.plan,
+        region,
+        names,
+      });
     },
   }),
   tool({
@@ -3207,17 +3254,19 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "The named seasons and events (food festivals, Christmas or Halloween party nights, " +
-      "Horror Nights, a closure) of one park, or of all Orlando parks without park, each " +
-      "confirmed, announced or expected (last year's pattern). For Orlando also the days with " +
-      "Early Entry, Early Park Admission, Extended Evening Hours and party nights, and when day " +
-      "guests leave. The next 31 days by default, up to 92.",
+      "Horror Nights, a closure) of one park, or of all parks of a trip region without park " +
+      "(Orlando by default), each confirmed, announced or expected (last year's pattern). For a " +
+      "trip region's parks also the days with an early slot (Orlando: Early Entry, Early Park " +
+      "Admission), Extended Evening Hours and party nights, and when day guests leave. The next " +
+      "31 days by default, up to 92.",
     input: z.object({
+      region: regionInput,
       park: z.string().min(2).max(120).optional(),
       from: isoDay.optional(),
       to: isoDay.optional(),
     }),
-    run: async ({ park: reference, from, to }, ctx) => {
-      const { regions, region, parks, names } = await orlando(ctx);
+    run: async ({ region: regionSlug, park: reference, from, to }, ctx) => {
+      let { regions, region, parks, names } = await tripRegion(ctx, regionSlug);
       let slug: string | null = null;
       let elsewhere: Park | null = null;
       if (reference) {
@@ -3229,8 +3278,17 @@ export const ASSISTANT_TOOLS = [
           const found = await resolvePark(mcp(ctx), reference);
           if (isAmbiguous(found)) return found;
           const inRegion = parks.find((p) => p.id === found.id);
+          const other = inRegion ? null : regionOfPark(found);
           if (inRegion) slug = inRegion.slug;
-          else elsewhere = found;
+          else if (other) {
+            // A park of another trip region reads that region's calendar.
+            ({ regions, region, parks, names } = await tripRegion(
+              ctx,
+              other.slug,
+            ));
+            slug = parks.find((p) => p.id === found.id)?.slug ?? null;
+            if (!slug) elsewhere = found;
+          } else elsewhere = found;
         }
       }
       if (elsewhere) {
@@ -3261,8 +3319,7 @@ export const ASSISTANT_TOOLS = [
             first,
             last,
           ),
-          slots:
-            "early and evening hours per day are known for the Orlando parks only; get_days has this park's days",
+          slots: `early and evening hours per day are known for the ${tripRegionNames()} parks only; get_days has this park's days`,
         };
       }
       ctx.notePark?.(region.timezone);
@@ -3288,6 +3345,7 @@ export const ASSISTANT_TOOLS = [
           slug ? [slug] : calendar.parks,
           names,
           region.timezone,
+          region,
         ),
         slotsWhy:
           "slots come with the published opening hours; a day past them lists none yet",
@@ -3298,34 +3356,41 @@ export const ASSISTANT_TOOLS = [
     name: "get_travel_time",
     status: "parks",
     description:
-      "Between two Orlando parks, or from a hotel area to a park: km and minutes of a drive " +
-      "without traffic, where it parks (Magic Kingdom: the TTC), and the resort's own " +
-      "transport (monorail, Skyliner, boat, bus, Hogwarts Express, walking). Orlando only.",
+      "Between two parks of a trip region (Orlando by default), or from a hotel area to a park: " +
+      "km and minutes of a drive without traffic, or the train where the region travels by " +
+      "rail, where a drive parks (Magic Kingdom: the TTC), and the resort's own transport " +
+      "(monorail, Skyliner, boat, bus, Hogwarts Express, walking). Trip regions only.",
     input: z.object({
+      region: regionInput,
       from: z.string().min(2).max(120).optional(),
-      area: z.enum(ORLANDO_AREAS).optional().describe("Instead of from"),
+      area: z
+        .string()
+        .regex(/^[a-z0-9_-]+$/)
+        .optional()
+        .describe(
+          `Instead of from, a hotel area of the region. Orlando: ${ORLANDO.hotelAreas.map((a) => a.key).join(", ")}`,
+        ),
       to: z.string().min(2).max(120),
     }),
-    run: async ({ from, area, to }, ctx) => {
+    run: async ({ region: regionSlug, from, area, to }, ctx) => {
       if (!from === !area) {
         throw new McpToolError("Give either from (a park) or area");
       }
-      const { region, parks } = await orlando(ctx);
-      const orlandoOnly =
-        "park.fan has travel times between the Orlando parks and from Orlando hotel areas only, none for this park";
-      const target = await orlandoPark(ctx, to, parks, orlandoOnly);
+      const { region, parks } = await tripRegion(ctx, regionSlug);
+      const orlandoOnly = `park.fan has travel times between the ${region.name} parks and from ${region.name} hotel areas only, none for this park`;
+      const target = await regionPark(ctx, to, parks, orlandoOnly);
       if ("ambiguous" in target) return target;
       let start: { point: string; name: string };
       if (area) {
         const hotelArea = region.hotelAreas.find((a) => a.key === area);
-        start = { point: hotelPoint(area), name: hotelArea?.name ?? area };
+        if (!hotelArea) {
+          throw new McpToolError(
+            `${area} is not a hotel area of ${region.name}: ${region.hotelAreas.map((a) => a.key).join(", ")}`,
+          );
+        }
+        start = { point: hotelPoint(area), name: hotelArea.name };
       } else {
-        const found = await orlandoPark(
-          ctx,
-          from as string,
-          parks,
-          orlandoOnly,
-        );
+        const found = await regionPark(ctx, from as string, parks, orlandoOnly);
         if ("ambiguous" in found) return found;
         start = { point: found.slug, name: found.name };
       }
@@ -3335,12 +3400,7 @@ export const ASSISTANT_TOOLS = [
       const leg = findLeg(buildLegs(region), start.point, target.slug);
       if (!leg)
         throw new McpToolError("park.fan has no travel time for this pair");
-      return travelSummary(
-        leg,
-        start.name,
-        target.name,
-        regionMatrix(region).attribution,
-      );
+      return travelSummary(leg, start.name, target.name, region);
     },
   }),
   tool({

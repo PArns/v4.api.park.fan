@@ -18,26 +18,49 @@ import type { TicketProduct } from "./tickets";
 /** What kind of day a park is: queues worth optimizing, or a flat-cost day. */
 export type TripParkType = "theme_park" | "water_park" | "reservation_park";
 
-/** `hotel=` on the plan: which resort's perks the visitor's hotel carries. */
-export const HOTEL_KINDS = [
-  "disney",
-  "disney_deluxe",
-  "universal",
-  "universal_premier",
-  "offsite",
-] as const;
-export type HotelKind = (typeof HOTEL_KINDS)[number];
+/**
+ * `hotel=` on the plan: which hotel's perks the visitor gets. A region's own
+ * vocabulary, the keys of its `perks` (Orlando: `disney`, `disney_deluxe`,
+ * `universal`, `universal_premier`, `offsite`); `offsite` (no perks) in every
+ * region. Validated per region ({@link hotelKinds}).
+ */
+export type HotelKind = string;
 
-/** A perk a hotel's guests get, as the plan's `perks` and `reasons` name it. */
-export type PerkKind =
-  | "early_entry"
-  | "early_park_admission"
-  | "extended_evening"
-  | "express_included";
+/**
+ * A perk a hotel's guests get, as the plan's `perks` and `reasons` name it: a
+ * region's own vocabulary, the keys of its `perkNames` (Orlando's
+ * `early_entry`, `early_park_admission`, `extended_evening`,
+ * `express_included`; Tokyo Disney Resort's Happy Entry would be
+ * `happy_entry`).
+ */
+export type PerkKind = string;
 
-/** How a guest gets between two places other than by car. */
+/**
+ * What a resort calls its before-opening slot (`early.kind` on the calendar):
+ * the same shape everywhere, a slot before the day guests' opening that some
+ * guests get. Orlando's `early_entry` (Disney) and `early_park_admission`
+ * (Universal); Disneyland Resort's Early Entry, Tokyo Disney Resort's Happy
+ * Entry and Disneyland Paris' Extra Magic Time are the same shape under their
+ * own names. Set per group (`RegionGroupConfig.earlyKind`).
+ */
+export type EarlyKind = string;
+
+/**
+ * How a guest gets between two places other than by car: a resort's own
+ * transport, and the rail and coach a city-to-city trip takes.
+ */
 export type TransportMode =
-  "monorail" | "skyliner" | "boat" | "bus" | "walk" | "train";
+  | "monorail"
+  | "skyliner"
+  | "boat"
+  | "bus"
+  | "walk"
+  | "train"
+  | "shinkansen"
+  | "rail"
+  | "metro"
+  | "highway_bus"
+  | "shuttle";
 
 export interface LatLng {
   latitude: number;
@@ -50,7 +73,7 @@ export interface RegionGroupConfig {
   name: string;
   kind: "resort" | "day_trip";
   /** What the feed's before-opening slot is called at this resort. */
-  earlyKind: "early_entry" | "early_park_admission";
+  earlyKind: EarlyKind;
 }
 
 export interface RegionParkConfig {
@@ -74,9 +97,11 @@ export interface RegionParkConfig {
    * Kingdom's car park is the Transportation and Ticket Center across the Seven
    * Seas Lagoon, Volcano Bay has none of its own. Picked so OSRM snaps it to the
    * road a guest actually arrives on; the park's own `latitude`/`longitude`
-   * (its centroid) snapped to service roads behind the parks.
+   * (its centroid) snapped to service roads behind the parks. Required where
+   * the region's travel comes from OSRM (`travel.source`), unused where it is
+   * curated.
    */
-  carPark: LatLng & { note: string };
+  carPark?: LatLng & { note: string };
   /**
    * The drive ends short of the gate and a transfer follows, e.g. the monorail
    * or ferry from the TTC. `minutes` is a curated estimate, waiting included.
@@ -95,12 +120,16 @@ export interface HotelAreaConfig extends LatLng {
 /**
  * A perk and where it applies. `needs` says what the day must carry for it to
  * count: the feed's before-opening slot, an extended evening, or nothing (the
- * perk holds every open day, like Express at the premier hotels).
+ * perk holds every open day, like Express at the premier hotels). `share` is
+ * what it takes off the park's cost that day: fixed shares, not measurements
+ * (an early slot is worth a ride or two before the day guests arrive, an
+ * extended evening more, Express Unlimited most of the queue).
  */
 export interface PerkRule {
   perk: PerkKind;
   parks: string[];
   needs: "early" | "extended_evening" | "always";
+  share: number;
 }
 
 /**
@@ -123,10 +152,19 @@ export interface CuratedLeg {
   to: string;
   alternatives: TransportAlternative[];
   /**
-   * Replaces the drive for a pair that shares a car park, where OSRM answers
-   * 0 km: the walk or shuttle between the two gates is the leg itself.
+   * The leg itself, where no drive stands for it: in an OSRM region a pair
+   * that shares a car park (OSRM answers 0 km; the walk or shuttle between the
+   * two gates is the leg) or a pair a guest makes by rail; in a curated region
+   * (`travel.source: "curated"`) every leg. It is served with
+   * `source: "curated"` where the region's own source is OSRM.
    */
-  replacesDrive?: { mode: TransportMode; minutes: number; km?: number };
+  primary?: {
+    mode: TransportMode;
+    minutes: number;
+    km?: number;
+    via?: string;
+    name?: string;
+  };
 }
 
 /** A place for an evening outside the parks. */
@@ -158,6 +196,111 @@ export interface NightShowConfig {
   kind: "fireworks" | "night_show";
 }
 
+/**
+ * Extreme heat at a theme park: the day's cost rises by `perDegree` for each
+ * degree of the day's high above the threshold, up to `cap`. A forecast high
+ * counts from `forecastFromC`, a day clearly hotter than the region's usual
+ * summer day; past the forecast the climate normal stands in from
+ * `normalFromC` (the top fifth of the summer's daily normals, "typically very
+ * hot") at `normalWeight`: a normal is a 70-day mean, flatter than any one
+ * day. How Orlando's were set: {@link ORLANDO_HEAT}; contract:
+ * docs/frontend/trip-regions.md#how-a-day-is-priced.
+ */
+export interface HeatModelConfig {
+  forecastFromC: number;
+  normalFromC: number;
+  perDegree: number;
+  normalWeight: number;
+  cap: number;
+}
+
+/**
+ * A storm season (Orlando's Atlantic hurricanes, Japan's typhoons) as a cost:
+ * `peakMinutes` × the date's weight added to every park's day. Weights by
+ * half month, `[month, firstHalf, secondHalf]`, the halves split after the
+ * 15th unless `firstHalfEnds` names another day for the month; the peak is
+ * `peak.from` … `peak.to` (`MM-DD`, inclusive). Curated relative to the
+ * season's climatology, never a forecast. Its codes are the kind's own:
+ * `hurricane_season`/`hurricane_peak`, `typhoon_season`/`typhoon_peak`.
+ */
+export interface StormSeasonConfig {
+  kind: "hurricane" | "typhoon";
+  weights: ReadonlyArray<readonly [number, number, number]>;
+  firstHalfEnds?: Readonly<Record<number, number>>;
+  peak: { from: string; to: string };
+  peakMinutes: number;
+}
+
+/**
+ * A season the answer names but does not price: Japan's rainy season
+ * (tsuyu). `from` … `to` as `MM-DD`, inclusive; the plan's days and `/when`'s
+ * windows that touch it warn `rainy_season`, and `/when`'s months say
+ * `rainySeason`.
+ */
+export interface SeasonNoteConfig {
+  kind: "rainy_season";
+  from: string;
+  to: string;
+}
+
+/** What the weather does to a region's days. */
+export interface RegionWeatherConfig {
+  heat: HeatModelConfig;
+  /** Absent: the region has no storm season worth a cost (California, Paris). */
+  storm?: StormSeasonConfig;
+  notes?: SeasonNoteConfig[];
+  /** The park whose climate normals stand for the region's months (`/when`). */
+  climatePark: string;
+}
+
+/**
+ * Where a region's travel times come from. `osrm`: a drive with no traffic
+ * between car parks, read once from OpenStreetMap
+ * (`travel-matrix.generated.ts`), with curated legs laid over it. `curated`:
+ * every leg is curated in the region's `legs` (`primary`), from timetables
+ * and the operators' own pages, as for a region travelled by train.
+ */
+export type RegionTravelConfig =
+  | { source: "osrm" }
+  | {
+      source: "curated";
+      /** The day the curated legs were last checked. */
+      computedOn: string;
+      /** What a leg's minutes are: a timetable's door to door, waits included. */
+      basis: "timetable";
+      attribution?: string;
+    };
+
+/**
+ * The markets a region's tickets are sold in (`TicketProduct.markets`, a
+ * link's `markets`). `home` is sold to anyone at the operator's own shop: what
+ * plan first suggests from. Orlando: `us` home, `uk` (UK and Ireland residents
+ * only), `intl` (sellers abroad).
+ */
+export interface TicketMarketsConfig {
+  home: string;
+  codes: readonly string[];
+}
+
+/** A city a visitor sleeps in, in a region whose parks lie in several (Japan). */
+export interface RegionBaseConfig {
+  key: string;
+  name: string;
+  /** Its hotel areas (`hotelAreas` keys); each area belongs to one base. */
+  hotelAreas: string[];
+  /** The parks a day from here reaches: door to door, one way, curated. */
+  parks: Array<{ slug: string; minutes: number; mode: TransportMode }>;
+}
+
+/** A move between two bases, both ways, door to door between their main hotel areas. */
+export interface BaseLegConfig {
+  from: string;
+  to: string;
+  minutes: number;
+  mode: TransportMode;
+  name?: string;
+}
+
 export interface RegionConfig {
   slug: string;
   name: string;
@@ -165,7 +308,12 @@ export interface RegionConfig {
   groups: RegionGroupConfig[];
   parks: RegionParkConfig[];
   hotelAreas: HotelAreaConfig[];
+  /** Per `hotel=` value the perks a stay there carries; the keys are the region's hotel kinds. */
   perks: Record<HotelKind, PerkRule[]>;
+  /** Every perk the region's rules name, by its code: its English name (Parky). */
+  perkNames: Record<PerkKind, string>;
+  /** Every hotel kind, by its `hotel=` value: whose hotel it is, in English (Parky). */
+  hotelNames: Record<HotelKind, string>;
   legs: CuratedLeg[];
   venues: VenueConfig[];
   /**
@@ -178,6 +326,16 @@ export interface RegionConfig {
    */
   hopperSets: string[][];
   nightShows: Record<string, NightShowConfig[]>;
+  weather: RegionWeatherConfig;
+  travel: RegionTravelConfig;
+  ticketMarkets: TicketMarketsConfig;
+  /**
+   * The cities a trip may stay in, where the parks lie too far apart for one
+   * hotel (docs/frontend/trip-regions.md#bases-a-trip-across-several-cities).
+   * Absent: one base, the region as a whole.
+   */
+  bases?: RegionBaseConfig[];
+  baseLegs?: BaseLegConfig[];
   /**
    * The ticket catalog as loaded from the admin's table, archived products
    * included (`TicketCatalogService.withTickets`); absent: the seed in
@@ -188,6 +346,51 @@ export interface RegionConfig {
   ticketsVersion?: string;
   /** The newest edit of the catalog. */
   ticketsUpdatedAt?: string;
+}
+
+/**
+ * Orlando's heat thresholds. Magic Kingdom's 2015–2024 daily normals (ERA5) top
+ * out at 32.1 °C in late June and run 30.9 °C at the June–October median
+ * (measured 2026-11-12): a forecast from 35 °C is clearly hotter than a usual
+ * summer day, a normal from 31.5 °C is the top fifth of those normals. How to
+ * set another region's: the same two measurements at its climate park.
+ */
+export const ORLANDO_HEAT: HeatModelConfig = {
+  forecastFromC: 35,
+  normalFromC: 31.5,
+  perDegree: 0.08,
+  normalWeight: 0.5,
+  cap: 1.4,
+};
+
+/**
+ * The Atlantic hurricane season, 1 June to 30 November, weighted by half
+ * month to the shape of the National Hurricane Center's climatology
+ * (nhc.noaa.gov/climo, 1991–2020): the first named storm usually forms in
+ * mid to late June, the first hurricane in early to mid August; the peak is
+ * 10 September, with most activity between mid-August and mid-October. The
+ * weights are curated relative to that peak, not NHC figures, and never a
+ * forecast. August splits after the 14th, so the peak starts on 15 August.
+ * Eight minutes at the peak is about a fifth of a typical headliner figure.
+ */
+export const ATLANTIC_HURRICANES: StormSeasonConfig = {
+  kind: "hurricane",
+  weights: [
+    [6, 0.05, 0.1],
+    [7, 0.15, 0.2],
+    [8, 0.4, 0.8],
+    [9, 1, 1],
+    [10, 0.8, 0.4],
+    [11, 0.15, 0.05],
+  ],
+  firstHalfEnds: { 8: 14 },
+  peak: { from: "08-15", to: "10-15" },
+  peakMinutes: 8,
+};
+
+/** Every region's `hotel=` values, in the order its `perks` lists them. */
+export function hotelKinds(region: Pick<RegionConfig, "perks">): string[] {
+  return Object.keys(region.perks);
 }
 
 const US = { continent: "north-america", country: "united-states" } as const;
@@ -214,11 +417,13 @@ const DISNEY_EARLY: PerkRule = {
   perk: "early_entry",
   parks: DISNEY_THEME_PARKS,
   needs: "early",
+  share: 0.05,
 };
 const UNIVERSAL_EARLY: PerkRule = {
   perk: "early_park_admission",
   parks: UNIVERSAL_PARKS,
   needs: "early",
+  share: 0.05,
 };
 
 /** Resort buses run between every Disney hotel and park, and park to park. */
@@ -261,7 +466,7 @@ function mergeLegs(legs: CuratedLeg[]): CuratedLeg[] {
         found.alternatives.push(alt);
       }
     }
-    found.replacesDrive ??= leg.replacesDrive;
+    found.primary ??= leg.primary;
   }
   return [...byPair.values()];
 }
@@ -270,6 +475,27 @@ export const ORLANDO: RegionConfig = {
   slug: "orlando",
   name: "Orlando",
   timezone: "America/New_York",
+  weather: {
+    heat: ORLANDO_HEAT,
+    storm: ATLANTIC_HURRICANES,
+    climatePark: "magic-kingdom-park",
+  },
+  travel: { source: "osrm" },
+  ticketMarkets: { home: "us", codes: ["us", "uk", "intl"] },
+  perkNames: {
+    early_entry: "Early Entry",
+    early_park_admission: "Early Park Admission",
+    extended_evening: "Extended Evening Hours",
+    express_included: "Express Unlimited",
+  },
+  hotelNames: {
+    disney: "a Walt Disney World resort hotel",
+    disney_deluxe: "a Disney Deluxe or Deluxe Villa resort hotel",
+    universal: "a Universal Orlando hotel",
+    universal_premier:
+      "a Universal Premier hotel (Royal Pacific, Hard Rock, Portofino Bay)",
+    offsite: "any other hotel",
+  },
   groups: [
     {
       key: "walt-disney-world",
@@ -672,6 +898,7 @@ export const ORLANDO: RegionConfig = {
         perk: "extended_evening",
         parks: DISNEY_THEME_PARKS,
         needs: "extended_evening",
+        share: 0.1,
       },
     ],
     universal: [UNIVERSAL_EARLY],
@@ -683,6 +910,7 @@ export const ORLANDO: RegionConfig = {
         perk: "express_included",
         parks: ["universal-studios-florida", "universal-islands-of-adventure"],
         needs: "always",
+        share: 0.6,
       },
     ],
     offsite: [],
@@ -718,7 +946,7 @@ export const ORLANDO: RegionConfig = {
     {
       from: "universal-studios-florida",
       to: "universal-islands-of-adventure",
-      replacesDrive: { mode: "walk", minutes: 10, km: 0.8 },
+      primary: { mode: "walk", minutes: 10, km: 0.8 },
       alternatives: [
         { mode: "walk", minutes: 10, via: "citywalk" },
         {
@@ -732,13 +960,13 @@ export const ORLANDO: RegionConfig = {
     {
       from: "universal-studios-florida",
       to: "universal-volcano-bay",
-      replacesDrive: { mode: "bus", minutes: 20 },
+      primary: { mode: "bus", minutes: 20 },
       alternatives: [{ mode: "bus", via: "garage_shuttle" }],
     },
     {
       from: "universal-islands-of-adventure",
       to: "universal-volcano-bay",
-      replacesDrive: { mode: "bus", minutes: 20 },
+      primary: { mode: "bus", minutes: 20 },
       alternatives: [{ mode: "bus", via: "garage_shuttle" }],
     },
     {
@@ -764,13 +992,13 @@ export const ORLANDO: RegionConfig = {
     {
       from: "venue:universal-citywalk",
       to: "universal-studios-florida",
-      replacesDrive: { mode: "walk", minutes: 5 },
+      primary: { mode: "walk", minutes: 5 },
       alternatives: [{ mode: "walk", minutes: 5 }],
     },
     {
       from: "venue:universal-citywalk",
       to: "universal-islands-of-adventure",
-      replacesDrive: { mode: "walk", minutes: 5 },
+      primary: { mode: "walk", minutes: 5 },
       alternatives: [{ mode: "walk", minutes: 5 }],
     },
     {

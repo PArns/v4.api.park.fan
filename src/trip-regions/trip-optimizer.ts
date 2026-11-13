@@ -19,7 +19,17 @@
  */
 import { addIsoDays } from "../common/utils/date.util";
 import { solveAssignment } from "./hungarian";
-import type { PerkKind, PerkRule, TripParkType } from "./regions";
+import { dayKindsOf, type TicketDayKind } from "./tickets";
+import {
+  ATLANTIC_HURRICANES,
+  ORLANDO_HEAT,
+  type HeatModelConfig,
+  type PerkKind,
+  type PerkRule,
+  type RegionWeatherConfig,
+  type StormSeasonConfig,
+  type TripParkType,
+} from "./regions";
 
 /** A trip runs at most three weeks, arrival and departure included. */
 export const MAX_TRIP_DAYS = 21;
@@ -39,19 +49,6 @@ const HOP_COMBO_LIMIT = 200;
 const REST_LOCAL_SEARCH_EVALS = 600;
 /** Combinations of the owned tickets' free starts tried per pairing. */
 const START_COMBO_LIMIT = 3000;
-
-/**
- * The share a hotel perk takes off a park's cost on the day it applies. Fixed
- * shares, not measurements: an early hour at a Disney park is worth a ride or
- * two before the day guests arrive, an extended evening more, and Express
- * Unlimited at the two Universal parks most of the queue.
- */
-export const PERK_SHARE: Record<PerkKind, number> = {
-  early_entry: 0.05,
-  early_park_admission: 0.05,
-  extended_evening: 0.1,
-  express_included: 0.6,
-};
 
 /**
  * The cost model, in minutes of headliner standby (the calendar's
@@ -89,74 +86,118 @@ export const PlanCostModel = {
 } as const;
 
 /**
- * Extreme heat at a theme park: the day's cost rises by `perDegree` for each
- * degree of the day's high above the threshold, up to `cap`. A forecast high
- * counts from 35 °C, a day clearly hotter than Orlando's usual summer day: Magic
- * Kingdom's 2015–2024 daily normals (ERA5) top out at 32.1 °C in late June and
- * run 30.9 °C at the June–October median. Past the forecast the climate normal
- * stands in, from 31.5 °C (the top fifth of those June–October normals, "typically
- * very hot") at half the weight: a normal is a 70-day mean, so it is flatter
- * than any one day and says less about the day the visitor gets. Water parks
- * and Discovery Cove take no heat term: a hot dry day is already their good
- * one (`weatherFactor`). Contract: docs/frontend/trip-regions.md.
+ * Orlando's heat model ({@link ORLANDO_HEAT}): the default where a caller
+ * names no region's, which only the specs do. Every region carries its own
+ * (`RegionConfig.weather.heat`). Water parks and Discovery Cove take no heat
+ * term: a hot dry day is already their good one (`weatherFactor`). Contract:
+ * docs/frontend/trip-regions.md.
  */
-export const HeatModel = {
-  forecastFromC: 35,
-  normalFromC: 31.5,
-  perDegree: 0.08,
-  normalWeight: 0.5,
-  cap: 1.4,
-} as const;
+export const HeatModel: HeatModelConfig = ORLANDO_HEAT;
+
+/** What the weather does to a day's cost: a region's heat, storm season and notes. */
+export type WeatherModel = Pick<
+  RegionWeatherConfig,
+  "heat" | "storm" | "notes"
+>;
 
 /**
- * The Atlantic hurricane season, 1 June to 30 November, weighted by half
- * month to the shape of the National Hurricane Center's climatology
- * (nhc.noaa.gov/climo, 1991–2020): the first named storm usually forms in
- * mid to late June, the first hurricane in early to mid August; the peak is
- * 10 September, with most activity between mid-August and mid-October. The
- * weights are curated relative to that peak, not NHC figures, and never a
- * forecast. `[month, firstHalf, secondHalf]`, the halves split after the 15th
- * (the 14th in August, so the peak starts on 15 August).
+ * Orlando's weather, the default of {@link dayCostParts} and the plan where a
+ * caller names none (the specs written for the first region). Every route
+ * passes its region's (`RegionConfig.weather`).
  */
-export const HURRICANE_WEIGHTS: ReadonlyArray<[number, number, number]> = [
-  [6, 0.05, 0.1],
-  [7, 0.15, 0.2],
-  [8, 0.4, 0.8],
-  [9, 1, 1],
-  [10, 0.8, 0.4],
-  [11, 0.15, 0.05],
-];
+export const ORLANDO_WEATHER: WeatherModel = {
+  heat: ORLANDO_HEAT,
+  storm: ATLANTIC_HURRICANES,
+};
 
-/** What a park day at the season's peak costs more, in minutes of headliner wait. */
-export const HURRICANE_PEAK_MINUTES = 8;
+/** Orlando's hurricane weights, `[month, firstHalf, secondHalf]` ({@link ATLANTIC_HURRICANES}). */
+export const HURRICANE_WEIGHTS = ATLANTIC_HURRICANES.weights;
+
+/** What a park day at the hurricane season's peak costs more, in minutes of headliner wait. */
+export const HURRICANE_PEAK_MINUTES = ATLANTIC_HURRICANES.peakMinutes;
+
+/** A storm season's weight on a date: 0 outside it; by half month. */
+export function stormWeight(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): number {
+  if (!storm) return 0;
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  const row = storm.weights.find(([m]) => m === month);
+  if (!row) return 0;
+  const split = storm.firstHalfEnds?.[month] ?? 15;
+  return day <= split ? row[1] : row[2];
+}
+
+/** Whether a date lies in a storm season's peak (`peak.from` … `peak.to`). */
+export function isStormPeak(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): boolean {
+  if (!storm) return false;
+  const md = date.slice(5, 10);
+  return md >= storm.peak.from && md <= storm.peak.to;
+}
+
+/** A storm season's minutes on a date, the same for every park that day. */
+export function stormMinutes(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): number {
+  return storm ? storm.peakMinutes * stormWeight(storm, date) : 0;
+}
+
+/**
+ * The storm warning a date carries: `<kind>_peak` in the peak,
+ * `<kind>_season` elsewhere in the season, none outside it.
+ */
+export function stormWarning(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): StormWarning | undefined {
+  if (!storm) return undefined;
+  if (isStormPeak(storm, date)) return `${storm.kind}_peak`;
+  return stormWeight(storm, date) > 0 ? `${storm.kind}_season` : undefined;
+}
+
+/** Whether a date lies in one of a region's noted seasons of that kind (Japan's rainy season). */
+export function inSeasonNote(
+  notes: WeatherModel["notes"],
+  kind: "rainy_season",
+  date: string,
+): boolean {
+  const md = date.slice(5, 10);
+  return (notes ?? []).some(
+    (n) => n.kind === kind && md >= n.from && md <= n.to,
+  );
+}
 
 /** The hurricane season's weight on a date: 0 outside 1 June … 30 November. */
 export function hurricaneWeight(date: string): number {
-  const month = Number(date.slice(5, 7));
-  const day = Number(date.slice(8, 10));
-  const row = HURRICANE_WEIGHTS.find(([m]) => m === month);
-  if (!row) return 0;
-  const split = month === 8 ? 14 : 15;
-  return day <= split ? row[1] : row[2];
+  return stormWeight(ATLANTIC_HURRICANES, date);
 }
 
 /** The season's peak, mid-August to mid-October (15 August … 15 October). */
 export function isHurricanePeak(date: string): boolean {
-  const md = date.slice(5, 10);
-  return md >= "08-15" && md <= "10-15";
+  return isStormPeak(ATLANTIC_HURRICANES, date);
 }
 
 /** The hurricane season's minutes on a date, the same for every park that day. */
 export function hurricaneMinutes(date: string): number {
-  return HURRICANE_PEAK_MINUTES * hurricaneWeight(date);
+  return stormMinutes(ATLANTIC_HURRICANES, date);
 }
 
 /**
  * How much hotter than its threshold a day's high is, and the factor it puts
  * on a theme park's cost; null when it is not extreme or nothing is known.
- * The forecast high where the calendar has one, else the day's climate normal.
+ * The forecast high where the calendar has one, else the day's climate normal,
+ * against the region's thresholds (Orlando's without one).
  */
-export function heatOf(weather: PlanCell["weather"]): {
+export function heatOf(
+  weather: PlanCell["weather"],
+  model: HeatModelConfig = HeatModel,
+): {
   excess: number;
   factor: number;
   basis: "forecast" | "climate_normal";
@@ -164,14 +205,13 @@ export function heatOf(weather: PlanCell["weather"]): {
   if (!weather || weather.tempMax == null) return null;
   const basis =
     weather.basis === "climate_normal" ? "climate_normal" : "forecast";
-  const from =
-    basis === "forecast" ? HeatModel.forecastFromC : HeatModel.normalFromC;
+  const from = basis === "forecast" ? model.forecastFromC : model.normalFromC;
   const excess = weather.tempMax - from;
   if (excess <= 0) return null;
-  const weight = basis === "forecast" ? 1 : HeatModel.normalWeight;
+  const weight = basis === "forecast" ? 1 : model.normalWeight;
   return {
     excess,
-    factor: Math.min(HeatModel.cap, 1 + HeatModel.perDegree * weight * excess),
+    factor: Math.min(model.cap, 1 + model.perDegree * weight * excess),
     basis,
   };
 }
@@ -189,6 +229,8 @@ export interface PlanCell {
   basis: PlanBasis;
   /** Hours the day guest has: the OPERATING row's open to close. */
   dayHours?: number;
+  /** The day guests' opening, in minutes after the park's midnight. */
+  opensMinute?: number;
   /**
    * The park's usual day-guest hours around this date, from the calendar
    * (independent of the window asked for); preferred over a window median.
@@ -250,6 +292,8 @@ export interface PlanOptions {
   hopPairs: Array<[string, string]>;
   perkRules: PerkRule[];
   locks: PlanLock[];
+  /** The region's weather (`RegionConfig.weather`); absent: Orlando's. */
+  weather?: WeatherModel;
 }
 
 /**
@@ -279,6 +323,13 @@ export interface PlanTicket {
   caps: Array<{ parks: string[]; max: number }>;
   /** Parks one hop day of this ticket may combine. */
   hopPairs: Array<[string, string]>;
+  /**
+   * An evening ticket: it admits from this many minutes after midnight, so a
+   * day on it is the evening of the day (`entryFrom`).
+   */
+  entryMinute?: number;
+  /** The kinds of day it may be used on; absent: every day. */
+  validDays?: TicketDayKind[];
 }
 
 export interface PlanInput {
@@ -294,16 +345,23 @@ export interface PlanInput {
   tickets?: PlanTicket[];
 }
 
-export type PlanReason =
+/** The plan's own reasons; a hotel perk's code joins them ({@link PlanReason}). */
+export type PlanDayReason =
   | "quietest_in_window"
   | "runner_up_close"
   | "weekday"
   | "holiday_ends"
-  | PerkKind
   | "water_park_weather"
   | "busiest_day_spared"
   | "rest_after_streak"
   | "locked";
+
+/** A plan day's reason: the plan's own, or a hotel perk the region names. */
+export type PlanReason = PlanDayReason | PerkKind;
+
+/** A storm season's two warnings, by its kind. */
+export type StormWarning =
+  "hurricane_season" | "hurricane_peak" | "typhoon_season" | "typhoon_peak";
 
 export type PlanWarning =
   | "party_night_short_hours"
@@ -315,13 +373,14 @@ export type PlanWarning =
   | "adjacent_repeat"
   | "long_streak"
   | "extreme_heat"
-  | "hurricane_season"
-  | "hurricane_peak"
+  | StormWarning
+  | "rainy_season"
   | "outside_ticket_window";
 
 export interface PlannedParkVisit {
   slug: string;
-  part: "full" | "half";
+  /** `evening`: on an evening ticket, from its entry time. */
+  part: "full" | "half" | "evening";
   /** On a hop day each park carries its own figures. */
   headlinerWait?: number;
   crowdLevel?: string;
@@ -345,6 +404,8 @@ export interface PlannedDay {
   ticketDay?: number;
   /** A visit on the ticket's allowance, which uses no ticket day. */
   ticketAllowance?: true;
+  /** An evening ticket's day: the park admits the guest from this time (`HH:MM`). */
+  entryFrom?: string;
 }
 
 export interface PlanAlternative {
@@ -373,8 +434,8 @@ export interface PlanTotals {
   /** The planned order saves at least {@link ORDER_MATTERS_MINUTES} per ride. */
   orderMatters: boolean;
   /**
-   * What heat and the hurricane season added to the plan's cost, in minutes
-   * per park day, beside `headlinerWait`, which they leave alone.
+   * What heat and the storm season added to the plan's cost, in minutes per
+   * park day, beside `headlinerWait`, which they leave alone.
    */
   penalties?: PlanPenalties;
   parkDays: number;
@@ -382,10 +443,15 @@ export interface PlanTotals {
   restDays: number;
 }
 
-/** Minutes of cost per park day that are not waiting: what ranked a plan lower. */
+/**
+ * Minutes of cost per park day that are not waiting: what ranked a plan
+ * lower. The storm season's under its kind: `hurricane` in Orlando, `typhoon`
+ * in Japan.
+ */
 export interface PlanPenalties {
   heat?: number;
   hurricane?: number;
+  typhoon?: number;
 }
 
 /** An owned ticket as the plan used it. */
@@ -536,8 +602,15 @@ export interface DayCostContext {
   fireworks?: FireworksOption;
   /** The product of (1 − share) of the hotel perks that day; 1 without a hotel. */
   perkFactor?: number;
-  /** The date priced, for the hurricane season's term; without it there is none. */
+  /** The date priced, for the storm season's term; without it there is none. */
   date?: string;
+  /** The region's heat and storm season; absent: Orlando's ({@link ORLANDO_WEATHER}). */
+  weather?: WeatherModel;
+  /**
+   * Hours of the day the guest cannot spend in the park: an evening ticket's
+   * late entry. Priced like a short day ({@link shortenedHoursFactor}).
+   */
+  lostHours?: number;
 }
 
 /**
@@ -555,6 +628,46 @@ export function hoursFactor(
     PlanCostModel.hoursFactorCap,
     Math.max(1, usual / cell.dayHours),
   );
+}
+
+/** The day a guest's hours are read against where nothing else says: a usual park day. */
+export const DEFAULT_DAY_HOURS = 10;
+
+/** Minutes after midnight as `HH:MM`. */
+const clockOf = (minute: number): string =>
+  `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+
+/** A day's opening where the calendar has none: the usual 09:00. */
+const DEFAULT_OPEN_MINUTE = 9 * 60;
+
+/** The hours an evening ticket's late entry takes off a day: entry − opening, at least 0. */
+export function lateEntryHours(
+  cell: Pick<PlanCell, "opensMinute">,
+  entryMinute: number,
+): number {
+  return (
+    Math.max(0, entryMinute - (cell.opensMinute ?? DEFAULT_OPEN_MINUTE)) / 60
+  );
+}
+
+/**
+ * {@link hoursFactor} for a day the guest spends `lostHours` less of: the
+ * park's usual hours ÷ the hours left, at least 1, at most
+ * {@link PlanCostModel.hoursFactorCap}, an early close included (the hours
+ * left are the day guest's hours less the lost ones). Without the day's
+ * hours, its usual ones (else {@link DEFAULT_DAY_HOURS}) stand in.
+ */
+export function shortenedHoursFactor(
+  cell: Pick<PlanCell, "dayHours" | "usualHours">,
+  medianHours: number | undefined,
+  lostHours: number,
+): number {
+  if (lostHours <= 0) return hoursFactor(cell, medianHours);
+  const usual = cell.usualHours ?? medianHours ?? DEFAULT_DAY_HOURS;
+  const day = cell.dayHours && cell.dayHours > 0 ? cell.dayHours : usual;
+  const left = day - lostHours;
+  if (left <= 0) return PlanCostModel.hoursFactorCap;
+  return Math.min(PlanCostModel.hoursFactorCap, Math.max(1, usual / left));
 }
 
 /**
@@ -587,7 +700,9 @@ export interface DayCostParts {
   cost: number;
   /** What extreme heat added (theme parks only). */
   heat: number;
-  /** What the hurricane season added (every park alike that date). */
+  /** What the region's storm season added (every park alike that date). */
+  storm: number;
+  /** `storm` where the season is Orlando's hurricanes, else 0: the name the first specs read. */
   hurricane: number;
 }
 
@@ -597,7 +712,7 @@ export interface DayCostParts {
  * night at 18:00 costs more than its waits), by the hotel's perks and by
  * extreme heat ({@link HeatModel}), plus a penalty for a day without published
  * hours, with `fireworks=want` one for a night that costs the evening show,
- * and the hurricane season's minutes for the date ({@link hurricaneMinutes}).
+ * and the region's storm season's minutes for the date ({@link stormMinutes}).
  * A water park or reservation park is a flat day the weather moves. Infinity
  * when the park is closed.
  */
@@ -606,18 +721,26 @@ export function dayCostParts(
   ctx: DayCostContext,
 ): DayCostParts {
   if (cell.status === "CLOSED") {
-    return { cost: Infinity, heat: 0, hurricane: 0 };
+    return { cost: Infinity, heat: 0, storm: 0, hurricane: 0 };
   }
+  const weather = ctx.weather ?? ORLANDO_WEATHER;
   const unknown =
     cell.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
-  const hurricane = ctx.date ? hurricaneMinutes(ctx.date) : 0;
+  const storm = ctx.date ? stormMinutes(weather.storm, ctx.date) : 0;
+  const hurricane = weather.storm?.kind === "hurricane" ? storm : 0;
+  const lost = ctx.lostHours ?? 0;
   if (ctx.type !== "theme_park") {
+    const shortened =
+      lost > 0 ? shortenedHoursFactor(cell, ctx.medianHours, lost) : 1;
     return {
       cost:
-        PlanCostModel.flatDayCost * weatherFactor(cell.weather).factor +
+        PlanCostModel.flatDayCost *
+          weatherFactor(cell.weather).factor *
+          shortened +
         unknown +
-        hurricane,
+        storm,
       heat: 0,
+      storm,
       hurricane,
     };
   }
@@ -629,12 +752,16 @@ export function dayCostParts(
     ctx.fireworks === "want" && losesEvening(cell, ctx.medianHours)
       ? PlanCostModel.fireworksMissedPenalty
       : 0;
-  const core =
-    base * hoursFactor(cell, ctx.medianHours) * (ctx.perkFactor ?? 1);
-  const heat = core * ((heatOf(cell.weather)?.factor ?? 1) - 1);
+  const hours =
+    lost > 0
+      ? shortenedHoursFactor(cell, ctx.medianHours, lost)
+      : hoursFactor(cell, ctx.medianHours);
+  const core = base * hours * (ctx.perkFactor ?? 1);
+  const heat = core * ((heatOf(cell.weather, weather.heat)?.factor ?? 1) - 1);
   return {
-    cost: core + heat + unknown + missed + hurricane,
+    cost: core + heat + unknown + missed + storm,
     heat,
+    storm,
     hurricane,
   };
 }
@@ -701,8 +828,11 @@ class TripOptimizer {
   private activePenalty: Structure["penalty"] | null = null;
   /** Owned tickets with no start on sale in the trip: every day on them is outside. */
   private readonly offSale = new Set<number>();
+  /** The region's weather: heat, storm season, noted seasons. */
+  private readonly weather: WeatherModel;
 
   constructor(private readonly input: PlanInput) {
+    this.weather = input.options.weather ?? ORLANDO_WEATHER;
     this.tickets = input.tickets ?? [];
     this.n = input.days.length;
     this.dates = input.days.map((d) => d.date);
@@ -735,14 +865,22 @@ class TripOptimizer {
     );
   }
 
-  /** The hotel perks that count for a park on a day: listed, and the cost factor. */
-  perks(slug: string, date: string): { listed: PerkKind[]; factor: number } {
+  /**
+   * The hotel perks that count for a park on a day: listed, and the cost
+   * factor. An evening visit (an evening ticket) misses the early slot.
+   */
+  perks(
+    slug: string,
+    date: string,
+    evening = false,
+  ): { listed: PerkKind[]; factor: number } {
     const c = this.cell(slug, date);
     const listed: PerkKind[] = [];
     let factor = 1;
     if (c.status === "CLOSED") return { listed, factor };
     for (const rule of this.input.options.perkRules) {
       if (!rule.parks.includes(slug)) continue;
+      if (evening && rule.needs === "early") continue;
       let applies = false;
       if (rule.needs === "always") applies = true;
       else if (rule.needs === "extended_evening") {
@@ -751,7 +889,7 @@ class TripOptimizer {
         applies = true;
       }
       if (!applies) continue;
-      factor *= 1 - PERK_SHARE[rule.perk];
+      factor *= 1 - rule.share;
       if (!listed.includes(rule.perk)) listed.push(rule.perk);
     }
     return { listed, factor };
@@ -784,23 +922,49 @@ class TripOptimizer {
     return this.costParts(slug, date).cost;
   }
 
-  /** One park's cost on a date with its heat and hurricane terms. */
-  costParts(slug: string, date: string): DayCostParts {
+  /** One park's cost on a date with its heat and storm terms. */
+  costParts(slug: string, date: string, entryMinute?: number): DayCostParts {
     const park = this.parkBySlug.get(slug);
-    if (!park) return { cost: Infinity, heat: 0, hurricane: 0 };
-    return dayCostParts(this.cell(slug, date), {
+    if (!park) return { cost: Infinity, heat: 0, storm: 0, hurricane: 0 };
+    const cell = this.cell(slug, date);
+    const evening = entryMinute !== undefined;
+    return dayCostParts(cell, {
       type: park.type,
       medianHours: this.medianHours.get(slug),
       neutralWait: this.neutral.get(slug),
       fireworks: this.input.options.fireworks,
-      perkFactor: this.perks(slug, date).factor,
+      perkFactor: this.perks(slug, date, evening).factor,
       date,
+      weather: this.weather,
+      ...(evening && { lostHours: lateEntryHours(cell, entryMinute) }),
     });
+  }
+
+  /** An evening ticket's visit: the day from the ticket's entry time. */
+  private eveningCost(slug: string, day: number, entryMinute: number): number {
+    const key = `${slug}|${day}|e${entryMinute}`;
+    const cached = this.costCache.get(key);
+    if (cached !== undefined) return cached;
+    const value = this.costParts(slug, this.dates[day], entryMinute).cost;
+    this.costCache.set(key, value);
+    return value;
+  }
+
+  /** The entry minute of the evening ticket a visit uses, if it uses one. */
+  entryOf(unit: Unit): number | undefined {
+    return unit.ticket === undefined || unit.allowance
+      ? undefined
+      : this.tickets[unit.ticket].entryMinute;
   }
 
   rowCost(row: Row, day: number): number {
     if (row.lockedDay !== undefined && row.lockedDay !== day) return Infinity;
-    if (row.units.length === 1) return this.cost(row.units[0].slug, day);
+    if (row.units.length === 1) {
+      const entry = this.entryOf(row.units[0]);
+      return entry === undefined
+        ? this.cost(row.units[0].slug, day)
+        : this.eveningCost(row.units[0].slug, day, entry);
+    }
     const [a, b] = row.units;
     return (
       0.5 * this.cost(a.slug, day) +
@@ -1166,6 +1330,15 @@ class TripOptimizer {
     );
   }
 
+  /** Whether a row's owned ticket may not be used on that kind of day (`validDays`). */
+  private wrongDay(row: Row, day: number): boolean {
+    const unit = row.units[0];
+    if (unit.ticket === undefined || unit.allowance) return false;
+    const valid = this.tickets[unit.ticket].validDays;
+    if (!valid || valid.length === 0) return false;
+    return !dayKindsOf(this.input.days[day]).some((k) => valid.includes(k));
+  }
+
   /** Whether a row on a day lies outside its owned ticket's window (or off its reserved day). */
   private outsideTicket(row: Row, day: number, starts: number[]): boolean {
     const ti = row.units[0].ticket;
@@ -1330,17 +1503,19 @@ class TripOptimizer {
       }
     };
     walk(0, []);
+    // A ticket's kinds of day (an evening ticket's weekends) hold even when
+    // its window is relaxed: it admits nobody on the others.
     return combos.map((starts) =>
       this.relaxWindows
         ? {
-            mask: () => false,
+            mask: (row: Row, day: number) => this.wrongDay(row, day),
             penalty: (row: Row, day: number) =>
               this.outsideTicket(row, day, starts) ? TICKET_WINDOW_PENALTY : 0,
             starts,
           }
         : {
             mask: (row: Row, day: number) =>
-              this.outsideTicket(row, day, starts),
+              this.outsideTicket(row, day, starts) || this.wrongDay(row, day),
             starts,
           },
     );
@@ -2285,14 +2460,18 @@ class TripOptimizer {
         reasons.add("holiday_ends");
       }
 
+      const entry = this.entryOf(row.units[0]);
       const visits: PlannedParkVisit[] = row.units.map((u) => {
         const c = this.cell(u.slug, date);
         const park = this.parkBySlug.get(u.slug) as PlanPark;
-        const { listed } = this.perks(u.slug, date);
+        const { listed } = this.perks(u.slug, date, entry !== undefined);
         listed.forEach((p) => reasons.add(p));
         if (c.status === "UNKNOWN") warnings.add("hours_not_published");
-        if (isHurricanePeak(date)) warnings.add("hurricane_peak");
-        else if (hurricaneWeight(date) > 0) warnings.add("hurricane_season");
+        const storm = stormWarning(this.weather.storm, date);
+        if (storm) warnings.add(storm);
+        if (inSeasonNote(this.weather.notes, "rainy_season", date)) {
+          warnings.add("rainy_season");
+        }
         if (c.basis === "last_year") warnings.add("estimate_last_year");
         if (c.basis === "long_range") warnings.add("long_range");
         if (park.type === "theme_park") {
@@ -2309,7 +2488,9 @@ class TripOptimizer {
                 : "party_night_short_hours",
             );
           }
-          if (heatOf(c.weather)) warnings.add("extreme_heat");
+          if (heatOf(c.weather, this.weather.heat)) {
+            warnings.add("extreme_heat");
+          }
         } else if (weatherFactor(c.weather).warmDry) {
           reasons.add("water_park_weather");
         }
@@ -2338,11 +2519,17 @@ class TripOptimizer {
         out.push({
           date,
           kind: "park",
-          parks: [{ slug: visits[0].slug, part: "full" }],
+          parks: [
+            {
+              slug: visits[0].slug,
+              part: entry === undefined ? "full" : "evening",
+            },
+          ],
           ...figures,
           reasons: [...reasons],
           warnings: [...warnings],
           ...ticket,
+          ...(entry !== undefined && { entryFrom: clockOf(entry) }),
         });
       } else {
         out.push({
@@ -2490,17 +2677,22 @@ class TripOptimizer {
     const averageDayWait = mean(average);
     // Per park day, as a hop day is costed: half of each park.
     let heat = 0;
-    let hurricane = 0;
+    let storm = 0;
     for (const [day, row] of rowOnDay) {
       const share = row.units.length > 1 ? 0.5 : 1;
       for (const u of row.units) {
-        const parts = this.costParts(u.slug, this.dates[day]);
+        const parts = this.costParts(u.slug, this.dates[day], this.entryOf(u));
         heat += share * parts.heat;
-        hurricane += share * parts.hurricane;
+        storm += share * parts.storm;
       }
     }
     const parkDays = rowOnDay.size;
-    const penalties = penaltiesOf(heat, hurricane, parkDays);
+    const penalties = penaltiesOf(
+      heat,
+      storm,
+      parkDays,
+      this.weather.storm?.kind,
+    );
     return {
       ...(headlinerWait != null && {
         headlinerWait: Math.round(headlinerWait),
@@ -2528,19 +2720,21 @@ class TripOptimizer {
 }
 
 /**
- * Heat and hurricane minutes summed over a plan's park days, as the mean per
- * park day, one decimal; undefined when both are zero.
+ * Heat and storm minutes summed over a plan's park days, as the mean per
+ * park day, one decimal, the storm's under its kind (`hurricane` without
+ * one); undefined when both are zero.
  */
 export function penaltiesOf(
   heat: number,
-  hurricane: number,
+  storm: number,
   parkDays: number,
+  kind: StormSeasonConfig["kind"] = "hurricane",
 ): PlanPenalties | undefined {
   if (parkDays === 0) return undefined;
   const per = (v: number) => Math.round((v / parkDays) * 10) / 10;
   const out: PlanPenalties = {
     ...(per(heat) > 0 && { heat: per(heat) }),
-    ...(per(hurricane) > 0 && { hurricane: per(hurricane) }),
+    ...(per(storm) > 0 && { [kind]: per(storm) }),
   };
   return Object.keys(out).length > 0 ? out : undefined;
 }

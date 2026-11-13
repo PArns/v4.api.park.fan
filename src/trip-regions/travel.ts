@@ -1,11 +1,15 @@
 /**
- * The region's legs: OSRM's drive between car parks (`travel-matrix.generated.ts`)
- * with the curated parts laid over it — the transfer from a car park that is
- * not the gate, the walk or shuttle that replaces a 0 km drive between parks
- * sharing a garage, and the resort's own transport as alternatives. Pure.
+ * The region's legs, from the source its `travel` names. `osrm`: OSRM's drive
+ * between car parks (`travel-matrix.generated.ts`) with the curated parts laid
+ * over it — the transfer from a car park that is not the gate, the walk or
+ * shuttle that replaces a 0 km drive between parks sharing a garage (a leg's
+ * `primary`, served with `source: "curated"`), and the resort's own transport
+ * as alternatives. `curated`: every leg is a curated `primary`, from
+ * timetables, as for a region travelled by train. Pure.
  */
 import {
   hotelPoint,
+  type CuratedLeg,
   type RegionConfig,
   type TransportAlternative,
   type TransportMode,
@@ -24,6 +28,13 @@ export interface TripLeg {
   km?: number;
   minutes: number;
   mode: "drive" | TransportMode;
+  /** A line or service, where a rail leg has one ("Keiyo Line"). */
+  name?: string;
+  /**
+   * `curated` on a leg whose figures are not the region's source: a curated
+   * leg in an OSRM region. Absent: the region's `travel.source`.
+   */
+  source?: "curated";
   /** Where the drive ends short of the gate (`ttc`, `garage_shuttle`). */
   via?: string;
   /** Curated minutes from that car park to the gate, both ends together. */
@@ -33,7 +44,7 @@ export interface TripLeg {
 
 const pairKey = (a: string, b: string): string => [a, b].sort().join("|");
 
-/** The region's travel matrix with its source fields. */
+/** The region's travel matrix with its source fields; OSRM regions only. */
 export function regionMatrix(region: RegionConfig): GeneratedTravelMatrix {
   const matrix = TRAVEL_MATRICES[region.slug];
   if (!matrix) {
@@ -42,8 +53,62 @@ export function regionMatrix(region: RegionConfig): GeneratedTravelMatrix {
   return matrix;
 }
 
+/** Where a region's legs come from, as the region route's `travel` names it. */
+export interface TravelSource {
+  source: "osrm" | "curated";
+  computedOn: string;
+  attribution?: string;
+  basis: "free_flow" | "timetable";
+}
+
+/** The source fields of a region's travel times. */
+export function travelSource(region: RegionConfig): TravelSource {
+  if (region.travel.source === "curated") {
+    return {
+      source: "curated",
+      computedOn: region.travel.computedOn,
+      ...(region.travel.attribution && {
+        attribution: region.travel.attribution,
+      }),
+      basis: region.travel.basis,
+    };
+  }
+  const matrix = regionMatrix(region);
+  return {
+    source: matrix.source,
+    computedOn: matrix.computedOn,
+    attribution: matrix.attribution,
+    basis: matrix.basis,
+  };
+}
+
+/** A curated leg's `primary` as a leg, with its alternatives. */
+function primaryLeg(
+  leg: { from: string; to: string },
+  extra: CuratedLeg,
+  source: TripLeg["source"],
+): TripLeg {
+  const primary = extra.primary as NonNullable<CuratedLeg["primary"]>;
+  return {
+    from: leg.from,
+    to: leg.to,
+    ...(primary.km != null && { km: primary.km }),
+    minutes: primary.minutes,
+    mode: primary.mode,
+    ...(primary.via && { via: primary.via }),
+    ...(primary.name && { name: primary.name }),
+    ...(source && { source }),
+    ...(extra.alternatives.length > 0 && { alternatives: extra.alternatives }),
+  };
+}
+
 /** Every leg of the region, curated parts applied, valid both ways. */
 export function buildLegs(region: RegionConfig): TripLeg[] {
+  if (region.travel.source === "curated") {
+    return region.legs
+      .filter((l) => l.primary)
+      .map((l) => primaryLeg(l, l, undefined));
+  }
   const transfers = new Map(
     region.parks
       .filter((p) => p.transfer)
@@ -55,16 +120,7 @@ export function buildLegs(region: RegionConfig): TripLeg[] {
     const alternatives = extra?.alternatives.length
       ? { alternatives: extra.alternatives }
       : {};
-    if (extra?.replacesDrive) {
-      return {
-        from: leg.from,
-        to: leg.to,
-        ...(extra.replacesDrive.km != null && { km: extra.replacesDrive.km }),
-        minutes: extra.replacesDrive.minutes,
-        mode: extra.replacesDrive.mode,
-        ...alternatives,
-      };
-    }
+    if (extra?.primary) return primaryLeg(leg, extra, "curated");
     const ends = [leg.from, leg.to]
       .map((end) => transfers.get(end))
       .filter((t): t is { via: string; minutes: number } => !!t);
