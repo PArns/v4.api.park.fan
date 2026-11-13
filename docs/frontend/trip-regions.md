@@ -1133,7 +1133,7 @@ admin role, writes `editor`.
 | PUT    | `…/tickets/order`         | `{ slugs: [...] }`: every product of the region, in the new order |
 | POST   | `…/tickets/validate`      | check a full product without saving: the form's live check        |
 
-An admin product is the public one plus `slug` (the public `id`), `active`, `sortOrder`,
+An admin product is the public one plus `slug` (the public `id`), `region`, `active`, `sortOrder`,
 `suggestRank` (the order plan first tries a resort's products in, lower first; `null`: never
 suggested), `sources` (`[{ url, title?, accessed?, note? }]`, the research behind it, admin only),
 `createdAt`, `updatedAt` and `updatedBy`. A write body is that shape without `id`, `shopUrl` (taken

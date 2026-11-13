@@ -54,8 +54,11 @@ import type {
 } from "./dto/trip-region-response.dto";
 import type { TripTicketCatalogDto } from "./dto/trip-tickets.dto";
 import { TicketCatalogService } from "./ticket-catalog.service";
-import { seedCatalog, withCatalog } from "./ticket-catalog";
-import { publicTicketCatalog } from "./tickets";
+import {
+  seedCatalog,
+  ticketCatalogResponse,
+  withCatalog,
+} from "./ticket-catalog";
 
 export {
   MAX_CALENDAR_DAYS,
@@ -134,13 +137,9 @@ export class TripRegionService {
 
   /** `GET /v1/trip-regions/:region/tickets` */
   async ticketCatalog(slug: string): Promise<TripTicketCatalogDto> {
-    const region = await this.regionWithTickets(slug);
-    return {
-      region: region.slug,
-      version: region.ticketsVersion ?? seedCatalog(region).version,
-      ...(region.ticketsUpdatedAt && { updatedAt: region.ticketsUpdatedAt }),
-      tickets: publicTicketCatalog(region) as TripTicketCatalogDto["tickets"],
-    };
+    return ticketCatalogResponse(
+      await this.regionWithTickets(slug),
+    ) as TripTicketCatalogDto;
   }
 
   /** The region's today, in its own timezone. */

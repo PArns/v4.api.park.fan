@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import type { RegionConfig } from "./regions";
 import {
   linksOf,
+  publicTicketCatalog,
   seedTickets,
   TICKET_RULE_KEYS,
   type TicketLink,
@@ -89,6 +90,24 @@ export function withCatalog(
     tickets: catalog.products,
     ticketsVersion: catalog.version,
     ...(catalog.updatedAt && { ticketsUpdatedAt: catalog.updatedAt }),
+  };
+}
+
+/**
+ * `GET /v1/trip-regions/:region/tickets`: the active products of the catalog a
+ * region carries (the seed where it carries none), with its version.
+ */
+export function ticketCatalogResponse(region: RegionConfig): {
+  region: string;
+  version: string;
+  updatedAt?: string;
+  tickets: ReturnType<typeof publicTicketCatalog>;
+} {
+  return {
+    region: region.slug,
+    version: catalogVersionOf(region),
+    ...(region.ticketsUpdatedAt && { updatedAt: region.ticketsUpdatedAt }),
+    tickets: publicTicketCatalog(region),
   };
 }
 

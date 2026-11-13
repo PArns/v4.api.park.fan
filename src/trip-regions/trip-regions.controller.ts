@@ -41,6 +41,7 @@ import {
 } from "./dto/trip-region-response.dto";
 import {
   TripPlanTicketDto,
+  TripTicketCatalogDto,
   TripTicketDaysRangeDto,
   TripTicketSuggestionDto,
 } from "./dto/trip-tickets.dto";
@@ -88,6 +89,25 @@ export class TripRegionsController {
   @ApiResponse({ status: 404, description: "Unknown region" })
   describe(@Param("region") region: string): Promise<TripRegionDto> {
     return this.regions.describe(region);
+  }
+
+  @Get(":region/tickets")
+  // Five minutes at the edge and ten stale: an admin edit reaches every reader
+  // within 15 minutes, and the second revalidation after CDN_SETTLE_MS lands
+  // after the edge has let go.
+  @UseInterceptors(new HttpCacheInterceptor(5 * 60))
+  @ApiOperation({
+    summary: "The region's ticket catalog, as the admin keeps it",
+    description:
+      "The active products in order, their rules and purchase links, and the catalog's version. " +
+      "No key, no prices. Cache: five minutes in the browser and at the edge, ten more stale. " +
+      "Clients read the catalog here, not off the region route.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, type: TripTicketCatalogDto })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  tickets(@Param("region") region: string): Promise<TripTicketCatalogDto> {
+    return this.regions.ticketCatalog(region);
   }
 
   @Get(":region/calendar")

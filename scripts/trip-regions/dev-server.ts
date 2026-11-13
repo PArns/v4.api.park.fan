@@ -4,7 +4,7 @@
  * http://localhost:3001 and gets:
  *
  * - `GET /v1/trip-regions/:region`, `/calendar`, `/best-days`, `/plan`,
- *   `/when`, `/school-breaks`
+ *   `/when`, `/school-breaks`, `/tickets`
  * - `POST /v1/parks/:continent/:country/:city/:park/plan/optimize`
  *
  * answered by the same modules the API runs (`trip-region.assembly`,
@@ -30,6 +30,11 @@
  *   `import-seasons.mjs` reads), skipping a row without an end date and one
  *   production already has.
  * - **Cache:** each fetched park answer is kept 15 minutes in memory.
+ * - **Tickets:** the shim has no database, so its ticket catalog is the seed
+ *   (`tickets.ts` with `ticket-seed-links.ts`, `seedCatalog`), put on the region
+ *   explicitly like `TicketCatalogService.withTickets` puts the table's. An
+ *   edit made in production's admin is not seen here; production's
+ *   `/tickets` route serves it.
  * - **Known gaps:** production's `/schedule` carries no `description`, so a
  *   gap-filled CLOSED day past the published hours reads as stated; there is
  *   no `forecastUntil` (it is the warmup's Redis key) and no group name from
@@ -55,6 +60,11 @@ import {
   getCurrentDateInTimezone,
 } from "../../src/common/utils/date.util";
 import { findRegion, type RegionConfig } from "../../src/trip-regions/regions";
+import {
+  seedCatalog,
+  ticketCatalogResponse,
+  withCatalog,
+} from "../../src/trip-regions/ticket-catalog";
 import {
   assembleRegionCalendar,
   describeRegion,
@@ -516,6 +526,7 @@ async function query<T extends object>(dto: new () => T, url: URL): Promise<T> {
   return instance;
 }
 
+/** The region with its ticket catalog: the seed, the shim having no table. */
 function regionOr404(slug: string): RegionConfig {
   const region = findRegion(slug);
   if (!region) {
@@ -524,7 +535,7 @@ function regionOr404(slug: string): RegionConfig {
       JSON.stringify({ statusCode: 404, message: `No trip region "${slug}"` }),
     );
   }
-  return region;
+  return withCatalog(region, seedCatalog(region));
 }
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -536,7 +547,7 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
 /** The routes the shim answers itself; null for everything it passes on. */
 async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
   const trip =
-    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|when|school-breaks))?\/?$/.exec(
+    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|when|school-breaks|tickets))?\/?$/.exec(
       url.pathname,
     );
   if (trip && req.method === "GET") {
@@ -545,6 +556,8 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
     switch (trip[2]) {
       case undefined:
         return describeRegion(region, await regionParks(region));
+      case "tickets":
+        return ticketCatalogResponse(region);
       case "calendar": {
         const q = await query(TripCalendarQueryDto, url);
         const from = q.from ?? today;

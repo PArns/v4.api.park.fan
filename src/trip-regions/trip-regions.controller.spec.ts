@@ -304,6 +304,36 @@ describe("TripRegionsController", () => {
     });
   });
 
+  describe("GET /v1/trip-regions/:region/tickets", () => {
+    it("serves the catalog without a key, versioned, short at the edge", async () => {
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/tickets")
+        .expect(200);
+      expect(res.body.region).toBe("orlando");
+      expect(res.body.version).toMatch(/^[0-9a-f]{12}$/);
+      expect(res.body.tickets.length).toBeGreaterThan(30);
+      const disney = res.body.tickets.find(
+        (t: { id: string }) => t.id === "wdw-date-based",
+      );
+      expect(disney.links).toEqual([
+        expect.objectContaining({ official: true, sponsored: false }),
+      ]);
+      expect(disney.shopUrl).toBe(disney.links[0].url);
+      expect(disney.suggest).toBeUndefined();
+      // Five minutes at the edge, ten stale: an edit shows within 15 minutes.
+      expect(res.headers["cache-control"]).toBe(
+        "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
+      );
+      expect(res.headers["cdn-cache-control"]).toBeUndefined();
+    });
+
+    it("answers an unknown region with 404", async () => {
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/atlantis/tickets")
+        .expect(404);
+    });
+  });
+
   describe("GET /v1/trip-regions/:region/calendar", () => {
     it("needs a data key", async () => {
       const res = await request(app.getHttpServer())
