@@ -533,16 +533,17 @@ export class ApiKeyService {
     for (const secret of ["current", "previous"] as const) {
       this.touchedAt.delete(touchKey(rotated.id, secret));
     }
-    await this.redis.del(
-      cacheKey(rotated.keyHash),
-      touchKey(rotated.id),
-      touchKey(rotated.id, "previous"),
-    );
+    // The refusals first: they are what stops a secret, the rest is upkeep.
     if (before.previousKeyHash && before.previousKeyHash !== before.keyHash) {
       await this.refuse(before.previousKeyHash);
     }
     if (rotated.previousKeyHash) await this.cacheRow(rotated, now);
     else await this.refuse(before.keyHash);
+    await this.redis.del(
+      cacheKey(rotated.keyHash),
+      touchKey(rotated.id),
+      touchKey(rotated.id, "previous"),
+    );
   }
 
   /**
