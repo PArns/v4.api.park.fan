@@ -722,13 +722,7 @@ export class ApiKeyService {
       }
       entry = found.entry;
       await this.redis
-        .set(
-          cacheKey(hash),
-          JSON.stringify(entry),
-          "PX",
-          found.ttlMs,
-          "NX",
-        )
+        .set(cacheKey(hash), JSON.stringify(entry), "PX", found.ttlMs, "NX")
         .catch(() => undefined);
     }
     const graceEndsAt = entry.graceEndsAt;

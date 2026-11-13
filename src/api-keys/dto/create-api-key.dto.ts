@@ -151,6 +151,7 @@ export class UpdateApiKeyDto {
 export class RotateApiKeyDto {
   @ApiProperty({
     description: `How many hours the old secret keeps working beside the new one, so its holder can switch without an outage; 0 refuses it at once. At most ${MAX_GRACE_HOURS} (30 days).`,
+    type: "integer",
     minimum: 0,
     maximum: MAX_GRACE_HOURS,
     example: 24,
