@@ -50,6 +50,20 @@ The MCP server, the OAuth endpoints and how a client connects: [admin MCP](mcp.m
 dates ISO strings or null. `redirectHost` is the redirect URI's host, with its port when it has one
 (`localhost:33418` for Claude Code).
 
+## Data API keys (`admin/api-keys`)
+
+Owner only, session only, every write audited (`api-key.*`). What a key opens, the cache and the
+rotation in detail: [data API keys](../frontend/api-keys.md).
+
+| Method | Path                    | Role  | Does                                                                                                                                                                                                                   |
+| ------ | ----------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `api-keys`              | owner | `{ items }`: every key, active first, with `requestsThisHour`, `stats`, `rotatedAt`, `previousExpiresAt` and `previousLastUsedAt`; never a hash                                                                        |
+| POST   | `api-keys`              | owner | `{ name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt? }` → `201 { key, item }`, the `pfk_…` key in this answer and nowhere else; audited `api-key.create`                                    |
+| PATCH  | `api-keys/:id`          | owner | `{ requestsPerHour?, allowedParkIds?, expiresAt? }` → `{ item }`, from the next request on; `404` for a revoked key; audited `api-key.update`                                                                          |
+| DELETE | `api-keys/:id`          | owner | `204`, revokes the key and any secret still in its grace period; audited `api-key.revoke`                                                                                                                              |
+| POST   | `api-keys/:id/rotate`   | owner | `{ graceHours: 0–720 }` → `200 { key, item }`: a new secret, the old one valid until `item.previousExpiresAt` (refused at once with 0); `409` for a revoked or expired key; audited `api-key.rotate` with `graceHours` |
+| DELETE | `api-keys/:id/previous` | owner | `204`, ends the grace period now; `404` when none runs; audited `api-key.previous.revoke`                                                                                                                              |
+
 ## Sync and background jobs
 
 | Method | Path | Role | Does |

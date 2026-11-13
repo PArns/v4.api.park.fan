@@ -176,16 +176,54 @@ key counts as none. `isAnonymousDataRequest` and `CfThrottlerGuard.handleRequest
 
 ## Issuing keys
 
-`/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update` and
-`api-key.revoke`): `GET` lists every key, active first, with `requestsThisHour`;
+`/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update`,
+`api-key.revoke`, `api-key.rotate` and `api-key.previous.revoke`): `GET` lists every key, active
+first, with `requestsThisHour`;
 `POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt? }` returns `{ key, item }` with the key in
 clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds?, expiresAt? }` changes any of them from the next request on
-(an unknown park id is a 400); `DELETE /:id` revokes. The table `api_keys` stores the SHA-256 of the
-key and its first ten characters. `ApiKeyService.lookup` caches a found key in Redis for five
-minutes and an unknown one for one minute, and stores only where nothing is cached (`NX`). A
-revocation writes the refusal over the entry and a `PATCH` writes the new state, so a lookup that
-read the old row a moment earlier cannot put it back. `last_used_at` is written at most every ten
-minutes per key, and a process asks Redis about it at most that often.
+(an unknown park id is a 400); `DELETE /:id` revokes; rotation is below. The table `api_keys`
+stores the SHA-256 of the key and its first ten characters. `ApiKeyService.lookup` caches a found
+key in Redis for five minutes and an unknown one for one minute, and stores only where nothing is
+cached (`NX`). A revocation writes the refusal over the entry and a `PATCH` writes the new state, so
+a lookup that read the old row a moment earlier cannot put it back. `last_used_at` is written at
+most every ten minutes per key, and a process asks Redis about it at most that often.
+
+## Rotation
+
+A key whose secret leaked, or whose holder changes hands, gets a new secret without losing what
+the key is: name, usage, allowance, parks, end date and statistics stay, because they hang on the
+row's id, not on the secret. A rotation is an `UPDATE` of the same row, not a new key.
+
+`POST /v1/admin/api-keys/:id/rotate { graceHours }` (0 to 720, whole hours) generates the secret
+exactly as a create does and answers `{ key, item }` in the same shape, the key in clear exactly
+once. The old secret's hash moves to `previous_key_hash` and keeps working until
+`previous_key_expires_at`, so the holder can deploy the new one without an outage; with
+`graceHours: 0` there is no previous secret and the old one is refused from the next request on.
+A rotation during a grace period replaces the secret that grace kept, which stops at once. A
+revoked key, or one past its end date, is a 409: its new secret would open nothing.
+`DELETE /v1/admin/api-keys/:id/previous` ends a running grace period now (404 when none runs).
+
+- **Both secrets are the same key** while the grace runs: one id, one allowance, one set of
+  counters. The old secret reports the end of its grace as its end date when that comes first, so
+  `X-API-Key-Expires` and `/v1/api-keys/verify` tell its holder when it stops. After the grace it
+  is `api-key-invalid`, as an unknown value is.
+- **The cache never outlives the grace.** The old secret's lookup is cached for five minutes at
+  most and never past `previous_key_expires_at` (`PX`, the remaining milliseconds), and the entry
+  carries the grace's end, compared on every read like an end date. A rotation writes the refusal
+  over the old secret's entry when it ends it (no grace, a second rotation, `DELETE …/previous`, a
+  revocation, which refuses both secrets), for the reason a revocation does.
+- **Each secret has its own last use.** `last_used_at` is the current secret's, `previous_last_used_at`
+  the old one's, written with the same ten-minute throttle, and the write names the hash, so a
+  request with the old secret never marks the new one used. A rotation moves `last_used_at` to
+  `previous_last_used_at` and starts the new secret's at null: the admin sees whether anyone has
+  switched. `rotated_at` is the last rotation.
+- **No hash leaves the API.** The item adds `rotatedAt`, `previousExpiresAt` (null without a
+  previous secret, in the past once its grace has run out) and `previousLastUsedAt`; the audit rows
+  hold the prefixes, `graceHours` and the grace's end, never a secret.
+
+The four columns are nullable and were added by `synchronize`
+([the entities are the schema](../rules/the-entities-are-the-schema.md)); a key that was never
+rotated has them null and behaves as before.
 
 ## Adding a forecast
 

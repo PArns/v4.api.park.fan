@@ -193,7 +193,11 @@ action rule covers every `plan_` tool but `plan_vacation`, which only reads. It 
 characters to the prompt and 3,700 to the tool list (the three tools, `plan_trip`'s `days`,
 `open_page`'s hub), roughly 1,300 tokens of the cached prefix. Version 49 routes "when should we go" for
 known parks and a length, without dates, to `find_trip_dates`, and has Parky ask for the visitor's
-school-holiday region only when they travel in school breaks.
+school-holiday region only when they travel in school breaks. Version 51 (PAR-1298) adds tickets:
+the tickets a visitor already holds go into `plan_vacation`'s `tickets` (an unknown hopper as
+`.h?`), without them the plan's `ticketsToBuy` is what to buy and never a price, and the prompt
+states the few ticket facts Parky may give without a tool (a Disney ticket's window, the UK 14-Day
+Magic Ticket, Epic Universe on Universal's 1- and 2-day tickets and in no pass).
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -496,8 +500,10 @@ name contains the words ("Epic"), several as candidates, else the site's park se
 
 - **`plan_vacation`** (status `forecast`): `from`, `to`, optional `parks` (`{ park, visits 1–3 }`,
   default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `rest`, `ticket`
-  (`base` or `hopper`: Disney's Park Hopper or Universal's park-to-park), `hop` (only with
-  `ticket: "hopper"`), `arrival`, `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
+  (`base` or `hopper`: Disney's Park Hopper or Universal's park-to-park, every resort), `hopper`
+  (the resorts planned with it), `tickets` (the tickets they hold, in the route's compact form;
+  the description lists the common product ids), `hop` (only with a hopper), `arrival`,
+  `departure`, `locks` (`{ park | "rest", date }`). It runs `TripPlanService.normalize`
   and `plan` (an hour in Redis by the normalized query), a refusal of either (over 21 days, 16
   visits, more visits than days without `hop`, a lock outside the trip) as the route's own
   sentence, then reads the same region calendar for the hours and events (a cache hit). Per day:
@@ -509,15 +515,20 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `perks`) and `watch` (the warnings; `last_year` reads "estimate from last year, not a
   forecast"), and `evening` where the park closes early: one phrase with the hop park or venue,
   its time on the park's clock, the travel, a show with `(projected)` where its time is last same
-  weekday's, and the alternatives by name ([evenings](trip-regions.md#evenings)). Then `totals`
+  weekday's, and the alternatives by name ([evenings](trip-regions.md#evenings)), and `ticket`
+  on an owned ticket's day ("t1 day 2 of 14"). Then `tickets` (each owned ticket by name: its
+  valid dates, the days used, why some go unused, a `.h?` ticket's hopper verdict as "worth
+  adding: an evening at EPCOT on …" or "not needed", what to watch), `resortsMixed`, and
+  `ticketsToBuy` (plan first's suggestion per resort by name: days, valid dates, extra days, the
+  hopper verdict, the UK alternatives marked "UK/Ireland only", each shop once). Then `totals`
   with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season
 said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
 every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
-  date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 9,000
-  characters (`assistant-trip.spec.ts`).
-- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…]#planner`,
+  date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
+  characters, its tickets to buy included (`assistant-trip.spec.ts`); a result is cut at 12,000.
+- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
 - **`find_trip_dates`** (status `forecast`): when to go
@@ -525,7 +536,8 @@ every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`,
   `days` (3–21, default 10), `parks` (`{ park, visits? }`; a park without `visits` may get a second
   visit by `split=auto`, as on the hub), `within` (a code from `/school-breaks`: `DE-NW`, `NL-GR`,
   `GB-ENG`, `BE-NL`, `FR-ZC`, `AT-WI` …), the plan options (`hotel`, `area`, `blocks`, `fireworks`,
-  `split`, `rest`, `hop`, `arrival`, `departure`) and `limit`. It runs `TripWhenService.when` (six
+  `split`, `rest`, `hop`, `arrival`, `departure`), `tickets` (without dates), `suggest` and
+  `limit`. It runs `TripWhenService.when` (six
   hours in Redis), a refusal as the route's own sentence (an unknown `within` names the codes its
   country has). Per window: `from`/`to` with their weekdays, `headlinerWait`, `rangeAverageWait`,
   `percentBelowAverage`, `basis` in words and `lastYear: true` where the figures are last year's,
@@ -535,7 +547,8 @@ every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`,
   reaches), `noWindow` when none fits, and the year strip as `months` (`headlinerWait`,
   `lastYear`, `climate` as "high/low °C, mm", the count of US school-break days, `partyNights`,
   `hurricaneSeason`), with `monthsMean` saying what the numbers are. A window the season ranked
-  lower carries `rankedLowerBy` ("hurricane season, 6.4 min a park day"); `extreme_heat` and
+  lower carries `rankedLowerBy` ("hurricane season, 6.4 min a park day"); with tickets a window
+  lists them in short (`tickets`), with `suggest` the tickets to buy (`ticketsToBuy`); `extreme_heat` and
   `hurricane_peak` read as short phrases in `watch`. Four eval cases (German and
   English, with and without a school-holiday region) cover the routing.
 - **`get_park_events`** (status `forecast`): one `park`, or all Orlando parks without it, `from`

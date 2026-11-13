@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { TripTicketProductDto } from "./trip-tickets.dto";
 
 /**
  * The three trip-region answers, for Swagger. The contract and every rule
@@ -127,6 +128,13 @@ export class TripRegionDto {
   })
   venues: TripVenueDto[];
   @ApiProperty({ type: () => TripTravelDto }) travel: TripTravelDto;
+  @ApiProperty({
+    type: () => [TripTicketProductDto],
+    description:
+      "The ticket catalog: what the operators sell, the window, hopping and caps of each " +
+      "(docs/frontend/trip-regions.md#tickets). No prices.",
+  })
+  tickets: TripTicketProductDto[];
 }
 
 export class TripSlotDto {
@@ -253,7 +261,9 @@ export class TripCalendarDto {
 export class TripPlanDto {
   @ApiProperty({
     description:
-      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, warnings",
+      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, hopper, tickets " +
+      "(TripPlanTicketDto[]), mixing ({ used, savedMinutesPerRide? }), ticketSuggestion " +
+      "(TripTicketSuggestionDto[]), warnings",
     type: "object",
     additionalProperties: true,
   })
@@ -261,7 +271,9 @@ export class TripPlanDto {
   @ApiProperty({
     description:
       "One entry per trip day: arrival | park | hop | rest | departure. A park day that " +
-      "ends early carries `evening` (a hop park or a venue, with up to two alternatives).",
+      "ends early carries `evening` (a hop park or a venue, with up to two alternatives). " +
+      "A park or hop day carries `ticket` (an owned ticket's id or a suggestion's) and " +
+      "`ticketDay`, or `ticketAllowance` on an allowance visit.",
     type: "array",
     items: { type: "object" },
   })

@@ -66,6 +66,36 @@ export class ApiKey {
   @Column({ name: "key_hash", type: "text" })
   keyHash: string;
 
+  /**
+   * The hash of the secret a rotation replaced, while its holder moves to the
+   * new one; null without a grace period. A second rotation replaces it.
+   */
+  @Column({ name: "previous_key_hash", type: "text", nullable: true })
+  previousKeyHash: string | null;
+
+  /** When the replaced secret stops working; set together with `previousKeyHash`. */
+  @Column({
+    name: "previous_key_expires_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  previousKeyExpiresAt: Date | null;
+
+  /**
+   * When the replaced secret was last presented, so the admin sees whether
+   * anyone still sends it; `last_used_at` is the current secret's.
+   */
+  @Column({
+    name: "previous_last_used_at",
+    type: "timestamptz",
+    nullable: true,
+  })
+  previousLastUsedAt: Date | null;
+
+  /** When the key last got a new secret; null if it never did. */
+  @Column({ name: "rotated_at", type: "timestamptz", nullable: true })
+  rotatedAt: Date | null;
+
   /** The admin account that issued it; null if that account is gone. */
   @Column({ name: "created_by", type: "uuid", nullable: true })
   createdBy: string | null;
@@ -73,6 +103,7 @@ export class ApiKey {
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 
+  /** When the current secret was last presented; a rotation starts it over. */
   @Column({ name: "last_used_at", type: "timestamptz", nullable: true })
   lastUsedAt: Date | null;
 

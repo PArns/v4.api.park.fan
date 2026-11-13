@@ -29,7 +29,11 @@ import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import { isCanonicalUuid } from "../common/utils/uuid-param.util";
 import { stripInvisibleCharacters } from "../common/utils/visible-text.util";
 import { ApiKeyService } from "./api-key.service";
-import { CreateApiKeyDto, UpdateApiKeyDto } from "./dto/create-api-key.dto";
+import {
+  CreateApiKeyDto,
+  RotateApiKeyDto,
+  UpdateApiKeyDto,
+} from "./dto/create-api-key.dto";
 
 /** An ISO 8601 date from a body, as a Date; null and absent pass through. */
 function toDate(value: string | null | undefined): Date | null | undefined {
@@ -38,8 +42,8 @@ function toDate(value: string | null | undefined): Date | null | undefined {
 
 /**
  * The data keys that unlock the forecast routes, for the admin's "API keys"
- * page. Owner only: a key decides who may use park.fan's forecasts, which is a
- * licensing decision, not an editorial one.
+ * page. Owner only, rotation included: a key decides who may use park.fan's
+ * forecasts, which is a licensing decision, not an editorial one.
  */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
@@ -57,7 +61,7 @@ export class AdminApiKeysController {
   @ApiOperation({
     summary: "Every data API key, active ones first",
     description:
-      "Revoked keys stay in the list with `revokedAt` set. Each key carries `requestsThisHour` and `stats`: its requests per UTC day for the last 30 days (with `limited`, those its hourly allowance refused) and per UTC month for the last 12.",
+      "Revoked keys stay in the list with `revokedAt` set. Each key carries `requestsThisHour` and `stats`: its requests per UTC day for the last 30 days (with `limited`, those its hourly allowance refused) and per UTC month for the last 12. `rotatedAt` is the last rotation; `previousExpiresAt` is when the secret it replaced stops working (null without one, past once its grace has run out), `previousLastUsedAt` when that secret was last presented. `lastUsedAt` is the current secret's. No hash is ever in the answer.",
   })
   async list() {
     return { items: await this.apiKeys.list() };
@@ -138,6 +142,78 @@ export class AdminApiKeysController {
       after: { ...changed.after },
     });
     return { item: changed.item };
+  }
+
+  @Post(":id/rotate")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Give a data API key a new secret",
+    description:
+      "The new key is in this response and nowhere else, as on create; name, usage, allowance, parks, end date and statistics stay. With `graceHours` above 0 the old secret keeps working that long beside the new one (`item.previousExpiresAt`); with 0 it is refused from the next request on. A rotation during a grace period replaces the secret that grace kept, which stops at once.",
+  })
+  @ApiResponse({ status: 200, description: "`{ key, item }`" })
+  @ApiResponse({ status: 404, description: "No such key" })
+  @ApiResponse({
+    status: 409,
+    description: "The key is revoked or past its end date",
+  })
+  async rotate(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+    @Body() body: RotateApiKeyDto,
+  ) {
+    if (!isCanonicalUuid(id))
+      throw new BadRequestException("id must be a uuid");
+    const rotated = await this.apiKeys.rotate(id, body.graceHours);
+    if (!rotated) throw new NotFoundException("No such key");
+    await this.audit.record({
+      actor: admin,
+      action: "api-key.rotate",
+      entityType: "api_key",
+      entityId: rotated.item.id,
+      entityLabel: rotated.item.name,
+      before: { prefix: rotated.previousPrefix },
+      after: {
+        prefix: rotated.item.prefix,
+        graceHours: body.graceHours,
+        previousExpiresAt: rotated.item.previousExpiresAt,
+      },
+    });
+    return { key: rotated.key, item: rotated.item };
+  }
+
+  @Delete(":id/previous")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "End a rotation's grace period now",
+    description:
+      "The secret the last rotation replaced is refused from the next request on; the current one is untouched.",
+  })
+  @ApiResponse({
+    status: 404,
+    description: "No such active key, or no grace period running",
+  })
+  async revokePrevious(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+  ): Promise<void> {
+    if (!isCanonicalUuid(id))
+      throw new BadRequestException("id must be a uuid");
+    const ended = await this.apiKeys.revokePrevious(id);
+    if (!ended) {
+      throw new NotFoundException(
+        "No such active key, or no grace period running",
+      );
+    }
+    await this.audit.record({
+      actor: admin,
+      action: "api-key.previous.revoke",
+      entityType: "api_key",
+      entityId: ended.item.id,
+      entityLabel: ended.item.name,
+      before: { previousExpiresAt: ended.previousExpiresAt },
+      after: { previousExpiresAt: null },
+    });
   }
 
   @Delete(":id")

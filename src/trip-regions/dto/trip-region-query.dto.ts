@@ -13,6 +13,13 @@ import { HOTEL_KINDS } from "../regions";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_MESSAGE = "must be a YYYY-MM-DD date";
+/** One owned ticket: `product[.days][.h][@YYYY-MM-DD]`. */
+const TICKET_ITEM =
+  "[a-z0-9-]+(\\.[0-9]{1,2})?(\\.h\\??)?(@\\d{4}-\\d{2}-\\d{2})?";
+/** `tickets=`: one to six of them, comma-separated. */
+export const TICKETS_PATTERN = new RegExp(
+  `^${TICKET_ITEM}(,${TICKET_ITEM}){0,5}$`,
+);
 
 /** `GET /v1/trip-regions/:region/calendar` */
 export class TripCalendarQueryDto {
@@ -147,12 +154,42 @@ export class TripPlanQueryDto {
   rest?: string;
 
   @ApiPropertyOptional({
+    description:
+      "The tickets the visitor already has, comma-separated, at most 6: " +
+      "`<product>[.<days>][.h|.h?][@<YYYY-MM-DD start>]`, the product an id of the region's " +
+      "`tickets`; `.h?`: the hopper is not known. " +
+      "The parks none of them covers are planned plan first, with a suggested ticket.",
+    example: "wdw-uk-14-day-magic@2027-02-01,uor-date-based.3.h",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  @Matches(TICKETS_PATTERN, {
+    message:
+      "tickets must be product[.days][.h|.h?][@YYYY-MM-DD], comma-separated, at most 6",
+  })
+  tickets?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Plan first: the resorts (group keys) planned with the hopper option. `ticket=hopper` means every resort.",
+    example: "walt-disney-world,universal-orlando",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @Matches(/^[a-z0-9-]+(,[a-z0-9-]+){0,7}$/, {
+    message: "hopper must be resort keys, comma-separated",
+  })
+  hopper?: string;
+
+  @ApiPropertyOptional({
     enum: ["base", "hopper"],
     default: "base",
     description:
-      "The visitor's ticket. `hopper`: Disney's Park Hopper or Universal's park-to-park " +
-      "(Universal Studios and Islands of Adventure, never Epic Universe); it allows `hop=1` " +
-      "and a second park in the evening.",
+      "Plan first: the ticket for the parks no owned ticket covers. `hopper`: Disney's Park " +
+      "Hopper or Universal's park-to-park (Universal Studios and Islands of Adventure, never " +
+      "Epic Universe); it allows `hop=1` and a second park in the evening.",
   })
   @IsOptional()
   @IsIn(["base", "hopper"])
@@ -162,8 +199,9 @@ export class TripPlanQueryDto {
     enum: ["0", "1"],
     default: "0",
     description:
-      "Allow two parks of one resort on a day when the trip is shorter than its parks. " +
-      "Only with `ticket=hopper`; otherwise ignored with the warning `hop_needs_hopper`.",
+      "Allow two parks of one resort on a day when the trip or a ticket has fewer days than " +
+      "visits. The day's ticket must hop between them (`ticket=hopper`, or an owned ticket with " +
+      "hopping); otherwise ignored with the warning `hop_needs_hopper`.",
   })
   @IsOptional()
   @IsIn(["0", "1", "true", "false"])

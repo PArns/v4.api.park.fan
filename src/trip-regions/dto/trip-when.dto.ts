@@ -82,6 +82,17 @@ export class TripWhenQueryDto extends OmitType(TripPlanQueryDto, [
   gap?: number;
 
   @ApiPropertyOptional({
+    enum: ["0", "1"],
+    default: "0",
+    description:
+      "Plan first: give each window a suggested ticket per resort (`ticketSuggestion`). " +
+      "Off by default to keep the search fast.",
+  })
+  @IsOptional()
+  @IsIn(["0", "1", "true", "false"])
+  suggest?: string;
+
+  @ApiPropertyOptional({
     enum: ["avoid", "allow", "prefer"],
     deprecated: true,
     description:
@@ -134,7 +145,7 @@ export class TripWhenDto {
   meta: Record<string, unknown>;
   @ApiProperty({
     description:
-      "The best windows: from, to, headlinerWait, rangeAverageWait, basis, reasons, warnings, seasons, closesEarlyDays, plan",
+      "The best windows: from, to, headlinerWait, rangeAverageWait, basis, reasons, warnings, seasons, closesEarlyDays, plan, tickets, ticketSuggestion",
     type: "array",
     items: { type: "object" },
   })

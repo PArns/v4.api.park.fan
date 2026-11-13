@@ -39,6 +39,11 @@ import {
   TripPlanDto,
   TripRegionDto,
 } from "./dto/trip-region-response.dto";
+import {
+  TripPlanTicketDto,
+  TripTicketDaysRangeDto,
+  TripTicketSuggestionDto,
+} from "./dto/trip-tickets.dto";
 
 /**
  * The policy a keyed answer asks for, as `/best-days` does: an hour, a day of
@@ -55,7 +60,12 @@ const KEYED_CACHE_CONTROL =
  * need a data key. Contract: docs/frontend/trip-regions.md.
  */
 @ApiTags("trip-regions")
-@ApiExtraModels(TripParkDayDto)
+@ApiExtraModels(
+  TripParkDayDto,
+  TripTicketDaysRangeDto,
+  TripPlanTicketDto,
+  TripTicketSuggestionDto,
+)
 @Controller("trip-regions")
 export class TripRegionsController {
   constructor(

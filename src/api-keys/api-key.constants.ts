@@ -37,6 +37,12 @@ export const API_KEY_VISIBLE_CHARS = API_KEY_PREFIX.length + 6;
  */
 export const DEFAULT_REQUESTS_PER_HOUR = 1000;
 
+/**
+ * The longest a rotation may keep the replaced secret working beside the new
+ * one: 30 days, enough for a holder who deploys once a month.
+ */
+export const MAX_GRACE_HOURS = 720;
+
 /** The response headers that report a key's hourly allowance. */
 export const API_KEY_LIMIT_HEADERS = {
   limit: "X-API-Key-Hourly-Limit",

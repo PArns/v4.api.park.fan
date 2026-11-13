@@ -94,6 +94,8 @@ function planQueryOf(
     hop: query.hop,
     // `hop` only counts with a hopper ticket, so the ticket has to travel with it.
     ticket: query.ticket,
+    hopper: query.hopper,
+    tickets: query.tickets,
   };
 }
 
@@ -116,11 +118,14 @@ export function normalizeWhenQuery(
       `The search range is shorter than a ${days}-day trip`,
     );
   }
+  // Owned tickets are read against the whole range, and without dates: each
+  // window searches their starts.
   const plan = normalizePlanQuery(
     region,
     known,
     planQueryOf(query, from, addIsoDays(from, days - 1)),
     today,
+    { from, to, starts: false },
   );
   return {
     from,
@@ -129,6 +134,7 @@ export function normalizeWhenQuery(
     limit: query.limit ?? WHEN_DEFAULT_LIMIT,
     gap: query.gap ?? WHEN_DEFAULT_GAP,
     plan,
+    suggest: query.suggest === "1" || query.suggest === "true",
     ...(within && { within }),
   };
 }
@@ -143,5 +149,6 @@ export function whenCacheQuery(q: WhenQuery): string {
     q.gap,
     q.within?.code ?? "-",
     planCacheQuery(q.plan),
+    ...(q.suggest ? ["suggest"] : []),
   ].join("|");
 }

@@ -27,6 +27,15 @@ import type {
 } from "../../trip-regions/trip-evening";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
 import { ASSISTANT_LOCALES } from "../system-prompt";
+import { TICKETS_PATTERN } from "../../trip-regions/dto/trip-region-query.dto";
+import {
+  canonicalTickets,
+  productOf,
+  type HopperVerdict,
+  type TicketSummary,
+  type TicketSuggestion,
+} from "../../trip-regions/trip-tickets";
+import type { WhenTicket } from "../../trip-regions/trip-when";
 import type {
   TripWhen,
   WhenReason,
@@ -147,6 +156,8 @@ const WARNINGS: Record<PlanWarning, string> = {
   extreme_heat: HEAT_PHRASE,
   hurricane_season: HURRICANE_PHRASE,
   hurricane_peak: HURRICANE_PEAK_PHRASE,
+  outside_ticket_window:
+    "outside the ticket's valid dates: no day inside them fitted",
 };
 
 /** A hotel perk's name on a plan day; the prompt says what each one is. */
@@ -161,6 +172,8 @@ const UNPLACED: Record<string, string> = {
   no_open_day:
     "closed on every day of the trip, or open on fewer days than visits",
   no_day_left: "no day left for it",
+  no_ticket_day:
+    "its ticket has no day left for it (days or per-park limit used up)",
 };
 
 const IGNORED_LOCKS: Record<string, string> = {
@@ -173,6 +186,22 @@ const IGNORED_LOCKS: Record<string, string> = {
 const RELAXED: Record<string, string> = {
   blocks_relaxed: "the resorts could not each keep their days together",
   streak_relaxed: "too few days to rest after every four park days",
+  ticket_window_relaxed:
+    "a visit lies outside its ticket's valid dates: no day inside them fitted",
+};
+
+/** Why an owned ticket's days go unused, in words. */
+const UNUSED: Record<string, string> = {
+  parks_fewer_than_days: "the chosen parks need fewer days",
+  rest_days_kept: "the rest days the trip keeps",
+  window_outside_trip: "part of its valid dates lies outside the trip",
+  no_open_day: "its parks are closed on the days left",
+};
+
+const TICKET_WARNINGS: Record<string, string> = {
+  blockouts_unchecked: "blockout dates not checked: check the pass's calendar",
+  park_reservation_needed: "passholders reserve their first park each day",
+  covers_no_planned_park: "covers none of the planned parks",
 };
 
 /** The before-opening and evening slots, as get_park_events names them. */
@@ -276,6 +305,8 @@ const HUB_PARAMS = [
   "arrival",
   "departure",
   "lock",
+  "tickets",
+  "hopper",
 ] as const;
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
@@ -294,6 +325,8 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   arrival: /^(free|park)$/,
   departure: /^(free|park)$/,
   lock: /^[a-z0-9-]+@\d{4}-\d{2}-\d{2}(,[a-z0-9-]+@\d{4}-\d{2}-\d{2})*$/,
+  tickets: TICKETS_PATTERN,
+  hopper: /^[a-z0-9-]+(,[a-z0-9-]+)*$/,
 };
 
 /** The hub's path; "orlando" reads the same in every language. */
@@ -320,14 +353,25 @@ function hubQuery(q: NormalizedPlanQuery): string {
     ...(q.locks.length > 0 && {
       lock: q.locks.map((l) => `${l.target}@${l.date}`).join(","),
     }),
+    ...(q.tickets.length > 0 && { tickets: canonicalTickets(q.tickets) }),
+    ...(q.ticket !== "hopper" &&
+      q.hopperResorts.length > 0 && { hopper: q.hopperResorts.join(",") }),
   };
   const params = new URLSearchParams();
   for (const name of HUB_PARAMS) {
     const value = values[name];
     if (value) params.set(name, value);
   }
-  // `:` and `,` stay readable; URLSearchParams would write %3A and %2C.
-  return params.toString().replace(/%3A/g, ":").replace(/%2C/g, ",");
+  return readableQuery(params);
+}
+
+/** `:`, `,` and `@` stay readable; URLSearchParams would write %3A, %2C and %40. */
+function readableQuery(params: URLSearchParams): string {
+  return params
+    .toString()
+    .replace(/%3A/g, ":")
+    .replace(/%2C/g, ",")
+    .replace(/%40/g, "@");
 }
 
 /** The hub with a plan in its query, where the planner reads it, opened at the planner. */
@@ -369,7 +413,7 @@ export function hubPath(url: string): string | null {
     if (!pattern || !pattern.test(value) || params.has(name)) return null;
     params.set(name, value);
   }
-  const query = params.toString().replace(/%3A/g, ":").replace(/%2C/g, ",");
+  const query = readableQuery(params);
   return query ? `${HUB_PATH}?${query}#planner` : HUB_PATH;
 }
 
@@ -516,6 +560,11 @@ export function vacationItinerary(input: {
     }),
   );
   const planned = plan.days as unknown as PlanDayWithTravel[];
+  const owned = (plan.meta.tickets as TicketSummary[] | undefined) ?? [];
+  const suggested =
+    (plan.meta.ticketSuggestion as TicketSuggestion[] | undefined) ?? [];
+  const mixing = plan.meta.mixing as
+    { used: boolean; savedMinutesPerRide?: number } | undefined;
   const days = planned.map((day) => {
     const calendarDay = byDate.get(day.date);
     const hop = day.kind === "hop";
@@ -556,6 +605,7 @@ export function vacationItinerary(input: {
       ...(day.evening && {
         evening: eveningPhrase(day.evening, names, region),
       }),
+      ...(ownedTicket(day, owned) && { ticket: ownedTicket(day, owned) }),
     };
   });
   const area = region.hotelAreas.find((a) => a.key === query.area);
@@ -598,6 +648,27 @@ export function vacationItinerary(input: {
     ...(plan.meta.exact === false && {
       searchCutShort: "a good plan, not proven the best",
     }),
+    ...(owned.length > 0 && {
+      tickets: owned.map((t) => ownedTicketSummary(t, region, names)),
+    }),
+    ...(mixing && {
+      resortsMixed: mixing.used
+        ? `yes${mixing.savedMinutesPerRide ? `, saving about ${mixing.savedMinutesPerRide} min a ride` : ""}`
+        : "no, each resort's days stay together",
+    }),
+    ...(suggested.length > 0 && {
+      ticketsToBuy: suggested.map((s, i) =>
+        suggestionSummary(
+          s,
+          region,
+          names,
+          // Each shop once: a resort's second ticket shares its first's.
+          suggested.findIndex((x) => x.shopUrl === s.shopUrl) === i,
+        ),
+      ),
+      ticketsToBuyMeans:
+        "what this plan needs where they hold no ticket; no prices",
+    }),
     ...((plan.meta.warnings as string[] | undefined)?.includes(
       "hop_needs_hopper",
     ) && {
@@ -613,6 +684,99 @@ export function vacationItinerary(input: {
       })),
     ),
   };
+}
+
+/** An owned ticket's part of a plan day: "t1 day 2 of 14", or its allowance. */
+function ownedTicket(
+  day: PlannedDay,
+  owned: readonly TicketSummary[],
+): string | undefined {
+  const t = owned.find((o) => o.id === day.ticket);
+  if (!t) return undefined;
+  if (day.ticketAllowance) return `${t.id}, water-park allowance`;
+  const of = t.windowDays ?? t.days;
+  return `${t.id} day ${day.ticketDay}${of ? ` of ${of}` : ""}`;
+}
+
+/** What the hopper adds, in one phrase. */
+export function hopperPhrase(
+  v: HopperVerdict,
+  names: ReadonlyMap<string, string>,
+): string {
+  if (!v.recommended) return "not needed";
+  const parts = [
+    ...v.eveningHopList.map(
+      (h) =>
+        `an evening at ${names.get(h.parks[1]) ?? h.parks[1]} on ${h.date} (${weekdayOf(h.date)})`,
+    ),
+    ...(v.fitsOnlyWithHopper.length > 0
+      ? [
+          `fits ${[...new Set(v.fitsOnlyWithHopper)].map((p) => names.get(p) ?? p).join(", ")}`,
+        ]
+      : []),
+    ...(v.savedMinutesPerRide >= 3
+      ? [`saves about ${v.savedMinutesPerRide} min a ride`]
+      : []),
+  ];
+  return `worth adding: ${parts.join("; ")}`;
+}
+
+function ownedTicketSummary(
+  t: TicketSummary,
+  region: RegionConfig,
+  names: ReadonlyMap<string, string>,
+) {
+  const product = productOf(region, t.product);
+  return {
+    id: t.id,
+    ticket: product?.name ?? t.product,
+    ...(t.start && t.end && { valid: `${t.start}..${t.end}` }),
+    ...(t.startChosen && { startPickedByPlan: true }),
+    used: t.windowDays
+      ? `${t.usedDays} park days in its ${t.windowDays}-day window`
+      : t.days
+        ? `${t.usedDays} of ${t.days} days`
+        : `${t.usedDays} days (a pass)`,
+    ...(t.unusedDays && {
+      unused: `${t.unusedDays}: ${UNUSED[t.unusedReason ?? ""] ?? t.unusedReason}`,
+    }),
+    ...(t.hopper === "unknown" && {
+      hopper: `not known, planned without; ${t.hopperVerdict ? hopperPhrase(t.hopperVerdict, names) : ""}`,
+    }),
+    ...(t.warnings.length > 0 && {
+      watch: t.warnings.map((w) => TICKET_WARNINGS[w] ?? w),
+    }),
+  };
+}
+
+function suggestionSummary(
+  s: TicketSuggestion,
+  region: RegionConfig,
+  names: ReadonlyMap<string, string>,
+  withShop: boolean,
+) {
+  const product = productOf(region, s.product);
+  return {
+    ticket: product?.name ?? s.product,
+    days: s.days,
+    valid: `${s.start}..${s.end}`,
+    ...(s.extraDays && {
+      extraDays: `${s.extraDays}, so its dates reach the last park day`,
+    }),
+    ...(s.hopper && { hopper: hopperPhrase(s.hopper, names) }),
+    ...(s.alternatives?.length && {
+      alternatives: s.alternatives.map(
+        (a) =>
+          `${productOf(region, a.product)?.name ?? a.product}${a.markets.includes("us") ? "" : " (UK/Ireland only)"}`,
+      ),
+    }),
+    ...(withShop && { shop: s.shopUrl }),
+  };
+}
+
+/** An owned ticket in a found window, in a phrase. */
+function whenTicketPhrase(t: WhenTicket): string {
+  return `${t.id}: ${t.start ? `${t.start}..${t.end}, ` : ""}${t.usedDays} days used${t.unusedDays ? `, ${t.unusedDays} unused` : ""}`;
 }
 
 /** A curated season as get_park_events gives it. */
@@ -787,6 +951,8 @@ const WHEN_WARNINGS: Record<WhenWarning, string> = {
   hours_not_published: "opening hours not published yet",
   estimate_last_year: "figures from last year, not a forecast",
   water_park_closed: "a chosen water park is closed for its season",
+  ticket_window_relaxed:
+    "a visit lies outside its ticket's valid dates: no day inside them fitted",
 };
 
 const WHEN_BASIS: Record<string, string> = {
@@ -861,6 +1027,13 @@ export function tripDatesSummary(input: {
               `hurricane season, ${w.penalties.hurricane} min a park day`,
             w.penalties.heat && `heat, ${w.penalties.heat} min a park day`,
           ].filter(Boolean),
+        }),
+        ...(w.tickets && { tickets: w.tickets.map(whenTicketPhrase) }),
+        ...(w.ticketSuggestion && {
+          ticketsToBuy: w.ticketSuggestion.map(
+            (s) =>
+              `${productOf({ slug: result.meta.region }, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
+          ),
         }),
         hubUrl: hubUrl({ ...plan, from: w.from, to: w.to }),
       };

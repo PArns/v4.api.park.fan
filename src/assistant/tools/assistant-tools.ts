@@ -107,7 +107,10 @@ import {
   TripRegionService,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
-import type { TripPlanQueryDto } from "../../trip-regions/dto/trip-region-query.dto";
+import {
+  TICKETS_PATTERN,
+  type TripPlanQueryDto,
+} from "../../trip-regions/dto/trip-region-query.dto";
 import {
   HOTEL_KINDS,
   hotelPoint,
@@ -1745,6 +1748,26 @@ const ORLANDO_AREAS = ORLANDO.hotelAreas.map((area) => area.key) as [
   ...string[],
 ];
 
+/** The resorts plan first's hopper is given per resort (`hopper=`). */
+const ORLANDO_RESORTS = ORLANDO.groups
+  .filter((g) => g.kind === "resort")
+  .map((g) => g.key) as [string, ...string[]];
+
+/**
+ * How Parky writes the tickets a visitor holds: the compact form of `tickets=`
+ * (docs/frontend/trip-regions.md#tickets), with the ids a visitor names most.
+ */
+const TICKETS_DESCRIPTION =
+  "Tickets they already have, comma-separated: product[.days][.h|.h?][@first day]. .h: with " +
+  "Park Hopper or park-to-park; .h?: they don't know (planned without, the result says what " +
+  "it would add). Products: wdw-date-based.1-10, wdw-date-based-plus.2-10 (water parks), " +
+  "wdw-uk-14-day-magic, wdw-uk-7-day-magic, wdw-4-park-magic, wdw-annual-pass, " +
+  "uor-date-based.1-5, uor-date-based-volcano-bay.3-5, uor-1-day-plus-epic, uor-epic-1-day, " +
+  "uor-uk-all-parks, uor-uk-three-park-adventure, uor-annual-pass, seaworld-1-day, " +
+  "seaworld-two-park, seaworld-three-park-3-day, seaworld-uk-3-visit, discovery-cove, " +
+  "legoland-1-day, legoland-2-day; the rest in the Orlando hub's ticket list. Without a " +
+  "first day the plan picks it";
+
 /** The days `get_park_events` reads when given no end: a month. */
 const DEFAULT_EVENT_DAYS = 31;
 
@@ -2897,7 +2920,9 @@ export const ASSISTANT_TOOLS = [
       "basis, hours, perks, events, travel and why, and evening where the park closes early " +
       "(a second park with a hopper ticket, else a free venue); totals; hubUrl (the Orlando hub with this " +
       "plan) and reserve (plan_trip's days). Up to 21 days and 16 visits; parks default to the " +
-      "7 big Disney and Universal parks.",
+      "7 big Disney and Universal parks. With tickets they already have, each ticket's valid dates " +
+      "and days bind the plan (tickets); without, ticketsToBuy says which ticket the plan needs " +
+      "per resort and whether a hopper is worth adding.",
     input: z.object({
       from: isoDay.describe("Arrival day"),
       to: isoDay.describe("Departure day"),
@@ -2932,13 +2957,22 @@ export const ASSISTANT_TOOLS = [
         .enum(["base", "hopper"])
         .optional()
         .describe(
-          "hopper: Disney Park Hopper or Universal park-to-park (Universal Studios and Islands of Adventure, not Epic); base (default): one park a day",
+          "Without tickets: hopper plans every resort with Disney Park Hopper or Universal park-to-park (Universal Studios and Islands of Adventure, not Epic); base (default): one park a day",
         ),
+      hopper: z
+        .array(z.enum(ORLANDO_RESORTS))
+        .optional()
+        .describe("Without tickets: the resorts planned with the hopper"),
+      tickets: z
+        .string()
+        .regex(TICKETS_PATTERN)
+        .optional()
+        .describe(TICKETS_DESCRIPTION),
       hop: z
         .boolean()
         .optional()
         .describe(
-          "Two parks of a resort a day, for more visits than days; needs ticket hopper",
+          "Two parks of a resort a day, for more visits than days; needs a hopper",
         ),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
@@ -3004,6 +3038,8 @@ export const ASSISTANT_TOOLS = [
         fireworks: input.fireworks,
         rest: input.rest,
         ticket: input.ticket,
+        hopper: input.hopper?.join(","),
+        tickets: input.tickets,
         hop: flag(input.hop),
         lock: locks.length > 0 ? locks.join(",") : undefined,
       };
@@ -3087,6 +3123,17 @@ export const ASSISTANT_TOOLS = [
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       limit: z.number().int().min(1).max(WHEN_MAX_LIMIT).optional(),
+      tickets: z
+        .string()
+        .regex(TICKETS_PATTERN)
+        .optional()
+        .describe(
+          "Tickets they already have, as for plan_vacation but without @start dates",
+        ),
+      suggest: z
+        .boolean()
+        .optional()
+        .describe("Name the tickets each window's plan needs"),
     }),
     run: async (input, ctx) => {
       const { regions, region, parks } = await orlando(ctx);
@@ -3137,6 +3184,8 @@ export const ASSISTANT_TOOLS = [
         arrival: input.arrival,
         departure: input.departure,
         limit: input.limit,
+        tickets: input.tickets,
+        suggest: flag(input.suggest),
       };
       const result = await tripCall(() =>
         ctx.get(TripWhenService).when(region.slug, query),
