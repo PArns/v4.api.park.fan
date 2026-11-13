@@ -41,6 +41,9 @@ import type {
   TicketValidationDto,
 } from "./dto/ticket-product.dto";
 
+/** The gap between two products' sort orders, as the seed and a reorder leave them. */
+export const SORT_STEP = 10;
+
 /** The frontend's cache tag for a region's ticket catalog. */
 export const tripTicketsTag = (region: string): string =>
   `trip-tickets:${region}`;
@@ -82,17 +85,34 @@ export class AdminTicketService {
     return adminView(await this.find(region.slug, slug));
   }
 
-  /** The checks and the dry run of a full product, nothing saved. */
+  /**
+   * The checks and the dry run, nothing saved. Without `editing` the body is a
+   * new product, whose slug must be free; with it, the body is an edit of that
+   * product, merged onto it as a PATCH is (null clears an optional field), and
+   * its own slug is no conflict.
+   */
   async validate(
     regionSlug: string,
     body: Record<string, unknown>,
+    editing?: string,
   ): Promise<TicketValidationDto> {
     const region = await this.regions.regionWithTickets(regionSlug);
     const others = await this.slugs(region.slug);
-    const existing =
-      typeof body.slug === "string" && others.includes(body.slug);
-    const { problems, valid } = validateTicketProduct(region, body, {
-      creating: !existing,
+    let draft = body;
+    if (editing !== undefined) {
+      const stored = await this.find(region.slug, editing);
+      if (body.slug !== undefined && body.slug !== editing) {
+        return {
+          ok: false,
+          problems: [
+            { path: "slug", message: "is the product's id and cannot change" },
+          ],
+        };
+      }
+      draft = mergeDraft(stored, body);
+    }
+    const { problems, valid } = validateTicketProduct(region, draft, {
+      creating: editing === undefined,
       slugs: others,
     });
     if (!valid) return { ok: false, problems };
@@ -114,8 +134,16 @@ export class AdminTicketService {
     admin: AdminPrincipal,
   ): Promise<AdminTicketProductDto> {
     const region = await this.regions.regionWithTickets(regionSlug);
-    const others = await this.slugs(region.slug);
-    const row = this.checked(region, body, { creating: true, slugs: others });
+    const existing = await this.ordered(region.slug);
+    const row = this.checked(region, body, {
+      creating: true,
+      slugs: existing.map((r) => r.slug),
+    });
+    // Without a sortOrder a new product goes last in its region.
+    if (body.sortOrder == null) {
+      row.sortOrder =
+        Math.max(0, ...existing.map((r) => r.sortOrder)) + SORT_STEP;
+    }
     let saved: TicketProductRecord;
     try {
       saved = await this.rows.save(
@@ -158,10 +186,9 @@ export class AdminTicketService {
         { path: "slug", message: "is the product's id and cannot change" },
       ]);
     }
-    const merged: Record<string, unknown> = { ...draftOf(stored) };
-    for (const [key, value] of Object.entries(body)) {
-      if (value !== undefined) merged[key] = value;
-    }
+    const merged = mergeDraft(stored, body);
+    // A product keeps its place; PUT …/order is what moves it.
+    if (merged.sortOrder == null) merged.sortOrder = stored.sortOrder;
     const row = this.checked(region, merged, {
       creating: false,
       slugs: await this.slugs(region.slug),
@@ -236,7 +263,7 @@ export class AdminTicketService {
         await manager.update(
           TicketProductRecord,
           { region: region.slug, slug },
-          { sortOrder: (i + 1) * 10, updatedBy: actorOf(admin) },
+          { sortOrder: (i + 1) * SORT_STEP, updatedBy: actorOf(admin) },
         );
       }
     });
@@ -298,7 +325,7 @@ export class AdminTicketService {
     );
     if (dryRun.problems.length > 0) throw refused(dryRun.problems);
     return rowOfProduct(region.slug, valid.product, {
-      sortOrder: valid.sortOrder,
+      sortOrder: valid.sortOrder ?? 0,
       active: valid.active,
       sources: valid.sources,
     });
@@ -377,6 +404,23 @@ export function adminView(row: TicketProductRecord): AdminTicketProductDto {
     updatedAt: new Date(row.updatedAt).toISOString(),
     ...(row.updatedBy && { updatedBy: row.updatedBy }),
   } as AdminTicketProductDto;
+}
+
+/**
+ * A PATCH (or an edit's check) merged onto the stored product: a field given
+ * replaces it, `null` clears an optional one (description, notes, blockoutUrl,
+ * reservationUrl, until, suggestRank, windowDays, allowance, onSale, hopSets,
+ * caps, reservedDayParks, sources, pass, blockouts), a field left out stays.
+ */
+export function mergeDraft(
+  row: TicketProductRecord,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...draftOf(row) };
+  for (const [key, value] of Object.entries(body)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 /** A stored row as a write draft: what a PATCH is merged onto. */

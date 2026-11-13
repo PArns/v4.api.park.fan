@@ -311,6 +311,141 @@ describe("AdminTicketService", () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
+  it("checks a new product's slug, and an edit's own slug as no conflict", async () => {
+    const { service, rows } = setup();
+    const taken = {
+      ...draftOf(rows.find((r) => r.slug === "legoland-1-day")!),
+    };
+    // Without ?slug the body is a new product: its slug must be free.
+    const asNew = await service.validate("orlando", taken);
+    expect(asNew.ok).toBe(false);
+    expect(asNew.problems).toEqual([
+      { path: "slug", message: "legoland-1-day exists already in orlando" },
+    ]);
+    // An edit of that product: its own slug is fine, a partial body is merged.
+    expect(
+      await service.validate("orlando", taken, "legoland-1-day"),
+    ).toMatchObject({ ok: true, problems: [] });
+    expect(
+      await service.validate(
+        "orlando",
+        { description: "One day at LEGOLAND" },
+        "legoland-1-day",
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      await service.validate("orlando", { slug: "other" }, "legoland-1-day"),
+    ).toEqual({
+      ok: false,
+      problems: [
+        { path: "slug", message: "is the product's id and cannot change" },
+      ],
+    });
+    await expect(service.validate("orlando", taken, "nope")).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it("clears an optional field a PATCH sends as null", async () => {
+    const { service, rows } = setup();
+    await service.update(
+      "orlando",
+      "seaworld-fun-card",
+      { description: "A year of SeaWorld", notes: "Check the blockouts" },
+      ADMIN,
+    );
+    const cleared = await service.update(
+      "orlando",
+      "seaworld-fun-card",
+      {
+        description: null,
+        notes: null,
+        blockoutUrl: null,
+        until: null,
+        blockouts: null,
+      },
+      ADMIN,
+    );
+    for (const key of [
+      "description",
+      "notes",
+      "blockoutUrl",
+      "until",
+      "blockouts",
+    ]) {
+      expect(cleared).not.toHaveProperty(key);
+    }
+    const pass = await service.update(
+      "orlando",
+      "wdw-annual-pass",
+      { reservationUrl: null },
+      ADMIN,
+    );
+    expect(pass).not.toHaveProperty("reservationUrl");
+    const unranked = await service.update(
+      "orlando",
+      "wdw-date-based",
+      { suggestRank: null },
+      ADMIN,
+    );
+    expect(unranked.suggestRank).toBeNull();
+    // Nested optional fields take null too; sortOrder null keeps the place.
+    const stored = rows.find((r) => r.slug === "wdw-date-based")!;
+    const nested = await service.update(
+      "orlando",
+      "wdw-date-based",
+      {
+        sortOrder: null,
+        onSale: [{ from: "2026-01-01", to: null }],
+        links: (draftOf(stored).links as Record<string, unknown>[]).map(
+          (link) => ({ ...link, markets: null, locales: null }),
+        ),
+        sources: [{ url: "https://disneyworld.disney.go.com/", note: null }],
+      },
+      ADMIN,
+    );
+    expect(nested.sortOrder).toBe(stored.sortOrder);
+    expect(nested.onSale).toEqual([{ from: "2026-01-01" }]);
+    expect(nested.links.every((l) => !("markets" in l))).toBe(true);
+    expect(nested.sources).toEqual([
+      { url: "https://disneyworld.disney.go.com/" },
+    ]);
+    // A required field cannot be cleared.
+    expect(
+      await refusedPaths(
+        service.update("orlando", "wdw-date-based", { name: null }, ADMIN),
+      ),
+    ).toEqual(["name"]);
+  });
+
+  it("puts a new product last in its region unless it gives a sortOrder", async () => {
+    const { service, rows } = setup();
+    const last = Math.max(...rows.map((r) => r.sortOrder));
+    const unplaced = newProduct(rows);
+    delete unplaced.sortOrder;
+    const created = await service.create("orlando", unplaced, ADMIN);
+    expect(created.sortOrder).toBe(last + 10);
+    const blank = await service.create(
+      "orlando",
+      { ...newProduct(rows), slug: "legoland-blank", sortOrder: null },
+      ADMIN,
+    );
+    expect(blank.sortOrder).toBe(last + 20);
+    const listed = await service.list("orlando");
+    expect(listed.tickets[listed.tickets.length - 1].slug).toBe(
+      "legoland-blank",
+    );
+    const placed = await service.create(
+      "orlando",
+      { ...newProduct(rows), slug: "legoland-first", sortOrder: 5 },
+      ADMIN,
+    );
+    expect(placed.sortOrder).toBe(5);
+    expect((await service.list("orlando")).tickets[0].slug).toBe(
+      "legoland-first",
+    );
+  });
+
   it("answers 404 for a product or region it does not have", async () => {
     const { service } = setup();
     await expect(service.get("orlando", "nope")).rejects.toThrow(

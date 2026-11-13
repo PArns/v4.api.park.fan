@@ -32,7 +32,8 @@ export interface TicketProblem {
 export interface ValidTicketProduct {
   product: TicketProduct;
   active: boolean;
-  sortOrder: number;
+  /** Absent when the draft gives none: a new product then goes last. */
+  sortOrder?: number;
   sources: TicketSource[];
 }
 
@@ -150,7 +151,7 @@ function lengths(
   value: unknown,
   days: TicketProduct["days"] | undefined,
 ): { min: number; max: number } | undefined {
-  if (value === undefined) return undefined;
+  if (value == null) return undefined;
   if (!isObject(value) || !isInt(value.min) || !isInt(value.max)) {
     p.add(path, "must be { min, max } in whole days");
     return undefined;
@@ -221,7 +222,8 @@ export function validateTicketProduct(
   } else {
     p.add("days", 'must be "unlimited" or { min, max } in whole days');
   }
-  const pass = draft.pass === undefined ? undefined : draft.pass;
+  // null clears an optional field, as a PATCH from the form sends it.
+  const pass = draft.pass == null ? undefined : draft.pass;
   if (pass !== undefined && typeof pass !== "boolean") {
     p.add("pass", "must be true or false");
   }
@@ -403,11 +405,11 @@ export function validateTicketProduct(
           return [];
         }
         for (const end of ["from", "to"] as const) {
-          if (range[end] !== undefined && !isRealIsoDate(range[end])) {
+          if (range[end] != null && !isRealIsoDate(range[end])) {
             p.add(`${path}.${end}`, "must be a real YYYY-MM-DD date");
           }
         }
-        if (range.from === undefined && range.to === undefined) {
+        if (range.from == null && range.to == null) {
           p.add(path, "needs from or to");
         }
         if (
@@ -419,8 +421,8 @@ export function validateTicketProduct(
         }
         return [
           {
-            ...(range.from !== undefined && { from: range.from as string }),
-            ...(range.to !== undefined && { to: range.to as string }),
+            ...(range.from != null && { from: range.from as string }),
+            ...(range.to != null && { to: range.to as string }),
           },
         ];
       });
@@ -431,10 +433,11 @@ export function validateTicketProduct(
       p.add("until", "must be a real YYYY-MM-DD date");
     }
   }
-  for (const key of ["blockouts", "active"] as const) {
-    if (draft[key] !== undefined && typeof draft[key] !== "boolean") {
-      p.add(key, "must be true or false");
-    }
+  if (draft.blockouts != null && typeof draft.blockouts !== "boolean") {
+    p.add("blockouts", "must be true or false");
+  }
+  if (draft.active !== undefined && typeof draft.active !== "boolean") {
+    p.add("active", "must be true or false (archive a product to retire it)");
   }
   for (const key of ["blockoutUrl", "reservationUrl"] as const) {
     if (draft[key] !== undefined && draft[key] !== null && draft[key] !== "") {
@@ -451,7 +454,7 @@ export function validateTicketProduct(
     p.add("confidence", "must be high, medium or low");
   }
   if (
-    draft.sortOrder !== undefined &&
+    draft.sortOrder != null &&
     (!isInt(draft.sortOrder) ||
       draft.sortOrder < 0 ||
       draft.sortOrder > 100_000)
@@ -508,7 +511,7 @@ export function validateTicketProduct(
     valid: {
       product,
       active: draft.active !== false,
-      sortOrder: isInt(draft.sortOrder) ? draft.sortOrder : 0,
+      ...(isInt(draft.sortOrder) && { sortOrder: draft.sortOrder }),
       sources,
     },
   };
@@ -542,7 +545,7 @@ function validateLinks(p: Problems, value: unknown): TicketLink[] {
     if (typeof link.sponsored !== "boolean") {
       p.add(`${path}.sponsored`, "must be true or false");
     }
-    if (link.official !== undefined && link.official !== true) {
+    if (link.official != null && link.official !== true) {
       p.add(`${path}.official`, "must be true or left out");
     }
     if (link.official === true) {
@@ -552,7 +555,7 @@ function validateLinks(p: Problems, value: unknown): TicketLink[] {
       }
     }
     const markets =
-      link.markets === undefined
+      link.markets == null
         ? undefined
         : list<TicketMarket>(
             p,
@@ -561,7 +564,7 @@ function validateLinks(p: Problems, value: unknown): TicketLink[] {
             TICKET_MARKETS,
           );
     const locales =
-      link.locales === undefined
+      link.locales == null
         ? undefined
         : list<string>(p, `${path}.locales`, link.locales, TICKET_LOCALES);
     out.push({
@@ -602,7 +605,7 @@ function validateSources(p: Problems, value: unknown): TicketSource[] {
     if (problem) p.add(`${path}.url`, problem);
     const title = text(p, `${path}.title`, source.title, 200, false);
     const note = text(p, `${path}.note`, source.note, 500, false);
-    if (source.accessed !== undefined && !isRealIsoDate(source.accessed)) {
+    if (source.accessed != null && !isRealIsoDate(source.accessed)) {
       p.add(`${path}.accessed`, "must be a real YYYY-MM-DD date");
     }
     return [

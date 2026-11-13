@@ -8,12 +8,14 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
 import {
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiSecurity,
   ApiTags,
@@ -69,12 +71,24 @@ export class AdminTicketsController {
     summary:
       "Check a full product and plan a sample trip with it, without saving",
   })
+  @ApiQuery({
+    name: "slug",
+    required: false,
+    description:
+      "The product being edited: the body is checked as a PATCH of it (merged, null clears an " +
+      "optional field) and its own slug is no conflict. Absent: the body is a new product.",
+  })
   @ApiResponse({ status: 200, type: TicketValidationDto })
+  @ApiResponse({
+    status: 404,
+    description: "`slug` names no product of the region",
+  })
   validate(
     @Param("region") region: string,
     @Body() body: TicketProductWriteDto,
+    @Query("slug") slug?: string,
   ): Promise<TicketValidationDto> {
-    return this.tickets.validate(region, { ...body });
+    return this.tickets.validate(region, { ...body }, slug || undefined);
   }
 
   @Put("order")

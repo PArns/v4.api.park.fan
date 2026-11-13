@@ -1127,17 +1127,36 @@ admin role, writes `editor`.
 | ------ | ------------------------- | ----------------------------------------------------------------- |
 | GET    | `…/tickets`               | every product, archived ones too, in order, with `version`        |
 | GET    | `…/tickets/:slug`         | one product                                                       |
-| POST   | `…/tickets`               | create (201); `slug` is the product's id, fixed from then on      |
-| PATCH  | `…/tickets/:slug`         | change any field but `slug`; the merged product is checked whole  |
+| POST   | `…/tickets`               | create (201), last in the region; `slug` fixed from then on       |
+| PATCH  | `…/tickets/:slug`         | change any field but `slug`; `null` clears an optional one        |
 | POST   | `…/tickets/:slug/archive` | `active: false` (a PATCH with `active: true` brings it back)      |
 | PUT    | `…/tickets/order`         | `{ slugs: [...] }`: every product of the region, in the new order |
-| POST   | `…/tickets/validate`      | check a full product without saving: the form's live check        |
+| POST   | `…/tickets/validate`      | the form's live check; `?slug=<slug>` checks an edit of it        |
 
 An admin product is the public one plus `slug` (the public `id`), `region`, `active`, `sortOrder`,
 `suggestRank` (the order plan first tries a resort's products in, lower first; `null`: never
 suggested), `sources` (`[{ url, title?, accessed?, note? }]`, the research behind it, admin only),
 `createdAt`, `updatedAt` and `updatedBy`. A write body is that shape without `id`, `shopUrl` (taken
 from the official link) and the stamps.
+
+**Writing.** Problem messages are English and meant to be shown as they come.
+
+- **Where a new product goes.** A POST without `sortOrder` (or with `null`) puts the product last in
+  its region: the highest `sortOrder` there plus 10. A `sortOrder` in the body is kept as given, and
+  `PUT …/order` numbers the region 10, 20, 30 … again.
+- **What a PATCH changes.** A field the body leaves out stays as stored; a field it gives replaces
+  the stored one, and the merged product is checked whole. `null` clears an optional field:
+  `description`, `notes`, `blockoutUrl`, `reservationUrl`, `until`, `suggestRank` (never suggested),
+  `pass`, `blockouts`, `windowDays`, `allowance`, `onSale`, `hopSets`, `caps`, `reservedDayParks`
+  and `sources`, and inside them a link's `markets`, `locales` and `official`, a source's `title`,
+  `accessed` and `note`, an `onSale` range's `from` or `to`, a set's or cap's `ticketDays`. A
+  required field sent as `null` is refused at its path (`name`: "is required"); `active` takes only
+  `true` or `false`; `sortOrder: null` keeps the product where it is.
+- **Checking an edit.** `POST …/validate` checks the body as a new product, whose `slug` must be
+  free in the region. With `?slug=<slug>` it checks an edit of that product exactly as the PATCH
+  would: the body is merged onto the stored product (a partial body works, `null` clears), the
+  product's own slug is no conflict, a different `slug` in the body is refused (`path: "slug"`),
+  and an unknown `<slug>` answers 404.
 
 **Checks.** A write is refused with a 400 that lists every problem by its path (`{ statusCode: 400,
 message, problems: [{ path: "windowTable[2].window", message }] }`), and `…/validate` answers
