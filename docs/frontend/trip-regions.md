@@ -795,7 +795,9 @@ and the optimizer.
 - **`pass: true`**: an annual pass or Fun Card, unlimited days, no window. **`blockouts: true`**:
   blockout dates apply to some or all of its versions (the passes, the Fun Cards, the 2-Day
   Park-to-Park + 1 Day Epic promotion); the plan does not check them, and an owned one says
-  `blockouts_unchecked`.
+  `blockouts_unchecked`. **`blockoutUrl`**: the operator's page with the blockout calendar (Disney's
+  passholder page, which links each pass's calendar). **`reservationUrl`**: where passholders reserve
+  their park (Disney's pass).
 
 The v1 catalog: Walt Disney World date-based (1–10 days, `.h` Park Hopper) and with the Plus option
 (Water Park and Sports; `.h` Park Hopper Plus), the 4-Park Magic Ticket, the UK 14-Day and 7-Day
@@ -812,22 +814,32 @@ listed on its own.
 
 ```
 tickets=wdw-uk-14-day-magic@2027-02-01,uor-uk-three-park-adventure@2027-02-08
-tickets=wdw-date-based.4.h@2027-02-02,uor-date-based.3.h
+tickets=wdw-date-based.4.h@2027-02-02,uor-date-based.3.h?
 ```
 
-One item per ticket, comma-separated: `<product>[.<days>][.h][@<YYYY-MM-DD>]`.
+One item per ticket, comma-separated: `<product>[.<days>][.h|.h?][@<YYYY-MM-DD>]`.
 
 - **`.<days>`**: required where the product sells several lengths, optional where it sells one,
   never on a pass.
 - **`.h`**: the hopper option of a product with `hopping: "optional"`; ignored on `included`.
+  **`.h?`**: the visitor does not know whether theirs has it. The plan keeps it without hopping (the
+  safe side) and the ticket carries `hopper: "unknown"` and `hopperVerdict`, what the hopper would
+  add, in the shape of a suggestion's `hopper`.
 - **`@date`**: the start chosen at purchase (`anchor: "start"`), the first visit (`first_use`), or
-  Discovery Cove's reserved day. It must lie in the trip. Without it the plan picks the start that
-  serves the trip best and says so (`startChosen`). Never on a pass.
+  Discovery Cove's reserved day. It may lie before the trip while the window still reaches into it
+  (a ticket started on the travel day); the days before the trip do not count as used. Discovery
+  Cove's reserved day must lie in the trip. Without it the plan picks the start that serves the
+  trip best and says so (`startChosen`). Never on a pass.
 
-A 400 names the reason: an unknown product, a length the product does not sell, `.h` on a product
-without hopping, a date outside the trip or outside `onSale`, no start in the trip on sale, a date
-or a length on a pass, more than 6 tickets. `ticket=base|hopper` keeps working for the parks on
-plan first; with `tickets` an owned ticket decides for the parks it covers.
+A 400 names the reason: an unknown product, a length the product does not sell, `.h` or `.h?` on a
+product without hopping, a date after the trip or whose window ends before it, a date outside
+`onSale`, no start in the trip on sale, a date or a length on a pass, more than 6 tickets.
+
+**Plan first's hopper.** `hopper=walt-disney-world,universal-orlando` gives the hopper option to the
+plan-first resorts listed (the planner's "Show the plan with Park Hopper", per resort); an unknown
+key or a group that is no resort is a 400. `ticket=hopper` still means every resort, and wins.
+`meta.hopper` lists the resorts planned with the hopper. With `tickets` an owned ticket decides for
+the parks it covers.
 
 **What the plan keeps.**
 
@@ -841,16 +853,20 @@ plan first; with `tickets` an owned ticket decides for the parks it covers.
   `split=auto`, parks of an owned ticket listed without a count get second visits until the ticket's
   days are used, in `secondVisitRank` order and while the trip has room (`meta.split[].ticket`
   names it); fewer days used is `unusedDays`.
-- **The caps**, e.g. one visit per park on the 4-Park Magic Ticket, Epic Universe not on a 1- or
-  2-day Universal date-based ticket.
+- **The caps**, e.g. one visit per park on the 4-Park Magic Ticket. A cap of `max: 0` means the
+  ticket does not cover the park at that length: Epic Universe on a 1- or 2-day Universal
+  date-based ticket is planned plan first, with the Epic Universe 1-day ticket suggested, never
+  left out. The suggestion names the owned tickets of its resort that do not cover it
+  (`notCoveredBy`), as it does for a pass.
 - **Hopping per ticket.** Two parks share a day only with `hop=1`, on a ticket with hopping whose
   hop set holds both, under 30 minutes apart, theme parks only. The evening's second park follows
   the same ticket. Universal's 3- to 5-day park-to-park and the UK tickets hop to Epic Universe
   too (Universal's terms since 2026); plan first with `ticket=hopper` keeps Universal Studios and
   Islands of Adventure only, as before.
-- **Blocks.** The windows replace `blocks` for the resorts the owned tickets cover, so two wide
-  windows (two 14-day tickets) let their resorts interleave where that saves waiting; `blocks`
-  keeps applying to the resorts on plan first.
+- **Blocks.** The windows replace `blocks` for the resorts the owned tickets cover: by default two
+  wide windows (two 14-day tickets) let their resorts mix where that saves waiting. `blocks=1`
+  written in the query keeps them together as well, each resort in one block inside its window;
+  `blocks` (default or written) keeps applying to the resorts on plan first.
 - **Allowances.** A water-park visit on the UK Magic Tickets' or the Plus option's allowance uses no
   ticket day; it lies in the window and counts against the allowance.
 - **When nothing fits**, the plan relaxes in this order and says so: it puts a visit outside its
@@ -885,19 +901,26 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   - `eveningHops`: park days whose evening becomes a second park ([evenings](#evenings));
   - `hopDays`: hop days that plan makes (only where the visits outnumber the days);
   - `fitsMoreParks`: visits only that plan places;
-  - `savedMinutes`: the headliner-wait sum it saves over the visits both place, unpenalized;
+  - `savedMinutes`: the headliner-wait sum it saves over the visits both place, unpenalized, and
+    `savedMinutesPerRide`, the same per headliner ride (the sum over those visits), as `totals`
+    reports a saving;
+  - `hopDayList` (`[{ date, parks }]`, the two parks of each hop day), `eveningHopList`
+    (`[{ date, parks }]`, the day's park, then the evening's), `fitsOnlyWithHopper` (the parks of
+    the visits in `fitsMoreParks`, a park once per visit);
   - `recommended`: one of `eveningHops`, `hopDays`, `fitsMoreParks` is at least 1, or
     `savedMinutes` at least 15;
   - `why`: `evening_hops`, `hop_days`, `fits_more_parks`, `saves_minutes`; `no_gain` when not
     recommended.
 
-  With `ticket=hopper` the plan already has the hopper on, and the comparison is against the plan
-  without it.
+  With the hopper already on for that resort (`ticket=hopper`, or the resort in `hopper=`) the
+  comparison is against the plan without it.
 
 - **`alternatives`**: on a trip of 10 days or more, the UK 14-day tickets (`reason: "long_stay"`,
   `markets: ["uk"]`: UK and Ireland residents only); the 4-Park Magic Ticket where its dates and one
   visit per park fit (`reason: "promotion"`).
 - **`id`**: `suggested:<resort>`, a second ticket for the resort `suggested:<resort>:2`.
+- **`notCoveredBy`**: the ids of the owned tickets of that resort that do not cover these parks
+  (Epic Universe with a pass or a 1- or 2-day Universal ticket); absent when there are none.
 
 ### The answer
 
@@ -908,6 +931,7 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   "meta": {
     "…": "…",
     "ticket": "base", // plan first's option, for the parks no owned ticket covers
+    "hopper": ["universal-orlando"], // plan-first resorts planned with the hopper; absent when none
     "tickets": [
       {
         "id": "t1", // t1 … t6 in the order of `tickets=`
@@ -918,6 +942,7 @@ For each resort with park days on plan first, the plan as made (blocks as today)
         "end": "2027-02-18", // the window's last day; absent for a pass
         "usedDays": 6,
         "unusedDays": 8, // absent when 0 and for a pass
+        "unusedReason": "parks_fewer_than_days", // with unusedDays
         "allowanceVisits": 1, // water-park visits on the allowance; absent when none
         "warnings": [], // blockouts_unchecked | park_reservation_needed | covers_no_planned_park
       },
@@ -938,9 +963,21 @@ For each resort with park days on plan first, the plan as made (blocks as today)
         "hopper": {
           "recommended": true,
           "savedMinutes": 0,
+          "savedMinutesPerRide": 0,
           "hopDays": 0,
           "eveningHops": 1,
           "fitsMoreParks": 0,
+          "hopDayList": [],
+          "eveningHopList": [
+            {
+              "date": "2027-02-11",
+              "parks": [
+                "universal-epic-universe",
+                "universal-islands-of-adventure",
+              ],
+            },
+          ],
+          "fitsOnlyWithHopper": [],
           "why": ["evening_hops"],
         },
         "shopUrl": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
@@ -988,6 +1025,13 @@ For each resort with park days on plan first, the plan as made (blocks as today)
 
 - **`start`** of an owned ticket is the given date, or, with `startChosen: true`, the day the plan
   picked: its first used day, from which the window reaches furthest.
+- **`hopper`** of an owned ticket is `true`, `false` or `"unknown"` (`.h?`); with `"unknown"`,
+  **`hopperVerdict`** has the shape of a suggestion's `hopper`.
+- **`unusedReason`**, with `unusedDays`, the first that holds: `window_outside_trip` (the trip holds
+  fewer days of the window than the ticket has, it starts before or ends after it),
+  `no_open_day` (a visit of its parks found no open day and was left out), `rest_days_kept` (the
+  trip's rest rule kept the days the ticket could have filled), `parks_fewer_than_days` (the planned
+  parks have every visit they get, second visits included, and need fewer days).
 - **Days without a ticket**: arrival, departure and rest days carry no `ticket`; a park with no
   product in the catalog for its days (none today) would carry none either.
 - **Codes.** `meta.relaxed`: `ticket_window_relaxed`. Day warnings: `outside_ticket_window`.

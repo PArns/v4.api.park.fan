@@ -133,48 +133,50 @@ export class TripTicketProductDto {
     description: "Blockout dates apply; the plan does not check them.",
   })
   blockouts?: true;
+  @ApiPropertyOptional({
+    description: "The operator's page with the blockout calendar.",
+  })
+  blockoutUrl?: string;
+  @ApiPropertyOptional({
+    description: "Where passholders reserve their park (Disney).",
+  })
+  reservationUrl?: string;
   @ApiProperty({ enum: ["high", "medium", "low"] })
   confidence: "high" | "medium" | "low";
   @ApiProperty() shopUrl: string;
   @ApiPropertyOptional() notes?: string;
 }
 
-/** `meta.tickets[]` of a plan: an owned ticket as the plan used it. */
-export class TripPlanTicketDto {
-  @ApiProperty({ example: "t1", description: "t1 … t6 in the order given." })
-  id: string;
-  @ApiProperty({ example: "wdw-uk-14-day-magic" }) product: string;
-  @ApiPropertyOptional({ description: "Absent for a pass." }) days?: number;
-  @ApiProperty() hopper: boolean;
-  @ApiPropertyOptional({
-    description:
-      "The window's first day: given, or with `startChosen` picked by the plan. Absent for a pass.",
-  })
-  start?: string;
-  @ApiPropertyOptional({ description: "The plan picked `start`." })
-  startChosen?: true;
-  @ApiPropertyOptional({ description: "The window's last day." }) end?: string;
-  @ApiProperty() usedDays: number;
-  @ApiPropertyOptional() unusedDays?: number;
-  @ApiPropertyOptional({ description: "Visits on the allowance." })
-  allowanceVisits?: number;
+export class TripTicketHopDto {
+  @ApiProperty({ example: "2027-02-11" }) date: string;
   @ApiProperty({
     type: [String],
-    enum: [
-      "blockouts_unchecked",
-      "park_reservation_needed",
-      "covers_no_planned_park",
-    ],
+    description:
+      "A hop day's two parks; an evening's day park, then the evening's.",
   })
-  warnings: string[];
+  parks: string[];
 }
 
 export class TripTicketHopperDto {
   @ApiProperty() recommended: boolean;
-  @ApiProperty() savedMinutes: number;
+  @ApiProperty({
+    description: "Headliner-wait sum saved over the visits both plans place.",
+  })
+  savedMinutes: number;
+  @ApiProperty({ description: "The same per headliner ride." })
+  savedMinutesPerRide: number;
   @ApiProperty() hopDays: number;
   @ApiProperty() eveningHops: number;
   @ApiProperty() fitsMoreParks: number;
+  @ApiProperty({ type: () => [TripTicketHopDto] })
+  hopDayList: TripTicketHopDto[];
+  @ApiProperty({ type: () => [TripTicketHopDto] })
+  eveningHopList: TripTicketHopDto[];
+  @ApiProperty({
+    type: [String],
+    description: "The parks of the visits only the hopper plan places.",
+  })
+  fitsOnlyWithHopper: string[];
   @ApiProperty({
     type: [String],
     enum: [
@@ -186,6 +188,55 @@ export class TripTicketHopperDto {
     ],
   })
   why: string[];
+}
+
+/** `meta.tickets[]` of a plan: an owned ticket as the plan used it. */
+export class TripPlanTicketDto {
+  @ApiProperty({ example: "t1", description: "t1 … t6 in the order given." })
+  id: string;
+  @ApiProperty({ example: "wdw-uk-14-day-magic" }) product: string;
+  @ApiPropertyOptional({ description: "Absent for a pass." }) days?: number;
+  @ApiProperty({
+    oneOf: [{ type: "boolean" }, { type: "string", enum: ["unknown"] }],
+    description:
+      '"unknown" for `.h?`: planned without hopping, with `hopperVerdict`.',
+  })
+  hopper: boolean | "unknown";
+  @ApiPropertyOptional({
+    type: () => TripTicketHopperDto,
+    description: 'What the hopper would add, for `hopper: "unknown"`.',
+  })
+  hopperVerdict?: TripTicketHopperDto;
+  @ApiPropertyOptional({
+    description:
+      "The window's first day: given, or with `startChosen` picked by the plan. Absent for a pass.",
+  })
+  start?: string;
+  @ApiPropertyOptional({ description: "The plan picked `start`." })
+  startChosen?: true;
+  @ApiPropertyOptional({ description: "The window's last day." }) end?: string;
+  @ApiProperty() usedDays: number;
+  @ApiPropertyOptional() unusedDays?: number;
+  @ApiPropertyOptional({
+    enum: [
+      "window_outside_trip",
+      "no_open_day",
+      "rest_days_kept",
+      "parks_fewer_than_days",
+    ],
+  })
+  unusedReason?: string;
+  @ApiPropertyOptional({ description: "Visits on the allowance." })
+  allowanceVisits?: number;
+  @ApiProperty({
+    type: [String],
+    enum: [
+      "blockouts_unchecked",
+      "park_reservation_needed",
+      "covers_no_planned_park",
+    ],
+  })
+  warnings: string[];
 }
 
 export class TripTicketAlternativeDto {
@@ -221,4 +272,10 @@ export class TripTicketSuggestionDto {
   @ApiProperty() shopUrl: string;
   @ApiPropertyOptional({ type: () => [TripTicketAlternativeDto] })
   alternatives?: TripTicketAlternativeDto[];
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Owned tickets of the resort that do not cover these parks (Epic Universe with a pass).",
+  })
+  notCoveredBy?: string[];
 }

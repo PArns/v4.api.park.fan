@@ -14,7 +14,8 @@ import { HOTEL_KINDS } from "../regions";
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_MESSAGE = "must be a YYYY-MM-DD date";
 /** One owned ticket: `product[.days][.h][@YYYY-MM-DD]`. */
-const TICKET_ITEM = "[a-z0-9-]+(\\.[0-9]{1,2})?(\\.h)?(@\\d{4}-\\d{2}-\\d{2})?";
+const TICKET_ITEM =
+  "[a-z0-9-]+(\\.[0-9]{1,2})?(\\.h\\??)?(@\\d{4}-\\d{2}-\\d{2})?";
 /** `tickets=`: one to six of them, comma-separated. */
 export const TICKETS_PATTERN = new RegExp(
   `^${TICKET_ITEM}(,${TICKET_ITEM}){0,5}$`,
@@ -155,7 +156,8 @@ export class TripPlanQueryDto {
   @ApiPropertyOptional({
     description:
       "The tickets the visitor already has, comma-separated, at most 6: " +
-      "`<product>[.<days>][.h][@<YYYY-MM-DD start>]`, the product an id of the region's `tickets`. " +
+      "`<product>[.<days>][.h|.h?][@<YYYY-MM-DD start>]`, the product an id of the region's " +
+      "`tickets`; `.h?`: the hopper is not known. " +
       "The parks none of them covers are planned plan first, with a suggested ticket.",
     example: "wdw-uk-14-day-magic@2027-02-01,uor-date-based.3.h",
   })
@@ -164,9 +166,22 @@ export class TripPlanQueryDto {
   @MaxLength(400)
   @Matches(TICKETS_PATTERN, {
     message:
-      "tickets must be product[.days][.h][@YYYY-MM-DD], comma-separated, at most 6",
+      "tickets must be product[.days][.h|.h?][@YYYY-MM-DD], comma-separated, at most 6",
   })
   tickets?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Plan first: the resorts (group keys) planned with the hopper option. `ticket=hopper` means every resort.",
+    example: "walt-disney-world,universal-orlando",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @Matches(/^[a-z0-9-]+(,[a-z0-9-]+){0,7}$/, {
+    message: "hopper must be resort keys, comma-separated",
+  })
+  hopper?: string;
 
   @ApiPropertyOptional({
     enum: ["base", "hopper"],

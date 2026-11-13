@@ -231,12 +231,14 @@ by the key guard). It answers 400 for:
 
 `tickets` and `suggest` work as on `/plan` ([tickets](./trip-regions.md#tickets)), per window:
 
+- **`hopper=`** gives plan first's hopper to the resorts listed, as on `/plan`.
 - **Owned tickets** (`tickets=wdw-uk-14-day-magic,uor-uk-three-park-adventure`) bind every window's
   plan, each ticket's start searched inside the window and on sale there. A window whose plan puts a
   day outside a ticket's window (`ticket_window_relaxed`) adds 1000 to its score per such day, as an
   unplaced visit does, and warns `ticket_window_relaxed`; a visit a ticket cannot take is unplaced
   as usual. Each window carries `tickets`:
-  `[{ id, start, end, usedDays, unusedDays? }]`, the plan's own `meta.tickets` in short.
+  `[{ id, start, end, usedDays, unusedDays? }]`, the plan's own `meta.tickets` in short. A `.h?`
+  ticket is planned without hopping; its `hopperVerdict` is `/plan`'s alone.
 - **`suggest=1`** gives each returned window `ticketSuggestion`, the plan's `meta.ticketSuggestion`
   for the parks on plan first, `hopper` included (its `eveningHops` read without the show times).
   It is computed for the returned windows only, after the search, and changes no ranking.

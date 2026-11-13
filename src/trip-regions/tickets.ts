@@ -68,6 +68,10 @@ export interface TicketProduct {
   pass?: true;
   /** Blockout dates apply and are not checked. */
   blockouts?: true;
+  /** The operator's page with the blockout calendar. */
+  blockoutUrl?: string;
+  /** Where passholders reserve their park. */
+  reservationUrl?: string;
   confidence: "high" | "medium" | "low";
   shopUrl: string;
   notes?: string;
@@ -243,6 +247,9 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopSets: [{ parks: DISNEY }],
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://disneyworld.disney.go.com/passholder-program/",
+    reservationUrl:
+      "https://disneyworld.disney.go.com/experience-updates/park-reservations/",
     confidence: "medium",
     shopUrl: "https://disneyworld.disney.go.com/passholder-program/",
     notes:
@@ -332,6 +339,8 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     ],
     onSale: [{ from: "2026-09-03", to: "2027-04-18" }],
     blockouts: true,
+    blockoutUrl:
+      "https://www.universalorlando.com/web/en/us/tickets-packages/offers/ticketoffer",
     confidence: "medium",
     shopUrl:
       "https://www.universalorlando.com/web/en/us/tickets-packages/offers/ticketoffer",
@@ -418,6 +427,8 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopSets: [{ parks: [USF, IOA] }],
     pass: true,
     blockouts: true,
+    blockoutUrl:
+      "https://www.universalorlando.com/web/en/us/tickets-packages/annual-passes/blockout-dates",
     confidence: "medium",
     shopUrl:
       "https://www.universalorlando.com/web/en/us/tickets-packages/annual-passes",
@@ -438,6 +449,8 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopSets: [{ parks: [USF, IOA] }],
     pass: true,
     blockouts: true,
+    blockoutUrl:
+      "https://www.universalorlando.com/web/en/us/tickets-packages/annual-passes/blockout-dates",
     confidence: "medium",
     shopUrl:
       "https://www.universalorlando.com/web/en/us/tickets-packages/annual-passes",
@@ -557,6 +570,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://seaworld.com/orlando/tickets/",
     until: "2027-12-31",
     confidence: "medium",
     shopUrl: SEAWORLD_SHOP,
@@ -573,6 +587,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://seaworld.com/orlando/tickets/",
     until: "2027-12-31",
     confidence: "medium",
     shopUrl: SEAWORLD_SHOP,
@@ -589,6 +604,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://seaworld.com/orlando/annual-pass/",
     confidence: "medium",
     shopUrl: "https://seaworld.com/orlando/annual-pass/",
     notes:
@@ -605,6 +621,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://seaworld.com/orlando/annual-pass/",
     confidence: "medium",
     shopUrl: "https://seaworld.com/orlando/annual-pass/",
     notes:
@@ -691,6 +708,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl: "https://buschgardens.com/tampa/tickets/",
     until: "2027-12-31",
     confidence: "medium",
     shopUrl: BUSCH_GARDENS_SHOP,
@@ -757,6 +775,8 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     hopping: "none",
     pass: true,
     blockouts: true,
+    blockoutUrl:
+      "https://www.legoland.com/florida/tickets-passes/passholder-hub/annual-pass-blockout-dates/",
     confidence: "medium",
     shopUrl: "https://www.legoland.com/florida/tickets-passes/",
     notes: "The Standard pass has blockout dates and excludes the water park.",

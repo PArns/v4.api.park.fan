@@ -98,6 +98,7 @@ describe("the Orlando ticket catalog", () => {
         }
       }
       if (p.pass) expect(p.days).toBe("unlimited");
+      if (p.blockouts) expect(p.blockoutUrl).toMatch(/^https:\/\//);
     }
   });
 
