@@ -1300,7 +1300,6 @@ class TripOptimizer {
     available: number[],
     useBlocks: boolean,
   ): SearchResult | null {
-    const { options } = this.input;
     const lockedRows: Row[] = pool
       .filter((u) => lockedUnitDay.has(u))
       .map((u) => ({ units: [u], lockedDay: lockedUnitDay.get(u) }));
