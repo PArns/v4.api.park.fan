@@ -1085,7 +1085,15 @@ class TripOptimizer {
 
     // Owned tickets: each visit takes the ticket that covers it, and a visit
     // beyond a ticket's days or caps leaves the plan at once.
-    const overTicket = this.assignTickets(placeable, lockedUnitDay, available);
+    const overTicket = [
+      ...this.assignTickets(placeable, lockedUnitDay, available),
+    ];
+    overTicket.push(
+      ...this.offValidDays(
+        placeable.filter((u) => !overTicket.includes(u)),
+        available,
+      ),
+    );
     for (const u of overTicket) {
       unplaced.push({ slug: u.slug, reason: "no_ticket_day" });
     }
@@ -1127,6 +1135,12 @@ class TripOptimizer {
     }
     for (const u of best?.dropped ?? []) {
       unplaced.push({ slug: u.slug, reason: "no_day_left" });
+    }
+    if (!best) {
+      // Nothing could be placed at all: every visit left says so.
+      for (const u of pool) {
+        unplaced.push({ slug: u.slug, reason: "no_day_left" });
+      }
     }
 
     return this.describe(
@@ -1328,6 +1342,28 @@ class TripOptimizer {
         Date.parse(`${this.dates[0]}T00:00:00Z`)) /
         86_400_000,
     );
+  }
+
+  /**
+   * The visits an owned ticket's kinds of day cannot hold: more of them than
+   * the trip has open days of those kinds (an evening ticket for weekends on
+   * a trip of weekdays). They leave the plan at once (`no_ticket_day`).
+   */
+  private offValidDays(units: Unit[], available: number[]): Unit[] {
+    const out: Unit[] = [];
+    this.tickets.forEach((t, ti) => {
+      if (!t.validDays || t.validDays.length === 0) return;
+      const mine = units.filter((u) => u.ticket === ti && !u.allowance);
+      const days = available.filter(
+        (d) =>
+          !this.wrongDay({ units: [{ slug: "", visit: 1, ticket: ti }] }, d) &&
+          mine.some(
+            (u) => this.cell(u.slug, this.dates[d]).status !== "CLOSED",
+          ),
+      ).length;
+      out.push(...mine.slice(days));
+    });
+    return out;
   }
 
   /** Whether a row's owned ticket may not be used on that kind of day (`validDays`). */

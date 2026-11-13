@@ -18,7 +18,7 @@ import {
   addIsoDays,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
-import { ORLANDO } from "./regions";
+import { ORLANDO, TRIP_REGIONS } from "./regions";
 
 const KEY = `pfk_${"t".repeat(43)}`;
 const TZ = "America/New_York";
@@ -246,6 +246,42 @@ describe("TripRegionsController", () => {
   });
 
   beforeEach(() => store.clear());
+
+  describe("GET /v1/trip-regions", () => {
+    it("lists every region without a key, with its park count and groups", async () => {
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions")
+        .expect(200);
+      expect(res.body.regions).toHaveLength(Object.keys(TRIP_REGIONS).length);
+      expect(res.body.regions[0]).toEqual({
+        slug: "orlando",
+        name: "Orlando",
+        timezone: "America/New_York",
+        parkCount: 16,
+        maxTripDays: 21,
+        groups: [
+          {
+            key: "walt-disney-world",
+            name: "Walt Disney World Resort",
+            kind: "resort",
+          },
+          {
+            key: "universal-orlando",
+            name: "Universal Orlando Resort",
+            kind: "resort",
+          },
+          {
+            key: "seaworld-orlando",
+            name: "SeaWorld Parks and Resorts Orlando",
+            kind: "resort",
+          },
+          { key: "day-trips", name: "Day trips", kind: "day_trip" },
+        ],
+      });
+      expect(res.headers["cache-control"]).toContain("max-age=3600");
+      expect(res.headers["cdn-cache-control"]).toContain("max-age=86400");
+    });
+  });
 
   describe("GET /v1/trip-regions/:region", () => {
     it("answers without a key, with the region's parks, groups and legs", async () => {
