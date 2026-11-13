@@ -18,6 +18,7 @@ import {
 import {
   API_KEY_USAGES,
   DEFAULT_REQUESTS_PER_HOUR,
+  MAX_GRACE_HOURS,
   type ApiKeyUsage,
 } from "../api-key.constants";
 
@@ -144,4 +145,18 @@ export class UpdateApiKeyDto {
   @IsOptional()
   @IsISO8601({ strict: true })
   expiresAt?: string | null;
+}
+
+/** The body of `POST /v1/admin/api-keys/:id/rotate`. */
+export class RotateApiKeyDto {
+  @ApiProperty({
+    description: `How many hours the old secret keeps working beside the new one, so its holder can switch without an outage; 0 refuses it at once. At most ${MAX_GRACE_HOURS} (30 days).`,
+    minimum: 0,
+    maximum: MAX_GRACE_HOURS,
+    example: 24,
+  })
+  @IsInt()
+  @Min(0)
+  @Max(MAX_GRACE_HOURS)
+  graceHours: number;
 }
