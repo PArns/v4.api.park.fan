@@ -237,8 +237,10 @@ by the key guard). It answers 400 for:
   day outside a ticket's window (`ticket_window_relaxed`) adds 1000 to its score per such day, as an
   unplaced visit does, and warns `ticket_window_relaxed`; a visit a ticket cannot take is unplaced
   as usual. Each window carries `tickets`:
-  `[{ id, start, end, usedDays, unusedDays? }]`, the plan's own `meta.tickets` in short. A `.h?`
-  ticket is planned without hopping; its `hopperVerdict` is `/plan`'s alone.
+  `[{ id, start, end, usedDays, unusedDays?, windowDays? }]`, the plan's own `meta.tickets` in
+  short (`windowDays` for an every-day ticket, instead of `unusedDays`). A ticket with no start on
+  sale in a window counts every day on it as outside its window. A `.h?` ticket is planned without
+  hopping; its `hopperVerdict` is `/plan`'s alone.
 - **`suggest=1`** gives each returned window `ticketSuggestion`, the plan's `meta.ticketSuggestion`
   for the parks on plan first, `hopper` included (its `eveningHops` read without the show times).
   It is computed for the returned windows only, after the search, and changes no ranking.
@@ -287,7 +289,10 @@ against planning every window.
 A 21-day trip with `split=auto` adds second visits and costs the optimizer about 0.3 s a window, so
 a request stops planning after 2 s (and the average after 0.8 s more) and says
 `meta.search.exact: false`; with `split=fixed` the same search takes 0.3 s. Without a clock (the
-specs) the search always runs to the end.
+specs) the search always runs to the end. With tickets (measured on the dev shim, 2027-01-05 …
+06-30, 10 days, the 7 headliners, 168 windows): `suggest=1` adds nothing measurable (0.27 s), two
+UK 14-day tickets take 0.35 s and a US 4-day and a 3-day ticket 0.6 s, every window planned twice
+for the mixing comparison ([tickets](./trip-regions.md#tickets)).
 
 **Reads.** The days come from the same calendar read as `/calendar`, over the whole range plus its
 two-week reference span: one read per park and month from the month caches, the last-year

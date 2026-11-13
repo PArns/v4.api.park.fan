@@ -893,7 +893,9 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   the 1-Day + 1-Day Epic for two days with Epic, date-based from three days; the Epic Universe or
   Volcano Bay 1-day ticket alone; SeaWorld's single day, Two Park, Three-Day Three Park or Four
   Parks for its parks with Busch Gardens and Adventure Island; Discovery Cove (with its sister parks
-  where they are planned); LEGOLAND's 1- or 2-day ticket.
+  where they are planned); LEGOLAND's 1- or 2-day ticket. Only researched products are suggested:
+  Aquatica or Adventure Island alone get the smallest multi-park ticket that covers them, with
+  its `extraDays`, because their single-day tickets were not researched.
 - **`days`** are the resort's park days (a hop day is one, an allowance visit none), **`start`** its
   first, **`end`** the window's last day. Where rest days inside the block need a longer window,
   `days` is the shortest length whose window reaches the last day and **`extraDays`** says by how
@@ -1084,6 +1086,15 @@ hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
+
+**Tickets' cost.** Plan first's suggestion is read off the plan; its hopper verdict plans the trip
+a second time only where the hopper can change it (a visit without a day, a hop day). Owned
+tickets plan the trip twice, with their resorts in blocks and free (the mixing comparison), and
+search their free starts with the structures; inside a block one start per reach of the block is
+tried. On the dev shim (production data, 1 to 21 February 2027, the 7 headliners and SeaWorld,
+second visits on, upstream reads cached): plan first 0.26–0.33 s; a US 6-day and 4-day ticket with
+their starts searched 0.22–0.25 s; two UK 14-day tickets with dates 0.21–0.25 s, without dates
+0.62 s; three tickets without dates (Disney, Universal, SeaWorld's Two Park) 0.51 s. All exact.
 
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
