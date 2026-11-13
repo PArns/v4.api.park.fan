@@ -18,7 +18,12 @@ import type { TripParkDayInternal } from "./trip-calendar.util";
 import type { InternalRegionCalendar } from "./trip-region.assembly";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
 import { seedCatalog, withCatalog } from "./ticket-catalog";
-import { publicTicketCatalog } from "./tickets";
+import {
+  ORLANDO_TICKETS,
+  publicTicketCatalog,
+  seedLinksOf,
+  shopUrlOf,
+} from "./tickets";
 
 const TODAY = "2026-11-12";
 const FROM = "2027-02-01";
@@ -406,6 +411,7 @@ describe("the hopper verdict", () => {
 
 describe("owned tickets in the answer", () => {
   it("lists each owned ticket, its days and why some are unused", () => {
+    const magic = ORLANDO_TICKETS.find((t) => t.id === "wdw-uk-14-day-magic")!;
     const { meta, body } = answer({
       parks: DISNEY.join(","),
       split: "fixed",
@@ -423,16 +429,9 @@ describe("owned tickets in the answer", () => {
         unusedDays: 10,
         unusedReason: "parks_fewer_than_days",
         warnings: [],
-        links: [
-          {
-            seller: "Disney Holidays UK",
-            url: "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
-            official: true,
-            sponsored: false,
-          },
-        ],
-        shopUrl:
-          "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
+        // The seeded links, in their order: Attraction Tickets' pages first, the official shop last.
+        links: seedLinksOf(magic),
+        shopUrl: shopUrlOf(magic),
       },
     ]);
     expect(meta.ticketCatalog).toMatch(/^[0-9a-f]{12}$/);

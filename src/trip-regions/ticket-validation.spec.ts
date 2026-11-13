@@ -155,7 +155,9 @@ describe("validateTicketProduct", () => {
 
   it("accepts https links only, exactly one official, never a sponsored one", () => {
     const draft = seed("wdw-date-based");
-    const official = (draft.links as Array<Record<string, unknown>>)[0];
+    const official = (draft.links as Array<Record<string, unknown>>).find(
+      (link) => link.official === true,
+    )!;
     const affiliate = {
       seller: "Attraction Tickets",
       url: "https://www.attractiontickets.com/en/orlando",

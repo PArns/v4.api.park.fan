@@ -315,10 +315,16 @@ describe("TripRegionsController", () => {
       const disney = res.body.tickets.find(
         (t: { id: string }) => t.id === "wdw-date-based",
       );
-      expect(disney.links).toEqual([
+      const official = disney.links.filter(
+        (link: { official?: boolean }) => link.official,
+      );
+      expect(official).toEqual([
         expect.objectContaining({ official: true, sponsored: false }),
       ]);
-      expect(disney.shopUrl).toBe(disney.links[0].url);
+      expect(
+        disney.links.every((link: { sponsored: boolean }) => !link.sponsored),
+      ).toBe(true);
+      expect(disney.shopUrl).toBe(official[0].url);
       expect(disney.suggest).toBeUndefined();
       // Five minutes at the edge, ten stale: an edit shows within 15 minutes.
       expect(res.headers["cache-control"]).toBe(

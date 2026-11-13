@@ -39,10 +39,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     cheapest: null,
     attractionTickets: [
       {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
-        locale: "en",
-      },
-      {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
         locale: "nl",
       },
@@ -60,10 +56,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     productId: "wdw-date-based-plus",
     cheapest: null,
     attractionTickets: [
-      {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
-        locale: "en",
-      },
       {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
         locale: "nl",
@@ -146,10 +138,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     cheapest: null,
     attractionTickets: [
       {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
-        locale: "en",
-      },
-      {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
         locale: "nl",
       },
@@ -177,10 +165,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     cheapest: null,
     attractionTickets: [
       {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
-        locale: "en",
-      },
-      {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
         locale: "nl",
       },
@@ -198,10 +182,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     productId: "uor-2-day-p2p-plus-epic",
     cheapest: null,
     attractionTickets: [
-      {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
-        locale: "en",
-      },
       {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
         locale: "nl",
@@ -301,10 +281,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     cheapest: null,
     attractionTickets: [
       {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-single-day-ticket",
-        locale: "en",
-      },
-      {
         url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/tagestickets",
         locale: "de",
       },
@@ -341,10 +317,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     cheapest: null,
     attractionTickets: [
       {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
-        locale: "en",
-      },
-      {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
         locale: "nl",
       },
@@ -365,10 +337,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
       url: "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
     },
     attractionTickets: [
-      {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
-        locale: "en",
-      },
       {
         url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/unlimited-seaworld-aquatica-busch-gardens-adventure-island-tickets",
         locale: "de",
@@ -519,10 +487,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
     productId: "busch-gardens-1-day",
     cheapest: null,
     attractionTickets: [
-      {
-        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
-        locale: "en",
-      },
       {
         url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
         locale: "nl",
