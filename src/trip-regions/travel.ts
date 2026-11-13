@@ -104,29 +104,30 @@ export function doorToDoorMinutes(leg: TripLeg): number {
 }
 
 /**
- * Whether one hopper ticket covers both parks: the same set of the region's
- * `hopperSets` (Disney's four theme parks; Universal Studios and Islands of
- * Adventure, never Epic Universe).
+ * Whether one hopper ticket covers both parks: the same hop set, by default
+ * the region's `hopperSets` (Disney's four theme parks; Universal Studios and
+ * Islands of Adventure, never Epic Universe), else an owned ticket's.
  */
 export function sameHopperSet(
   region: RegionConfig,
   a: string,
   b: string,
+  sets: string[][] = region.hopperSets,
 ): boolean {
-  return (
-    a !== b && region.hopperSets.some((s) => s.includes(a) && s.includes(b))
-  );
+  return a !== b && sets.some((s) => s.includes(a) && s.includes(b));
 }
 
 /**
  * The parks that may share a hop day: theme parks one hopper ticket covers
- * ({@link sameHopperSet}) whose leg is under {@link HOP_MAX_MINUTES} door to
- * door. Water parks and Discovery Cove take a whole day and never hop.
+ * ({@link sameHopperSet}, with `sets` an owned ticket's hop sets) whose leg is
+ * under {@link HOP_MAX_MINUTES} door to door. Water parks and Discovery Cove
+ * take a whole day and never hop.
  */
 export function hopPairs(
   region: RegionConfig,
   legs: TripLeg[],
   slugs: string[],
+  sets: string[][] = region.hopperSets,
 ): Array<[string, string]> {
   const kindOf = new Map(region.groups.map((g) => [g.key, g.kind]));
   const parks = region.parks.filter(
@@ -138,7 +139,7 @@ export function hopPairs(
   const pairs: Array<[string, string]> = [];
   for (let i = 0; i < parks.length; i++) {
     for (let j = i + 1; j < parks.length; j++) {
-      if (!sameHopperSet(region, parks[i].slug, parks[j].slug)) continue;
+      if (!sameHopperSet(region, parks[i].slug, parks[j].slug, sets)) continue;
       const leg = findLeg(legs, parks[i].slug, parks[j].slug);
       if (leg && doorToDoorMinutes(leg) < HOP_MAX_MINUTES) {
         pairs.push([parks[i].slug, parks[j].slug]);

@@ -916,8 +916,9 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   comparison is against the plan without it.
 
 - **`alternatives`**: on a trip of 10 days or more, the UK 14-day tickets (`reason: "long_stay"`,
-  `markets: ["uk"]`: UK and Ireland residents only); the 4-Park Magic Ticket where its dates and one
-  visit per park fit (`reason: "promotion"`).
+  `markets: ["uk"]`: UK and Ireland residents only), on a resort's first suggestion; a promotion
+  (the 4-Park Magic Ticket, Universal's 2-Day Park-to-Park + 1 Day Epic) where its dates and caps
+  fit the same visits without extra days (`reason: "promotion"`).
 - **`id`**: `suggested:<resort>`, a second ticket for the resort `suggested:<resort>:2`.
 - **`notCoveredBy`**: the ids of the owned tickets of that resort that do not cover these parks
   (Epic Universe with a pass or a 1- or 2-day Universal ticket); absent when there are none.
@@ -1027,11 +1028,11 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   picked: its first used day, from which the window reaches furthest.
 - **`hopper`** of an owned ticket is `true`, `false` or `"unknown"` (`.h?`); with `"unknown"`,
   **`hopperVerdict`** has the shape of a suggestion's `hopper`.
-- **`unusedReason`**, with `unusedDays`, the first that holds: `window_outside_trip` (the trip holds
-  fewer days of the window than the ticket has, it starts before or ends after it),
-  `no_open_day` (a visit of its parks found no open day and was left out), `rest_days_kept` (the
-  trip's rest rule kept the days the ticket could have filled), `parks_fewer_than_days` (the planned
-  parks have every visit they get, second visits included, and need fewer days).
+- **`unusedReason`**, with `unusedDays`: `parks_fewer_than_days` (the planned parks have every
+  visit they get, second visits included, and need fewer days), `rest_days_kept` (the trip's rest
+  rule kept the days second visits could have filled), or, where the visits would fill it,
+  `window_outside_trip` (the trip holds fewer days of the window than the ticket has: it starts
+  before or ends after it) and `no_open_day` (its parks were closed on the days left).
 - **Days without a ticket**: arrival, departure and rest days carry no `ticket`; a park with no
   product in the catalog for its days (none today) would carry none either.
 - **Codes.** `meta.relaxed`: `ticket_window_relaxed`. Day warnings: `outside_ticket_window`.

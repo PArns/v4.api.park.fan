@@ -39,6 +39,24 @@ import {
 } from "./trip-evening";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
 import type { TripPlanDto } from "./dto/trip-region-response.dto";
+import {
+  canonicalTickets,
+  ownedHops,
+  ownedHopSets,
+  ownedVerdict,
+  parseTickets,
+  planTicketsOf,
+  productOf,
+  suggestTickets,
+  ticketSummaries,
+  type DayTicket,
+  type HopperVerdict,
+  type OwnedTicket,
+  type ReplanChange,
+  type SuggestionInput,
+  type TicketSuggestion,
+} from "./trip-tickets";
+import { parksOf } from "./tickets";
 
 /** The plan's options after validation, in one canonical form. */
 export interface NormalizedPlanQuery {
@@ -59,15 +77,28 @@ export interface NormalizedPlanQuery {
   hop: boolean;
   evenings: boolean;
   locks: PlanLock[];
-  /** `hop_needs_hopper`: `hop=1` came without `ticket=hopper` and was ignored. */
+  /** `hop_needs_hopper`: `hop=1` came without a hopper and was ignored. */
   warnings: Array<"hop_needs_hopper">;
+  /** The visitor's own tickets (`tickets=`); empty: plan first throughout. */
+  tickets: OwnedTicket[];
+  /** Plan first's resorts planned with the hopper (`hopper=`, or all with `ticket=hopper`). */
+  hopperResorts: string[];
+  /** `blocks` was written in the query: it then holds for owned tickets' resorts too. */
+  blocksWritten: boolean;
 }
 
 /** A plan before its answer is written: the optimizer's result and what split added. */
 export interface OptimizedTrip {
   plan: OptimizedPlan;
-  split: Array<{ slug: string; visits: number; auto: true }>;
+  split: Array<{ slug: string; visits: number; auto: true; ticket?: string }>;
+  /** The visits each park got, second visits included: what a second plan reuses. */
+  visits?: Map<string, number>;
+  /** Owned tickets whose second visits stopped for the trip's rest days. */
+  restKept?: Set<string>;
 }
+
+/** What a second plan changes: the hopper of one resort or one owned ticket. */
+export type PlanOverrides = ReplanChange;
 
 const flag = (value: string | undefined, fallback: boolean): boolean =>
   value === undefined ? fallback : value === "1" || value === "true";
@@ -87,6 +118,7 @@ export function normalizePlanQuery(
   known: string[],
   query: TripPlanQueryDto,
   today: string,
+  ticketScope?: { from: string; to: string; starts: boolean },
 ): NormalizedPlanQuery {
   validateWindow(query.from, query.to, MAX_TRIP_DAYS, today);
   const tripDays = daysBetween(query.from, query.to) + 1;
@@ -122,8 +154,30 @@ export function normalizePlanQuery(
   parks.sort((a, b) => a.slug.localeCompare(b.slug));
 
   const ticket: TicketKind = query.ticket === "hopper" ? "hopper" : "base";
+  const resorts = region.groups
+    .filter((g) => g.kind === "resort")
+    .map((g) => g.key);
+  const hopperResorts =
+    ticket === "hopper"
+      ? resorts
+      : [...new Set(query.hopper ? query.hopper.split(",") : [])].sort();
+  for (const key of hopperResorts) {
+    if (!resorts.includes(key)) {
+      throw new BadRequestException(
+        `hopper: ${key} is not a resort of ${region.name} (${resorts.join(", ")})`,
+      );
+    }
+  }
+  const tickets = parseTickets(
+    region,
+    query.tickets,
+    ticketScope ?? { from: query.from, to: query.to },
+    ticketScope?.starts ?? true,
+  );
   const hopAsked = flag(query.hop, false);
-  const hop = hopAsked && ticket === "hopper";
+  const hop =
+    hopAsked &&
+    (hopperResorts.length > 0 || tickets.some((t) => ownedHops(region, t)));
   const parkDays = parks.reduce((s, p) => s + p.visits, 0);
   if (parkDays > MAX_PARK_DAYS) {
     throw new BadRequestException(
@@ -197,6 +251,9 @@ export function normalizePlanQuery(
     evenings: flag(query.evenings, true),
     locks,
     warnings: hopAsked && !hop ? ["hop_needs_hopper"] : [],
+    tickets,
+    hopperResorts,
+    blocksWritten: query.blocks !== undefined,
   };
 }
 
@@ -220,6 +277,14 @@ export function planCacheQuery(q: NormalizedPlanQuery): string {
     q.locks.map((l) => `${l.target}@${l.date}`).join(","),
     q.ticket,
     q.evenings ? 1 : 0,
+    // Tickets changed nothing above; what they add goes last.
+    ...(q.tickets.length > 0 || q.hopperResorts.length > 0
+      ? [
+          canonicalTickets(q.tickets),
+          q.hopperResorts.join(","),
+          q.blocksWritten ? "b" : "-",
+        ]
+      : []),
   ].join("|");
 }
 
@@ -229,6 +294,7 @@ export function planInput(
   q: NormalizedPlanQuery,
   calendar: InternalRegionCalendar,
   visits: Map<string, number>,
+  change?: PlanOverrides,
 ): PlanInput {
   const configs = new Map(region.parks.map((p) => [p.slug, p]));
   const legs = buildLegs(region);
@@ -243,6 +309,21 @@ export function planInput(
       cells[s][day.date] = cell;
     }
   }
+  // A second plan may switch one resort's or one ticket's hopper.
+  let hopperResorts = q.hopperResorts;
+  let hopperTicket: string | undefined;
+  if (change && "resort" in change) {
+    hopperResorts = change.hopper
+      ? [...new Set([...hopperResorts, change.resort])]
+      : hopperResorts.filter((r) => r !== change.resort);
+  } else if (change?.hopper) {
+    hopperTicket = change.ticket;
+  }
+  const groupOf = new Map(region.parks.map((p) => [p.slug, p.group]));
+  const planFirstPairs = hopPairs(region, legs, slugs).filter(([a]) =>
+    hopperResorts.includes(groupOf.get(a) ?? ""),
+  );
+  const dates = calendar.days.map((d) => d.date);
   return {
     days: calendar.days.map((d) => ({
       date: d.date,
@@ -267,13 +348,18 @@ export function planInput(
       blockGroups: region.groups
         .filter((g) => g.kind === "resort")
         .map((g) => g.key),
+      blockOwned: q.blocks && q.blocksWritten,
       fireworks: q.fireworks,
       rest: q.rest,
-      hop: q.hop,
-      hopPairs: hopPairs(region, legs, slugs),
+      // A second plan's switched hopper may hop where the visitor did not ask.
+      hop: q.hop || (change?.hopper ?? false),
+      hopPairs: planFirstPairs,
       perkRules: region.perks[q.hotel],
       locks: q.locks,
     },
+    ...(q.tickets.length > 0 && {
+      tickets: planTicketsOf(region, q.tickets, dates, legs, hopperTicket),
+    }),
   };
 }
 
@@ -288,25 +374,76 @@ export function autoSplit(
   q: NormalizedPlanQuery,
   calendar: InternalRegionCalendar,
 ): Map<string, number> {
+  return splitVisits(region, q, calendar).visits;
+}
+
+/**
+ * {@link autoSplit} with what the plan route says about it: each owned
+ * ticket with a day count first gets second visits for its parks until its
+ * days are used (the ticket named), then the other parks as before. A park
+ * of such a ticket gets none beyond it. `restKept`: the tickets whose filling
+ * stopped for the trip's rest days.
+ */
+export function splitVisits(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+): {
+  visits: Map<string, number>;
+  byTicket: Map<string, string>;
+  restKept: Set<string>;
+} {
   const visits = new Map(q.parks.map((p) => [p.slug, p.visits]));
-  if (q.split !== "auto") return visits;
+  const byTicket = new Map<string, string>();
+  const restKept = new Set<string>();
+  if (q.split !== "auto") return { visits, byTicket, restKept };
   const ranked = region.parks
     .filter((c) => c.secondVisitRank != null)
     .sort((a, b) => (a.secondVisitRank ?? 0) - (b.secondVisitRank ?? 0))
     .filter((c) => q.parks.some((p) => p.slug === c.slug && !p.explicit));
   let room = extraVisitRoom(planInput(region, q, calendar, visits));
   let total = [...visits.values()].reduce((s, v) => s + v, 0);
+  const openDays = (slug: string) =>
+    calendar.days.filter(
+      (d) => d.parks[slug] && d.parks[slug].status !== "CLOSED",
+    ).length;
+  const counted = new Set<string>();
+  for (const o of q.tickets) {
+    const product = productOf(region, o.product);
+    if (!product || o.days === "unlimited") continue;
+    const covered = parksOf(product, o.days);
+    covered.forEach((slug) => counted.add(slug));
+    let ticketRoom =
+      o.days -
+      q.parks
+        .filter((p) => covered.includes(p.slug))
+        .reduce((sum, p) => sum + (visits.get(p.slug) ?? p.visits), 0);
+    for (const config of ranked) {
+      if (ticketRoom <= 0 || total >= MAX_PARK_DAYS) break;
+      if (!covered.includes(config.slug) || visits.get(config.slug) !== 1) {
+        continue;
+      }
+      if (room <= 0) {
+        restKept.add(o.id);
+        break;
+      }
+      if (openDays(config.slug) < 2) continue;
+      visits.set(config.slug, 2);
+      byTicket.set(config.slug, o.id);
+      room--;
+      total++;
+      ticketRoom--;
+    }
+  }
   for (const config of ranked) {
     if (room <= 0 || total >= MAX_PARK_DAYS) break;
-    const openDays = calendar.days.filter(
-      (d) => d.parks[config.slug] && d.parks[config.slug].status !== "CLOSED",
-    ).length;
-    if (openDays < 2) continue;
+    if (counted.has(config.slug) || visits.get(config.slug) !== 1) continue;
+    if (openDays(config.slug) < 2) continue;
     visits.set(config.slug, 2);
     room--;
     total++;
   }
-  return visits;
+  return { visits, byTicket, restKept };
 }
 
 /** Runs the optimizer for a query on its calendar, second visits included. */
@@ -315,7 +452,7 @@ export function optimizePlan(
   q: NormalizedPlanQuery,
   calendar: InternalRegionCalendar,
 ): OptimizedTrip {
-  const visits = autoSplit(region, q, calendar);
+  const { visits, byTicket, restKept } = splitVisits(region, q, calendar);
   const plan = optimizeTrip(planInput(region, q, calendar, visits));
   const split = q.parks
     .filter((p) => (visits.get(p.slug) ?? p.visits) !== p.visits)
@@ -323,8 +460,21 @@ export function optimizePlan(
       slug: p.slug,
       visits: visits.get(p.slug) as number,
       auto: true as const,
+      ...(byTicket.has(p.slug) && { ticket: byTicket.get(p.slug) }),
     }));
-  return { plan, split };
+  return { plan, split, visits, restKept };
+}
+
+/** The plan again with one resort's or one ticket's hopper switched, on the same visits. */
+export function replanTrip(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+  trip: OptimizedTrip,
+  change: PlanOverrides,
+): OptimizedPlan {
+  const visits = trip.visits ?? new Map(q.parks.map((p) => [p.slug, p.visits]));
+  return optimizeTrip(planInput(region, q, calendar, visits, change));
 }
 
 /**
@@ -402,6 +552,89 @@ export interface PlanResponseContext {
   shows?: EveningShows;
 }
 
+/**
+ * The hop sets an evening on a date may use: the owned ticket's the day uses,
+ * else the region's hopper sets where plan first has the hopper for the
+ * day's resort.
+ */
+export function dayHopSets(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  plan: OptimizedPlan,
+): (date: string) => string[][] {
+  const groupOf = new Map(region.parks.map((p) => [p.slug, p.group]));
+  const owned = new Map(q.tickets.map((t) => [t.id, t]));
+  const byDate = new Map(plan.days.map((d) => [d.date, d]));
+  return (date) => {
+    const day = byDate.get(date);
+    if (!day || day.parks.length === 0) return [];
+    const ticket = day.ticket ? owned.get(day.ticket) : undefined;
+    if (ticket) return ownedHopSets(region, ticket);
+    const resort = groupOf.get(day.parks[0].slug) ?? "";
+    return q.hopperResorts.includes(resort) ? region.hopperSets : [];
+  };
+}
+
+/** The ticket parts of an answer: the owned tickets, plan first's suggestion and its days. */
+export interface PlanTicketParts {
+  summaries: ReturnType<typeof ticketSummaries>;
+  suggestions: TicketSuggestion[];
+  days: Map<string, DayTicket>;
+  warnings: Array<"hop_needs_hopper" | "blockouts_unchecked">;
+}
+
+/** The answer's ticket parts for a planned trip. */
+export function planTickets(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+  trip: OptimizedTrip,
+  eveningsWith: SuggestionInput["eveningsWith"],
+): PlanTicketParts {
+  const { plan } = trip;
+  const input: SuggestionInput = {
+    region,
+    plan,
+    trip: { from: q.from, to: q.to },
+    owned: q.tickets,
+    hopperResorts: q.hopperResorts,
+    eveningsWith,
+    replan: (change) => replanTrip(region, q, calendar, trip, change),
+  };
+  const { suggestions, days } = suggestTickets(input);
+  const verdicts = new Map<string, HopperVerdict>();
+  for (const t of q.tickets) {
+    if (t.hopper !== "unknown") continue;
+    const verdict = ownedVerdict(input, t);
+    if (verdict) verdicts.set(t.id, verdict);
+  }
+  const dates = calendar.days.map((d) => d.date);
+  const available = dates.filter(
+    (_, i) =>
+      !(i === 0 && q.arrival === "free") &&
+      !(i === dates.length - 1 && dates.length > 1 && q.departure === "free"),
+  );
+  const summaries =
+    q.tickets.length > 0
+      ? ticketSummaries({
+          region,
+          owned: q.tickets,
+          planned: plan.tickets,
+          parks: q.parks.map((p) => p.slug),
+          available,
+          restKept: trip.restKept ?? new Set(),
+          visits:
+            trip.visits ?? new Map(q.parks.map((p) => [p.slug, p.visits])),
+          verdicts,
+        })
+      : [];
+  const warnings: PlanTicketParts["warnings"] = [...q.warnings];
+  if (summaries.some((t) => t.warnings.includes("blockouts_unchecked"))) {
+    warnings.push("blockouts_unchecked");
+  }
+  return { summaries, suggestions, days, warnings };
+}
+
 /** The plan route's answer. */
 export function planResponse(
   region: RegionConfig,
@@ -412,17 +645,20 @@ export function planResponse(
 ): TripPlanDto {
   const { plan } = trip;
   const legs = buildLegs(region);
-  const evenings = q.evenings
-    ? planEvenings({
-        region,
-        calendar,
-        legs,
-        days: plan.days,
-        trip: { from: q.from, to: q.to },
-        ticket: q.ticket,
-        shows: ctx.shows ?? new Map(),
-      })
-    : new Map();
+  const hopSetsOn = dayHopSets(region, q, plan);
+  const eveningsWith = (sets: (date: string) => string[][]) =>
+    planEvenings({
+      region,
+      calendar,
+      legs,
+      days: plan.days,
+      trip: { from: q.from, to: q.to },
+      ticket: q.ticket,
+      hopSetsOn: sets,
+      shows: ctx.shows ?? new Map(),
+    });
+  const evenings = q.evenings ? eveningsWith(hopSetsOn) : new Map();
+  const tickets = planTickets(region, q, calendar, trip, eveningsWith);
   const errors = plan.days.flatMap((day) =>
     visitsOf(day).flatMap((visit) => {
       if (visit.basis !== "forecast" && visit.basis !== "long_range") return [];
@@ -445,12 +681,18 @@ export function planResponse(
       ...(plan.relaxed.length > 0 && { relaxed: plan.relaxed }),
       ...(trip.split.length > 0 && { split: trip.split }),
       ticket: q.ticket,
-      ...(q.warnings.length > 0 && { warnings: q.warnings }),
+      ...(q.hopperResorts.length > 0 && { hopper: q.hopperResorts }),
+      ...(tickets.summaries.length > 0 && { tickets: tickets.summaries }),
+      ...(tickets.suggestions.length > 0 && {
+        ticketSuggestion: tickets.suggestions,
+      }),
+      ...(tickets.warnings.length > 0 && { warnings: tickets.warnings }),
     },
     days: plan.days.map((day) => {
       const evening = evenings.get(day.date);
       return {
         ...withTravel(day, legs, q.area),
+        ...(!day.ticket && tickets.days.get(day.date)),
         ...(evening && { evening }),
       };
     }) as unknown as Array<Record<string, unknown>>,

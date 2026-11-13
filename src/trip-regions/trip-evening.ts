@@ -234,7 +234,19 @@ export interface EveningInput {
   days: PlannedDay[];
   trip: { from: string; to: string };
   ticket: TicketKind;
+  /**
+   * The hop sets of the ticket a day uses, where that is not `ticket` (an
+   * owned ticket's, docs/frontend/trip-regions.md#tickets); empty: no hop.
+   * Absent: `ticket=hopper` hops within the region's `hopperSets`.
+   */
+  hopSetsOn?: (date: string) => string[][];
   shows: EveningShows;
+}
+
+/** The hop sets an evening on a date may use. */
+function eveningHopSets(input: EveningInput, date: string): string[][] {
+  if (input.hopSetsOn) return input.hopSetsOn(date);
+  return input.ticket === "hopper" ? input.region.hopperSets : [];
 }
 
 /** The evening of each trigger day, by date. */
@@ -261,8 +273,9 @@ function eveningFor(
   const cell = cells?.[t.park];
   if (!cells || !isOpen(cell)) return undefined;
   const close = closeMinute(t.date, cell.closesAt);
+  const sets = eveningHopSets(input, t.date);
   const hops =
-    input.ticket === "hopper" ? hopCandidates(input, t, cells, close) : [];
+    sets.length > 0 ? hopCandidates(input, t, cells, close, sets) : [];
   const venues = venueCandidates(input, t, cells, close);
   const ranked = (list: Candidate[]) =>
     list.sort((a, b) => compareRank(a.rank, b.rank)).map((c) => c.option);
@@ -320,12 +333,13 @@ function hopCandidates(
   t: EveningTrigger,
   cells: Record<string, TripParkDayInternal>,
   close: number,
+  sets: string[][],
 ): Candidate[] {
   const { region, legs } = input;
   const tz = region.timezone;
   const out: Candidate[] = [];
   for (const [slug, c] of Object.entries(cells)) {
-    if (!sameHopperSet(region, t.park, slug)) continue;
+    if (!sameHopperSet(region, t.park, slug, sets)) continue;
     if (!isOpen(c) || partyNight(c)) continue;
     const leg = findLeg(legs, t.park, slug);
     if (!leg) continue;

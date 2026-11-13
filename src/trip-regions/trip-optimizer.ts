@@ -238,6 +238,11 @@ export interface PlanOptions {
   blocks: boolean;
   /** The groups `blocks` keeps together (the resorts; day trips stay free). */
   blockGroups: string[];
+  /**
+   * `blocks` holds for the resorts of owned tickets too (written in the query);
+   * otherwise their windows replace it and they may mix.
+   */
+  blockOwned?: boolean;
   fireworks: FireworksOption;
   rest: RestOption;
   hop: boolean;
@@ -263,7 +268,7 @@ export interface PlanTicket {
   days: number;
   /** Calendar days its use may spread over from its start; Infinity: no window. */
   window: number;
-  /** A fixed start date; absent: the plan picks the start. */
+  /** A fixed start date, which may lie before the trip; absent: the plan picks the start. */
   start?: string;
   /** The dates a picked start may be (on sale); absent: any day of the trip. */
   startOptions?: string[];
@@ -923,7 +928,7 @@ class TripOptimizer {
     const windowed = this.tickets.some(
       (t) => Number.isFinite(t.window) || (t.reservedDayParks?.length ?? 0) > 0,
     );
-    for (let attempt = 0; attempt <= units.length + 1; attempt++) {
+    for (let attempt = 0; attempt <= units.length + 3; attempt++) {
       // A failed attempt's loosened rules are not the plan's.
       const relaxedBefore = new Set(this.relaxed);
       best = this.searchAll(pool, lockedUnitDay, available, useBlocks);
@@ -937,8 +942,13 @@ class TripOptimizer {
         continue;
       }
       if (windowed && !this.relaxWindows) {
-        // No placement keeps every ticket's window: a day may leave it, at a price.
+        // No placement keeps every ticket's window: a day may leave it, at a
+        // price. The blocks come back: it may have been the windows alone.
         this.relaxWindows = true;
+        if (options.blocks) {
+          this.relaxed.delete("blocks_relaxed");
+          useBlocks = true;
+        }
         continue;
       }
       const stuck = this.stuckUnits(pool, lockedUnitDay, available);
@@ -1143,6 +1153,15 @@ class TripOptimizer {
     return date === undefined ? undefined : this.dateIndex.get(date);
   }
 
+  /** Days from the trip's first day to a date, negative before it. */
+  private offsetOf(date: string): number {
+    return Math.round(
+      (Date.parse(`${date}T00:00:00Z`) -
+        Date.parse(`${this.dates[0]}T00:00:00Z`)) /
+        86_400_000,
+    );
+  }
+
   /** Whether a row on a day lies outside its owned ticket's window (or off its reserved day). */
   private outsideTicket(row: Row, day: number, starts: number[]): boolean {
     const ti = row.units[0].ticket;
@@ -1176,10 +1195,9 @@ class TripOptimizer {
     const t = this.tickets[ti];
     const n = this.n;
     if (!Number.isFinite(t.window)) return [NaN];
-    const fixed = this.dayIndexOf(t.start);
     let starts: number[];
-    if (fixed !== undefined) {
-      starts = [fixed];
+    if (t.start !== undefined) {
+      starts = [this.offsetOf(t.start)];
     } else {
       const all = Array.from({ length: n }, (_, i) => i);
       const allowed = t.startOptions ? new Set(t.startOptions) : null;
@@ -1580,8 +1598,11 @@ class TripOptimizer {
     const none = [() => false];
     if (!useBlocks) return none;
     const blockable = new Set(this.input.options.blockGroups);
-    // An owned ticket's window replaces its resort's block.
-    const planFirst = (row: Row) => row.units[0].ticket === undefined;
+    // An owned ticket's window replaces its resort's block, unless the query
+    // asked for blocks in so many words.
+    const planFirst = (row: Row) =>
+      this.input.options.blockOwned === true ||
+      row.units[0].ticket === undefined;
     const groups = [
       ...new Set(
         rows
