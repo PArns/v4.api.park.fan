@@ -253,7 +253,8 @@ export class TripCalendarDto {
 export class TripPlanDto {
   @ApiProperty({
     description:
-      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, warnings",
+      "region, from, to, computedAt, objective, exact, relaxed, split, ticket, tickets " +
+      "(TripPlanTicketDto[]), ticketSuggestion (TripTicketSuggestionDto[]), warnings",
     type: "object",
     additionalProperties: true,
   })
@@ -261,7 +262,9 @@ export class TripPlanDto {
   @ApiProperty({
     description:
       "One entry per trip day: arrival | park | hop | rest | departure. A park day that " +
-      "ends early carries `evening` (a hop park or a venue, with up to two alternatives).",
+      "ends early carries `evening` (a hop park or a venue, with up to two alternatives). " +
+      "A park or hop day carries `ticket` (an owned ticket's id or a suggestion's) and " +
+      "`ticketDay`, or `ticketAllowance` on an allowance visit.",
     type: "array",
     items: { type: "object" },
   })

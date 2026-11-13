@@ -24,6 +24,8 @@ by the key guard). It answers 400 for:
   does);
 - any trip option `/plan` refuses (an unknown park, more visits than days without `hop`, …), and
   `lock`, which no window can take;
+- an owned ticket with a start date (`tickets=…@2027-02-01`): a fixed start leaves no window to
+  search;
 - an unknown query parameter.
 
 ## Parameters
@@ -35,6 +37,8 @@ by the key guard). It answers 400 for:
 | `parks`, `hotel`, `area`, `arrival`, `departure`, `blocks`, `fireworks`, `split`, `rest`, `hop` | as `/plan`          | the trip each window is planned for, validated and defaulted by the plan's own `normalizePlanQuery`                             |
 | `parties`                                                                                       | none                | deprecated name of `fireworks`: `avoid` reads as `want`, `allow` and `prefer` as `any`; `fireworks` wins                        |
 | `within`                                                                                        | none                | a code from `/school-breaks` (`DE-NW`, `NL-GR`, `GB-ENG` …): only windows lying wholly inside one of that region's breaks count |
+| `tickets`                                                                                       | none                | owned tickets as on `/plan`, without `@date`: each window searches their starts ([tickets](#tickets))                           |
+| `suggest`                                                                                       | `0`                 | `1`: each window carries plan first's suggested tickets                                                                         |
 | `limit`                                                                                         | 5                   | windows returned, at most 10                                                                                                    |
 | `gap`                                                                                           | 7                   | minimum days between two returned windows' start dates, so the list is not five shifts of one week                              |
 
@@ -185,6 +189,7 @@ by the key guard). It answers 400 for:
   - `hurricaneSeason`: June to November.
 
   `weeks` and `months` show the plain figures, without the heat and hurricane terms.
+
 - **Reasons** (the client translates the codes and shows nothing for an unknown one):
   - `no_school_break`: no day of the window is a US school break and none is unknown;
   - `after_holidays`: and a school break ended within 7 days before it;
@@ -209,7 +214,9 @@ by the key guard). It answers 400 for:
   - `hours_not_published`: a planned day has no published hours;
   - `estimate_last_year`: a planned day reads last year's figure;
   - `water_park_closed`: a chosen water park has a curated closure in the window, or could not be
-    placed.
+    placed;
+  - `ticket_window_relaxed`: an owned ticket's window could not hold every planned day
+    ([tickets](#tickets)).
 
   The school-break codes are about the region's own (US) school calendar, which is what fills the
   parks; `within` is about the visitor's.
@@ -219,6 +226,47 @@ by the key guard). It answers 400 for:
   `meta.within.periods` listed, so the client can say why; `weeks` and `months` still cover the
   range. `meta.within.through` is the last day the stored school data reaches; a break after it is
   unknown, not absent.
+
+## Tickets
+
+`tickets` and `suggest` work as on `/plan` ([tickets](./trip-regions.md#tickets)), per window:
+
+- **Owned tickets** (`tickets=wdw-uk-14-day-magic,uor-uk-three-park-adventure`) bind every window's
+  plan, each ticket's start searched inside the window and on sale there. A window whose plan puts a
+  day outside a ticket's window (`ticket_window_relaxed`) adds 1000 to its score per such day, as an
+  unplaced visit does, and warns `ticket_window_relaxed`; a visit a ticket cannot take is unplaced
+  as usual. Each window carries `tickets`:
+  `[{ id, start, end, usedDays, unusedDays? }]`, the plan's own `meta.tickets` in short.
+- **`suggest=1`** gives each returned window `ticketSuggestion`, the plan's `meta.ticketSuggestion`
+  for the parks on plan first, `hopper` included (its `eveningHops` read without the show times).
+  It is computed for the returned windows only, after the search, and changes no ranking.
+
+```jsonc
+{
+  "rank": 1,
+  "from": "2027-02-16",
+  "to": "2027-02-25",
+  "…": "…",
+  "tickets": [
+    {
+      "id": "t1",
+      "start": "2027-02-17",
+      "end": "2027-03-06",
+      "usedDays": 6,
+      "unusedDays": 8,
+    },
+  ],
+  "ticketSuggestion": [
+    {
+      "id": "suggested:universal-orlando",
+      "resort": "universal-orlando",
+      "product": "uor-date-based",
+      "days": 3,
+      "…": "as on /plan",
+    },
+  ],
+}
+```
 
 ## How it is computed
 
