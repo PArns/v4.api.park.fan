@@ -37,7 +37,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "wdw-date-based",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Walt Disney World",
       url: "https://disneyworld.disney.go.com/admission/tickets/",
@@ -46,7 +59,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "wdw-date-based-plus",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag-mit",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Walt Disney World",
       url: "https://disneyworld.disney.go.com/admission/tickets/",
@@ -55,7 +81,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "wdw-4-park-magic",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-tickets/disney-4-park-magic-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Walt Disney World",
       url: "https://disneyworld.disney.go.com/admission/tickets/four-park-magic-ticket-offer/",
@@ -64,7 +103,16 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "wdw-uk-14-day-magic",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+        locale: "nl",
+      },
+    ],
     official: {
       seller: "Disney Holidays UK",
       url: "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
@@ -73,7 +121,12 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "wdw-uk-7-day-magic",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-7-day-ticket",
+        locale: "en",
+      },
+    ],
     official: {
       seller: "Disney Holidays UK",
       url: "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
@@ -91,7 +144,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "uor-date-based",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/universal-orlando-resort/2-park-1-day-park-to-park-tickets",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Universal Orlando Resort",
       url: "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
@@ -109,7 +175,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "uor-1-day-plus-epic",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-resort/universal-orlando-1-tag-park-park-plus-1-tag",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Universal Orlando Resort",
       url: "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
@@ -118,7 +197,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "uor-2-day-p2p-plus-epic",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-2-tages-park-park-plus-1-tages-universal-epic-universe",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Universal Orlando Resort",
       url: "https://www.universalorlando.com/web/en/us/tickets-packages/offers/ticketoffer",
@@ -145,7 +237,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "uor-uk-all-parks",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-4-park-explorer-ticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Universal Orlando UK store",
       url: "https://ukstore.universalorlando.com/park-tickets",
@@ -154,7 +259,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "uor-uk-three-park-adventure",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Universal Orlando UK store",
       url: "https://ukstore.universalorlando.com/park-tickets",
@@ -181,7 +299,16 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "seaworld-1-day",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-single-day-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/tagestickets",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -190,7 +317,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "seaworld-two-park",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/2-visit-seaworld-and-aquatica-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-two-park-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/2-park-ticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -199,7 +339,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "seaworld-three-park-3-day",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/3-park-ticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -207,8 +360,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   },
   {
     productId: "seaworld-four-parks-14-day",
-    cheapest: null,
-    attractionTickets: null,
+    cheapest: {
+      seller: "Attraction Tickets",
+      url: "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
+    },
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/seaworld-orlando/unlimited-seaworld-aquatica-busch-gardens-adventure-island-tickets",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -216,8 +381,16 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   },
   {
     productId: "seaworld-uk-3-visit",
-    cheapest: null,
-    attractionTickets: null,
+    cheapest: {
+      seller: "Attraction Tickets",
+      url: "https://www.attractiontickets.com/en/orlando/seaworld/three-park-ticket-plus-all-day-dining",
+    },
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando/seaworld/three-park-ticket-plus-all-day-dining",
+        locale: "en",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -225,8 +398,16 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   },
   {
     productId: "seaworld-uk-ultimate",
-    cheapest: null,
-    attractionTickets: null,
+    cheapest: {
+      seller: "Attraction Tickets",
+      url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket",
+    },
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket",
+        locale: "en",
+      },
+    ],
     official: {
       seller: "SeaWorld Orlando",
       url: "https://seaworld.com/orlando/tickets/",
@@ -271,7 +452,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "discovery-cove",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-tageserlebnis",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Discovery Cove",
       url: "https://discoverycove.com/orlando/pricing/",
@@ -280,7 +474,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "discovery-cove-plus-2",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Discovery Cove",
       url: "https://discoverycove.com/orlando/pricing/",
@@ -289,7 +496,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "discovery-cove-plus-3",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/discovery-cove-orlando/discovery-cove-ultimate-package-swim",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Discovery Cove",
       url: "https://discoverycove.com/orlando/pricing/",
@@ -298,7 +518,20 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   {
     productId: "busch-gardens-1-day",
     cheapest: null,
-    attractionTickets: null,
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/au/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tagesticket",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "Busch Gardens Tampa Bay",
       url: "https://buschgardens.com/tampa/tickets/",
@@ -315,8 +548,24 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   },
   {
     productId: "legoland-1-day",
-    cheapest: null,
-    attractionTickets: null,
+    cheapest: {
+      seller: "Attraction Tickets",
+      url: "https://www.attractiontickets.com/us/orlando-attraction-tickets/legoland-florida/legoland-florida-promo-ticket",
+    },
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando/legoland-florida/tagestickets",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "LEGOLAND Florida",
       url: "https://www.legoland.com/florida/tickets-passes/tickets/",
@@ -333,8 +582,24 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
   },
   {
     productId: "legoland-merlin-7-attractions",
-    cheapest: null,
-    attractionTickets: null,
+    cheapest: {
+      seller: "Attraction Tickets",
+      url: "https://www.attractiontickets.com/us/orlando-attraction-tickets/merlin-florida-combo-ticket",
+    },
+    attractionTickets: [
+      {
+        url: "https://www.attractiontickets.com/en/orlando-attraction-tickets/merlin-florida-combo-ticket",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/merlin-florida-combo-ticket",
+        locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/de/orlando-attraction-tickets/peppa-pig-legoland-florida-legoland-waterpark",
+        locale: "de",
+      },
+    ],
     official: {
       seller: "LEGOLAND Florida",
       url: "https://www.legoland.com/florida/tickets-passes/tickets/",
