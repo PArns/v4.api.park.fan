@@ -37,7 +37,7 @@
     "priceFrom": "189.00",
     "priceCurrency": "USD",
     "opensAt": "19:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://disneyworld.disney.go.com/events-tours/magic-kingdom/mickeys-very-merry-christmas-party/",
     "sourceUrl": "https://disneyworld.disney.go.com/events-tours/magic-kingdom/mickeys-very-merry-christmas-party/",
     "notes": "25 party nights, 23 of them inside the window (from 12 Nov). Magic Kingdom closes to day guests at 18:00 on every party night (park.fan feed); party ticket holders may enter from 16:00. Adult tickets $189-$229 by date, children 3-9 $10 less; no day ticket or park reservation needed. Party days are typically lighter during the day than non-party days, but the afternoon fills with party guests from 16:00; non-party days (Mon/Wed/Sat in Nov-Dec) absorb the displaced day crowd and close at 22:00-23:00. Feed gap: 9 of these nights have no TICKETED_EVENT row in the park.fan feed (24, 25, 27, 29 Nov; 13, 15, 17, 20, 22 Dec), although the 18:00 day close is there."
@@ -63,7 +63,7 @@
     "status": "confirmed",
     "separateTicket": false,
     "opensAt": "09:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://disneyworld.disney.go.com/events-tours/calendar/",
     "sourceUrl": "https://disneyworld.disney.go.com/events-tours/calendar/",
     "notes": "Disney's event calendar confirms New Year's Eve celebrations and fireworks on 31 Dec 2026; hours 09:00-24:00 come from the park.fan feed (30 Dec also runs to midnight). Historically the most likely day of the year for Magic Kingdom to reach capacity; plan another park or arrive at opening."
@@ -114,7 +114,7 @@
     "status": "expected",
     "separateTicket": true,
     "opensAt": "19:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://disneyworld.disney.go.com/events-tours/magic-kingdom/mickeys-not-so-scary-halloween-party/",
     "sourceUrl": "https://disneyworld.disney.go.com/events-tours/calendar/",
     "notes": "2027 not announced (official page: 'check back for future events'). Range inferred from 2026, which ran select nights 7 Aug-31 Oct 2026 (sold out); 2027 start shifted to the matching Friday. On party nights MK closes to day guests at 18:00 (2026 pattern). Disney After Hours at MK ends 19 Jul 2027, consistent with an August party start. Dates usually announced in spring."
@@ -128,7 +128,7 @@
     "status": "expected",
     "separateTicket": true,
     "opensAt": "19:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://disneyworld.disney.go.com/events-tours/magic-kingdom/mickeys-very-merry-christmas-party/",
     "sourceUrl": "https://disneyworld.disney.go.com/events-tours/magic-kingdom/mickeys-very-merry-christmas-party/",
     "notes": "2027 not announced. Range mirrors the 2026 season (Sun 8 Nov-Tue 22 Dec 2026) on matching weekdays. 2026 had 25 party nights with MK closing to day guests at 18:00."
@@ -368,7 +368,7 @@
     "status": "confirmed",
     "separateTicket": false,
     "opensAt": "09:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://disneyworld.disney.go.com/events-tours/calendar/",
     "sourceUrl": "https://disneyworld.disney.go.com/events-tours/calendar/",
     "notes": "Open until midnight per the park.fan feed; Disney's calendar confirms resort-wide NYE celebrations on 31 Dec 2026."
@@ -517,7 +517,7 @@
     "priceFrom": "179.99",
     "priceCurrency": "USD",
     "opensAt": "21:00",
-    "closesAt": "24:00",
+    "closesAt": "00:00",
     "url": "https://media.universalparksusa.com/press-releases/universal-orlando-resort-tickets-on-sale-afterhours-epic-universe-this-october-081326/",
     "sourceUrl": "https://www.parkjourney.com/industry-news/universal-orlando-resort-adds-three-new-dates-for-universal-nights-the-exclusive-after-hours-event-debuting-this-october-at-universal-epic-universe",
     "notes": "Only 20 Nov 2026 is inside the window. Limited-capacity after-hours event; ticket admits from 19:00. Original two dates from Universal's 13 Aug 2026 release; 24 Oct, 6 Nov and 20 Nov from Universal's 2 Sep 2026 release (read via the Park Journey reprint). Epic closes to day guests at 20:00 on 20 Nov (feed) but the feed has no TICKETED_EVENT row for the event. No 2027 dates announced."

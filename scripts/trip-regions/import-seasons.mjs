@@ -62,7 +62,8 @@ const KINDS = new Set([
 ]);
 const STATUSES = new Set(["confirmed", "announced", "expected", "cancelled"]);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME = /^([01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+/** The admin route's own rule: 00:00–23:59. A midnight close is 00:00, read as the next day. */
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 async function api(method, path, body) {
   const res = await fetch(`${base}/v1/${path}`, {
@@ -138,6 +139,7 @@ function problem(row) {
   if (row.endDate < row.startDate) return "endDate is before startDate";
   if (row.status && !STATUSES.has(row.status)) return `status "${row.status}" is unknown`;
   for (const f of ["opensAt", "closesAt"]) {
+    if (row[f] === "24:00") return `${f} is 24:00: write midnight as 00:00`;
     if (row[f] != null && !TIME.test(row[f])) return `${f} is not HH:MM`;
   }
   if (row.dates != null && !Array.isArray(row.dates)) return "dates is not a list";
