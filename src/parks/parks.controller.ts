@@ -36,6 +36,7 @@ import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
 import { PlanDayService } from "./services/plan-day.service";
+import { cachedPlanDay } from "./services/plan-day-cache";
 import { BestDaysService } from "./services/best-days.service";
 import { AttractionsService } from "../attractions/attractions.service";
 import { AttractionIntegrationService } from "../attractions/services/attraction-integration.service";
@@ -1603,13 +1604,7 @@ export class ParksController {
 
     // Built once per park, date and quarter hour: since a key is required the
     // answer leaves private and Cloudflare no longer absorbs the repeats.
-    return cachedJson(
-      this.redis,
-      CacheKeys.planDayResponse(park.id, date),
-      15 * 60,
-      () => this.planDayService.buildPlanDay(park, date),
-      (plan) => plan.ridesUnavailable?.reason !== "data_unavailable",
-    );
+    return cachedPlanDay(this.redis, this.planDayService, park, date);
   }
 
   /**

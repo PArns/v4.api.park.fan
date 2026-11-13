@@ -388,7 +388,6 @@ describe("get_best_days", () => {
 });
 import {
   foldText,
-  lastYearDays,
   rideBadges,
   runAssistantTool,
   showsCard,
@@ -403,34 +402,12 @@ import { CalendarService } from "../../parks/services/calendar.service";
 import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { addIsoDays } from "../../common/utils/date.util";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 
 describe("the same day last year", () => {
-  it("keeps the date and finds the nearest day of the same weekday", () => {
-    // Saturday 2026-11-07: a year back the 7th is a Friday, the Saturday is the 8th.
-    expect(lastYearDays("2026-11-07")).toEqual({
-      sameDate: "2025-11-07",
-      sameWeekday: "2025-11-08",
-    });
-    // Halloween 2026 is a Saturday; 2025-10-31 a Friday, so Saturday 2025-11-01.
-    expect(lastYearDays("2026-10-31").sameWeekday).toBe("2025-11-01");
-    // Across a leap day: Monday 2029-03-05 → Monday 2028-03-06 (the 5th is a Sunday).
-    expect(lastYearDays("2029-03-05")).toEqual({
-      sameDate: "2028-03-05",
-      sameWeekday: "2028-03-06",
-    });
-    expect(lastYearDays("2028-02-29").sameDate).toBe("2027-02-28");
-    for (const date of ["2026-01-01", "2026-06-15", "2027-12-31"]) {
-      const { sameDate, sameWeekday } = lastYearDays(date);
-      const dow = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
-      expect(dow(sameWeekday)).toBe(dow(date));
-      const off = Math.abs(Date.parse(sameWeekday) - Date.parse(sameDate));
-      expect(off).toBeLessThanOrEqual(3 * 86_400_000);
-    }
-  });
-
   it("answers with the calendar's day, and null for a day it has nothing on", async () => {
     const calendar = {
       buildCalendarResponse: jest.fn(async () => ({
@@ -1415,6 +1392,79 @@ describe("compare_parks", () => {
         },
       ],
     ]);
+
+  it("ranks a park whose day guests leave early behind a full day with a similar wait", async () => {
+    // Magic Kingdom on a party night: 40 min but out at 18:00 against a usual
+    // 23:00; Animal Kingdom 45 min over a full day (as on 2026-11-24).
+    const MK = parkRow("66666666-6666-4666-8666-666666666666", "Magic Kingdom");
+    const AK = parkRow(
+      "77777777-7777-4777-8777-777777777777",
+      "Animal Kingdom",
+    );
+    const NY = "America/New_York";
+    const local = (date: string, time: string) =>
+      fromZonedTime(`${date}T${time}:00`, NY).toISOString();
+    const window = (from: Date, to: Date) => {
+      const out: string[] = [];
+      for (
+        let d = from.toISOString().slice(0, 10);
+        d <= to.toISOString().slice(0, 10);
+        d = addIsoDays(d, 1)
+      ) {
+        out.push(d);
+      }
+      return out;
+    };
+    const calendarFor = jest.fn(
+      async (p: { id: string }, from: Date, to: Date) => ({
+        meta: {
+          scheduleCoverage: { from: "2025-12-26", to: dayAhead(100) },
+          hasOperatingSchedule: true,
+        },
+        days: window(from, to).map((date) => ({
+          date,
+          status: "OPERATING",
+          crowdLevel: p.id === MK.id ? "low" : "moderate",
+          headlinerForecast: { avgWait: p.id === MK.id ? 40 : 45 },
+          hours: {
+            openingTime: local(date, "09:00"),
+            closingTime:
+              p.id === MK.id && date === DATE
+                ? local(date, "18:00")
+                : local(date, p.id === MK.id ? "23:00" : "20:00"),
+            isInferred: false,
+          },
+        })),
+      }),
+    );
+    const parks = [MK, AK].map((row) => ({ ...row, timezone: NY }));
+    const { json } = await run(
+      "compare_parks",
+      { parks: [MK.id, AK.id], date: DATE },
+      new Map<unknown, unknown>([
+        [
+          ParksService,
+          {
+            findById: jest.fn(async (id: string) =>
+              parks.find((row) => row.id === id),
+            ),
+            getSchedule: jest.fn(async () => []),
+          },
+        ],
+        [CalendarService, { buildCalendarResponse: calendarFor }],
+      ]),
+    );
+    expect(json.ranked.map((row: { name: string }) => row.name)).toEqual([
+      "Animal Kingdom",
+      "Magic Kingdom",
+    ]);
+    expect(json.ranked[1]).toMatchObject({
+      closes: `${DATE} 18:00`,
+      closesEarlyForDayGuests: true,
+      usualClose: "23:00",
+    });
+    expect(json.ranked[0]).not.toHaveProperty("closesEarlyForDayGuests");
+  });
 
   it("ranks a country's parks quietest first, closed and unrated apart", async () => {
     const { json } = await run(

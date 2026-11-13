@@ -362,69 +362,14 @@ export class HolidaysService {
     entries: import("../external-apis/open-holidays/open-holidays.types").OpenHolidaysEntry[],
     countryCode: string,
   ): Promise<number> {
-    const holidaysToUpsert: HolidayInput[] = [];
-
-    for (const entry of entries) {
-      const start = new Date(`${entry.startDate}T12:00:00Z`);
-      const end = new Date(`${entry.endDate}T12:00:00Z`);
-      const current = new Date(start);
-
-      while (current <= end) {
-        try {
-          const dateStr = current.toISOString().split("T")[0];
-          const name =
-            entry.name.find((n) => n.language.toUpperCase() === "EN")?.text ||
-            entry.name.find(
-              (n) => n.language.toUpperCase() === countryCode.toUpperCase(),
-            )?.text ||
-            entry.name[0]?.text ||
-            "School Holiday";
-
-          // Regions: Support both 'subdivisions' and 'groups' (BE uses groups)
-          let regionsToCheck = entry.subdivisions?.map((s) => s.code) || [];
-          if (regionsToCheck.length === 0 && entry.groups) {
-            regionsToCheck = entry.groups.map((g) => g.code);
-          }
-
-          if (entry.regionalScope === "National" || entry.nationwide) {
-            regionsToCheck = [null] as any;
-          }
-
-          if (
-            regionsToCheck.length === 0 &&
-            entry.regionalScope !== "National"
-          ) {
-            current.setUTCDate(current.getUTCDate() + 1);
-            continue;
-          }
-
-          for (const regionCode of regionsToCheck) {
-            const regionPart = regionCode || "national";
-            const externalId = `openholidays:${countryCode}:${regionPart}:${dateStr}:${entry.id}`;
-
-            const holidayDate = new Date(current);
-            holidayDate.setUTCHours(0, 0, 0, 0);
-
-            holidaysToUpsert.push({
-              externalId,
-              date: holidayDate,
-              name,
-              localName: name,
-              country: countryCode,
-              region: regionCode || undefined,
-              holidayType: "school",
-              isNationwide: !regionCode,
-            });
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to process school holiday entry ${entry.id}: ${error}`,
-          );
-        }
-        current.setUTCDate(current.getUTCDate() + 1);
-      }
-    }
-
+    const holidaysToUpsert = openHolidaysSchoolRows(
+      entries,
+      countryCode,
+      (id, error) =>
+        this.logger.warn(
+          `Failed to process school holiday entry ${id}: ${error}`,
+        ),
+    );
     return this.saveRawHolidays(holidaysToUpsert);
   }
 
@@ -1127,4 +1072,75 @@ export function bridgeDaysOf(
     }
   }
   return [...days].sort();
+}
+
+/**
+ * OpenHolidays school entries as the rows the sync stores: one per day and
+ * subdivision (or group, where an entry names no subdivision), a national
+ * entry as one row without a region. Pure, so the trip-region dev shim reads
+ * OpenHolidays the way the sync does (docs/frontend/trip-regions-when.md).
+ */
+export function openHolidaysSchoolRows(
+  entries: import("../external-apis/open-holidays/open-holidays.types").OpenHolidaysEntry[],
+  countryCode: string,
+  onError?: (entryId: string, error: unknown) => void,
+): HolidayInput[] {
+  const holidaysToUpsert: HolidayInput[] = [];
+
+  for (const entry of entries) {
+    const start = new Date(`${entry.startDate}T12:00:00Z`);
+    const end = new Date(`${entry.endDate}T12:00:00Z`);
+    const current = new Date(start);
+
+    while (current <= end) {
+      try {
+        const dateStr = current.toISOString().split("T")[0];
+        const name =
+          entry.name.find((n) => n.language.toUpperCase() === "EN")?.text ||
+          entry.name.find(
+            (n) => n.language.toUpperCase() === countryCode.toUpperCase(),
+          )?.text ||
+          entry.name[0]?.text ||
+          "School Holiday";
+
+        // Regions: Support both 'subdivisions' and 'groups' (BE uses groups)
+        let regionsToCheck = entry.subdivisions?.map((s) => s.code) || [];
+        if (regionsToCheck.length === 0 && entry.groups) {
+          regionsToCheck = entry.groups.map((g) => g.code);
+        }
+
+        if (entry.regionalScope === "National" || entry.nationwide) {
+          regionsToCheck = [null] as any;
+        }
+
+        if (regionsToCheck.length === 0 && entry.regionalScope !== "National") {
+          current.setUTCDate(current.getUTCDate() + 1);
+          continue;
+        }
+
+        for (const regionCode of regionsToCheck) {
+          const regionPart = regionCode || "national";
+          const externalId = `openholidays:${countryCode}:${regionPart}:${dateStr}:${entry.id}`;
+
+          const holidayDate = new Date(current);
+          holidayDate.setUTCHours(0, 0, 0, 0);
+
+          holidaysToUpsert.push({
+            externalId,
+            date: holidayDate,
+            name,
+            localName: name,
+            country: countryCode,
+            region: regionCode || undefined,
+            holidayType: "school",
+            isNationwide: !regionCode,
+          });
+        }
+      } catch (error) {
+        onError?.(entry.id, error);
+      }
+      current.setUTCDate(current.getUTCDate() + 1);
+    }
+  }
+  return holidaysToUpsert;
 }

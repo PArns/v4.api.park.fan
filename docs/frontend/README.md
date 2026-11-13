@@ -27,6 +27,7 @@ page for the field or endpoint you are reading or changing.
 | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | [api-keys](./api-keys.md)                                         | which routes need a data key, `?forecast=true` on mixed routes, issuing keys                                    |
 | [plan-day/](./plan-day/README.md)                                 | `/plan/day`: the trip planner's per-ride series for one date                                                    |
+| [plan-day/optimize.md](./plan-day/optimize.md)                    | `POST …/plan/optimize`: the trip planner's day optimizer, behind a data key                                     |
 | [schedule](./schedule.md)                                         | `/schedule`: a park's opening-hours range                                                                       |
 | [yearly-predictions](./yearly-predictions.md)                     | `/predictions/yearly`: crowd outlook per day of the year                                                        |
 | [park-seasons](./park-seasons.md)                                 | `/seasons`: a park's named seasons and events                                                                   |
@@ -34,6 +35,8 @@ page for the field or endpoint you are reading or changing.
 | [restaurants](./restaurants.md)                                   | restaurants on the park payload: `cuisineType`, `requiresReservation` (unknown is absent)                       |
 | [weather](./weather.md)                                           | `/weather`, `/weather/forecast`, `/weather/nowcast`                                                             |
 | [trips](./trips.md)                                               | `/v1/trips`: stored plans, the id as credential, write limits                                                   |
+| [trip-regions](./trip-regions.md)                                 | `/v1/trip-regions/*`: a region's parks and travel times, its days side by side, the optimized vacation plan     |
+| [trip-regions-when](./trip-regions-when.md)                       | `/v1/trip-regions/:region/when` and `/school-breaks`: the best dates for a trip, the year strip, school breaks  |
 | [assistant](./assistant.md)                                       | `/v1/assistant/*`: Parky's chat, tools, limits, the sealed Claude key, site feedback                            |
 | [push](./push.md)                                                 | `/v1/push*`: subscriptions, topics, ride alerts, followed shows, quiet hours                                    |
 | [favorites](./favorites.md)                                       | `/v1/favorites`: favourites with full entities and distances                                                    |

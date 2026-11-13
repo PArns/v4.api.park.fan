@@ -137,6 +137,28 @@ describe("AssistantPageService.subject", () => {
     expect(parks.findByGeographicPath).not.toHaveBeenCalled();
   });
 
+  it("names the Orlando hub and its month pages, in every language, without a lookup", async () => {
+    const { service, cache } = setup();
+    const hub =
+      "park.fan's Orlando hub: a crowd calendar of all Orlando parks and the vacation planner";
+    expect(await service.subject("/de/orlando", "de")).toBe(hub);
+    expect(await service.subject("/fr/orlando/2026/12", "fr")).toBe(
+      `${hub}, showing December 2026`,
+    );
+    expect(await service.subject("/en/orlando/2027/3", "en")).toBe(
+      `${hub}, showing March 2027`,
+    );
+    for (const path of [
+      "/de/orlando/2026/13",
+      "/de/orlando/2026",
+      "/de/orlando/2026/12/1",
+      "/de/orlando/epcot",
+    ]) {
+      expect([path, await service.subject(path, "de")]).toEqual([path, null]);
+    }
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
   it("reads a resolved page from the cache the second time", async () => {
     const { service, cache, posts } = setup();
     const first = await service.subject("/de/blog/best-days", "de");

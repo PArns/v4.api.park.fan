@@ -32,6 +32,7 @@ import {
   roundServedWait,
   servePcnIntraday as servePcnIntradayFlag,
 } from "./pcn-serving.constants";
+import { SERVING_TFT_DAYS } from "./serving-horizons.constants";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -1280,7 +1281,7 @@ export class MLService {
    */
   async getServingDailyPredictions(
     parkId: string,
-    tftDays = 60,
+    tftDays = SERVING_TFT_DAYS,
   ): Promise<BulkPredictionResponseDto> {
     // Single-flight: concurrent calendar/yearly requests that all miss the
     // underlying cache share one CatBoost rebuild instead of stampeding it.

@@ -14,6 +14,7 @@ uncommitted. Tracked:
 | `scripts/backup/parkfan-backup.sh`, `backup.env.example` | The nightly host backup ([backup](../deployment/backup.md)).                                                                                                                                  |
 | `scripts/python-deps/`                                   | Artefact compatibility checks for a Python dependency upgrade ([Python dependencies](python-dependencies.md#re-running-the-check)).                                                           |
 | `scripts/generate-swagger-spec.ts`                       | Runs as `postbuild` and writes the Swagger spec; skipped with a warning when it fails.                                                                                                        |
+| `scripts/trip-regions/` | `build-travel-matrix.mjs` rebuilds the trip regions' OSRM travel matrix; `import-seasons.mjs` imports researched park seasons through the admin API, a dry run unless `--apply` (the Orlando list researched for 2026/27, with its sources per row, is `seasons/orlando-2026-27.json`); `dev-server.ts` is the local stand-in for the trip-region routes (below) ([trip regions](../frontend/trip-regions.md)) |
 | [`scripts/README.md`](../../scripts/README.md)           | A pointer to this page.                                                                                                                                                                       |
 
 ## Package commands
@@ -43,6 +44,37 @@ the same jobs run from tracked code:
 | `job:baselines-recalc`                        | Bull Board: `calculate-park-baselines` / `calculate-attraction-baselines` on `p50-baseline`                                                       |
 | `clear-queues`                                | Bull Board, per queue ([job queues](../architecture/job-queues.md))                                                                               |
 | `repair:schedule-dates`                       | A one-off, run on 2026-07-27; `normalizeClosingTime` now repairs misdated closes on write. Audit old rows with SQL through `scripts/prod-psql.sh` |
+
+## The trip-region dev shim
+
+`pnpm trip-regions:dev` serves `http://localhost:3001` for the frontend while the trip-region
+routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions/:region`,
+`/calendar`, `/best-days`, `/plan`, `/when` and `/school-breaks`, and `POST
+/v1/parks/…/plan/optimize`, by running the API's own modules (`trip-region.assembly`,
+`trip-best-days`, `trip-plan.assembly`, `trip-evening`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
+`trip-school-breaks`, the day optimizer's `engine`) on production's public answers (`/calendar`,
+`/schedule`, `/seasons`, `/plan/day`, read in spans of at most 90 days) and, for the school
+breaks, on OpenHolidays and the curated sets through the sync's own `openHolidaysSchoolRows`, and
+passes every other path to `https://api.park.fan` unchanged. It adds fetching
+and wiring and no rule of its own, so its answers are the API's for the same data.
+
+- **Key:** the calendar, plan day and plan routes need a data key. In the Claude Code container the
+  HTTPS proxy injects one; elsewhere set `DEV_API_KEY` (sent as `X-API-Key`, never printed).
+- **Proxy:** Node's `fetch` reaches a proxy only with `NODE_USE_ENV_PROXY=1`; the shim restarts
+  itself with it when `HTTPS_PROXY` is set (without it production answers 401).
+- **Seasons:** production holds no Orlando seasons yet. `DEV_SEASONS_FILE=<file>` adds the rows of a
+  JSON file in the shape `import-seasons.mjs` reads, skipping a row without an end date and one
+  production already has (same park, kind and name, overlapping dates).
+- **Cache:** each production answer is kept 15 minutes in memory; a cold calendar takes a few
+  seconds.
+- **Where it differs from the deployed API**, because production does not serve the input:
+  no `meta.forecastUntil` (the warmup's Redis key); group names are the curated ones
+  (`SeaWorld Orlando`), not the `destinations` rows (`SeaWorld Parks and Resorts Orlando`);
+  production's `/schedule` carries no `description`, so a gap-filled CLOSED day past the published
+  hours reads as stated; `headlinerWait` ranks on the rounded figure until the calendar's
+  `exactWait` is deployed; the day optimizer gets no `ridesInWorks` and its request is not
+  validated; `expectedError` reads `/plan/day`'s `leadTimeMae` per planned date, and the
+  evenings' night shows `/plan/day`'s `shows` for each park and evening the plan asks for.
 
 ## Running a local script
 

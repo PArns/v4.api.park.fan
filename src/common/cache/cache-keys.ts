@@ -101,6 +101,13 @@ export const CacheKeys = {
     `plan-day:resp:v1:${parkId}:${date}`,
   planDayResponsePattern: (parkId: string): string =>
     `plan-day:resp:v1:${parkId}:*`,
+  /**
+   * The rides a works window shuts on a planned day, beside the plan the
+   * optimizer reads. Under the response's own prefix, so whatever evicts the
+   * plan (`planDayResponsePattern`) evicts this with it.
+   */
+  planDayRidesInWorks: (parkId: string, date: string): string =>
+    `plan-day:resp:v1:${parkId}:${date}:works`,
   rideDayCurve: (parkId: string, attraction: string): string =>
     `ride-day-curve:v1:${parkId}:${attraction}`,
   rideDayCurvePattern: (parkId: string): string =>
@@ -109,6 +116,24 @@ export const CacheKeys = {
     `predictions-yearly:resp:v1:${parkId}:${date}`,
   predictionsYearlyResponsePattern: (parkId: string): string =>
     `predictions-yearly:resp:v1:${parkId}:*`,
+
+  /**
+   * Trip regions (`src/trip-regions/`). The calendar and the plan are whole
+   * answers kept an hour; the two below are written by the calendar warmup and
+   * read by the calendar: a past month's measured figures for the `last_year`
+   * days, and the last day a region park's calendar carries a forecast.
+   */
+  tripRegionCalendar: (region: string, from: string, to: string): string =>
+    `trip-regions:calendar:v1:${region}:${from}:${to}`,
+  tripRegionPlan: (region: string, query: string): string =>
+    `trip-regions:plan:v1:${region}:${query}`,
+  /** `/when` by its normalized query, six hours (`TRIP_WHEN_TTL`). */
+  tripRegionWhen: (region: string, query: string): string =>
+    `trip-regions:when:v1:${region}:${query}`,
+  tripLastYearMonth: (parkId: string, ym: string): string =>
+    `trip-regions:last-year:v1:${parkId}:${ym}`,
+  tripForecastUntil: (parkId: string): string =>
+    `trip-regions:forecast-until:v1:${parkId}`,
 
   /** Glob matching every schedule:* key of a park (parkId is the 3rd segment!). */
   scheduleParkPattern: (parkId: string): string => `schedule:*:${parkId}:*`,

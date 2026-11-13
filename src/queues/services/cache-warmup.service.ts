@@ -27,6 +27,30 @@ import {
   CALENDAR_WARMUP_CURRENT_MONTH_TTL,
   CALENDAR_WARMUP_MONTH_TTL,
 } from "../../common/cache/cache-ttl";
+import { regionOfPark } from "../../trip-regions/regions";
+import {
+  shiftMonth,
+  writeLastYearMonth,
+} from "../../trip-regions/last-year-snapshot";
+import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
+
+/** Calendar months warmed ahead of the current one, for every park. */
+const CALENDAR_MONTHS_AHEAD = 3;
+/**
+ * A trip region's parks are warmed a year ahead and a month more: the region
+ * calendar (docs/frontend/trip-regions.md) serves a year and reads two weeks
+ * past its last day for the usual day (`referenceRange`), and `/when`
+ * (docs/frontend/trip-regions-when.md) reads all of it at once. Months past the
+ * forecast (about six) are cheap to build: no forecast to merge, only hours.
+ */
+const REGION_CALENDAR_MONTHS_AHEAD = 13;
+/**
+ * And their past months, back to this one, are kept as last-year snapshots:
+ * the region calendar's days past the forecast (months 7–12) read the same
+ * weekday a year earlier. The current and the previous month are in the
+ * ordinary window; the snapshots cover -6 … -2.
+ */
+const REGION_LAST_YEAR_MONTHS_BACK = 6;
 
 /**
  * Cache Warmup Service
@@ -36,7 +60,8 @@ import {
  *
  * Strategy:
  * - Parks: Warm up OPERATING parks or parks opening within 12h
- * - Calendar: Warm up calendar (current + next month) once per day for all parks (warmup-calendar-daily job)
+ * - Calendar: Warm up calendar months −1…+3 twice a day for all parks, −1…+13 plus last-year
+ *   snapshots for a trip region's parks (warmup-calendar-daily job)
  * - Attractions: Warm up top 100 most popular attractions (based on queue data frequency)
  * - Skip if cache is fresh (< 2 min old) to avoid redundant work
  */
@@ -188,7 +213,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
   }
 
   /**
-   * Warm up calendar cache for one park: -1 month to +3 months (park timezone).
+   * Warm up calendar cache for one park: -1 month to +3 months (park timezone),
+   * to +13 for a trip region's park (see {@link warmTripRegionPark}).
    * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
    * Called from warmupCalendarForAllParks (background warmup every 12h).
    *
@@ -214,8 +240,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         fromM += 12;
         fromY -= 1;
       }
-      // To: last day of (current + 3 months)
-      let endM = m + 3;
+      // To: last day of (current + 3 months), +13 for a trip region's park.
+      const region = regionOfPark(park);
+      let endM =
+        m + (region ? REGION_CALENDAR_MONTHS_AHEAD : CALENDAR_MONTHS_AHEAD);
       let endY = y;
       while (endM > 12) {
         endM -= 12;
@@ -267,6 +295,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // try, so a grid-build throw (the ~150-day window trips a limit the ≤90-day read path
       // never hits) skipped precompute for EVERY park → all /best-days snapshots empty.
       // Logged at warn (not debug) so the underlying grid-build failure stays visible.
+      const warmedDays: CalendarDay[] = [];
       try {
         // Build the grid MONTH BY MONTH, not as one −1..+3-month call. That full 5-month
         // window's parallel per-(ride,day) CTE fan-out over queue_data exhausts the DB
@@ -282,12 +311,13 @@ export class CacheWarmupService implements OnApplicationBootstrap {
           const first = `${cy}-${String(cm).padStart(2, "0")}-01`;
           const lastDay = new Date(cy, cm, 0).getDate(); // cm is 1-based → last day of month cm
           const last = `${cy}-${String(cm).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-          await this.calendarService.buildCalendarResponse(
+          const month = await this.calendarService.buildCalendarResponse(
             park,
             new Date(`${first}T12:00:00.000Z`),
             new Date(`${last}T12:00:00.000Z`),
             "none",
           );
+          if (region) warmedDays.push(...month.days);
           cm += 1;
           if (cm > 12) {
             cm = 1;
@@ -323,6 +353,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         this.logger.warn(`Calendar grid warm failed for ${park.slug}: ${gm}`);
       }
 
+      if (region) {
+        await this.warmTripRegionPark(park, todayStr, warmedDays);
+      }
+
       // Materialize the lean best-days snapshot (today → +90d) — INDEPENDENT of the grid
       // warm above (does its own 90-day build), so it runs even when the grid build throws.
       // This is what lets /best-days serve a single Redis GET instead of the cold path.
@@ -331,6 +365,60 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Calendar warmup skipped for ${park.slug}: ${msg}`);
       return null;
+    }
+  }
+
+  /**
+   * The two things a trip region's calendar reads besides the month caches:
+   * the last day this park's calendar carries a forecast (`forecastUntil`,
+   * read off what the warm months actually returned, not a constant), and the
+   * last-year snapshots of the past months its days past the forecast fall
+   * back to. A snapshot that exists is left alone: a passed month does not
+   * change, and it lives a week (`TRIP_LAST_YEAR_TTL`).
+   */
+  private async warmTripRegionPark(
+    park: Park,
+    todayStr: string,
+    warmedDays: CalendarDay[],
+  ): Promise<void> {
+    try {
+      const forecastDays = warmedDays
+        .filter(
+          (d) =>
+            d.date >= todayStr &&
+            d.headlinerForecast &&
+            !d.headlinerForecast.actual,
+        )
+        .map((d) => d.date)
+        .sort();
+      const until = forecastDays[forecastDays.length - 1];
+      if (until) {
+        await this.redis.set(
+          CacheKeys.tripForecastUntil(park.id),
+          until,
+          "EX",
+          this.WARMUP_MONTH_TTL,
+        );
+      }
+
+      const current = todayStr.slice(0, 7);
+      for (let back = REGION_LAST_YEAR_MONTHS_BACK; back >= 2; back--) {
+        const ym = shiftMonth(current, -back);
+        const exists = await this.redis.exists(
+          CacheKeys.tripLastYearMonth(park.id, ym),
+        );
+        if (exists) continue;
+        await writeLastYearMonth(
+          this.calendarService,
+          this.redis,
+          park,
+          ym,
+          todayStr,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Trip-region warm failed for ${park.slug}: ${msg}`);
     }
   }
 

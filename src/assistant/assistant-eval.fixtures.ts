@@ -26,6 +26,12 @@ export interface EvalCase {
   forbid?: string[] | "actions" | "any";
   /** Canned results by tool name, for the calls before the last wanted one. */
   results?: Record<string, unknown>;
+  /**
+   * What the final answer, after the canned results, must say: each `must`
+   * (a case-insensitive regex) has to match whenever its `when` matches, or
+   * always without one. For the few rules a tool choice cannot show.
+   */
+  answer?: Array<{ when?: string; must: string }>;
 }
 
 const PHL_ID = "0b8f3c1e-7d2a-4c55-9a61-2f1e3d4c5b6a";
@@ -75,6 +81,64 @@ const PLAN: PlannerSnapshot = {
 };
 
 const PUSH_READY: AlertsSnapshot = { push: "ready", rides: [], shows: [] };
+
+const HUB_SUBJECT =
+  "park.fan's Orlando hub: a crowd calendar of all Orlando parks and the vacation planner";
+
+/** A plan_vacation answer as the next turn's history holds it: text only, no tool result. */
+const ORLANDO_PLAN_ANSWER =
+  "So würde ich es machen: Mittwoch, 3. März Anreise. Donnerstag, 4. März Magic Kingdom, Freitag EPCOT, Samstag Epic Universe, Sonntag Pause, Montag Islands of Adventure, Dienstag Hollywood Studios, Mittwoch, 10. März Abreise. Soll ich dir die Tage in deinen Tagesplaner legen?";
+
+/** What plan_vacation returns when the eval lets Parky look the plan up again. */
+const ORLANDO_PLAN_RESULT = {
+  region: "Orlando",
+  trip: { from: "2027-03-03", to: "2027-03-10", days: 8 },
+  days: [
+    {
+      date: "2027-03-04",
+      weekday: "Thursday",
+      kind: "park",
+      parks: [{ park: "Magic Kingdom Park", headlinerWait: 45 }],
+    },
+    {
+      date: "2027-03-05",
+      weekday: "Friday",
+      kind: "park",
+      parks: [{ park: "EPCOT", headlinerWait: 35 }],
+    },
+  ],
+  hubUrl:
+    "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:1#planner",
+  reserve: [
+    { park: "magic-kingdom-park", date: "2027-03-04" },
+    { park: "epcot", date: "2027-03-05" },
+  ],
+};
+
+/** A plan with Animal Kingdom closing early and a Park Hopper evening after it. */
+const ORLANDO_HOPPER_RESULT = {
+  region: "Orlando",
+  trip: { from: "2027-03-03", to: "2027-03-10", days: 8 },
+  days: [
+    {
+      date: "2027-03-08",
+      weekday: "Monday",
+      kind: "park",
+      parks: [
+        {
+          park: "Disney's Animal Kingdom Theme Park",
+          headlinerWait: 40,
+          hours: "08:00–18:00",
+        },
+      ],
+      evening:
+        "hop to Disney's Hollywood Studios 18:17–21:00, 17 min by drive; Fantasmic! 20:00 (projected); or hop to EPCOT or Disney Springs",
+    },
+  ],
+  hubUrl:
+    "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&ticket=hopper#planner",
+  reserve: [{ park: "disneys-animal-kingdom-theme-park", date: "2027-03-08" }],
+};
 
 export const EVAL_CASES: EvalCase[] = [
   {
@@ -642,5 +706,268 @@ export const EVAL_CASES: EvalCase[] = [
     pageSubject: "the park.fan home page",
     message: "Wann hast du eigentlich mal Urlaub?",
     forbid: "any",
+  },
+  {
+    id: "orlando-vacation-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10" },
+      },
+    ],
+  },
+  {
+    id: "orlando-vacation-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We're in Orlando from March 3 to 10. Which park should we do on which day?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10" },
+      },
+    ],
+  },
+  {
+    id: "orlando-when-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir wollen zu Disney und Universal, wann am besten 2027?",
+    want: [{ tool: "find_trip_dates" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-when-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We want to do Disney and Universal. When is the best time in 2027?",
+    want: [{ tool: "find_trip_dates" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-when-within-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message:
+      "Wir wollen zu Disney und Universal, wann am besten in den NRW-Sommerferien 2027?",
+    want: [{ tool: "find_trip_dates", input: { within: "DE-NW" } }],
+  },
+  {
+    id: "orlando-when-within-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message:
+      "We live in North Rhine-Westphalia and can only go in the summer school holidays 2027. When should we do Disney and Universal?",
+    want: [{ tool: "find_trip_dates", input: { within: "DE-NW" } }],
+  },
+  {
+    id: "orlando-one-day-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Welcher Park ist am Samstag am leersten in Orlando?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-one-day-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message: "Which Orlando park is the least busy on Saturday?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "orlando-best-disney-park-early-close-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    now: "2026-11-12 10:15",
+    message: "Which Disney park is best on Tue 24 Nov?",
+    allowBefore: ["search_parks"],
+    want: [{ tool: "compare_parks" }],
+    forbid: ["plan_vacation"],
+    // As compare_parks ranks the day: Magic Kingdom's party night (40 min, out
+    // at 18:00) behind Animal Kingdom's full day (45 min).
+    results: {
+      compare_parks: {
+        date: "2026-11-24",
+        ranked: [
+          {
+            name: "Disney's Animal Kingdom Theme Park",
+            opens: "2026-11-24 08:00",
+            closes: "2026-11-24 20:00",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 45,
+            schoolVacation: true,
+          },
+          {
+            name: "Magic Kingdom Park",
+            opens: "2026-11-24 08:00",
+            closes: "2026-11-24 18:00",
+            closesEarlyForDayGuests: true,
+            usualClose: "23:00",
+            crowdLevel: "low",
+            expectedPeakWaitMinutes: 40,
+            schoolVacation: true,
+          },
+          {
+            name: "EPCOT",
+            opens: "2026-11-24 09:00",
+            closes: "2026-11-24 21:00",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 55,
+          },
+        ],
+        unrated: [],
+        closed: [],
+        hoursNotPublished: [],
+      },
+    },
+    // Magic Kingdom may be named, but never without its early close.
+    answer: [
+      { when: "magic kingdom", must: "18[:.]00|6(:00)?\\s*(pm|p\\.m\\.)" },
+    ],
+  },
+  {
+    id: "orlando-christmas-party-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    message: "Wann ist die Christmas Party?",
+    want: [{ tool: "get_park_events" }],
+  },
+  {
+    id: "orlando-christmas-party-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    message: "When is the Christmas party?",
+    want: [{ tool: "get_park_events" }],
+  },
+  {
+    id: "orlando-travel-time-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wie weit ist es vom Magic Kingdom zum Epic Universe?",
+    want: [{ tool: "get_travel_time", input: { from: "*", to: "*" } }],
+  },
+  {
+    id: "orlando-travel-time-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message: "How far is it from Magic Kingdom to Epic Universe?",
+    want: [{ tool: "get_travel_time", input: { from: "*", to: "*" } }],
+  },
+  {
+    id: "orlando-plan-into-planner-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?"],
+      ["assistant", ORLANDO_PLAN_ANSWER],
+    ],
+    message: "Pack das in meinen Planer",
+    allowBefore: ["plan_vacation"],
+    want: [{ tool: "plan_trip", input: { days: "*" } }],
+    results: { plan_vacation: ORLANDO_PLAN_RESULT },
+  },
+  {
+    id: "orlando-hopper-evening-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Wir sind vom 3. bis 10. März in Orlando, welcher Park wann?"],
+      [
+        "assistant",
+        "So würde ich es machen: Mittwoch, 3. März Anreise. Donnerstag Magic Kingdom, Freitag EPCOT, Samstag Pause, Sonntag Hollywood Studios, Montag, 8. März Animal Kingdom, Dienstag Islands of Adventure, Mittwoch, 10. März Abreise.",
+      ],
+    ],
+    message:
+      "Wir haben Park Hopper, was machen wir abends nach Animal Kingdom?",
+    want: [
+      {
+        tool: "plan_vacation",
+        input: { from: "2027-03-03", to: "2027-03-10", ticket: "hopper" },
+      },
+    ],
+    results: { plan_vacation: ORLANDO_HOPPER_RESULT },
+    answer: [{ must: "Hollywood Studios|Fantasmic" }],
+  },
+  {
+    id: "orlando-plan-into-planner-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "We're in Orlando from March 3 to 10, which park on which day?"],
+      [
+        "assistant",
+        "Here's my pick: arrive Wednesday 3 March, Magic Kingdom on Thursday, EPCOT on Friday, Epic Universe on Saturday, a rest day on Sunday, Islands of Adventure on Monday, Hollywood Studios on Tuesday, and fly home on Wednesday 10 March. Shall I put the days into your planner?",
+      ],
+    ],
+    message: "Yes, put that in my planner",
+    allowBefore: ["plan_vacation"],
+    want: [{ tool: "plan_trip", input: { days: "*" } }],
+    results: { plan_vacation: ORLANDO_PLAN_RESULT },
+  },
+  {
+    id: "orlando-hub-and-epic-de",
+    locale: "de",
+    pagePath: "/de/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      [
+        "user",
+        "Welcher Tag vom 3. bis 10. März ist im Magic Kingdom am besten?",
+      ],
+      [
+        "assistant",
+        "Am entspanntesten wird der Donnerstag, 4. März: die großen Bahnen liegen im Schnitt bei 45 Minuten.",
+      ],
+    ],
+    message: "und für Epic?",
+    want: [
+      {
+        tool: ["plan_vacation", "get_days", "compare_parks", "get_best_days"],
+      },
+    ],
+  },
+  {
+    id: "orlando-hub-and-epic-en",
+    locale: "en",
+    pagePath: "/en/orlando",
+    pageSubject: HUB_SUBJECT,
+    history: [
+      ["user", "Which day from March 3 to 10 is best for Magic Kingdom?"],
+      [
+        "assistant",
+        "Thursday 4 March looks calmest: the big rides average 45 minutes at their busiest.",
+      ],
+    ],
+    message: "and for Epic?",
+    want: [
+      {
+        tool: ["plan_vacation", "get_days", "compare_parks", "get_best_days"],
+      },
+    ],
   },
 ];

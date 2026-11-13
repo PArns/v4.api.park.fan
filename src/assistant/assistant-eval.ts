@@ -16,10 +16,13 @@ import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
 import { ASSISTANT_TOOL_PARAMS } from "./tools/assistant-tools";
 import { EVAL_CASES, type EvalCase } from "./assistant-eval.fixtures";
 
-/** Tools that change the page, the plan, the alerts or the chat: what "actions" forbids. */
+/**
+ * Tools that change the page, the plan, the alerts or the chat: what "actions" forbids.
+ * `plan_vacation` only reads, whatever its prefix says.
+ */
 export const ACTION_TOOLS = ASSISTANT_TOOL_PARAMS.map((t) => t.name).filter(
   (name) =>
-    name.startsWith("plan_") ||
+    (name.startsWith("plan_") && name !== "plan_vacation") ||
     [
       "open_page",
       "set_ride_alert",
@@ -56,8 +59,12 @@ function matches(expected: unknown, actual: unknown): boolean {
   return expected === actual;
 }
 
-/** Why a case failed, or null when it passed. */
-export function judge(testCase: EvalCase, calls: ToolCall[]): string | null {
+/** Why a case failed, or null when it passed. `answer` is the final text, where a case checks it. */
+export function judge(
+  testCase: EvalCase,
+  calls: ToolCall[],
+  answer = "",
+): string | null {
   const forbidden =
     testCase.forbid === "any"
       ? calls
@@ -82,6 +89,12 @@ export function judge(testCase: EvalCase, calls: ToolCall[]): string | null {
       return `${call.name} with ${JSON.stringify(call.input)}`;
     }
   }
+  for (const rule of testCase.answer ?? []) {
+    if (rule.when && !new RegExp(rule.when, "i").test(answer)) continue;
+    if (!new RegExp(rule.must, "i").test(answer)) {
+      return `answer without /${rule.must}/${rule.when ? ` though it says /${rule.when}/` : ""}`;
+    }
+  }
   return null;
 }
 
@@ -103,7 +116,7 @@ async function run(
   client: Anthropic,
   prompt: string,
   testCase: EvalCase,
-): Promise<ToolCall[]> {
+): Promise<{ calls: ToolCall[]; answer: string }> {
   const system: Anthropic.TextBlockParam[] = [
     { type: "text", text: prompt, cache_control: { type: "ephemeral" } },
     {
@@ -127,10 +140,13 @@ async function run(
     { role: "user", content: testCase.message },
   ];
   const calls: ToolCall[] = [];
-  const rounds = Math.min(
-    3,
-    (testCase.want?.length ?? 0) + (testCase.allowBefore?.length ?? 0) || 1,
-  );
+  let answer = "";
+  // A case that checks the answer gets one more round to write it.
+  const rounds =
+    Math.min(
+      3,
+      (testCase.want?.length ?? 0) + (testCase.allowBefore?.length ?? 0) || 1,
+    ) + (testCase.answer ? 1 : 0);
   for (let round = 0; round < rounds; round++) {
     const response = await client.messages.create({
       model: ASSISTANT_MODEL,
@@ -144,6 +160,10 @@ async function run(
     const uses = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
     );
+    answer = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
     if (!uses.length) break;
     calls.push(
       ...uses.map((use) => ({
@@ -165,7 +185,7 @@ async function run(
       },
     );
   }
-  return calls;
+  return { calls, answer };
 }
 
 async function main(): Promise<void> {
@@ -208,8 +228,9 @@ async function main(): Promise<void> {
     let verdict: string | null;
     let calls: ToolCall[] = [];
     try {
-      calls = await run(client, prompt, testCase);
-      verdict = judge(testCase, calls);
+      const result = await run(client, prompt, testCase);
+      calls = result.calls;
+      verdict = judge(testCase, calls, result.answer);
     } catch (error) {
       verdict = `error: ${(error as Error).message}`;
     }
