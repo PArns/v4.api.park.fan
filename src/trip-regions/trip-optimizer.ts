@@ -17,6 +17,7 @@
  * past that. A plan is reported `exact` only when nothing on the way was cut
  * short; the contract (docs/frontend/trip-regions.md) says how to read it.
  */
+import { addIsoDays } from "../common/utils/date.util";
 import { solveAssignment } from "./hungarian";
 import type { PerkKind, PerkRule, TripParkType } from "./regions";
 
@@ -36,6 +37,8 @@ const SOLVE_BUDGET = 20000;
 const HOP_COMBO_LIMIT = 200;
 /** Local-search evaluations of rest patterns per structure. */
 const REST_LOCAL_SEARCH_EVALS = 600;
+/** Combinations of the owned tickets' free starts tried per pairing. */
+const START_COMBO_LIMIT = 3000;
 
 /**
  * The share a hotel perk takes off a park's cost on the day it applies. Fixed
@@ -244,12 +247,46 @@ export interface PlanOptions {
   locks: PlanLock[];
 }
 
+/**
+ * A ticket the visitor already has, as the optimizer keeps it: the parks a
+ * day of it covers, its days and window, its caps and hop pairs. Resolved
+ * from the catalog by `trip-tickets.ts`; contract:
+ * docs/frontend/trip-regions.md#tickets.
+ */
+export interface PlanTicket {
+  id: string;
+  /** Parks a ticket day covers. */
+  parks: string[];
+  /** Visits that use no ticket day (UK Magic water parks), at most `visits`. */
+  allowance?: { parks: string[]; visits: number };
+  /** Days it may be used on; Infinity for a pass. */
+  days: number;
+  /** Calendar days its use may spread over from its start; Infinity: no window. */
+  window: number;
+  /** A fixed start date; absent: the plan picks the start. */
+  start?: string;
+  /** The dates a picked start may be (on sale); absent: any day of the trip. */
+  startOptions?: string[];
+  /** Parks used only on `reservedDay` (Discovery Cove); the window must hold that day. */
+  reservedDayParks?: string[];
+  reservedDay?: string;
+  /** At most `max` days on which any of `parks` is visited (a hop day between two is one). */
+  caps: Array<{ parks: string[]; max: number }>;
+  /** Parks one hop day of this ticket may combine. */
+  hopPairs: Array<[string, string]>;
+}
+
 export interface PlanInput {
   days: PlanDayInfo[];
   parks: PlanPark[];
   /** cells[slug][date]; a missing cell reads as UNKNOWN. */
   cells: Record<string, Record<string, PlanCell>>;
   options: PlanOptions;
+  /**
+   * The visitor's own tickets. A park one of them covers is planned inside
+   * its rules; the others are planned as before ("plan first").
+   */
+  tickets?: PlanTicket[];
 }
 
 export type PlanReason =
@@ -274,7 +311,8 @@ export type PlanWarning =
   | "long_streak"
   | "extreme_heat"
   | "hurricane_season"
-  | "hurricane_peak";
+  | "hurricane_peak"
+  | "outside_ticket_window";
 
 export interface PlannedParkVisit {
   slug: string;
@@ -296,6 +334,12 @@ export interface PlannedDay {
   perks?: PerkKind[];
   reasons: PlanReason[];
   warnings: PlanWarning[];
+  /** The owned ticket the day uses (its id); plan first's days get theirs later. */
+  ticket?: string;
+  /** The day's number among the ticket's days. */
+  ticketDay?: number;
+  /** A visit on the ticket's allowance, which uses no ticket day. */
+  ticketAllowance?: true;
 }
 
 export interface PlanAlternative {
@@ -337,14 +381,34 @@ export interface PlanPenalties {
   hurricane?: number;
 }
 
+/** An owned ticket as the plan used it. */
+export interface PlannedTicket {
+  id: string;
+  /** The window's first day: the given start, or the first day the plan uses it. */
+  start?: string;
+  /** The plan picked `start`. */
+  startChosen?: true;
+  /** The window's last day. */
+  end?: string;
+  usedDays: number;
+  allowanceVisits: number;
+}
+
+export type UnplacedReason = "no_open_day" | "no_day_left" | "no_ticket_day";
+
 export interface OptimizedPlan {
   exact: boolean;
-  /** Rules the plan had to loosen: `blocks_relaxed`, `streak_relaxed`. */
+  /**
+   * Rules the plan had to loosen: `blocks_relaxed`, `streak_relaxed`,
+   * `ticket_window_relaxed`.
+   */
   relaxed: string[];
   days: PlannedDay[];
   parks: PlannedParkSummary[];
   totals: PlanTotals;
-  unplaced: Array<{ slug: string; reason: "no_open_day" | "no_day_left" }>;
+  unplaced: Array<{ slug: string; reason: UnplacedReason }>;
+  /** The owned tickets in input order; empty without any. */
+  tickets: PlannedTicket[];
   ignoredLocks: Array<{
     lock: string;
     reason: "outside_trip" | "closed" | "day_taken" | "no_visit_left";
@@ -356,6 +420,10 @@ export interface OptimizedPlan {
 interface Unit {
   slug: string;
   visit: number;
+  /** The owned ticket (its index) the visit uses; absent: plan first. */
+  ticket?: number;
+  /** On that ticket's allowance: it uses no ticket day. */
+  allowance?: boolean;
 }
 
 interface Row {
@@ -375,8 +443,12 @@ type DayKind = "break" | "forced" | "choice";
 
 interface Structure {
   rows: Row[];
-  /** `true` where a row may not go (outside its resort's block). */
+  /** `true` where a row may not go (outside its resort's block or its ticket's window). */
   mask: (row: Row, day: number) => boolean;
+  /** Minutes a cell costs on top of its day: a day outside a relaxed ticket window. */
+  penalty?: (row: Row, day: number) => number;
+  /** The trip-day index each owned ticket's window starts on; NaN without a window. */
+  starts: number[];
   /** Visits this structure leaves out for lack of days. */
   dropped: Unit[];
 }
@@ -386,7 +458,15 @@ interface SearchResult {
   solution: Solution;
   dropped: Unit[];
   exact: boolean;
+  starts: number[];
 }
+
+/**
+ * What a day outside an owned ticket's window costs once the windows are
+ * relaxed: more than any day inside, so the plan leaves a window only where
+ * nothing else fits.
+ */
+export const TICKET_WINDOW_PENALTY = 2000;
 
 interface StructureResult {
   solution: Solution | null;
@@ -607,8 +687,14 @@ class TripOptimizer {
   private cutShort = false;
   private readonly relaxed = new Set<string>();
   private readonly maxStreak: number;
+  private readonly tickets: PlanTicket[];
+  /** Days outside an owned ticket's window cost a penalty instead of being forbidden. */
+  private relaxWindows = false;
+  /** The penalty of the structure being solved, which every objective adds. */
+  private activePenalty: Structure["penalty"] | null = null;
 
   constructor(private readonly input: PlanInput) {
+    this.tickets = input.tickets ?? [];
     this.n = input.days.length;
     this.dates = input.days.map((d) => d.date);
     this.dates.forEach((d, i) => this.dateIndex.set(d, i));
@@ -824,10 +910,20 @@ class TripOptimizer {
       });
     }
 
-    let pool = placeable;
+    // Owned tickets: each visit takes the ticket that covers it, and a visit
+    // beyond a ticket's days or caps leaves the plan at once.
+    const overTicket = this.assignTickets(placeable, lockedUnitDay, available);
+    for (const u of overTicket) {
+      unplaced.push({ slug: u.slug, reason: "no_ticket_day" });
+    }
+
+    let pool = placeable.filter((u) => !overTicket.includes(u));
     let useBlocks = options.blocks;
     let best: SearchResult | null = null;
-    for (let attempt = 0; attempt <= units.length; attempt++) {
+    const windowed = this.tickets.some(
+      (t) => Number.isFinite(t.window) || (t.reservedDayParks?.length ?? 0) > 0,
+    );
+    for (let attempt = 0; attempt <= units.length + 1; attempt++) {
       // A failed attempt's loosened rules are not the plan's.
       const relaxedBefore = new Set(this.relaxed);
       best = this.searchAll(pool, lockedUnitDay, available, useBlocks);
@@ -838,6 +934,11 @@ class TripOptimizer {
         // No order of the resorts fits (closed days, locks): plan without blocks.
         this.relaxed.add("blocks_relaxed");
         useBlocks = false;
+        continue;
+      }
+      if (windowed && !this.relaxWindows) {
+        // No placement keeps every ticket's window: a day may leave it, at a price.
+        this.relaxWindows = true;
         continue;
       }
       const stuck = this.stuckUnits(pool, lockedUnitDay, available);
@@ -859,6 +960,308 @@ class TripOptimizer {
       unplaced,
       ignoredLocks,
       best?.exact ?? true,
+      best?.starts ?? this.tickets.map(() => NaN),
+    );
+  }
+
+  // ── owned tickets ─────────────────────────────────────────────────────────
+
+  /** The order visits leave a plan in: repeats first, then the park whose best day is dearest. */
+  private dropOrder(units: Unit[], available: number[]): Unit[] {
+    const best = new Map<string, number>();
+    const bestCost = (slug: string): number => {
+      let v = best.get(slug);
+      if (v === undefined) {
+        v = Math.min(...available.map((d) => this.cost(slug, d)));
+        best.set(slug, v);
+      }
+      return v;
+    };
+    return [...units].sort(
+      (a, b) =>
+        b.visit - a.visit ||
+        bestCost(b.slug) - bestCost(a.slug) ||
+        a.slug.localeCompare(b.slug),
+    );
+  }
+
+  /**
+   * Gives each visit the owned ticket that covers it: the park with the fewest
+   * covering tickets first, each visit to the first ticket in input order with
+   * room for it (a day, a cap, an allowance visit), counting a ticket that may
+   * hop as holding two visits a day only once none has room otherwise. Then
+   * trims each ticket to what its days, caps and hop pairs can hold. Returns
+   * the visits no ticket has room for; a park no ticket covers stays plan first.
+   */
+  private assignTickets(
+    units: Unit[],
+    lockedUnitDay: Map<Unit, number>,
+    available: number[],
+  ): Unit[] {
+    const tickets = this.tickets;
+    if (tickets.length === 0) return [];
+    const covers = (t: PlanTicket, slug: string) =>
+      t.parks.includes(slug) || !!t.allowance?.parks.includes(slug);
+    const coverCount = (u: Unit) =>
+      tickets.filter((t) => covers(t, u.slug)).length;
+    const parkIndex = new Map(this.input.parks.map((p, i) => [p.slug, i]));
+    const order = units
+      .filter((u) => coverCount(u) > 0)
+      .sort(
+        (a, b) =>
+          coverCount(a) - coverCount(b) ||
+          a.visit - b.visit ||
+          (parkIndex.get(a.slug) ?? 0) - (parkIndex.get(b.slug) ?? 0),
+      );
+    const dayUse = tickets.map(() => 0);
+    const allowanceUse = tickets.map(() => 0);
+    const capUse = tickets.map((t) => t.caps.map(() => 0));
+    const pairable = (t: PlanTicket, set?: string[]) =>
+      this.input.options.hop &&
+      t.hopPairs.some(([a, b]) => !set || (set.includes(a) && set.includes(b)));
+    const assign = (u: Unit, loose: boolean): boolean => {
+      for (let i = 0; i < tickets.length; i++) {
+        const t = tickets[i];
+        if (!covers(t, u.slug)) continue;
+        if (!t.parks.includes(u.slug)) {
+          if (allowanceUse[i] >= (t.allowance?.visits ?? 0)) continue;
+          allowanceUse[i]++;
+          u.ticket = i;
+          u.allowance = true;
+          return true;
+        }
+        if (dayUse[i] >= t.days * (loose && pairable(t) ? 2 : 1)) continue;
+        const hit = t.caps
+          .map((c, k) => (c.parks.includes(u.slug) ? k : -1))
+          .filter((k) => k >= 0);
+        const full = hit.some(
+          (k) =>
+            capUse[i][k] >=
+            t.caps[k].max * (loose && pairable(t, t.caps[k].parks) ? 2 : 1),
+        );
+        if (full) continue;
+        dayUse[i]++;
+        hit.forEach((k) => capUse[i][k]++);
+        u.ticket = i;
+        return true;
+      }
+      return false;
+    };
+    const waiting = order.filter((u) => !assign(u, false));
+    const over = waiting.filter((u) => !assign(u, true));
+    return [
+      ...over,
+      ...this.trimTickets(
+        units.filter((u) => !over.includes(u)),
+        lockedUnitDay,
+        available,
+      ),
+    ];
+  }
+
+  /**
+   * Leaves out the visits a ticket's days, caps and hop pairs cannot hold
+   * (`no_ticket_day`), the drop order's first each time, until every ticket
+   * has a pairing that keeps them.
+   */
+  private trimTickets(
+    units: Unit[],
+    lockedUnitDay: Map<Unit, number>,
+    available: number[],
+  ): Unit[] {
+    const dropped: Unit[] = [];
+    for (let ti = 0; ti < this.tickets.length; ti++) {
+      for (;;) {
+        const mine = units.filter(
+          (u) => u.ticket === ti && !u.allowance && !dropped.includes(u),
+        );
+        const free = mine.filter((u) => !lockedUnitDay.has(u));
+        const lockedRows: Row[] = mine
+          .filter((u) => lockedUnitDay.has(u))
+          .map((u) => ({ units: [u], lockedDay: lockedUnitDay.get(u) }));
+        const need = this.pairsNeeded(ti, free, lockedRows);
+        const kept =
+          need === 0
+            ? this.ticketKept(ti, [], free, lockedRows)
+            : this.input.options.hop &&
+              this.pairCombos(free, need, this.tickets[ti].hopPairs).some(
+                (combo) => this.ticketKept(ti, combo, free, lockedRows),
+              );
+        if (kept || free.length === 0) break;
+        dropped.push(this.dropOrder(free, available)[0]);
+      }
+    }
+    return dropped;
+  }
+
+  /**
+   * The hop days a ticket's free visits need: enough to fit its days, and to
+   * fit each cap (a pair inside a cap's parks is one of its days).
+   */
+  private pairsNeeded(ti: number, free: Unit[], lockedRows: Row[]): number {
+    const t = this.tickets[ti];
+    const own = lockedRows.filter(
+      (r) => r.units[0].ticket === ti && !r.units[0].allowance,
+    );
+    const days = Math.max(0, own.length + free.length - t.days);
+    let caps = 0;
+    for (const c of t.caps) {
+      const k =
+        free.filter((u) => c.parks.includes(u.slug)).length +
+        own.filter((r) => c.parks.includes(r.units[0].slug)).length;
+      caps += Math.max(0, k - c.max);
+    }
+    return Math.max(days, caps);
+  }
+
+  /** A ticket's rows under a pairing keep its days and its caps. */
+  private ticketKept(
+    ti: number,
+    pairs: Row[],
+    free: Unit[],
+    lockedRows: Row[],
+  ): boolean {
+    const t = this.tickets[ti];
+    const inPairs = new Set(pairs.flatMap((p) => p.units));
+    const rows: Row[] = [
+      ...lockedRows.filter(
+        (r) => r.units[0].ticket === ti && !r.units[0].allowance,
+      ),
+      ...pairs,
+      ...free.filter((u) => !inPairs.has(u)).map((u) => ({ units: [u] })),
+    ];
+    if (rows.length > t.days) return false;
+    return t.caps.every(
+      (c) =>
+        rows.filter((r) => r.units.some((u) => c.parks.includes(u.slug)))
+          .length <= c.max,
+    );
+  }
+
+  /** The index of a trip date, for a ticket's start or reserved day. */
+  private dayIndexOf(date: string | undefined): number | undefined {
+    return date === undefined ? undefined : this.dateIndex.get(date);
+  }
+
+  /** Whether a row on a day lies outside its owned ticket's window (or off its reserved day). */
+  private outsideTicket(row: Row, day: number, starts: number[]): boolean {
+    const ti = row.units[0].ticket;
+    if (ti === undefined) return false;
+    const t = this.tickets[ti];
+    const reserved = this.dayIndexOf(t.reservedDay);
+    if (
+      reserved !== undefined &&
+      row.units.some((u) => t.reservedDayParks?.includes(u.slug)) &&
+      day !== reserved
+    ) {
+      return true;
+    }
+    if (!Number.isFinite(t.window)) return false;
+    const start = starts[ti];
+    return day < start || day > start + t.window - 1;
+  }
+
+  /**
+   * The starts a ticket's window may take in this structure. A fixed start is
+   * itself; a free one any trip day on sale (holding the reserved day), less
+   * those another start's window covers (every window that reaches the trip's
+   * end is beaten by the earliest of them) and, while the windows are kept,
+   * those that cannot hold the ticket's visits on open days. NaN: no window.
+   */
+  private startCandidates(
+    ti: number,
+    rows: Row[],
+    available: number[],
+  ): number[] {
+    const t = this.tickets[ti];
+    const n = this.n;
+    if (!Number.isFinite(t.window)) return [NaN];
+    const fixed = this.dayIndexOf(t.start);
+    let starts: number[];
+    if (fixed !== undefined) {
+      starts = [fixed];
+    } else {
+      const all = Array.from({ length: n }, (_, i) => i);
+      const allowed = t.startOptions ? new Set(t.startOptions) : null;
+      starts = allowed ? all.filter((i) => allowed.has(this.dates[i])) : all;
+      const reserved = this.dayIndexOf(t.reservedDay);
+      if (reserved !== undefined) {
+        starts = starts.filter(
+          (s0) => s0 <= reserved && reserved <= s0 + t.window - 1,
+        );
+      }
+      if (starts.length === 0 && this.relaxWindows) starts = all;
+      const last = n - t.window;
+      const late = starts.filter((s0) => s0 > last);
+      starts = starts.filter((s0) => s0 <= last);
+      if (late.length > 0 && !starts.includes(last)) starts.push(late[0]);
+    }
+    if (this.relaxWindows) return starts;
+    const own = rows.filter((r) => r.units[0].ticket === ti);
+    return starts.filter((s0) => {
+      const lo = Math.max(0, s0);
+      const hi = Math.min(n - 1, s0 + t.window - 1);
+      const days = available.filter((d) => d >= lo && d <= hi);
+      if (days.length < own.length) return false;
+      const need = new Map<string, number>();
+      for (const r of own) {
+        if (r.lockedDay !== undefined && (r.lockedDay < lo || r.lockedDay > hi))
+          return false;
+        for (const u of r.units) need.set(u.slug, (need.get(u.slug) ?? 0) + 1);
+      }
+      for (const [slug, k] of need) {
+        const open = days.filter(
+          (d) => this.cell(slug, this.dates[d]).status !== "CLOSED",
+        ).length;
+        if (open < k) return false;
+      }
+      return true;
+    });
+  }
+
+  /**
+   * One mask (or, with the windows relaxed, one penalty) per combination of
+   * the owned tickets' starts.
+   */
+  private ticketStructures(
+    rows: Row[],
+    available: number[],
+  ): Array<Pick<Structure, "mask" | "penalty" | "starts">> {
+    if (this.tickets.length === 0) return [{ mask: () => false, starts: [] }];
+    const options = this.tickets.map((_, ti) =>
+      this.startCandidates(ti, rows, available),
+    );
+    if (options.some((o) => o.length === 0)) return [];
+    const combos: number[][] = [];
+    const walk = (i: number, chosen: number[]) => {
+      if (combos.length >= START_COMBO_LIMIT) {
+        this.cutShort = true;
+        return;
+      }
+      if (i === options.length) {
+        combos.push([...chosen]);
+        return;
+      }
+      for (const s0 of options[i]) {
+        chosen.push(s0);
+        walk(i + 1, chosen);
+        chosen.pop();
+      }
+    };
+    walk(0, []);
+    return combos.map((starts) =>
+      this.relaxWindows
+        ? {
+            mask: () => false,
+            penalty: (row: Row, day: number) =>
+              this.outsideTicket(row, day, starts) ? TICKET_WINDOW_PENALTY : 0,
+            starts,
+          }
+        : {
+            mask: (row: Row, day: number) =>
+              this.outsideTicket(row, day, starts),
+            starts,
+          },
     );
   }
 
@@ -904,23 +1307,11 @@ class TripOptimizer {
     const free = pool.filter((u) => !lockedUnitDay.has(u));
     const capacity = available.length - lockedRows.length;
 
-    // Hop days are only for a trip shorter than its visits.
-    let pairings: Row[][] = [[]];
-    const overflow = free.length - capacity;
-    if (overflow > 0 && options.hop) {
-      const found = this.hopPairings(free, overflow);
-      if (found.length > 0) pairings = found;
-    }
+    // Hop days are only for a trip, or a ticket, shorter than its visits.
+    const pairings = this.pairings(free, lockedRows, capacity);
 
     // A repeat visit is dropped first, then the park whose best day is dearest.
-    const bestCost = (slug: string) =>
-      Math.min(...available.map((d) => this.cost(slug, d)));
-    const dropOrder = [...free].sort(
-      (a, b) =>
-        b.visit - a.visit ||
-        bestCost(b.slug) - bestCost(a.slug) ||
-        a.slug.localeCompare(b.slug),
-    );
+    const dropOrder = this.dropOrder(free, available);
 
     const structures: Structure[] = [];
     for (const pairs of pairings) {
@@ -940,8 +1331,17 @@ class TripOptimizer {
           .map((u) => ({ units: [u] })),
       ];
       if (rows.length > available.length) continue;
-      for (const mask of this.blockMasks(rows, useBlocks)) {
-        structures.push({ rows, mask, dropped });
+      const blocks = this.blockMasks(rows, useBlocks);
+      for (const ticket of this.ticketStructures(rows, available)) {
+        for (const block of blocks) {
+          structures.push({
+            rows,
+            mask: (row, day) => ticket.mask(row, day) || block(row, day),
+            ...(ticket.penalty && { penalty: ticket.penalty }),
+            starts: ticket.starts,
+            dropped,
+          });
+        }
       }
     }
     if (structures.length === 0) return null;
@@ -968,7 +1368,7 @@ class TripOptimizer {
     > = [];
     for (const s of structures) {
       if (!this.budgetLeft()) break;
-      const matrix = this.matrix(s.rows, available, s.mask);
+      const matrix = this.matrix(s.rows, available, s.mask, s.penalty);
       const result = this.solve(matrix);
       if (result.feasible) {
         bounded.push({
@@ -1006,6 +1406,7 @@ class TripOptimizer {
     for (const s of bounded) {
       if (best && s.bound >= best.solution.objective) break;
       if (!this.budgetLeft()) break;
+      this.activePenalty = s.penalty ?? null;
       const outcome = this.solveStructure(
         s.rows,
         available,
@@ -1023,6 +1424,7 @@ class TripOptimizer {
           solution: outcome.solution,
           dropped: s.dropped,
           exact: true,
+          starts: s.starts,
         };
       }
     }
@@ -1030,6 +1432,7 @@ class TripOptimizer {
       // Out of budget before anything kept the rule: the cheapest structure's
       // plain assignment is still a plan, and the answer says it is not exact.
       const s = bounded[0];
+      this.activePenalty = s.penalty ?? null;
       if (
         longestRun(this.parkDayFlags(s.rowToCol.map((c) => available[c]))) >
         limit
@@ -1044,6 +1447,7 @@ class TripOptimizer {
         ),
         dropped: s.dropped,
         exact: false,
+        starts: s.starts,
       };
     }
     if (!best) return null;
@@ -1053,45 +1457,117 @@ class TripOptimizer {
     return best;
   }
 
-  /** The hop pairings of `need` pairs, or fewer when that many cannot be made. */
-  private hopPairings(free: Unit[], need: number): Row[][] {
-    const eligible = this.input.options.hopPairs.filter(
-      ([a, b]) =>
-        a !== b &&
-        free.some((u) => u.slug === a) &&
-        free.some((u) => u.slug === b),
-    );
-    for (let size = need; size >= 1; size--) {
-      const combos: Row[][] = [];
-      const left = new Map<string, Unit[]>();
-      for (const u of free) left.set(u.slug, [...(left.get(u.slug) ?? []), u]);
-      const walk = (start: number, chosen: Row[]) => {
-        if (combos.length >= HOP_COMBO_LIMIT) {
+  /**
+   * The pairings a structure may use. Each owned ticket pairs at least as many
+   * of its visits as its days and caps need, and the trip pairs as many as it
+   * has visits over days, in the group a pair's two visits share (a ticket's,
+   * or plan first's with `ticket=hopper`); fewer trip pairs when that many
+   * cannot be made. `[[]]` when none is needed.
+   */
+  private pairings(free: Unit[], lockedRows: Row[], capacity: number): Row[][] {
+    const { options } = this.input;
+    const byGroup = new Map<number, Unit[]>();
+    for (const u of free) {
+      // -1: plan first; -2: allowance visits, which never pair.
+      const g = u.ticket === undefined ? -1 : u.allowance ? -2 : u.ticket;
+      byGroup.set(g, [...(byGroup.get(g) ?? []), u]);
+    }
+    const groups = [...byGroup].map(([g, units]) => ({
+      g,
+      units,
+      pairs:
+        !options.hop || g === -2
+          ? []
+          : g === -1
+            ? options.hopPairs
+            : this.tickets[g].hopPairs,
+      min: g >= 0 ? this.pairsNeeded(g, units, lockedRows) : 0,
+    }));
+    const minimum = groups.reduce((sum, g) => sum + g.min, 0);
+    const total = Math.max(minimum, free.length - capacity);
+    if (total <= 0) return [[]];
+    const cache = new Map<string, Row[][]>();
+    const combosOf = (k: number, size: number): Row[][] => {
+      const key = `${k}|${size}`;
+      const hit = cache.get(key);
+      if (hit) return hit;
+      const g = groups[k];
+      const list = (
+        size === 0 ? [[]] : this.pairCombos(g.units, size, g.pairs)
+      ).filter(
+        (combo) => g.g < 0 || this.ticketKept(g.g, combo, g.units, lockedRows),
+      );
+      cache.set(key, list);
+      return list;
+    };
+    for (let size = total; size >= minimum; size--) {
+      const out: Row[][] = [];
+      const walk = (k: number, left: number, chosen: Row[][]) => {
+        if (out.length >= HOP_COMBO_LIMIT) {
           this.cutShort = true;
           return;
         }
-        if (chosen.length === size) {
-          combos.push([...chosen]);
+        if (k === groups.length) {
+          if (left === 0) out.push(chosen.flat());
           return;
         }
-        for (let k = start; k < eligible.length; k++) {
-          const [a, b] = eligible[k];
-          const ua = left.get(a);
-          const ub = left.get(b);
-          if (!ua?.length || !ub?.length) continue;
-          const unitA = ua.pop() as Unit;
-          const unitB = ub.pop() as Unit;
-          chosen.push({ units: [unitA, unitB] });
-          walk(k, chosen);
-          chosen.pop();
-          ua.push(unitA);
-          ub.push(unitB);
+        const g = groups[k];
+        const most = Math.min(left, Math.floor(g.units.length / 2));
+        for (let take = g.min; take <= most; take++) {
+          for (const combo of combosOf(k, take)) {
+            chosen.push(combo);
+            walk(k + 1, left - take, chosen);
+            chosen.pop();
+            if (out.length >= HOP_COMBO_LIMIT) return;
+          }
         }
       };
-      walk(0, []);
-      if (combos.length > 0) return combos;
+      walk(0, size, []);
+      if (out.length > 0) return out;
     }
-    return [];
+    return [[]];
+  }
+
+  /** The ways to make exactly `size` hop pairs of the given visits from the eligible park pairs. */
+  private pairCombos(
+    units: Unit[],
+    size: number,
+    eligiblePairs: Array<[string, string]>,
+  ): Row[][] {
+    const eligible = eligiblePairs.filter(
+      ([a, b]) =>
+        a !== b &&
+        units.some((u) => u.slug === a) &&
+        units.some((u) => u.slug === b),
+    );
+    const combos: Row[][] = [];
+    const left = new Map<string, Unit[]>();
+    for (const u of units) left.set(u.slug, [...(left.get(u.slug) ?? []), u]);
+    const walk = (start: number, chosen: Row[]) => {
+      if (combos.length >= HOP_COMBO_LIMIT) {
+        this.cutShort = true;
+        return;
+      }
+      if (chosen.length === size) {
+        combos.push([...chosen]);
+        return;
+      }
+      for (let k = start; k < eligible.length; k++) {
+        const [a, b] = eligible[k];
+        const ua = left.get(a);
+        const ub = left.get(b);
+        if (!ua?.length || !ub?.length) continue;
+        const unitA = ua.pop() as Unit;
+        const unitB = ub.pop() as Unit;
+        chosen.push({ units: [unitA, unitB] });
+        walk(k, chosen);
+        chosen.pop();
+        ua.push(unitA);
+        ub.push(unitB);
+      }
+    };
+    walk(0, []);
+    return combos;
   }
 
   /**
@@ -1105,9 +1581,14 @@ class TripOptimizer {
     const none = [() => false];
     if (!useBlocks) return none;
     const blockable = new Set(this.input.options.blockGroups);
+    // An owned ticket's window replaces its resort's block.
+    const planFirst = (row: Row) => row.units[0].ticket === undefined;
     const groups = [
       ...new Set(
-        rows.map((r) => this.rowGroup(r)).filter((g) => blockable.has(g)),
+        rows
+          .filter(planFirst)
+          .map((r) => this.rowGroup(r))
+          .filter((g) => blockable.has(g)),
       ),
     ].sort();
     if (groups.length <= 1) return none;
@@ -1120,6 +1601,7 @@ class TripOptimizer {
           for (let d = start; d < end; d++) segmentOf[d] = order[k];
         });
         masks.push((row, day) => {
+          if (!planFirst(row)) return false;
           const group = this.rowGroup(row);
           return blockable.has(group) && segmentOf[day] !== group;
         });
@@ -1132,6 +1614,7 @@ class TripOptimizer {
     rows: Row[],
     days: number[],
     mask: (row: Row, day: number) => boolean,
+    penalty?: (row: Row, day: number) => number,
   ): number[][] {
     const lockedDays = new Set(
       rows.filter((r) => r.lockedDay !== undefined).map((r) => r.lockedDay),
@@ -1140,13 +1623,18 @@ class TripOptimizer {
       days.map((day) => {
         if (mask(row, day)) return Infinity;
         if (row.lockedDay === undefined && lockedDays.has(day)) return Infinity;
-        return this.rowCost(row, day);
+        return this.rowCost(row, day) + (penalty?.(row, day) ?? 0);
       }),
     );
   }
 
   private objective(rows: Row[], dayOf: number[]): Solution {
-    const base = rows.reduce((s, row, r) => s + this.rowCost(row, dayOf[r]), 0);
+    const penalty = this.activePenalty;
+    const base = rows.reduce(
+      (s, row, r) =>
+        s + this.rowCost(row, dayOf[r]) + (penalty?.(row, dayOf[r]) ?? 0),
+      0,
+    );
     return {
       dayOf,
       base,
@@ -1591,6 +2079,7 @@ class TripOptimizer {
     unplaced: OptimizedPlan["unplaced"],
     ignoredLocks: OptimizedPlan["ignoredLocks"],
     exact: boolean,
+    starts: number[],
   ): OptimizedPlan {
     const { options, days: dayInfo } = this.input;
     const n = this.n;
@@ -1626,10 +2115,23 @@ class TripOptimizer {
       options.rest.mode === "max" ? options.rest.n : DEFAULT_MAX_STREAK;
 
     const out: PlannedDay[] = [];
+    const ticketDays = this.tickets.map(() => 0);
     let run = 0;
     for (let i = 0; i < n; i++) {
       const date = this.dates[i];
       const row = rowOnDay.get(i);
+      const ti = row?.units[0].ticket;
+      let ticket: Pick<PlannedDay, "ticket" | "ticketDay" | "ticketAllowance"> =
+        {};
+      if (row && ti !== undefined) {
+        const id = this.tickets[ti].id;
+        if (row.units[0].allowance) {
+          ticket = { ticket: id, ticketAllowance: true };
+        } else {
+          ticketDays[ti]++;
+          ticket = { ticket: id, ticketDay: ticketDays[ti] };
+        }
+      }
       if (!row) {
         const precededBy = run;
         run = 0;
@@ -1721,6 +2223,10 @@ class TripOptimizer {
         ) {
           warnings.add("adjacent_repeat");
         }
+        if (this.relaxWindows && this.outsideTicket(row, i, starts)) {
+          warnings.add("outside_ticket_window");
+          this.relaxed.add("ticket_window_relaxed");
+        }
         return {
           slug: u.slug,
           part: row.units.length > 1 ? "half" : "full",
@@ -1740,6 +2246,7 @@ class TripOptimizer {
           ...figures,
           reasons: [...reasons],
           warnings: [...warnings],
+          ...ticket,
         });
       } else {
         out.push({
@@ -1748,6 +2255,7 @@ class TripOptimizer {
           parks: visits,
           reasons: [...reasons],
           warnings: [...warnings],
+          ...ticket,
         });
       }
     }
@@ -1760,7 +2268,48 @@ class TripOptimizer {
       totals: this.totals(rowOnDay, out),
       unplaced,
       ignoredLocks,
+      tickets: this.ticketSummaries(out, starts),
     };
+  }
+
+  /**
+   * Each owned ticket as the plan used it. A start the plan picked is the
+   * first day it is used on where that start is on sale (its window then
+   * reaches furthest), else the start the search kept.
+   */
+  private ticketSummaries(
+    days: PlannedDay[],
+    starts: number[],
+  ): PlannedTicket[] {
+    return this.tickets.map((t, ti) => {
+      const used = days.filter((d) => d.ticket === t.id);
+      const usedDays = used.filter((d) => d.ticketDay !== undefined).length;
+      const allowanceVisits = used.length - usedDays;
+      const summary: PlannedTicket = { id: t.id, usedDays, allowanceVisits };
+      if (!Number.isFinite(t.window)) return summary;
+      let start = t.start;
+      if (start === undefined) {
+        const first = used[0]?.date;
+        const onSale = (date: string) =>
+          !t.startOptions || t.startOptions.includes(date);
+        const outside = used.some((d) =>
+          d.warnings.includes("outside_ticket_window"),
+        );
+        start =
+          first && onSale(first) && !outside
+            ? first
+            : Number.isFinite(starts[ti])
+              ? this.dates[starts[ti]]
+              : first;
+      }
+      if (start === undefined) return summary;
+      return {
+        ...summary,
+        start,
+        ...(t.start === undefined && { startChosen: true as const }),
+        end: addIsoDays(start, t.window - 1),
+      };
+    });
   }
 
   /** `quietest_in_window` and `runner_up_close` for one visit. */

@@ -147,6 +147,8 @@ const WARNINGS: Record<PlanWarning, string> = {
   extreme_heat: HEAT_PHRASE,
   hurricane_season: HURRICANE_PHRASE,
   hurricane_peak: HURRICANE_PEAK_PHRASE,
+  outside_ticket_window:
+    "outside the ticket's valid dates: no day inside them fitted",
 };
 
 /** A hotel perk's name on a plan day; the prompt says what each one is. */
