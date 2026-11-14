@@ -79,6 +79,12 @@ export interface RegionGroupConfig {
 export interface RegionParkConfig {
   /** `parks.slug`; with `city` it resolves through `findByGeographicPath`. */
   slug: string;
+  /**
+   * A short curated code for tight views (the month grid's cell), unique in
+   * the region: Tokyo Disneyland `DL` and Tokyo DisneySea `DS`, where initials
+   * would give both `TD`. Absent: the client derives one.
+   */
+  code?: string;
   continent: string;
   country: string;
   city: string;
@@ -128,8 +134,15 @@ export interface HotelAreaConfig extends LatLng {
 export interface PerkRule {
   perk: PerkKind;
   parks: string[];
-  needs: "early" | "extended_evening" | "always";
+  /**
+   * `after_first_night`: every open day the guest woke at the hotel, so not
+   * the day they check in (Tokyo Disney Resort's Happy Entry): the trip's
+   * arrival day, or in a region with bases the first day of the stay.
+   */
+  needs: "early" | "extended_evening" | "always" | "after_first_night";
   share: number;
+  /** Dates the perk does not hold (a hotel's published blackouts). */
+  blackoutDates?: string[];
 }
 
 /**
@@ -282,13 +295,37 @@ export interface TicketMarketsConfig {
   codes: readonly string[];
 }
 
+/** An airport a trip lands at or leaves from, and the base it serves. */
+export interface GatewayConfig {
+  /** The IATA code: `HND`, `KIX`. */
+  code: string;
+  name: string;
+  /** Typical minutes to the base's main hotel area. */
+  minutes?: number;
+}
+
 /** A city a visitor sleeps in, in a region whose parks lie in several (Japan). */
 export interface RegionBaseConfig {
   key: string;
   name: string;
+  /**
+   * Its place on the route line: a trip's stays follow the line one way or
+   * the other (Tokyo, Fujikawaguchiko, Nagoya, Osaka), never doubling back.
+   */
+  order: number;
   /** Its hotel areas (`hotelAreas` keys); each area belongs to one base. */
   hotelAreas: string[];
-  /** The parks a day from here reaches: door to door, one way, curated. */
+  /** The area a stay is reckoned from when the visitor names none. */
+  defaultArea?: string;
+  /** The airports that serve it: the client maps an airport to `startBase` and `endBase`. */
+  gateways?: GatewayConfig[];
+  /** Where to stay in it, a curated hint in English. */
+  stayNote?: string;
+  /**
+   * The parks a day from here reaches: door to door from its usual area, one
+   * way, curated. A stay's own area refines the minutes where a leg from it
+   * (`hotel:<area>`) is curated.
+   */
   parks: Array<{ slug: string; minutes: number; mode: TransportMode }>;
 }
 
@@ -299,7 +336,45 @@ export interface BaseLegConfig {
   minutes: number;
   mode: TransportMode;
   name?: string;
+  /**
+   * Whether a park fits the day of this move before or after it: overrides
+   * the region's `parkDayMaxLegMinutes` rule (a curated call, e.g. false for
+   * Fujikawaguchiko to Nagoya, a full day by bus and train).
+   */
+  parkDay?: boolean;
+  changes?: number;
+  /** Where the train or coach leaves and arrives: `Shinjuku`, `Kawaguchiko`. */
+  fromStop?: string;
+  toStop?: string;
+  /** Curated notes the client words: the rail pass, a seat reservation, luggage sent ahead. */
+  notes?: Array<"jr_pass" | "reserve_seat" | "forward_luggage">;
 }
+
+/**
+ * How stays and moves are priced (docs/frontend/trip-regions.md#bases-a-trip-across-several-cities).
+ * A region may set any of them; {@link DEFAULT_STAY_RULES} fills the rest.
+ */
+export interface StayRulesConfig {
+  /** Travel to a park up to this, one way, costs a day nothing. */
+  dayTripFreeMinutes: number;
+  /** Checking out, luggage and checking in on a move. */
+  moveOverheadMinutes: number;
+  /** A move up to this, door to door, leaves room for a park the same day. */
+  parkDayMaxLegMinutes: number;
+  /** What a hotel change costs the plan, in minutes of headliner wait. */
+  moveCost: number;
+  /** When a morning move leaves, park-local `HH:MM`. */
+  moveStartsAt: string;
+}
+
+/** The stay rules a region leaves unset (owner-approved starting values, PAR-1302). */
+export const DEFAULT_STAY_RULES: StayRulesConfig = {
+  dayTripFreeMinutes: 45,
+  moveOverheadMinutes: 60,
+  parkDayMaxLegMinutes: 150,
+  moveCost: 20,
+  moveStartsAt: "08:00",
+};
 
 export interface RegionConfig {
   slug: string;
@@ -336,6 +411,8 @@ export interface RegionConfig {
    */
   bases?: RegionBaseConfig[];
   baseLegs?: BaseLegConfig[];
+  /** How the region prices stays and moves; unset fields take {@link DEFAULT_STAY_RULES}. */
+  stayRules?: Partial<StayRulesConfig>;
   /**
    * The ticket catalog as loaded from the admin's table, archived products
    * included (`TicketCatalogService.withTickets`); absent: the seed in
@@ -387,6 +464,11 @@ export const ATLANTIC_HURRICANES: StormSeasonConfig = {
   peak: { from: "08-15", to: "10-15" },
   peakMinutes: 8,
 };
+
+/** A region's stay rules, its own over the defaults. */
+export function stayRulesOf(region: Pick<RegionConfig, "stayRules">): StayRulesConfig {
+  return { ...DEFAULT_STAY_RULES, ...region.stayRules };
+}
 
 /** Every region's `hotel=` values, in the order its `perks` lists them. */
 export function hotelKinds(region: Pick<RegionConfig, "perks">): string[] {

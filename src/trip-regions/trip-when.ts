@@ -325,14 +325,25 @@ const round1 = (v: number): number => Math.round(v * 10) / 10;
 const waitOf = (c: PlanCell): number | undefined =>
   c.exactWait ?? c.headlinerWait;
 
-/** The hotel's perk factor for a park on a day, as the plan applies it. */
-function perkFactor(slug: string, cell: PlanCell, rules: PerkRule[]): number {
+/**
+ * The hotel's perk factor for a park on a day, as the plan applies it. A
+ * perk after the first night counts on every day: across windows the check-in
+ * day moves, and counting it keeps the bound below every plan.
+ */
+function perkFactor(
+  slug: string,
+  cell: PlanCell,
+  rules: PerkRule[],
+  date: string,
+): number {
   if (cell.status === "CLOSED") return 1;
   let factor = 1;
   for (const rule of rules) {
     if (!rule.parks.includes(slug)) continue;
+    if (rule.blackoutDates?.includes(date)) continue;
     const applies =
       rule.needs === "always" ||
+      rule.needs === "after_first_night" ||
       (rule.needs === "extended_evening"
         ? cell.evening?.kind === "extended_evening"
         : !!cell.early);
@@ -411,7 +422,7 @@ function priceOf(
     medianHours: pricing.medianHours,
     neutralWait: pricing.neutralWait,
     fireworks: q.fireworks,
-    perkFactor: perkFactor(pricing.slug, cell, rules),
+    perkFactor: perkFactor(pricing.slug, cell, rules, day.date),
     date: day.date,
     weather,
   };
