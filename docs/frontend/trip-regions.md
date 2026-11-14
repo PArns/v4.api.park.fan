@@ -26,6 +26,7 @@ sold in, and, in Japan and Paris, its bases ([below](#what-a-region-defines)).
 | `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
 | `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
 | `GET /v1/trip-regions/:region/tickets`   | none | five minutes at the edge, ten more stale                | the ticket catalog ([tickets](#tickets))        |
+| `GET /v1/trip-regions/:region/accuracy`  | none | an hour in the browser, a day at the edge; Redis a day  | how accurate the forecast was ([accuracy](#how-accurate-the-forecast-was-get-v1trip-regionsregionaccuracy)) |
 
 Before the routes are deployed, `pnpm trip-regions:dev` serves all four on `localhost:3001` from
 production's data through the same modules
@@ -1690,6 +1691,52 @@ ticket does not allow, and the catalog's `confidence` and `notes` say so:
   UK store says 2027-03-24). The curated closure in `park_seasons` (to 2027-03-23) closes those
   days; 24 to 31 March read as days without published hours, which the plan uses only when nothing
   else fits.
+
+## How accurate the forecast was (`GET /v1/trip-regions/:region/accuracy`)
+
+Open, no key: it is a statement about our forecasts, not one. An hour in the browser, a day at the
+edge, and a day in Redis under the region's date (`trip-regions:accuracy:v1:{region}:{date}`), so
+each region reads the archive once a day. For the hub's line on how far to trust the calendar.
+
+```jsonc
+{
+  "region": "orlando",
+  "forecastAccuracy": {
+    "days": 30, // the window
+    "from": "2026-10-14", // park-local, inclusive
+    "to": "2026-11-12", // the region's last measured day
+    "leadDays": 7, // the forecasts were made a week ahead
+    "maeMinutes": 16.4, // the mean absolute error, minutes, one decimal
+    "parks": 14, // the parks counted
+    "sampleDays": 28, // the window's days with a scored forecast
+  }, // null where too little is measured: show nothing
+}
+```
+
+- **What it measures:** the day's peak wait at the headliners (the calendar's `headlinerWait`, the
+  "peak wait"), as forecast `leadDays` ahead, against what the day did (each headliner's day P90):
+  the mean absolute error per park, then the mean over the counted parks, so a park with many
+  headliners weighs as much as one with few. It is the measurement the plan's `expectedError`
+  quotes ([reader-facing accuracy](../ml/reader-facing-accuracy.md)): `prediction_lead_snapshots`,
+  the **served** daily level (TFT or CatBoost, whichever the reader was shown), scored rows only.
+  Never a second definition: the plan reads the same rows by lead, this route by region.
+- **Which lead:** a week ahead (`ACCURACY_LEAD_DAYS`), a typical look at the calendar before a
+  trip. The day-ahead figure would flatter a page people plan weeks ahead with; the error grows
+  with the lead ([long-range forecasting](../ml/long-range-forecasting.md)). Say the lead with the
+  figure: "a week ahead, our peak-wait forecast was off by 16 minutes on average over the last 30
+  days".
+- **Which days:** the 30 park-local days ending on the region's last measured day. A day counts
+  once it is over in the park (date.util, the park's timezone) and the nightly scoring has filled
+  it, so `to` is usually two days back; a region closed for a while answers from before its
+  closure (the read reaches 45 days back).
+- **When it is null:** a park counts with 20 scored rows or more in the window (about three
+  headliners for a week); the figure needs 100 scored rows over the counted parks, the floor the
+  plan's own figure publishes at (`PredictionLeadSnapshotService.MIN_SCORED`), and 14 measured
+  days, half the window. Below that it is `null`, never a guess. Paris in November, with Parc
+  Astérix closed, still counts its Disney parks.
+- **Code:** `trip-accuracy.ts` (the figure), `trip-accuracy.service.ts` (read and cache),
+  `PredictionLeadSnapshotService.parkDayErrors` (the archive read). The dev shim has no database
+  and passes the route to production.
 
 ## Caching and cost
 
