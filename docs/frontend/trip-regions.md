@@ -50,6 +50,10 @@ the calendar and the best days, `trip-tickets:<slug>` on the ticket catalog, whi
 revalidates on every catalog edit of that region ([editing](#editing-the-catalog)). The list route
 changes only with a deploy.
 
+**Metrics.** Every answer of `/plan`, `/when` and `/best-days` leaves a row of operational facts
+for the planner's operators: no date, name, text, address or visitor id, and nothing a client sees
+([what the server records](#what-the-server-records)).
+
 ## The list (`GET /v1/trip-regions`)
 
 Open, no key; an hour in the browser, a day at the edge, like the region route. For the site's
@@ -1713,3 +1717,67 @@ in the ordinary window) as week-long snapshots (`trip-regions:last-year:v1:{park
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:
 [caching](../architecture/caching-strategy.md#cache-warmup).
+
+## What the server records
+
+Every answer of `/plan`, `/when` and `/best-days` leaves one row in `trip_request_metrics`, so the
+planner can be tuned from data: the MCP tool `trip_planner_ops` reads them
+([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
+frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
+answer. Code: `src/trip-regions/metrics/`.
+
+**Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
+the services (400, 404), a failure (5xx). Not recorded: a request the data-key guard turns away
+(401, 403, 429: it never reaches the route), an answer Cloudflare serves from its cache, and
+Parky's `plan_vacation` and `find_trip_dates`, which call the services without the route.
+
+| Column                                                 | What                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
+| `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
+| `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
+| `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
+| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
+| `calendar_cache`                                       | the region calendar a built answer read, the same three states                                                                                             |
+| `exact`                                                | `meta.exact` (`/plan`) or `meta.search.exact` (`/when`): the search was proven, not stopped by its time budget                                            |
+| `relaxed`                                              | the codes of `meta.relaxed`, sorted; `/when`: `ticket_window_relaxed` when a window answered carries that warning                                         |
+| `unplaced_reasons`                                     | one entry per `unplaced[]`, its reason; `/when` names none, so one `unknown` per park its best window left out                                            |
+| `trip_days`, `parks`, `parks_named`, `visits`, `locks` | the normalized query in counts: trip length with arrival and departure, parks (named or the headliners), visits with second ones, pinned days             |
+| `ticket_kinds`                                         | one entry per owned ticket: `pass`, `evening`, `reserved_day`, `one_day`, `multi_day`, `unknown` (a product the catalog no longer has)                     |
+| `hopper`                                               | plan first's hopper resorts, or an owned ticket with the hopper                                                                                            |
+| `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; `/when`: the best window's stays (a window names no moves); null in the other regions        |
+| `range_days`, `windows`, `windows_planned`, `within`   | `/when`: the search range in days, the windows answered, those planned (`meta.search.planned`), a school-break filter. `/best-days`: `range_days`          |
+
+The shape is read from the normalized query, so a request refused while its query is read has
+only its route, region, status, code and latency.
+
+**Error codes.** A 404 is `unknown_region`; a 400 of the query's own validation (a malformed date,
+`days` out of range, an unknown parameter) is `invalid_query`; a 400 the services raise is told by
+its message, which names the parameter at fault: `bad_date`, `window_in_past`, `window_reversed`,
+`window_past_horizon`, `window_too_long`, `range_shorter_than_trip`, `unknown_park`,
+`park_listed_twice`, `visits_per_park`, `too_many_visits`, `visits_exceed_days`, `bad_hopper`,
+`unknown_area`, `bad_hotel`, `bad_lock`, `bad_tickets`, `bad_within`; in a region with bases
+`bad_bases` (`bases`, `startBase`, `endBase`), `stay_nights_exceed_trip` and `area_needs_base`, and
+`no_bases_in_region` for those parameters elsewhere; and `bad_request` for a message the list does
+not know yet (`TRIP_ERROR_CODES` in `trip-request-facts.ts`, pinned by its
+spec against the messages the code throws). 503 is `unavailable`, any other failure `internal`.
+Only the code is kept: the messages carry the visitor's own values.
+
+**What a row never holds**: a date (the trip's, the range's, a lock's), a park, hotel, area or
+ticket name, a message, free text, an address, a User-Agent or a visitor id. Every string is the
+API's own vocabulary, a region only when `regions.ts` has it.
+
+**How it is written.** The routes wear `@MeasureTripRequest`, an interceptor that opens a trace
+(`AsyncLocalStorage`) around the route; the services note into it the caches that served and the
+trip's shape, and outside a measured request (Parky's tools) a note does nothing. Each API process
+keeps the rows in memory and writes them once a minute, 500 per `INSERT`, and on shutdown; a failed
+write keeps its rows for the next one, and past 5,000 rows waiting a row is dropped and counted
+(the ops tool's `writer`). Recording never touches the answer.
+
+**Retention and schema.** Rows are kept 90 days (`TRIP_METRICS_RETENTION_DAYS`, as long as the
+site statistic's hourly rows) and deleted nightly at 01:25 UTC by `trip-metrics` / `prune`, in
+batches of 10,000 ([job queues](../architecture/job-queues.md)). The table came with the entity
+(`synchronize`, [the entities are the schema](../rules/the-entities-are-the-schema.md)): additive,
+a plain table with an index on `bucket`, its array columns without a default because every insert
+names them. A column added later is nullable or has a default.

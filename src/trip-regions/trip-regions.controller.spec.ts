@@ -19,6 +19,8 @@ import {
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
 import { ORLANDO, TRIP_REGIONS } from "./regions";
+import { TripRequestMetricsService } from "./metrics/trip-request-metrics.service";
+import type { TripRequestMetricRow } from "./metrics/trip-request-facts";
 
 const KEY = `pfk_${"t".repeat(43)}`;
 const TZ = "America/New_York";
@@ -36,6 +38,8 @@ describe("TripRegionsController", () => {
   const day = (n: number) => addIsoDays(today, n);
 
   const store = new Map<string, string>();
+  /** The metric rows the routes handed to the writer. */
+  const recorded: TripRequestMetricRow[] = [];
   const redis = {
     get: jest.fn(async (k: string) => store.get(k) ?? null),
     set: jest.fn(async (k: string, v: string) => {
@@ -206,6 +210,12 @@ describe("TripRegionsController", () => {
           useValue: { showsOn: jest.fn(async () => []) },
         },
         {
+          provide: TripRequestMetricsService,
+          useValue: {
+            record: (row: TripRequestMetricRow) => recorded.push(row),
+          },
+        },
+        {
           provide: ApiKeyService,
           useValue: {
             lookup: jest.fn(async (value: string) =>
@@ -245,7 +255,10 @@ describe("TripRegionsController", () => {
     await app.close();
   });
 
-  beforeEach(() => store.clear());
+  beforeEach(() => {
+    store.clear();
+    recorded.length = 0;
+  });
 
   describe("GET /v1/trip-regions", () => {
     it("lists every region without a key, with its park count and groups", async () => {
@@ -663,6 +676,183 @@ describe("TripRegionsController", () => {
         .get(`/v1/trip-regions/orlando/when?${parks}&${qs}`)
         .set("X-API-Key", KEY)
         .expect(400);
+    });
+  });
+
+  describe("the metric rows of /plan, /when and /best-days", () => {
+    const get = (url: string) =>
+      request(app.getHttpServer()).get(url).set("X-API-Key", KEY);
+
+    it("records a built plan and its cached second answer, with the trip's shape in counts", async () => {
+      const qs = `from=${day(1)}&to=${day(8)}&parks=magic-kingdom-park:2,epcot,universal-epic-universe&lock=epcot@${day(3)}&ticket=hopper`;
+      await get(`/v1/trip-regions/orlando/plan?${qs}`).expect(200);
+      await get(`/v1/trip-regions/orlando/plan?${qs}`).expect(200);
+
+      expect(recorded).toHaveLength(2);
+      const [built, cached] = recorded;
+      expect(built).toMatchObject({
+        region: "orlando",
+        route: "plan",
+        status: 200,
+        errorCode: null,
+        cache: "miss",
+        calendarCache: "miss",
+        exact: true,
+        tripDays: 8,
+        parks: 3,
+        parksNamed: true,
+        visits: 4,
+        locks: 1,
+        ticketKinds: [],
+        hopper: true,
+        bases: null,
+        moves: null,
+      });
+      expect(built.bucket.getUTCMinutes()).toBe(0);
+      expect(built.bucket.getUTCSeconds()).toBe(0);
+      expect(built.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(Array.isArray(built.relaxed)).toBe(true);
+      expect(Array.isArray(built.unplacedReasons)).toBe(true);
+      // The second answer came from Redis and read no calendar.
+      expect(cached).toMatchObject({
+        route: "plan",
+        cache: "hit",
+        calendarCache: null,
+        tripDays: 8,
+      });
+    });
+
+    it("counts the headliners as parks that were not named", async () => {
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(12)}`,
+      ).expect(200);
+      expect(recorded[0]).toMatchObject({ parksNamed: false, locks: 0 });
+      expect(recorded[0].parks).toBeGreaterThan(0);
+    });
+
+    it("records a refusal with its reason code and the region it named", async () => {
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(5)}&parks=europa-park`,
+      ).expect(400);
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(5)}&budget=low`,
+      ).expect(400);
+      await get(
+        `/v1/trip-regions/atlantis/plan?from=${day(1)}&to=${day(5)}`,
+      ).expect(404);
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(2)}&parks=epcot,magic-kingdom-park,universal-epic-universe`,
+      ).expect(400);
+      expect(
+        recorded.map(({ region, route, status, errorCode }) => ({
+          region,
+          route,
+          status,
+          errorCode,
+        })),
+      ).toEqual([
+        {
+          region: "orlando",
+          route: "plan",
+          status: 400,
+          errorCode: "unknown_park",
+        },
+        {
+          region: "orlando",
+          route: "plan",
+          status: 400,
+          errorCode: "invalid_query",
+        },
+        {
+          region: "(unknown)",
+          route: "plan",
+          status: 404,
+          errorCode: "unknown_region",
+        },
+        {
+          region: "orlando",
+          route: "plan",
+          status: 400,
+          errorCode: "visits_exceed_days",
+        },
+      ]);
+      // Refused while the query was read: no shape, no cache.
+      expect(recorded[3]).toMatchObject({
+        tripDays: null,
+        parks: null,
+        cache: null,
+      });
+    });
+
+    it("records nothing for a request the key guard turns away", async () => {
+      await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(5)}`)
+        .expect(401);
+      expect(recorded).toEqual([]);
+    });
+
+    it("records a search for dates with its range, windows and whether it was proven", async () => {
+      await get(
+        `/v1/trip-regions/orlando/when?from=${day(1)}&to=${day(40)}&days=5&parks=epcot,magic-kingdom-park&limit=3&gap=5`,
+      ).expect(200);
+      await get(
+        `/v1/trip-regions/orlando/when?parks=epcot&from=${day(1)}&to=${day(3)}&days=7`,
+      ).expect(400);
+      expect(recorded[0]).toMatchObject({
+        route: "when",
+        status: 200,
+        cache: "miss",
+        calendarCache: "miss",
+        exact: true,
+        tripDays: 5,
+        parks: 2,
+        rangeDays: 40,
+        windows: 3,
+        within: false,
+        locks: 0,
+      });
+      expect(recorded[0].windowsPlanned).toBeGreaterThan(0);
+      expect(recorded[1]).toMatchObject({
+        route: "when",
+        status: 400,
+        errorCode: "range_shorter_than_trip",
+      });
+    });
+
+    it("records the best days with the window's length and the calendar's cache as its own", async () => {
+      await get(
+        `/v1/trip-regions/orlando/best-days?from=${day(1)}&to=${day(10)}&limit=3`,
+      ).expect(200);
+      await get(
+        `/v1/trip-regions/orlando/best-days?from=${day(1)}&to=${day(10)}&limit=3`,
+      ).expect(200);
+      expect(recorded.map((r) => [r.route, r.cache, r.rangeDays])).toEqual([
+        ["best_days", "miss", 10],
+        ["best_days", "hit", 10],
+      ]);
+      expect(recorded[0]).toMatchObject({ exact: null, tripDays: null });
+    });
+
+    it("keeps no date, slug or query text in a row", async () => {
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(8)}&parks=magic-kingdom-park,epcot&lock=epcot@${day(3)}`,
+      ).expect(200);
+      await get(
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(5)}&parks=europa-park`,
+      ).expect(400);
+      const text = JSON.stringify(
+        recorded.map(({ bucket: _bucket, ...row }) => row),
+      );
+      for (const leak of [
+        day(1),
+        day(3),
+        day(8),
+        "epcot",
+        "magic-kingdom",
+        "europa",
+      ]) {
+        expect(text).not.toContain(leak);
+      }
     });
   });
 

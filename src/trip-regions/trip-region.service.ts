@@ -58,6 +58,7 @@ import type {
 } from "./dto/trip-region-response.dto";
 import type { TripTicketCatalogDto } from "./dto/trip-tickets.dto";
 import { TicketCatalogService } from "./ticket-catalog.service";
+import { noteTripCache, noteTripShape } from "./metrics/trip-request-trace";
 import {
   seedCatalog,
   ticketCatalogResponse,
@@ -239,6 +240,13 @@ export class TripRegionService {
     const from = fromQuery ?? this.today(region);
     const to = toQuery ?? addIsoDays(from, 30);
     this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
+    noteTripShape({
+      rangeDays:
+        Math.round(
+          (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+            86_400_000,
+        ) + 1,
+    });
     const calendar = await this.internalCalendar(region, from, to);
     return regionBestDays(region, calendar, limit);
   }
@@ -253,8 +261,13 @@ export class TripRegionService {
     const cached = safeJsonParse<InternalRegionCalendar>(
       await this.redis.get(key),
     );
-    if (cached) return cached;
+    if (cached) {
+      noteTripCache("calendarCache", "hit");
+      return cached;
+    }
+    noteTripCache("calendarCache", "joined");
     return this.calendarFlight.run(key, async () => {
+      noteTripCache("calendarCache", "miss");
       const built = await this.buildCalendar(region, from, to);
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)
