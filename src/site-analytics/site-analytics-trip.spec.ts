@@ -167,16 +167,17 @@ describe("tripPlannerFigures", () => {
     });
     expect(figures.funnel.map((s) => s.step)).toEqual([...TRIP_FUNNEL]);
     expect(figures.newFunnelFrom).toBe(CUTOVER);
-    expect(step(figures, "datesPicked")).toEqual({
-      step: "datesPicked",
+    expect(step(figures, "started")).toEqual({
+      step: "started",
       before: 10,
       since: 22,
     });
-    expect(step(figures, "planShown")).toMatchObject({ before: 8, since: 28 });
+    expect(step(figures, "requested")).toMatchObject({ before: 0, since: 36 });
+    expect(step(figures, "shown")).toMatchObject({ before: 8, since: 28 });
     // The old planner sent nothing when a plan was changed; Parky's changes are his.
     expect(step(figures, "changed")).toMatchObject({ before: null, since: 9 });
     // A yes before the cut-over; the ticket step's openings after it.
-    expect(step(figures, "ticketsEntered")).toMatchObject({
+    expect(step(figures, "tickets")).toMatchObject({
       before: 4,
       since: 5,
     });
@@ -190,7 +191,7 @@ describe("tripPlannerFigures", () => {
       window: { from: CUTOVER, to: "2026-11-24" },
       newFunnelFrom: CUTOVER,
     });
-    expect(step(after, "datesPicked")).toMatchObject({
+    expect(step(after, "started")).toMatchObject({
       before: null,
       since: 22,
     });
@@ -205,7 +206,7 @@ describe("tripPlannerFigures", () => {
       before: null,
       since: null,
     });
-    expect(step(before, "datesPicked")).toMatchObject({
+    expect(step(before, "started")).toMatchObject({
       before: 32,
       since: null,
     });
@@ -272,22 +273,22 @@ describe("tripPlannerFigures", () => {
     expect(figures.pageTypes).toEqual([
       {
         pageType: "trip_hub",
-        datesPicked: 20,
-        planRequested: 30,
-        planShown: 0,
+        started: 20,
+        requested: 30,
+        shown: 0,
       },
-      { pageType: "other", datesPicked: 10, planRequested: 0, planShown: 0 },
+      { pageType: "other", started: 10, requested: 0, shown: 0 },
       {
         pageType: "trip_best_time",
-        datesPicked: 0,
-        planRequested: 6,
-        planShown: 0,
+        started: 0,
+        requested: 6,
+        shown: 0,
       },
       {
         pageType: "trip_month",
-        datesPicked: 2,
-        planRequested: 0,
-        planShown: 0,
+        started: 2,
+        requested: 0,
+        shown: 0,
       },
     ]);
   });
@@ -324,19 +325,19 @@ describe("tripPlannerFigures", () => {
     expect(all.regions).toEqual([
       expect.objectContaining({
         region: "orlando",
-        datesPicked: 32,
-        planRequested: 36,
-        planShown: 36,
+        started: 32,
+        requested: 36,
+        shown: 36,
         errors: 1,
         kept: 6,
         ticketLinks: 5,
       }),
       expect.objectContaining({
         region: "japan",
-        datesPicked: 3,
+        started: 3,
         ticketLinks: 2,
       }),
-      expect.objectContaining({ region: "(other)", datesPicked: 1 }),
+      expect.objectContaining({ region: "(other)", started: 1 }),
     ]);
     expect(
       tripPlannerFigures(ROWS, { ...OPTIONS, region: "japan" }).totals,
@@ -404,6 +405,32 @@ describe("tripPlannerFigures", () => {
       "north-america/united-states/orlando/magic-kingdom-park",
     );
     expect(parkKeyOf("/de/orlando")).toBeNull();
+  });
+
+  it("counts the day planner opened from the trip planner by the region and suffix of its source", () => {
+    const opened = (source: string, count: number) =>
+      ev("planner_opened", { source }, count);
+    const rows = [
+      opened("orlando-trip-day", 4),
+      opened("orlando-trip-first", 2),
+      opened("orlando-hub", 3),
+      opened("japan-trip-day", 5),
+      // The day planner's own ways in, and a region nobody has.
+      opened("header", 40),
+      opened("atlantis-trip-day", 9),
+    ];
+    const one = tripPlannerFigures(rows, { ...OPTIONS, region: "orlando" });
+    expect(one.totals).toMatchObject({
+      dayPlannerTripDay: 4,
+      dayPlannerTripFirst: 2,
+      dayPlannerHub: 3,
+    });
+    // No planner event: it adds no row to the regions side by side.
+    expect(one.regions).toEqual([]);
+    expect(
+      tripPlannerFigures(rows, { ...OPTIONS, region: null }).totals
+        .dayPlannerTripDay,
+    ).toBe(9);
   });
 
   it("names an empty value (none) rather than dropping it", () => {

@@ -140,7 +140,7 @@ against these rules.
 | `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
-| `trip_planner_report`        | the multi-day trip planner per region: the dates-first funnel (dates picked → plan shown → changed → tickets entered → kept) with drop-off, split at the new planner's first day, find dates, edits and options, parks left out, tickets, hopper, views, purchase links by seller kind and position, errors shown, the page types it was used from | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
+| `trip_planner_report`        | the multi-day trip planner per region: the dates-first funnel (started → requested → shown → changed → tickets → kept), the optional steps as shares of the plans shown, split at the new planner's first day, find dates, edits and options, parks left out, tickets, hopper, views, purchase links by seller kind and position, errors shown, the page types it was used from | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
 | `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
@@ -246,21 +246,25 @@ one from each side; `planner_report` is the day planner's.
   archived products included, and attributes a click to the region whose catalog has its product;
   a product no catalog has is counted in `unattributedTicketLinks` and listed only with every
   region.
-- **The funnel** is the dates-first planner's (release 2.21.0, PAR-1309): `datesPicked`
-  (`trip_planner_started`) → `planShown` (`trip_plan_shown`) → `changed` (`trip_edit_opened` and
-  the visitor's `trip_option_changed`, not Parky's) → `ticketsEntered` (`trip_tickets_opened`) →
-  `kept` (`trip_days_saved`, `trip_ics_exported`, `trip_link_copied`), each step with
-  `ofDatesPicked`, `fromPrevious` and `dropOff`. Since PAR-1309 a ticket answer fires only after a
-  plan, only with yes and once per browser, so the old funnel's `ticketsAnswered` step read as an
-  almost complete drop-off.
+- **The funnel** is the dates-first planner's (release 2.21.0, PAR-1309; the frontend's
+  `docs/features/orlando-planner.md#the-funnel`): `started` (`trip_planner_started`, source `hero`,
+  `button`, `link` or `dates`) → `requested` (`trip_plan_requested`) → `shown` (`trip_plan_shown`)
+  → `changed` (`trip_edit_opened` and the visitor's `trip_option_changed`; Parky's are counted
+  beside it) → `tickets` (`trip_tickets_opened`) → `kept` (`trip_days_saved`, `trip_ics_exported`,
+  `trip_link_copied`). Every step has `ofStarted`. `requested` and `shown` have `fromPrevious` and
+  `dropOff`. `changed` and `tickets` are optional, a plan that suits needs neither, so they come as
+  `ofShown`, a share of the plans shown, and never as a drop-off; `kept` follows `shown`, with
+  `fromPrevious` and `dropOff` against it, and lists the day planner opened from the trip planner
+  (`planner_opened` with the source `<region>-trip-day`, `<region>-trip-first` or `<region>-hub`;
+  the prefix names the region).
 - **A window across the deploy.** `newFunnelFrom` is the first UTC day any of the new planner's own
   events (`trip_edit_opened`, `trip_option_changed`, `trip_tickets_opened`) was counted
   (`firstDayOf`, the hourly rows and the daily roll-up of names). Each step counts its days before
-  it (`before`) by the old planner's events, a start for `datesPicked` and a yes to the ticket
-  question for `ticketsEntered`, nothing for `changed`, which the old planner did not send, and its
-  days from it on (`since`) by the new ones. A rate is taken over the days both steps count, so
-  `changed` is rated against the answers of the new planner's days only. Until the frontend sends
-  the new events, every day is `before`.
+  it (`before`) by the old planner's events, a yes of `trip_tickets_answered` for `tickets` (no
+  longer sent, so it counts only there) and nothing for `changed`, which the old planner did not
+  send, and its days from it on (`since`) by the new ones. A rate is taken over the days both steps
+  count, so `changed` is a share of the answers of the new planner's days only. Until the frontend
+  sends the new events, every day is `before`.
 - **Counts are events, not visitors.** An answer fires once per distinct request, so a step can
   outnumber the one before it; `dropOff` is then null.
 - **The tile as a way in.** The planner tile on a region park's pages (PAR-1317) is read beside
@@ -275,10 +279,11 @@ one from each side; `planner_report` is the day planner's.
   outcome with the loosened rule, the error's status and the parks left out with the fix chosen,
   the cities of a route, find dates (toggles, periods, windows found and planned), edits by panel and
   where they were opened, options changed by option, value and who, the stay suggestion, ticket
-  openings and entries, hopper, the views switched to and seen, the date grid's resort mode, days
-  opened, pins, the accuracy note, what was kept, the purchase links, the regions side by side and
+  openings and entries, hopper, the views switched to, the date grid's resort mode, days opened,
+  pins, the accuracy note, what was kept, the purchase links, the regions side by side and
   `pageTypes`: the starts, requests and answers by the page they came from (`trip_hub`,
-  `trip_month`, `trip_best_time`, `other` …). An event the frontend does not send yet lists
+  `trip_month` and `trip_best_time` from the deploy that sends them on, `other` before it and on
+  every other page). An event the frontend does not send yet lists
   nothing. The small-value and `visitorData` rules are the other event tools': lists fold, a region
   narrows like a filter, so one region's counts from 1 to 4 are null, per era too, and so is every
   rate computed from one.

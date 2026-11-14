@@ -562,15 +562,15 @@ describe("Trip planner metrics (e2e)", () => {
       .report(lastDays(7), options);
     expect(report.newFunnelFrom).toBe(today);
     const step = (name: string) => report.funnel.find((s) => s.step === name);
-    expect(step("datesPicked")).toEqual({
-      step: "datesPicked",
+    expect(step("started")).toEqual({
+      step: "started",
       before: 6,
       since: 7,
     });
-    expect(step("planShown")).toMatchObject({ before: 5, since: 4 });
+    expect(step("shown")).toMatchObject({ before: 5, since: 4 });
     expect(step("changed")).toMatchObject({ before: null, since: 3 });
     // A yes before the cut-over, the ticket step's openings since; today's yes is neither.
-    expect(step("ticketsEntered")).toMatchObject({ before: 2, since: 2 });
+    expect(step("tickets")).toMatchObject({ before: 2, since: 2 });
     expect(report.totals).toMatchObject({
       planRequested: 4,
       datesSearched: 4,
@@ -590,33 +590,33 @@ describe("Trip planner metrics (e2e)", () => {
     expect(report.pageTypes).toEqual([
       expect.objectContaining({
         pageType: "trip_hub",
-        datesPicked: 7,
-        planShown: 9,
+        started: 7,
+        shown: 9,
       }),
-      expect.objectContaining({ pageType: "other", datesPicked: 6 }),
-      expect.objectContaining({ pageType: "trip_best_time", planRequested: 4 }),
+      expect.objectContaining({ pageType: "other", started: 6 }),
+      expect.objectContaining({ pageType: "trip_best_time", requested: 4 }),
     ]);
     // Japan is no region of this list: its starts are (other).
-    expect(report.regions.map((row) => [row.region, row.datesPicked])).toEqual([
+    expect(report.regions.map((row) => [row.region, row.started])).toEqual([
       ["orlando", 13],
       ["(other)", 2],
     ]);
-    expect(
-      report.series?.reduce((sum, point) => sum + point.datesPicked, 0),
-    ).toBe(13);
+    expect(report.series?.reduce((sum, point) => sum + point.started, 0)).toBe(
+      13,
+    );
 
     // One day, hourly: today's rows by their hour, all of it the new planner's.
     const hourly = await app
       .get(SiteAnalyticsTripService)
       .report(lastDays(1), options);
     expect(hourly.interval).toBe("hour");
-    expect(hourly.funnel.find((s) => s.step === "datesPicked")).toMatchObject({
+    expect(hourly.funnel.find((s) => s.step === "started")).toMatchObject({
       before: null,
       since: 7,
     });
-    expect(
-      hourly.series?.reduce((sum, point) => sum + point.datesPicked, 0),
-    ).toBe(7);
+    expect(hourly.series?.reduce((sum, point) => sum + point.started, 0)).toBe(
+      7,
+    );
   });
 
   it("records Parky's calls with the caller, and the stays and parks left out of every row", async () => {

@@ -14,8 +14,9 @@ import {
  * docs/features/orlando-planner.md#analytics): every one carries `region`.
  * `ticket_link_clicked` has the eight properties the statistic allows and so
  * no region: its product's slug belongs to one region's catalog. The 2.21.0
- * planner (PAR-1309, dates first) adds the events of the tracking audit's
- * T10–T18 and T27; a name the frontend does not send yet counts nothing.
+ * planner (PAR-1309, dates first) adds the edits, options, ticket openings,
+ * parks left out, the finder, the date grid's mode, the accuracy note, the
+ * stay suggestion and the park pages' tile (PAR-1317).
  */
 export const TRIP_EVENTS = {
   started: "trip_planner_started",
@@ -49,8 +50,7 @@ export const TRIP_EVENTS = {
   calendarMode: "trip_calendar_mode",
   accuracyOpened: "trip_accuracy_opened",
   staySuggestion: "trip_stay_suggestion",
-  viewSeen: "trip_view_seen",
-  pinsAction: "trip_pins_action",
+
   tileClicked: "trip_tile_clicked",
 } as const;
 
@@ -69,6 +69,16 @@ export const TILE_SEEN = {
   section: "trip_tile",
 } as const;
 
+/** The day planner opened: a source `<region>-trip-day`, `-trip-first` or `-hub` is the trip planner's. */
+export const DAY_PLANNER_OPENED = "planner_opened";
+
+/** How the trip planner hands over to the day planner, by the source's suffix. */
+const DAY_PLANNER_FROM: Record<string, "tripDay" | "tripFirst" | "hub"> = {
+  "trip-day": "tripDay",
+  "trip-first": "tripFirst",
+  hub: "hub",
+};
+
 /**
  * The events only the dates-first planner sends: the first UTC day any of
  * them was counted is the day its funnel starts (`newFunnelFrom`).
@@ -79,15 +89,36 @@ export const NEW_FUNNEL_EVENTS: readonly string[] = [
   E.ticketsOpened,
 ];
 
-/** The funnel's steps, in the order a visitor of the dates-first planner meets them. */
+/**
+ * The funnel's steps, in the order a visitor of the dates-first planner meets
+ * them (the frontend's docs/features/orlando-planner.md#the-funnel).
+ */
 export const TRIP_FUNNEL = [
-  "datesPicked",
-  "planShown",
+  "started",
+  "requested",
+  "shown",
   "changed",
-  "ticketsEntered",
+  "tickets",
   "kept",
 ] as const;
 export type TripFunnelStep = (typeof TRIP_FUNNEL)[number];
+
+/**
+ * What each step is rated against. `changed` and `tickets` are optional (a
+ * plan that suits needs neither), so they are shares of `shown`, not a
+ * drop-off, and `kept` follows `shown` too.
+ */
+export const TRIP_FUNNEL_BASE: Record<
+  TripFunnelStep,
+  { step: TripFunnelStep; share: boolean } | null
+> = {
+  started: null,
+  requested: { step: "started", share: false },
+  shown: { step: "requested", share: false },
+  changed: { step: "shown", share: true },
+  tickets: { step: "shown", share: true },
+  kept: { step: "shown", share: false },
+};
 
 /** The days before the dates-first planner's first event, and the days from it on. */
 export type TripFunnelEra = "before" | "since";
@@ -96,18 +127,19 @@ const KEPT = [E.daysSaved, E.icsExported, E.linkCopied];
 
 /**
  * What each step counts in each era; null where the era has no such event.
- * Before the dates-first planner, a start was the step before the dates and
- * a ticket answer of `yes` the way into the tickets; it sent nothing when a
- * plan was changed.
+ * Before the dates-first planner, a ticket answer of `yes` was the way into
+ * the tickets (`trip_tickets_answered`, no longer sent); it sent nothing when
+ * a plan was changed.
  */
 export const TRIP_FUNNEL_EVENTS: Record<
   TripFunnelStep,
   Record<TripFunnelEra, readonly string[] | null>
 > = {
-  datesPicked: { before: [E.started], since: [E.started] },
-  planShown: { before: [E.planShown], since: [E.planShown] },
+  started: { before: [E.started], since: [E.started] },
+  requested: { before: [E.planRequested], since: [E.planRequested] },
+  shown: { before: [E.planShown], since: [E.planShown] },
   changed: { before: null, since: [E.editOpened, E.optionChanged] },
-  ticketsEntered: { before: [E.ticketsAnswered], since: [E.ticketsOpened] },
+  tickets: { before: [E.ticketsAnswered], since: [E.ticketsOpened] },
   kept: { before: KEPT, since: KEPT },
 };
 
@@ -198,11 +230,11 @@ export const TRIP_LISTS = {
   hopperToggled: { events: [E.hopperToggled], props: ["on"] },
   calendarMode: { events: [E.calendarMode], props: ["mode", "from_default"] },
   viewsChanged: { events: [E.viewChanged], props: ["view"] },
-  viewsSeen: { events: [E.viewSeen], props: ["view", "chosen"] },
+
   dayOpened: { events: [E.dayOpened], props: ["kind", "view"] },
   dayOpenedByView: { events: [E.dayOpened], props: ["view"] },
   dayPinned: { events: [E.dayPinned], props: ["pinned"] },
-  pinsActions: { events: [E.pinsAction], props: ["action"] },
+
   tileClicks: { events: [E.tileClicked], props: ["link"] },
   accuracyOpened: { events: [E.accuracyOpened], props: ["surface"] },
   savedDays: { events: [E.daysSaved], props: ["days"] },
@@ -291,7 +323,12 @@ export const TRIP_TOTALS = {
   },
 } as const satisfies Record<string, ListSpec>;
 export type TripTotalKey =
-  keyof typeof TRIP_TOTALS | "unattributedTicketLinks" | "tileShown";
+  | keyof typeof TRIP_TOTALS
+  | "unattributedTicketLinks"
+  | "tileShown"
+  | "dayPlannerTripDay"
+  | "dayPlannerTripFirst"
+  | "dayPlannerHub";
 export type TripTotals = Record<TripTotalKey, number>;
 
 export interface ValueCount {
@@ -337,9 +374,9 @@ export interface TripPlannerFigures {
   totals: TripTotals;
   regions: Array<{
     region: string;
-    datesPicked: number;
-    planRequested: number;
-    planShown: number;
+    started: number;
+    requested: number;
+    shown: number;
     errors: number;
     kept: number;
     ticketLinks: number;
@@ -355,9 +392,9 @@ export interface TripPlannerFigures {
   /** Where the planner is used: its starts, requests and answers by the page they came from. */
   pageTypes: Array<{
     pageType: string;
-    datesPicked: number;
-    planRequested: number;
-    planShown: number;
+    started: number;
+    requested: number;
+    shown: number;
   }>;
   lists: Record<TripListKey, Array<Record<string, string> & { count: number }>>;
 }
@@ -398,9 +435,14 @@ export function tripPlannerFigures(
   };
 
   const totals = Object.fromEntries(
-    [...Object.keys(TRIP_TOTALS), "unattributedTicketLinks", "tileShown"].map(
-      (k) => [k, 0],
-    ),
+    [
+      ...Object.keys(TRIP_TOTALS),
+      "unattributedTicketLinks",
+      "tileShown",
+      "dayPlannerTripDay",
+      "dayPlannerTripFirst",
+      "dayPlannerHub",
+    ].map((k) => [k, 0]),
   ) as TripTotals;
   const byTile = new Map<string, TripPlannerFigures["tile"][number]>();
   const tileOf = (region: string) => {
@@ -432,6 +474,19 @@ export function tripPlannerFigures(
       totals.tileShown += n;
       continue;
     }
+    // The day planner opened from the trip planner names its region in the source's prefix.
+    if (row.name === DAY_PLANNER_OPENED) {
+      const source = row.props.source ?? "";
+      const at = source.indexOf("-");
+      const from = DAY_PLANNER_FROM[source.slice(at + 1)];
+      const opened = source.slice(0, at);
+      if (at <= 0 || !from || !known.has(opened)) continue;
+      if (options.region !== null && opened !== options.region) continue;
+      if (from === "tripDay") totals.dayPlannerTripDay += n;
+      if (from === "tripFirst") totals.dayPlannerTripFirst += n;
+      if (from === "hub") totals.dayPlannerHub += n;
+      continue;
+    }
     const region = regionOf(row);
     if (row.name === E.tileClicked && region !== null) {
       if (options.region === null || region === options.region) {
@@ -450,19 +505,19 @@ export function tripPlannerFigures(
       if (!side) {
         side = {
           region,
-          datesPicked: 0,
-          planRequested: 0,
-          planShown: 0,
+          started: 0,
+          requested: 0,
+          shown: 0,
           errors: 0,
           kept: 0,
           ticketLinks: 0,
         };
         byRegion.set(region, side);
       }
-      if (row.name === E.started) side.datesPicked += n;
-      if (row.name === E.planRequested) side.planRequested += n;
+      if (row.name === E.started) side.started += n;
+      if (row.name === E.planRequested) side.requested += n;
       if (row.name === E.planShown) {
-        side.planShown += n;
+        side.shown += n;
         if (row.props.outcome === "error") side.errors += n;
       }
       if (KEPT.includes(row.name as (typeof KEPT)[number])) side.kept += n;
@@ -497,13 +552,13 @@ export function tripPlannerFigures(
     ) {
       const page = byPage.get(row.pageType) ?? {
         pageType: row.pageType || NO_VALUE,
-        datesPicked: 0,
-        planRequested: 0,
-        planShown: 0,
+        started: 0,
+        requested: 0,
+        shown: 0,
       };
-      if (row.name === E.started) page.datesPicked += n;
-      if (row.name === E.planRequested) page.planRequested += n;
-      if (row.name === E.planShown) page.planShown += n;
+      if (row.name === E.started) page.started += n;
+      if (row.name === E.planRequested) page.requested += n;
+      if (row.name === E.planShown) page.shown += n;
       byPage.set(row.pageType, page);
     }
   }
@@ -526,12 +581,12 @@ export function tripPlannerFigures(
     ),
     regions: byCountDesc(
       [...byRegion.values()],
-      (row) => row.datesPicked,
+      (row) => row.started,
       (row) => row.region,
     ),
     pageTypes: byCountDesc(
       [...byPage.values()],
-      (row) => row.datesPicked + row.planRequested,
+      (row) => row.started + row.requested,
       (row) => row.pageType,
     ),
     lists: Object.fromEntries(

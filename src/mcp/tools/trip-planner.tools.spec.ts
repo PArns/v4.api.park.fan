@@ -123,15 +123,15 @@ function services(
         series: [
           {
             day: "2026-11-13",
-            datesPicked: 30,
-            planRequested: 2,
-            planShown: 0,
+            started: 30,
+            requested: 2,
+            shown: 0,
           },
           {
             day: "2026-11-14",
-            datesPicked: 12,
-            planRequested: 54,
-            planShown: 48,
+            started: 12,
+            requested: 54,
+            shown: 48,
           },
         ],
       }),
@@ -164,7 +164,8 @@ describe("trip_planner_report", () => {
     expect(text).toContain(SMALL_CELLS_DESCRIPTION);
     expect(text).toContain("planner_report");
     expect(text).toContain("trip_planner_ops");
-    expect(text).toContain("datesPicked");
+    expect(text).toContain("started (trip_planner_started");
+    expect(text).toContain("ofShown");
     expect(text).toContain("newFunnelFrom");
     // The old planner's wizard steps are gone from the funnel and its description.
     expect(text).not.toContain("not_yet, yes, skipped");
@@ -194,52 +195,70 @@ describe("trip_planner_report", () => {
       answer.funnel.find((s: { step: string }) => s.step === name);
     expect(answer.newFunnelFrom).toBe("2026-11-18");
     expect(answer.funnel.map((s: { step: string }) => s.step)).toEqual([
-      "datesPicked",
-      "planShown",
+      "started",
+      "requested",
+      "shown",
       "changed",
-      "ticketsEntered",
+      "tickets",
       "kept",
     ]);
-    expect(step("datesPicked")).toMatchObject({
+    expect(step("started")).toMatchObject({
       count: 62,
       before: 20,
       since: 42,
-      ofDatesPicked: null,
+      ofStarted: null,
       fromPrevious: null,
+      dropOff: null,
     });
-    expect(step("planShown")).toMatchObject({
+    expect(step("requested")).toMatchObject({
+      count: 56,
+      before: 0,
+      since: 56,
+      fromPrevious: 0.903,
+      dropOff: 0.097,
+    });
+    // More answers than requests in the old planner's days: no drop-off to speak of.
+    expect(step("shown")).toMatchObject({
       count: 66,
       before: 18,
       since: 48,
+      fromPrevious: 1.179,
+      dropOff: null,
       ok: 63,
       error: 3,
       errorRate: 0.045,
     });
-    // Changes were counted only since the cut-over: rated against those days' answers alone.
+    // Optional steps are shares of the answers shown, never a drop-off; changes were
+    // counted only since the cut-over, so against those days' answers alone.
     expect(step("changed")).toMatchObject({
       count: 20,
       before: null,
       since: 20,
-      ofDatesPicked: 0.476,
-      fromPrevious: 0.417,
-      dropOff: 0.583,
+      ofShown: 0.417,
+      ofStarted: 0.476,
       events: {
         before: null,
         since: ["trip_edit_opened", "trip_option_changed"],
       },
     });
-    expect(step("ticketsEntered")).toMatchObject({
+    expect(step("changed")).not.toHaveProperty("dropOff");
+    expect(step("tickets")).toMatchObject({
       count: 15,
       before: 6,
       since: 9,
       ticketsOpened: 9,
       ticketsAnsweredYes: 6,
-      fromPrevious: 0.45,
+      ofShown: 0.227,
     });
+    expect(step("tickets")).not.toHaveProperty("fromPrevious");
+    // Kept follows the answers shown, past the optional steps.
     expect(step("kept")).toMatchObject({
       count: 8,
+      fromPrevious: 0.121,
+      dropOff: 0.879,
       daysSaved: 4,
       linkCopied: 4,
+      dayPlannerOpened: { tripDay: 0, tripFirst: 0, hub: 0 },
     });
     expect(answer.requests).toMatchObject({
       planRequested: 56,
@@ -257,7 +276,7 @@ describe("trip_planner_report", () => {
     expect(answer.visitorDataNotice).toBe(VISITOR_DATA_NOTICE);
     const data = answer.visitorData;
     // A way in used twice is folded: too few to tell anyone apart.
-    expect(data.datesPicked.sources).toEqual([
+    expect(data.started.sources).toEqual([
       { source: "dates", count: 40 },
       { source: "hero", count: 20 },
       { source: "(other)", count: 2 },
@@ -275,7 +294,7 @@ describe("trip_planner_report", () => {
     expect(data.regions).toEqual([
       expect.objectContaining({
         region: "orlando",
-        datesPicked: 62,
+        started: 62,
         ticketLinks: 11,
       }),
     ]);
@@ -295,17 +314,14 @@ describe("trip_planner_report", () => {
     const step = (name: string) =>
       answer.funnel.find((s: { step: string }) => s.step === name);
     // Three starts before the cut-over: the step's whole count would give them away.
-    expect(step("datesPicked")).toMatchObject({
+    expect(step("started")).toMatchObject({
       count: null,
       before: null,
       since: 20,
     });
-    expect(step("planShown")).toMatchObject({ count: 12, ofDatesPicked: null });
-    expect(step("changed")).toMatchObject({
-      count: null,
-      fromPrevious: null,
-      dropOff: null,
-    });
+    expect(step("requested")).toMatchObject({ count: 0, fromPrevious: null });
+    expect(step("shown")).toMatchObject({ count: 12, ofStarted: null });
+    expect(step("changed")).toMatchObject({ count: null, ofShown: null });
     expect(step("kept")).toMatchObject({ count: null, daysSaved: null });
     expect(answer).toMatchObject({
       region: "orlando",
@@ -320,7 +336,7 @@ describe("trip_planner_report", () => {
       answer.funnel.find((s: { step: string }) => s.step === name);
     expect(answer.newFunnelFrom).toBeNull();
     expect(step("changed")).toMatchObject({ count: null, since: null });
-    expect(step("ticketsEntered")).toMatchObject({ count: 6, before: 6 });
+    expect(step("tickets")).toMatchObject({ count: 6, before: 6 });
   });
 
   it("reads the tile as a way in beside the sources: shown, clicked by link, per region", async () => {
@@ -351,7 +367,7 @@ describe("trip_planner_report", () => {
       calendar: 2,
       clickRate: 0.25,
     });
-    expect(answer.visitorData.datesPicked.tile).toEqual([
+    expect(answer.visitorData.started.tile).toEqual([
       {
         region: "orlando",
         shown: 40,
@@ -361,7 +377,7 @@ describe("trip_planner_report", () => {
         clickRate: 0.25,
       },
     ]);
-    expect(answer.visitorData.datesPicked.tileClicks).toEqual([
+    expect(answer.visitorData.started.tileClicks).toEqual([
       { link: "plan", count: 8 },
       { link: "(other)", count: 2 },
     ]);
@@ -371,8 +387,8 @@ describe("trip_planner_report", () => {
     const { map } = services();
     const answer = await run(tripPlannerReportTool, { series: true }, map);
     expect(answer.visitorData.series).toEqual([
-      { day: "2026-11-13", datesPicked: 30, planRequested: null, planShown: 0 },
-      { day: "2026-11-14", datesPicked: 12, planRequested: 54, planShown: 48 },
+      { day: "2026-11-13", started: 30, requested: null, shown: 0 },
+      { day: "2026-11-14", started: 12, requested: 54, shown: 48 },
     ]);
     expect(answer.smallValuesHidden).toBe(true);
   });

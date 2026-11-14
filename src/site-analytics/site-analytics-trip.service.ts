@@ -11,6 +11,7 @@ import { SiteReportRunner } from "./site-analytics-report-runner";
 import { echo } from "./site-analytics.service";
 import { firstDayOf, readEventProps } from "./site-analytics-event-props";
 import {
+  DAY_PLANNER_OPENED,
   NEW_FUNNEL_EVENTS,
   TICKET_LINK_EVENT,
   TILE_SEEN,
@@ -25,9 +26,9 @@ export type SiteTripPlannerReport = ReturnType<typeof echo> &
     series?: Array<{
       day: string;
       partial?: true;
-      datesPicked: number;
-      planRequested: number;
-      planShown: number;
+      started: number;
+      requested: number;
+      shown: number;
     }>;
   };
 
@@ -57,7 +58,11 @@ export class SiteAnalyticsTripService {
         readEventProps(
           this.runner,
           window,
-          [...Object.values(TRIP_EVENTS), TICKET_LINK_EVENT],
+          [
+            ...Object.values(TRIP_EVENTS),
+            TICKET_LINK_EVENT,
+            DAY_PLANNER_OPENED,
+          ],
           { period: true, pageType: true },
         ),
         // The tile's views by page, whose park names the region.
@@ -91,10 +96,10 @@ export class SiteAnalyticsTripService {
         series: seriesPeriods(window, now).map((point) => ({
           day: point.day,
           ...(point.partial && { partial: true as const }),
-          datesPicked: counted.get(`${point.day}|${TRIP_EVENTS.started}`) ?? 0,
-          planRequested:
+          started: counted.get(`${point.day}|${TRIP_EVENTS.started}`) ?? 0,
+          requested:
             counted.get(`${point.day}|${TRIP_EVENTS.planRequested}`) ?? 0,
-          planShown: counted.get(`${point.day}|${TRIP_EVENTS.planShown}`) ?? 0,
+          shown: counted.get(`${point.day}|${TRIP_EVENTS.planShown}`) ?? 0,
         })),
       };
     });

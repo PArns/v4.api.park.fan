@@ -406,7 +406,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     // No dates-first event yet: the old planner's funnel.
     expect(report.newFunnelFrom).toBeNull();
     expect(report.funnel[0]).toMatchObject({
-      step: "datesPicked",
+      step: "started",
       count: 10,
       before: 10,
       since: null,
@@ -420,7 +420,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
       clicks: 5,
       unattributedTicketLinks: 0,
     });
-    expect(report.visitorData.datesPicked.sources).toEqual([
+    expect(report.visitorData.started.sources).toEqual([
       { source: "hero", count: 8 },
       { source: "(other)", count: 2 },
     ]);

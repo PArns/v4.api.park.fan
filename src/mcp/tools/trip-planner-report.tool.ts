@@ -4,6 +4,7 @@ import { SiteAnalyticsTripService } from "../../site-analytics/site-analytics-tr
 import {
   TICKET_LINK_EVENT,
   TRIP_FUNNEL,
+  TRIP_FUNNEL_BASE,
   TRIP_FUNNEL_EVENTS,
   TRIP_LISTS,
   type TripFunnelEra,
@@ -54,15 +55,20 @@ export const tripPlannerReportTool = defineMcpTool({
   description:
     "How park.fan's multi-day trip planner (the region hubs) is used, from its trip_* events and " +
     "ticket_link_clicked, per region or for all (`region`). Not the day planner: that is " +
-    "planner_report. The funnel of the dates-first planner (release 2.21.0): datesPicked " +
-    "(trip_planner_started) → planShown (trip_plan_shown) → changed (trip_edit_opened, " +
-    "trip_option_changed by the visitor) → ticketsEntered (trip_tickets_opened) → kept (days " +
-    "saved to the day planner, .ics exported, link copied), each with ofDatesPicked, " +
-    "fromPrevious and dropOff (1 − fromPrevious, null where a step outnumbers the one before). " +
-    "newFunnelFrom is the first UTC day the dates-first planner's events were counted; each " +
-    "step counts its `before` days by the old planner's events (a start, an answer of yes to " +
-    "the ticket question; nothing for changed) and its `since` days by the new ones, and every " +
-    "rate is taken over the days both steps count, so a window across the deploy still adds " +
+    "planner_report. The funnel of the dates-first planner (release 2.21.0, the frontend's " +
+    "docs/features/orlando-planner.md#the-funnel): started (trip_planner_started, source hero, " +
+    "button, link or dates) → requested (trip_plan_requested) → shown (trip_plan_shown) → " +
+    "changed (trip_edit_opened, and trip_option_changed by the visitor; Parky's are counted " +
+    "beside) → tickets (trip_tickets_opened) → kept (days saved to the day planner, .ics " +
+    "exported, link copied). Every step has ofStarted; requested and shown have fromPrevious and " +
+    "dropOff (1 − fromPrevious, null where a step outnumbers the one before); changed and " +
+    "tickets are optional (a plan that suits needs neither), so they come as ofShown, a share of " +
+    "shown, not a drop-off; kept follows shown, with fromPrevious and dropOff against it. " +
+    "newFunnelFrom is the first UTC day the dates-first planner's own events were counted; each " +
+    "step counts its `before` days by the old planner's events (trip_tickets_answered with yes " +
+    "for tickets, no longer sent; nothing for changed) and its `since` days by the new ones, and " +
+    "every rate is taken over the days both steps count, so a window across the deploy still " +
+    "adds " +
     "up. Counts are events, not visitors: an answer fires once per distinct request. Then: ways " +
     "in (source, via) and the planner tile on the region parks' pages (shown: its section_seen, " +
     "attributed to a region by the park in its page; clicked: trip_tile_clicked by link, plan " +
@@ -72,12 +78,15 @@ export const tripPlannerReportTool = defineMcpTool({
     "out and the fix chosen, cities of a route, find dates (toggles, periods, windows found and " +
     "planned by rank), the edits opened (panel, from) and options changed (option, value, by " +
     "visitor or parky), the stay suggestion, ticket openings (from, first) and entries, hopper, " +
-    "the views switched to and seen, the date grid's resort mode, days opened, pins, the " +
-    "accuracy note, what was kept, ticket purchase links by seller kind (official, sponsored, " +
+    "the views switched to, the date grid's resort mode, days opened, pins, the " +
+    "accuracy note, what was kept and the day planner opened from a trip day, after copying the " +
+    "days or from the hub (planner_opened's <region>-trip-day, -trip-first, -hub), ticket " +
+    "purchase links by seller kind (official, sponsored, " +
     "plain) and position, surface, mode, locale match, seller and product, attributed to a " +
     "region by the product's catalog (a product no catalog has is in unattributedTicketLinks); " +
     "the regions side by side (a region value park.fan does not have is (other)) and the page " +
-    "types the planner was used from (trip_hub, trip_month, trip_best_time, other …). An event " +
+    "types the planner was used from (trip_hub, trip_month, trip_best_time from the deploy on, " +
+    "other before and elsewhere). An event " +
     "the frontend does not send yet lists nothing. The server's own record of the plan, when " +
     "and best-days answers is trip_planner_ops. UTC days; up to six minutes behind the site; Do " +
     "Not Track, GPC and opted-out readers are missing. " +
@@ -104,9 +113,7 @@ export const tripPlannerReportTool = defineMcpTool({
     series: z
       .boolean()
       .default(false)
-      .describe(
-        "Include dates picked, plan requests and plans shown per period",
-      ),
+      .describe("Include starts, plan requests and plans shown per period"),
   },
   async handler({ region, limit, series, ...input }, ctx) {
     const catalogs = ctx.get(TicketCatalogService);
@@ -160,38 +167,40 @@ export const tripPlannerReportTool = defineMcpTool({
     };
     const hide = series
       ? hideSmallInSeries(report.series ?? [], [
-          "datesPicked",
-          "planRequested",
-          "planShown",
+          "started",
+          "requested",
+          "shown",
         ])
       : null;
 
-    const funnel = TRIP_FUNNEL.map((step, i) => {
-      const fromPrevious = i === 0 ? null : rateOf(step, TRIP_FUNNEL[i - 1]);
+    const funnel = TRIP_FUNNEL.map((step) => {
+      const base = TRIP_FUNNEL_BASE[step];
+      const rate = base ? rateOf(step, base.step) : null;
       return {
         step,
         events: TRIP_FUNNEL_EVENTS[step],
         count: countOf(step),
         before: measured(step, "before") ? era(step, "before") : null,
         since: measured(step, "since") ? era(step, "since") : null,
-        ofDatesPicked: i === 0 ? null : rateOf(step, "datesPicked"),
-        fromPrevious,
-        dropOff:
-          fromPrevious !== null && fromPrevious <= 1
-            ? round3(1 - fromPrevious)
-            : null,
-        ...(step === "planShown" && {
+        ofStarted: base ? rateOf(step, "started") : null,
+        ...(base?.share
+          ? { ofShown: rate }
+          : {
+              fromPrevious: rate,
+              dropOff: rate !== null && rate <= 1 ? round3(1 - rate) : null,
+            }),
+        ...(step === "shown" && {
           ok: t("shownOk"),
           relaxed: t("shownRelaxed"),
           error: t("shownError"),
-          errorRate: ratio(t("shownError"), countOf("planShown")),
+          errorRate: ratio(t("shownError"), countOf("shown")),
         }),
         ...(step === "changed" && {
           editOpened: t("editOpened"),
           optionChanged: t("optionChanged"),
           optionChangedByParky: t("optionChangedByParky"),
         }),
-        ...(step === "ticketsEntered" && {
+        ...(step === "tickets" && {
           ticketsOpened: t("ticketsOpened"),
           ticketsAnsweredYes: t("ticketsAnsweredYes"),
         }),
@@ -199,6 +208,11 @@ export const tripPlannerReportTool = defineMcpTool({
           daysSaved: t("daysSaved"),
           icsExported: t("icsExported"),
           linkCopied: t("linkCopied"),
+          dayPlannerOpened: {
+            tripDay: t("dayPlannerTripDay"),
+            tripFirst: t("dayPlannerTripFirst"),
+            hub: t("dayPlannerHub"),
+          },
         }),
       };
     });
@@ -258,11 +272,11 @@ export const tripPlannerReportTool = defineMcpTool({
       {
         regions: foldSmallRows(report.regions, {
           dims: ["region"],
-          count: "datesPicked",
+          count: "started",
           sum: [
-            "datesPicked",
-            "planRequested",
-            "planShown",
+            "started",
+            "requested",
+            "shown",
             "errors",
             "kept",
             "ticketLinks",
@@ -271,15 +285,15 @@ export const tripPlannerReportTool = defineMcpTool({
         pageTypes: foldSmallRows(
           report.pageTypes.map((row) => ({
             ...row,
-            events: row.datesPicked + row.planRequested + row.planShown,
+            events: row.started + row.requested + row.shown,
           })),
           {
             dims: ["pageType"],
             count: "events",
-            sum: ["datesPicked", "planRequested", "planShown", "events"],
+            sum: ["started", "requested", "shown", "events"],
           },
         ),
-        datesPicked: {
+        started: {
           sources: list("sources"),
           via: list("startedVia"),
           tile: foldSmallRows(
@@ -324,7 +338,6 @@ export const tripPlannerReportTool = defineMcpTool({
           options: list("options"),
           staySuggestion: list("staySuggestion"),
           dayPinned: list("dayPinned"),
-          pinsActions: list("pinsActions"),
         },
         tickets: {
           answers: list("ticketAnswers"),
@@ -340,7 +353,6 @@ export const tripPlannerReportTool = defineMcpTool({
         },
         views: {
           switched: list("viewsChanged"),
-          seen: list("viewsSeen"),
           calendarMode: list("calendarMode"),
           dayOpened: list("dayOpened"),
           dayOpenedByView: list("dayOpenedByView"),
