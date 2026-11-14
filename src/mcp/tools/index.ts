@@ -30,6 +30,8 @@ import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
 import { analyticsTrafficCrosstabTool } from "./analytics-traffic-crosstab.tool";
 import { analyticsLiveTool } from "./analytics-live.tool";
 import { plannerReportTool } from "./planner-report.tool";
+import { tripPlannerOpsTool } from "./trip-planner-ops.tool";
+import { tripPlannerReportTool } from "./trip-planner-report.tool";
 import { searchReportTool } from "./search-report.tool";
 import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
@@ -77,6 +79,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   analyticsCrosstabTool,
   searchReportTool,
   plannerReportTool,
+  tripPlannerReportTool,
+  tripPlannerOpsTool,
   seoLandingPagesTool,
   seoTrendsTool,
   seoNotFoundTool,
