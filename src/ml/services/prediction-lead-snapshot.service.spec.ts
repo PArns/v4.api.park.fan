@@ -294,10 +294,13 @@ describe("PredictionLeadSnapshotService", () => {
     });
   });
 
-  it("samples out to ninety days, so CatBoost's error beyond the seam is recorded", () => {
+  it("samples past the seam, so CatBoost's error beyond day 60 is recorded", () => {
     // PAR-167: the d90 row is CatBoost's alone, one of the measurements its
-    // daily band needs to be calibrated on.
-    expect(Math.max(...PredictionLeadSnapshotService.LEAD_BUCKETS)).toBe(90);
+    // daily band needs to be calibrated on. PAR-1341: d120 and d180 measure the
+    // long range, which nothing recorded before.
+    expect(PredictionLeadSnapshotService.LEAD_BUCKETS).toEqual(
+      expect.arrayContaining([90, 120, 180]),
+    );
   });
 
   it("snapshots the 90-day row", async () => {
@@ -354,15 +357,17 @@ describe("PredictionLeadSnapshotService", () => {
       // The furthest thing anybody has measured. "At least this wrong" is
       // honest where interpolating into unmeasured distance is not.
       await expect(service.getLeadTimeMae(300)).resolves.toBe(11);
-      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:90"]);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:180"]);
     });
 
     it("keeps answering with d60 while d90 has not filled", async () => {
       // A new far bucket must not blank a figure the 60-day bucket already gave.
       aggregate = { mae: "11.0", scored: enough };
       aggregateByBucket.set(90, { mae: "30.0", scored: "4" });
+      aggregateByBucket.set(120, { mae: "40.0", scored: "2" });
 
       await expect(service.getLeadTimeMae(120)).resolves.toBe(11);
+      expect(redis.store.get("ml:lead-mae:v2:120")).toBe("none");
       expect(redis.store.get("ml:lead-mae:v2:90")).toBe("none");
       expect(redis.store.get("ml:lead-mae:v2:60")).toBe("11");
     });

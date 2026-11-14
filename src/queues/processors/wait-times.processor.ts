@@ -17,7 +17,6 @@ import {
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { PopularityService } from "../../popularity/popularity.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import {
   EntityLiveResponse,
   EntityType,
@@ -74,7 +73,6 @@ export class WaitTimesProcessor {
     private queueDataService: QueueDataService,
     private readonly orchestrator: MultiSourceOrchestrator,
     private readonly popularityService: PopularityService,
-    private readonly predictionDeviationService: PredictionDeviationService,
     private readonly rideAlertsService: RideAlertsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue(LIVE_CACHE_WARMUP_QUEUE)
@@ -366,10 +364,6 @@ export class WaitTimesProcessor {
                           mappingLookup,
                           park.timezone,
                           closingTime,
-                        );
-                        await this.checkAndFlagDeviation(
-                          entityLiveData,
-                          mappingLookup,
                         );
                       } catch (e) {
                         this.logger.warn(
@@ -932,41 +926,6 @@ export class WaitTimesProcessor {
       diningAvailability: entityData.diningAvailability,
       lastUpdated: entityData.lastUpdated,
     };
-  }
-
-  private async checkAndFlagDeviation(
-    entityData: EntityLiveData,
-    mappingLookup: Map<string, string>,
-  ): Promise<void> {
-    try {
-      if (entityData.status !== "OPERATING" || !entityData.waitTime) return;
-      const attractionId = mappingLookup.get(
-        `${entityData.source}:${entityData.externalId}`,
-      );
-      if (!attractionId) return;
-      const result = await this.predictionDeviationService.checkDeviation(
-        attractionId,
-        entityData.waitTime,
-      );
-      if (
-        result.hasDeviation &&
-        result.deviation &&
-        result.percentageDeviation &&
-        result.predictedWaitTime
-      ) {
-        await this.predictionDeviationService.flagDeviation(attractionId, {
-          actualWaitTime: entityData.waitTime,
-          predictedWaitTime: result.predictedWaitTime,
-          deviation: result.deviation,
-          percentageDeviation: result.percentageDeviation,
-          detectedAt: new Date(),
-        });
-      }
-    } catch (e) {
-      this.logger.warn(
-        `Failed to check/flag deviation for entity ${entityData.externalId}: ${(e as Error)?.message ?? e}`,
-      );
-    }
   }
 
   private async trackDowntime(

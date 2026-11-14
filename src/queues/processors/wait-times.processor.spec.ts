@@ -14,7 +14,6 @@ import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { PopularityService } from "../../popularity/popularity.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { RideAlertsService } from "../../ride-alerts/ride-alerts.service";
 import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 import { getQueueToken } from "@nestjs/bull";
@@ -154,7 +153,6 @@ describe("WaitTimesProcessor", () => {
           useValue: liveCacheWarmupQueue,
         },
         { provide: PopularityService, useValue: mockPopularityService },
-        { provide: PredictionDeviationService, useValue: {} },
         {
           provide: RideAlertsService,
           useValue: { checkAndNotify: jest.fn().mockResolvedValue(undefined) },

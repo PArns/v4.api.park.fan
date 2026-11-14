@@ -170,6 +170,22 @@ class Settings(BaseSettings):
     # training (06:00 UTC, or a manual one) is what takes effect.
     CATBOOST_CURATED_RIDE_TYPE: bool = False
 
+    # Two weather features serving computes differently from training
+    # (PAR-1341), each behind its own switch so each can be measured alone.
+    #
+    # is_raining past the weather forecast: the climatological precipitation is
+    # a monthly mean and never 0, so every row beyond ~16 days read "raining".
+    # On: such a row takes the month's most frequent weather code instead
+    # (code >= 51 is precipitation). Read by serving and by the origin
+    # hold-out's stand-in for it.
+    FAR_RAIN_FROM_WEATHER_CODE: bool = False
+    # temperature_deviation: training subtracts the mean over a park-month's
+    # rows (operating hours), serving subtracted the climatological all-day
+    # mean, so every served row read 4-5 degrees warmer than normal. On:
+    # serving subtracts the mean of the climatological curve over the rows it
+    # is asked about.
+    TEMP_DEVIATION_ROW_BASELINE: bool = False
+
     # Sample Weight Configuration (Feedback Loop)
     # Re-enabled: Now uses efficient attraction-level aggregated MAE from
     # attraction_accuracy_stats instead of row-level prediction_accuracy JOIN.

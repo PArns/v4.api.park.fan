@@ -1,6 +1,6 @@
 /**
  * PCN champion-swap serving constants, shared by every consumer that must present
- * the SAME served intraday numbers (ml.service read paths, prediction-deviation).
+ * the SAME served intraday numbers (the ml.service read paths).
  *
  * Staleness guard: only PCN forecasts written in the last N hours may override
  * CatBoost. PCN's whole edge is being a nowcaster; a frozen producer would

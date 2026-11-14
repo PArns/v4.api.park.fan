@@ -33,6 +33,13 @@ const PRE_OPEN_WINDOW_MS = 3 * 60 * 60 * 1000;
 export class PredictionGeneratorProcessor implements OnModuleInit {
   private readonly logger = new Logger(PredictionGeneratorProcessor.name);
 
+  /**
+   * A fresh run that took this long makes the next one read the cache again:
+   * the job runs every 15 minutes and must not fall behind its own cadence.
+   */
+  private static readonly FRESH_RUN_BUDGET_MS = 10 * 60 * 1000;
+  private lastHourlyRunMs = 0;
+
   constructor(
     private mlService: MLService,
     private leadSnapshotService: PredictionLeadSnapshotService,
@@ -53,6 +60,12 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     this.logger.log(
       "⏰ Generating hourly predictions for all parks (BATCHED)...",
     );
+    // Off unless `GENERATE_HOURLY_FRESH=true`: without it two of three runs
+    // store the 30-minute Redis answer again (PAR-1330).
+    const startedAt = Date.now();
+    const fresh =
+      process.env.GENERATE_HOURLY_FRESH === "true" &&
+      this.lastHourlyRunMs < PredictionGeneratorProcessor.FRESH_RUN_BUDGET_MS;
 
     try {
       const allParks = await this.parksService.findAll();
@@ -142,9 +155,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 "hourly",
                 undefined,
                 liveStatus,
-                // Off unless `GENERATE_HOURLY_FRESH=true`: without it two of
-                // three runs store the 30-minute Redis answer again (PAR-1330).
-                process.env.GENERATE_HOURLY_FRESH === "true",
+                fresh,
               );
 
               if (response.predictions.length > 0) {
@@ -189,8 +200,9 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         }
       }
 
+      this.lastHourlyRunMs = Date.now() - startedAt;
       this.logger.log(
-        `✅ Hourly predictions complete: ${totalPredictions} predictions for ${successParks}/${parks.length} parks`,
+        `✅ Hourly predictions complete: ${totalPredictions} predictions for ${successParks}/${parks.length} parks in ${Math.round(this.lastHourlyRunMs / 1000)}s (${fresh ? "fresh" : "cache read-through"})`,
       );
 
       if (failedParks > 0) {

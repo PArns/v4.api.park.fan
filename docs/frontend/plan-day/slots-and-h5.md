@@ -17,6 +17,10 @@ at, so it can go on for the leads the forward archive has already decided while 
 are still being measured (PAR-1331). Past the cap the old composer serves; the shadow capture
 keeps the full 90 days either way.
 
+**Production serves it since PAR-1341**: `docker-compose.production.yml` sets
+`PLAN_DAY_H5_COMPOSER=true` and `PLAN_DAY_H5_MAX_LEAD_DAYS=21`, the leads decided on 2026-11-14.
+The code default stays off, so a local run and the specs see the old composer unless they set it.
+
 ## What changes with the flag on
 
 1. **Composed hours come from the H5 profile.** The old composer

@@ -1093,6 +1093,9 @@ def apply_weather_features(
     clim_temp = temp_min + interpolation_factor * (temp_max - temp_min)
 
     df["temperature_avg"] = clim_temp
+    # Which rows keep climatological precipitation: all, until a forecast day
+    # replaces it below.
+    precip_from_climatology = pd.Series(True, index=df.index)
     df["precipitation"] = df["precip_avg"].astype(float).fillna(0.0)
     df["windSpeedMax"] = df["wind_avg"].astype(float).fillna(0.0)
     df["snowfallSum"] = df["snow_avg"].astype(float).fillna(0.0)
@@ -1116,6 +1119,7 @@ def apply_weather_features(
 
         daily = _forecast_daily_equivalents(fc, park_timezones)
         df = df.merge(daily, on=["parkId", "_local_date"], how="left")
+        precip_from_climatology = df["fc_precipitation"].isna()
         df["precipitation"] = df["fc_precipitation"].fillna(df["precipitation"])
         df["snowfallSum"] = df["fc_snowfall"].fillna(df["snowfallSum"])
         df["windSpeedMax"] = df["fc_wind"].fillna(df["windSpeedMax"])
@@ -1126,9 +1130,21 @@ def apply_weather_features(
 
     df["weatherCode"] = df["weatherCode"].astype(int)
     df["precipitation_last_3h"] = df["precipitation"] * 0.125
-    df["temperature_deviation"] = df["temperature_avg"] - df["temp_avg"].astype(
-        float
-    ).fillna(20.0)
+    if settings.TEMP_DEVIATION_ROW_BASELINE:
+        # Training's baseline is the mean over a park-month's ROWS, which are
+        # operating hours; the same mean of the climatological curve here.
+        baseline = clim_temp.groupby([df["parkId"], df["_month"]]).transform("mean")
+    else:
+        baseline = df["temp_avg"].astype(float).fillna(20.0)
+    df["temperature_deviation"] = df["temperature_avg"] - baseline
+
+    df["is_raining"] = (df["precipitation"] > 0).astype(int)
+    if settings.FAR_RAIN_FROM_WEATHER_CODE:
+        # A monthly mean is never 0 mm; the month's most frequent weather code
+        # says whether a typical day there is wet (51+ is precipitation).
+        df.loc[precip_from_climatology.to_numpy(), "is_raining"] = (
+            df["weatherCode"] >= 51
+        ).astype(int)
 
     return df.drop(
         columns=["_month", "_local_date"] + CLIMATOLOGY_COLUMNS[2:], errors="ignore"
@@ -1263,9 +1279,8 @@ def create_prediction_features(
             logging.getLogger(__name__).warning(
                 f"Failed to read weather forecast: {e}. Using climatology."
             )
+    # Sets is_raining too (the one place that knows which rows are climatology).
     df = apply_weather_features(df, forecast_df, climatology_df, park_timezones_wx)
-
-    df["is_raining"] = (df["precipitation"] > 0).astype(int)
 
     # Rain Trend Features (starting/stopping) - matches features.py logic
     # Sort by (parkId, timestamp) to correctly find state changes

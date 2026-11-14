@@ -219,7 +219,6 @@ re-arming the API's 3-hour guard for a park it had already handed back to CatBoo
 | Reader | Where | Oldest row it reads |
 |---|---|---|
 | Serving override | `MLService.getPcnIntradayWaits` | `created_at` ≥ now − 3 h |
-| Deviation badges | `PredictionDeviationService.getServedPcnWait` | 3 h |
 | Served-accuracy recorder | `MLService.servedIntradayValues` | 3 h |
 | ML overview probe | `MlOverviewService.components` | newest row, last 2 days |
 | Main board | `score.py` → `fetch_pcn_forecasts_window` | targets from yesterday 00:00 park-local, origins up to 12 h earlier: ≤ 60 h |

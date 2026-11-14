@@ -23,7 +23,9 @@ this page before reading or changing a forward-archive score.
   of a day value: per headliner the P90 of the raw STANDBY, OPERATING, ≥ 10 min rows of the
   park-local date, averaged over headliners (`AnalyticsService.calculateTypicalDayPeak`). The
   numerator is the same day value for the target date (`calendarDayValue`), not the 15-minute
-  truth. The ratio is bucketed with `determineCrowdLevel` ([crowd-level rules](../../rules/crowd-levels.md)).
+  truth. Both sides count heartbeat rows, as the baseline's query does; until PAR-1341 the
+  numerator read the truth rows, which leave them out, so a day with a silent feed rated itself
+  against a baseline of a different statistic. The ratio is bucketed with `determineCrowdLevel` ([crowd-level rules](../../rules/crowd-levels.md)).
 - A `plan_day` hour is compared with each of its four quarter-hours, as served (a step).
 
 ## Scores

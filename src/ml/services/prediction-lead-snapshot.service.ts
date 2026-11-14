@@ -121,8 +121,13 @@ export class PredictionLeadSnapshotService {
    * as the park has published a schedule (181 to 362 days across the live
    * parks, `DAILY_PREDICTIONS` = 365), so the row is there to copy; the bucket
    * simply says nothing for its first ~90 days.
+   *
+   * d120 and d180 (PAR-1341) exist to measure the long range at all: the daily
+   * level beyond day 60 reads flat and low (PAR-1320), and nothing recorded
+   * what was said that far ahead. They report from about 120 and 180 days
+   * after their first night, and only for parks that publish that far.
    */
-  static readonly LEAD_BUCKETS = [1, 3, 7, 14, 30, 60, 90] as const;
+  static readonly LEAD_BUCKETS = [1, 3, 7, 14, 30, 60, 90, 120, 180] as const;
 
   /**
    * Scored rows a bucket needs before its mean is worth publishing.

@@ -5,7 +5,6 @@ import { Redis } from "ioredis";
 import { MLModelService } from "./ml-model.service";
 import { MLService } from "../ml.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
-import { PredictionDeviationService } from "./prediction-deviation.service";
 import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
 import { MLDashboardDto } from "../dto/ml-dashboard.dto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -22,7 +21,6 @@ export class MLDashboardService {
     private mlModelService: MLModelService,
     private mlService: MLService,
     private accuracyService: PredictionAccuracyService,
-    private deviationService: PredictionDeviationService,
     private driftService: MLDriftMonitoringService,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,

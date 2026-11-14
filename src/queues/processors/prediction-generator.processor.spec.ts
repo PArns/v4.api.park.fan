@@ -147,6 +147,39 @@ describe("PredictionGeneratorProcessor", () => {
       }
     });
 
+    it("reads the cache again after a fresh run that overran its budget", async () => {
+      process.env.GENERATE_HOURLY_FRESH = "true";
+      try {
+        parksService.getBatchParkStatus.mockResolvedValue(
+          new Map([["p1", "OPERATING"]]),
+        );
+        mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
+        // The previous run took 11 minutes: the job must not fall behind.
+        (processor as any).lastHourlyRunMs = 11 * 60 * 1000;
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getRawParkPredictions).toHaveBeenLastCalledWith(
+          "p1",
+          "hourly",
+          undefined,
+          "OPERATING",
+          false,
+        );
+        // That run was quick, so the next one is fresh again.
+        await processor.handleGenerateHourly({} as Job);
+        expect(mlService.getRawParkPredictions).toHaveBeenLastCalledWith(
+          "p1",
+          "hourly",
+          undefined,
+          "OPERATING",
+          true,
+        );
+      } finally {
+        delete process.env.GENERATE_HOURLY_FRESH;
+      }
+    });
+
     it("stores raw CatBoost, never the served PCN curve (PAR-817)", async () => {
       // wait_time_predictions + prediction_accuracy are the CatBoost side of the
       // PCN-vs-CatBoost board. Feeding them the served read would let the board
