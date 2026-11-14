@@ -107,6 +107,9 @@ import {
   TripRegionService,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import { TripRequestMetricsService } from "../../trip-regions/metrics/trip-request-metrics.service";
+import type { TripMetricRoute } from "../../trip-regions/metrics/trip-request-facts";
+import type { AssistantToolErrorKind } from "../entities/assistant-message.entity";
 import {
   TICKETS_PATTERN,
   type TripPlanQueryDto,
@@ -1905,11 +1908,19 @@ async function itineraryOf(
   ctx: AssistantToolContext,
   trip: Awaited<ReturnType<typeof tripRegion>>,
   query: TripPlanQueryDto,
+  /** A tool's plan is recorded as his; the digest of the trip on screen, read each question, is not. */
+  measured = true,
 ) {
   const { regions, region, parks, names } = trip;
   const plans = ctx.get(TripPlanService);
   const normalized = await tripCall(() => plans.normalize(region.slug, query));
-  const plan = await tripCall(() => plans.plan(region.slug, query));
+  const plan = await tripCall(() =>
+    measured
+      ? parkyTripCall(ctx, "plan", region.slug, () =>
+          plans.plan(region.slug, query),
+        )
+      : plans.plan(region.slug, query),
+  );
   // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
   const calendar = await regions.internalCalendar(
     region,
@@ -1936,7 +1947,12 @@ export async function visitorTripItinerary(
 ): Promise<ReturnType<typeof vacationItinerary> | null> {
   const query = planQueryOf(trip.params);
   if (!query) return null;
-  return itineraryOf(ctx, await tripRegion(ctx, trip.region.slug), query);
+  return itineraryOf(
+    ctx,
+    await tripRegion(ctx, trip.region.slug),
+    query,
+    false,
+  );
 }
 
 /** The visitor's trip a trip tool means, or a refusal that says what is missing. */
@@ -1967,6 +1983,29 @@ const moveBufferInput = z
   .describe(
     "A region with bases: minutes for each hotel change on top of the train; 30 with bags sent ahead by courier, 60 carried along, 90 or 120 for a slower pace. Default the region's (Japan 30)",
   );
+
+/**
+ * A trip route's service called for one of Parky's tools, recorded in the
+ * route's metrics as his (`caller: parky`,
+ * docs/frontend/trip-regions.md#what-the-server-records). Without the metrics
+ * (a spec's context) it only runs.
+ */
+function parkyTripCall<T>(
+  ctx: AssistantToolContext,
+  route: TripMetricRoute,
+  region: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  let metrics: TripRequestMetricsService | undefined;
+  try {
+    metrics = ctx.get(TripRequestMetricsService);
+  } catch {
+    metrics = undefined;
+  }
+  return metrics
+    ? metrics.measure({ route, region, caller: "parky" }, run)
+    : run();
+}
 
 /** A trip route's 400 or 404 as a refusal the model reads. */
 async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
@@ -3612,7 +3651,9 @@ export const ASSISTANT_TOOLS = [
         suggest: flag(input.suggest),
       };
       const result = await tripCall(() =>
-        ctx.get(TripWhenService).when(region.slug, query),
+        parkyTripCall(ctx, "when", region.slug, () =>
+          ctx.get(TripWhenService).when(region.slug, query),
+        ),
       );
       const normalized = await tripCall(() =>
         normalizeWhenQuery(
@@ -5801,21 +5842,77 @@ export function storedToolInput(input: unknown): unknown {
  * input, or a failing tool, becomes an error result the model can read; the
  * message of an unexpected error stays in the log.
  */
+/** A key or path segment as the record keeps it: an identifier, never a value. */
+const RECORDED_KEY = /^[A-Za-z0-9_]{1,40}$/;
+/** Keys and paths one call records at most. */
+const MAX_RECORDED_KEYS = 10;
+
+/** The paths of a schema's refusal, keys and indices only (`dates.from`, `parks.0`). */
+function issuePaths(error: z.ZodError): string[] {
+  const paths = error.issues.flatMap((issue) => {
+    const base = issue.path.map(String);
+    // An unknown key of a strict object is named in the issue, not in its path.
+    const keys =
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => [...base, key])
+        : [base];
+    return keys
+      .filter((path) => path.every((part) => RECORDED_KEY.test(part)))
+      .map((path) => path.join(".") || "(input)");
+  });
+  return [...new Set(paths)].slice(0, MAX_RECORDED_KEYS);
+}
+
+/** The keys of the model's input the schema dropped: it strips what it does not know. */
+function droppedKeys(raw: unknown, parsed: unknown): string[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const kept = new Set(
+    parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
+  );
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(
+      ([key, value]) =>
+        value !== undefined && !kept.has(key) && RECORDED_KEY.test(key),
+    )
+    .map(([key]) => key)
+    .slice(0, MAX_RECORDED_KEYS);
+}
+
+/** A tool's answer to the model, and what the chat's record keeps of the call. */
+export interface AssistantToolRun {
+  content: string;
+  isError: boolean;
+  action?: ClientAction;
+  errorKind?: AssistantToolErrorKind;
+  issues?: string[];
+  ignoredKeys?: string[];
+}
+
 export async function runAssistantTool(
   name: string,
   rawInput: unknown,
   ctx: AssistantToolContext,
   onError: (error: unknown) => void,
-): Promise<{ content: string; isError: boolean; action?: ClientAction }> {
+): Promise<AssistantToolRun> {
   const definition = BY_NAME.get(name);
-  if (!definition) return { content: `Unknown tool ${name}`, isError: true };
+  if (!definition) {
+    return {
+      content: `Unknown tool ${name}`,
+      isError: true,
+      errorKind: "unknown_tool",
+    };
+  }
   const input = definition.input.safeParse(rawInput);
   if (!input.success) {
     return {
       content: `Invalid input: ${z.prettifyError(input.error)}`,
       isError: true,
+      errorKind: "invalid_input",
+      issues: issuePaths(input.error),
     };
   }
+  const ignored = droppedKeys(rawInput, input.data);
+  const recorded = ignored.length > 0 ? { ignoredKeys: ignored } : {};
   try {
     // The parks this call is about, so its times come in their clock, not the visitor's.
     const zones = new Set<string>();
@@ -5855,14 +5952,22 @@ export async function runAssistantTool(
           : result,
       isError: false,
       ...(action && { action }),
+      ...recorded,
     };
   } catch (error) {
     if (error instanceof McpToolError)
-      return { content: error.message, isError: true };
+      return {
+        content: error.message,
+        isError: true,
+        errorKind: "refused",
+        ...recorded,
+      };
     onError(error);
     return {
       content: "The lookup failed; say you could not check it.",
       isError: true,
+      errorKind: "failed",
+      ...recorded,
     };
   }
 }

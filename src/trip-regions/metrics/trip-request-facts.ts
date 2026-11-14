@@ -20,6 +20,10 @@ import type { TripRequestMetric } from "./trip-request-metric.entity";
 export const TRIP_METRIC_ROUTES = ["plan", "when", "best_days"] as const;
 export type TripMetricRoute = (typeof TRIP_METRIC_ROUTES)[number];
 
+/** Who asked: the route itself, or Parky's trip tools calling its service. */
+export const TRIP_METRIC_CALLERS = ["site", "parky"] as const;
+export type TripMetricCaller = (typeof TRIP_METRIC_CALLERS)[number];
+
 /** The region of a request whose slug names none: the slug itself is visitor text. */
 export const UNKNOWN_REGION = "(unknown)";
 
@@ -166,7 +170,18 @@ export function planShapeOf(
     ),
     hopper:
       q.hopperResorts.length > 0 || q.tickets.some((t) => t.hopper === true),
+    ...(q.stays && {
+      moveBuffer: q.stays.moveBuffer,
+      gateways: gatewaysOf(q.stays),
+    }),
   };
+}
+
+/** Which ends of a trip across cities the visitor fixed. */
+function gatewaysOf(stays: { startBase?: string; endBase?: string }) {
+  if (stays.startBase && stays.endBase) return "both" as const;
+  if (stays.startBase) return "start" as const;
+  return stays.endBase ? ("end" as const) : ("none" as const);
 }
 
 /** The shape of a valid `/when` query: its trip's, with the range for the dates. */
@@ -193,6 +208,10 @@ export interface TripAnswerFacts {
   moves: number | null;
   windows: number | null;
   windowsPlanned: number | null;
+  /** The chosen parks the plan has no visit of. */
+  leftOut?: number | null;
+  /** A region with bases: whether the answer suggested other stays. */
+  staySuggested?: boolean | null;
 }
 
 /** A code of the API's own, as an answer carries it: anything else is not kept. */
@@ -223,6 +242,8 @@ export function planAnswerFacts(body: TripPlanDto): TripAnswerFacts {
       (stays || withBase ? days.filter((d) => d.move).length : null),
     windows: null,
     windowsPlanned: null,
+    leftOut: Array.isArray(body.parksLeftOut) ? body.parksLeftOut.length : null,
+    staySuggested: stays ? Boolean(meta.staySuggestion) : null,
   };
 }
 
@@ -247,7 +268,22 @@ export function whenAnswerFacts(body: TripWhen): TripAnswerFacts {
     moves: null,
     windows: windows.length,
     windowsPlanned: count(search?.planned),
+    leftOut: best ? (best.plan?.parksLeftOut?.length ?? 0) : null,
   };
+}
+
+/** What a route's answer adds to its row; `/best-days` adds nothing. */
+export function answerFactsOf(
+  route: TripMetricRoute,
+  body: unknown,
+): TripAnswerFacts | undefined {
+  try {
+    if (route === "plan") return planAnswerFacts(body as TripPlanDto);
+    if (route === "when") return whenAnswerFacts(body as TripWhen);
+  } catch {
+    // An answer of an unexpected shape is recorded without its facts.
+  }
+  return undefined;
 }
 
 /** A metric row before it is written: the entity without its id. */
@@ -273,6 +309,8 @@ const EMPTY_FACTS: TripAnswerFacts = {
 /** One answer as its row: the route's facts, the trace's caches and shape, the error's code. */
 export function metricRowOf(input: {
   route: TripMetricRoute;
+  /** `site` when absent. */
+  caller?: TripMetricCaller;
   region: string;
   at: Date;
   latencyMs: number;
@@ -290,6 +328,7 @@ export function metricRowOf(input: {
     bucket: hourOf(input.at),
     region: input.region,
     route: input.route,
+    caller: input.caller ?? "site",
     status: input.status,
     errorCode: input.errorCode ?? null,
     latencyMs: Math.max(0, Math.round(input.latencyMs)),
@@ -313,5 +352,9 @@ export function metricRowOf(input: {
     windowsPlanned: small(facts.windowsPlanned),
     windows: small(facts.windows),
     within: shape.within ?? null,
+    leftOut: small(facts.leftOut),
+    moveBuffer: small(shape.moveBuffer),
+    gateways: shape.gateways ?? null,
+    staySuggested: facts.staySuggested ?? null,
   };
 }

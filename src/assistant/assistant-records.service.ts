@@ -2,7 +2,10 @@ import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
-import { AssistantMessage } from "./entities/assistant-message.entity";
+import {
+  ASSISTANT_TOOL_ERROR_KINDS,
+  AssistantMessage,
+} from "./entities/assistant-message.entity";
 import {
   SiteFeedback,
   type FeedbackKind,
@@ -23,12 +26,78 @@ export const RECORDS_PAGE_SIZE = 50;
 /** Feedback Parky passes on from one chat at most: a second, different issue still goes in. */
 export const CHAT_FEEDBACK_PER_CONVERSATION = 2;
 
+/** What a tool report reads: a window of UTC days, narrowed or not. */
+export interface ToolStatsQuery {
+  /** First and last UTC day, both included. */
+  from: string;
+  to: string;
+  /** Parky's tool names; any other name a call carries counts as `(unknown)`. */
+  tools: readonly string[];
+  /** The trip regions an input's `region` may name; any other is `''`. */
+  regions: readonly string[];
+  promptVersion?: number;
+  tool?: string;
+}
+
+/** One cell of the tool report: calls of a tool by outcome, region and prompt version. */
+export interface ToolStatRow {
+  tool: string;
+  outcome: string;
+  region: string;
+  promptVersion: number;
+  calls: number;
+}
+
+/** What the kept chats' tool inputs say, beside the counts. */
+export interface ToolInputStats {
+  /** The first UTC day of the window whose chats are still kept. */
+  keptFrom: string;
+  answers: number;
+  answersWithTools: number;
+  calls: number;
+  issues: Array<{ tool: string; path: string; count: number }>;
+  ignoredKeys: Array<{ tool: string; key: string; count: number }>;
+  changeTripKeys: Array<{ key: string; count: number }>;
+  interviewOps: Array<{ op: string; outcome: string; count: number }>;
+}
+
+/** A stored call's outcome: `ok`, its error kind, or `error` for a failure stored before the kinds. */
+const TOOL_OUTCOME_SQL = `CASE WHEN c->>'error' = 'true'
+  THEN CASE WHEN c->>'errorKind' IN (${ASSISTANT_TOOL_ERROR_KINDS.map((k) => `'${k}'`).join(", ")})
+            THEN c->>'errorKind' ELSE 'error' END
+  ELSE 'ok' END`;
+
+/** The interview tool's ops and the outcomes of its `end` (`interview` in assistant-tools.ts). */
+const INTERVIEW_OPS = new Set(["start", "answered", "skip", "ask", "end"]);
+const INTERVIEW_OUTCOMES = new Set(["done", "left"]);
+
+/** The calls of the window's answers, one row per call: what both halves of the tool report read. */
+const LIVE_CALLS = `
+  FROM assistant_messages m
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(m."toolCalls") = 'array' THEN m."toolCalls" ELSE '[]'::jsonb END
+  ) AS c
+ WHERE m.role = 'assistant'`;
+
 /**
  * The stored side of Parky: ratings and feedback from visitors, the lists the
  * admin reads, and the retention of chats.
  */
 @Injectable()
 export class AssistantRecordsService {
+  /** Parky's tool names and the trip regions, for the prune's tool sums (`AssistantModule` sets them). */
+  private toolNames: readonly string[] = [];
+  private regionSlugs: readonly string[] = [];
+
+  /** The names a tool sum keeps; a name outside them is `(unknown)`, a region `''`. */
+  setToolVocabulary(
+    tools: readonly string[],
+    regions: readonly string[],
+  ): void {
+    this.toolNames = tools;
+    this.regionSlugs = regions;
+  }
+
   constructor(
     @InjectRepository(AssistantConversation)
     private readonly conversations: Repository<AssistantConversation>,
@@ -262,8 +331,9 @@ export class AssistantRecordsService {
   /**
    * Deletes chats past the retention, ended ones included; their messages go with them (the
    * foreign key cascades) and feedback keeps its link as it is. Each batch first adds what it
-   * deletes to `assistant_day_stats`, in the same transaction, so the 30-day statistic neither
-   * loses nor double-counts a chat. Batches keep the first run after a shorter retention, weeks
+   * deletes to `assistant_day_stats`, and its tool calls to `assistant_tool_day_stats`, in the
+   * same transaction, so neither the 30-day statistic nor the tool report loses or
+   * double-counts a chat. Batches keep the first run after a shorter retention, weeks
    * of chats at once, from holding one long lock.
    */
   async pruneConversations(): Promise<number> {
@@ -307,6 +377,22 @@ export class AssistantRecordsService {
             [ids],
           );
           await manager.query(
+            `INSERT INTO assistant_tool_day_stats
+                    (day, prompt_version, tool, outcome, region, calls)
+             SELECT (m."createdAt" AT TIME ZONE 'UTC')::date,
+                    coalesce(m."promptVersion", 0),
+                    CASE WHEN c->>'name' = ANY($2::text[]) THEN c->>'name' ELSE '(unknown)' END,
+                    ${TOOL_OUTCOME_SQL},
+                    CASE WHEN c->'input'->>'region' = ANY($3::text[])
+                         THEN c->'input'->>'region' ELSE '' END,
+                    count(*)
+               ${LIVE_CALLS} AND m."conversationId" = ANY($1::uuid[])
+              GROUP BY 1, 2, 3, 4, 5
+             ON CONFLICT (day, prompt_version, tool, outcome, region) DO UPDATE SET
+               calls = assistant_tool_day_stats.calls + EXCLUDED.calls`,
+            [ids, this.toolNames, this.regionSlugs],
+          );
+          await manager.query(
             `DELETE FROM assistant_conversations WHERE id = ANY($1::uuid[])`,
             [ids],
           );
@@ -316,5 +402,166 @@ export class AssistantRecordsService {
       removed += batch;
       if (batch < PRUNE_BATCH) return removed;
     }
+  }
+
+  /**
+   * Parky's tool calls over a window of UTC days, per tool, outcome (`ok`, an
+   * error kind, `error` for a failure stored before the kinds), region and
+   * prompt version: the kept chats' calls plus the sums the prune kept of the
+   * deleted ones.
+   */
+  async toolStats(query: ToolStatsQuery): Promise<ToolStatRow[]> {
+    const params: unknown[] = [
+      `${query.from}T00:00:00.000Z`,
+      `${query.to}T00:00:00.000Z`,
+      query.tools,
+      query.regions,
+    ];
+    const narrow: string[] = [];
+    if (query.promptVersion !== undefined) {
+      params.push(query.promptVersion);
+      narrow.push(`prompt_version = $${params.length}`);
+    }
+    if (query.tool !== undefined) {
+      params.push(query.tool);
+      narrow.push(`tool = $${params.length}`);
+    }
+    const rows: Array<{
+      tool: string;
+      outcome: string;
+      region: string;
+      prompt_version: number;
+      calls: number;
+    }> = await this.messages.query(
+      `SELECT tool, outcome, region, prompt_version, sum(calls)::int AS calls
+         FROM (
+           SELECT coalesce(m."promptVersion", 0) AS prompt_version,
+                  CASE WHEN c->>'name' = ANY($3::text[]) THEN c->>'name' ELSE '(unknown)' END AS tool,
+                  ${TOOL_OUTCOME_SQL} AS outcome,
+                  CASE WHEN c->'input'->>'region' = ANY($4::text[])
+                       THEN c->'input'->>'region' ELSE '' END AS region,
+                  1 AS calls
+             ${LIVE_CALLS}
+              AND m."createdAt" >= $1::timestamptz
+              AND m."createdAt" < $2::timestamptz + interval '1 day'
+           UNION ALL
+           SELECT prompt_version, tool, outcome, region, calls
+             FROM assistant_tool_day_stats
+            WHERE day >= ($1::timestamptz AT TIME ZONE 'UTC')::date
+              AND day <= ($2::timestamptz AT TIME ZONE 'UTC')::date
+         ) AS both_halves
+        ${narrow.length > 0 ? `WHERE ${narrow.join(" AND ")}` : ""}
+        GROUP BY tool, outcome, region, prompt_version
+        ORDER BY sum(calls) DESC, tool, outcome, region, prompt_version`,
+      params,
+    );
+    return rows.map((row) => ({
+      tool: row.tool,
+      outcome: row.outcome,
+      region: row.region,
+      promptVersion: row.prompt_version,
+      calls: row.calls,
+    }));
+  }
+
+  /**
+   * What only the kept chats can say, over the window's days they cover:
+   * answers and those with tool calls, the paths a schema refused, the keys
+   * it dropped, which keys `change_trip` was given, and the interview's ops.
+   * Keys and paths only, never a value.
+   */
+  async toolInputStats(query: ToolStatsQuery): Promise<ToolInputStats> {
+    const params: unknown[] = [
+      `${query.from}T00:00:00.000Z`,
+      `${query.to}T00:00:00.000Z`,
+    ];
+    let where = `m."createdAt" >= $1::timestamptz
+                 AND m."createdAt" < $2::timestamptz + interval '1 day'`;
+    if (query.promptVersion !== undefined) {
+      params.push(query.promptVersion);
+      where += ` AND coalesce(m."promptVersion", 0) = $${params.length}`;
+    }
+    // The answers and the two narrowed reads below take the window alone.
+    const windowParams = [...params];
+    let toolWhere = "";
+    if (query.tool !== undefined) {
+      params.push(query.tool);
+      toolWhere = ` AND c->>'name' = $${params.length}`;
+    }
+    /** A list of strings each call of the window carries under `field`, counted per tool. */
+    const listed = (field: "issues" | "ignoredKeys") =>
+      this.messages.query(
+        `SELECT tool, value, count(*)::int AS count FROM (
+           SELECT c->>'name' AS tool, c->'${field}' AS list
+             ${LIVE_CALLS} AND ${where}${toolWhere}
+              AND jsonb_typeof(c->'${field}') = 'array') s
+           CROSS JOIN LATERAL jsonb_array_elements_text(s.list) AS value
+          GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2`,
+        params,
+      ) as Promise<Array<{ tool: string; value: string; count: number }>>;
+    const [answers, issues, ignored, changeKeys, ops, oldest] =
+      await Promise.all([
+        this.messages.query(
+          `SELECT count(*)::int AS answers,
+                count(*) FILTER (WHERE jsonb_typeof(m."toolCalls") = 'array'
+                                   AND jsonb_array_length(m."toolCalls") > 0)::int AS with_tools,
+                coalesce(sum(CASE WHEN jsonb_typeof(m."toolCalls") = 'array'
+                                  THEN jsonb_array_length(m."toolCalls") ELSE 0 END), 0)::int AS calls
+           FROM assistant_messages m
+          WHERE m.role = 'assistant' AND ${where}`,
+          windowParams,
+        ),
+        listed("issues"),
+        listed("ignoredKeys"),
+        this.messages.query(
+          `SELECT key, count(*)::int AS count FROM (
+           SELECT c->'input' AS input
+             ${LIVE_CALLS} AND ${where}
+              AND c->>'name' = 'change_trip'
+              AND jsonb_typeof(c->'input') = 'object') s
+           CROSS JOIN LATERAL jsonb_object_keys(s.input) AS key
+          GROUP BY 1 ORDER BY 2 DESC, 1`,
+          windowParams,
+        ),
+        this.messages.query(
+          `SELECT c->'input'->>'op' AS op, coalesce(c->'input'->>'outcome', '') AS outcome,
+                count(*)::int AS count
+           ${LIVE_CALLS} AND ${where}
+            AND c->>'name' = 'interview'
+          GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2`,
+          windowParams,
+        ),
+        this.conversations.query(
+          `SELECT to_char(min("createdAt") AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS first
+           FROM assistant_conversations`,
+        ),
+      ]);
+    const kept = oldest[0]?.first as string | null | undefined;
+    const keyed = (value: unknown) =>
+      typeof value === "string" && /^[A-Za-z0-9_.]{1,60}$/.test(value);
+    return {
+      keptFrom: kept && kept > query.from ? kept : query.from,
+      answers: answers[0]?.answers ?? 0,
+      answersWithTools: answers[0]?.with_tools ?? 0,
+      calls: answers[0]?.calls ?? 0,
+      issues: issues
+        .filter((row) => query.tools.includes(row.tool) && keyed(row.value))
+        .map((row) => ({ tool: row.tool, path: row.value, count: row.count })),
+      ignoredKeys: ignored
+        .filter((row) => query.tools.includes(row.tool) && keyed(row.value))
+        .map((row) => ({ tool: row.tool, key: row.value, count: row.count })),
+      changeTripKeys: (
+        changeKeys as Array<{ key: string; count: number }>
+      ).filter((row) => keyed(row.key)),
+      interviewOps: (
+        ops as Array<{ op: string | null; outcome: string; count: number }>
+      )
+        .filter((row) => INTERVIEW_OPS.has(row.op ?? ""))
+        .map((row) => ({
+          op: row.op as string,
+          outcome: INTERVIEW_OUTCOMES.has(row.outcome) ? row.outcome : "",
+          count: row.count,
+        })),
+    };
   }
 }

@@ -9,7 +9,25 @@ import { Repository } from "typeorm";
 import { addIsoDays } from "../../common/utils/date.util";
 import { utcDay } from "../../common/utils/reader-hash.util";
 import { TripRequestMetric } from "./trip-request-metric.entity";
-import type { TripRequestMetricRow } from "./trip-request-facts";
+import {
+  answerFactsOf,
+  errorOf,
+  metricRowOf,
+  regionOf,
+  type TripAnswerFacts,
+  type TripErrorCode,
+  type TripMetricCaller,
+  type TripMetricRoute,
+  type TripRequestMetricRow,
+} from "./trip-request-facts";
+import { withTripTrace, type TripRequestTrace } from "./trip-request-trace";
+
+/** One measured request: its route, region slug (as asked) and caller. */
+export interface TripMeasure {
+  route: TripMetricRoute;
+  region: unknown;
+  caller: TripMetricCaller;
+}
 
 /**
  * How long a row is kept: the site statistic's hourly rows live as long
@@ -33,6 +51,8 @@ export interface TripOpsQuery {
   to: string;
   region?: string;
   route?: string;
+  /** `site` or `parky` (`TRIP_METRIC_CALLERS`). */
+  caller?: string;
   /** Rows of `slowest`. */
   limit: number;
   series: boolean;
@@ -51,6 +71,8 @@ export interface LatencyFigures {
 export interface TripOpsRouteRow {
   region: string;
   route: string;
+  /** `site`, the route itself, or `parky`, his trip tools. */
+  caller: string;
   requests: number;
   answered: number;
   errors: number;
@@ -70,6 +92,10 @@ export interface TripOpsRouteRow {
   /** Of the 200s, the share with a hopper and with owned tickets. */
   hopperShare: number | null;
   ownedTicketsShare: number | null;
+  /** Of the 200s that say, the share that left a chosen park out (`parksLeftOut`). */
+  leftOutShare: number | null;
+  /** A region with bases: of its 200s, the share that suggested other stays. */
+  staySuggestedShare: number | null;
   avgTripDays: number | null;
   avgParks: number | null;
 }
@@ -91,6 +117,7 @@ export interface TripOpsReport {
   days: number;
   region: string | null;
   route: string | null;
+  caller: string | null;
   totals: { requests: number; answered: number; errors: number };
   routes: TripOpsRouteRow[];
   relaxed: Array<{
@@ -115,6 +142,13 @@ export interface TripOpsReport {
     route: string;
     kind: string;
     tickets: number;
+    requests: number;
+  }>;
+  /** A region with bases: the 200s by the visitor's move buffer and by the ends they fixed. */
+  stays: Array<{
+    route: string;
+    dim: "move_buffer" | "gateways";
+    value: string;
     requests: number;
   }>;
   /** Built answers by their whole shape, slowest p90 first. */
@@ -212,6 +246,64 @@ export class TripRequestMetricsService
     this.buffer.push(row);
   }
 
+  /**
+   * Records one answer or failure of a measured request. Never throws: a row
+   * that cannot be built is logged and left out, and the answer goes on.
+   */
+  recordAnswer(
+    measure: TripMeasure,
+    trace: TripRequestTrace,
+    startedAt: number,
+    outcome:
+      | { status: 200; facts?: TripAnswerFacts }
+      | { status: number; errorCode: TripErrorCode },
+  ): void {
+    try {
+      this.record(
+        metricRowOf({
+          route: measure.route,
+          caller: measure.caller,
+          region: regionOf(measure.region),
+          at: new Date(),
+          latencyMs: performance.now() - startedAt,
+          trace,
+          status: outcome.status,
+          ...("errorCode" in outcome
+            ? { errorCode: outcome.errorCode }
+            : { facts: outcome.facts }),
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Trip request metric for ${measure.route} not recorded: ${message}`,
+      );
+    }
+  }
+
+  /**
+   * Runs a call to a trip route's service as a measured request, the way the
+   * interceptor runs the route: a trace around it, one row for its answer or
+   * its error. What Parky's trip tools call (`caller: parky`); the answer and
+   * the error pass through unchanged.
+   */
+  async measure<T>(measure: TripMeasure, run: () => Promise<T>): Promise<T> {
+    const trace: TripRequestTrace = {};
+    const startedAt = performance.now();
+    try {
+      const body = await withTripTrace(trace, run);
+      this.recordAnswer(measure, trace, startedAt, {
+        status: 200,
+        facts: answerFactsOf(measure.route, body),
+      });
+      return body;
+    } catch (error) {
+      const { status, code } = errorOf(error);
+      this.recordAnswer(measure, trace, startedAt, { status, errorCode: code });
+      throw error;
+    }
+  }
+
   /** Rows waiting, and rows dropped since the process started. */
   writerState(): { buffered: number; dropped: number } {
     return { buffered: this.buffer.length, dropped: this.dropped };
@@ -278,11 +370,11 @@ export class TripRequestMetricsService
   }
 
   /**
-   * The ops report over a window of UTC days: per region and route the
+   * The ops report over a window of UTC days: per region, route and caller the
    * requests, errors, latency percentiles (all answers and the built ones),
    * the caches, the share proven, loosened and incomplete; the codes behind
    * them; the slowest shapes of a built answer; and a series on request.
-   * Six statements over the bucket index, a seventh for the series.
+   * Seven statements over the bucket index, an eighth for the series.
    */
   async ops(query: TripOpsQuery): Promise<TripOpsReport> {
     const params: unknown[] = [
@@ -301,6 +393,10 @@ export class TripRequestMetricsService
       params.push(query.route);
       conditions.push(`route = $${params.length}`);
     }
+    if (query.caller) {
+      params.push(query.caller);
+      conditions.push(`caller = $${params.length}`);
+    }
     const where = conditions.join(" AND ");
     const read = <T>(sql: string) =>
       this.repository.query(sql, params) as Promise<T[]>;
@@ -312,9 +408,12 @@ export class TripRequestMetricsService
       errorRows,
       ticketRows,
       shapeRows,
+      stayRows,
     ] = await Promise.all([
-      read<Record<string, Num> & { region: string; route: string }>(
-        `SELECT region, route,
+      read<
+        Record<string, Num> & { region: string; route: string; caller: string }
+      >(
+        `SELECT region, route, caller,
                   count(*) AS requests,
                   count(*) FILTER (WHERE ${ANSWERED}) AS answered,
                   ${latencyColumns("all", ANSWERED)},
@@ -331,12 +430,16 @@ export class TripRequestMetricsService
                   count(*) FILTER (WHERE ${ANSWERED} AND cardinality(unplaced_reasons) > 0) AS unplaced,
                   count(*) FILTER (WHERE ${ANSWERED} AND hopper) AS hopper,
                   count(*) FILTER (WHERE ${ANSWERED} AND cardinality(ticket_kinds) > 0) AS owned,
+                  count(*) FILTER (WHERE ${ANSWERED} AND left_out IS NOT NULL) AS left_out_known,
+                  count(*) FILTER (WHERE ${ANSWERED} AND left_out > 0) AS left_out,
+                  count(*) FILTER (WHERE ${ANSWERED} AND stay_suggested IS NOT NULL) AS stay_known,
+                  count(*) FILTER (WHERE ${ANSWERED} AND stay_suggested) AS stay_suggested,
                   avg(trip_days) FILTER (WHERE ${ANSWERED}) AS avg_trip_days,
                   avg(parks) FILTER (WHERE ${ANSWERED}) AS avg_parks
              FROM trip_request_metrics
             WHERE ${where}
-            GROUP BY region, route
-            ORDER BY count(*) DESC, region, route`,
+            GROUP BY region, route, caller
+            ORDER BY count(*) DESC, region, route, caller`,
       ),
       read<{ route: string; code: string; requests: Num }>(
         `SELECT route, code, count(*) AS requests
@@ -394,6 +497,18 @@ export class TripRequestMetricsService
               (route, trip_days, parks, bases),
               (route, trip_days), (route, parks), (route, bases))`,
       ),
+      read<{ route: string; dim: string; value: string; requests: Num }>(
+        `SELECT route, 'move_buffer' AS dim, move_buffer::text AS value, count(*) AS requests
+             FROM trip_request_metrics
+            WHERE ${where} AND ${ANSWERED} AND move_buffer IS NOT NULL
+            GROUP BY route, move_buffer
+           UNION ALL
+           SELECT route, 'gateways', gateways, count(*)
+             FROM trip_request_metrics
+            WHERE ${where} AND ${ANSWERED} AND gateways IS NOT NULL
+            GROUP BY route, gateways
+            ORDER BY 1, 2, 4 DESC, 3`,
+      ),
     ]);
 
     const routes: TripOpsRouteRow[] = routeRows.map((row) => {
@@ -406,6 +521,7 @@ export class TripRequestMetricsService
       return {
         region: row.region,
         route: row.route,
+        caller: row.caller,
         requests,
         answered,
         errors,
@@ -423,6 +539,8 @@ export class TripRequestMetricsService
         unplacedShare: share(num(row.unplaced), answered),
         hopperShare: share(num(row.hopper), answered),
         ownedTicketsShare: share(num(row.owned), answered),
+        leftOutShare: share(num(row.left_out), num(row.left_out_known)),
+        staySuggestedShare: share(num(row.stay_suggested), num(row.stay_known)),
         avgTripDays: avg(row.avg_trip_days),
         avgParks: avg(row.avg_parks),
       };
@@ -475,6 +593,7 @@ export class TripRequestMetricsService
         ) + 1,
       region: query.region ?? null,
       route: query.route ?? null,
+      caller: query.caller ?? null,
       totals,
       routes,
       relaxed: relaxedRows.map((row) => ({
@@ -499,6 +618,12 @@ export class TripRequestMetricsService
         route: row.route,
         kind: row.kind,
         tickets: num(row.tickets),
+        requests: num(row.requests),
+      })),
+      stays: stayRows.map((row) => ({
+        route: row.route,
+        dim: row.dim as "move_buffer" | "gateways",
+        value: row.value,
         requests: num(row.requests),
       })),
       slowest: shapes(0)

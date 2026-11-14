@@ -18,6 +18,7 @@ import type { TripPlanDto } from "../dto/trip-region-response.dto";
 import type { TripWhen } from "../trip-when";
 import {
   TRIP_ERROR_CODES,
+  answerFactsOf,
   UNKNOWN_REGION,
   errorOf,
   hourOf,
@@ -227,7 +228,24 @@ describe("a region with bases", () => {
         leadMae: new Map(),
       },
     );
-    expect(planAnswerFacts(answer)).toMatchObject({ bases: 4, moves: 3 });
+    expect(planAnswerFacts(answer)).toMatchObject({
+      bases: 4,
+      moves: 3,
+      leftOut: 0,
+      staySuggested: false,
+    });
+    // Both ends fixed, the region's own move buffer.
+    expect(planShapeOf(JAPAN, q, true)).toMatchObject({
+      gateways: "both",
+      moveBuffer: undefined,
+    });
+    expect(
+      planShapeOf(
+        JAPAN,
+        japan({ startBase: "tokyo", moveBuffer: 60 } as never),
+        true,
+      ),
+    ).toMatchObject({ gateways: "start", moveBuffer: 60 });
   });
 });
 
@@ -326,6 +344,8 @@ describe("the facts of an answer", () => {
       moves: null,
       windows: null,
       windowsPlanned: null,
+      leftOut: 0,
+      staySuggested: null,
     });
   });
 
@@ -382,11 +402,93 @@ describe("the facts of an answer", () => {
       moves: null,
       windows: 2,
       windowsPlanned: 41,
+      leftOut: 0,
     });
   });
 });
 
+describe("the parks left out and the stay suggestion", () => {
+  it("counts the chosen parks with no visit, on /plan and in /when's best window", () => {
+    const plan = {
+      meta: { exact: true },
+      days: [],
+      parks: [],
+      totals: {},
+      unplaced: [],
+      parksLeftOut: [
+        { park: "epcot", reason: "no_day_left" },
+        { park: "universal-epic-universe", reason: "no_day_left" },
+      ],
+    } as unknown as TripPlanDto;
+    expect(planAnswerFacts(plan)).toMatchObject({
+      leftOut: 2,
+      staySuggested: null,
+    });
+    expect(answerFactsOf("plan", plan)).toMatchObject({ leftOut: 2 });
+    const when = {
+      meta: { search: { exact: true, planned: 3 } },
+      windows: [
+        { warnings: [], plan: { days: [], parksLeftOut: [{ park: "epcot" }] } },
+      ],
+    } as unknown as TripWhen;
+    expect(whenAnswerFacts(when)).toMatchObject({ leftOut: 1 });
+    expect(whenAnswerFacts({ meta: {}, windows: [] } as never)).toMatchObject({
+      leftOut: null,
+    });
+    // The best days add nothing; an answer of another shape is read as none.
+    expect(answerFactsOf("best_days", {})).toBeUndefined();
+    expect(answerFactsOf("plan", null)).toBeUndefined();
+  });
+
+  it("says a suggestion only in a region with bases", () => {
+    const facts = planAnswerFacts({
+      meta: {
+        exact: true,
+        stays: [{ base: "tokyo" }],
+        staySuggestion: { base: "osaka" },
+      },
+      days: [],
+      parks: [],
+      totals: {},
+      unplaced: [],
+    } as unknown as TripPlanDto);
+    expect(facts.staySuggested).toBe(true);
+  });
+});
+
 describe("a metric row", () => {
+  it("is the site's unless Parky asked", () => {
+    const of = (caller?: "site" | "parky") =>
+      metricRowOf({
+        route: "plan",
+        caller,
+        region: "orlando",
+        at: new Date("2026-11-14T17:42:31Z"),
+        latencyMs: 5,
+        trace: { shape: { moveBuffer: 90, gateways: "end" } },
+        status: 200,
+        facts: {
+          exact: true,
+          relaxed: [],
+          unplacedReasons: [],
+          bases: 2,
+          moves: 1,
+          windows: null,
+          windowsPlanned: null,
+          leftOut: 1,
+          staySuggested: true,
+        },
+      });
+    expect(of()).toMatchObject({
+      caller: "site",
+      leftOut: 1,
+      moveBuffer: 90,
+      gateways: "end",
+      staySuggested: true,
+    });
+    expect(of("parky").caller).toBe("parky");
+  });
+
   it("keeps the hour, never the moment, and a known region only", () => {
     expect(hourOf(new Date("2026-11-14T17:42:31.123Z")).toISOString()).toBe(
       "2026-11-14T17:00:00.000Z",

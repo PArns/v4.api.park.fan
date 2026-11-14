@@ -31,6 +31,10 @@ export interface TripRequestShape {
   rangeDays?: number;
   /** `/when`: kept inside a school-holiday region's breaks. */
   within?: boolean;
+  /** A region with bases: the visitor's minutes for a hotel change. */
+  moveBuffer?: number;
+  /** A region with bases: which ends the visitor fixed. */
+  gateways?: "none" | "start" | "end" | "both";
 }
 
 export interface TripRequestTrace {

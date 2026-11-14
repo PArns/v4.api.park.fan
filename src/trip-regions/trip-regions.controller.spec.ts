@@ -40,6 +40,11 @@ describe("TripRegionsController", () => {
   const store = new Map<string, string>();
   /** The metric rows the routes handed to the writer. */
   const recorded: TripRequestMetricRow[] = [];
+  /** The real writer, its rows caught before they would reach a table. */
+  const metrics = new TripRequestMetricsService({} as never);
+  jest.spyOn(metrics, "record").mockImplementation((row) => {
+    recorded.push(row);
+  });
   const redis = {
     get: jest.fn(async (k: string) => store.get(k) ?? null),
     set: jest.fn(async (k: string, v: string) => {
@@ -211,9 +216,7 @@ describe("TripRegionsController", () => {
         },
         {
           provide: TripRequestMetricsService,
-          useValue: {
-            record: (row: TripRequestMetricRow) => recorded.push(row),
-          },
+          useValue: metrics,
         },
         {
           provide: ApiKeyService,
@@ -693,6 +696,7 @@ describe("TripRegionsController", () => {
       expect(built).toMatchObject({
         region: "orlando",
         route: "plan",
+        caller: "site",
         status: 200,
         errorCode: null,
         cache: "miss",
