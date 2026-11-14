@@ -19,6 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import { TripWhenService } from "./trip-when.service";
+import { TripAccuracyService } from "./trip-accuracy.service";
 import { MeasureTripRequest } from "./metrics/trip-request-metrics.interceptor";
 import type { TripWhen } from "./trip-when";
 import type { TripSchoolBreaks } from "./trip-school-breaks";
@@ -35,6 +36,7 @@ import {
 } from "./dto/trip-region-query.dto";
 import type { TripBestDays } from "./trip-best-days";
 import {
+  TripAccuracyDto,
   TripCalendarDto,
   TripParkDayDto,
   TripPlanDto,
@@ -78,6 +80,7 @@ export class TripRegionsController {
     private readonly regions: TripRegionService,
     private readonly plans: TripPlanService,
     private readonly whens: TripWhenService,
+    private readonly accuracies: TripAccuracyService,
   ) {}
 
   @Get()
@@ -238,6 +241,24 @@ export class TripRegionsController {
     const body = await this.whens.when(region, query);
     if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
     return body;
+  }
+
+  @Get(":region/accuracy")
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
+  @ApiOperation({
+    summary:
+      "How accurate the region's forecast was over the last 30 measured days",
+    description:
+      "The day's peak wait at the headliners as forecast a week ahead, against what the day " +
+      "did: the mean absolute error in minutes, averaged over the region's parks, from the " +
+      "same archive the planner's expected error reads. `forecastAccuracy` is null where too " +
+      "little is measured. No key. Cache: an hour in the browser, a day at the edge.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, type: TripAccuracyDto })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  accuracy(@Param("region") region: string): Promise<TripAccuracyDto> {
+    return this.accuracies.accuracy(region);
   }
 
   @Get(":region/school-breaks")

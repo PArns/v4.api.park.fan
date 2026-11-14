@@ -292,6 +292,49 @@ export class TripRegionSummaryDto {
   groups: TripRegionGroupDto[];
 }
 
+export class TripForecastAccuracyDto {
+  @ApiProperty({ example: 30, description: "The window's length in days." })
+  days: number;
+  @ApiProperty({ example: "2026-10-14", description: "Park-local, inclusive." })
+  from: string;
+  @ApiProperty({
+    example: "2026-11-12",
+    description: "The region's last measured day, park-local.",
+  })
+  to: string;
+  @ApiProperty({
+    example: 7,
+    description: "How many days ahead the scored forecasts were made.",
+  })
+  leadDays: number;
+  @ApiProperty({
+    example: 16.4,
+    description:
+      "The day's peak wait at the headliners: forecast against the day's P90, the mean " +
+      "absolute error in minutes, averaged over the counted parks, one decimal.",
+  })
+  maeMinutes: number;
+  @ApiProperty({ example: 14, description: "Parks counted." })
+  parks: number;
+  @ApiProperty({
+    example: 28,
+    description: "Days of the window with a scored forecast.",
+  })
+  sampleDays: number;
+}
+
+export class TripAccuracyDto {
+  @ApiProperty({ example: "orlando" }) region: string;
+  @ApiProperty({
+    type: () => TripForecastAccuracyDto,
+    nullable: true,
+    description:
+      "Null where too little is measured: under 100 scored rows, under 14 measured days, " +
+      "or no park with 20.",
+  })
+  forecastAccuracy: TripForecastAccuracyDto | null;
+}
+
 export class TripRegionListDto {
   @ApiProperty({ type: () => [TripRegionSummaryDto] })
   regions: TripRegionSummaryDto[];

@@ -21,8 +21,8 @@ export type TripParkType = "theme_park" | "water_park" | "reservation_park";
 /**
  * `hotel=` on the plan: which hotel's perks the visitor gets. A region's own
  * vocabulary, the keys of its `perks` (Orlando: `disney`, `disney_deluxe`,
- * `universal`, `universal_premier`, `offsite`); `offsite` (no perks) in every
- * region. Validated per region ({@link hotelKinds}).
+ * `disney_springs`, `universal`, `universal_premier`, `offsite`); `offsite`
+ * (no perks) in every region. Validated per region ({@link hotelKinds}).
  */
 export type HotelKind = string;
 
@@ -616,6 +616,8 @@ export const ORLANDO: RegionConfig = {
   hotelNames: {
     disney: "a Walt Disney World resort hotel",
     disney_deluxe: "a Disney Deluxe or Deluxe Villa resort hotel",
+    disney_springs:
+      "a Disney Springs Resort Area hotel other than the B Resort",
     universal: "a Universal Orlando hotel",
     universal_premier:
       "a Universal Premier hotel (Royal Pacific, Hard Rock, Portofino Bay)",
@@ -999,12 +1001,26 @@ export const ORLANDO: RegionConfig = {
       note: "International Drive at ICON Park, the middle of the hotel strip",
     },
     {
+      // Disney names these hotels among the "other select hotels" whose guests
+      // get Early Entry, and not among those with Extended Evening Hours
+      // (disneyworld.disney.go.com/guest-services/early-entry/ and
+      // /extended-evening/). The B Resort on the same boulevard is on neither.
+      key: "disney_springs",
+      name: "Disney Springs Resort Area",
+      latitude: 28.3768,
+      longitude: -81.5138,
+      hotel: "disney_springs",
+      note: "Hotel Plaza Boulevard by Disney Springs: the Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree Suites, Holiday Inn Orlando, Wyndham Lake Buena Vista and Wyndham Garden",
+    },
+    {
+      // The same point: the B Resort sits on Hotel Plaza Boulevard, the
+      // Lake Buena Vista hotels along SR 535 a few minutes' drive away.
       key: "lake_buena_vista",
       name: "Lake Buena Vista",
       latitude: 28.3768,
       longitude: -81.5138,
       hotel: "offsite",
-      note: "Hotel Plaza Boulevard by Disney Springs",
+      note: "Hotel Plaza Boulevard by Disney Springs, for the Lake Buena Vista hotels without Early Entry",
     },
     {
       key: "kissimmee",
@@ -1026,6 +1042,7 @@ export const ORLANDO: RegionConfig = {
         share: 0.1,
       },
     ],
+    disney_springs: [DISNEY_EARLY],
     universal: [UNIVERSAL_EARLY],
     universal_premier: [
       UNIVERSAL_EARLY,

@@ -1779,6 +1779,14 @@ describe("a ride by its name", () => {
 });
 
 describe("get_hours", () => {
+  // The fixtures plan 14 November 2026; on that day itself the tool drops the hours already gone,
+  // so the clock stands days before it, whatever day the suite runs.
+  beforeEach(() => {
+    jest.useFakeTimers({ now: new Date("2026-11-10T12:00:00Z") });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
   const plan = (status: string, extra: object = {}) => ({
     tier: "composed",
     context: { date: "2026-11-14", status, openHour: 10, closeHour: 18 },
