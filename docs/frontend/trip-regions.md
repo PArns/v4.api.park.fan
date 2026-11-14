@@ -671,7 +671,13 @@ calendar does not.
 | `bases`, `startBase`, `endBase` | `tokyo:4@maihama`, `tokyo`, `osaka` | a region with bases only, in place of `area` and `hotel`: the stays the visitor fixes and the trip's ends ([bases](#bases-a-trip-across-several-cities)) |
 | `moveBuffer` | `30` | a region with bases only: the visitor's own minutes for a hotel change on top of the train, one of `stayRules.moveBufferOptions` (30, 60, 90, 120); default the region's `moveOverheadMinutes` |
 
-More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
+**Which answer comes when.** A park listed without a count, or with `:1`, never makes the trip
+impossible: the plan gives the chosen parks the park days the trip has and names the ones it could
+not place in **`parksLeftOut`** (below), a 200. Orlando's seven default parks in a 7-day trip with
+a free arrival and departure day plan on its 5 park days, two parks out. **Only pinned visits can
+make a 400:** the counts of two or three a query writes (`magic-kingdom-park:2`) adding up to more
+than the trip's days (more than two a day with `hop`), "More park visits than trip days"; and more
+than 16 visits in all. That 400 is the one a client words as "too many visits". `hop=1` without
 a hopper (neither `ticket=hopper` nor an owned ticket with hopping) is ignored: the plan keeps one
 park a day and `meta.warnings` says `hop_needs_hopper`. A lock on a park
 not in `parks` or outside the trip is a 400; a lock the plan cannot keep (the park is closed that
@@ -786,8 +792,25 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   "unplaced": [
     { "slug": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
   ],
+  "parksLeftOut": [
+    // the chosen parks with no visit in the plan, in the region's order; [] when every one has a day
+    { "park": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
+  ],
 }
 ```
+
+- **`parksLeftOut`** lists each chosen park the plan has no visit of, `{ park, reason }`, always
+  present, `[]` when every chosen park has a day. `reason` is its visit's `unplaced` reason:
+  `no_day_left` (the trip's park days went to the other parks: "EPCOT and Epic Universe don't fit
+  into 5 park days", the 5 being `totals.parkDays`), `no_open_day`, `no_ticket_day` or `no_base`.
+  A dropped second visit is not in it, since its park is in the plan; `unplaced` lists every visit
+  left out. Each `/when` window's `plan` carries the same field for its dates, absent when empty:
+  both are this optimizer on the same days, so the plan for a window's dates leaves out the same
+  parks, unless days without published hours, which `/when` prices as if open
+  ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
+  the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
+  `/when`.
 
 **The objective.** Minimize the sum over planned visits of their [day cost](#how-a-day-is-priced).
 A hotel perk takes a fixed share off the day it applies: `early_entry` and `early_park_admission`
@@ -1668,7 +1691,7 @@ ticket does not allow, and the catalog's `confidence` and `notes` say so:
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v2:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).

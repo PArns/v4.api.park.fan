@@ -530,6 +530,20 @@ describe("TripRegionsController", () => {
       expect(buildCalendarResponse.mock.calls.length).toBe(calls);
     });
 
+    it("plans what fits of parks without a count, and names the ones left out", async () => {
+      const res = await request(app.getHttpServer())
+        .get(
+          `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(2)}&parks=epcot,magic-kingdom-park,universal-epic-universe&arrival=park&departure=park`,
+        )
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect(res.body.totals.parkDays).toBe(2);
+      expect(res.body.parksLeftOut).toHaveLength(1);
+      expect(res.body.parksLeftOut[0]).toMatchObject({
+        reason: "no_day_left",
+      });
+    });
+
     it.each([
       [
         "a trip over 21 days",
@@ -544,8 +558,8 @@ describe("TripRegionsController", () => {
         `from=${addIsoDays(getCurrentDateInTimezone(TZ), 1)}&to=${addIsoDays(getCurrentDateInTimezone(TZ), 9)}&parks=epcot:4`,
       ],
       [
-        "more visits than days without hop",
-        `from=${addIsoDays(getCurrentDateInTimezone(TZ), 1)}&to=${addIsoDays(getCurrentDateInTimezone(TZ), 2)}&parks=epcot,magic-kingdom-park,universal-epic-universe`,
+        "more pinned visits than days without hop",
+        `from=${addIsoDays(getCurrentDateInTimezone(TZ), 1)}&to=${addIsoDays(getCurrentDateInTimezone(TZ), 2)}&parks=epcot:2,magic-kingdom-park:2`,
       ],
       [
         "a lock outside the trip",

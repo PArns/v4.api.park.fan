@@ -109,12 +109,29 @@ export interface PlanAnswer {
   unplaced: Array<{ slug: string; reason: string }>;
 }
 
-/** A plan for a query on the region's days, as the route answers it. */
+/** The days of a longer calendar from `from` to `to`, as a calendar of their own. */
+export function sliceCalendar(
+  calendar: InternalRegionCalendar,
+  from: string,
+  to: string,
+): InternalRegionCalendar {
+  return {
+    ...calendar,
+    meta: { ...calendar.meta, from, to },
+    days: calendar.days.filter((d) => d.date >= from && d.date <= to),
+  };
+}
+
+/**
+ * A plan for a query on the region's days, as the route answers it: on the
+ * fixture's own days, or on `calendar`'s for the trip's dates.
+ */
 export function regionPlan(
   region: RegionConfig,
   query: Record<string, string>,
   today: string,
   tweak?: CellTweak,
+  from?: InternalRegionCalendar,
 ): PlanAnswer {
   const q = normalizePlanQuery(
     region,
@@ -122,12 +139,9 @@ export function regionPlan(
     query as never,
     today,
   );
-  const calendar = regionCalendar(
-    region,
-    q.from,
-    daysBetween(q.from, q.to),
-    tweak,
-  );
+  const calendar = from
+    ? sliceCalendar(from, q.from, q.to)
+    : regionCalendar(region, q.from, daysBetween(q.from, q.to), tweak);
   const trip = optimizePlan(region, q, calendar);
   return planResponse(region, q, calendar, trip, {
     computedAt: "t",
