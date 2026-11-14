@@ -1499,6 +1499,10 @@ export const JAPAN: RegionConfig = {
       },
     ],
   },
+  // Most travellers send their bags ahead by courier (takkyubin) to the next hotel, so a
+  // morning move needs no check-out queue with luggage: half the default overhead, and an
+  // earlier start, as the train timetables allow. The owner's decision for Japan.
+  stayRules: { moveOverheadMinutes: 30, moveStartsAt: "07:30" },
   bases: [
     {
       key: "tokyo",
