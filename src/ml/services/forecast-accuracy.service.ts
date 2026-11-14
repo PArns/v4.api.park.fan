@@ -85,7 +85,13 @@ export class ForecastAccuracyService {
                 max(qda.p90)::float AS actual
            FROM queue_data_aggregates qda
            JOIN parks p ON p.id::text = qda."parkId"
-          WHERE qda.hour >= current_date - 45 AND qda.hour < current_date
+          -- A day counts once it is over in the PARK's zone, with all of its
+          -- hours: cut at UTC midnight, an American park's newest day lost its
+          -- evening and read too low (PAR-1333). The hour bound is one day
+          -- wider than the window so the oldest local day is whole too.
+          WHERE qda.hour >= current_date - 46 AND qda.hour < now()
+            AND (qda.hour AT TIME ZONE p.timezone)::date
+                < (now() AT TIME ZONE p.timezone)::date
             AND qda."sampleCount" >= 2
           GROUP BY 1, 2
          HAVING max(qda.p90) > 0

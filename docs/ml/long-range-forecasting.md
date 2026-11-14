@@ -119,7 +119,10 @@ they are not comparable line for line with §2. The 15-minute curve's equivalent
 (`src/ml/services/forecast-accuracy.service.ts`); `/plan/day` attaches `expectedError` per ride and
 an `accuracy` block per day, with `basis: "unmeasured"` past 60 days. The buckets are
 **`d1/d3/d7/d14/d30/d60`**, the distances the forward archive samples (four until PAR-17, which
-answered a 10-day question with the 30-day cell). Every cell needs 500 comparisons (`MIN_SAMPLE`);
+answered a 10-day question with the 30-day cell). A target day is scored once it is over in the
+park's own timezone, against all of its hours; until PAR-1333 the truth was cut at UTC midnight,
+so the newest day of every American park was scored without its evening. Every cell needs 500
+comparisons (`MIN_SAMPLE`);
 all 18 cleared it by an order of magnitude on 2026-09-11:
 
 | Predicted | ≤ 1 d | ≤ 3 d | ≤ 7 d | ≤ 14 d | ≤ 30 d | ≤ 60 d |
