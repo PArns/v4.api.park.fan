@@ -162,7 +162,7 @@ export class TripTicketMarketsDto {
   @ApiProperty({
     example: "us",
     description:
-      "Sold to anyone at the operator's own shop: what plan first suggests from.",
+      "The operators' own shops; a product without it is sold only by shops abroad, which the client says in a label.",
   })
   home: string;
   @ApiProperty({ example: ["us", "uk", "intl"] }) codes: string[];

@@ -93,7 +93,7 @@ region route serves the parts a client needs:
 | `weather.heat`, `.storm`, `.notes`     | `weather`                        | heat thresholds, the storm season and the seasons the answers name but do not price ([how a day is priced](#how-a-day-is-priced))                           |
 | `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
-| `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name; `home` is sold to anyone, what plan first suggests from ([tickets](#tickets))                                  |
+| `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name, where each is sold; `home` is the operators' own shops ([tickets](#tickets))                                   |
 | `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
 | a park's `code`                        | `parks[].code`                   | a short curated code for tight views (Tokyo Disneyland `DL`, Tokyo DisneySea `DS`, where initials would give both `TD`); absent: the client derives one  |
 
@@ -1256,7 +1256,7 @@ A product:
   "id": "uor-date-based", // stable, the contract's key
   "name": "Universal Orlando date-based ticket", // the operator's product name, not translated
   "resort": "universal-orlando", // the group whose operator sells it
-  "markets": ["us", "intl"], // the region's ticketMarkets codes; in Orlando us: sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only
+  "markets": ["us", "intl"], // where it is sold (ticketMarkets codes); Orlando us: the operators' shops; uk: UK and Irish shops; intl: elsewhere
   "parks": [
     "universal-studios-florida",
     "universal-islands-of-adventure",
@@ -1307,7 +1307,7 @@ A product:
       "seller": "Attraction Tickets",
       "url": "https://www.attractiontickets.com/…",
       "sponsored": true, // an affiliate link: show it as such, rel="sponsored"
-      "markets": ["uk"], // absent: everyone
+      "markets": ["uk"], // the market its seller sells in; absent: every one
       "locales": ["en"], // absent: every locale
     },
   ],
@@ -1318,13 +1318,14 @@ A product:
 
 - **`links`**: where to buy. Exactly one is the operator's own shop (`official: true`), whose url is
   also `shopUrl`. `sponsored: true` marks an affiliate or paid link: the client labels it and links
-  it `rel="sponsored noopener"`. `markets` and `locales` say whom a link is for (a UK seller for
-  `uk`, a German page for `de`); a link without them is for everyone. **The array order is the
-  display order:** among the links that suit the reader equally (those for their locale or market
-  first, then those for everyone), the client shows them in the order given, so the admin decides
-  which link comes first. Every url is `https`. Purchase links show the sellers that the visitor
-  comes from park.fan: the client renders them with `referrerPolicy="origin"` and never with
-  `noreferrer`.
+  it `rel="sponsored noopener"`. `markets` and `locales` say where a link sells and in which
+  language (a UK shop `uk`, a German page `de`); a link without them suits everyone. The client
+  shows a link's market beside it as a label, and every link to every visitor. **The array order
+  is the display order:** among the links that suit the reader equally (those for their locale or
+  market first, then those for everyone), the client shows them in the order given, so the admin
+  decides which link comes first. Every url is `https`. Purchase links show the sellers that the
+  visitor comes from park.fan: the client renders them with `referrerPolicy="origin"` and never
+  with `noreferrer`.
 - **`description`**: an optional sentence about the product, in English, as the admin wrote it.
 
 - **`windowTable`** lists, for each length on sale, the calendar days the ticket may be used in,
@@ -1346,8 +1347,12 @@ A product:
   `blockouts_unchecked`. **`blockoutUrl`**: the operator's page with the blockout calendar (Disney's
   passholder page, which links each pass's calendar). **`reservationUrl`**: where passholders reserve
   their park (Disney's pass).
-- **`markets`** (and a link's) are codes of the region's `ticketMarkets`, whose `home` is sold to
-  anyone at the operator's own shop: `us` in Orlando, the region's own elsewhere.
+- **`markets`** (and a link's) are codes of the region's `ticketMarkets`, whose `home` is the
+  operators' own shops: `us` in Orlando, the region's own elsewhere. **A market says where a ticket
+  is sold, never who may buy it, and filters nothing**: anyone may buy a UK 14-day ticket from a UK
+  shop, plan first suggests from every market, and the client shows the market as a label beside
+  the product or the link ("UK shop"). The catalog has no field for a buyer's condition (a UK
+  address), so no client claims one.
 - **An evening ticket**: **`entryFrom`** (`"15:00"`, park-local) admits only from that time, and
   **`validDays`** (`weekday`, `weekend`, `holiday`; absent: every day) names the kinds of day it is
   used on: Tokyo Disney Resort's Early Evening Passport (from 15:00, weekends and holidays) and
@@ -1457,14 +1462,20 @@ pass, so an Epic visit with a pass is planned plan first and gets an Epic day ti
 
 For each resort with park days on plan first, the plan as made (blocks as today) gets a ticket:
 
-- **`product`**: the shortest product sold to everyone (`markets` has the region's home market,
-  `us` in Orlando), no evening ticket, and on sale at the
-  start that covers the resort's planned days: Disney date-based (with the Plus option where a
-  Disney water park is planned); Universal date-based without Epic Universe for one or two days,
+- **`product`**: among the products with a suggestion rank (`suggest`, the admin's
+  `suggestRank`), whatever their `markets`, the one that covers the most of the resort's next
+  planned days without more than doubling its park days, then the fewest extra days, then the
+  rank; no evening ticket, and on sale at the start: Disney date-based (with the Plus option where
+  a Disney water park is planned); Universal date-based without Epic Universe for one or two days,
   the 1-Day + 1-Day Epic for two days with Epic, date-based from three days; the Epic Universe or
   Volcano Bay 1-day ticket alone; SeaWorld's single day, Two Park, Three-Day Three Park or Four
   Parks for its parks with Busch Gardens and Adventure Island; Discovery Cove (with its sister parks
-  where they are planned); LEGOLAND's 1- or 2-day ticket. Only researched products are suggested:
+  where they are planned); LEGOLAND's 1- or 2-day ticket; and the tickets UK shops sell where they
+  fit better: the 7-Day Magic Ticket for Disney days spread wider than a date-based ticket reaches
+  (7 days in 15), the 14-Day Magic Ticket from 11 Disney days, Universal's 14-day ticket from 7
+  Universal days (one ticket instead of two). A tie goes to the lower rank, which the seed gives
+  the operators' own tickets; a catalog saved before the UK tickets had a rank suggests them once
+  the admin gives them one. Only researched products are suggested:
   Aquatica or Adventure Island alone get the smallest multi-park ticket that covers them, with
   its `extraDays`, because their single-day tickets were not researched.
 - **`days`** are the resort's park days (a hop day is one, an allowance visit none), **`start`** its
@@ -1492,10 +1503,11 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   With the hopper already on for that resort (`ticket=hopper`, or the resort in `hopper=`) the
   comparison is against the plan without it.
 
-- **`alternatives`**: on a trip of 10 days or more, the UK 14-day tickets (`reason: "long_stay"`,
-  `markets: ["uk"]`: UK and Ireland residents only), on a resort's first suggestion; a promotion
-  (the 4-Park Magic Ticket, Universal's 2-Day Park-to-Park + 1 Day Epic) where its dates and caps
-  fit the same visits without extra days (`reason: "promotion"`).
+- **`alternatives`**: on a trip of 10 days or more, the resort's 14-day tickets other than the
+  suggested one (`reason: "long_stay"`, with their `markets`: the UK ones are sold by UK shops), on
+  a resort's first suggestion; a promotion (the 4-Park Magic Ticket, Universal's 2-Day
+  Park-to-Park + 1 Day Epic) where its dates and caps fit the same visits without extra days
+  (`reason: "promotion"`).
 - **`id`**: `suggested:<resort>`, a second ticket for the resort `suggested:<resort>:2`.
 - **`notCoveredBy`**: the ids of the owned tickets of that resort that do not cover these parks
   (Epic Universe with a pass or a 1- or 2-day Universal ticket); absent when there are none.

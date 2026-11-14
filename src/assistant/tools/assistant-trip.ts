@@ -1061,11 +1061,17 @@ function ownedTicketSummary(
   };
 }
 
-/** Whom an alternative is sold to, where not to everyone: "(UK/Ireland only)" in Orlando. */
-function marketNote(region: RegionConfig, markets: readonly string[]): string {
-  if (markets.includes(region.ticketMarkets.home)) return "";
-  if (markets.includes("uk")) return " (UK/Ireland only)";
-  return ` (${markets.join(", ")} only)`;
+/**
+ * A ticket by its name, and where it is sold when the operators' own shops do
+ * not sell it: "… (sold by UK shops)" in Orlando. Information, not a limit:
+ * anyone may buy it there.
+ */
+function ticketName(region: RegionConfig, id: string): string {
+  const product = productOf(region, id);
+  if (!product) return id;
+  const { markets } = product;
+  if (markets.includes(region.ticketMarkets.home)) return product.name;
+  return `${product.name} (sold by ${markets.includes("uk") ? "UK shops" : "shops abroad"})`;
 }
 
 function suggestionSummary(
@@ -1074,9 +1080,8 @@ function suggestionSummary(
   names: ReadonlyMap<string, string>,
   withShop: boolean,
 ) {
-  const product = productOf(region, s.product);
   return {
-    ticket: product?.name ?? s.product,
+    ticket: ticketName(region, s.product),
     days: s.days,
     valid: `${s.start}..${s.end}`,
     ...(s.extraDays && {
@@ -1084,10 +1089,7 @@ function suggestionSummary(
     }),
     ...(s.hopper && { hopper: hopperPhrase(s.hopper, names) }),
     ...(s.alternatives?.length && {
-      alternatives: s.alternatives.map(
-        (a) =>
-          `${productOf(region, a.product)?.name ?? a.product}${marketNote(region, a.markets)}`,
-      ),
+      alternatives: s.alternatives.map((a) => ticketName(region, a.product)),
     }),
     ...(withShop && { shop: s.shopUrl }),
   };
@@ -1394,7 +1396,7 @@ export function tripDatesSummary(input: {
         ...(w.ticketSuggestion && {
           ticketsToBuy: w.ticketSuggestion.map(
             (s) =>
-              `${productOf(region, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
+              `${ticketName(region, s.product)}, ${s.days} days from ${s.start}`,
           ),
         }),
         hubUrl: hubUrl(region, { ...plan, from: w.from, to: w.to }),

@@ -43,7 +43,7 @@ export const MAX_TICKETS = 6;
  */
 export const HOPPER_SAVED_PER_RIDE = ORDER_MATTERS_MINUTES;
 
-/** Trips this long or longer get the UK 14-day tickets as an alternative. */
+/** Trips this long or longer get the 14-day tickets as an alternative. */
 export const LONG_STAY_DAYS = 10;
 
 /** An owned ticket as the query names it. */
@@ -567,14 +567,16 @@ export function suggestTickets(input: SuggestionInput): {
   for (const group of region.groups) {
     const visits = byResort.get(group.key);
     if (!visits) continue;
+    // Whatever its market: a visitor buys from a shop abroad (a UK 14-day
+    // ticket) as readily as from the operator's own, and `markets` only says
+    // where a product is sold.
     const products = catalog
       .filter(
         (p) =>
           p.resort === group.key &&
           p.suggest !== undefined &&
           !p.archived &&
-          !p.entryFrom &&
-          p.markets.includes(region.ticketMarkets.home),
+          !p.entryFrom,
       )
       .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
     const notCoveredBy = input.owned
@@ -602,7 +604,7 @@ export function suggestTickets(input: SuggestionInput): {
       }
       const alternatives = alternativesFor(
         catalog,
-        region.ticketMarkets.home,
+        product.id,
         group.key,
         chosen.visits,
         // A resort the visitor holds a ticket for needs no other offer.
@@ -633,13 +635,13 @@ export function suggestTickets(input: SuggestionInput): {
 }
 
 /**
- * The UK 14-day tickets on a long trip (named on a resort's first suggestion
- * only), and a promotion (sold in the US, with sale dates, never suggested
- * itself) that covers the same visits without extra days.
+ * The 14-day tickets on a long trip (named on a resort's first suggestion
+ * only, the suggested product left out), and a promotion (with sale dates,
+ * never suggested itself) that covers the same visits without extra days.
  */
 function alternativesFor(
   catalog: TicketProduct[],
-  home: string,
+  suggested: string,
   resort: string,
   visits: Visit[],
   tripDays: number,
@@ -648,13 +650,8 @@ function alternativesFor(
   const out: TicketAlternative[] = [];
   for (const p of catalog) {
     if (p.resort !== resort || p.pass || p.archived) continue;
-    if (p.days === "unlimited") continue;
-    if (
-      tripDays >= LONG_STAY_DAYS &&
-      !p.markets.includes(home) &&
-      p.days.min >= 14 &&
-      onSaleAt(p, start)
-    ) {
+    if (p.days === "unlimited" || p.id === suggested) continue;
+    if (tripDays >= LONG_STAY_DAYS && p.days.min >= 14 && onSaleAt(p, start)) {
       out.push({
         product: p.id,
         days: p.days.min,
@@ -663,12 +660,7 @@ function alternativesFor(
       });
       continue;
     }
-    if (
-      p.suggest === undefined &&
-      p.onSale &&
-      !p.entryFrom &&
-      p.markets.includes(home)
-    ) {
+    if (p.suggest === undefined && p.onSale && !p.entryFrom) {
       const fit = fitOf(p, visits);
       if (fit && fit.days !== "unlimited" && fit.extra === 0) {
         out.push({
