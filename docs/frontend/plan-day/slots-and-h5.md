@@ -12,6 +12,11 @@ is the pre-H5 one byte for byte (pinned by a spec against the old output), plus
 `composer` on composed rides. It ships off so the forward archive can score old
 and new composers side by side first (below).
 
+`PLAN_DAY_H5_MAX_LEAD_DAYS` (a whole number below 90; unset = 90) caps the lead H5 is **served**
+at, so it can go on for the leads the forward archive has already decided while the longer ones
+are still being measured (PAR-1331). Past the cap the old composer serves; the shadow capture
+keeps the full 90 days either way.
+
 ## What changes with the flag on
 
 1. **Composed hours come from the H5 profile.** The old composer

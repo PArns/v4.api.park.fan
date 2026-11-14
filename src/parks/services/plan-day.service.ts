@@ -300,6 +300,23 @@ export class PlanDayService {
    */
   private static readonly H5_MAX_LEAD_DAYS = 90;
 
+  /**
+   * The farthest lead the H5 composer is SERVED at: `PLAN_DAY_H5_MAX_LEAD_DAYS`
+   * when it is a whole number below {@link H5_MAX_LEAD_DAYS}, else that. It
+   * lets H5 go on for the leads the forward archive has already decided while
+   * the longer ones are still being measured (PAR-1331). The shadow capture
+   * keeps the full reach, or those leads would never be scored.
+   */
+  static h5ServedMaxLeadDays(): number {
+    const raw = process.env.PLAN_DAY_H5_MAX_LEAD_DAYS;
+    const cap = raw ? Number(raw) : NaN; // unset or "" is no cap, not 0
+    return Number.isInteger(cap) &&
+      cap >= 0 &&
+      cap < PlanDayService.H5_MAX_LEAD_DAYS
+      ? cap
+      : PlanDayService.H5_MAX_LEAD_DAYS;
+  }
+
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
     return this.build(park, dateStr, null);
   }
@@ -1093,7 +1110,7 @@ export class PlanDayService {
     const useH5 =
       PlanDayService.h5ComposerEnabled() &&
       this.h5ProfileService !== undefined &&
-      leadDays <= PlanDayService.H5_MAX_LEAD_DAYS;
+      leadDays <= PlanDayService.h5ServedMaxLeadDays();
     const [
       levels,
       downIds,
