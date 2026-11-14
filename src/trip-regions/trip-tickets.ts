@@ -30,6 +30,8 @@ import {
   type PlanTicket,
   type PlannedDay,
   type PlannedTicket,
+  type TicketCost,
+  type TicketVisit,
 } from "./trip-optimizer";
 import { hopPairs, type TripLeg } from "./travel";
 
@@ -380,10 +382,7 @@ export type DayTicket = Pick<
 >;
 
 /** A plan day's visits as a ticket sees them. */
-interface Visit {
-  date: string;
-  parks: string[];
-}
+type Visit = TicketVisit;
 
 /** The parks of a planned day's visits. */
 const parksOfDay = (d: PlannedDay): string[] => d.parks.map((p) => p.slug);
@@ -522,6 +521,49 @@ function chooseTickets(products: TicketProduct[], visits: Visit[]): Chosen[] {
   return out;
 }
 
+/** The products plan first suggests for a resort, in the catalog's order of suggestion. */
+function suggestedProducts(
+  region: RegionConfig,
+  resort: string,
+): TicketProduct[] {
+  // Whatever its market: a visitor buys from a shop abroad (a UK 14-day
+  // ticket) as readily as from the operator's own, and `markets` only says
+  // where a product is sold.
+  return ticketCatalog(region)
+    .filter(
+      (p) =>
+        p.resort === resort &&
+        p.suggest !== undefined &&
+        !p.archived &&
+        !p.entryFrom,
+    )
+    .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
+}
+
+/**
+ * What plan first's tickets for one resort's visits (in date order) come to,
+ * chosen as {@link suggestTickets} chooses them: the optimizer's spread may
+ * not make it dearer (`PlanInput.planFirstTickets`).
+ */
+export function planFirstTicketCost(
+  region: RegionConfig,
+  resort: string,
+  visits: TicketVisit[],
+): TicketCost {
+  const chosen = chooseTickets(suggestedProducts(region, resort), visits);
+  return {
+    uncovered:
+      visits.length - chosen.reduce((sum, c) => sum + c.visits.length, 0),
+    tickets: chosen.length,
+    days: chosen.reduce(
+      (sum, c) =>
+        sum + (c.fit.days === "unlimited" ? c.fit.dayUse : c.fit.days),
+      0,
+    ),
+    products: chosen.map((c) => `${c.product.id}:${c.fit.days}`).join(","),
+  };
+}
+
 /** What the suggestion needs from the plan route. */
 export interface SuggestionInput {
   region: RegionConfig;
@@ -567,18 +609,7 @@ export function suggestTickets(input: SuggestionInput): {
   for (const group of region.groups) {
     const visits = byResort.get(group.key);
     if (!visits) continue;
-    // Whatever its market: a visitor buys from a shop abroad (a UK 14-day
-    // ticket) as readily as from the operator's own, and `markets` only says
-    // where a product is sold.
-    const products = catalog
-      .filter(
-        (p) =>
-          p.resort === group.key &&
-          p.suggest !== undefined &&
-          !p.archived &&
-          !p.entryFrom,
-      )
-      .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
+    const products = suggestedProducts(region, group.key);
     const notCoveredBy = input.owned
       .filter((o) => productOf(region, o.product)?.resort === group.key)
       .map((o) => o.id);

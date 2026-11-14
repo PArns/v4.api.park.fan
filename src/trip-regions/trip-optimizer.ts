@@ -364,6 +364,39 @@ export interface PlanTicket {
   validDays?: TicketDayKind[];
 }
 
+/** A plan-first visit as a ticket sees it: its date and its parks. */
+export interface TicketVisit {
+  date: string;
+  parks: string[];
+}
+
+/**
+ * Plan first's tickets for one resort's visits: visits no product covers,
+ * how many tickets, their days, and which (`product:days`, in order).
+ */
+export interface TicketCost {
+  uncovered: number;
+  tickets: number;
+  days: number;
+  products: string;
+}
+
+/**
+ * Whether one resort's tickets are no dearer than another's: none of the
+ * counts higher, and the same products where none is lower.
+ */
+function noDearer(a: TicketCost, b: TicketCost): boolean {
+  if (a.uncovered > b.uncovered || a.tickets > b.tickets || a.days > b.days) {
+    return false;
+  }
+  return (
+    a.uncovered < b.uncovered ||
+    a.tickets < b.tickets ||
+    a.days < b.days ||
+    a.products === b.products
+  );
+}
+
 export interface PlanInput {
   days: PlanDayInfo[];
   parks: PlanPark[];
@@ -372,6 +405,12 @@ export interface PlanInput {
    * planned, only priced on the plan's spare days ({@link OptimizedPlan.spareDayParks}).
    */
   candidates?: PlanPark[];
+  /**
+   * What plan first's tickets for one resort's visits come to
+   * (`trip-tickets.ts`), which the spread may not make dearer. Absent: the
+   * spread does not look at tickets (the specs of the optimizer alone).
+   */
+  planFirstTickets?: (resort: string, visits: TicketVisit[]) => TicketCost;
   /** cells[slug][date]; a missing cell reads as UNKNOWN. */
   cells: Record<string, Record<string, PlanCell>>;
   options: PlanOptions;
@@ -2896,13 +2935,18 @@ class TripOptimizer {
    * Among the placements that tie the cheapest, the one that spreads the
    * park days best ({@link spreadScore}), then the cheaper. A placement ties
    * when it keeps the structure's rules (its masks, locks and the streak
-   * `limit`), costs less than `ceiling` (the cheapest plus the stays' tie
-   * band, {@link stayTieBand}), and puts no visit on a day more than
+   * `limit`; an owned ticket's window is a mask, so no visit leaves it),
+   * costs less than `ceiling` (the cheapest plus the stays' tie band,
+   * {@link stayTieBand}), and puts no visit on a day more than
    * `runnerUpMinutes` dearer than the day `start` gave it, a park's visits
    * compared cheapest with cheapest: a clearly better day is never given up
-   * for the spread. Moves of a visit to a free day and swaps of two, the
-   * best of each round, while one improves. Without it, on the flat days of
-   * a long trip (last year's measured waits) the visits stay wherever the
+   * for the spread. Nor is a ticket day: each resort's plan-first tickets
+   * ({@link PlanInput.planFirstTickets}) stay as they are or get cheaper,
+   * and fewer ticket days, then fewer tickets, come before the spread, so a
+   * consecutive ticket keeps its park days together rather than paying for a
+   * rest day. Moves of a visit to a free day and swaps of two, the best of
+   * each round, while one improves. Without it, on the flat days of a long
+   * trip (last year's measured waits) the visits stay wherever the
    * assignment happened to put them, a week of rest between two park days.
    */
   private spreadDays(
@@ -2940,9 +2984,17 @@ class TripOptimizer {
         (c) => c + PlanCostModel.runnerUpMinutes + 1e-9,
       ),
     }));
+    const ticketsOf = this.planFirstTicketsOf(rows);
     const ties = (objective: number) =>
       objective < ceiling - 1e-9 || objective <= start.objective + 1e-9;
-    const evaluate = (dayOf: number[]) => {
+    type Placement = {
+      solution: Solution;
+      score: number;
+      tickets: Map<string, TicketCost>;
+    };
+    const total = (p: Placement, key: "days" | "tickets") =>
+      [...p.tickets.values()].reduce((sum, t) => sum + t[key], 0);
+    const evaluate = (dayOf: number[], than: Placement): Placement | null => {
       const base = dayOf.reduce((s, day, r) => s + costAt(r, day), fixedCost);
       if (!ties(base)) return null;
       const objective =
@@ -2954,21 +3006,26 @@ class TripOptimizer {
         if (costs.some((c, k) => !(c <= cap[k]))) return null;
       }
       if (longestRun(this.parkDayFlags(dayOf)) > limit) return null;
+      const tickets = ticketsOf(dayOf);
+      for (const [resort, cost] of tickets) {
+        const before = than.tickets.get(resort);
+        if (before && !noDearer(cost, before)) return null;
+      }
       return {
         solution: { dayOf, base, objective },
         score: this.spreadScore(rows, dayOf),
+        tickets,
       };
     };
-    const better = (
-      a: { solution: Solution; score: number },
-      b: { solution: Solution; score: number },
-    ) =>
-      a.score < b.score ||
-      (a.score === b.score &&
-        a.solution.objective < b.solution.objective - 1e-9);
-    let current = {
+    const better = (a: Placement, b: Placement) =>
+      total(a, "days") - total(b, "days") ||
+      total(a, "tickets") - total(b, "tickets") ||
+      a.score - b.score ||
+      (a.solution.objective < b.solution.objective - 1e-9 ? -1 : 0);
+    let current: Placement = {
       solution: start,
       score: this.spreadScore(rows, start.dayOf),
+      tickets: ticketsOf(start.dayOf),
     };
     for (let round = 0; round < SPREAD_ROUNDS; round++) {
       const taken = new Set(current.solution.dayOf);
@@ -2989,13 +3046,54 @@ class TripOptimizer {
       }
       let next = current;
       for (const dayOf of candidates) {
-        const found = evaluate(dayOf);
-        if (found && better(found, next)) next = found;
+        const found = evaluate(dayOf, current);
+        if (found && better(found, next) < 0) next = found;
       }
       if (next === current) break;
       current = next;
     }
     return current.solution;
+  }
+
+  /**
+   * Plan first's tickets per resort under a placement: the visits no owned
+   * ticket covers, by their park's group (the resort a suggestion is made
+   * for), priced by {@link PlanInput.planFirstTickets}; each resort's visits
+   * priced once. Empty without the pricing.
+   */
+  private planFirstTicketsOf(
+    rows: Row[],
+  ): (dayOf: number[]) => Map<string, TicketCost> {
+    const price = this.input.planFirstTickets;
+    const planFirst = rows
+      .map((row, r) => (row.units[0].ticket === undefined ? r : -1))
+      .filter((r) => r >= 0);
+    if (!price || planFirst.length === 0) return () => new Map();
+    const seen = new Map<string, TicketCost>();
+    return (dayOf) => {
+      const byResort = new Map<string, TicketVisit[]>();
+      for (const r of [...planFirst].sort((a, b) => dayOf[a] - dayOf[b])) {
+        const resort = this.rowGroup(rows[r]);
+        byResort.set(resort, [
+          ...(byResort.get(resort) ?? []),
+          {
+            date: this.dates[dayOf[r]],
+            parks: rows[r].units.map((u) => u.slug),
+          },
+        ]);
+      }
+      const out = new Map<string, TicketCost>();
+      for (const [resort, visits] of byResort) {
+        const key = `${resort}|${visits.map((v) => `${v.date}:${v.parks.join("+")}`).join(",")}`;
+        let cost = seen.get(key);
+        if (!cost) {
+          cost = price(resort, visits);
+          seen.set(key, cost);
+        }
+        out.set(resort, cost);
+      }
+      return out;
+    };
   }
 
   // ── the answer ────────────────────────────────────────────────────────────

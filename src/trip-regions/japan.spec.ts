@@ -188,6 +188,11 @@ describe("Japan", () => {
       ]);
       // The same waits as the cheapest plan: TDS 70 and 100, TDL 60 twice.
       expect(answer.totals).toMatchObject({ headlinerWait: 78, parkDays: 6 });
+      // Dated 1-day passports: no ticket to keep the days together for.
+      expect(answer.meta.ticketSuggestion?.map((t) => t.product)).toEqual([
+        ...Array<string>(4).fill("tdr-1-day-passport"),
+        ...Array<string>(2).fill("usj-1-day-studio-pass"),
+      ]);
     });
 
     it("calls its rest days spare and names the parks that fit them", () => {
