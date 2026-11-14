@@ -50,6 +50,9 @@ const PLAN_NAMES = [
   "tickets",
   "hopper",
   "lock",
+  "bases",
+  "startBase",
+  "endBase",
 ] as const;
 
 /** The order the planner writes its names in, kept so a changed query reads like the page's. */
@@ -62,6 +65,9 @@ const WRITE_ORDER = [
   "parks",
   "hotel",
   "area",
+  "bases",
+  "startBase",
+  "endBase",
   "arrival",
   "departure",
   "blocks",
@@ -236,6 +242,7 @@ export function tripLine(trip: VisitorTrip): string {
   if (p.get("lock")) parts.push(`pinned ${p.get("lock")?.replace(/,/g, ", ")}`);
   if (p.get("hotel")) parts.push(`hotel ${p.get("hotel")}`);
   if (p.get("area")) parts.push(`staying in ${p.get("area")}`);
+  if (p.get("bases")) parts.push(`stays ${p.get("bases")}`);
   if (p.get("tickets")) parts.push(`tickets held ${p.get("tickets")}`);
   if (p.get("hopper") || p.get("ticket") === "hopper") {
     parts.push(`hopper ${p.get("hopper") ?? "every resort"}`);

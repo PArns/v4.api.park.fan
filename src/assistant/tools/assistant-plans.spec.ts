@@ -95,6 +95,23 @@ describe("the trip planner's state", () => {
     });
   });
 
+  it("keeps a region's stays through a change, untouched", () => {
+    const { params } = changeTripParams(
+      tripParams(
+        "from=2027-04-01&to=2027-04-10&bases=tokyo:4,osaka:5&startBase=tokyo",
+      ),
+      { rest: "none" },
+      { headliners: [] },
+    );
+    expect(writeTripQuery(params)).toBe(
+      "from=2027-04-01&to=2027-04-10&bases=tokyo:4,osaka:5&startBase=tokyo&rest=none",
+    );
+    expect(planQueryOf(params)).toMatchObject({
+      bases: "tokyo:4,osaka:5",
+      startBase: "tokyo",
+    });
+  });
+
   it("splits the plan's query from a date search", () => {
     const planned = tripParams(
       "from=2027-10-14&to=2027-10-21&hotel=disney&when=2027-01-01_2027-12-31",
