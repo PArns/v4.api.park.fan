@@ -14,6 +14,7 @@
  * contract and how the plan reads each field: docs/frontend/trip-regions.md#tickets.
  */
 import { TICKET_SEED_LINKS, type SeedLinkEntry } from "./ticket-seed-links";
+import { PARIS_TICKETS } from "./tickets-paris";
 import { SOUTHERN_CALIFORNIA_TICKETS } from "./tickets-southern-california";
 
 /**
@@ -864,6 +865,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
 export const TICKET_CATALOGS: Record<string, TicketProduct[]> = {
   orlando: ORLANDO_TICKETS,
   "southern-california": SOUTHERN_CALIFORNIA_TICKETS,
+  paris: PARIS_TICKETS,
 };
 
 /** A region's seed catalog: the products the table starts from; empty without one. */

@@ -1491,9 +1491,369 @@ export const SOUTHERN_CALIFORNIA: RegionConfig = {
   ],
 };
 
+// ── Paris (PAR-1296) ────────────────────────────────────────────────────────
+// Researched 2026-11-13: Disneyland Paris' press site and media PDFs (its main
+// site sends scripts to a waiting room, so its rules are read through the
+// search index), parcasterix.fr, OpenStreetMap and our own data. Disney
+// Adventure World is Walt Disney Studios Park renamed when it reopened on
+// 29 March 2026. Parc Astérix is a resort of its own (owner's decision,
+// 2026-11-14): a full-size park with its own hotels.
+
+const FRANCE = { continent: "europe", country: "france" } as const;
+
+/**
+ * Paris' heat thresholds, set as Orlando's were at the region's climate park:
+ * Disneyland Park's 2015–2024 daily normals (ERA5, measured 2026-11-14) top
+ * out at 26.8 °C on 21 July, and the top fifth of its June–October normals
+ * starts at 24.9 °C. A forecast counts from 30 °C (the highest normal plus
+ * Orlando's margin of about 3 °C; Météo-France's Paris-Montsouris station
+ * counts 14 days a year at or above it, 1991–2020), a normal from 25 °C.
+ */
+export const PARIS_HEAT: HeatModelConfig = {
+  forecastFromC: 30,
+  normalFromC: 25,
+  perDegree: 0.08,
+  normalWeight: 0.5,
+  cap: 1.4,
+};
+
+const DISNEYLAND_PARIS_PARKS = ["disneyland-park", "disney-adventure-world"];
+
+/**
+ * Extra Magic Time: an hour before opening ("usually 1 extra hour", Disney's
+ * FAQ as the search index quotes it) for the guests of every Disney Hotel,
+ * Davy Crockett Ranch included. Disney says which park and how long "may
+ * vary", so it counts only on a day the feed carries the slot; the feed has it
+ * at both parks on every day from 1 September 2026. Disneyland Pass Gold
+ * holders and Les Villages Nature package guests get it too: a ticket's or a
+ * package's perk, which a hotel kind cannot carry, so it is left out for them.
+ */
+const EXTRA_MAGIC_TIME: PerkRule = {
+  perk: "extra_magic_time",
+  parks: DISNEYLAND_PARIS_PARKS,
+  needs: "early",
+  share: 0.05,
+};
+
+/**
+ * Parc Astérix's hotels: a stay includes "Early Entry: access to certain park
+ * attractions 30 minutes earlier", subject to the weather and never on Peur
+ * sur le Parc nocturne days, special days or Christmas-tree events
+ * (parcasterix.fr/hotels, read 2026-11-14). Our feed carries no early slot for
+ * the park, so it counts on no day until it does; the region route lists it.
+ */
+const PARC_ASTERIX_EARLY_ENTRY: PerkRule = {
+  perk: "early_entry",
+  parks: ["parc-asterix"],
+  needs: "early",
+  share: 0.05,
+};
+
+/** The guest car park both Disney parks share; travelators lead past Disney Village to the gates. */
+const DISNEYLAND_PARIS_CAR_PARK = {
+  latitude: 48.8753,
+  longitude: 2.7877,
+  note: "Disneyland Paris guest car park off the A4 (exit 14), shared by both parks; travelators lead past Disney Village to the two gates, which face each other",
+};
+
+/** Disney's partner hotels run a free shuttle from the Chessy bus station. */
+const PARTNER_SHUTTLE: TransportAlternative = {
+  mode: "shuttle",
+  name: "Disneyland Paris partner-hotel shuttle",
+};
+
+/**
+ * RER A from Châtelet–Les Halles: "a 40-minute journey" to Marne-la-Vallée–
+ * Chessy, "just a 2-minute walk from the entrance" (Disney's press, September
+ * 2026); 45 with the wait for the train.
+ */
+const RER_A_FROM_PARIS: TransportAlternative = {
+  mode: "rail",
+  minutes: 45,
+  name: "RER A",
+  via: "chatelet_les_halles",
+};
+
+/** One RER A stop from Val d'Europe; 15 with the wait, the trains run every 10 to 15 minutes. */
+const RER_A_FROM_VAL_D_EUROPE: TransportAlternative = {
+  mode: "rail",
+  minutes: 15,
+  name: "RER A",
+  via: "val_d_europe_station",
+};
+
+/** Paris legs for both Disney parks alike. */
+function bothDisneyParks(
+  from: string,
+  leg: Omit<CuratedLeg, "from" | "to">,
+): CuratedLeg[] {
+  return DISNEYLAND_PARIS_PARKS.map((to) => ({ from, to, ...leg }));
+}
+
+export const PARIS: RegionConfig = {
+  slug: "paris",
+  name: "Paris",
+  timezone: "Europe/Paris",
+  // No storm season: summer thunderstorms pause rides for hours, not a season.
+  weather: { heat: PARIS_HEAT, climatePark: "disneyland-park" },
+  travel: { source: "osrm" },
+  // Every product is sold to anyone at the operators' own shops (`eu`, priced
+  // in euros); `intl`: by sellers abroad as well.
+  ticketMarkets: { home: "eu", codes: ["eu", "intl"] },
+  perkNames: {
+    extra_magic_time: "Extra Magic Time",
+    early_entry: "Early Entry",
+  },
+  hotelNames: {
+    disney:
+      "a Disneyland Paris hotel (the Disney Hotels, Davy Crockett Ranch included)",
+    parc_asterix:
+      "a Parc Astérix hotel (Les Trois Hiboux, La Cité Suspendue, Les Quais de Lutèce)",
+    offsite: "any other hotel, Disneyland Paris' partner hotels included",
+  },
+  groups: [
+    {
+      key: "disneyland-paris",
+      name: "Disneyland Paris",
+      kind: "resort",
+      earlyKind: "extra_magic_time",
+    },
+    {
+      key: "parc-asterix",
+      name: "Parc Astérix",
+      kind: "resort",
+      earlyKind: "early_entry",
+    },
+  ],
+  parks: [
+    {
+      // The slug repeats Anaheim's Disneyland Park: the path (city `paris`,
+      // where our data files both Disney parks) tells them apart.
+      slug: "disneyland-park",
+      ...FRANCE,
+      city: "paris",
+      group: "disneyland-paris",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 1,
+      carPark: DISNEYLAND_PARIS_CAR_PARK,
+      transfer: { via: "walk", minutes: 15 },
+    },
+    {
+      slug: "disney-adventure-world",
+      ...FRANCE,
+      city: "paris",
+      group: "disneyland-paris",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 2,
+      carPark: DISNEYLAND_PARIS_CAR_PARK,
+      transfer: { via: "walk", minutes: 15 },
+    },
+    {
+      slug: "parc-asterix",
+      ...FRANCE,
+      city: "plailly",
+      group: "parc-asterix",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 3,
+      carPark: {
+        latitude: 49.1375,
+        longitude: 2.5735,
+        note: "visitor car park beside the entrance, A1 exit 'Parc Astérix' between exits 7 and 8, Plailly",
+      },
+    },
+  ],
+  venues: [
+    {
+      key: "disney-village",
+      name: "Disney Village",
+      group: "disneyland-paris",
+      kind: "district",
+      latitude: 48.8682,
+      longitude: 2.7847,
+      free: true,
+      url: "https://www.disneylandparis.com/en-usd/destinations/disney-village",
+      notes:
+        "restaurants, bars, shops and a cinema between the station, the parks and Lake Disney; open daily from about 08:00 until late (no published closing time); entry free except on some dates with a special show; parking paid",
+      highlights: ["dining", "shopping"],
+    },
+  ],
+  hopperSets: [DISNEYLAND_PARIS_PARKS],
+  // The paid reserved viewing areas our data lists beside each show are
+  // seats, not shows. Parc Astérix has no nighttime spectacular outside its
+  // ticketed Halloween nights.
+  nightShows: {
+    "disneyland-park": [
+      {
+        slug: "disney-tales-of-magic",
+        name: "Disney Tales of Magic",
+        kind: "fireworks",
+      },
+    ],
+    "disney-adventure-world": [
+      {
+        slug: "disney-cascade-of-lights",
+        name: "Disney Cascade of Lights",
+        kind: "night_show",
+      },
+    ],
+  },
+  hotelAreas: [
+    {
+      key: "disney_lake",
+      name: "Disney hotels by Lake Disney",
+      latitude: 48.8705,
+      longitude: 2.7884,
+      hotel: "disney",
+      note: "Disney Hotel New York – The Art of Marvel; the Disneyland Hotel, Newport Bay Club and Sequoia Lodge are within 5-15 minutes' walk of the parks",
+    },
+    {
+      key: "disney_cheyenne_santa_fe",
+      name: "Disney Hotel Cheyenne and Santa Fe",
+      latitude: 48.8738,
+      longitude: 2.794,
+      hotel: "disney",
+      note: "between the two hotels; 20 minutes' walk or the free Disney Hotels shuttle",
+    },
+    {
+      key: "disney_davy_crockett",
+      name: "Disney Davy Crockett Ranch",
+      latitude: 48.8339,
+      longitude: 2.8204,
+      hotel: "disney",
+      note: "a forest cabin resort in Bailly-Romainvilliers; about 15 minutes by car, no shuttle",
+    },
+    {
+      key: "val_d_europe",
+      name: "Val d'Europe",
+      latitude: 48.8551,
+      longitude: 2.7739,
+      hotel: "offsite",
+      note: "Val d'Europe RER A station in Serris, by Hôtel l'Elysée, Adagio, Relais Spa and Staycity; one RER stop or the partner-hotel shuttle to the parks",
+    },
+    {
+      key: "val_de_france",
+      name: "Val de France, Magny-le-Hongre",
+      latitude: 48.8745,
+      longitude: 2.8075,
+      hotel: "offsite",
+      note: "Explorers, Dream Castle, Magic Circus, B&B and Campanile Val de France; free partner-hotel shuttle",
+    },
+    {
+      key: "paris_center",
+      name: "Central Paris",
+      latitude: 48.8616,
+      longitude: 2.347,
+      hotel: "offsite",
+      note: "Châtelet–Les Halles, on RER A to Marne-la-Vallée–Chessy and RER B to the Parc Astérix shuttle at the airport",
+    },
+    {
+      key: "parc_asterix",
+      name: "Parc Astérix hotels",
+      latitude: 49.1298,
+      longitude: 2.571,
+      hotel: "parc_asterix",
+      note: "Les Trois Hiboux, La Cité Suspendue and Les Quais de Lutèce in the woods south of the park, a walk from the gate; the point is the Trois Hiboux quarter between them. L'Odyssée opens on 26 March 2027",
+    },
+  ],
+  perks: {
+    disney: [EXTRA_MAGIC_TIME],
+    parc_asterix: [PARC_ASTERIX_EARLY_ENTRY],
+    offsite: [],
+  },
+  legs: [
+    {
+      // The gates face each other across the entrance plaza; both parks share
+      // the car park, so OSRM answers no drive.
+      from: "disneyland-park",
+      to: "disney-adventure-world",
+      primary: { mode: "walk", minutes: 5, km: 0.3 },
+      alternatives: [{ mode: "walk", minutes: 5, via: "entrance_plaza" }],
+    },
+    // Disney gives the lake hotels as 5 to 15 minutes' walk from the parks;
+    // the area counts the far end.
+    ...bothDisneyParks("hotel:disney_lake", {
+      primary: { mode: "walk", minutes: 15 },
+      alternatives: [{ mode: "walk", minutes: 15 }],
+    }),
+    ...bothDisneyParks("hotel:disney_cheyenne_santa_fe", {
+      primary: { mode: "walk", minutes: 20 },
+      alternatives: [
+        { mode: "walk", minutes: 20 },
+        { mode: "shuttle", name: "Disney Hotels shuttle" },
+      ],
+    }),
+    ...bothDisneyParks("hotel:val_d_europe", {
+      primary: { ...RER_A_FROM_VAL_D_EUROPE, minutes: 15 },
+      alternatives: [RER_A_FROM_VAL_D_EUROPE, PARTNER_SHUTTLE],
+    }),
+    ...bothDisneyParks("hotel:val_de_france", {
+      alternatives: [PARTNER_SHUTTLE],
+    }),
+    ...bothDisneyParks("hotel:paris_center", {
+      primary: { ...RER_A_FROM_PARIS, minutes: 45 },
+      alternatives: [
+        RER_A_FROM_PARIS,
+        { mode: "highway_bus", name: "Disneyland Paris Express" },
+      ],
+    }),
+    ...bothDisneyParks("venue:disney-village", {
+      primary: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    }),
+    {
+      // RER B to Aéroport Charles de Gaulle 1, then the park's shuttle from
+      // Roissypôle (quai A3), every 15 to 30 minutes on every open day, booked
+      // by the day before (parcasterix.fr/offres/navette, read 2026-11-14).
+      // The Paris City Vision coach leaves the Pullman Paris Tour Eiffel at
+      // 09:00, so its time of day, not its minutes, decides.
+      from: "hotel:paris_center",
+      to: "parc-asterix",
+      alternatives: [
+        {
+          mode: "rail",
+          minutes: 75,
+          name: "RER B and the Parc Astérix shuttle",
+          via: "roissypole",
+        },
+        {
+          mode: "highway_bus",
+          name: "Paris City Vision coach",
+          via: "pullman_tour_eiffel",
+        },
+      ],
+    },
+    // No coach runs from the Disney parks to Parc Astérix that we could
+    // verify; by rail it is the TGV from Marne-la-Vallée–Chessy to Aéroport
+    // CDG 2, then the park's shuttle, timetable-bound, so no minutes.
+    ...DISNEYLAND_PARIS_PARKS.map((from) => ({
+      from,
+      to: "parc-asterix",
+      alternatives: [
+        {
+          mode: "rail" as const,
+          name: "TGV to Aéroport CDG 2, then the Parc Astérix shuttle",
+          via: "roissypole",
+        },
+      ],
+    })),
+    {
+      // The park says its hotels have "walking access to the park" without a
+      // time; 15 minutes stands for the 0.9 km to the entrance, rounded up.
+      from: "hotel:parc_asterix",
+      to: "parc-asterix",
+      primary: { mode: "walk", minutes: 15 },
+      alternatives: [{ mode: "walk", minutes: 15 }],
+    },
+  ],
+};
+
 export const TRIP_REGIONS: Record<string, RegionConfig> = {
   [ORLANDO.slug]: ORLANDO,
   [SOUTHERN_CALIFORNIA.slug]: SOUTHERN_CALIFORNIA,
+  [PARIS.slug]: PARIS,
 };
 
 /** The region a slug names, or null. */
