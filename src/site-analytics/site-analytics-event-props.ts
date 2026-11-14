@@ -8,6 +8,7 @@ import {
   type SiteAnalyticsWindow,
 } from "./site-analytics.query";
 import type { SiteReportRunner } from "./site-analytics-report-runner";
+import { byCountDesc } from "./site-analytics.query";
 
 /** One event's count for one combination of its properties, optionally per period and page type. */
 export interface EventPropRow {
@@ -111,4 +112,110 @@ export async function firstDayOf(
     [names, NAME_CUBOID],
   );
   return row?.first ?? null;
+}
+
+/**
+ * A breakdown over event rows: the events it counts, the properties that
+ * name a row, and the values the rows must have (`*`: any but empty) or must
+ * not have. The event reports declare theirs as data, so a new event is one
+ * line.
+ */
+export interface EventListSpec {
+  events: readonly string[];
+  props: readonly string[];
+  where?: Readonly<Record<string, string | readonly string[]>>;
+  not?: Readonly<Record<string, string>>;
+}
+
+/** Whether a row is one of a spec's events with the property values it asks for. */
+export function matchesSpec(
+  spec: EventListSpec,
+  row: Pick<EventPropRow, "name" | "props">,
+): boolean {
+  if (!spec.events.includes(row.name)) return false;
+  for (const [prop, wanted] of Object.entries(spec.where ?? {})) {
+    const value = row.props[prop] ?? "";
+    const ok =
+      wanted === "*"
+        ? value !== ""
+        : ([] as string[]).concat(wanted).includes(value);
+    if (!ok) return false;
+  }
+  for (const [prop, unwanted] of Object.entries(spec.not ?? {})) {
+    if ((row.props[prop] ?? "") === unwanted) return false;
+  }
+  return true;
+}
+
+/** The label of an empty property value in a breakdown. */
+export const NO_VALUE = "(none)";
+
+/** The key a breakdown counts a row under: its values of `props`, empty ones `(none)`. */
+export function tallyKey(
+  row: Pick<EventPropRow, "props">,
+  props: readonly string[],
+): string {
+  return JSON.stringify(props.map((p) => row.props[p] || NO_VALUE));
+}
+
+/** A breakdown's counts by {@link tallyKey} as rows named by their properties, most first. */
+export function tallyRows(
+  counts: ReadonlyMap<string, number> | undefined,
+  props: readonly string[],
+): Array<Record<string, string> & { count: number }> {
+  return byCountDesc(
+    [...(counts ?? new Map<string, number>())].map(([k, count]) => {
+      const values = JSON.parse(k) as string[];
+      const row = {
+        ...Object.fromEntries(props.map((p, i) => [p, values[i]])),
+        count,
+      } as Record<string, string> & { count: number };
+      return { k, row };
+    }),
+    (entry) => entry.row.count,
+    (entry) => entry.k,
+  ).map((entry) => entry.row);
+}
+
+/** Every breakdown of `specs` over the rows. */
+export function tallyLists<K extends string>(
+  rows: readonly Pick<EventPropRow, "name" | "props" | "count">[],
+  specs: Readonly<Record<K, EventListSpec>>,
+): Record<K, Array<Record<string, string> & { count: number }>> {
+  const counts = new Map<K, Map<string, number>>();
+  for (const row of rows) {
+    for (const [key, spec] of Object.entries(specs) as Array<
+      [K, EventListSpec]
+    >) {
+      if (!matchesSpec(spec, row)) continue;
+      const k = tallyKey(row, spec.props);
+      const tally = counts.get(key) ?? new Map<string, number>();
+      tally.set(k, (tally.get(k) ?? 0) + row.count);
+      counts.set(key, tally);
+    }
+  }
+  return Object.fromEntries(
+    (Object.entries(specs) as Array<[K, EventListSpec]>).map(([key, spec]) => [
+      key,
+      tallyRows(counts.get(key), spec.props),
+    ]),
+  ) as Record<K, Array<Record<string, string> & { count: number }>>;
+}
+
+/** Every total of `specs` over the rows: the count of the rows each matches. */
+export function tallyTotals<K extends string>(
+  rows: readonly Pick<EventPropRow, "name" | "props" | "count">[],
+  specs: Readonly<Record<K, EventListSpec>>,
+): Record<K, number> {
+  const totals = Object.fromEntries(
+    Object.keys(specs).map((key) => [key, 0]),
+  ) as Record<K, number>;
+  for (const row of rows) {
+    for (const [key, spec] of Object.entries(specs) as Array<
+      [K, EventListSpec]
+    >) {
+      if (matchesSpec(spec, row)) totals[key] += row.count;
+    }
+  }
+  return totals;
 }

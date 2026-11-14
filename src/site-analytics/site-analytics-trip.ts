@@ -1,5 +1,12 @@
 import { OVERFLOW_VALUE } from "./site-analytics.constants";
 import { byCountDesc } from "./site-analytics.query";
+import {
+  NO_VALUE,
+  matchesSpec as matches,
+  tallyKey,
+  tallyRows,
+  type EventListSpec as ListSpec,
+} from "./site-analytics-event-props";
 
 /**
  * The trip planner's events, as the frontend sends them (`trackTripEvent` in
@@ -107,9 +114,6 @@ function countsFor(
   return true;
 }
 
-/** The label of an empty property value. */
-const NONE = "(none)";
-
 /** One event's count for one combination of its properties, on a UTC day and page type. */
 export interface TripEventRow {
   name: string;
@@ -118,19 +122,6 @@ export interface TripEventRow {
   /** The row's UTC day; absent: before every cut-over. */
   day?: string;
   pageType?: string;
-}
-
-/**
- * A breakdown: the events it counts, the properties that name a row, and
- * the values the rows must have (`*` any but empty). Declared here so a new
- * event is one line.
- */
-interface ListSpec {
-  events: readonly string[];
-  props: readonly string[];
-  where?: Readonly<Record<string, string | readonly string[]>>;
-  /** The values that must not be there. */
-  not?: Readonly<Record<string, string>>;
 }
 
 export const TRIP_LISTS = {
@@ -281,23 +272,6 @@ export const TRIP_TOTALS = {
 export type TripTotalKey = keyof typeof TRIP_TOTALS | "unattributedTicketLinks";
 export type TripTotals = Record<TripTotalKey, number>;
 
-/** Whether a row matches a spec's event and property values. */
-function matches(spec: ListSpec, row: TripEventRow): boolean {
-  if (!spec.events.includes(row.name)) return false;
-  for (const [prop, wanted] of Object.entries(spec.where ?? {})) {
-    const value = row.props[prop] ?? "";
-    const ok =
-      wanted === "*"
-        ? value !== ""
-        : ([] as string[]).concat(wanted).includes(value);
-    if (!ok) return false;
-  }
-  for (const [prop, unwanted] of Object.entries(spec.not ?? {})) {
-    if ((row.props[prop] ?? "") === unwanted) return false;
-  }
-  return true;
-}
-
 export interface ValueCount {
   value: string;
   count: number;
@@ -434,7 +408,7 @@ export function tripPlannerFigures(
       [TripListKey, ListSpec]
     >) {
       if (!matches(spec, row)) continue;
-      const k = JSON.stringify(spec.props.map((p) => row.props[p] || NONE));
+      const k = tallyKey(row, spec.props);
       const tally = lists.get(key) ?? new Map<string, number>();
       tally.set(k, (tally.get(k) ?? 0) + n);
       lists.set(key, tally);
@@ -446,7 +420,7 @@ export function tripPlannerFigures(
         row.name === E.planShown)
     ) {
       const page = byPage.get(row.pageType) ?? {
-        pageType: row.pageType || NONE,
+        pageType: row.pageType || NO_VALUE,
         datesPicked: 0,
         planRequested: 0,
         planShown: 0,
@@ -481,25 +455,7 @@ export function tripPlannerFigures(
     ),
     lists: Object.fromEntries(
       (Object.entries(TRIP_LISTS) as Array<[TripListKey, ListSpec]>).map(
-        ([key, spec]) => [
-          key,
-          byCountDesc(
-            [...(lists.get(key) ?? new Map<string, number>())].map(
-              ([k, count]) => {
-                const values = JSON.parse(k) as string[];
-                const row = {
-                  ...Object.fromEntries(
-                    spec.props.map((p, i) => [p, values[i]]),
-                  ),
-                  count,
-                } as Record<string, string> & { count: number };
-                return { k, row };
-              },
-            ),
-            (entry) => entry.row.count,
-            (entry) => entry.k,
-          ).map((entry) => entry.row),
-        ],
+        ([key, spec]) => [key, tallyRows(lists.get(key), spec.props)],
       ),
     ) as TripPlannerFigures["lists"],
   };
