@@ -13,7 +13,9 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   waits, which come from `MLService.getServingDailyPredictions`: TFT for days 1–60 (`tftDays`)
   wherever it covers the ride, CatBoost beyond and for any ride-day TFT lacks. That merge is for
   serving only; the prediction writer stores pure CatBoost. A headliner in a curated maintenance or
-  works window on that day is not in the average (`withoutRidesInMaintenance`).
+  works window on that day is not in the average (`withoutRidesInMaintenance`). With
+  `CALENDAR_SEASON_FILTER=true` (default off, PAR-1326) neither is a headliner whose season months
+  or bound park season rule the day out (`withoutRidesOutOfSeason`, the rule `/plan/day` applies).
 - **Point-in-time and live signals use ratio-vs-P50.** `calculateParkOccupancy` is
   `Σ latest_wait ÷ Σ attraction_p50 × 100` over headliners reporting in the last 60 min
   (`getHeadlinerLoad`), falling back to `avg(latest) ÷ park_p50` without per-ride baselines. The
