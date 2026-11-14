@@ -138,6 +138,17 @@ export class TripPlanQueryDto {
   @Matches(/^[a-z0-9-]+$/, { message: "endBase must be a base key" })
   endBase?: string;
 
+  @ApiPropertyOptional({
+    description:
+      "A region with bases: the minutes a hotel change costs on top of the train (check-out, luggage, check-in). " +
+      "30 fits bags sent ahead by courier; more is a slower pace. Defaults to the region's `stayRules.moveOverheadMinutes`.",
+    enum: [30, 60, 90, 120],
+  })
+  @IsOptional()
+  @IsInt()
+  @IsIn([30, 60, 90, 120])
+  moveBuffer?: number;
+
   @ApiPropertyOptional({ enum: ["free", "park"], default: "free" })
   @IsOptional()
   @IsIn(["free", "park"])

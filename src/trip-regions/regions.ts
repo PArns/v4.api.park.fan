@@ -381,6 +381,13 @@ export interface StayRulesConfig {
   lastArrivalAt: string;
 }
 
+/**
+ * The move buffers a visitor may choose (`moveBuffer=`), in minutes on top of the train: 30 when
+ * the bags travel ahead by courier, more for a slower pace or bags carried along. A short list,
+ * so the plans stay cacheable.
+ */
+export const MOVE_BUFFER_OPTIONS = [30, 60, 90, 120] as const;
+
 /** The stay rules a region leaves unset (owner-approved starting values, PAR-1302). */
 export const DEFAULT_STAY_RULES: StayRulesConfig = {
   dayTripFreeMinutes: 45,
