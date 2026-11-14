@@ -35,3 +35,30 @@ def test_grid_panel_counts_observed_days_not_rows():
     mask = {"gappy": [0, 0, 1, 0], "ok": [1, 0, 1, 0]}
     out = forecast.fit_frame(_panel({"gappy": 4, "ok": 4}, mask))
     assert list(out["unique_id"].unique()) == ["ok"]
+
+
+def test_static_rows_follow_the_fit_frame():
+    # NeuralForecast pairs static rows with series by position (PAR-1327): a row
+    # for the dropped one-day series "b" would hand "c" the country of "b".
+    panel = _panel({"a": 30, "b": 1, "c": 30})
+    meta = pd.DataFrame({
+        "unique_id": ["a", "b", "c"],
+        "country": ["DE", "US", "FR"],
+        "region": [None, None, None],
+    })
+    static_df, _ = forecast._build_static_df(meta, panel)
+    fit_df = forecast.fit_frame(panel)
+
+    out = forecast.fit_static(static_df, fit_df)
+
+    assert list(out["unique_id"]) == sorted(fit_df["unique_id"].unique())
+    # Codes are the full panel's, so fit and predict agree on what a code means.
+    full = static_df.set_index("unique_id")["country_code"]
+    assert out.set_index("unique_id")["country_code"].to_dict() == {
+        "a": full["a"],
+        "c": full["c"],
+    }
+
+
+def test_fit_static_without_static_covariates():
+    assert forecast.fit_static(None, _panel({"a": 2})) is None

@@ -216,6 +216,20 @@ def fit_frame(panel: pd.DataFrame) -> pd.DataFrame:
     return panel[counts >= 2]
 
 
+def fit_static(static_df, fit_df: pd.DataFrame):
+    """`static_df` cut to the series in `fit_df`.
+
+    NeuralForecast pairs static rows with series by position after sorting both
+    by id; it never compares the ids. A static frame with a row for a series
+    `fit_frame` dropped shifts every later series onto another ride's country
+    and region (PAR-1327).
+    """
+    if static_df is None:
+        return None
+    ids = set(fit_df["unique_id"].astype(str))
+    return static_df[static_df["unique_id"].astype(str).isin(ids)]
+
+
 def train_and_forecast(version: str) -> pd.DataFrame:
     """Train + forecast ITERATIVELY over park chunks, returning the concatenated
     forward forecast.
@@ -315,7 +329,8 @@ def train_and_forecast(version: str) -> pd.DataFrame:
             nf = NeuralForecast(
                 models=_build_models(ci, len(chunks), stat_exog), freq="D"
             )
-            nf.fit(df=fit_frame(panel)[cols], static_df=static_df)
+            fit_df = fit_frame(panel)
+            nf.fit(df=fit_df[cols], static_df=fit_static(static_df, fit_df))
             futr = db.build_future_frame(
                 panel, meta, holidays, settings.NF_HORIZON, weather, schedule
             )
