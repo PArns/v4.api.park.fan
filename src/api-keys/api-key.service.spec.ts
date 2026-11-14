@@ -1,3 +1,4 @@
+import { ConflictException } from "@nestjs/common";
 import { hashToken } from "../admin/auth/token-hash.util";
 import { ApiKeyService, looksLikeApiKey } from "./api-key.service";
 
@@ -12,7 +13,10 @@ function build(found: Record<string, unknown> | null = null) {
       store.set(key, value);
       return "OK";
     }),
-    del: jest.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
+    del: jest.fn(
+      async (...keys: string[]) =>
+        keys.filter((key) => store.delete(key)).length,
+    ),
     incr: jest.fn(async (key: string) => {
       const next = Number(store.get(key) ?? 0) + 1;
       store.set(key, String(next));
@@ -53,6 +57,7 @@ function build(found: Record<string, unknown> | null = null) {
     })),
     findOne: jest.fn(async () => found),
     update: jest.fn(async () => undefined),
+    delete: jest.fn(async () => ({ affected: 1 })),
     query: jest.fn(async (_sql: string, params: unknown[]) =>
       ((params[0] as string[]) ?? [])
         .filter((id) => id.startsWith("park-"))
@@ -324,5 +329,53 @@ describe("ApiKeyService parks", () => {
       service.create({ name: "a", allowedParkIds: ["park-1", "nope"] }, null),
     ).rejects.toThrow("Unknown park ids: nope");
     expect(keys.save).not.toHaveBeenCalled();
+  });
+});
+
+describe("ApiKeyService.deleteRevoked", () => {
+  // 10:15 UTC, as in the counting tests.
+  const at = Date.UTC(2026, 10, 11, 10, 15, 0);
+  const row = {
+    id: ID,
+    name: "Coaster club",
+    usage: "non-commercial",
+    prefix: "pfk_abcdef",
+    keyHash: "h",
+    previousKeyHash: null,
+    revokedAt: new Date(at - 86_400_000),
+  };
+
+  it("refuses an active key and leaves it alone", async () => {
+    const { service, keys } = build({ ...row, revokedAt: null });
+    await expect(service.deleteRevoked(ID, at)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(keys.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes a revoked key with its counters, and keeps its secret refused", async () => {
+    const { service, keys, store } = build({ ...row });
+    store.set(`api-key:day:${ID}:2026-10-10`, "4");
+    store.set(`api-key:day-limited:${ID}:2026-11-11`, "1");
+    store.set(`api-key:month:${ID}:2025-09`, "40");
+    store.set(`api-key:hour:${ID}:${Math.floor(at / 3_600_000)}`, "2");
+    store.set(`api-key:day:other:2026-11-11`, "9");
+
+    expect(await service.deleteRevoked(ID, at)).toMatchObject({
+      id: ID,
+      name: "Coaster club",
+    });
+    expect(keys.delete).toHaveBeenCalledWith({ id: ID });
+    expect([...store.keys()].filter((key) => key.includes(ID))).toEqual([]);
+    expect(store.get(`api-key:day:other:2026-11-11`)).toBe("9");
+    expect(store.get("api-key:h")).toBe("-");
+  });
+
+  it("answers null for no such key, and for one a second delete got first", async () => {
+    const { service, keys } = build(null);
+    expect(await service.deleteRevoked(ID, at)).toBeNull();
+    keys.findOne.mockResolvedValueOnce({ ...row } as never);
+    keys.delete.mockResolvedValueOnce({ affected: 0 });
+    expect(await service.deleteRevoked(ID, at)).toBeNull();
   });
 });

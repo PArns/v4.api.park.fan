@@ -287,7 +287,8 @@ function toItem(row: ApiKey): ApiKeyItem {
 }
 
 /**
- * Issues, lists, revokes and checks the keys that unlock the forecast routes.
+ * Issues, lists, revokes, deletes and checks the keys that unlock the forecast
+ * routes.
  *
  * Every forecast request asks `lookup`, so the answer is cached in Redis both
  * ways: a found key for five minutes, an unknown one for one. A revocation or
@@ -677,6 +678,60 @@ export class ApiKeyService {
     // in its grace period is refused with it.
     for (const hash of hashesOf(row)) await this.refuse(hash);
     return toItem(row);
+  }
+
+  /**
+   * Deletes a revoked key for good, so it leaves the admin list: the row, its
+   * use counters and its last-use markers. Null when there is no such key. An
+   * active key is a 409: it is revoked first, so a stray click can never take
+   * a key out of use and its record in one step. The audit log keeps the
+   * key's history under its name, since its rows point at no table.
+   */
+  async deleteRevoked(
+    id: string,
+    now = Date.now(),
+  ): Promise<ApiKeyItem | null> {
+    const row = await this.keys.findOne({ where: { id } });
+    if (!row) return null;
+    if (!row.revokedAt) {
+      throw new ConflictException("Revoke the key before deleting it");
+    }
+    const result = await this.keys.delete({ id });
+    // A second delete at the same time finds nothing left to remove.
+    if (!result.affected) return null;
+    await this.afterDeletion(row, now).catch((error: unknown) =>
+      // The row is gone all the same: a lookup finds nothing to open, and
+      // every counter expires on its own within its window.
+      this.logger.warn(
+        `Could not clear the counters of deleted API key ${id}: ${String(error)}`,
+      ),
+    );
+    return toItem(row);
+  }
+
+  /**
+   * Redis after a deletion: both secrets refused, as on a revocation, in case
+   * that one's refusal never reached Redis; then every counter that can still
+   * be alive, so nothing outlives the key it counted.
+   */
+  private async afterDeletion(row: ApiKey, now: number): Promise<void> {
+    for (const hash of hashesOf(row)) await this.refuse(hash);
+    for (const secret of ["current", "previous"] as const) {
+      this.touchedAt.delete(touchKey(row.id, secret));
+    }
+    // As far back as a counter can still be alive: its lifetime, counted from
+    // the end of the hour, day or month it began in.
+    const hour = currentHour(now);
+    const days = lastDays(now, USAGE_DAYS + 3);
+    const months = lastMonths(now, USAGE_MONTHS + 3);
+    await this.redis.del(
+      touchKey(row.id),
+      touchKey(row.id, "previous"),
+      ...[hour - 2, hour - 1, hour].map((h) => hourKey(row.id, h)),
+      ...days.map((date) => dayKey(row.id, date)),
+      ...days.map((date) => limitedKey(row.id, date)),
+      ...months.map((month) => monthKey(row.id, month)),
+    );
   }
 
   /** The active key behind a presented value, or null: unknown, revoked or expired. */

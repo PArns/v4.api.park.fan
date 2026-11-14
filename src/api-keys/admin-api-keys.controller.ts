@@ -61,7 +61,7 @@ export class AdminApiKeysController {
   @ApiOperation({
     summary: "Every data API key, active ones first",
     description:
-      "Revoked keys stay in the list with `revokedAt` set. Each key carries `requestsThisHour` and `stats`: its requests per UTC day for the last 30 days (with `limited`, those its hourly allowance refused) and per UTC month for the last 12. `rotatedAt` is the last rotation; `previousExpiresAt` is when the secret it replaced stops working (null without one, past once its grace has run out), `previousLastUsedAt` when that secret was last presented. `lastUsedAt` is the current secret's. No hash is ever in the answer.",
+      "Revoked keys stay in the list with `revokedAt` set until `POST /:id/delete` removes them. Each key carries `requestsThisHour` and `stats`: its requests per UTC day for the last 30 days (with `limited`, those its hourly allowance refused) and per UTC month for the last 12. `rotatedAt` is the last rotation; `previousExpiresAt` is when the secret it replaced stops working (null without one, past once its grace has run out), `previousLastUsedAt` when that secret was last presented. `lastUsedAt` is the current secret's. No hash is ever in the answer.",
   })
   async list() {
     return { items: await this.apiKeys.list() };
@@ -213,6 +213,38 @@ export class AdminApiKeysController {
       entityLabel: ended.item.name,
       before: { previousExpiresAt: ended.previousExpiresAt },
       after: { previousExpiresAt: null },
+    });
+  }
+
+  @Post(":id/delete")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Delete a revoked data API key for good",
+    description:
+      "The key leaves the list, and its request statistics go with it; the audit log keeps its history. Only a revoked key: an active one is revoked first (`DELETE /:id`), so its holder is refused before anything is erased.",
+  })
+  @ApiResponse({ status: 404, description: "No such key" })
+  @ApiResponse({ status: 409, description: "The key is not revoked" })
+  async remove(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+  ): Promise<void> {
+    if (!isCanonicalUuid(id))
+      throw new BadRequestException("id must be a uuid");
+    const deleted = await this.apiKeys.deleteRevoked(id);
+    if (!deleted) throw new NotFoundException("No such key");
+    await this.audit.record({
+      actor: admin,
+      action: "api-key.delete",
+      entityType: "api_key",
+      entityId: deleted.id,
+      entityLabel: deleted.name,
+      before: {
+        usage: deleted.usage,
+        prefix: deleted.prefix,
+        createdAt: deleted.createdAt,
+        revokedAt: deleted.revokedAt,
+      },
     });
   }
 
