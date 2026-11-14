@@ -280,8 +280,8 @@ published the same way whoever made it. What a client reads: [park seasons](../f
 The body (`SeasonWriteDto`, `SeasonPatchDto`, then `ParkSeasonService`); every refusal is a 400 whose
 message names the field, and a field the DTO does not list is refused too:
 
-- `kind`, required on create: `halloween`, `christmas`, `summer_nights`, `special_event`, `opening`,
-  `closure`, `maintenance`;
+- `kind`, required on create: `halloween`, `christmas`, `winter`, `summer_nights`, `special_event`,
+  `opening`, `closure`, `maintenance`;
 - `startDate`, `endDate`, required on create: real `YYYY-MM-DD` dates, the end not before the start;
 - `name`: at most 200, trimmed; null shows the frontend's label for the kind;
 - `dates`: at most 366 `YYYY-MM-DD` dates inside the range, stored sorted and once each; an empty

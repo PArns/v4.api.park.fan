@@ -19,6 +19,14 @@ import {
 import { ParkSeasonService } from "./services/park-season.service";
 
 /**
+ * How far ahead of the park's today a season list looks when nobody names a
+ * window: long enough that a visitor planning next Halloween in August sees
+ * it, short enough that a park with a decade of history does not answer with
+ * all of it.
+ */
+export const SEASON_WINDOW_DAYS = 365;
+
+/**
  * The public read side of a park's seasons.
  *
  * A separate endpoint rather than a field on the park payload, and the reason
@@ -82,12 +90,10 @@ export class ParkSeasonsController {
     });
     if (!park) throw new NotFoundException("Park not found");
 
-    // Defaults to a year from today: long enough that a visitor planning next
-    // Halloween in August sees it, short enough that a park with a decade of
-    // history does not answer with all of it. "Today" is the park's day.
+    // "Today" is the park's day.
     const defaultFrom = getCurrentDateInTimezone(park.timezone ?? "UTC");
     const rangeFrom = from || defaultFrom;
-    const rangeTo = to || addIsoDays(defaultFrom, 365);
+    const rangeTo = to || addIsoDays(defaultFrom, SEASON_WINDOW_DAYS);
 
     return {
       parkId: park.id,

@@ -204,6 +204,19 @@ export function seasonCovers(season: SeasonLike, date: string): boolean {
   return season.startDate <= date && date <= season.endDate;
 }
 
+/**
+ * The seasons a day lists: those running on the date, a cancelled one left
+ * out. The region calendar's cells and the MCP's days both read it.
+ */
+export function seasonsOn<T extends SeasonLike>(
+  seasons: readonly T[],
+  date: string,
+): T[] {
+  return seasons.filter(
+    (season) => season.status !== "cancelled" && seasonCovers(season, date),
+  );
+}
+
 /** A season that states something: not last year's pattern, not called off. */
 const isStatement = (season: SeasonLike): boolean =>
   season.status === "confirmed" || season.status === "announced";
@@ -407,7 +420,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     status = "UNKNOWN";
   }
 
-  const daySeasons = seasons.filter((s) => seasonCovers(s, date));
+  const daySeasons = seasonsOn(seasons, date);
   let closedBy: string | undefined;
   if (status !== "OPERATING") {
     // A curated closure is a stated fact (the operator's page), so it may close
@@ -432,9 +445,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     crowdLevel: "unknown",
     basis: "none",
   };
-  const seasonIds = daySeasons
-    .filter((s) => s.status !== "cancelled")
-    .map((s) => s.id);
+  const seasonIds = daySeasons.map((s) => s.id);
   if (seasonIds.length > 0) out.seasons = seasonIds;
   if (closedBy) out.closedBy = closedBy;
 

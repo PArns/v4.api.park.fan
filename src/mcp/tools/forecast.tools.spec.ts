@@ -7,6 +7,7 @@ import { ForecastErrorBreakdownService } from "../../ml/services/forecast-error-
 import { DataSource } from "typeorm";
 import { parkForecastTool } from "./park-forecast.tool";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
 import { mlAccuracyTool } from "./ml-accuracy.tool";
 
 const PARK_ID = "11111111-1111-4111-8111-111111111111";
@@ -174,6 +175,65 @@ describe("park_forecast", () => {
     expect(out.days[0].ridesInMaintenance).toBeUndefined();
     expect(out.days[1].ridesInMaintenance).toEqual(["Raik"]);
     expect(out.days[2].ridesInMaintenance).toBeUndefined();
+  });
+
+  it("lists each day's seasons: single dates only on those, a cancelled one never", async () => {
+    const season = (extra: object) => ({
+      name: null,
+      dates: null,
+      status: "confirmed",
+      separateTicket: false,
+      ...extra,
+    });
+    const seasons = {
+      forParkInRange: jest.fn(async () => [
+        season({
+          kind: "halloween",
+          name: "Fright Nights",
+          startDate: "2026-10-01",
+          endDate: "2026-11-01",
+          dates: ["2026-10-30"],
+          separateTicket: true,
+        }),
+        season({
+          kind: "special_event",
+          startDate: "2026-10-01",
+          endDate: "2026-11-01",
+          status: "cancelled",
+        }),
+        season({
+          kind: "winter",
+          name: "Wintertraum",
+          startDate: "2026-10-29",
+          endDate: "2027-01-24",
+          status: "expected",
+        }),
+      ]),
+    };
+    const withSeasons = ctxWith(
+      new Map<unknown, unknown>([
+        [ParksService, parksService],
+        [DataSource, dataSource],
+        [CalendarService, calendar],
+        [MlOverviewService, overview],
+        [ParkSeasonService, seasons],
+      ]),
+    );
+    const input = z.object(parkForecastTool.input).parse({ park: PARK_ID });
+    const out = (await parkForecastTool.handler(
+      input as never,
+      withSeasons,
+    )) as any;
+    const wintertraum = {
+      kind: "winter",
+      name: "Wintertraum",
+      status: "expected",
+    };
+    expect(out.days[0].seasons).toEqual([wintertraum]);
+    expect(out.days[1].seasons).toEqual([
+      { kind: "halloween", name: "Fright Nights", separateTicket: true },
+      wintertraum,
+    ]);
   });
 
   it("keeps the days when the maintenance lookup fails", async () => {

@@ -16,7 +16,11 @@ import { Park } from "./park.entity";
  * translates them into six languages — so renaming one is breaking.
  *
  * - `halloween` / `christmas`: the two big overlay seasons, and the ones with
- *   the most schedule detail attached to them.
+ *   the most schedule detail attached to them. `christmas` is the Christmas
+ *   event or party (Mickey's Very Merry Christmas Party).
+ * - `winter`: a winter season the park runs as one, Christmas or not
+ *   (Phantasialand's Wintertraum, Winter Efteling). Its own kind because it
+ *   reads, and is drawn, differently from a Christmas party.
  * - `summer_nights`: late openings over the summer holidays.
  * - `special_event`: anything else with a name and a date range — an
  *   anniversary, a food festival, a ride's opening week.
@@ -30,6 +34,7 @@ import { Park } from "./park.entity";
 export const PARK_SEASON_KINDS = [
   "halloween",
   "christmas",
+  "winter",
   "summer_nights",
   "special_event",
   "opening",

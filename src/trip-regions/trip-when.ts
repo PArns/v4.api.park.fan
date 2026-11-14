@@ -119,6 +119,7 @@ const FESTIVAL_KINDS = new Set([
   "special_event",
   "halloween",
   "christmas",
+  "winter",
   "summer_nights",
 ]);
 

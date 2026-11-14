@@ -299,6 +299,7 @@ export function slotName(
 const SEASON_KINDS: Record<string, string> = {
   halloween: "Halloween season",
   christmas: "Christmas season",
+  winter: "winter season",
   summer_nights: "summer nights",
   special_event: "special event",
   opening: "opening season",
