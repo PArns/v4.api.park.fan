@@ -10,7 +10,11 @@ import {
   type TripParty,
   type TripSnapshot,
 } from "../assistant.schemas";
-import { HUB_VALUES, type vacationItinerary } from "./assistant-trip";
+import {
+  HUB_VALUES,
+  luggagePhrase,
+  type vacationItinerary,
+} from "./assistant-trip";
 
 /**
  * The visitor's own plans as Parky reads and changes them: the trip planner's state (the hub's
@@ -53,6 +57,7 @@ const PLAN_NAMES = [
   "bases",
   "startBase",
   "endBase",
+  "moveBuffer",
 ] as const;
 
 /** The order the planner writes its names in, kept so a changed query reads like the page's. */
@@ -68,6 +73,7 @@ const WRITE_ORDER = [
   "bases",
   "startBase",
   "endBase",
+  "moveBuffer",
   "arrival",
   "departure",
   "blocks",
@@ -173,10 +179,14 @@ export function planQueryOf(params: URLSearchParams): TripPlanQueryDto | null {
   const from = params.get("from");
   const to = params.get("to");
   if (!from || !to) return null;
-  const query: Record<string, string> = {};
+  const query: Record<string, string | number> = {};
   for (const name of PLAN_NAMES) {
     const value = params.get(name);
     if (value !== null) query[name] = value;
+  }
+  // The route's pipe makes it a number; Parky's path has none, and the value was checked above.
+  if (typeof query.moveBuffer === "string") {
+    query.moveBuffer = Number(query.moveBuffer);
   }
   return query as unknown as TripPlanQueryDto;
 }
@@ -243,6 +253,9 @@ export function tripLine(trip: VisitorTrip): string {
   if (p.get("hotel")) parts.push(`hotel ${p.get("hotel")}`);
   if (p.get("area")) parts.push(`staying in ${p.get("area")}`);
   if (p.get("bases")) parts.push(`stays ${p.get("bases")}`);
+  if (p.get("moveBuffer")) {
+    parts.push(`${p.get("moveBuffer")} min a hotel change on top of the train`);
+  }
   if (p.get("tickets")) parts.push(`tickets held ${p.get("tickets")}`);
   if (p.get("hopper") || p.get("ticket") === "hopper") {
     parts.push(`hopper ${p.get("hopper") ?? "every resort"}`);
@@ -348,6 +361,8 @@ export interface TripChange {
   evenings?: boolean;
   arrival?: "free" | "park";
   departure?: "free" | "park";
+  /** A region with bases: minutes a hotel change takes on top of the train. */
+  moveBuffer?: number;
 }
 
 /** What kind of change a trip got, for the widget's receipt and the statistic. */
@@ -411,7 +426,12 @@ function dayTarget(day: SwapDay | undefined): string | null {
 export function changeTripParams(
   current: URLSearchParams,
   change: TripChange,
-  options: { headliners: readonly string[]; days?: readonly SwapDay[] },
+  options: {
+    headliners: readonly string[];
+    days?: readonly SwapDay[];
+    /** The region's own buffer, which the planner leaves out of the URL. */
+    moveBufferDefault?: number;
+  },
 ): { params: URLSearchParams; kinds: TripChangeKind[] } {
   const params = new URLSearchParams(current);
   const kinds = new Set<TripChangeKind>();
@@ -513,6 +533,15 @@ export function changeTripParams(
   if (change.hotel !== undefined || change.area !== undefined) {
     if (change.hotel) params.set("hotel", change.hotel);
     if (change.area) params.set("area", change.area);
+    kinds.add("hotel");
+  }
+  if (change.moveBuffer !== undefined) {
+    setOrDefault(
+      params,
+      "moveBuffer",
+      String(change.moveBuffer),
+      String(options.moveBufferDefault ?? ""),
+    );
     kinds.add("hotel");
   }
   if (change.fireworks !== undefined) {
@@ -771,7 +800,29 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
   },
 };
 
-function guideOf(kind: "trip" | "day", step: InterviewStep): StepGuide {
+/**
+ * A trip's hotel step in a region with bases (Japan): the cities come with the plan, so the
+ * question is how a hotel change goes, which the visitor chooses (`moveBuffer`, PAR-1304).
+ */
+function basesHotelGuide(luggage: string): StepGuide {
+  return {
+    ask: `how a hotel change should go: say in a sentence that ${luggage}, then ask whether they send the bags ahead, carry them, or want more time`,
+    apply:
+      "change_trip moveBuffer (30: bags sent ahead, 60: carried along, 90 or 120: more time); area or bases only if they name a hotel",
+    chips:
+      "send the bags ahead (30 min) / carry our own bags (60 min) / rather more time",
+  };
+}
+
+function guideOf(
+  kind: "trip" | "day",
+  step: InterviewStep,
+  region?: RegionConfig | null,
+): StepGuide {
+  const luggage = region ? luggagePhrase(region) : null;
+  if (kind === "trip" && step === "hotel" && luggage) {
+    return basesHotelGuide(luggage);
+  }
   return STEP_GUIDE[kind === "day" && step === "mustdo" ? "mustdo_day" : step];
 }
 
@@ -806,6 +857,11 @@ export function interviewHolds(
     if (step === "party" && trip?.party) return partyPhrase(trip.party);
     if (step === "mustdo" && p?.get("parks")) return p.get("parks");
     if (step === "tickets" && p?.get("tickets")) return p.get("tickets");
+    if (step === "hotel" && trip?.region.bases?.length) {
+      return p?.get("moveBuffer")
+        ? `${p.get("moveBuffer")} min a hotel change`
+        : null;
+    }
     if (step === "hotel" && (p?.get("hotel") || p?.get("area"))) {
       return [p.get("hotel"), p.get("area")].filter(Boolean).join(", ");
     }
@@ -839,8 +895,9 @@ export function interviewGuide(
   kind: "trip" | "day",
   step: InterviewStep,
   holds: string | null,
+  region?: RegionConfig | null,
 ) {
-  const guide = guideOf(kind, step);
+  const guide = guideOf(kind, step, region);
   const steps = interviewSteps(kind);
   return {
     step,
@@ -857,8 +914,14 @@ export function interviewGuide(
 export function interviewLine(
   interview: InterviewSnapshot,
   holds: string | null,
+  region?: RegionConfig | null,
 ): string {
   const step = interview.step as InterviewStep;
-  const guide = interviewGuide(interview.kind, step, holds);
+  const guide = interviewGuide(
+    interview.kind,
+    step,
+    holds,
+    region ?? (interview.region ? findRegion(interview.region) : null),
+  );
   return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, step ${guide.of} "${step}"${interview.answered.length ? `; answered ${interview.answered.join(", ")}` : ""}${interview.skipped.length ? `; skipped ${interview.skipped.join(", ")}` : ""}. The question out now: ${guide.ask}. Apply the answer with ${guide.applyAnswerWith}, then call interview with op answered.`;
 }

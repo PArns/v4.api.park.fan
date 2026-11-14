@@ -220,7 +220,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 77 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 78 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -552,7 +552,8 @@ stay; the first edit of an untouched trip starts from the region's headliners, a
 `pin` (`{ park | "rest", date }`, one pin a date), `unpin` (dates), `swap` (`{ a, b }`: each day
 pinned to what the other holds, the planner's own `swapLocks`; a travel or two-park day is refused),
 `rest`, `tickets` (`""` clears), `hotel`, `area`, `hopper`, `fireworks`, `evenings`, `arrival`,
-`departure`. `changeTripParams` edits the visitor's query name by name, so everything the change
+`departure` and, in a region with bases, `moveBuffer` (30, 60, 90 or 120 minutes for each hotel
+change on top of the train; the region's own, Japan's 30, stays out of the query). `changeTripParams` edits the visitor's query name by name, so everything the change
 does not touch stays as written (`blocks`, the stays' `bases`), and the planner's defaults stay out
 of it, as the page writes them. New dates leave a date search and drop pins outside them; a removed
 park takes its pins along. The plan route then checks the result: a refusal (an unknown park, hotel
@@ -597,6 +598,14 @@ with `outcome` `done` or `left`. The next step is the first neither answered nor
 ideas in English (`interviewGuide`). A trip's `party` (how many, the children's heights) has no
 field in either planner: the widget keeps it with the region's remembered trip, it comes back in
 `trips`, and `file` writes the smallest height into the day planner's prefs.
+
+In a region with bases (Japan) the hotel step asks how a hotel change should go instead of whose
+hotel and where (`basesHotelGuide`): Parky says how the bags travel, in the region's own phrase
+(`luggagePhrase` in `tools/assistant-trip.ts`; Japan's: the courier, takkyubin, booked at the hotel
+front desk or a convenience store, at the next hotel the same or the next day, never a price), asks
+whether they send the bags ahead, carry them or want more time, and sets `moveBuffer` with
+`change_trip` (PAR-1304). `plan_vacation` and `find_trip_dates` take `moveBuffer` too, and a plan
+with stays carries `hotelChange` (the minutes, the visitor's or the region's) and `luggage`.
 
 ### The trip regions: the vacation planner in the chat
 

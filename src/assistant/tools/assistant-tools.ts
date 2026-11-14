@@ -112,9 +112,11 @@ import {
   type TripPlanQueryDto,
 } from "../../trip-regions/dto/trip-region-query.dto";
 import {
+  findRegion,
   hotelPoint,
   ORLANDO,
   regionOfPark,
+  stayRulesOf,
   TRIP_REGIONS,
 } from "../../trip-regions/regions";
 import {
@@ -1950,6 +1952,17 @@ function visitorTrip(ctx: AssistantToolContext, region?: string): VisitorTrip {
  */
 const PLANNER_PROBLEM = /^More park visits|park visits$/;
 
+/**
+ * A region with bases: the minutes a hotel change takes on top of the train, the visitor's choice
+ * (PAR-1304); the region's own without it.
+ */
+const moveBufferInput = z
+  .union([z.literal(30), z.literal(60), z.literal(90), z.literal(120)])
+  .optional()
+  .describe(
+    "A region with bases: minutes for each hotel change on top of the train; 30 with bags sent ahead by courier, 60 carried along, 90 or 120 for a slower pace. Default the region's (Japan 30)",
+  );
+
 /** A trip route's 400 or 404 as a refusal the model reads. */
 async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
   try {
@@ -3121,6 +3134,7 @@ export const ASSISTANT_TOOLS = [
         .regex(/^[a-z0-9-]+$/)
         .optional()
         .describe("A region with bases: where they fly home from"),
+      moveBuffer: moveBufferInput,
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       locks: z
@@ -3187,6 +3201,7 @@ export const ASSISTANT_TOOLS = [
         bases: input.bases,
         startBase: input.startBase,
         endBase: input.endBase,
+        moveBuffer: input.moveBuffer,
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
         rest: input.rest,
@@ -3245,7 +3260,8 @@ export const ASSISTANT_TOOLS = [
       'park or "rest" on a date: "Magic Kingdom on Thursday", "a rest day on the 6th"); unpin ' +
       "(dates); swap (two dates trade what is on them); rest (auto, none, max:n park days in a " +
       "row); tickets (the compact form, empty clears); hotel, area; hopper (resorts); fireworks; " +
-      "evenings; arrival, departure (park: a park that day). Without a trip, dates start one. " +
+      "evenings; arrival, departure (park: a park that day); moveBuffer (a region with bases). " +
+      "Without a trip, dates start one. " +
       "The result says which days moved and the big rides' wait before and after.",
     input: z.object({
       region: regionInput,
@@ -3298,6 +3314,7 @@ export const ASSISTANT_TOOLS = [
         ),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
+      moveBuffer: moveBufferInput,
     }),
     run: async (input, ctx) => {
       const trips = ctx.trips ?? [];
@@ -3324,6 +3341,7 @@ export const ASSISTANT_TOOLS = [
         ...(input.evenings !== undefined && { evenings: input.evenings }),
         ...(input.arrival !== undefined && { arrival: input.arrival }),
         ...(input.departure !== undefined && { departure: input.departure }),
+        ...(input.moveBuffer !== undefined && { moveBuffer: input.moveBuffer }),
       };
       if (input.parks) {
         change.parks = [];
@@ -3360,6 +3378,7 @@ export const ASSISTANT_TOOLS = [
             headliners: region.parks
               .filter((p) => p.headliner)
               .map((p) => p.slug),
+            moveBufferDefault: stayRulesOf(region).moveOverheadMinutes,
             days: was?.days.map((day) => ({
               date: day.date,
               kind: day.kind,
@@ -3512,6 +3531,7 @@ export const ASSISTANT_TOOLS = [
         .regex(/^[a-z0-9-]+$/)
         .optional()
         .describe("A region with bases: where they fly home from"),
+      moveBuffer: moveBufferInput,
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       limit: z.number().int().min(1).max(WHEN_MAX_LIMIT).optional(),
@@ -3581,6 +3601,7 @@ export const ASSISTANT_TOOLS = [
         bases: input.bases,
         startBase: input.startBase,
         endBase: input.endBase,
+        moveBuffer: input.moveBuffer,
         limit: input.limit,
         tickets: input.tickets,
         suggest: flag(input.suggest),
@@ -5516,6 +5537,7 @@ export const ASSISTANT_TOOLS = [
             state.kind,
             next,
             interviewHolds(state, next, trip, ctx.planner),
+            trip?.region ?? (state.region ? findRegion(state.region) : null),
           ),
           ...(state.mustDoRides.length > 0 && {
             mustDoRides: state.mustDoRides,

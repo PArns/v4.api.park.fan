@@ -112,6 +112,27 @@ describe("the trip planner's state", () => {
     });
   });
 
+  it("sets the visitor's buffer for a hotel change, and leaves the region's own out", () => {
+    const japan = tripParams(
+      "from=2027-04-01&to=2027-04-10&bases=tokyo:4,osaka:5",
+    );
+    const options = { headliners: [], moveBufferDefault: 30 };
+    const slower = changeTripParams(japan, { moveBuffer: 60 }, options);
+    expect(writeTripQuery(slower.params)).toBe(
+      "from=2027-04-01&to=2027-04-10&bases=tokyo:4,osaka:5&moveBuffer=60",
+    );
+    expect(slower.kinds).toEqual(["hotel"]);
+    // The route takes it as a number; Parky's path has no pipe to make it one.
+    expect(planQueryOf(slower.params)).toMatchObject({ moveBuffer: 60 });
+    const back = changeTripParams(slower.params, { moveBuffer: 30 }, options);
+    expect(back.params.has("moveBuffer")).toBe(false);
+    expect(
+      tripParams("from=2027-04-01&to=2027-04-10&moveBuffer=45").has(
+        "moveBuffer",
+      ),
+    ).toBe(false);
+  });
+
   it("splits the plan's query from a date search", () => {
     const planned = tripParams(
       "from=2027-10-14&to=2027-10-21&hotel=disney&when=2027-01-01_2027-12-31",
@@ -534,6 +555,28 @@ describe("the interview", () => {
         interview({ kind: "day", step: "day", answered: ["day"] }),
       ),
     ).toBe("arrival");
+  });
+
+  it("asks in a region with bases how a hotel change should go, with the luggage courier", () => {
+    const [japan] = visitorTrips([
+      { region: "japan", query: "from=2027-04-01&to=2027-04-10" },
+    ]);
+    const tripInterview = interview({ region: "japan", step: "hotel" });
+    const line = interviewLine(tripInterview, null, japan.region);
+    expect(line).toContain("takkyubin");
+    expect(line).toContain("change_trip moveBuffer");
+    expect(line).not.toMatch(/yen|¥|price of/i);
+    expect(interviewHolds(tripInterview, "hotel", japan, null)).toBeNull();
+    const [chosen] = visitorTrips([
+      { region: "japan", query: "from=2027-04-01&to=2027-04-10&moveBuffer=60" },
+    ]);
+    expect(interviewHolds(tripInterview, "hotel", chosen, null)).toBe(
+      "60 min a hotel change",
+    );
+    // Orlando has no bases: the hotel step asks whose hotel and where.
+    expect(interviewLine(interview({ step: "hotel" }), null)).toContain(
+      "change_trip hotel and area",
+    );
   });
 
   it("confirms what the plans already hold instead of asking again", () => {

@@ -240,6 +240,7 @@ export function chatContext(params: {
               pickTrip(params.trips ?? [], params.interview.region) ?? null,
               params.planner,
             ),
+            pickTrip(params.trips ?? [], params.interview.region)?.region,
           ),
           ...(params.interview.source === "planner" &&
           params.interview.answered.length === 0

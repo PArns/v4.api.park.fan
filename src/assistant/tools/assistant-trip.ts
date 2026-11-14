@@ -14,7 +14,11 @@ import type {
   PlannedParkVisit,
   PlanTotals,
 } from "../../trip-regions/trip-optimizer";
-import { TRIP_REGIONS, type RegionConfig } from "../../trip-regions/regions";
+import {
+  stayRulesOf,
+  TRIP_REGIONS,
+  type RegionConfig,
+} from "../../trip-regions/regions";
 import { stormSeasonSpan } from "../../trip-regions/trip-region.assembly";
 import { travelSource, type TripLeg } from "../../trip-regions/travel";
 import type {
@@ -358,6 +362,7 @@ const HUB_PARAMS = [
   "bases",
   "startBase",
   "endBase",
+  "moveBuffer",
 ] as const;
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
@@ -382,6 +387,7 @@ export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
     /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?)*$/,
   startBase: /^[a-z0-9-]+$/,
   endBase: /^[a-z0-9-]+$/,
+  moveBuffer: /^(30|60|90|120)$/,
 };
 
 /**
@@ -430,6 +436,9 @@ function hubQuery(q: NormalizedPlanQuery): string {
       }),
     ...(q.stays?.startBase && { startBase: q.stays.startBase }),
     ...(q.stays?.endBase && { endBase: q.stays.endBase }),
+    ...(q.stays?.moveBuffer !== undefined && {
+      moveBuffer: String(q.stays.moveBuffer),
+    }),
   };
   const params = new URLSearchParams();
   for (const name of HUB_PARAMS) {
@@ -749,6 +758,10 @@ export function vacationItinerary(input: {
         names,
       ),
     }),
+    ...(plan.meta.stays !== undefined && {
+      hotelChange: moveBufferPhrase(region, query.stays?.moveBuffer),
+      ...(luggagePhrase(region) && { luggage: luggagePhrase(region) }),
+    }),
     ...(tripSeason(region, planned) && {
       season: tripSeason(region, planned),
     }),
@@ -836,6 +849,33 @@ interface StaySuggestionLike {
 /** A base's name, else its key. */
 function baseName(region: RegionConfig, key: string): string {
   return region.bases?.find((b) => b.key === key)?.name ?? key;
+}
+
+/**
+ * How bags travel between a region's hotels, in Parky's words: Japan's courier, which most
+ * travellers use, so its moves are priced with 30 minutes (PAR-1304). No prices: the hotel or the
+ * shop states them. Elsewhere the general phrase.
+ */
+const LUGGAGE: Record<string, string> = {
+  japan:
+    "luggage goes ahead by courier (takkyubin): booked at the hotel front desk or a convenience store, it reaches the next hotel the same or the next day, so a move needs no bags on the train; never give a price",
+};
+const LUGGAGE_ELSEWHERE =
+  "bags carried along on the move; ask at the hotel whether it sends luggage ahead";
+
+/** The region's luggage phrase; null in a region without bases, where nobody changes hotel. */
+export function luggagePhrase(region: RegionConfig): string | null {
+  if (!region.bases?.length) return null;
+  return LUGGAGE[region.slug] ?? LUGGAGE_ELSEWHERE;
+}
+
+/** The minutes a hotel change takes on top of the train: the visitor's own, else the region's. */
+export function moveBufferPhrase(
+  region: RegionConfig,
+  chosen: number | undefined,
+): string {
+  const minutes = chosen ?? stayRulesOf(region).moveOverheadMinutes;
+  return `${minutes} min for each hotel change on top of the train (${chosen !== undefined ? "the user's choice" : "the region's default"}; moveBuffer: 30 with bags sent ahead, 60 carried along, 90 or 120 for a slower pace)`;
 }
 
 /** A move in one phrase: where, how, when, and what it does to the day. */

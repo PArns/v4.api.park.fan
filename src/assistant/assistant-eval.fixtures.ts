@@ -324,6 +324,38 @@ const PLAN_CASES: EvalCase[] = [
     ],
   },
   {
+    id: "interview-luggage-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    trips: [
+      {
+        region: "japan",
+        query: "from=2027-04-01&to=2027-04-10&bases=tokyo:5,osaka:4",
+        onScreen: true,
+      },
+    ],
+    interview: {
+      ...INTERVIEW_AT("hotel", [
+        "region",
+        "dates",
+        "party",
+        "mustdo",
+        "tickets",
+      ]),
+      region: "japan",
+    },
+    history: [
+      ["user", "Weiter"],
+      [
+        "assistant",
+        "Zwischen Tokio und Osaka zieht ihr einmal um. Das Gepäck kann per Kurier (Takkyubin) vorausfahren. Wie wollt ihr es machen?",
+      ],
+    ],
+    message: "Gepäck vorausschicken",
+    want: [{ tool: "change_trip", input: { moveBuffer: 30 } }],
+  },
+  {
     id: "interview-leave-de",
     locale: "de",
     pagePath: OCT_HUB,
