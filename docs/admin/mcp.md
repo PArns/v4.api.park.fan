@@ -2,7 +2,7 @@
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
-site statistic and its SEO reports, Google Search Console, system and ML health, job queues, data-quality findings,
+site statistic and its SEO reports, the trip planner's usage and its server metrics, Google Search Console, system and ML health, job queues, data-quality findings,
 duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
@@ -138,6 +138,8 @@ against these rules.
 | `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
+| `trip_planner_report`        | the multi-day trip planner per region: funnel with drop-off (dates and parks read off the requests), find dates, ticket answers and modes, hopper, views, what was kept, purchase links by seller kind and position, errors shown | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
+| `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days`: latency percentiles (all and built), caches, exact share, relaxation, unplaced and error codes, owned tickets by kind, the slowest shapes | `TripRequestMetricsService.ops`                  |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
@@ -153,8 +155,8 @@ The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365
 (`hour`, `day`, `week`, `month`), `locale`, and `filters` as `[{ dim, value }]`, which become the
 reports' `filter=<dim>:<value>`, and `datacenter` (`exclude` by default, `include`, `only`;
 [data centres](../frontend/site-analytics.md#data-centres)). The tools over events (`analytics_events`,
-`analytics_event`, `analytics_crosstab`, `search_report`, `planner_report`) take only the event's
-dimensions (`eventWindowInput`), and
+`analytics_event`, `analytics_crosstab`, `search_report`, `planner_report`, `trip_planner_report`)
+take only the event's dimensions (`eventWindowInput`), and
 `seo_not_found` only the page view's (`pageWindowInput`, with `browser_language`): their rows carry
 no visit dimension, so the schema does not offer one rather than the report refusing it. Their
 descriptions carry what a model must know to read the numbers: rows are UTC hours, visitors are
@@ -197,7 +199,11 @@ the count that decides, and the measures that add up.
   items, the parks and rides opened most, an id no table knows left out and counted in
   `unresolvedEntities`), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
   device, the parks and rides planned most, an id no table knows any more left out and counted in
-  `unresolvedEntities`), `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
+  `unresolvedEntities`), `trip_planner_report` (the regions side by side, ways in, ticket answers,
+  what the requests asked, answers by mode and outcome, loosened rules, parks left out, errors by
+  status, find dates' windows and ranks, tickets added, hopper, views, days opened, what was kept,
+  and the purchase links by kind and position, surface, mode, seller and product),
+  `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
   referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per
   language). `seo_uncovered` lists our own parks and rides that had no search visit at all, so there is no
   count in it to fold; `gsc_*` (Google drops rare queries itself) and `audit_log` are as they were.
@@ -217,6 +223,39 @@ the count that decides, and the measures that add up.
 The answer also carries `hourlyFrom`, the day from which a figure that needed the hourly rows is complete
 (null when none was cut): the hourly rows hold 90 to 97 days, the daily roll-ups 400
 ([retention](../frontend/site-analytics.md#retention)).
+
+### The trip planner's tools
+
+Two tools look at the multi-day trip planner (the region hubs, [trip regions](../frontend/trip-regions.md)),
+one from each side; `planner_report` is the day planner's.
+
+- **`trip_planner_report`** reads the frontend's 22 `trip_*` events and `ticket_link_clicked`
+  (the list: the frontend's `docs/features/orlando-planner.md#analytics`) through
+  `SiteAnalyticsTripService` (`site-analytics-trip.ts` holds the figures, pure). Every `trip_*`
+  event carries `region`; a value `regions.ts` does not have is `(other)`. A purchase link carries
+  no region (its eight properties are the statistic's limit), so the tool reads every region's
+  ticket catalog, archived products included, and attributes a click to the region whose catalog
+  has its product; a product no catalog has is counted in `unattributedTicketLinks` and listed only
+  with every region. The funnel is `started → ticketsAnswered → planRequested → planShown →
+  viewChanged → dayOpened → kept` (`trip_days_saved`, `trip_ics_exported`, `trip_link_copied`),
+  each step with `ofStarted`, `fromPrevious` and `dropOff`. Its counts are events, not visitors: a
+  request fires once per distinct query, so `planRequested` can exceed `started`, and `dropOff` is
+  null where a step outnumbers the one before. The wizard's dates and parks steps send no event of
+  their own; the tool reads them off `trip_plan_requested` (`mode` dates or when, `parks` 0 for the
+  headliners). The small-value and `visitorData` rules are the other event tools': lists fold, a
+  region narrows like a filter, so one region's totals from 1 to 4 are null and so is every rate
+  computed from one.
+- **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/when` and `/best-days`
+  ([what the server records](../frontend/trip-regions.md#what-the-server-records)) through
+  `TripRequestMetricsService.ops`: per region and route the requests, errors, latency p50/p90/p99
+  and max over every 200 and over the built ones, the cache and the calendar's, the exact share,
+  the shares that loosened a rule, left a visit out, used a hopper or owned tickets; the relaxation
+  codes, unplaced reasons, error codes and ticket kinds; the built answers' latency by shape
+  (`slowest`, by trip days × parks × bases, and `byLength`, `byParks`, `byBases`); a series per UTC
+  day on request. UTC days, `days` up to 90 (the retention), 7 by default. Its lists are not
+  folded and it has no `visitorData`: every value is the server's own measurement or code, no row
+  stands for a reader, and the rare long trip is exactly the shape the optimizer has to be tuned
+  for. The rows reach the table once a minute per process, so the last minute is missing.
 
 ## Endpoints
 
