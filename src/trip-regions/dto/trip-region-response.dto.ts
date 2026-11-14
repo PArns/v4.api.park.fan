@@ -259,6 +259,12 @@ export class TripStayRulesDto {
   @ApiProperty({ example: 20 }) moveCost: number;
   @ApiProperty({ example: "08:00" }) moveStartsAt: string;
   @ApiProperty({ example: "23:00" }) lastArrivalAt: string;
+  @ApiProperty({
+    example: [30, 60, 90, 120],
+    description:
+      "The buffers a visitor may choose for a hotel change (`moveBuffer=`); `moveOverheadMinutes` is the default.",
+  })
+  moveBufferOptions: number[];
 }
 
 export class TripRegionSummaryDto {

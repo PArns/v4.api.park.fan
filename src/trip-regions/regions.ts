@@ -381,6 +381,13 @@ export interface StayRulesConfig {
   lastArrivalAt: string;
 }
 
+/**
+ * The move buffers a visitor may choose (`moveBuffer=`), in minutes on top of the train: 30 when
+ * the bags travel ahead by courier, more for a slower pace or bags carried along. A short list,
+ * so the plans stay cacheable.
+ */
+export const MOVE_BUFFER_OPTIONS = [30, 60, 90, 120] as const;
+
 /** The stay rules a region leaves unset (owner-approved starting values, PAR-1302). */
 export const DEFAULT_STAY_RULES: StayRulesConfig = {
   dayTripFreeMinutes: 45,
@@ -1964,6 +1971,10 @@ export const JAPAN: RegionConfig = {
       },
     ],
   },
+  // Most travellers send their bags ahead by courier (takkyubin) to the next hotel, so a
+  // morning move needs no check-out queue with luggage: half the default overhead, and an
+  // earlier start, as the train timetables allow. The owner's decision for Japan.
+  stayRules: { moveOverheadMinutes: 30, moveStartsAt: "07:30" },
   bases: [
     {
       key: "tokyo",

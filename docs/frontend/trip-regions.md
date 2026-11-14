@@ -89,7 +89,8 @@ region route serves the parts a client needs:
 | `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
 | `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name; `home` is sold to anyone, what plan first suggests from ([tickets](#tickets))                                  |
-| `bases`, `baseLegs`                    | `bases`, `baseLegs`              | the cities a trip stays in, Japan and Paris ([bases](#bases-a-trip-across-several-cities))                                                                       |
+| `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
+| a park's `code`                        | `parks[].code`                   | a short curated code for tight views (Tokyo Disneyland `DL`, Tokyo DisneySea `DS`, where initials would give both `TD`); absent: the client derives one  |
 
 **The codes a client translates are the region's own.** A perk or early slot is a code like
 Orlando's: `early_entry` and `early_park_admission` (Orlando, and `early_entry` for the Early Entry
@@ -666,6 +667,8 @@ calendar does not.
 | `hop`        | `1`                                                  | allow two parks on one day where the trip or a ticket has fewer days than visits; the day's ticket must allow it                        |
 | `evenings`   | `1`                                                  | `1` (default): an `evening` on park days that end early ([Evenings](#evenings)); `0`: none                                              |
 | `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                                |
+| `bases`, `startBase`, `endBase` | `tokyo:4@maihama`, `tokyo`, `osaka` | a region with bases only, in place of `area` and `hotel`: the stays the visitor fixes and the trip's ends ([bases](#bases-a-trip-across-several-cities)) |
+| `moveBuffer` | `30` | a region with bases only: the visitor's own minutes for a hotel change on top of the train, one of `stayRules.moveBufferOptions` (30, 60, 90, 120); default the region's `moveOverheadMinutes` |
 
 More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
 a hopper (neither `ticket=hopper` nor an owned ticket with hopping) is ignored: the plan keeps one
@@ -913,97 +916,125 @@ fireworks are the party's.
 
 ## Bases: a trip across several cities
 
-**Status: proposed (PAR-1302), not built yet.** Japan's parks lie in four cities, two to three
-hours apart by train; no hotel serves them all. A region may therefore define **bases**: the cities
-a visitor sleeps in. A region without bases (Orlando, Southern California) has none of the
-fields, parameters or codes of this section and plans exactly as before; `bases`, `startBase` and
-`endBase` on such a region are a 400.
+Japan's parks lie in four cities, two to three hours apart by train; no hotel serves them all.
+Paris has three places to sleep (the Disney hotels, Parc Astérix's, central Paris). A region may
+therefore define **bases**: the cities a trip sleeps in. A trip there is a sequence of **stays**,
+one base for a run of nights, and the plan searches the stays with the parks. A region without
+bases (Orlando, Southern California) has none of the fields, parameters or codes of this
+section and plans exactly as before; `bases`, `startBase` and `endBase` there are a 400.
 
 ### The region's bases
 
 ```jsonc
 // GET /v1/trip-regions/japan
 {
+  "parks": [{ "slug": "tokyo-disneyland", "code": "DL", "…": "…" }], // code: short, curated
   "bases": [
     {
       "key": "tokyo",
       "name": "Tokyo",
-      "hotelAreas": ["maihama", "tokyo-station"], // keys of `hotelAreas`; each area is in one base
-      "parks": [
-        // the parks a day from here can reach: door to door, one way, curated
-        { "slug": "tokyo-disneyland", "minutes": 20, "mode": "rail" },
-        { "slug": "tokyo-disneysea", "minutes": 20, "mode": "rail" },
-        { "slug": "fuji-q-highland", "minutes": 120, "mode": "highway_bus" },
+      "order": 1, // its place on the route line; absent on every base of a region without one
+      "hotelAreas": ["maihama", "disneysea_hotels", "bayside", "shin_urayasu", "tokyo_station", "shinjuku"],
+      "defaultArea": "maihama",
+      "gateways": [
+        { "code": "HND", "name": "Haneda Airport", "kind": "airport" },
+        { "code": "NRT", "name": "Narita Airport", "kind": "airport" },
       ],
-    },
-    {
-      "key": "fujikawaguchiko",
-      "name": "Fujikawaguchiko",
-      "hotelAreas": ["kawaguchiko"],
-      "parks": [{ "slug": "fuji-q-highland", "minutes": 10, "mode": "shuttle" }],
+      "stayNote": "Maihama for both Disney parks; Shinjuku for the buses to Fuji-Q",
+      "parks": [
+        // the parks a day from here reaches: door to door, one way, curated
+        { "slug": "tokyo-disneyland", "minutes": 10, "mode": "walk" },
+        { "slug": "tokyo-disneysea", "minutes": 15, "mode": "monorail" },
+        { "slug": "fuji-q-highland", "minutes": 110, "mode": "highway_bus" },
+      ],
     },
   ],
   "baseLegs": [
-    // the moves between bases, both ways, door to door between their main hotel areas
-    { "from": "tokyo", "to": "nagoya", "minutes": 135, "mode": "shinkansen", "name": "Tokaido Shinkansen" },
-    { "from": "nagoya", "to": "osaka", "minutes": 80, "mode": "shinkansen", "name": "Tokaido Shinkansen" },
-    { "from": "tokyo", "to": "fujikawaguchiko", "minutes": 130, "mode": "highway_bus" },
+    {
+      "from": "tokyo",
+      "to": "nagoya",
+      "minutes": 150, // door to door between the bases' main areas, the wait included
+      "mode": "shinkansen",
+      "name": "Tokaido Shinkansen Nozomi",
+      "parkDay": true, // a park fits the day of this move
+      "fromStop": "Tokyo",
+      "toStop": "Nagoya",
+      "notes": ["reserve_seat", "forward_luggage"], // jr_pass | reserve_seat | forward_luggage
+    },
   ],
+  "stayRules": {
+    "dayTripFreeMinutes": 45,
+    "moveOverheadMinutes": 60,
+    "parkDayMaxLegMinutes": 150,
+    "moveCost": 20,
+    "moveStartsAt": "08:00",
+    "lastArrivalAt": "23:00",
+  },
 }
 ```
 
-### The trip as stays
+- **`stayRules`** override the defaults above per region. Japan moves at 07:30 with a 30-minute
+  overhead, because most travellers there send their bags ahead by courier (takkyubin); every other
+  region keeps the defaults.
+- **`gateways`** are where a trip arrives or leaves: an airport, or a station a long-distance
+  train reaches (Marne-la-Vallée–Chessy for the TGV and the Eurostar, `kind: "station"`). The
+  client offers them as "you land in" and "you fly home from" and sends the base as `startBase`
+  and `endBase`; the API is the one place that knows which airport belongs to which base.
+- **Each hotel area belongs to one base**, and a stay's hotel kind (its perks) is its area's.
+- **A base's `parks`** are the parks a day from it reaches. A stay whose area has a curated leg to
+  the park (`hotel:<area>` in `travel.legs`) uses that leg's minutes instead.
+- **`parkDay`** is the leg's own call where it has one (Fujikawaguchiko to Nagoya by bus and
+  Kodama is a full travel day), else whether the leg is at most `parkDayMaxLegMinutes`.
+- **`stayRules`** are the region's; the values above are the defaults every region gets
+  (`DEFAULT_STAY_RULES`, owner-approved starting values) unless it sets its own.
 
-A trip is a sequence of **stays**: one base for a run of nights. Each base appears at most once.
-Every park day starts and ends at its stay's base. Between two stays lies a **move day**: the
-morning in the old base, the night in the new one. Nights are the trip's days less one (a trip of
-10 days has 9 nights).
+### The plan's parameters
 
-**Who decides: both.** The visitor fixes what they know, the optimizer fills the rest.
+| Parameter   | Example                                         | Meaning                                                                                                                                                                                                 |
+| ----------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bases`     | `tokyo:4@maihama,fujikawaguchiko:0,nagoya:1`     | what the visitor fixes, per base: `:n` its nights (`:0` no stay there, its parks as day trips), `@area` its hotel area. A base listed without nights is a stay whose nights the plan picks. The order of the list does not matter |
+| `startBase` | `tokyo`                                         | where the trip arrives: the first stay, unless `bases` rules it out with `:0`; then the arrival day moves on from it                                                                                    |
+| `endBase`   | `osaka`                                         | where the trip leaves: the last stay, or, where that is elsewhere (a round trip from Tokyo), the departure day moves there                                                                              |
 
-| Parameter   | Example              | Meaning                                                                                                                                  |
-| ----------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `bases`     | `tokyo:5,osaka`      | the stays in this order; `:n` fixes a stay's nights, a stay without it gets its nights from the optimizer. Nights given in full must add up to the trip's |
-| `startBase` | `tokyo`              | without `bases`: the first stay (where the flight lands)                                                                                 |
-| `endBase`   | `osaka`              | without `bases`: the last stay (where the flight leaves from)                                                                            |
-| `area`      | `maihama,namba`      | one hotel area per base at most; a base without one shows no `travel`                                                                     |
-| `hotel`     | `tdr_hotel,offsite`  | one hotel kind per base at most; each kind's perks count at its own parks only. Default: each listed area's hotel                          |
+`area` and `hotel` are a 400 in a region with bases: the area goes with its base. Everything else
+is the plan's: which bases (those that reach the chosen parks; a base counts when it reaches one
+within `dayTripFreeMinutes`, or is named), in which order and with how many nights. A 400 names an
+unknown base, an area of another base, an area on a `:0` base, and nights the trip does not have
+("Your stays add up to 10 nights; the trip has 9").
 
-Without `bases` the optimizer picks the bases, their order and the nights. What it picked comes
-back in `meta.stays`, marked `auto`, so the client can show it and the visitor can fix any part of
-it with `bases` on the next request.
+**The order follows the route.** Where the bases lie on one line (Japan: Tokyo, Fujikawaguchiko,
+Nagoya, Osaka), the stays follow it one way or the other and never double back; landing in Osaka
+and leaving from Tokyo reverses it. Where they lie on none (Paris), the stays come in any order the
+base legs connect. Each base is stayed in at most once.
 
-**Which parks a day can have.** A park day's park must be one its base reaches (`bases[].parks`).
-A park no base of the trip reaches is `unplaced` with `no_base`. A lock on a date whose fixed stay
-cannot reach the park is in `ignoredLocks` with `base_unreachable`.
+### How a day is priced across cities
 
-**A long day trip costs hours.** Travel past 45 minutes each way (`DAY_TRIP_FREE_MINUTES`) is taken
-off the day's hours and priced like a short day: the hours factor of
-[how a day is priced](#how-a-day-is-priced), at most 1.5 with an early close included. Fuji-Q from
-Tokyo (about 2 hours) loses 2.5 of a 10-hour day and costs a third more; from Fujikawaguchiko
-nothing. Such a day warns `long_day_trip`.
-
-**A move costs time.** A move day is either
-
-- a **park day** at a park the old or the new base reaches within 45 minutes, its hours shortened
-  by the leg plus an hour for checking out, luggage and checking in (`MOVE_OVERHEAD_MINUTES`),
-  priced by the hours factor and warning `move_day`. Only where the leg is at most 2 h 30 door to
-  door; never a hop day, never a long day trip; or
-- a **travel day**: `kind: "travel"`, no park. It breaks a run of park days like a rest day but is
-  not counted as one.
-
-Each move also adds 20 minutes to the plan's cost (`PlanCostModel.moveCost`): a hotel change is
-worth something to avoid, so the plan does not move to save less than that. With one Fuji-Q visit,
-the day trip from Tokyo (a third of about 40 minutes, about 13) beats two moves (40), so the plan
-keeps Tokyo; a visitor who wants the night by the lake names `fujikawaguchiko` in `bases`.
-
-**The search.** The stays are one more structure, like the resort blocks: every set of bases that
-reaches the chosen parks (a base counts when it reaches one of them within 45 minutes, or is
-pinned), every order the base legs allow (two consecutive stays need a leg; `startBase` and
-`endBase` pinned) and every split of the nights. Structures are solved cheapest bound first, as
-before. `blocks` still applies, inside the stays. `split=auto` keeps a move day out of the room it
-gives second visits. `/when` plans each window the same way, so `bases` with every night given
-must fit `days`; each window's `plan` carries its `stays`.
+- **A day within one base** may go to a park the base reaches. Travel past
+  `dayTripFreeMinutes` each way is taken off the day's hours and priced like a short day (the hours
+  factor of [how a day is priced](#how-a-day-is-priced), at most 1.5 with an early close): Fuji-Q
+  from Tokyo (about 2 hours from Shinjuku) loses 2 h 10 of a 12-hour day. The day warns
+  `long_day_trip`.
+- **A move day** (the morning in one base, the night in the next) is one of three, the cheapest the
+  plan can use:
+  - **a morning move**, `move.when: "morning"`: the move leaves at `moveStartsAt`, and the day's
+    park is one the new base reaches within the free time; the guest gets in at `moveStartsAt` +
+    the leg + `moveOverheadMinutes` (luggage, check-in) + the way to the park (`startAt`), and
+    the day is priced by the hours left. Warns `move_day`. Only where the leg is a `parkDay`.
+  - **an evening move**, `move.when: "evening"`: the day's park is one the old base reaches
+    within the free time, the move leaves after its close and must arrive by `lastArrivalAt`; it
+    costs the park nothing. Only where the leg is a `parkDay`.
+  - **a travel day**, `kind: "travel"`, `move.when: "day"`: no park. It breaks a run of park days
+    like a rest day but is not counted as one.
+- **Each move adds `moveCost`** (20 minutes of headliner wait): the plan never changes hotels to
+  save less. With one Fuji-Q visit the plan keeps it a day trip from Tokyo unless a night by the
+  lake pays; a visitor who wants the night names `fujikawaguchiko` in `bases`.
+- **A move to or from an airport's city** on the arrival or departure day takes no park.
+- **The stay hotel's perks** count where the guest woke: a perk with `needs: "after_first_night"`
+  (Tokyo Disney Resort's Happy Entry, which no feed carries and which does not hold on the
+  check-in day) holds every morning after the first night, never on the day of a morning move into
+  the base; `blackoutDates` are skipped.
+- **Resort blocks** (`blocks`) are the stays here: a resort's parks are reached from its base, so
+  its days fall in that stay. `blocks` changes nothing in a region with bases.
 
 ### The answer
 
@@ -1011,33 +1042,79 @@ must fit `days`; each window's `plan` carries its `stays`.
 {
   "meta": {
     "stays": [
-      { "base": "tokyo", "from": "2027-04-01", "to": "2027-04-06", "nights": 5, "area": "maihama" },
-      { "base": "osaka", "from": "2027-04-06", "to": "2027-04-10", "nights": 4, "auto": true },
+      { "base": "tokyo", "from": "2027-04-10", "to": "2027-04-14", "nights": 4, "area": "maihama" },
+      { "base": "fujikawaguchiko", "from": "2027-04-14", "to": "2027-04-15", "nights": 1, "auto": true },
     ],
+    "staySuggestion": {
+      // with nights the visitor fixed, the one-night change that saves most
+      "nights": { "tokyo": 3 },
+      "savedMinutesPerRide": 6,
+      "park": "universal-studios-japan",
+      "date": "2027-04-16",
+    },
   },
   "days": [
     {
-      "date": "2027-04-06",
+      "date": "2027-04-14",
+      "kind": "park",
+      "base": "fujikawaguchiko",
+      "parks": [{ "slug": "fuji-q-highland", "part": "full" }],
+      "move": {
+        "from": "tokyo",
+        "to": "fujikawaguchiko",
+        "minutes": 150,
+        "mode": "highway_bus",
+        "name": "highway bus Busta Shinjuku–Kawaguchiko",
+        "when": "morning", // morning | evening | day
+        "departAt": "2027-04-14T08:00:00+09:00",
+        "arriveAt": "2027-04-14T10:30:00+09:00",
+      },
+      "startAt": "2027-04-14T11:45:00+09:00", // after a morning move: when the guest gets in
+      "warnings": ["move_day"],
+    },
+    {
+      "date": "2027-04-15",
       "kind": "travel",
-      "base": "osaka",
+      "base": "nagoya",
       "parks": [],
-      "move": { "from": "tokyo", "to": "osaka", "minutes": 150, "mode": "shinkansen", "name": "Tokaido Shinkansen" },
-      "reasons": [],
-      "warnings": [],
+      "move": { "from": "fujikawaguchiko", "to": "nagoya", "when": "day", "…": "…" },
     },
   ],
-  "totals": { "…": "…", "moves": 1, "travelDays": 1 },
+  "totals": { "…": "…", "moves": 3, "travelDays": 1 },
 }
 ```
 
-- **`stays[]`**: `from` is the check-in day, `to` the check-out day (the next move day, or the
-  departure day); `auto: true` where the optimizer picked the base, its place in the order or its
-  nights.
-- **`days[].base`**: where that night is spent; the departure day's is where it starts. **`move`**
-  on a move day, the curated leg. A park day's `travel` reads from its base's hotel area.
-- **Codes.** Kind `travel`. Warnings `long_day_trip`, `move_day`. `unplaced[].reason`: `no_base`.
-  `ignoredLocks[].reason`: `base_unreachable`. `totals.moves` and `totals.travelDays` only in a
-  region with bases.
+- **`stays[]`**: `from` the check-in day, `to` the check-out day (the next move day, or the
+  departure day); `auto: true` where the plan picked the base or its nights; `area` the visitor's.
+- **`days[].base`**: where that night is spent; the departure day's is where it starts.
+  **`move`** on a move day; its times are typical (the leg's minutes from `moveStartsAt`, or from
+  the park's close plus the way out), never a timetable. A park day's `travel` reads from the
+  hotel area of the base its park is reached from.
+- **`moveBuffer`** is the buffer the plan used for each hotel change: the visitor's `moveBuffer=`
+  or the region's `moveOverheadMinutes`. The client asks the visitor rather than deciding: in
+  Japan, bags sent ahead by courier (takkyubin) make 30 minutes enough, carrying them takes about
+  60, and a slower pace may want more. The region route lists the choices in
+  `stayRules.moveBufferOptions`.
+- **`staySuggestion`** appears only where the visitor fixed nights: each fixed stay one night
+  shorter or longer, the plan made again, the change that saves at least 3 minutes a ride and
+  places every visit; `park` and `date` name the visit that moved to the cheaper day. With every
+  night left to the plan there is nothing to suggest: the plan already has the best split.
+- **Codes.** Kind `travel`. Warnings `long_day_trip`, `move_day`. `unplaced[].reason`: `no_base`
+  (no base the trip may stay in reaches the park). `ignoredLocks[].reason`: `base_unreachable` (no
+  stay the trip can make reaches the park that day). `totals.moves` and `totals.travelDays` only in
+  a region with bases.
+
+**The search.** The stays are one more structure, like the resort blocks: every set of bases that
+reaches the chosen parks, in every order the route allows, with every split of the nights. Each
+plan's quick bound (every visit on its cheapest allowed day, days shared, plus the moves) ranks
+them; the 400 cheapest are solved, branch and bound as before, and a plan left out whose bound
+could beat the result makes `meta.exact` false. `split=auto` keeps the days that can only be a
+move out of the room it gives second visits. On the test region (four cities, five parks, ten
+days) a plan takes 5–40 ms.
+
+**`/when`** plans each window the same way, `bases`, `startBase` and `endBase` included, and ranks
+it with the stays' cost (the hours day trips and moves take, and the moves) on top of its park
+days; each window's `plan` carries its `stays` and each day its `base`.
 
 ## Tickets
 
