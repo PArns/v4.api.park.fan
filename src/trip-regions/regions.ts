@@ -1947,6 +1947,107 @@ export const PARIS: RegionConfig = {
       alternatives: [{ mode: "walk", minutes: 15 }],
     },
   ],
+  // Three bases that all reach each other, so no route line (`order`): the
+  // stays may come in any order. A base's reach is door to door from its
+  // default area, read off the legs above (OSRM's free-flow drive where no
+  // curated leg stands for it); a stay's own area refines it.
+  bases: [
+    {
+      key: "disneyland-paris",
+      name: "Disneyland Paris",
+      hotelAreas: [
+        "disney_lake",
+        "disney_cheyenne_santa_fe",
+        "disney_davy_crockett",
+        "val_d_europe",
+        "val_de_france",
+      ],
+      defaultArea: "disney_lake",
+      // The TGV and the Eurostar (with a change at Lille) stop at
+      // Marne-la-Vallée–Chessy, 2 minutes' walk from the gates; the TGV
+      // reaches it from Aéroport CDG 2 in about 10 minutes.
+      gateways: [
+        {
+          code: "XED",
+          name: "Marne-la-Vallée–Chessy",
+          kind: "station",
+          minutes: 15,
+        },
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+      ],
+      stayNote:
+        "The Disney Hotels by Lake Disney are a walk from the gates and get Extra Magic Time; the partner hotels in Val d'Europe and Val de France run a free shuttle.",
+      parks: [
+        { slug: "disneyland-park", minutes: 15, mode: "walk" },
+        { slug: "disney-adventure-world", minutes: 15, mode: "walk" },
+        { slug: "parc-asterix", minutes: 50, mode: "drive" },
+      ],
+    },
+    {
+      key: "parc-asterix",
+      name: "Parc Astérix",
+      hotelAreas: ["parc_asterix"],
+      defaultArea: "parc_asterix",
+      // The park's shuttle runs from Roissypôle at the airport on every open
+      // day (parcasterix.fr/offres/navette).
+      gateways: [
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+      ],
+      stayNote:
+        "The park's three hotels are a walk from the gate, and a stay includes park tickets and Early Entry to some rides.",
+      parks: [
+        { slug: "parc-asterix", minutes: 15, mode: "walk" },
+        // 56 minutes' drive to the Disney car park, 15 on foot to the gates.
+        { slug: "disneyland-park", minutes: 70, mode: "drive" },
+        { slug: "disney-adventure-world", minutes: 70, mode: "drive" },
+      ],
+    },
+    {
+      key: "paris",
+      name: "Paris",
+      hotelAreas: ["paris_center"],
+      defaultArea: "paris_center",
+      gateways: [
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+        { code: "ORY", name: "Paris Orly", kind: "airport" },
+      ],
+      stayNote:
+        "Châtelet–Les Halles is on RER A to Disneyland Paris and on RER B to the Parc Astérix shuttle at the airport.",
+      parks: [
+        { slug: "disneyland-park", minutes: 45, mode: "rail" },
+        { slug: "disney-adventure-world", minutes: 45, mode: "rail" },
+        // Free flow; RER B and the park's shuttle take about 75.
+        { slug: "parc-asterix", minutes: 45, mode: "drive" },
+      ],
+    },
+  ],
+  baseLegs: [
+    {
+      // About an hour by car between the hotels (OSRM's free flow between the
+      // two car parks is 54 minutes); no coach runs between the resorts.
+      from: "disneyland-paris",
+      to: "parc-asterix",
+      minutes: 60,
+      mode: "drive",
+    },
+    {
+      from: "paris",
+      to: "disneyland-paris",
+      minutes: 45,
+      mode: "rail",
+      name: "RER A",
+      changes: 0,
+      fromStop: "Châtelet–Les Halles",
+      toStop: "Marne-la-Vallée–Chessy",
+    },
+    {
+      // OSRM's free flow between Châtelet and the park, 45 minutes.
+      from: "paris",
+      to: "parc-asterix",
+      minutes: 45,
+      mode: "drive",
+    },
+  ],
 };
 
 export const TRIP_REGIONS: Record<string, RegionConfig> = {
