@@ -25,6 +25,7 @@ import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
+import { SiteAnalyticsTripService } from "./site-analytics-trip.service";
 import { COLLECT_ROUTE } from "./site-analytics.module";
 import { collectBodyMiddleware } from "./collect-body.middleware";
 
@@ -83,6 +84,7 @@ const blocklist = {
     { provide: SiteAnalyticsSeoService, useValue: seo },
     { provide: SiteAnalyticsBlocklist, useValue: blocklist },
     { provide: SiteAnalyticsLiveService, useValue: liveView },
+    { provide: SiteAnalyticsTripService, useValue: {} },
   ],
 })
 class TestModule implements NestModule {
