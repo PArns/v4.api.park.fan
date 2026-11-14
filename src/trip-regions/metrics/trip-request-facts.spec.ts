@@ -59,7 +59,7 @@ describe("errorOf", () => {
     [{ parks: "europa-park" }, "unknown_park"],
     [{ parks: "epcot,epcot" }, "park_listed_twice"],
     [{ parks: "epcot:4" }, "visits_per_park"],
-    [{ to: FROM }, "visits_exceed_days"],
+    [{ to: FROM, parks: "epcot:2,magic-kingdom-park:2" }, "visits_exceed_days"],
     [{ hopper: "atlantis" }, "bad_hopper"],
     [{ area: "atlantis" }, "unknown_area"],
     [{ lock: `universal-epic-universe@${FROM}` }, "bad_lock"],
@@ -303,6 +303,7 @@ describe("the facts of an answer", () => {
     parks: [],
     totals: {},
     unplaced: [],
+    parksLeftOut: [],
     ...over,
   });
 

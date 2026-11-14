@@ -741,7 +741,7 @@ describe("TripRegionsController", () => {
         `/v1/trip-regions/atlantis/plan?from=${day(1)}&to=${day(5)}`,
       ).expect(404);
       await get(
-        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(2)}&parks=epcot,magic-kingdom-park,universal-epic-universe`,
+        `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(2)}&parks=epcot:2,magic-kingdom-park:2`,
       ).expect(400);
       expect(
         recorded.map(({ region, route, status, errorCode }) => ({
