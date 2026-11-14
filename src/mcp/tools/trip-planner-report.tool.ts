@@ -3,11 +3,12 @@ import { defineMcpTool } from "../mcp-tool";
 import { SiteAnalyticsTripService } from "../../site-analytics/site-analytics-trip.service";
 import {
   TICKET_LINK_EVENT,
-  TRIP_EVENTS,
   TRIP_FUNNEL,
-  type TripFunnelStep,
-  type TripTotals,
-  type ValueCount,
+  TRIP_FUNNEL_EVENTS,
+  TRIP_LISTS,
+  type TripFunnelEra,
+  type TripListKey,
+  type TripTotalKey,
 } from "../../site-analytics/site-analytics-trip";
 import { TRIP_REGIONS } from "../../trip-regions/regions";
 import { TicketCatalogService } from "../../trip-regions/ticket-catalog.service";
@@ -28,21 +29,7 @@ import {
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const REGIONS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
-
-/** The event each funnel step counts; `kept` is three. */
-const STEP_EVENTS: Record<TripFunnelStep, string[]> = {
-  started: [TRIP_EVENTS.started],
-  ticketsAnswered: [TRIP_EVENTS.ticketsAnswered],
-  planRequested: [TRIP_EVENTS.planRequested],
-  planShown: [TRIP_EVENTS.planShown],
-  viewChanged: [TRIP_EVENTS.viewChanged],
-  dayOpened: [TRIP_EVENTS.dayOpened],
-  kept: [
-    TRIP_EVENTS.daysSaved,
-    TRIP_EVENTS.icsExported,
-    TRIP_EVENTS.linkCopied,
-  ],
-};
+const ERAS: readonly TripFunnelEra[] = ["before", "since"];
 
 /** A ratio to three places, null without both counts or a base. */
 const ratio = (count: number | null, base: number | null): number | null =>
@@ -52,29 +39,33 @@ export const tripPlannerReportTool = defineMcpTool({
   name: "trip_planner_report",
   title: "Trip planner (vacation) usage",
   description:
-    "How park.fan's multi-day trip planner (the region hubs: Orlando and the regions after it) " +
-    "is used, from its trip_* events and ticket_link_clicked, per region or for all (`region`). " +
-    "Not the day planner: that is planner_report. The funnel in the order a visitor meets it: " +
-    "started → ticketsAnswered → planRequested → planShown → viewChanged → dayOpened → kept " +
-    "(days saved to the day planner + .ics exported + link copied), each with ofStarted, " +
+    "How park.fan's multi-day trip planner (the region hubs) is used, from its trip_* events and " +
+    "ticket_link_clicked, per region or for all (`region`). Not the day planner: that is " +
+    "planner_report. The funnel of the dates-first planner (release 2.21.0): datesPicked " +
+    "(trip_planner_started) → planShown (trip_plan_shown) → changed (trip_edit_opened, " +
+    "trip_option_changed by the visitor) → ticketsEntered (trip_tickets_opened) → kept (days " +
+    "saved to the day planner, .ics exported, link copied), each with ofDatesPicked, " +
     "fromPrevious and dropOff (1 − fromPrevious, null where a step outnumbers the one before). " +
-    "Counts are events, not visitors: planRequested and planShown fire once per distinct " +
-    "request, so they can exceed started. The wizard's dates and parks steps send no event of " +
-    "their own; they are read off planRequested: dates known (mode dates) or searched (mode " +
-    "when, find dates), parks named or the headliners (parks 0). Then: ways in; ticket answers " +
-    "(not_yet, yes, skipped) and what the requests asked (mode, trip length bucket, parks, " +
-    "owned tickets, hopper none/some/all, blocks, rest); answers shown by mode and outcome (ok, " +
-    "relaxed with the rule, error with the HTTP status, 0 = no answer), the parks a plan could " +
-    "not place; find dates: searches, answers, windows found, windows planned by rank; tickets " +
-    "added (picker or combo, by list entry), starts, details opened, adopted, long-stay, a day " +
-    "outside its ticket; hopper toggled on and off; views switched to and days opened by kind " +
-    "and view; pins, swaps, days sent; what was kept; ticket purchase links by seller kind " +
-    "(official, sponsored, plain) and position, surface, ticket mode, locale match, seller and " +
-    "product, attributed to a region by the product's catalog (a product no catalog has is " +
-    "counted in unattributedTicketLinks); and the regions side by side (a region value park.fan " +
-    "does not have is (other)). The server's own record of the plan, when and best-days answers " +
-    "is trip_planner_ops. UTC days; up to six minutes behind the site; Do Not Track, GPC and " +
-    "opted-out readers are missing. " +
+    "newFunnelFrom is the first UTC day the dates-first planner's events were counted; each " +
+    "step counts its `before` days by the old planner's events (a start, an answer of yes to " +
+    "the ticket question; nothing for changed) and its `since` days by the new ones, and every " +
+    "rate is taken over the days both steps count, so a window across the deploy still adds " +
+    "up. Counts are events, not visitors: an answer fires once per distinct request. Then: ways " +
+    "in (source, via), the requests (mode dates or when, trip length bucket, parks with 0 for " +
+    "the headliners, owned tickets, hopper none/some/all, blocks, rest), answers by mode and " +
+    "outcome (ok, relaxed with the rule, error with the HTTP status, 0 = no answer), parks left " +
+    "out and the fix chosen, cities of a route, find dates (toggles, periods, windows found and " +
+    "planned by rank), the edits opened (panel, from) and options changed (option, value, by " +
+    "visitor or parky), the stay suggestion, ticket openings (from, first) and entries, hopper, " +
+    "the views switched to and seen, the date grid's resort mode, days opened, pins, the " +
+    "accuracy note, what was kept, ticket purchase links by seller kind (official, sponsored, " +
+    "plain) and position, surface, mode, locale match, seller and product, attributed to a " +
+    "region by the product's catalog (a product no catalog has is in unattributedTicketLinks); " +
+    "the regions side by side (a region value park.fan does not have is (other)) and the page " +
+    "types the planner was used from (trip_hub, trip_month, trip_best_time, other …). An event " +
+    "the frontend does not send yet lists nothing. The server's own record of the plan, when " +
+    "and best-days answers is trip_planner_ops. UTC days; up to six minutes behind the site; Do " +
+    "Not Track, GPC and opted-out readers are missing. " +
     VISITOR_DATA_DESCRIPTION +
     " " +
     SMALL_CELLS_DESCRIPTION +
@@ -98,7 +89,9 @@ export const tripPlannerReportTool = defineMcpTool({
     series: z
       .boolean()
       .default(false)
-      .describe("Include starts, plan requests and plans shown per period"),
+      .describe(
+        "Include dates picked, plan requests and plans shown per period",
+      ),
   },
   async handler({ region, limit, series, ...input }, ctx) {
     const catalogs = ctx.get(TicketCatalogService);
@@ -119,85 +112,121 @@ export const tripPlannerReportTool = defineMcpTool({
       });
 
     // The whole planner's counts are as counted; one region's, or a filtered
-    // window's, are small cells.
+    // window's, are small cells: each era's count, each total.
+    const flat: Record<string, number | null> = { ...report.totals };
+    for (const step of report.funnel) {
+      for (const era of ERAS) flat[`${step.step}.${era}`] = step[era];
+    }
     const narrowed = isNarrowed(input) || Boolean(region);
-    const keys = Object.keys(report.totals) as Array<keyof TripTotals>;
     const masked = narrowed
-      ? hideSmallInSeries([report.totals], keys)
-      : { series: [report.totals], hidden: false };
-    const t = masked.series[0] as { [K in keyof TripTotals]: number | null };
+      ? hideSmallInSeries([flat], Object.keys(flat))
+      : { series: [flat], hidden: false };
+    const v = masked.series[0];
+    const t = (key: TripTotalKey) => v[key] ?? null;
+    const era = (step: string, e: TripFunnelEra) => v[`${step}.${e}`] ?? null;
+    const measured = (step: string, e: TripFunnelEra) =>
+      report.funnel.find((s) => s.step === step)?.[e] !== null;
+    /** A step's count over the eras it counts; null when one of them is hidden. */
+    const countOf = (step: string, eras = ERAS) => {
+      const counted = eras.filter((e) => measured(step, e));
+      if (counted.length === 0) return null;
+      const values = counted.map((e) => era(step, e));
+      return values.some((x) => x === null)
+        ? null
+        : (values as number[]).reduce((a, b) => a + b, 0);
+    };
+    /** `step` over `base`, over the eras both count. */
+    const rateOf = (step: string, base: string) => {
+      const both = ERAS.filter((e) => measured(step, e) && measured(base, e));
+      return both.length === 0
+        ? null
+        : ratio(countOf(step, both), countOf(base, both));
+    };
     const hide = series
       ? hideSmallInSeries(report.series ?? [], [
-          "started",
+          "datesPicked",
           "planRequested",
           "planShown",
         ])
       : null;
 
     const funnel = TRIP_FUNNEL.map((step, i) => {
-      const count = t[step];
-      const fromPrevious = i === 0 ? null : ratio(count, t[TRIP_FUNNEL[i - 1]]);
+      const fromPrevious = i === 0 ? null : rateOf(step, TRIP_FUNNEL[i - 1]);
       return {
         step,
-        events: STEP_EVENTS[step],
-        count,
-        ofStarted: i === 0 ? null : ratio(count, t.started),
+        events: TRIP_FUNNEL_EVENTS[step],
+        count: countOf(step),
+        before: measured(step, "before") ? era(step, "before") : null,
+        since: measured(step, "since") ? era(step, "since") : null,
+        ofDatesPicked: i === 0 ? null : rateOf(step, "datesPicked"),
         fromPrevious,
         dropOff:
           fromPrevious !== null && fromPrevious <= 1
             ? round3(1 - fromPrevious)
             : null,
-        ...(step === "planRequested" && {
-          dates: { known: t.datesKnown, searched: t.datesSearched },
-          parks: { named: t.parksNamed, headliners: t.parksHeadliners },
-        }),
         ...(step === "planShown" && {
-          ok: t.shownOk,
-          relaxed: t.shownRelaxed,
-          error: t.shownError,
-          errorRate: ratio(t.shownError, t.planShown),
+          ok: t("shownOk"),
+          relaxed: t("shownRelaxed"),
+          error: t("shownError"),
+          errorRate: ratio(t("shownError"), countOf("planShown")),
+        }),
+        ...(step === "changed" && {
+          editOpened: t("editOpened"),
+          optionChanged: t("optionChanged"),
+          optionChangedByParky: t("optionChangedByParky"),
+        }),
+        ...(step === "ticketsEntered" && {
+          ticketsOpened: t("ticketsOpened"),
+          ticketsAnsweredYes: t("ticketsAnsweredYes"),
         }),
         ...(step === "kept" && {
-          daysSaved: t.daysSaved,
-          icsExported: t.icsExported,
-          linkCopied: t.linkCopied,
+          daysSaved: t("daysSaved"),
+          icsExported: t("icsExported"),
+          linkCopied: t("linkCopied"),
         }),
       };
     });
 
-    const cut = <R extends object>(rows: readonly R[], dims: string[]) =>
-      foldSmallRows(rows.slice(0, limit), {
-        dims,
+    const list = (key: TripListKey) =>
+      foldSmallRows(report.lists[key].slice(0, limit), {
+        dims: [...TRIP_LISTS[key].props],
         count: "count",
         sum: ["count"],
       });
-    const values = (rows: readonly ValueCount[]) => cut(rows, ["value"]);
 
     return withVisitorData(
       {
         ...windowOf(report),
         region: report.region,
+        newFunnelFrom: report.newFunnelFrom,
         funnel,
+        requests: {
+          planRequested: t("planRequested"),
+          datesKnown: t("datesKnown"),
+          datesSearched: t("datesSearched"),
+          parksHeadliners: t("parksHeadliners"),
+        },
         findDates: {
-          requested: t.findDatesRequested,
-          shown: t.findDatesShown,
-          windowsPlanned: t.windowsPlanned,
-          plannedPerShown: ratio(t.windowsPlanned, t.findDatesShown),
+          searched: t("datesSearched"),
+          shown: t("findDatesShown"),
+          windowsPlanned: t("windowsPlanned"),
+          plannedPerShown: ratio(t("windowsPlanned"), t("findDatesShown")),
         },
         tickets: {
-          removed: t.ticketRemoved,
-          adopted: t.ticketsAdopted,
-          longStayUsed: t.longStayUsed,
+          removed: t("ticketRemoved"),
+          adopted: t("ticketsAdopted"),
+          longStayUsed: t("longStayUsed"),
         },
+        views: { switched: t("viewChanged"), dayOpened: t("dayOpened") },
         actions: {
-          daySwapped: t.daySwapped,
-          daySent: t.daySent,
-          eveningLinkClicked: t.eveningLinkClicked,
+          daySwapped: t("daySwapped"),
+          daySent: t("daySent"),
+          eveningLinkClicked: t("eveningLinkClicked"),
         },
         ticketLinks: {
           event: TICKET_LINK_EVENT,
-          clicks: t.ticketLinks,
-          unattributedTicketLinks: t.unattributedTicketLinks,
+          clicks: t("ticketLinks"),
+          unattributedTicketLinks: t("unattributedTicketLinks"),
         },
         ...((series || narrowed) && {
           smallValuesHidden: (hide?.hidden ?? false) || masked.hidden,
@@ -206,9 +235,9 @@ export const tripPlannerReportTool = defineMcpTool({
       {
         regions: foldSmallRows(report.regions, {
           dims: ["region"],
-          count: "started",
+          count: "datesPicked",
           sum: [
-            "started",
+            "datesPicked",
             "planRequested",
             "planShown",
             "errors",
@@ -216,55 +245,77 @@ export const tripPlannerReportTool = defineMcpTool({
             "ticketLinks",
           ],
         }),
-        sources: values(report.sources),
-        ticketAnswers: values(report.ticketAnswers),
+        pageTypes: foldSmallRows(
+          report.pageTypes.map((row) => ({
+            ...row,
+            events: row.datesPicked + row.planRequested + row.planShown,
+          })),
+          {
+            dims: ["pageType"],
+            count: "events",
+            sum: ["datesPicked", "planRequested", "planShown", "events"],
+          },
+        ),
+        datesPicked: { sources: list("sources"), via: list("startedVia") },
         requests: {
-          mode: values(report.requests.mode),
-          days: values(report.requests.days),
-          parks: values(report.requests.parks),
-          tickets: values(report.requests.tickets),
-          hopper: values(report.requests.hopper),
-          blocks: values(report.requests.blocks),
-          rest: values(report.requests.rest),
+          mode: list("requestMode"),
+          days: list("requestDays"),
+          parks: list("requestParks"),
+          tickets: list("requestTickets"),
+          hopper: list("requestHopper"),
+          blocks: list("requestBlocks"),
+          rest: list("requestRest"),
         },
-        shown: cut(report.shown, ["mode", "outcome"]),
-        relaxed: values(report.relaxed),
-        unplaced: values(report.unplaced),
-        errors: cut(report.errors, ["mode", "status"]),
+        answers: {
+          shown: list("shown"),
+          relaxed: list("relaxed"),
+          unplaced: list("unplaced"),
+          leftOut: list("leftOut"),
+          leftOutFixes: list("leftOutFixes"),
+          stays: list("stays"),
+          errors: list("errors"),
+        },
         findDates: {
-          windowsFound: values(report.windowsFound),
-          windowRanks: values(report.windowRanks),
+          toggled: list("findToggled"),
+          periods: list("findPeriods"),
+          windowsFound: list("windowsFound"),
+          windowRanks: list("windowRanks"),
+        },
+        changes: {
+          edits: list("edits"),
+          options: list("options"),
+          staySuggestion: list("staySuggestion"),
+          dayPinned: list("dayPinned"),
+          pinsActions: list("pinsActions"),
         },
         tickets: {
-          added: cut(report.ticketsAdded, ["via", "entry"]),
-          starts: values(report.ticketStarts),
-          detailsOpened: values(report.ticketDetails),
-          outsideTicket: values(report.outsideTicket),
+          answers: list("ticketAnswers"),
+          opened: list("ticketsOpened"),
+          added: list("ticketsAdded"),
+          starts: list("ticketStarts"),
+          detailsOpened: list("ticketDetails"),
+          outsideTicket: list("outsideTicket"),
         },
         hopper: {
-          toggled: values(report.hopperToggled),
-          requested: values(report.requests.hopper),
+          toggled: list("hopperToggled"),
+          requested: list("requestHopper"),
         },
         views: {
-          changed: values(report.viewsChanged),
-          dayOpened: cut(report.dayOpened, ["kind", "view"]),
-          dayOpenedByView: values(report.dayOpenedByView),
+          switched: list("viewsChanged"),
+          seen: list("viewsSeen"),
+          calendarMode: list("calendarMode"),
+          dayOpened: list("dayOpened"),
+          dayOpenedByView: list("dayOpenedByView"),
         },
-        dayPinned: values(report.dayPinned),
-        kept: {
-          savedDays: values(report.savedDays),
-          icsDays: values(report.icsDays),
-        },
+        accuracyOpened: list("accuracyOpened"),
+        kept: { savedDays: list("savedDays"), icsDays: list("icsDays") },
         ticketLinks: {
-          byKindAndPosition: cut(report.ticketLinksByKindAndPosition, [
-            "kind",
-            "position",
-          ]),
-          bySurface: values(report.ticketLinksBySurface),
-          byTicketMode: values(report.ticketLinksByMode),
-          byLocaleMatch: values(report.ticketLinksByLocaleMatch),
-          bySeller: cut(report.ticketLinksBySeller, ["seller", "host", "kind"]),
-          byProduct: values(report.ticketLinksByProduct),
+          byKindAndPosition: list("linksByKindAndPosition"),
+          bySurface: list("linksBySurface"),
+          byTicketMode: list("linksByMode"),
+          byLocaleMatch: list("linksByLocaleMatch"),
+          bySeller: list("linksBySeller"),
+          byProduct: list("linksByProduct"),
         },
         ...(hide && { series: hide.series }),
       },
