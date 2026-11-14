@@ -45,7 +45,7 @@ two decimals here; it is never stored or logged.
 
 The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, `wait-times`,
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
-to do, below), `delta` (text), then `done` (the stored answer's id) or `error`. A refusal before the
+to do, below; `replies`, the chips under the answer, comes last), `delta` (text), then `done` (the stored answer's id) or `error`. A refusal before the
 stream is a normal status: 400, 401 (no valid session), 404 (unknown chat or another session's),
 422 (`unclear`: junk, below), 429 with `Retry-After`, 503 (no key stored or the day's budget
 spent).
@@ -158,7 +158,7 @@ the hours of a park's day to `get_hours`. Version 40: times are park time,
 with "park time" said once when the visitor's zone differs. Version 41: a ride by name
 goes straight into the ride tools, a card is never paired with its lookup, small talk needs no
 tool, and "where is it quiet now" without a park goes to `find_parks_nearby`. Version 47: Parky
-*is* park.fan. Waits, forecasts, the calendar, guides, news and fun facts are his own knowledge,
+_is_ park.fan. Waits, forecasts, the calendar, guides, news and fun facts are his own knowledge,
 so he says "I" and "we" ("our guide", "no date yet"), never "according to park.fan", "my data"
 or "the tool"; a park.fan in a tool result means him. He knows the site's story (it began in the
 Taron queue) and how park.fan gets its numbers, as the How park.fan works page tells it, and
@@ -202,18 +202,26 @@ Magic Ticket, Epic Universe on Universal's 1- and 2-day tickets and in no pass).
 and `get_travel_time` take a `region` (Orlando without it), the prompt's trip routing speaks of a
 trip region with Orlando's facts kept as Orlando's, and what differs by region (the perks' names,
 the storm and rainy seasons, whose school breaks) comes with each tool's result instead of the
-prompt.
+prompt. Version 53 gives Parky the visitor's plans ([below](#the-visitors-plans)): "# Their plans"
+says he reads the day planner and the trips in "This chat" without asking, prices a day with
+`review_plan_day`, adds one hint worth knowing unasked (a party night, a ride in maintenance or one
+the smallest rider is too short for, a quieter day nearby, a ticket that misses a day, the storm
+season; once per chat each), and changes a trip with `change_trip`, never a new `plan_vacation`;
+"# Replies" ends an answer the visitor will likely answer with `suggest_replies`; "# Interview"
+leads a trip or a park day question by question. The prompt grew by 2,696 characters (34,236 to
+36,932) and the tool list by 7,934 (50,870 to 58,804, the six new tools 7,649 of them), about 2,600
+tokens of the cached prefix.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
-page and "This chat", the tools by job, the action rule and the one offer, feedback, then off-topic,
-safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
+page and "This chat", their plans, the tools by job, the action rule and the one offer, replies, the
+interview, feedback, then off-topic, safety, teasing and abuse. A rule lives in one place: the action tools' descriptions say what a tool
 does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 65 short chats (`assistant-eval.fixtures.ts`: page, planner,
-alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+`src/assistant/assistant-eval.ts` sends 77 short chats (`assistant-eval.fixtures.ts`: page, planner,
+trips and their plan, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
 the prompt's tokens alone and with the tools, then a pass/fail table:
@@ -463,12 +471,20 @@ action is sent), `plan_add_block`,
 The chat request carries an optional `planner` snapshot of the visitor's plan (`plannerSnapshotSchema`
 in `assistant.schemas.ts`): `{ active?: { park, date }, days: [{ park: { slug, name }, date,
 prefs?: { riderHeightCm?, avoidWet?, earlyEntry? }, entries: [{ id, kind: "ride" | "show" |
-"block", name, rideSlug?, start?: "HH:MM", durationMinutes?, done? }] }] }`, at most 6 days and 40
-entries a day. **The snapshots never fail a chat** (`lenientList`, `lenient`): they come from the
+"block", name, rideSlug?, showSlug?, start?: "HH:MM", startMinute?, durationMinutes?, done? }] }],
+more: [{ park: { slug, name }, date, entries, done?, reserved?, riderHeightCm? }] }`: the active
+day and the nearest in full, at most 8 days (`PLANNER_DETAILED_DAYS`) and 40 entries a day, and
+every other planned day from today on in `more` by park and date, at most 60
+(`PLANNER_INDEX_DAYS`). `startMinute` is the planner's own minute (0 to 2880), so a show at 00:30
+after midnight is not read as the morning; `start` stays for older browsers. **The snapshots never fail a chat** (`lenientList`, `lenient`): they come from the
 browser's own storage, so an unknown key, a bad day or entry, a bad optional value or a list that
 is not one is dropped, a list too long is cut, and a snapshot that is not an object counts as
-absent. The same holds for `alerts` and `favorites` below. Names are cut to 80 characters on one line; the snapshot reaches the
-model as JSON in "This chat", marked as data. Parky answers "what's next" from it without a tool.
+absent. The same holds for `trips`, `interview`, `alerts` and `favorites` below. Names are cut to 80
+characters on one line. The snapshot reaches the model in "This chat" as lines, marked as data
+(`plannerLines`, `tools/assistant-plans.ts`): one per day, one per entry with its id, park-clock
+start, kind, quoted name and slug, then the other days; about 40 % fewer tokens than the JSON it
+replaced. Parky answers "what's next" from it without a tool; a day only in `more` he opens with
+`plan_day`, and the next question carries it in full.
 
 The planner tools check the park like the others (`planPark`) and refuse a day or an entry id the
 snapshot does not hold, so no id is ever guessed. Every `park` below is the `PlannerPark` the other
@@ -477,21 +493,110 @@ planner actions carry; times are `HH:MM` on the park's clock.
 | Tool                | Action                                                                                     |
 | ------------------- | ------------------------------------------------------------------------------------------ |
 | `plan_remove`       | `{ type: "planner_remove", park, date, entryIds }`                                         |
-| `plan_move`         | `{ type: "planner_move", park, date, entryId, toIndex }` (0-based, within the day)         |
+| `plan_move`         | `{ type: "planner_move", park, date, entryId, toIndex? \| start? }` (0-based, or `HH:MM`)  |
 | `plan_update_block` | `{ type: "planner_update_block", park, date, entryId, label?, start?, durationMinutes? }`  |
 | `plan_add_show`     | `{ type: "planner_add_show", park, date, showSlug, start }` (one of the show's times then) |
 | `plan_set_party`    | `{ type: "planner_set_prefs", park, date, prefs }`                                         |
 | `plan_mark_done`    | `{ type: "planner_mark_done", park, date, entryIds, done }`                                |
 | `plan_clear_day`    | `{ type: "planner_clear_day", park, date }` (input `confirmed: true`, after a yes)         |
-| `plan_trip`         | `{ type: "planner_reserve_days", park, dates }` (1 to 6, deduplicated, sorted)             |
-| `plan_trip` `days`  | `{ type: "planner_reserve_trip", days: [{ park, date }] }` (1 to 16, by date, deduplicated) |
+| `plan_trip`         | `{ type: "planner_reserve_days", park, dates, prefs? }` (1 to 6, deduplicated, sorted)     |
+| `plan_trip` `days`  | `{ type: "planner_reserve_trip", days: [{ park, date }], prefs? }` (1 to 16, by date)      |
 | `plan_undo`         | `{ type: "planner_undo", park, date }`                                                     |
 | `plan_share`        | `{ type: "planner_share" }` (refused with nothing planned)                                 |
 
-`plan_update_block` changes blocks only. `plan_add_show` checks the time against the show's
+`plan_update_block` changes blocks only. `plan_move` takes `toIndex` or `start`, never both; a show
+moves only to one of its times that day (`showPerformance`, as `plan_add_show`). `plan_trip`'s
+`riderHeightCm` goes along as `prefs: { riderHeightCm }` for every day it reserves: the interview's
+smallest rider when a trip is filed. `plan_add_show` checks the time against the show's
 showtimes that day; `get_shows` lists each show's `slug` for it. `plan_undo` takes back Parky's
 own last change to the day, and the widget refuses it when the visitor changed the day since; Parky sees only the snapshot, so when a visitor says the
 undo did not work he says the day changed since and offers to make the change by hand.
+
+### The visitor's plans
+
+`review_plan_day` (`park`, `date`, a day of the snapshot) prices one planned day as the visitor holds
+it: the day optimizer (`PlanOptimizeService`, `mode: day`, `preview: true`, the day's prefs) scores
+it as sent, and `/plan/day` from its Redis entry (`cachedPlanDay`) gives each ride's forecast wait
+at the quarter hour its queue is joined, else its hour (`waitAt`). The result: each entry with its
+start and `waitMinutes`, `inMaintenance` (`ridesInWorks`), `tooShortForParty` with the minimum, and
+`notAShowTime` with the show's times; then `totalWaitMinutes`, `idleMinutes`, `endsAt` against
+`closes`, `ridesJoinedAfterClosing`, `clashes` and `sortingSaves`, what `plan_optimize` would save
+(before less after). An optimizer that refuses or fails leaves the totals out with the reason.
+
+The trip planner has no state of its own: its state is the hub's query. The request's `trips`
+(`tripsSnapshotSchema`) carries it per region: `[{ region, query, onScreen?, party?: { size?,
+heightsCm } }]`, at most 4, the query at most 1,200 characters of the planner's own alphabet. The
+browser sends the planner on screen (`onScreen`) and the last trip it remembers per region
+(park.fan's `docs/features/assistant.md`). `visitorTrips` keeps one per known region, the
+on-screen one first; `tripParams` keeps only the names the planner writes (`HUB_VALUES` plus
+`evenings`, `when`, `days`, `within`), each value checked, so a tracking parameter or a hand-edited
+value costs itself only. "This chat" says each trip in one line read off the query alone
+(`tripLine`: dates or the search, parks with their counts, pins, hotel, area, stays, tickets,
+hopper, rest, evenings, the party). For the trip on screen the chat plans it before the answer
+(`visitorTripItinerary`: the plan route's own `normalize` and `plan`, an hour in Redis by the
+normalized query, which the planner asked a moment before) within 1.5 s
+(`TRIP_DIGEST_BUDGET_MS`), in parallel with the page subject, and lists it a line a day
+(`tripDigest`: the parks with their big rides' wait, a party night, why, what to watch, an evening;
+then the totals, the season, what was not placed or not kept). That digest is where Parky's unasked
+hints come from, and every figure in it is the plan's own, never the browser's. Past the budget, or
+for a remembered trip, the line says to read it with `get_trip_plan`.
+
+| Tool            | Action / result                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `get_trip_plan` | reads only: the trip (`region` when there are several) as `plan_vacation` retells a plan, with `shown` and `party` |
+| `change_trip`   | `{ type: "trip_set", region, query, change: TripChangeKind[] }`                                                    |
+| `trip_undo`     | `{ type: "trip_undo", region }`: back to the trip before Parky's last change, unless the visitor changed it since  |
+
+`change_trip` takes `dates`, `parks` (`{ park, visits }`, 1–3 sets a park, 0 removes it, the others
+stay; the first edit of an untouched trip starts from the region's headliners, as the planner does),
+`pin` (`{ park | "rest", date }`, one pin a date), `unpin` (dates), `swap` (`{ a, b }`: each day
+pinned to what the other holds, the planner's own `swapLocks`; a travel or two-park day is refused),
+`rest`, `tickets` (`""` clears), `hotel`, `area`, `hopper`, `fireworks`, `evenings`, `arrival`,
+`departure`. `changeTripParams` edits the visitor's query name by name, so everything the change
+does not touch stays as written (`blocks`, the stays' `bases`), and the planner's defaults stay out
+of it, as the page writes them. New dates leave a date search and drop pins outside them; a removed
+park takes its pins along. The plan route then checks the result: a refusal (an unknown park, hotel
+or ticket, over 21 days) is the route's sentence and sends nothing. More visits than the days hold is
+the planner's own problem state with its way out (`PLANNER_PROBLEM`), so that change still goes, with
+`notPlannedYet`: an interview sets the dates before the parks. Otherwise the result says
+`daysChanged` (date, weekday, `now`, `was`) and `bigRidesWait` before and after (`tripPlanChange`),
+plus pins not kept and parks not placed. Without a trip, `dates` start one. `query` is written in
+the planner's own order and spelling (`writeTripQuery`); the widget applies it through the planner's
+state, or opens the hub with it.
+
+### Reply chips
+
+`suggest_replies` (`replies`: 2 to 4, each 1 to 40 characters) sends `{ type: "replies", replies }`:
+the visitor's likely answers, tappable under the answer, each sent as their message. The tool drops
+Markdown characters, a URL, junk (`junkReason`) and a repeat, and runs once per answer. It is
+terminal: when every call of a round is `suggest_replies`, the loop ends after that round, so chips
+cost no extra round and no wait (`REPLIES_TOOL` in `assistant-chat.service.ts`); beside another call
+it is answered "call suggest_replies last, alone" and shows nothing. The last round
+(`tool_choice: none`) has none. The call is stored with the answer's tool calls, so the admin and
+the admin MCP's `assistant_conversation` show the chips offered; no column was added.
+
+### The interview
+
+Parky can lead a visitor through a trip (`TRIP_INTERVIEW_STEPS`: `region`, `dates`, `party`,
+`mustdo`, `tickets`, `hotel`, `pace`, `file`) or a park day (`DAY_INTERVIEW_STEPS`: `day`,
+`arrival`, `mustdo`, `heights`, `shows`, `sort`). The browser holds the state beside the chat and
+sends it with every question as `interview` (`interviewSnapshotSchema`): `{ kind, region?, park?,
+date?, step, answered, skipped, mustDoRides: [{ park, rides: ride ids }], source: "planner" |
+"chat" }`, lenient like the rest. Every answer is applied at once with the tool the step names
+(`change_trip`, `plan_set_party`, `plan_add_rides`, `plan_add_show`, `plan_trip`), so a visitor who
+leaves keeps everything; the state only says where the interview stands, and the history's ten
+messages are no limit. "This chat" names the step, what to ask and the tool that takes the answer
+(`interviewLine`); a step the plans already hold is asked as a confirmation (`interviewHolds`), and
+a start from the planner's button says to ask the first question at once.
+
+`interview` (`op`: `start` with `kind` and `region`, `park` or `date`; `answered` or `skip`, the
+step being asked by default, `party` and `mustDoRides` with it; `end`) runs once per answer and
+sends `{ type: "interview_state", interview, outcome?, region?, party? }`: the new state, or `null`
+with `outcome` `done` or `left`. The next step is the first neither answered nor skipped
+(`nextInterviewStep`), and the result names it with what to ask, the tool for the answer and chip
+ideas in English (`interviewGuide`). A trip's `party` (how many, the children's heights) has no
+field in either planner: the widget keeps it with the region's remembered trip, it comes back in
+`trips`, and `file` writes the smallest height into the day planner's prefs.
 
 ### The trip regions: the vacation planner in the chat
 
@@ -543,9 +648,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season
-said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
-every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
-  date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
+  said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
+  every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
+date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
   characters, its tickets to buy included (`assistant-trip.spec.ts`); a result is cut at 12,000.
 - **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
