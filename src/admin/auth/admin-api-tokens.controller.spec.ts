@@ -122,6 +122,30 @@ describe("AdminApiTokensController", () => {
     expect(auth.confirmIdentity).not.toHaveBeenCalled();
   });
 
+  it("makes an owner token for an owner only, refusing an editor before the password", async () => {
+    const { controller, tokens, auth } = build();
+    await controller.create(admin("owner"), {
+      name: "Claude",
+      password: "a-long-enough-password",
+      scope: "admin:owner",
+    });
+    expect(tokens.createPersonalToken).toHaveBeenCalledWith(
+      SELF,
+      "Claude",
+      null,
+      "admin:owner",
+    );
+    auth.confirmIdentity.mockClear();
+    await expect(
+      controller.create(admin("editor"), {
+        name: "Claude",
+        password: "a-long-enough-password",
+        scope: "admin:owner",
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(auth.confirmIdentity).not.toHaveBeenCalled();
+  });
+
   it("refuses a name that is only invisible characters, without spending an attempt", async () => {
     const { controller, auth } = build();
     await expect(

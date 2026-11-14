@@ -35,8 +35,8 @@ export interface McpToolDefinition<Shape extends ToolInputShape> {
   /**
    * What the tool changes; absent for a read. `add` only adds rows, `change`
    * changes them, `delete` removes or retires them. A tool that writes needs
-   * `minRole` `editor` or above, which only a token with `admin:write`
-   * reaches (`mcp-write.ts`).
+   * `minRole` `editor` or above, which a token with `admin:write` reaches,
+   * or `owner`, which only `admin:owner` does (`mcp-write.ts`).
    */
   writes?: McpToolWrites;
   /**

@@ -5,7 +5,7 @@ import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import {
   ADMIN_TOKEN_SCOPES,
-  WRITE_ADMIN_TOKEN_SCOPE,
+  scopeForRole,
   type AdminTokenScope,
 } from "../admin/auth/admin-api-token.constants";
 import { roleAtLeast } from "../admin/auth/entities/admin-user.entity";
@@ -37,9 +37,10 @@ export function toolAnnotations(tool: AnyMcpTool): ToolAnnotations {
 }
 
 /**
- * Why a principal may not call a tool, or null when it may. A read-only
- * token and an account below the tool's role are told apart, so the answer
- * names the credential to get.
+ * Why a principal may not call a tool, or null when it may. A token whose
+ * scope stops below the tool's role and an account below it are told apart,
+ * so the answer names the credential to get: `admin:write` for an editor's
+ * tool, `admin:owner` for an owner's.
  */
 export function toolRefusal(
   tool: AnyMcpTool,
@@ -53,13 +54,12 @@ export function toolRefusal(
       ? ADMIN_TOKEN_SCOPES[scope as AdminTokenScope]
       : null;
   if (cap && !roleAtLeast(cap, minRole)) {
-    if (!roleAtLeast(ADMIN_TOKEN_SCOPES[WRITE_ADMIN_TOKEN_SCOPE], minRole)) {
-      return `${tool.name} needs the ${minRole} role, which no token scope reaches; it is done in the admin`;
-    }
+    const needed = scopeForRole(minRole);
+    const who = minRole === "owner" ? "An owner" : "An editor or owner";
     return (
-      `${tool.name} changes data and needs a token with the ${WRITE_ADMIN_TOKEN_SCOPE} scope; ` +
-      `this one has ${scope}. An editor or owner connects again and allows writing on the ` +
-      `consent page, or creates a personal access token with ${WRITE_ADMIN_TOKEN_SCOPE}.`
+      `${tool.name} needs a token with the ${needed} scope; this one has ${scope}. ` +
+      `${who} connects again and allows it on the consent page, or creates a ` +
+      `personal access token with ${needed}.`
     );
   }
   return `${tool.name} needs the ${minRole} role; this account is ${admin.role}`;

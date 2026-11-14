@@ -1,6 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { AdminPrincipal } from "../../../admin/auth/admin-principal";
 import type { AdminRole } from "../../../admin/auth/entities/admin-user.entity";
+import { scopeForRole } from "../../../admin/auth/admin-api-token.constants";
 import {
   AdminAuditService,
   type AuditWrite,
@@ -8,7 +9,7 @@ import {
 import { McpServerFactory } from "../../mcp-server.factory";
 import type { AnyMcpTool, McpToolContext } from "../../mcp-tool";
 
-/** The account behind a token, with the role the token leaves it. */
+/** The account behind a token, with the narrowest scope that leaves it this role. */
 export function principal(role: AdminRole): AdminPrincipal {
   return {
     userId: "11111111-1111-4111-8111-111111111111",
@@ -20,7 +21,12 @@ export function principal(role: AdminRole): AdminPrincipal {
     ip: "203.0.113.7",
     mustChangePassword: false,
     mustEnrolTotp: false,
-    apiToken: { id: "t", kind: "pat", clientName: null, scope: "admin:write" },
+    apiToken: {
+      id: "t",
+      kind: "pat",
+      clientName: null,
+      scope: scopeForRole(role),
+    },
   };
 }
 

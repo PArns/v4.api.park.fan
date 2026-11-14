@@ -27,8 +27,8 @@ const READ_ONLY = " Nothing here changes data.";
 
 /** Appended for a caller whose token may write. */
 const WRITES =
-  " With this token, the tools not marked read-only also write, as an editor does in the " +
-  "admin, through the same checks. Every write is in the audit log under this account. Write " +
+  " With this token, the tools not marked read-only also write, as the account's role does in " +
+  "the admin, through the same checks. Every write is in the audit log under this account. Write " +
   "only what the person asked for; run a bulk write with dryRun first, and a delete needs confirm.";
 
 /**

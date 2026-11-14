@@ -22,49 +22,72 @@ export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const PAT_EXPIRY_DAYS = [30, 90, 365] as const;
 
 /**
- * Every scope a token can carry, and the most its holder may do with it. The
- * effective role is the lesser of this and the account's own role, so a token
- * never outranks the person who made it. `admin:write` reads too, and stops at
- * `editor`: curation (seasons, tickets) and nothing an owner alone may do.
+ * Every scope a token can carry, and the most its holder may do with it,
+ * narrowest first. The effective role is the lesser of this and the
+ * account's own role, so a token never outranks the person who made it.
+ * `admin:write` reads too and stops at `editor`: curation and the editor's
+ * actions. `admin:owner` reaches the owner-only actions too (merges,
+ * retirement, maintenance, API keys) and is granted to an owner only.
  */
 export const ADMIN_TOKEN_SCOPES = {
   "admin:read": "viewer",
   "admin:write": "editor",
+  "admin:owner": "owner",
 } as const satisfies Record<string, AdminRole>;
 
 export type AdminTokenScope = keyof typeof ADMIN_TOKEN_SCOPES;
 export const DEFAULT_ADMIN_TOKEN_SCOPE: AdminTokenScope = "admin:read";
 export const WRITE_ADMIN_TOKEN_SCOPE: AdminTokenScope = "admin:write";
+export const OWNER_ADMIN_TOKEN_SCOPE: AdminTokenScope = "admin:owner";
 
-/** Every scope, for the discovery documents and the DTOs. */
+/** Every scope, narrowest first, for the discovery documents and the DTOs. */
 export const ADMIN_TOKEN_SCOPE_NAMES = Object.keys(
   ADMIN_TOKEN_SCOPES,
 ) as AdminTokenScope[];
 
-/**
- * The scope an OAuth request asks for: `admin:write` when its space-separated
- * `scope` names it, else `admin:read`. Anything else asked for is not granted,
- * which RFC 6749 §3.3 allows; the token response names what was.
- */
-export function requestedScope(raw: string | undefined): AdminTokenScope {
-  const asked = (raw ?? "").split(/\s+/);
-  return asked.includes(WRITE_ADMIN_TOKEN_SCOPE)
-    ? WRITE_ADMIN_TOKEN_SCOPE
-    : DEFAULT_ADMIN_TOKEN_SCOPE;
+/** The narrowest scope whose cap reaches `role`: the one a tool of that role needs. */
+export function scopeForRole(role: AdminRole): AdminTokenScope {
+  return (
+    ADMIN_TOKEN_SCOPE_NAMES.find((scope) =>
+      roleAtLeast(ADMIN_TOKEN_SCOPES[scope], role),
+    ) ?? OWNER_ADMIN_TOKEN_SCOPE
+  );
 }
 
 /**
- * The scope an account may hand out: one whose cap it reaches itself. A viewer
- * or author asking for `admin:write` gets `admin:read`, so a token's stored
- * scope never claims a write its account could not make.
+ * The scope an OAuth request asks for: the widest of the known scopes its
+ * space-separated `scope` names, else `admin:read`. Anything else asked for
+ * is not granted, which RFC 6749 §3.3 allows; the token response names what
+ * was.
+ */
+export function requestedScope(raw: string | undefined): AdminTokenScope {
+  const asked = (raw ?? "").split(/\s+/);
+  return (
+    [...ADMIN_TOKEN_SCOPE_NAMES]
+      .reverse()
+      .find((scope) => asked.includes(scope)) ?? DEFAULT_ADMIN_TOKEN_SCOPE
+  );
+}
+
+/**
+ * The scope an account may hand out: the one asked for, or the widest
+ * narrower one whose cap the account reaches itself. An editor asking for
+ * `admin:owner` gets `admin:write`, a viewer or author asking for either
+ * gets `admin:read`, so a token's stored scope never claims what its account
+ * could not do.
  */
 export function grantableScope(
   scope: AdminTokenScope,
   role: AdminRole,
 ): AdminTokenScope {
-  return roleAtLeast(role, ADMIN_TOKEN_SCOPES[scope])
-    ? scope
-    : DEFAULT_ADMIN_TOKEN_SCOPE;
+  const names = ADMIN_TOKEN_SCOPE_NAMES;
+  return (
+    names
+      .slice(0, names.indexOf(scope) + 1)
+      .reverse()
+      .find((name) => roleAtLeast(role, ADMIN_TOKEN_SCOPES[name])) ??
+    DEFAULT_ADMIN_TOKEN_SCOPE
+  );
 }
 
 export const ADMIN_API_TOKEN_KINDS = ["pat", "oauth"] as const;

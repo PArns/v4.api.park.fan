@@ -85,7 +85,7 @@ export class McpController {
     description:
       "Needs `Authorization: Bearer` with a personal access token (`pfa_…`) or an OAuth " +
       "access token from /v1/oauth/token. Reads; a token with `admin:write` also writes " +
-      "as an editor. See docs/admin/mcp.md.",
+      "as an editor, one with `admin:owner` as an owner. See docs/admin/mcp.md.",
   })
   @ApiResponse({
     status: 401,
