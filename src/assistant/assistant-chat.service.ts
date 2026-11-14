@@ -21,6 +21,7 @@ import {
   type LookedUpEntity,
 } from "./system-prompt";
 import { repeatsLastQuestion } from "./assistant-junk";
+import { RepliesTextGuard } from "./assistant-replies-text";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
 import {
@@ -272,7 +273,31 @@ export class AssistantChatService {
     ];
     const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const toolCalls: AssistantToolCall[] = [];
-    let text = "";
+    // Chips the model wrote as text never reach the page; they go out as the replies tool's.
+    const guard = new RepliesTextGuard();
+    const show = (piece: string) => {
+      const shown = guard.push(piece);
+      if (shown) emit({ type: "delta", text: shown });
+    };
+    const runTool = async (name: string, input: unknown) => {
+      const status = toolStatus(name);
+      if (status) emit({ type: "status", tool: status });
+      const result = await runAssistantTool(name, input, toolContext, (error) =>
+        this.logger.error(`Tool ${name} failed: ${(error as Error).message}`),
+      );
+      if (result.action) emit({ type: "action", action: result.action });
+      toolCalls.push({
+        name,
+        input: storedToolInput(input),
+        ...(result.isError && {
+          error: true,
+          errorKind: result.errorKind,
+        }),
+        ...(result.issues && { issues: result.issues }),
+        ...(result.ignoredKeys && { ignoredKeys: result.ignoredKeys }),
+      });
+      return result;
+    };
     /** The running round's usage from its stream events, for a round that never finishes. */
     let partial: Usage | null = null;
 
@@ -306,15 +331,13 @@ export class AssistantChatService {
             running.output = event.usage.output_tokens;
           }
         });
-        let separated = text.length === 0;
+        let separated = !guard.started;
         stream.on("text", (delta) => {
           if (!separated) {
             separated = true;
-            text += "\n\n";
-            emit({ type: "delta", text: "\n\n" });
+            show("\n\n");
           }
-          text += delta;
-          emit({ type: "delta", text: delta });
+          show(delta);
         });
         const reply = await stream.finalMessage();
         partial = null;
@@ -340,28 +363,7 @@ export class AssistantChatService {
                 is_error: true,
               };
             }
-            const status = toolStatus(call.name);
-            if (status) emit({ type: "status", tool: status });
-            const result = await runAssistantTool(
-              call.name,
-              call.input,
-              toolContext,
-              (error) =>
-                this.logger.error(
-                  `Tool ${call.name} failed: ${(error as Error).message}`,
-                ),
-            );
-            if (result.action) emit({ type: "action", action: result.action });
-            toolCalls.push({
-              name: call.name,
-              input: storedToolInput(call.input),
-              ...(result.isError && {
-                error: true,
-                errorKind: result.errorKind,
-              }),
-              ...(result.issues && { issues: result.issues }),
-              ...(result.ignoredKeys && { ignoredKeys: result.ignoredKeys }),
-            });
+            const result = await runTool(call.name, call.input);
             return {
               type: "tool_result" as const,
               tool_use_id: call.id,
@@ -385,14 +387,27 @@ export class AssistantChatService {
       if (!signal.aborted) {
         this.logger.error(`Answer failed: ${describeError(error)}`);
       }
-      await this.record(conversation, text, toolCalls, usage, chat.sessionHash);
+      guard.finish();
+      await this.record(
+        conversation,
+        guard.text,
+        toolCalls,
+        usage,
+        chat.sessionHash,
+      );
       emit({ type: "error", code: "upstream" });
       return;
     }
 
+    const { rest, replies } = guard.finish();
+    if (rest) emit({ type: "delta", text: rest });
+    if (replies?.length && !answer.done.has(REPLIES_TOOL)) {
+      this.logger.warn("Replies written as text: moved to suggest_replies");
+      await runTool(REPLIES_TOOL, { replies });
+    }
     const message = await this.record(
       conversation,
-      text,
+      guard.text,
       toolCalls,
       usage,
       chat.sessionHash,
