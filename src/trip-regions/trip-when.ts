@@ -27,6 +27,7 @@ import {
   penaltiesOf,
   PlanCostModel,
   stormWeight,
+  touchesStormPeak,
   type StormWarning,
   type DayCostContext,
   type DayCostParts,
@@ -654,8 +655,18 @@ export function findTripDates(input: WhenInput): TripWhen {
       1,
       [...visitsAt(i).values()].reduce((s, v) => s + v, 0),
     );
+  // A window that touches the storm peak on any day pays this per visit, in
+  // its bound and its score alike, so the search stays exact.
+  const peakWindowMinutes = region.weather.storm?.peakWindowMinutes ?? 0;
+  const peakTermAt = (i: number): number =>
+    peakWindowMinutes > 0 &&
+    touchesStormPeak(region.weather.storm, dates[i], dates[i + length - 1])
+      ? peakWindowMinutes
+      : 0;
 
-  const lowerBound = (i: number): number => {
+  const lowerBound = (i: number): number =>
+    planBound(i) + peakTermAt(i) * visitCount(i);
+  const planBound = (i: number): number => {
     const pricing = pricingAt(i);
     const visits = visitsAt(i);
     const open: number[] = [];
@@ -745,6 +756,9 @@ export function findTripDates(input: WhenInput): TripWhen {
     score += UNPLACED_VISIT_COST * (plan.unplaced.length + outside);
     // A region with bases: what the stays add (travel hours, the moves).
     score += plan.stayPenalty ?? 0;
+    const peakTerm = peakTermAt(i);
+    score += peakTerm * visitCount(i);
+    storm += peakTerm * parkDays;
     const basis = basisOf(bases);
     const penalties = penaltiesOf(
       heat,

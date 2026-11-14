@@ -148,6 +148,23 @@ export function isStormPeak(
   return md >= storm.peak.from && md <= storm.peak.to;
 }
 
+/**
+ * Whether a trip from `from` to `to` (inclusive) touches a storm season's
+ * peak on any day, travel days included: the window `hurricane_peak` /
+ * `typhoon_peak` warns about, and the one `/when` adds `peakWindowMinutes` to.
+ */
+export function touchesStormPeak(
+  storm: StormSeasonConfig | undefined,
+  from: string,
+  to: string,
+): boolean {
+  if (!storm) return false;
+  for (let d = from; d <= to; d = addIsoDays(d, 1)) {
+    if (isStormPeak(storm, d)) return true;
+  }
+  return false;
+}
+
 /** A storm season's minutes on a date, the same for every park that day. */
 export function stormMinutes(
   storm: StormSeasonConfig | undefined,
