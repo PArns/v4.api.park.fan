@@ -12,6 +12,7 @@ import type { PublicParkSeason } from "../parks/park-seasons.controller";
 import {
   hotelKinds,
   stayRulesOf,
+  MOVE_BUFFER_OPTIONS,
   venuePoint,
   type RegionConfig,
   type RegionParkConfig,
@@ -278,7 +279,7 @@ export function describeRegion(
         ...l,
         parkDay: l.parkDay ?? l.minutes <= stayRules.parkDayMaxLegMinutes,
       })),
-      stayRules,
+      stayRules: { ...stayRules, moveBufferOptions: [...MOVE_BUFFER_OPTIONS] },
     }),
     tickets: publicTicketCatalog(region),
   };

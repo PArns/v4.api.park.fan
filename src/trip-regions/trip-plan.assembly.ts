@@ -106,6 +106,8 @@ export interface NormalizedPlanQuery {
     bases: Array<{ base: string; nights?: number; area?: string }>;
     startBase?: string;
     endBase?: string;
+    /** `moveBuffer=`: the visitor's own minutes for a hotel change, over the region's. */
+    moveBuffer?: number;
   };
 }
 
@@ -294,7 +296,7 @@ export function normalizePlanQuery(
 }
 
 /**
- * `bases`, `startBase` and `endBase`: only in a region with bases, where they
+ * `bases`, `startBase`, `endBase` and `moveBuffer`: only in a region with bases, where they
  * replace `area` and `hotel`; every base known, its area its own, its nights
  * within the trip's. 400 otherwise.
  */
@@ -306,11 +308,12 @@ function normalizeStays(
   const asked =
     query.bases !== undefined ||
     query.startBase !== undefined ||
-    query.endBase !== undefined;
+    query.endBase !== undefined ||
+    query.moveBuffer !== undefined;
   if (!region.bases) {
     if (asked) {
       throw new BadRequestException(
-        `${region.name} has no bases: bases, startBase and endBase are for a trip across several cities`,
+        `${region.name} has no bases: bases, startBase, endBase and moveBuffer are for a trip across several cities`,
       );
     }
     return undefined;
@@ -380,6 +383,7 @@ function normalizeStays(
     bases,
     ...(startBase && { startBase }),
     ...(endBase && { endBase }),
+    ...(query.moveBuffer !== undefined && { moveBuffer: query.moveBuffer }),
   };
 }
 
@@ -396,6 +400,7 @@ function staysCacheQuery(
       .join(","),
     stays.startBase ?? "-",
     stays.endBase ?? "-",
+    stays.moveBuffer ?? "-",
   ].join(";");
 }
 
@@ -445,7 +450,7 @@ export function staysOption(
     ...(stays.endBase && { endBase: stays.endBase }),
     rules: {
       dayTripFreeMinutes: rules.dayTripFreeMinutes,
-      moveOverheadMinutes: rules.moveOverheadMinutes,
+      moveOverheadMinutes: stays.moveBuffer ?? rules.moveOverheadMinutes,
       moveCost: rules.moveCost,
       moveStartMinute: minuteOfClock(rules.moveStartsAt) ?? 8 * 60,
       lastArrivalMinute: minuteOfClock(rules.lastArrivalAt) ?? 23 * 60,
@@ -1096,6 +1101,10 @@ export function planResponse(
         }),
       }),
       ...(suggestion && { staySuggestion: suggestion }),
+      ...(q.stays && {
+        moveBuffer:
+          q.stays.moveBuffer ?? stayRulesOf(region).moveOverheadMinutes,
+      }),
     },
     days: plan.days.map((raw) => {
       const { day, area } = withStay(raw, q, region.timezone);

@@ -597,6 +597,7 @@ calendar does not.
 | `evenings`   | `1`                                                  | `1` (default): an `evening` on park days that end early ([Evenings](#evenings)); `0`: none                                              |
 | `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                                |
 | `bases`, `startBase`, `endBase` | `tokyo:4@maihama`, `tokyo`, `osaka` | a region with bases only, in place of `area` and `hotel`: the stays the visitor fixes and the trip's ends ([bases](#bases-a-trip-across-several-cities)) |
+| `moveBuffer` | `30` | a region with bases only: the visitor's own minutes for a hotel change on top of the train, one of `stayRules.moveBufferOptions` (30, 60, 90, 120); default the region's `moveOverheadMinutes` |
 
 More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
 a hopper (neither `ticket=hopper` nor an owned ticket with hopping) is ignored: the plan keeps one
@@ -1018,6 +1019,11 @@ base legs connect. Each base is stayed in at most once.
   **`move`** on a move day; its times are typical (the leg's minutes from `moveStartsAt`, or from
   the park's close plus the way out), never a timetable. A park day's `travel` reads from the
   hotel area of the base its park is reached from.
+- **`moveBuffer`** is the buffer the plan used for each hotel change: the visitor's `moveBuffer=`
+  or the region's `moveOverheadMinutes`. The client asks the visitor rather than deciding: in
+  Japan, bags sent ahead by courier (takkyubin) make 30 minutes enough, carrying them takes about
+  60, and a slower pace may want more. The region route lists the choices in
+  `stayRules.moveBufferOptions`.
 - **`staySuggestion`** appears only where the visitor fixed nights: each fixed stay one night
   shorter or longer, the plan made again, the change that saves at least 3 minutes a ride and
   places every visit; `park` and `date` name the visit that moved to the cheaper day. With every
