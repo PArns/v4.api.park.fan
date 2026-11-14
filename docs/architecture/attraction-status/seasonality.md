@@ -61,8 +61,9 @@ global stats), the outage and „not run today" lines, and the MCP and Parky too
 a bound ride reads `isCurrentlyInSeason: false` and carries `boundSeason`
 ([contract](../../frontend/seasonality.md#a-ride-bound-to-a-park-season)). The detectors read the
 same answer: `findSilencedClusters` takes a bound ride as a known season, `findAbsenceRetiredUnreviewed`
-does not ask about one, the retirement candidates leave it out while it is outside its days, and
-the children sync's absence step does not retire it (`isSeasonalRow`).
+does not ask about one, the retirement candidates leave it out while it is outside its days,
+the children sync's absence step does not retire it (`isSeasonalRow`), and the
+[maze rule](maze-rule.md) reads a bound season's months as its season.
 
 **Explicit selects.** A `find` with `select` loads the virtual column only when it lists
 `seasonBindings: true` (`/plan/day` and the children sync do); without it the ride resolves as not

@@ -19,10 +19,19 @@ A row is filed `MAZE` when all three coincide:
 None is enough alone: `Haunted Mansion` runs all year, and 258 seasonal rows with an autumn last month
 are water slides. All three together are still circumstantial, which is what the rubric is for.
 
-**Season evidence is read in two steps:** the resolved months, else the month of
-`season_out_since`. Only 18 of 1,098 seasonal rows carried months (2026-10-06); 633 had neither and
-the rule refuses them. `park_seasons` was empty that day, so the Halloween branch contributes
-nothing until a season is curated; the fixed window is the floor.
+**Season evidence is read in three steps:** the months of the park seasons that bind the row, where
+a binding decides its season ([season-bound rides](seasonality.md)); else the resolved months; else
+the month of `season_out_since`. Only 18 of 1,098 seasonal rows carried months (2026-10-06); 633 had
+neither and the rule refuses them. `park_seasons` was empty that day, so the Halloween branch
+contributes nothing until a season is curated; the fixed window is the floor.
+
+**The bindings are loaded as the entity loads them.** The rule's query selects
+`attractionSeasonBindingsSql` (`season-window.sql.ts`, what `Attraction.seasonBindings` reads) beside
+the five seasonality columns, and `resolveCuratedFacts` weighs them with the precedence of
+`attractionIsSeasonal` and `attractionIsSeasonBound`: a curated `false` or curated months override a
+binding, a binding overrides the detector. A maze the detector never flagged, because it ran a dozen
+evenings, is seasonal once its park's Halloween season lists it; a ride a Christmas season binds is
+seasonal but not in autumn.
 
 ## The park's rubric overrides all three (PAR-835)
 
@@ -53,7 +62,7 @@ The rule runs as the last attraction step of `detect-seasonal` (step 5), right a
 rewrite `is_seasonal` and `season_months`; on its own cron it would read a day-old season on the
 night a maze's season is first recognised. It decides in TypeScript over loaded rows (7,531 unjudged
 rows, 2026-10-06) rather than in SQL, so seasonality is not resolved a second time in a second
-language.
+language; only the bindings come out of SQL, unweighed.
 
 ## Calibration
 
