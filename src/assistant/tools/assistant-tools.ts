@@ -155,6 +155,28 @@ import {
   type RegionParkName,
   type SeasonRow,
 } from "./assistant-trip";
+import {
+  changeTripParams,
+  clockOfMinute,
+  entryMinute,
+  interviewGuide,
+  interviewHolds,
+  nextInterviewStep,
+  optimizerEntry,
+  pickTrip,
+  planQueryOf,
+  tripPlanChange,
+  tripSearchOf,
+  type TripChange,
+  type VisitorTrip,
+  waitAt,
+  writeTripQuery,
+} from "./assistant-plans";
+import { PlanOptimizeService } from "../../planner/plan-optimize.service";
+import type { PlanOptimizeRequestDto } from "../../planner/dto/plan-optimize.dto";
+import { cachedPlanDay } from "../../parks/services/plan-day-cache";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import type { Redis } from "ioredis";
 
 /** How long a session may not chat after Parky ended one of its chats. */
 export const CHAT_END_COOLDOWN_MINUTES = 15;
@@ -189,6 +211,10 @@ import {
   type PostCardRow,
 } from "./assistant-actions";
 import {
+  DAY_INTERVIEW_STEPS,
+  type InterviewSnapshot,
+  type InterviewStep,
+  TRIP_INTERVIEW_STEPS,
   plannerClock,
   plannerEntryId,
   plannerPrefs,
@@ -309,6 +335,10 @@ export interface AssistantToolContext {
   notePark?: (timezone: string) => void;
   /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
   planner?: PlannerSnapshot | null;
+  /** The visitor's trips, one per region, the on-screen one first (`visitorTrips`). */
+  trips?: readonly VisitorTrip[];
+  /** Parky's interview, while one runs, as the browser holds it. */
+  interview?: InterviewSnapshot | null;
   /** The browser's push state and alerts as it sent them. */
   alerts?: AlertsSnapshot | null;
   /** The ids of the favourites as the browser sent them. */
@@ -1859,6 +1889,61 @@ function regionWatch(
   return watch.length > 0 ? { watch } : {};
 }
 
+/**
+ * A trip's plan as the model retells it (`vacationItinerary`): normalized and planned by the plan
+ * route's own service, an hour in Redis by the normalized query, so the planner's own request and
+ * Parky's read share one plan. A 400 is a refusal the model reads.
+ */
+async function itineraryOf(
+  ctx: AssistantToolContext,
+  trip: Awaited<ReturnType<typeof tripRegion>>,
+  query: TripPlanQueryDto,
+) {
+  const { regions, region, parks, names } = trip;
+  const plans = ctx.get(TripPlanService);
+  const normalized = await tripCall(() => plans.normalize(region.slug, query));
+  const plan = await tripCall(() => plans.plan(region.slug, query));
+  // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
+  const calendar = await regions.internalCalendar(
+    region,
+    normalized.from,
+    normalized.to,
+  );
+  return vacationItinerary({
+    plan,
+    calendar,
+    query: normalized,
+    region,
+    names,
+    ids: new Map(parks.map((p) => [p.slug, p.id])),
+  });
+}
+
+/**
+ * The plan of the visitor's trip in a region, for "This chat"'s digest: null when the trip has no
+ * dates or the plan route refuses it.
+ */
+export async function visitorTripItinerary(
+  ctx: AssistantToolContext,
+  trip: VisitorTrip,
+): Promise<ReturnType<typeof vacationItinerary> | null> {
+  const query = planQueryOf(trip.params);
+  if (!query) return null;
+  return itineraryOf(ctx, await tripRegion(ctx, trip.region.slug), query);
+}
+
+/** The visitor's trip a trip tool means, or a refusal that says what is missing. */
+function visitorTrip(ctx: AssistantToolContext, region?: string): VisitorTrip {
+  const trips = ctx.trips ?? [];
+  const trip = pickTrip(trips, region);
+  if (trip) return trip;
+  throw new McpToolError(
+    trips.length > 1
+      ? `The user has trips in ${trips.map((t) => t.region.slug).join(" and ")}: call again with region`
+      : "The user has no trip in the trip planner; plan_vacation plans one, change_trip with dates starts one in their planner",
+  );
+}
+
 /** A trip route's 400 or 404 as a refusal the model reads. */
 async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
   try {
@@ -3105,25 +3190,210 @@ export const ASSISTANT_TOOLS = [
         hop: flag(input.hop),
         lock: locks.length > 0 ? locks.join(",") : undefined,
       };
-      const plans = ctx.get(TripPlanService);
-      const normalized = await tripCall(() =>
-        plans.normalize(region.slug, query),
+      return itineraryOf(ctx, { regions, region, parks, names }, query);
+    },
+  }),
+  // The visitor's own trip in the hub's planner: read it, change it, undo Parky's change
+  // (docs/frontend/assistant.md#the-visitors-plans).
+  tool({
+    name: "get_trip_plan",
+    status: "forecast",
+    description:
+      "The user's own trip in the trip planner (This chat names it): the plan day by day as " +
+      "plan_vacation gives one (parks, headlinerWait, hours, party nights, why, watch, evening, " +
+      "tickets, ticketsToBuy, season, notPlaced, pinsNotKept, hubUrl, reserve), plus the party " +
+      "they told you. region only when they have trips in several.",
+    input: z.object({ region: regionInput }),
+    run: async ({ region }, ctx) => {
+      const trip = visitorTrip(ctx, region);
+      const search = tripSearchOf(trip.params);
+      const query = planQueryOf(trip.params);
+      if (!query) {
+        throw new McpToolError(
+          search
+            ? `The trip has no dates yet: they are searching ${search.days} days between ${search.from} and ${search.to}${search.within ? ` in the school breaks of ${search.within}` : ""}; find_trip_dates answers that`
+            : "The trip has no dates yet: ask for them, then change_trip with dates",
+        );
+      }
+      ctx.notePark?.(trip.region.timezone);
+      const plan = await itineraryOf(
+        ctx,
+        await tripRegion(ctx, trip.region.slug),
+        query,
       );
-      const plan = await tripCall(() => plans.plan(region.slug, query));
-      // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
-      const calendar = await regions.internalCalendar(
-        region,
-        normalized.from,
-        normalized.to,
+      return {
+        ...(trip.onScreen
+          ? { shown: "on screen in the hub's planner now" }
+          : { shown: "remembered by this browser; the hub opens it" }),
+        ...(trip.party && { party: trip.party }),
+        ...plan,
+      };
+    },
+  }),
+  tool({
+    name: "change_trip",
+    status: "forecast",
+    description:
+      "Change the user's trip in the trip planner; the planner shows the change and an undo. " +
+      "Any of: dates; parks (visits 1-3 sets a park, 0 removes it; the others stay); pin (a " +
+      'park or "rest" on a date: "Magic Kingdom on Thursday", "a rest day on the 6th"); unpin ' +
+      "(dates); swap (two dates trade what is on them); rest (auto, none, max:n park days in a " +
+      "row); tickets (the compact form, empty clears); hotel, area; hopper (resorts); fireworks; " +
+      "evenings; arrival, departure (park: a park that day). Without a trip, dates start one. " +
+      "The result says which days moved and the big rides' wait before and after.",
+    input: z.object({
+      region: regionInput,
+      dates: z.object({ from: isoDay, to: isoDay }).optional(),
+      parks: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            visits: z.number().int().min(0).max(MAX_VISITS_PER_PARK),
+          }),
+        )
+        .min(1)
+        .max(MAX_PARK_DAYS)
+        .optional(),
+      pin: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120).describe('A park, or "rest"'),
+            date: isoDay,
+          }),
+        )
+        .min(1)
+        .max(MAX_TRIP_DAYS)
+        .optional(),
+      unpin: z.array(isoDay).min(1).max(MAX_TRIP_DAYS).optional(),
+      swap: z.object({ a: isoDay, b: isoDay }).optional(),
+      rest: z
+        .string()
+        .regex(/^(auto|none|max:[1-9])$/)
+        .optional(),
+      tickets: z
+        .string()
+        .regex(TICKETS_PATTERN)
+        .or(z.literal(""))
+        .optional()
+        .describe(TICKETS_DESCRIPTION),
+      hotel: hotelInput,
+      area: areaInput,
+      hopper: z
+        .array(z.string().regex(/^[a-z0-9-]+$/))
+        .max(6)
+        .optional()
+        .describe("The resorts planned with a hopper; empty: none"),
+      fireworks: z.enum(["want", "any"]).optional(),
+      evenings: z
+        .boolean()
+        .optional()
+        .describe("An evening at a second park or a venue after an early close"),
+      arrival: z.enum(["free", "park"]).optional(),
+      departure: z.enum(["free", "park"]).optional(),
+    }),
+    run: async (input, ctx) => {
+      const trips = ctx.trips ?? [];
+      const current = pickTrip(trips, input.region);
+      if (!current && !input.dates) {
+        visitorTrip(ctx, input.region);
+      }
+      const slug =
+        current?.region.slug ?? input.region ?? pickTrip(trips)?.region.slug;
+      const trip = await tripRegion(ctx, slug);
+      const { region, parks } = trip;
+      ctx.notePark?.(region.timezone);
+      const elsewhere = `change_trip changes the ${region.name} trip only`;
+      const change: TripChange = {
+        ...(input.dates && { dates: input.dates }),
+        ...(input.unpin && { unpin: input.unpin }),
+        ...(input.swap && { swap: input.swap }),
+        ...(input.rest !== undefined && { rest: input.rest }),
+        ...(input.tickets !== undefined && { tickets: input.tickets }),
+        ...(input.hotel !== undefined && { hotel: input.hotel }),
+        ...(input.area !== undefined && { area: input.area }),
+        ...(input.hopper !== undefined && { hopper: input.hopper }),
+        ...(input.fireworks !== undefined && { fireworks: input.fireworks }),
+        ...(input.evenings !== undefined && { evenings: input.evenings }),
+        ...(input.arrival !== undefined && { arrival: input.arrival }),
+        ...(input.departure !== undefined && { departure: input.departure }),
+      };
+      if (input.parks) {
+        change.parks = [];
+        for (const { park: reference, visits } of input.parks) {
+          const found = await regionPark(ctx, reference, parks, elsewhere);
+          if ("ambiguous" in found) return found;
+          change.parks.push({ slug: found.slug, visits });
+        }
+      }
+      if (input.pin) {
+        change.pin = [];
+        for (const { park: reference, date } of input.pin) {
+          if (reference.trim().toLowerCase() === "rest") {
+            change.pin.push({ target: "rest", date });
+            continue;
+          }
+          const found = await regionPark(ctx, reference, parks, elsewhere);
+          if ("ambiguous" in found) return found;
+          change.pin.push({ target: found.slug, date });
+        }
+      }
+      const before = current ? planQueryOf(current.params) : null;
+      // A swap reads what is on each day, and the comparison needs the plan before: one plan,
+      // and the planner on screen asked for the same a moment ago.
+      const was = before ? await itineraryOf(ctx, trip, before).catch(() => null) : null;
+      let edited: ReturnType<typeof changeTripParams>;
+      try {
+        edited = changeTripParams(current?.params ?? new URLSearchParams(), change, {
+          headliners: region.parks.filter((p) => p.headliner).map((p) => p.slug),
+          days: was?.days.map((day) => ({
+            date: day.date,
+            kind: day.kind,
+            parks: (day.parks ?? []).map((p) => ({
+              slug:
+                parks.find((park) => park.name === p.park)?.slug ?? String(p.park),
+            })),
+          })),
+        });
+      } catch (error) {
+        throw new McpToolError((error as Error).message);
+      }
+      const after = planQueryOf(edited.params);
+      // The plan route checks the new trip; a refusal sends nothing to the planner.
+      const plan = after ? await itineraryOf(ctx, trip, after) : null;
+      return new ActionOutcome(
+        {
+          type: "trip_set",
+          region: region.slug,
+          query: writeTripQuery(edited.params),
+          change: edited.kinds,
+        },
+        {
+          changed: edited.kinds,
+          shownIn: current?.onScreen
+            ? "the planner on screen, which re-plans"
+            : "the hub, which opens with it",
+          ...(plan
+            ? tripPlanChange(was, plan)
+            : { plan: "no dates yet, so nothing is planned" }),
+        },
       );
-      return vacationItinerary({
-        plan,
-        calendar,
-        query: normalized,
-        region,
-        names,
-        ids: new Map(parks.map((p) => [p.slug, p.id])),
-      });
+    },
+  }),
+  tool({
+    name: "trip_undo",
+    status: "planner",
+    description:
+      "Undo your last change to the user's trip. The planner refuses it when the user changed " +
+      "the trip since.",
+    input: z.object({ region: regionInput }),
+    run: (input, ctx) => {
+      const trip = visitorTrip(ctx, input.region);
+      return Promise.resolve(
+        new ActionOutcome(
+          { type: "trip_undo", region: trip.region.slug },
+          { undoing: trip.region.name },
+        ),
+      );
     },
   }),
   // find_trip_dates: when to go, for a trip whose parks and length are known
@@ -4402,26 +4672,57 @@ export const ASSISTANT_TOOLS = [
     name: "plan_move",
     status: "planner",
     description:
-      "Move one entry of a planned day to another place in its order, toIndex counting from 0.",
+      "Move one entry of a planned day: to another place in its order (toIndex, from 0) or to a " +
+      "time (start, HH:MM on the park's clock; a show only to one of its times that day).",
     input: z.object({
       park: parkRef,
       date: planDate,
       entryId: plannerEntryId,
-      toIndex: z.number().int().min(0).max(39),
+      toIndex: z.number().int().min(0).max(39).optional(),
+      start: plannerClock.optional(),
     }),
-    run: async ({ park: reference, date, entryId, toIndex }, ctx) => {
+    run: async ({ park: reference, date, entryId, toIndex, start }, ctx) => {
+      if ((toIndex === undefined) === (start === undefined)) {
+        throw new McpToolError("Give toIndex or start, one of them");
+      }
       const found = await plannedDay(ctx, reference, date);
       if ("ambiguous" in found) return found;
       const { park, day } = found;
       const [entry] = plannedEntries(day, [entryId]);
-      if (toIndex >= day.entries.length) {
+      if (toIndex !== undefined && toIndex >= day.entries.length) {
         throw new McpToolError(
           `The day has ${day.entries.length} entries; toIndex is at most ${day.entries.length - 1}`,
         );
       }
+      if (start !== undefined && entry.kind === "show") {
+        if (!entry.showSlug) {
+          throw new McpToolError(
+            `${entry.name} is a show; remove it and add it again with plan_add_show at the new time`,
+          );
+        }
+        const show = await showPerformance(
+          ctx,
+          reference,
+          date,
+          entry.showSlug,
+          start,
+        );
+        if ("ambiguous" in show) return show;
+      }
       return new ActionOutcome(
-        { type: "planner_move", park, date, entryId, toIndex },
-        { moved: entry.name, toIndex, park: park.name, date },
+        {
+          type: "planner_move",
+          park,
+          date,
+          entryId,
+          ...(toIndex !== undefined ? { toIndex } : { start }),
+        },
+        {
+          moved: entry.name,
+          ...(toIndex !== undefined ? { toIndex } : { start }),
+          park: park.name,
+          date,
+        },
       );
     },
   }),
@@ -4786,7 +5087,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Reserve days in the trip planner at once, empty days the user fills later: several days " +
-      "at one park, or a trip across parks (days, as plan_vacation's reserve).",
+      "at one park, or a trip across parks (days, as plan_vacation's or get_trip_plan's reserve). " +
+      "riderHeightCm: the party's smallest rider, written to every day.",
     input: z.object({
       park: parkRef.optional(),
       dates: z.array(planDate).min(1).max(6).optional(),
@@ -4796,8 +5098,11 @@ export const ASSISTANT_TOOLS = [
         .max(MAX_PARK_DAYS)
         .optional()
         .describe("Instead of park and dates"),
+      riderHeightCm: riderHeight.optional(),
     }),
-    run: async ({ park: reference, dates, days }, ctx) => {
+    run: async ({ park: reference, dates, days, riderHeightCm }, ctx) => {
+      const prefs =
+        riderHeightCm !== undefined ? { prefs: { riderHeightCm } } : {};
       if (days) {
         if (reference || dates) {
           throw new McpToolError("Give either park and dates, or days");
@@ -4827,7 +5132,7 @@ export const ASSISTANT_TOOLS = [
               a.park.slug.localeCompare(b.park.slug),
           );
         return new ActionOutcome(
-          { type: "planner_reserve_trip", days: trip },
+          { type: "planner_reserve_trip", days: trip, ...prefs },
           {
             reserved: trip.map(({ park, date }) => ({ park: park.name, date })),
           },
@@ -4840,7 +5145,7 @@ export const ASSISTANT_TOOLS = [
       if ("ambiguous" in park) return park;
       const unique = [...new Set(dates)].sort();
       return new ActionOutcome(
-        { type: "planner_reserve_days", park, dates: unique },
+        { type: "planner_reserve_days", park, dates: unique, ...prefs },
         { reserved: unique, park: park.name },
       );
     },
@@ -4873,6 +5178,293 @@ export const ASSISTANT_TOOLS = [
         throw new McpToolError("The user has nothing planned to share yet");
       }
       return new ActionOutcome({ type: "planner_share" }, { sharing: true });
+    },
+  }),
+  tool({
+    name: "review_plan_day",
+    status: "planner",
+    description:
+      "One day of the user's plan as they hold it, priced: each entry with its start and, for " +
+      "a ride, the forecast wait when its queue is joined then; the day's total queueing, idle " +
+      "time, when it ends against closing, rides joined after closing, clashes; rides a " +
+      "maintenance window shuts that day, rides the party's smallest rider is too short for, a " +
+      'show at a time it does not play; sortingSaves, what plan_optimize would save. For "how ' +
+      'long do I wait in total", "does my day work", and the hint worth giving about a day.',
+    input: z.object({ park: parkRef, date: planDate }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park: planned, day } = found;
+      const entries = day.entries.flatMap((entry) => {
+        const sent = optimizerEntry(entry);
+        return sent ? [sent] : [];
+      });
+      if (entries.length === 0) {
+        throw new McpToolError(
+          `Nothing is planned on ${date} at ${planned.name} yet`,
+        );
+      }
+      const park = await ctx
+        .get(ParksService)
+        .findByGeographicPath(
+          planned.geo.continent,
+          planned.geo.country,
+          planned.geo.city,
+          planned.slug,
+        );
+      if (!park) throw new McpToolError(`No park ${reference}`);
+      ctx.notePark?.(park.timezone);
+      const planDays = ctx.get(PlanDayService);
+      const redis = ctx.get(REDIS_CLIENT as unknown as Type<Redis>);
+      const [plan, works, priced] = await Promise.all([
+        cachedPlanDay(redis, planDays, park, date),
+        planDays.ridesInWorks(park, date).catch(() => []),
+        ctx
+          .get(PlanOptimizeService)
+          .optimize(
+            { ...planned.geo, parkSlug: planned.slug },
+            {
+              date,
+              mode: "day",
+              entries,
+              ...(day.prefs && { prefs: day.prefs }),
+              preview: true,
+            } as PlanOptimizeRequestDto,
+          )
+          .catch(() => null),
+      ]);
+      const party = day.prefs?.riderHeightCm;
+      const rides = new Map(plan.rides.map((r) => [r.attractionSlug, r]));
+      const inWorks = new Map(works.map((w) => [w.attractionSlug, w]));
+      const shows = new Map(plan.shows.map((show) => [show.showSlug, show]));
+      const clockMinute = (time: string) => {
+        const [h, m] = time.split(":").map(Number);
+        return (h * 60 + m) % 1440;
+      };
+      const before = priced?.before ?? null;
+      const after = priced?.status === "optimized" ? priced.after : null;
+      const closeHour = plan.context.closeHour;
+      return {
+        park: planned.name,
+        date,
+        ...(party !== undefined && { partyRiderHeightCm: party }),
+        entries: day.entries.map((entry) => {
+          const minute = entryMinute(entry);
+          const ride = entry.rideSlug ? rides.get(entry.rideSlug) : undefined;
+          const works = entry.rideSlug ? inWorks.get(entry.rideSlug) : undefined;
+          const show = entry.showSlug ? shows.get(entry.showSlug) : undefined;
+          const wait =
+            ride && minute !== null && !entry.done ? waitAt(ride, minute) : null;
+          return {
+            id: entry.id,
+            kind: entry.kind,
+            name: entry.name,
+            ...(minute !== null && { at: clockOfMinute(minute) }),
+            ...(entry.done && { done: true }),
+            ...(wait !== null && { waitMinutes: wait }),
+            ...(works && { inMaintenance: works.worksPeriod }),
+            ...(ride &&
+              partyTooShort(ride.minimumHeight, party) && {
+                tooShortForParty: { minimumHeightCm: ride.minimumHeight },
+              }),
+            ...(show &&
+              minute !== null &&
+              !show.times.some((t) => clockMinute(t) === minute % 1440) && {
+                notAShowTime: { showTimes: show.times },
+              }),
+          };
+        }),
+        ...(before
+          ? {
+              totalWaitMinutes: Math.round(before.totalWaitMinutes),
+              idleMinutes: Math.round(before.idleMinutes),
+              endsAt: clockOfMinute(before.endMinute),
+              ...(closeHour !== null && {
+                closes: clockOfMinute(
+                  unfoldedCloseHour(plan.context.openHour ?? 0, closeHour) * 60,
+                ),
+              }),
+              ...(before.overflow > 0 && {
+                ridesJoinedAfterClosing: before.overflow,
+              }),
+              ...(before.clashes > 0 && { clashes: before.clashes }),
+              sortingSaves: after
+                ? `plan_optimize would save about ${Math.max(0, Math.round(before.totalWaitMinutes - after.totalWaitMinutes))} min of queueing`
+                : "the order is as good as it gets",
+            }
+          : {
+              totals: priced?.refusal
+                ? `not priced: ${priced.refusal}`
+                : "the day could not be priced right now",
+            }),
+        means:
+          "waitMinutes: the forecast standby wait when that ride's queue is joined at its start; totalWaitMinutes: every queue of the day as planned",
+      };
+    },
+  }),
+  tool({
+    name: "suggest_replies",
+    description:
+      "Two to four short replies the user can tap under your answer, each sent as their " +
+      "message: written as they would say it, in their language, under 40 characters, the " +
+      "likeliest first. Call it last, alone, after your answer's text (# Replies).",
+    input: z.object({
+      replies: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
+    }),
+    run: ({ replies }, ctx) => {
+      claimOnce(ctx, "suggest_replies");
+      const seen = new Set<string>();
+      const kept = replies
+        .map((reply) => reply.replace(/\s+/g, " ").replace(/[*_`#>[\]]/g, ""))
+        .filter((reply) => {
+          const key = reply.toLowerCase();
+          if (!reply || seen.has(key) || /https?:|www\./i.test(reply)) return false;
+          if (junkReason(reply)) return false;
+          seen.add(key);
+          return true;
+        });
+      if (kept.length === 0) {
+        throw new McpToolError("None of these replies can be shown");
+      }
+      return Promise.resolve(
+        new ActionOutcome({ type: "replies", replies: kept }, { shown: kept.length }),
+      );
+    },
+  }),
+  tool({
+    name: "interview",
+    status: "planner",
+    description:
+      "Parky's interview, which plans a trip or a park day question by question (# Interview): " +
+      "start one (kind, and region, park or date where known), mark the step the user just " +
+      "answered (answered, with party for a trip's party step and mustDoRides for its rides) or " +
+      "skipped, or end it when the user wants to stop. The result names the next step: what " +
+      "to ask, which tool takes the answer, ideas for the replies.",
+    input: z.object({
+      op: z.enum(["start", "answered", "skip", "end"]),
+      kind: z.enum(["trip", "day"]).optional().describe("start only"),
+      region: regionInput,
+      park: parkRef.optional().describe("A park day's park, start only"),
+      date: planDate.optional().describe("A park day's date, start only"),
+      step: z
+        .enum([
+          ...new Set([...TRIP_INTERVIEW_STEPS, ...DAY_INTERVIEW_STEPS]),
+        ] as [string, ...string[]])
+        .optional()
+        .describe("answered or skip: the step; default the one being asked"),
+      party: z
+        .object({
+          size: z.number().int().min(1).max(30).optional(),
+          heightsCm: z
+            .array(z.number().int().min(50).max(250))
+            .max(10)
+            .optional()
+            .describe("The children's heights; adults need none"),
+        })
+        .optional(),
+      mustDoRides: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            rideIds: z.array(z.uuid()).min(1).max(12),
+          }),
+        )
+        .max(8)
+        .optional()
+        .describe("A trip's must-do rides by park, for the filing"),
+    }),
+    run: async (input, ctx) => {
+      claimOnce(ctx, "interview");
+      const running = ctx.interview ?? null;
+      if (input.op === "end") {
+        if (!running) throw new McpToolError("No interview is running");
+        return new ActionOutcome(
+          { type: "interview_state", interview: null, outcome: "left" },
+          {
+            ended: true,
+            say: "one short line: everything answered so far stays in the planner, and they can pick it up any time",
+          },
+        );
+      }
+      let state: InterviewSnapshot;
+      if (input.op === "start") {
+        if (!input.kind) throw new McpToolError("start needs kind");
+        let park: string | undefined;
+        if (input.park) {
+          const found = await planPark(mcp(ctx), input.park);
+          if ("ambiguous" in found) return found;
+          park = found.slug;
+        }
+        const region =
+          input.region ??
+          (input.kind === "trip" ? pickTrip(ctx.trips ?? [])?.region.slug : undefined);
+        const first = input.kind === "trip" ? TRIP_INTERVIEW_STEPS[0] : DAY_INTERVIEW_STEPS[0];
+        state = {
+          kind: input.kind,
+          ...(region && { region }),
+          ...(park && { park }),
+          ...(input.date && { date: input.date }),
+          step: first,
+          answered: [],
+          skipped: [],
+          mustDoRides: [],
+          source: running?.source ?? "chat",
+        };
+      } else {
+        if (!running) {
+          throw new McpToolError("No interview is running; start one first");
+        }
+        const step = (input.step ?? running.step) as InterviewStep;
+        const list = input.op === "answered" ? "answered" : "skipped";
+        state = {
+          ...running,
+          [list]: [...new Set([...running[list], step])],
+          mustDoRides: [...running.mustDoRides],
+        };
+        for (const { park: reference, rideIds } of input.mustDoRides ?? []) {
+          const found = await planPark(mcp(ctx), reference);
+          if ("ambiguous" in found) return found;
+          const kept = state.mustDoRides.filter((m) => m.park !== found.slug);
+          const had = state.mustDoRides.find((m) => m.park === found.slug)?.rides ?? [];
+          state.mustDoRides = [
+            ...kept,
+            { park: found.slug, rides: [...new Set([...had, ...rideIds])].slice(0, 12) },
+          ].slice(0, 8);
+        }
+      }
+      const next = nextInterviewStep(state);
+      const party =
+        input.party && state.kind === "trip"
+          ? { size: input.party.size, heightsCm: input.party.heightsCm ?? [] }
+          : undefined;
+      const region = state.region ?? pickTrip(ctx.trips ?? [])?.region.slug;
+      const extras = {
+        ...(party && { party }),
+        ...(party && region && { region }),
+      };
+      if (!next) {
+        return new ActionOutcome(
+          { type: "interview_state", interview: null, outcome: "done", ...extras },
+          {
+            done: true,
+            say: "the plan is in the planner: two sentences on what stands out (the order and one hint), then suggest_replies for changes (swap two days, why this order, add a rest day)",
+          },
+        );
+      }
+      state.step = next;
+      const trip = pickTrip(ctx.trips ?? [], state.region) ?? null;
+      return new ActionOutcome(
+        { type: "interview_state", interview: state, ...extras },
+        {
+          next: interviewGuide(
+            state.kind,
+            next,
+            interviewHolds(state, next, trip, ctx.planner),
+          ),
+          ...(state.mustDoRides.length > 0 && { mustDoRides: state.mustDoRides }),
+          then: "ask it in one short question in your voice and end with suggest_replies",
+        },
+      );
     },
   }),
   tool({

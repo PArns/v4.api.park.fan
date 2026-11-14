@@ -22,7 +22,7 @@ import type {
   PlanEvening,
 } from "../../trip-regions/trip-evening";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
-import { ASSISTANT_LOCALES } from "../system-prompt";
+import { ASSISTANT_LOCALES } from "../assistant-locales";
 import { TICKETS_PATTERN } from "../../trip-regions/dto/trip-region-query.dto";
 import {
   canonicalTickets,

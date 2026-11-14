@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ASSISTANT_LOCALES } from "./system-prompt";
+import { ASSISTANT_LOCALES } from "./assistant-locales";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
   RIDE_ALERT_THRESHOLD_MIN,
@@ -122,8 +122,12 @@ export const plannerSnapshotSchema = z.object({
     PLANNER_INDEX_DAYS,
   ),
 });
-export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
+type ParsedPlanner = z.infer<typeof plannerSnapshotSchema>;
+/** The snapshot as the tools read it; `more` is optional for snapshots built by hand. */
+export type PlannerSnapshot = Omit<ParsedPlanner, "more"> &
+  Partial<Pick<ParsedPlanner, "more">>;
 export type PlannerDay = PlannerSnapshot["days"][number];
+export type PlannerIndexDay = ParsedPlanner["more"][number];
 
 /** The longest trip query a question carries: a 21-day trip with pins and six tickets fits. */
 export const TRIP_QUERY_MAX = 1200;

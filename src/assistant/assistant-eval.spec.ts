@@ -95,7 +95,10 @@ describe("assistant eval", () => {
       for (const name of used)
         expect([c.id, names.has(name)]).toEqual([c.id, true]);
       if (c.planner)
-        expect(plannerSnapshotSchema.parse(c.planner)).toEqual(c.planner);
+        expect(plannerSnapshotSchema.parse(c.planner)).toEqual({
+          more: [],
+          ...c.planner,
+        });
       if (c.alerts)
         expect(alertsSnapshotSchema.parse(c.alerts)).toEqual(c.alerts);
     }

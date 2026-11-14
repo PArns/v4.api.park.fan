@@ -610,11 +610,12 @@ export function plannerLines(planner: PlannerSnapshot): string[] {
       );
     }
   }
-  if (planner.more.length > 0) {
+  const more = planner.more ?? [];
+  if (more.length > 0) {
     lines.push(
       "Other planned days (only park and date here; plan_day opens one, and the next question carries it in full):",
     );
-    for (const day of planner.more) {
+    for (const day of more) {
       lines.push(
         `- ${day.park.slug} ${JSON.stringify(day.park.name)} on ${day.date}: ${day.entries} entries${day.done ? `, ${day.done} done` : ""}${day.reserved && day.entries === 0 ? ", reserved" : ""}${day.riderHeightCm ? `, shortest rider ${day.riderHeightCm} cm` : ""}`,
       );
