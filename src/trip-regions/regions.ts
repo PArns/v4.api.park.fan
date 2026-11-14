@@ -1132,6 +1132,471 @@ export const ORLANDO: RegionConfig = {
   ]),
 };
 
+// ── Southern California (PAR-1303) ──────────────────────────────────────────
+// Researched 2026-11-13: the parks, car parks, hotels and transport from the
+// operators' pages and OpenStreetMap; the night shows and day-guest closes
+// from our own data. The sources per value are in the research's region.md.
+
+/**
+ * Southern California's heat thresholds, set as Orlando's were at the
+ * region's climate park: Disneyland's 2015–2024 daily normals (ERA5, measured
+ * 2026-11-14) top out at 32.4 °C on 7 September, and the top fifth of its
+ * June–October normals starts at 30.4 °C. A forecast counts from 35 °C (the
+ * highest normal plus Orlando's margin of about 3 °C), a normal from 30.5 °C.
+ * Every park is read against them with its own temperatures: Six Flags Magic
+ * Mountain, inland in the Santa Clarita Valley, runs a June–October median of
+ * 32.9 °C and peaks at 35.7 °C, so it is the park the heat prices most; the
+ * San Diego parks never reach the normal's threshold.
+ */
+export const SOUTHERN_CALIFORNIA_HEAT: HeatModelConfig = {
+  forecastFromC: 35,
+  normalFromC: 30.5,
+  perDegree: 0.08,
+  normalWeight: 0.5,
+  cap: 1.4,
+};
+
+const DISNEYLAND_RESORT_PARKS = [
+  "disneyland-park",
+  "disney-california-adventure-park",
+];
+
+/** Mickey & Friends: the drive to either Disneyland park ends there, the tram follows. */
+const MICKEY_AND_FRIENDS = {
+  latitude: 33.8153,
+  longitude: -117.9262,
+  note: "Mickey & Friends parking structure off Disneyland Drive (Pixar Pals is beside it); the tram runs to the Esplanade between the two gates",
+};
+
+export const SOUTHERN_CALIFORNIA: RegionConfig = {
+  slug: "southern-california",
+  name: "Southern California",
+  timezone: "America/Los_Angeles",
+  // No storm season: coastal Southern California has no hurricane season.
+  weather: {
+    heat: SOUTHERN_CALIFORNIA_HEAT,
+    climatePark: "disneyland-park",
+  },
+  travel: { source: "osrm" },
+  ticketMarkets: { home: "us", codes: ["us", "uk", "intl"] },
+  // No perk in this region. Disneyland ended Early Entry for its hotel guests
+  // on 2026-01-05 (the last day was 2026-01-04); its hotel guests now get one
+  // Lightning Lane Multi Pass entry per stay, a single ride's skip that moves
+  // no park choice and has no perk kind. Universal owns no hotel here, and the
+  // hotels by Universal City run a shuttle without any admission benefit.
+  perkNames: {},
+  hotelNames: {
+    disney:
+      "a Disneyland Resort hotel (Disneyland Hotel, Grand Californian, Pixar Place)",
+    offsite: "any other hotel",
+  },
+  groups: [
+    {
+      key: "disneyland-resort",
+      name: "Disneyland Resort",
+      kind: "resort",
+      earlyKind: "early_entry",
+    },
+    {
+      // A day trip, not a resort: one park, no hotel of Universal's own, and
+      // 54 km from the Disneyland gates.
+      key: "universal-studios-hollywood",
+      name: "Universal Studios Hollywood",
+      kind: "day_trip",
+      // The feed carries a one-hour slot before opening every day from
+      // September 2026, most likely the separately sold SUPER NINTENDO WORLD
+      // Early Access (Universal's pages as the search index quotes them; not
+      // verified). No hotel guest gets it, so it carries a name of its own
+      // rather than Orlando's hotel perk, and a client that does not know the
+      // code shows nothing.
+      earlyKind: "early_access_ticket",
+    },
+    {
+      key: "day-trips",
+      name: "Day trips",
+      kind: "day_trip",
+      earlyKind: "early_entry",
+    },
+  ],
+  parks: [
+    {
+      slug: "disneyland-park",
+      ...US,
+      city: "anaheim",
+      group: "disneyland-resort",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 1,
+      carPark: MICKEY_AND_FRIENDS,
+      transfer: { via: "tram", minutes: 15 },
+    },
+    {
+      slug: "disney-california-adventure-park",
+      ...US,
+      city: "anaheim",
+      group: "disneyland-resort",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 2,
+      carPark: MICKEY_AND_FRIENDS,
+      transfer: { via: "tram", minutes: 15 },
+    },
+    {
+      slug: "universal-studios-hollywood",
+      ...US,
+      city: "los-angeles",
+      group: "universal-studios-hollywood",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 3,
+      carPark: {
+        // Which of Universal's garages is open to day guests on a day is not
+        // published where we could read it; the Frankenstein garage is the
+        // one at the top of the drive, by CityWalk.
+        latitude: 34.1383,
+        longitude: -118.3566,
+        note: "Universal's garages at the top of Universal Hollywood Drive (Frankenstein garage); the gate is a walk through CityWalk",
+      },
+    },
+    {
+      slug: "knotts-berry-farm",
+      ...US,
+      city: "buena-park",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 33.8449,
+        longitude: -117.9955,
+        note: "main car park off Beach Boulevard, Buena Park",
+      },
+    },
+    {
+      slug: "six-flags-magic-mountain",
+      ...US,
+      city: "santa-clarita",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 34.4289,
+        longitude: -118.5961,
+        note: "main car park north of the entrance off Magic Mountain Parkway, Valencia",
+      },
+    },
+    {
+      slug: "seaworld-san-diego",
+      ...US,
+      city: "san-diego",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 32.7629,
+        longitude: -117.225,
+        note: "main car park off SeaWorld Drive, Mission Bay",
+      },
+    },
+    {
+      slug: "legoland-california",
+      ...US,
+      city: "carlsbad",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 33.1244,
+        longitude: -117.3119,
+        note: "car park south of the entrance off LEGOLAND Drive and Armada Drive, Carlsbad",
+      },
+    },
+    {
+      slug: "sesame-place-san-diego",
+      ...US,
+      city: "chula-vista",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 32.5881,
+        longitude: -117.0058,
+        note: "car park by the North Island Credit Union Amphitheatre, Entertainment Circle, Chula Vista",
+      },
+    },
+  ],
+  venues: [
+    {
+      key: "downtown-disney",
+      name: "Downtown Disney District",
+      group: "disneyland-resort",
+      kind: "district",
+      latitude: 33.8091,
+      longitude: -117.9214,
+      typicalHours: { opens: "07:00", closes: "01:00" },
+      free: true,
+      url: "https://disneyland.disney.go.com/destinations/downtown-disney-district/",
+      notes:
+        "between the Esplanade and the Disneyland Hotel; no ticket needed; open 07:00-01:00, Thursdays to 23:00; parking in the Simba Lot",
+      highlights: ["dining", "shopping"],
+    },
+    {
+      key: "universal-citywalk",
+      name: "Universal CityWalk Hollywood",
+      group: "universal-studios-hollywood",
+      kind: "district",
+      latitude: 34.1363,
+      longitude: -118.3549,
+      free: true,
+      url: "https://www.universalstudioshollywood.com/web/en/us/things-to-do/citywalk",
+      notes:
+        "outside the park gate, between the garages and the entrance; entry free, parking paid; venue and cinema hours vary",
+      highlights: ["dining", "shopping"],
+    },
+  ],
+  hopperSets: [DISNEYLAND_RESORT_PARKS],
+  nightShows: {
+    // Fire of the Rising Moons is the castle fireworks seen from Galaxy's
+    // Edge, so it is left out: it would count one show twice. On some nights
+    // (2026-11-13) our data lists the fireworks under that slug only.
+    "disneyland-park": [
+      {
+        slug: "believein-holiday-magic-fireworks-spectacular",
+        name: '"Believe...In Holiday Magic" Fireworks Spectacular',
+        kind: "fireworks",
+      },
+      {
+        slug: "halloween-screams-with-fireworks",
+        name: "Halloween Screams",
+        kind: "fireworks",
+      },
+      { slug: "fantasmic", name: "Fantasmic!", kind: "night_show" },
+      {
+        slug: "tapestry-of-happiness",
+        name: "Tapestry of Happiness",
+        kind: "night_show",
+      },
+      {
+        slug: "shadows-of-memory-a-skywalker-saga",
+        name: "Shadows of Memory: A Skywalker Saga",
+        kind: "night_show",
+      },
+    ],
+    // World of Color Happiness! was the 70th celebration's version, which
+    // ended on 2026-08-09; ONE is the one performing.
+    "disney-california-adventure-park": [
+      {
+        slug: "world-of-color-one",
+        name: "World of Color - ONE",
+        kind: "night_show",
+      },
+    ],
+    "seaworld-san-diego": [
+      {
+        slug: "a-christmas-wish-fireworks-show",
+        name: "A Christmas Wish Fireworks Show",
+        kind: "fireworks",
+      },
+      {
+        slug: "donner-and-blitzens-lazer-light-show",
+        name: "Donner and Blitzen's Lazer Light Show",
+        kind: "night_show",
+      },
+      { slug: "fireworks", name: "Fireworks", kind: "fireworks" },
+    ],
+  },
+  hotelAreas: [
+    {
+      key: "disneyland_resort",
+      name: "Disneyland Resort hotels",
+      latitude: 33.8078,
+      longitude: -117.9248,
+      hotel: "disney",
+      note: "the Disneyland Hotel, Grand Californian and Pixar Place along Downtown Disney; the point is the middle of the three",
+    },
+    {
+      key: "anaheim_harbor",
+      name: "Harbor Boulevard (Anaheim)",
+      latitude: 33.8063,
+      longitude: -117.9145,
+      hotel: "offsite",
+      note: "Harbor Boulevard opposite the main entrance, where the walking-distance Good Neighbor hotels are (The Anaheim Hotel, 1700 S Harbor Blvd)",
+    },
+    {
+      key: "buena_park",
+      name: "Buena Park",
+      latitude: 33.8404,
+      longitude: -117.9984,
+      hotel: "offsite",
+      note: "Knott's Hotel on Crescent Avenue, next to Knott's Berry Farm",
+    },
+    {
+      key: "universal_city",
+      name: "Universal City",
+      latitude: 34.1369,
+      longitude: -118.3583,
+      hotel: "offsite",
+      note: "Hilton Los Angeles/Universal City and Sheraton Universal below CityWalk; free hotel shuttle to the park, no admission perks",
+    },
+    {
+      key: "hollywood",
+      name: "Hollywood",
+      latitude: 34.1017,
+      longitude: -118.3393,
+      hotel: "offsite",
+      note: "Hollywood Boulevard at Hollywood/Highland, one Metro B Line stop from Universal City",
+    },
+    {
+      key: "santa_monica",
+      name: "Santa Monica",
+      latitude: 34.0163,
+      longitude: -118.4969,
+      hotel: "offsite",
+      note: "downtown Santa Monica at the Third Street Promenade, near the pier",
+    },
+    {
+      key: "downtown_la",
+      name: "Downtown Los Angeles",
+      latitude: 34.0484,
+      longitude: -118.253,
+      hotel: "offsite",
+      note: "Pershing Square, on the Metro B Line to Universal City",
+    },
+    {
+      key: "san_diego",
+      name: "San Diego (Downtown)",
+      latitude: 32.7115,
+      longitude: -117.1601,
+      hotel: "offsite",
+      note: "Gaslamp Quarter, downtown San Diego; Santa Fe Depot (Pacific Surfliner, COASTER) is 1 km west",
+    },
+    {
+      key: "carlsbad",
+      name: "Carlsbad",
+      latitude: 33.126,
+      longitude: -117.3096,
+      hotel: "offsite",
+      note: "the LEGOLAND California Hotel at the park; Carlsbad's other hotels are along Palomar Airport Road and in the Village",
+    },
+  ],
+  perks: { disney: [], offsite: [] },
+  legs: [
+    {
+      // The two gates face each other across the Esplanade; both parks share
+      // the car park, so OSRM answers no drive.
+      from: "disneyland-park",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 5, km: 0.1 },
+      alternatives: [{ mode: "walk", minutes: 5, via: "esplanade" }],
+    },
+    {
+      from: "hotel:disneyland_resort",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 15, via: "downtown_disney" },
+      alternatives: [{ mode: "walk", minutes: 15, via: "downtown_disney" }],
+    },
+    {
+      from: "hotel:disneyland_resort",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 15, via: "downtown_disney" },
+      alternatives: [
+        { mode: "walk", minutes: 15, via: "downtown_disney" },
+        // The Grand Californian's own gate into the park reopened in January
+        // 2026 (press, not Disney's page) and may be kept for its guests at
+        // busy times, so it is an alternative, never the leg.
+        { mode: "walk", minutes: 10, via: "grand_californian_entrance" },
+      ],
+    },
+    {
+      from: "hotel:anaheim_harbor",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 10, via: "harbor_entrance" },
+      alternatives: [
+        { mode: "walk", minutes: 10, via: "harbor_entrance" },
+        { mode: "bus", name: "Anaheim Resort Transportation (ART)" },
+      ],
+    },
+    {
+      from: "hotel:anaheim_harbor",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 10, via: "harbor_entrance" },
+      alternatives: [
+        { mode: "walk", minutes: 10, via: "harbor_entrance" },
+        { mode: "bus", name: "Anaheim Resort Transportation (ART)" },
+      ],
+    },
+    {
+      from: "venue:downtown-disney",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "venue:downtown-disney",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "hotel:buena_park",
+      to: "knotts-berry-farm",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "hotel:universal_city",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        { mode: "shuttle", name: "hotel shuttle" },
+        { mode: "walk", minutes: 15, via: "citywalk" },
+      ],
+    },
+    {
+      from: "venue:universal-citywalk",
+      to: "universal-studios-hollywood",
+      primary: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    },
+    {
+      // Metro to Universal City/Studio City, then Universal's free shuttle up
+      // the hill; no minutes, the waits for both vary too much.
+      from: "hotel:hollywood",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        {
+          mode: "metro",
+          name: "Metro B Line",
+          via: "universal_city_studio_city",
+        },
+      ],
+    },
+    {
+      from: "hotel:downtown_la",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        {
+          mode: "metro",
+          name: "Metro B Line",
+          via: "universal_city_studio_city",
+        },
+      ],
+    },
+    {
+      from: "hotel:carlsbad",
+      to: "legoland-california",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      // The COASTER to Carlsbad Poinsettia, then 2 km by bus or taxi.
+      from: "hotel:san_diego",
+      to: "legoland-california",
+      alternatives: [
+        { mode: "rail", name: "COASTER", via: "carlsbad_poinsettia" },
+      ],
+    },
+  ],
+};
+
 // ── Japan ──────────────────────────────────────────────────────────────────
 // Researched 2026-11-13 (PAR-1304): JR Central's and Fujikyu's timetables,
 // Tokyo Disney Resort's FAQ, the parks' own pages, JMA's normals. Travel is
@@ -1709,9 +2174,473 @@ export const JAPAN: RegionConfig = {
 };
 
 /** Every region, in the order the list route and the navigation show them. */
+
+// ── Paris (PAR-1296) ────────────────────────────────────────────────────────
+// Researched 2026-11-13: Disneyland Paris' press site and media PDFs (its main
+// site sends scripts to a waiting room, so its rules are read through the
+// search index), parcasterix.fr, OpenStreetMap and our own data. Disney
+// Adventure World is Walt Disney Studios Park renamed when it reopened on
+// 29 March 2026. Parc Astérix is a resort of its own (owner's decision,
+// 2026-11-14): a full-size park with its own hotels.
+
+const FRANCE = { continent: "europe", country: "france" } as const;
+
+/**
+ * Paris' heat thresholds, set as Orlando's were at the region's climate park:
+ * Disneyland Park's 2015–2024 daily normals (ERA5, measured 2026-11-14) top
+ * out at 26.8 °C on 21 July, and the top fifth of its June–October normals
+ * starts at 24.9 °C. A forecast counts from 30 °C (the highest normal plus
+ * Orlando's margin of about 3 °C; Météo-France's Paris-Montsouris station
+ * counts 14 days a year at or above it, 1991–2020), a normal from 25 °C.
+ */
+export const PARIS_HEAT: HeatModelConfig = {
+  forecastFromC: 30,
+  normalFromC: 25,
+  perDegree: 0.08,
+  normalWeight: 0.5,
+  cap: 1.4,
+};
+
+const DISNEYLAND_PARIS_PARKS = ["disneyland-park", "disney-adventure-world"];
+
+/**
+ * Extra Magic Time: an hour before opening ("usually 1 extra hour", Disney's
+ * FAQ as the search index quotes it) for the guests of every Disney Hotel,
+ * Davy Crockett Ranch included. Disney says which park and how long "may
+ * vary", so it counts only on a day the feed carries the slot; the feed has it
+ * at both parks on every day from 1 September 2026. Disneyland Pass Gold
+ * holders and Les Villages Nature package guests get it too: a ticket's or a
+ * package's perk, which a hotel kind cannot carry, so it is left out for them.
+ */
+const EXTRA_MAGIC_TIME: PerkRule = {
+  perk: "extra_magic_time",
+  parks: DISNEYLAND_PARIS_PARKS,
+  needs: "early",
+  share: 0.05,
+};
+
+/**
+ * Parc Astérix's hotels: a stay includes "Early Entry: access to certain park
+ * attractions 30 minutes earlier", subject to the weather and never on Peur
+ * sur le Parc nocturne days, special days or Christmas-tree events
+ * (parcasterix.fr/hotels, read 2026-11-14). Our feed carries no early slot for
+ * the park, so it counts on no day until it does; the region route lists it.
+ */
+const PARC_ASTERIX_EARLY_ENTRY: PerkRule = {
+  perk: "early_entry",
+  parks: ["parc-asterix"],
+  needs: "early",
+  share: 0.05,
+};
+
+/** The guest car park both Disney parks share; travelators lead past Disney Village to the gates. */
+const DISNEYLAND_PARIS_CAR_PARK = {
+  latitude: 48.8753,
+  longitude: 2.7877,
+  note: "Disneyland Paris guest car park off the A4 (exit 14), shared by both parks; travelators lead past Disney Village to the two gates, which face each other",
+};
+
+/** Disney's partner hotels run a free shuttle from the Chessy bus station. */
+const PARTNER_SHUTTLE: TransportAlternative = {
+  mode: "shuttle",
+  name: "Disneyland Paris partner-hotel shuttle",
+};
+
+/**
+ * RER A from Châtelet–Les Halles: "a 40-minute journey" to Marne-la-Vallée–
+ * Chessy, "just a 2-minute walk from the entrance" (Disney's press, September
+ * 2026); 50 door to door with the walk down to the platforms and the wait for
+ * a train (every 10 to 15 minutes).
+ */
+const RER_A_FROM_PARIS: TransportAlternative = {
+  mode: "rail",
+  minutes: 50,
+  name: "RER A",
+  via: "chatelet_les_halles",
+};
+
+/** One RER A stop from Val d'Europe; 15 with the wait, the trains run every 10 to 15 minutes. */
+const RER_A_FROM_VAL_D_EUROPE: TransportAlternative = {
+  mode: "rail",
+  minutes: 15,
+  name: "RER A",
+  via: "val_d_europe_station",
+};
+
+/** Paris legs for both Disney parks alike. */
+function bothDisneyParks(
+  from: string,
+  leg: Omit<CuratedLeg, "from" | "to">,
+): CuratedLeg[] {
+  return DISNEYLAND_PARIS_PARKS.map((to) => ({ from, to, ...leg }));
+}
+
+export const PARIS: RegionConfig = {
+  slug: "paris",
+  name: "Paris",
+  timezone: "Europe/Paris",
+  // No storm season: summer thunderstorms pause rides for hours, not a season.
+  weather: { heat: PARIS_HEAT, climatePark: "disneyland-park" },
+  travel: { source: "osrm" },
+  // Every product is sold to anyone at the operators' own shops (`eu`, priced
+  // in euros); `intl`: by sellers abroad as well.
+  ticketMarkets: { home: "eu", codes: ["eu", "intl"] },
+  perkNames: {
+    extra_magic_time: "Extra Magic Time",
+    early_entry: "Early Entry",
+  },
+  hotelNames: {
+    disney:
+      "a Disneyland Paris hotel (the Disney Hotels, Davy Crockett Ranch included)",
+    parc_asterix:
+      "a Parc Astérix hotel (Les Trois Hiboux, La Cité Suspendue, Les Quais de Lutèce)",
+    offsite: "any other hotel, Disneyland Paris' partner hotels included",
+  },
+  groups: [
+    {
+      key: "disneyland-paris",
+      name: "Disneyland Paris",
+      kind: "resort",
+      earlyKind: "extra_magic_time",
+    },
+    {
+      key: "parc-asterix",
+      name: "Parc Astérix",
+      kind: "resort",
+      earlyKind: "early_entry",
+    },
+  ],
+  parks: [
+    {
+      // The slug repeats Anaheim's Disneyland Park: the path (city `paris`,
+      // where our data files both Disney parks) tells them apart.
+      slug: "disneyland-park",
+      ...FRANCE,
+      city: "paris",
+      group: "disneyland-paris",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 1,
+      carPark: DISNEYLAND_PARIS_CAR_PARK,
+      transfer: { via: "walk", minutes: 15 },
+    },
+    {
+      slug: "disney-adventure-world",
+      ...FRANCE,
+      city: "paris",
+      group: "disneyland-paris",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 2,
+      carPark: DISNEYLAND_PARIS_CAR_PARK,
+      transfer: { via: "walk", minutes: 15 },
+    },
+    {
+      slug: "parc-asterix",
+      ...FRANCE,
+      city: "plailly",
+      group: "parc-asterix",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 3,
+      carPark: {
+        latitude: 49.1375,
+        longitude: 2.5735,
+        note: "visitor car park beside the entrance, A1 exit 'Parc Astérix' between exits 7 and 8, Plailly",
+      },
+    },
+  ],
+  venues: [
+    {
+      key: "disney-village",
+      name: "Disney Village",
+      group: "disneyland-paris",
+      kind: "district",
+      latitude: 48.8682,
+      longitude: 2.7847,
+      free: true,
+      url: "https://www.disneylandparis.com/en-usd/destinations/disney-village",
+      notes:
+        "restaurants, bars, shops and a cinema between the station, the parks and Lake Disney; open daily from about 08:00 until late (no published closing time); entry free except on some dates with a special show; parking paid",
+      highlights: ["dining", "shopping"],
+    },
+  ],
+  hopperSets: [DISNEYLAND_PARIS_PARKS],
+  // The paid reserved viewing areas our data lists beside each show are
+  // seats, not shows. Parc Astérix has no nighttime spectacular outside its
+  // ticketed Halloween nights.
+  nightShows: {
+    "disneyland-park": [
+      {
+        slug: "disney-tales-of-magic",
+        name: "Disney Tales of Magic",
+        kind: "fireworks",
+      },
+    ],
+    "disney-adventure-world": [
+      {
+        slug: "disney-cascade-of-lights",
+        name: "Disney Cascade of Lights",
+        kind: "night_show",
+      },
+    ],
+  },
+  hotelAreas: [
+    {
+      key: "disney_lake",
+      name: "Disney hotels by Lake Disney",
+      latitude: 48.8705,
+      longitude: 2.7884,
+      hotel: "disney",
+      note: "Disney Hotel New York – The Art of Marvel; the Disneyland Hotel, Newport Bay Club and Sequoia Lodge are within 5-15 minutes' walk of the parks",
+    },
+    {
+      key: "disney_cheyenne_santa_fe",
+      name: "Disney Hotel Cheyenne and Santa Fe",
+      latitude: 48.8738,
+      longitude: 2.794,
+      hotel: "disney",
+      note: "between the two hotels; 20 minutes' walk or the free Disney Hotels shuttle",
+    },
+    {
+      key: "disney_davy_crockett",
+      name: "Disney Davy Crockett Ranch",
+      latitude: 48.8339,
+      longitude: 2.8204,
+      hotel: "disney",
+      note: "a forest cabin resort in Bailly-Romainvilliers; about 15 minutes by car, no shuttle",
+    },
+    {
+      key: "val_d_europe",
+      name: "Val d'Europe",
+      latitude: 48.8551,
+      longitude: 2.7739,
+      hotel: "offsite",
+      note: "Val d'Europe RER A station in Serris, by Hôtel l'Elysée, Adagio, Relais Spa and Staycity; one RER stop or the partner-hotel shuttle to the parks",
+    },
+    {
+      key: "val_de_france",
+      name: "Val de France, Magny-le-Hongre",
+      latitude: 48.8745,
+      longitude: 2.8075,
+      hotel: "offsite",
+      note: "Explorers, Dream Castle, Magic Circus, B&B and Campanile Val de France; free partner-hotel shuttle",
+    },
+    {
+      key: "paris_center",
+      name: "Central Paris",
+      latitude: 48.8616,
+      longitude: 2.347,
+      hotel: "offsite",
+      note: "Châtelet–Les Halles, on RER A to Marne-la-Vallée–Chessy and RER B to the Parc Astérix shuttle at the airport",
+    },
+    {
+      key: "parc_asterix",
+      name: "Parc Astérix hotels",
+      latitude: 49.1298,
+      longitude: 2.571,
+      hotel: "parc_asterix",
+      note: "Les Trois Hiboux, La Cité Suspendue and Les Quais de Lutèce in the woods south of the park, a walk from the gate; the point is the Trois Hiboux quarter between them. L'Odyssée opens on 26 March 2027",
+    },
+  ],
+  perks: {
+    disney: [EXTRA_MAGIC_TIME],
+    parc_asterix: [PARC_ASTERIX_EARLY_ENTRY],
+    offsite: [],
+  },
+  legs: [
+    {
+      // The gates face each other across the entrance plaza; both parks share
+      // the car park, so OSRM answers no drive.
+      from: "disneyland-park",
+      to: "disney-adventure-world",
+      primary: { mode: "walk", minutes: 5, km: 0.3 },
+      alternatives: [{ mode: "walk", minutes: 5, via: "entrance_plaza" }],
+    },
+    // Disney gives the lake hotels as 5 to 15 minutes' walk from the parks;
+    // the area counts the far end.
+    ...bothDisneyParks("hotel:disney_lake", {
+      primary: { mode: "walk", minutes: 15 },
+      alternatives: [{ mode: "walk", minutes: 15 }],
+    }),
+    ...bothDisneyParks("hotel:disney_cheyenne_santa_fe", {
+      primary: { mode: "walk", minutes: 20 },
+      alternatives: [
+        { mode: "walk", minutes: 20 },
+        { mode: "shuttle", name: "Disney Hotels shuttle" },
+      ],
+    }),
+    ...bothDisneyParks("hotel:val_d_europe", {
+      primary: { ...RER_A_FROM_VAL_D_EUROPE, minutes: 15 },
+      alternatives: [RER_A_FROM_VAL_D_EUROPE, PARTNER_SHUTTLE],
+    }),
+    ...bothDisneyParks("hotel:val_de_france", {
+      alternatives: [PARTNER_SHUTTLE],
+    }),
+    ...bothDisneyParks("hotel:paris_center", {
+      primary: { ...RER_A_FROM_PARIS, minutes: 50 },
+      alternatives: [
+        RER_A_FROM_PARIS,
+        { mode: "highway_bus", name: "Disneyland Paris Express" },
+      ],
+    }),
+    ...bothDisneyParks("venue:disney-village", {
+      primary: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    }),
+    {
+      // RER B to Aéroport Charles de Gaulle 1, then the park's shuttle from
+      // Roissypôle (quai A3), every 15 to 30 minutes on every open day, booked
+      // by the day before (parcasterix.fr/offres/navette, read 2026-11-14).
+      // The Paris City Vision coach leaves the Pullman Paris Tour Eiffel at
+      // 09:00, so its time of day, not its minutes, decides.
+      from: "hotel:paris_center",
+      to: "parc-asterix",
+      alternatives: [
+        {
+          mode: "rail",
+          minutes: 75,
+          name: "RER B and the Parc Astérix shuttle",
+          via: "roissypole",
+        },
+        {
+          mode: "highway_bus",
+          name: "Paris City Vision coach",
+          via: "pullman_tour_eiffel",
+        },
+      ],
+    },
+    // No coach runs from the Disney parks to Parc Astérix that we could
+    // verify; by rail it is the TGV from Marne-la-Vallée–Chessy to Aéroport
+    // CDG 2, then the park's shuttle, timetable-bound, so no minutes.
+    ...DISNEYLAND_PARIS_PARKS.map((from) => ({
+      from,
+      to: "parc-asterix",
+      alternatives: [
+        {
+          mode: "rail" as const,
+          name: "TGV to Aéroport CDG 2, then the Parc Astérix shuttle",
+          via: "roissypole",
+        },
+      ],
+    })),
+    {
+      // The park says its hotels have "walking access to the park" without a
+      // time; 15 minutes stands for the 0.9 km to the entrance, rounded up.
+      from: "hotel:parc_asterix",
+      to: "parc-asterix",
+      primary: { mode: "walk", minutes: 15 },
+      alternatives: [{ mode: "walk", minutes: 15 }],
+    },
+  ],
+  // Three bases that all reach each other, so no route line (`order`): the
+  // stays may come in any order. A base's reach is door to door from its
+  // default area, read off the legs above (OSRM's free-flow drive where no
+  // curated leg stands for it); a stay's own area refines it.
+  bases: [
+    {
+      key: "disneyland-paris",
+      name: "Disneyland Paris",
+      hotelAreas: [
+        "disney_lake",
+        "disney_cheyenne_santa_fe",
+        "disney_davy_crockett",
+        "val_d_europe",
+        "val_de_france",
+      ],
+      defaultArea: "disney_lake",
+      // The TGV and the Eurostar (with a change at Lille) stop at
+      // Marne-la-Vallée–Chessy, 2 minutes' walk from the gates; the TGV
+      // reaches it from Aéroport CDG 2 in about 10 minutes.
+      gateways: [
+        {
+          code: "XED",
+          name: "Marne-la-Vallée–Chessy",
+          kind: "station",
+          minutes: 15,
+        },
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+      ],
+      stayNote:
+        "The Disney Hotels by Lake Disney are a walk from the gates and get Extra Magic Time; the partner hotels in Val d'Europe and Val de France run a free shuttle.",
+      parks: [
+        { slug: "disneyland-park", minutes: 15, mode: "walk" },
+        { slug: "disney-adventure-world", minutes: 15, mode: "walk" },
+        { slug: "parc-asterix", minutes: 50, mode: "drive" },
+      ],
+    },
+    {
+      key: "parc-asterix",
+      name: "Parc Astérix",
+      hotelAreas: ["parc_asterix"],
+      defaultArea: "parc_asterix",
+      // The park's shuttle runs from Roissypôle at the airport on every open
+      // day (parcasterix.fr/offres/navette).
+      gateways: [
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+      ],
+      stayNote:
+        "The park's three hotels are a walk from the gate, and a stay includes park tickets and Early Entry to some rides.",
+      parks: [
+        { slug: "parc-asterix", minutes: 15, mode: "walk" },
+        // 56 minutes' drive to the Disney car park, 15 on foot to the gates.
+        { slug: "disneyland-park", minutes: 70, mode: "drive" },
+        { slug: "disney-adventure-world", minutes: 70, mode: "drive" },
+      ],
+    },
+    {
+      key: "paris",
+      name: "Paris",
+      hotelAreas: ["paris_center"],
+      defaultArea: "paris_center",
+      gateways: [
+        { code: "CDG", name: "Paris Charles de Gaulle", kind: "airport" },
+        { code: "ORY", name: "Paris Orly", kind: "airport" },
+      ],
+      stayNote:
+        "Châtelet–Les Halles is on RER A to Disneyland Paris and on RER B to the Parc Astérix shuttle at the airport.",
+      parks: [
+        { slug: "disneyland-park", minutes: 50, mode: "rail" },
+        { slug: "disney-adventure-world", minutes: 50, mode: "rail" },
+        // Free flow; RER B and the park's shuttle take about 75.
+        { slug: "parc-asterix", minutes: 45, mode: "drive" },
+      ],
+    },
+  ],
+  baseLegs: [
+    {
+      // About an hour by car between the hotels (OSRM's free flow between the
+      // two car parks is 54 minutes); no coach runs between the resorts.
+      from: "disneyland-paris",
+      to: "parc-asterix",
+      minutes: 60,
+      mode: "drive",
+    },
+    {
+      from: "paris",
+      to: "disneyland-paris",
+      minutes: 50,
+      mode: "rail",
+      name: "RER A",
+      changes: 0,
+      fromStop: "Châtelet–Les Halles",
+      toStop: "Marne-la-Vallée–Chessy",
+    },
+    {
+      // OSRM's free flow between Châtelet and the park, 45 minutes.
+      from: "paris",
+      to: "parc-asterix",
+      minutes: 45,
+      mode: "drive",
+    },
+  ],
+};
+
 export const TRIP_REGIONS: Record<string, RegionConfig> = {
   [ORLANDO.slug]: ORLANDO,
+  [SOUTHERN_CALIFORNIA.slug]: SOUTHERN_CALIFORNIA,
   [JAPAN.slug]: JAPAN,
+  [PARIS.slug]: PARIS,
 };
 
 /** The region a slug names, or null. */
