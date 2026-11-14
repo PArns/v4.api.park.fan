@@ -110,6 +110,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("site-analytics") private siteAnalyticsQueue: Queue,
     @InjectQueue("search-console") private searchConsoleQueue: Queue,
     @InjectQueue("admin-audit") private adminAuditQueue: Queue,
+    @InjectQueue("trip-metrics") private tripMetricsQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
     @InjectQueue("forecast-archive-score")
@@ -1255,6 +1256,28 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "15 1 * * *" },
           jobId: "admin-audit-sweep-cron",
+        },
+      );
+    }
+
+    // Trip-region metric rows: those past their retention go nightly at
+    // 01:25, a few indexed batches between the audit sweep and the 01:30
+    // driver-level job.
+    if (
+      !(await this.hasRepeatableJob(
+        this.tripMetricsQueue,
+        "trip-metrics-prune-cron",
+        "25 1 * * *",
+      ))
+    ) {
+      await this.tripMetricsQueue.add(
+        "prune",
+        {},
+        {
+          repeat: { cron: "25 1 * * *" },
+          jobId: "trip-metrics-prune-cron",
+          removeOnComplete: 100,
+          removeOnFail: 100,
         },
       );
     }

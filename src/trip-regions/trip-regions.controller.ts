@@ -19,6 +19,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import { TripWhenService } from "./trip-when.service";
+import { MeasureTripRequest } from "./metrics/trip-request-metrics.interceptor";
 import type { TripWhen } from "./trip-when";
 import type { TripSchoolBreaks } from "./trip-school-breaks";
 import {
@@ -60,6 +61,8 @@ const KEYED_CACHE_CONTROL =
  * Paris), their days side by side and the plan that puts each park on its
  * quietest trip day. The list and the region route are static facts and stay
  * open; the calendar and the plan carry forecasts and need a data key.
+ * The plan, `/when` and `/best-days` each leave a metric row
+ * (docs/frontend/trip-regions.md#what-the-server-records).
  * Contract: docs/frontend/trip-regions.md.
  */
 @ApiTags("trip-regions")
@@ -154,6 +157,7 @@ export class TripRegionsController {
 
   @Get(":region/best-days")
   @RequiresApiKey()
+  @MeasureTripRequest("best_days")
   @ApiOperation({
     summary:
       "Per park its quietest and busiest days, per resort the quietest dates",
@@ -186,6 +190,7 @@ export class TripRegionsController {
 
   @Get(":region/plan")
   @RequiresApiKey()
+  @MeasureTripRequest("plan")
   @ApiOperation({
     summary: "The optimized itinerary for a trip",
     description:
@@ -208,6 +213,7 @@ export class TripRegionsController {
   }
   @Get(":region/when")
   @RequiresApiKey()
+  @MeasureTripRequest("when")
   @ApiOperation({
     summary: "The best dates for a trip of given parks and length",
     description:
