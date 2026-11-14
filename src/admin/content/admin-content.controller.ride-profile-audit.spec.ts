@@ -34,6 +34,7 @@ function build() {
     rideProfiles as never,
     {} as never,
     audit as never,
+    {} as never,
   );
   return { controller, audit, rideProfiles };
 }

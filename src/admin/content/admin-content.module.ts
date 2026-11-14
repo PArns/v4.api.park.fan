@@ -22,6 +22,7 @@ import { EftelingMaintenanceSyncProcessor } from "./efteling-maintenance-sync.pr
 import { TicketProductRecord } from "../../trip-regions/entities/ticket-product.entity";
 import { TripRegionsModule } from "../../trip-regions/trip-regions.module";
 import { AdminTicketService } from "./admin-ticket.service";
+import { AdminSeasonService } from "./admin-season.service";
 import { AdminTicketsController } from "./admin-tickets.controller";
 
 /**
@@ -69,6 +70,7 @@ import { AdminTicketsController } from "./admin-tickets.controller";
     FunFactTranslationProcessor,
     EftelingMaintenanceSyncProcessor,
     AdminTicketService,
+    AdminSeasonService,
   ],
   exports: [AdminCurationService],
 })

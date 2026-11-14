@@ -44,6 +44,14 @@ import { gscQueriesTool } from "./gsc-queries.tool";
 import { gscPagesTool } from "./gsc-pages.tool";
 import { gscSeriesTool } from "./gsc-series.tool";
 import { gscInspectUrlTool } from "./gsc-inspect-url.tool";
+import { listTripSeasonsTool } from "./list-trip-seasons.tool";
+import { createTripSeasonTool } from "./create-trip-season.tool";
+import { updateTripSeasonTool } from "./update-trip-season.tool";
+import { deleteTripSeasonTool } from "./delete-trip-season.tool";
+import { importTripSeasonsTool } from "./import-trip-seasons.tool";
+import { listTicketProductsTool } from "./list-ticket-products.tool";
+import { upsertTicketProductTool } from "./upsert-ticket-product.tool";
+import { archiveTicketProductTool } from "./archive-ticket-product.tool";
 
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
@@ -94,4 +102,12 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   gscPagesTool,
   gscSeriesTool,
   gscInspectUrlTool,
+  listTripSeasonsTool,
+  createTripSeasonTool,
+  updateTripSeasonTool,
+  deleteTripSeasonTool,
+  importTripSeasonsTool,
+  listTicketProductsTool,
+  upsertTicketProductTool,
+  archiveTicketProductTool,
 ];

@@ -42,6 +42,8 @@ export interface SeasonInput {
 
 export interface SeasonQuery {
   parkId?: string;
+  /** Seasons of any of these parks, e.g. a trip region's; an empty list matches none. */
+  parkIds?: string[];
   kind?: ParkSeasonKind;
   status?: ParkSeasonStatus;
   year?: number;
@@ -51,8 +53,10 @@ export interface SeasonQuery {
   offset?: number;
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** A season's day, park-local. */
+export const SEASON_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** A season's opening or closing time, 00:00–23:59; a midnight close is 00:00. */
+export const SEASON_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 @Injectable()
 export class ParkSeasonService {
@@ -87,6 +91,12 @@ export class ParkSeasonService {
 
     if (query.parkId)
       qb.andWhere("season.parkId = :parkId", { parkId: query.parkId });
+    if (query.parkIds) {
+      if (query.parkIds.length === 0) return { seasons: [], total: 0 };
+      qb.andWhere("season.parkId IN (:...parkIds)", {
+        parkIds: query.parkIds,
+      });
+    }
     if (query.kind) qb.andWhere("season.kind = :kind", { kind: query.kind });
     if (query.status)
       qb.andWhere("season.status = :status", { status: query.status });
@@ -194,6 +204,14 @@ export class ParkSeasonService {
 
     Object.assign(season, merged, { updatedBy: actorId });
     return this.seasons.save(season);
+  }
+
+  /**
+   * The checks a create runs, without writing: 400 with the first problem, as
+   * `create` would answer. A season import's dry run calls it per row.
+   */
+  async validate(parkId: string, input: SeasonInput): Promise<void> {
+    await this.normalize(parkId, input);
   }
 
   async remove(id: string): Promise<ParkSeason> {
@@ -317,10 +335,10 @@ export class ParkSeasonService {
       }
     }
 
-    if (input.opensAt && !TIME_RE.test(input.opensAt)) {
+    if (input.opensAt && !SEASON_TIME_RE.test(input.opensAt)) {
       throw new BadRequestException("opensAt must be HH:MM");
     }
-    if (input.closesAt && !TIME_RE.test(input.closesAt)) {
+    if (input.closesAt && !SEASON_TIME_RE.test(input.closesAt)) {
       throw new BadRequestException("closesAt must be HH:MM");
     }
 
@@ -427,7 +445,7 @@ export class ParkSeasonService {
   }
 
   private requireDate(value: string, field: string): string {
-    if (typeof value !== "string" || !DATE_RE.test(value)) {
+    if (typeof value !== "string" || !SEASON_DATE_RE.test(value)) {
       throw new BadRequestException(`${field} must be a YYYY-MM-DD date`);
     }
     if (!isRealIsoDate(value)) {

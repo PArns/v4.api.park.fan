@@ -86,11 +86,40 @@ describe("AdminApiTokensController", () => {
       expiresInDays: 90,
       password: "a-long-enough-password",
     });
-    expect(tokens.createPersonalToken).toHaveBeenCalledWith(SELF, "Laptop", 90);
+    expect(tokens.createPersonalToken).toHaveBeenCalledWith(
+      SELF,
+      "Laptop",
+      90,
+      "admin:read",
+    );
     expect(created.token).toBe("pfa_secret");
     const row = (audit.record.mock.calls[0] as unknown[])[0];
     expect(row).toMatchObject({ action: "auth.token.create", entityId: TOKEN });
     expect(JSON.stringify(row)).not.toContain("pfa_secret");
+  });
+
+  it("makes a write token for an editor and refuses one to a viewer before the password", async () => {
+    const { controller, tokens, auth } = build();
+    await controller.create(admin("editor"), {
+      name: "Claude",
+      password: "a-long-enough-password",
+      scope: "admin:write",
+    });
+    expect(tokens.createPersonalToken).toHaveBeenCalledWith(
+      SELF,
+      "Claude",
+      null,
+      "admin:write",
+    );
+    auth.confirmIdentity.mockClear();
+    await expect(
+      controller.create(admin("viewer"), {
+        name: "Claude",
+        password: "a-long-enough-password",
+        scope: "admin:write",
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(auth.confirmIdentity).not.toHaveBeenCalled();
   });
 
   it("refuses a name that is only invisible characters, without spending an attempt", async () => {
