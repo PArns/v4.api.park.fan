@@ -208,7 +208,8 @@ says he reads the day planner and the trips in "This chat" without asking, price
 the smallest rider is too short for, a quieter day nearby, a ticket that misses a day, the storm
 season; once per chat each), and changes a trip with `change_trip`, never a new `plan_vacation`;
 "# Replies" ends an answer the visitor will likely answer with `suggest_replies`; "# Interview"
-leads a trip or a park day question by question. The prompt grew by 2,696 characters (34,236 to
+leads a trip or a park day from simple to detailed: a short core, the plan, then refinements on
+offer, and what a visitor says early is taken at once. The prompt grew by 2,696 characters (34,236 to
 36,932) and the tool list by 7,934 (50,870 to 58,804, the six new tools 7,649 of them), about 2,600
 tokens of the cached prefix.
 
@@ -220,7 +221,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 78 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 80 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -578,26 +579,35 @@ the admin MCP's `assistant_conversation` show the chips offered; no column was a
 
 ### The interview
 
-Parky can lead a visitor through a trip (`TRIP_INTERVIEW_STEPS`: `region`, `dates`, `party`,
-`mustdo`, `tickets`, `hotel`, `pace`, `file`) or a park day (`DAY_INTERVIEW_STEPS`: `day`,
-`arrival`, `mustdo`, `heights`, `shows`, `sort`). The browser holds the state beside the chat and
-sends it with every question as `interview` (`interviewSnapshotSchema`): `{ kind, region?, park?,
-date?, step, answered, skipped, mustDoRides: [{ park, rides: ride ids }], source: "planner" |
-"chat" }`, lenient like the rest. Every answer is applied at once with the tool the step names
-(`change_trip`, `plan_set_party`, `plan_add_rides`, `plan_add_show`, `plan_trip`), so a visitor who
-leaves keeps everything; the state only says where the interview stands, and the history's ten
-messages are no limit. "This chat" names the step, what to ask and the tool that takes the answer
-(`interviewLine`); a step the plans already hold is asked as a confirmation (`interviewHolds`), and
-a start from the planner's button says to ask the first question at once.
+Parky can lead a visitor through a trip or a park day from simple to detailed, the owner's rule: a
+short core, a plan at once, then refinements on offer. A trip's core is `region`, `dates`, `parks`
+(`TRIP_INTERVIEW_CORE`), a park day's `day` and `mustdo` (`DAY_INTERVIEW_CORE`); once the core is
+in, the interview is at `refine`: the plan stands, Parky says it in two sentences with one hint and
+offers the refinements still open as replies (a trip's `party`, `tickets`, `hotel`, `pace`,
+`file`; a day's `heights`, `shows`, `arrival`, after `plan_optimize` has sorted it). A visitor who
+stops after the core has a plan. The order is a guide, not a form: what a visitor says early
+("we already have tickets") is applied at once and marked answered, never postponed.
 
-`interview` (`op`: `start` with `kind` and `region`, `park` or `date`; `answered` or `skip`, the
-step being asked by default, `party` and `mustDoRides` with it; `end`) runs once per answer and
-sends `{ type: "interview_state", interview, outcome?, region?, party? }`: the new state, or `null`
-with `outcome` `done` or `left`. The next step is the first neither answered nor skipped
-(`nextInterviewStep`), and the result names it with what to ask, the tool for the answer and chip
-ideas in English (`interviewGuide`). A trip's `party` (how many, the children's heights) has no
-field in either planner: the widget keeps it with the region's remembered trip, it comes back in
-`trips`, and `file` writes the smallest height into the day planner's prefs.
+The browser holds the state beside the chat and sends it with every question as `interview`
+(`interviewSnapshotSchema`): `{ kind, region?, park?, date?, step, answered, skipped,
+mustDoRides: [{ park, rides: ride ids }], source: "planner" | "chat" }`, lenient like the rest.
+Every answer is applied at once with the tool the step names (`change_trip`, `plan_set_party`,
+`plan_add_rides`, `plan_add_show`, `plan_trip`), so a visitor who leaves keeps everything; the state
+only says where the interview stands, and the history's ten messages are no limit. "This chat"
+names the step, what to ask, the tool for the answer and ideas for the replies (`interviewLine`); a
+step the plans already hold is asked as a confirmation (`interviewHolds`), and a start from the
+planner's button says to ask the first question at once.
+
+`interview` runs once per answer and sends `{ type: "interview_state", interview, outcome?,
+region?, party? }`, the new state or `null`. Its `op`: `start` (`kind`, and `region`, `park` or
+`date`); `answered` or `skip` (the step, the one asked by default; `also` for other steps the same
+message answered; `party`, `mustDoRides`); `ask` (a refinement the visitor picked, while it is
+open); `end` (`outcome` `done` for "that's enough", `left` to stop). The next step is the first core
+step neither answered nor passed, then `refine` while a refinement is open, then none
+(`nextInterviewStep`, `openRefinements`); the result names it with what to ask, the tool for the
+answer and reply ideas in English (`interviewGuide`). A trip's `party` (how many, the children's
+heights) has no field in either planner: the widget keeps it with the region's remembered trip, it
+comes back in `trips`, and `file` writes the smallest height into the day planner's prefs.
 
 In a region with bases (Japan) the hotel step asks how a hotel change should go instead of whose
 hotel and where (`basesHotelGuide`): Parky says how the bags travel, in the region's own phrase

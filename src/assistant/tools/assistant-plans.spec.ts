@@ -10,6 +10,7 @@ import {
   interviewHolds,
   interviewLine,
   nextInterviewStep,
+  openRefinements,
   optimizerEntry,
   pickTrip,
   planQueryOf,
@@ -527,26 +528,28 @@ describe("the interview", () => {
       ...patch,
     });
 
-  it("asks the steps in order, past the answered and the skipped", () => {
+  it("asks the short core first, then offers what is left to refine, then stops", () => {
     expect(nextInterviewStep(interview())).toBe("region");
+    // A step answered early is never asked again.
     expect(
       nextInterviewStep(
-        interview({ answered: ["region", "dates"], skipped: ["party"] }),
+        interview({ answered: ["region", "tickets"], skipped: ["dates"] }),
       ),
-    ).toBe("mustdo");
+    ).toBe("parks");
+    const planned = interview({ answered: ["region", "dates", "parks"] });
+    expect(nextInterviewStep(planned)).toBe("refine");
+    expect(openRefinements(planned)).toEqual([
+      "party",
+      "tickets",
+      "hotel",
+      "pace",
+      "file",
+    ]);
     expect(
       nextInterviewStep(
         interview({
-          answered: [
-            "region",
-            "dates",
-            "party",
-            "mustdo",
-            "tickets",
-            "hotel",
-            "pace",
-            "file",
-          ],
+          answered: ["region", "dates", "parks", "party", "tickets", "hotel"],
+          skipped: ["pace", "file"],
         }),
       ),
     ).toBeNull();
@@ -554,7 +557,27 @@ describe("the interview", () => {
       nextInterviewStep(
         interview({ kind: "day", step: "day", answered: ["day"] }),
       ),
-    ).toBe("arrival");
+    ).toBe("mustdo");
+    expect(
+      nextInterviewStep(
+        interview({ kind: "day", step: "day", answered: ["day", "mustdo"] }),
+      ),
+    ).toBe("refine");
+  });
+
+  it("once the plan stands, offers the open refinements and the way to stop", () => {
+    const line = interviewLine(
+      interview({
+        step: "refine",
+        answered: ["region", "dates", "parks", "tickets"],
+      }),
+      null,
+    );
+    expect(line).toContain('at "refine" (the plan stands)');
+    expect(line).toContain("who's coming and the kids' heights, hotel");
+    expect(line).not.toContain("tickets they hold");
+    expect(line).toContain("interview ask with that step");
+    expect(line).toContain("mark that step answered too");
   });
 
   it("asks in a region with bases how a hotel change should go, with the luggage courier", () => {
@@ -605,7 +628,7 @@ describe("the interview", () => {
       interview({ step: "dates", answered: ["region"] }),
       "2027-10-14 to 2027-10-21",
     );
-    expect(line).toContain('step 2 of 8 "dates"; answered region');
+    expect(line).toContain('at "dates" (2 of 3); answered region');
     expect(line).toContain(
       "confirm what the plan holds (2027-10-14 to 2027-10-21)",
     );

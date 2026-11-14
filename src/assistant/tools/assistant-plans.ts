@@ -1,8 +1,11 @@
 import type { TripPlanQueryDto } from "../../trip-regions/dto/trip-region-query.dto";
 import { findRegion, type RegionConfig } from "../../trip-regions/regions";
 import {
-  DAY_INTERVIEW_STEPS,
-  TRIP_INTERVIEW_STEPS,
+  DAY_INTERVIEW_CORE,
+  DAY_INTERVIEW_REFINE,
+  INTERVIEW_REFINE,
+  TRIP_INTERVIEW_CORE,
+  TRIP_INTERVIEW_REFINE,
   type InterviewSnapshot,
   type InterviewStep,
   type PlannerDay,
@@ -719,8 +722,8 @@ interface StepGuide {
   chips: string;
 }
 
-/** By step; a park day's must-dos are `mustdo_day`, since they go in by ride, not by park. */
-const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
+/** By step; a park day's must-dos are `mustdo`, a trip's must-see parks `parks`. */
+const STEP_GUIDE: Record<Exclude<InterviewStep, "refine">, StepGuide> = {
   region: {
     ask: "where they want to go (the trip regions)",
     apply:
@@ -733,22 +736,21 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
       "change_trip dates; to find dates, find_trip_dates with the trip's parks, then change_trip dates with the window they pick",
     chips: "next summer / I know our dates / find the best dates",
   },
-  party: {
-    ask: "how many are going, and the children's heights in cm",
-    apply: "interview with op answered and party",
-    chips: "just the two of us / 2 adults, 2 kids / kids 105 and 132 cm",
-  },
-  mustdo: {
-    ask: "the parks they must see and any ride they must not miss",
+  parks: {
+    ask: "which parks they want to see (all the big ones is fine) and any ride they must not miss",
     apply:
       "change_trip parks (visits 1-3, 0 removes); must-do rides go into interview's mustDoRides by ride id, for the filing",
-    chips:
-      "two of the region's headline parks by name / all the big ones / no idea yet",
+    chips: "all the big parks / Disney only / two parks by name",
+  },
+  party: {
+    ask: "how many are going, and the children's heights in cm",
+    apply: "interview answered with party",
+    chips: "just the two of us / 2 adults, 2 kids / kids 105 and 132 cm",
   },
   tickets: {
     ask: "which tickets they already hold, if any",
     apply: "change_trip tickets (the compact form); none: nothing to apply",
-    chips: "none yet / a Disney ticket / Universal and Disney",
+    chips: "none yet / a Disney ticket / Disney and Universal",
   },
   hotel: {
     ask: "where they stay: whose hotel, and which area",
@@ -756,7 +758,7 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
     chips: "a Disney hotel / a Universal hotel / off-site",
   },
   pace: {
-    ask: "the pace: rest days and evenings in a second park",
+    ask: "the pace: rest days, and evenings in a second park",
     apply: "change_trip rest (auto, none, max:n) and evenings",
     chips: "a rest day every few days / full speed / evenings off",
   },
@@ -771,13 +773,7 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
     apply: "plan_day",
     chips: "today / tomorrow / a park by name",
   },
-  arrival: {
-    ask: "when they arrive: at opening, later in the morning or in the afternoon, and whether a hotel lets them in early",
-    apply:
-      "plan_set_party earlyEntry when a hotel lets them in early; a later arrival as plan_add_block (icon meet, 15 minutes) at that time",
-    chips: "at opening / around 11:00 / after lunch",
-  },
-  mustdo_day: {
+  mustdo: {
     ask: "the rides they must not miss",
     apply: "plan_add_rides with the rides' ids",
     chips: "two headliners by name / the biggest coasters / whatever is quiet",
@@ -791,13 +787,26 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
   shows: {
     ask: "whether a show belongs in the day",
     apply: "get_shows, then plan_add_show at one of its times",
-    chips: "the evening show / no shows / what's on?",
+    chips: "the evening show / what's on? / no shows",
   },
-  sort: {
-    ask: "whether to sort the day for the shortest waits",
-    apply: "plan_optimize",
-    chips: "yes, sort it / leave it as it is",
+  arrival: {
+    ask: "when they arrive: at opening, later in the morning or in the afternoon, and whether a hotel lets them in early",
+    apply:
+      "plan_set_party earlyEntry when a hotel lets them in early; a later arrival as plan_add_block (icon meet, 15 minutes) at that time, then plan_optimize",
+    chips: "at opening / around 11:00 / after lunch",
   },
+};
+
+/** A refinement in the words of a reply, for the offer once the plan stands. */
+const REFINEMENT_OFFER: Record<string, string> = {
+  party: "who's coming and the kids' heights",
+  tickets: "tickets they hold",
+  hotel: "hotel",
+  pace: "rest days and evenings",
+  file: "into the day planner",
+  heights: "the kids' heights",
+  shows: "a show",
+  arrival: "arrival time",
 };
 
 /**
@@ -814,32 +823,37 @@ function basesHotelGuide(luggage: string): StepGuide {
   };
 }
 
-function guideOf(
-  kind: "trip" | "day",
-  step: InterviewStep,
-  region?: RegionConfig | null,
-): StepGuide {
-  const luggage = region ? luggagePhrase(region) : null;
-  if (kind === "trip" && step === "hotel" && luggage) {
-    return basesHotelGuide(luggage);
-  }
-  return STEP_GUIDE[kind === "day" && step === "mustdo" ? "mustdo_day" : step];
+/** The core steps of an interview of this kind, in the order that flows best. */
+export function interviewCore(kind: "trip" | "day"): readonly InterviewStep[] {
+  return kind === "trip" ? TRIP_INTERVIEW_CORE : DAY_INTERVIEW_CORE;
 }
 
-/** The steps of an interview of this kind, in order. */
-export function interviewSteps(kind: "trip" | "day"): readonly InterviewStep[] {
-  return kind === "trip" ? TRIP_INTERVIEW_STEPS : DAY_INTERVIEW_STEPS;
+/** The refinements of an interview of this kind, offered once its plan stands. */
+export function interviewRefinements(
+  kind: "trip" | "day",
+): readonly InterviewStep[] {
+  return kind === "trip" ? TRIP_INTERVIEW_REFINE : DAY_INTERVIEW_REFINE;
+}
+
+/** The refinements not answered or passed yet. */
+export function openRefinements(
+  interview: Pick<InterviewSnapshot, "kind" | "answered" | "skipped">,
+): InterviewStep[] {
+  const done = new Set([...interview.answered, ...interview.skipped]);
+  return interviewRefinements(interview.kind).filter((s) => !done.has(s));
 }
 
 /**
- * The first step not answered and not skipped, or null when the interview is through. A step the
- * plans already hold is still asked, as a confirmation (`holds`).
+ * Where the interview goes next: the first core step not answered or passed, then `refine` (the
+ * plan stands and the refinements are on offer) while any is left, then null.
  */
 export function nextInterviewStep(
   interview: Pick<InterviewSnapshot, "kind" | "answered" | "skipped">,
 ): InterviewStep | null {
   const done = new Set([...interview.answered, ...interview.skipped]);
-  return interviewSteps(interview.kind).find((step) => !done.has(step)) ?? null;
+  const core = interviewCore(interview.kind).find((step) => !done.has(step));
+  if (core) return core;
+  return openRefinements(interview).length > 0 ? INTERVIEW_REFINE : null;
 }
 
 /** What a step already holds in the visitor's plans, so Parky confirms it instead of asking. */
@@ -852,10 +866,11 @@ export function interviewHolds(
   if (interview.kind === "trip") {
     const p = trip?.params;
     if (step === "region" && trip) return trip.region.name;
-    if (step === "dates" && p?.get("from"))
+    if (step === "dates" && p?.get("from")) {
       return `${p.get("from")} to ${p.get("to")}`;
+    }
     if (step === "party" && trip?.party) return partyPhrase(trip.party);
-    if (step === "mustdo" && p?.get("parks")) return p.get("parks");
+    if (step === "parks" && p?.get("parks")) return p.get("parks");
     if (step === "tickets" && p?.get("tickets")) return p.get("tickets");
     if (step === "hotel" && trip?.region.bases?.length) {
       return p?.get("moveBuffer")
@@ -890,18 +905,51 @@ export function interviewHolds(
   return null;
 }
 
-/** The step in words for the model: what to ask, how to apply the answer, ideas for the chips. */
+/** The plan stands: say it, then offer what is left to refine. */
+function refineGuide(
+  interview: Pick<InterviewSnapshot, "kind" | "answered" | "skipped">,
+): StepGuide {
+  const left = openRefinements(interview)
+    .map((step) => REFINEMENT_OFFER[step])
+    .join(", ");
+  return interview.kind === "trip"
+    ? {
+        ask: "nothing: the plan stands. Say it in two sentences with one hint (get_trip_plan, or the digest in This chat), then offer what can still be refined",
+        apply:
+          "a reply naming a refinement: interview ask with that step; enough: interview end with outcome done",
+        chips: `${left}, and that's enough (pick three or four)`,
+      }
+    : {
+        ask: "nothing: plan_optimize the day first if it has not run, then say the plan in two sentences and offer what can still be refined",
+        apply:
+          "a reply naming a refinement: interview ask with that step; enough: interview end with outcome done",
+        chips: `${left}, and that's enough`,
+      };
+}
+
+/** The step in words for the model: what to ask, how to apply the answer, ideas for the replies. */
 export function interviewGuide(
-  kind: "trip" | "day",
+  interview: Pick<InterviewSnapshot, "kind" | "answered" | "skipped">,
   step: InterviewStep,
   holds: string | null,
   region?: RegionConfig | null,
 ) {
-  const guide = guideOf(kind, step, region);
-  const steps = interviewSteps(kind);
+  const kind = interview.kind;
+  const core = interviewCore(kind);
+  const luggage = region ? luggagePhrase(region) : null;
+  const guide =
+    step === INTERVIEW_REFINE
+      ? refineGuide(interview)
+      : kind === "trip" && step === "hotel" && luggage
+        ? basesHotelGuide(luggage)
+        : STEP_GUIDE[step];
   return {
     step,
-    of: `${steps.indexOf(step) + 1} of ${steps.length}`,
+    of: core.includes(step)
+      ? `${core.indexOf(step) + 1} of ${core.length}`
+      : step === INTERVIEW_REFINE
+        ? "the plan stands"
+        : "a refinement",
     ask: holds
       ? `confirm what the plan holds (${holds}) or change it`
       : guide.ask,
@@ -918,10 +966,14 @@ export function interviewLine(
 ): string {
   const step = interview.step as InterviewStep;
   const guide = interviewGuide(
-    interview.kind,
+    interview,
     step,
     holds,
     region ?? (interview.region ? findRegion(interview.region) : null),
   );
-  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, step ${guide.of} "${step}"${interview.answered.length ? `; answered ${interview.answered.join(", ")}` : ""}${interview.skipped.length ? `; skipped ${interview.skipped.join(", ")}` : ""}. The question out now: ${guide.ask}. Apply the answer with ${guide.applyAnswerWith}, then call interview with op answered.`;
+  const done = [
+    interview.answered.length && `answered ${interview.answered.join(", ")}`,
+    interview.skipped.length && `passed ${interview.skipped.join(", ")}`,
+  ].filter(Boolean);
+  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, at "${step}" (${guide.of})${done.length ? `; ${done.join("; ")}` : ""}. Now: ${guide.ask}. ${step === INTERVIEW_REFINE ? guide.applyAnswerWith : `Apply the answer with ${guide.applyAnswerWith}, then interview answered`}. Replies: ${guide.chipIdeas}. Anything the user says for another step, take at once with its tool and mark that step answered too.`;
 }

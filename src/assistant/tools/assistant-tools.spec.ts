@@ -2547,69 +2547,97 @@ describe("planner tools", () => {
       });
       expect(JSON.parse(result.content).next).toMatchObject({
         step: "region",
-        of: "1 of 8",
+        of: "1 of 3",
       });
     });
 
-    it("marks a step answered, keeps the party for the trip and moves on", async () => {
-      const running = {
-        kind: "trip" as const,
-        region: "orlando",
-        step: "party",
-        answered: ["region", "dates"],
-        skipped: [],
-        mustDoRides: [],
-        source: "planner" as const,
-      };
+    const running = {
+      kind: "trip" as const,
+      region: "orlando",
+      step: "parks",
+      answered: ["region", "dates"],
+      skipped: [],
+      mustDoRides: [],
+      source: "planner" as const,
+    };
+
+    it("goes from the core to the plan, taking what was said early too", async () => {
       const result = await ask(
         "interview",
-        { op: "answered", party: { size: 4, heightsCm: [105, 132] } },
+        { op: "answered", also: ["tickets"] },
         { interview: running },
       );
       expect(result.action).toEqual({
         type: "interview_state",
         interview: {
           ...running,
-          step: "mustdo",
-          answered: ["region", "dates", "party"],
+          step: "refine",
+          answered: ["region", "dates", "parks", "tickets"],
+        },
+      });
+      expect(JSON.parse(result.content).next).toMatchObject({
+        step: "refine",
+        of: "the plan stands",
+      });
+    });
+
+    it("takes up a refinement the user picked, keeps the party with the trip", async () => {
+      const planned = {
+        ...running,
+        step: "refine",
+        answered: ["region", "dates", "parks"],
+      };
+      const picked = await ask(
+        "interview",
+        { op: "ask", step: "party" },
+        { interview: planned },
+      );
+      expect(picked.action).toMatchObject({
+        interview: { step: "party" },
+      });
+      expect(
+        (
+          await ask(
+            "interview",
+            { op: "ask", step: "dates" },
+            { interview: planned },
+          )
+        ).isError,
+      ).toBe(true);
+      const answered = await ask(
+        "interview",
+        { op: "answered", party: { size: 4, heightsCm: [105, 132] } },
+        { interview: { ...planned, step: "party" } },
+      );
+      expect(answered.action).toEqual({
+        type: "interview_state",
+        interview: {
+          ...planned,
+          step: "refine",
+          answered: ["region", "dates", "parks", "party"],
         },
         party: { size: 4, heightsCm: [105, 132] },
         region: "orlando",
+      });
+    });
+
+    it("ends when they have enough or want to stop, and needs a running interview", async () => {
+      const done = await ask(
+        "interview",
+        { op: "end", outcome: "done" },
+        { interview: running },
+      );
+      expect(done.action).toEqual({
+        type: "interview_state",
+        interview: null,
+        outcome: "done",
       });
       const left = await ask(
         "interview",
         { op: "end" },
         { interview: running },
       );
-      expect(left.action).toEqual({
-        type: "interview_state",
-        interview: null,
-        outcome: "left",
-      });
-      const done = await ask(
-        "interview",
-        { op: "answered", step: "file" },
-        {
-          interview: {
-            ...running,
-            step: "file",
-            answered: [
-              "region",
-              "dates",
-              "party",
-              "mustdo",
-              "tickets",
-              "hotel",
-              "pace",
-            ],
-          },
-        },
-      );
-      expect(done.action).toMatchObject({
-        type: "interview_state",
-        interview: null,
-        outcome: "done",
-      });
+      expect(left.action).toMatchObject({ outcome: "left" });
       expect((await ask("interview", { op: "answered" })).isError).toBe(true);
     });
   });

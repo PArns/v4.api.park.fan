@@ -161,9 +161,11 @@ import {
   changeTripParams,
   clockOfMinute,
   entryMinute,
+  interviewCore,
   interviewGuide,
   interviewHolds,
   nextInterviewStep,
+  openRefinements,
   optimizerEntry,
   pickTrip,
   planQueryOf,
@@ -213,10 +215,13 @@ import {
   type PostCardRow,
 } from "./assistant-actions";
 import {
-  DAY_INTERVIEW_STEPS,
+  DAY_INTERVIEW_CORE,
+  DAY_INTERVIEW_REFINE,
+  INTERVIEW_REFINE,
   type InterviewSnapshot,
   type InterviewStep,
-  TRIP_INTERVIEW_STEPS,
+  TRIP_INTERVIEW_CORE,
+  TRIP_INTERVIEW_REFINE,
   plannerClock,
   plannerEntryId,
   plannerPrefs,
@@ -5398,23 +5403,46 @@ export const ASSISTANT_TOOLS = [
     name: "interview",
     status: "planner",
     description:
-      "Parky's interview, which plans a trip or a park day question by question (# Interview): " +
-      "start one (kind, and region, park or date where known), mark the step the user just " +
-      "answered (answered, with party for a trip's party step and mustDoRides for its rides) or " +
-      "skipped, or end it when the user wants to stop. The result names the next step: what " +
-      "to ask, which tool takes the answer, ideas for the replies.",
+      "Parky's interview, which plans a trip or a park day from simple to detailed (# Interview): " +
+      "start one (kind, and region, park or date where known); answered or skip for the step the " +
+      "user just answered or passed (any step, also one they answered early; party for a trip's " +
+      "party, mustDoRides for its rides); ask to take up a refinement they picked once the plan " +
+      "stands; end when they have enough (outcome done) or want to stop (left). The result names " +
+      "the next step: what to ask, which tool takes the answer, ideas for the replies.",
     input: z.object({
-      op: z.enum(["start", "answered", "skip", "end"]),
+      op: z.enum(["start", "answered", "skip", "ask", "end"]),
       kind: z.enum(["trip", "day"]).optional().describe("start only"),
       region: regionInput,
       park: parkRef.optional().describe("A park day's park, start only"),
       date: planDate.optional().describe("A park day's date, start only"),
       step: z
         .enum([
-          ...new Set([...TRIP_INTERVIEW_STEPS, ...DAY_INTERVIEW_STEPS]),
+          ...new Set([
+            ...TRIP_INTERVIEW_CORE,
+            ...TRIP_INTERVIEW_REFINE,
+            ...DAY_INTERVIEW_CORE,
+            ...DAY_INTERVIEW_REFINE,
+          ]),
         ] as [string, ...string[]])
         .optional()
-        .describe("answered or skip: the step; default the one being asked"),
+        .describe(
+          "answered, skip: the step, default the one being asked; ask: the refinement",
+        ),
+      also: z
+        .array(
+          z.enum([
+            ...new Set([
+              ...TRIP_INTERVIEW_CORE,
+              ...TRIP_INTERVIEW_REFINE,
+              ...DAY_INTERVIEW_CORE,
+              ...DAY_INTERVIEW_REFINE,
+            ]),
+          ] as [string, ...string[]]),
+        )
+        .max(8)
+        .optional()
+        .describe("answered: other steps this message answered too"),
+      outcome: z.enum(["done", "left"]).optional().describe("end only"),
       party: z
         .object({
           size: z.number().int().min(1).max(30).optional(),
@@ -5441,11 +5469,15 @@ export const ASSISTANT_TOOLS = [
       const running = ctx.interview ?? null;
       if (input.op === "end") {
         if (!running) throw new McpToolError("No interview is running");
+        const outcome = input.outcome ?? "left";
         return new ActionOutcome(
-          { type: "interview_state", interview: null, outcome: "left" },
+          { type: "interview_state", interview: null, outcome },
           {
-            ended: true,
-            say: "one short line: everything answered so far stays in the planner, and they can pick it up any time",
+            ended: outcome,
+            say:
+              outcome === "done"
+                ? "one warm line on the plan they have; no question"
+                : "one short line: everything answered so far stays in the planner, and they can pick it up any time",
           },
         );
       }
@@ -5463,16 +5495,12 @@ export const ASSISTANT_TOOLS = [
           (input.kind === "trip"
             ? pickTrip(ctx.trips ?? [])?.region.slug
             : undefined);
-        const first =
-          input.kind === "trip"
-            ? TRIP_INTERVIEW_STEPS[0]
-            : DAY_INTERVIEW_STEPS[0];
         state = {
           kind: input.kind,
           ...(region && { region }),
           ...(park && { park }),
           ...(input.date && { date: input.date }),
-          step: first,
+          step: interviewCore(input.kind)[0],
           answered: [],
           skipped: [],
           mustDoRides: [],
@@ -5482,13 +5510,33 @@ export const ASSISTANT_TOOLS = [
         if (!running) {
           throw new McpToolError("No interview is running; start one first");
         }
-        const step = (input.step ?? running.step) as InterviewStep;
-        const list = input.op === "answered" ? "answered" : "skipped";
         state = {
           ...running,
-          [list]: [...new Set([...running[list], step])],
+          answered: [...running.answered],
+          skipped: [...running.skipped],
           mustDoRides: [...running.mustDoRides],
         };
+        if (input.op === "ask") {
+          const open = openRefinements(state);
+          if (!input.step || !open.includes(input.step as InterviewStep)) {
+            throw new McpToolError(
+              `ask takes a refinement still open: ${open.join(", ") || "none left"}`,
+            );
+          }
+        } else {
+          const step = (input.step ?? running.step) as InterviewStep;
+          if (step === INTERVIEW_REFINE) {
+            throw new McpToolError(
+              "Name the step that was answered, or use ask for a refinement they picked",
+            );
+          }
+          const list = input.op === "answered" ? "answered" : "skipped";
+          const also =
+            input.op === "answered" ? (input.also ?? []) : ([] as string[]);
+          state[list] = [
+            ...new Set([...state[list], step, ...(also as InterviewStep[])]),
+          ];
+        }
         for (const { park: reference, rideIds } of input.mustDoRides ?? []) {
           const found = await planPark(mcp(ctx), reference);
           if ("ambiguous" in found) return found;
@@ -5504,7 +5552,10 @@ export const ASSISTANT_TOOLS = [
           ].slice(0, 8);
         }
       }
-      const next = nextInterviewStep(state);
+      const next =
+        input.op === "ask"
+          ? (input.step as InterviewStep)
+          : nextInterviewStep(state);
       const party =
         input.party && state.kind === "trip"
           ? { size: input.party.size, heightsCm: input.party.heightsCm ?? [] }
@@ -5524,7 +5575,7 @@ export const ASSISTANT_TOOLS = [
           },
           {
             done: true,
-            say: "the plan is in the planner: two sentences on what stands out (the order and one hint), then suggest_replies for changes (swap two days, why this order, add a rest day)",
+            say: "the plan is in the planner and every refinement is in: two sentences on what stands out, then suggest_replies for changes (swap two days, why this order, add a rest day)",
           },
         );
       }
@@ -5534,15 +5585,17 @@ export const ASSISTANT_TOOLS = [
         { type: "interview_state", interview: state, ...extras },
         {
           next: interviewGuide(
-            state.kind,
+            state,
             next,
-            interviewHolds(state, next, trip, ctx.planner),
+            next === INTERVIEW_REFINE
+              ? null
+              : interviewHolds(state, next, trip, ctx.planner),
             trip?.region ?? (state.region ? findRegion(state.region) : null),
           ),
           ...(state.mustDoRides.length > 0 && {
             mustDoRides: state.mustDoRides,
           }),
-          then: "ask it in one short question in your voice and end with suggest_replies",
+          then: "one short question or the plan in your voice, and end with suggest_replies",
         },
       );
     },

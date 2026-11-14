@@ -314,7 +314,7 @@ const PLAN_CASES: EvalCase[] = [
     pageSubject: HUB_SUBJECT,
     trips: [OCT_TRIP],
     tripDigest: OCT_DIGEST,
-    interview: INTERVIEW_AT("party", ["region", "dates"]),
+    interview: INTERVIEW_AT("party", ["region", "dates", "parks"]),
     message: "2 adults and 2 kids, they're 105 and 132 cm",
     want: [
       {
@@ -336,13 +336,7 @@ const PLAN_CASES: EvalCase[] = [
       },
     ],
     interview: {
-      ...INTERVIEW_AT("hotel", [
-        "region",
-        "dates",
-        "party",
-        "mustdo",
-        "tickets",
-      ]),
+      ...INTERVIEW_AT("hotel", ["region", "dates", "parks", "party"]),
       region: "japan",
     },
     history: [
@@ -356,13 +350,39 @@ const PLAN_CASES: EvalCase[] = [
     want: [{ tool: "change_trip", input: { moveBuffer: 30 } }],
   },
   {
+    id: "interview-early-tickets-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [{ region: "orlando", query: "", onScreen: true }],
+    interview: INTERVIEW_AT("dates", ["region"]),
+    message: "October 14 to 21, 2027, and we already have 4-day Disney tickets",
+    want: [
+      {
+        tool: "change_trip",
+        input: { dates: { from: "2027-10-14", to: "2027-10-21" } },
+      },
+    ],
+  },
+  {
+    id: "interview-refine-pick-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("refine", ["region", "dates", "parks"]),
+    message: "Tickets",
+    want: [{ tool: "interview", input: { op: "ask", step: "tickets" } }],
+  },
+  {
     id: "interview-leave-de",
     locale: "de",
     pagePath: OCT_HUB,
     pageSubject: HUB_SUBJECT,
     trips: [OCT_TRIP],
     tripDigest: OCT_DIGEST,
-    interview: INTERVIEW_AT("tickets", ["region", "dates", "party", "mustdo"]),
+    interview: INTERVIEW_AT("refine", ["region", "dates", "parks", "party"]),
     message: "Lass uns später weitermachen",
     want: [{ tool: "interview", input: { op: "end" } }],
   },

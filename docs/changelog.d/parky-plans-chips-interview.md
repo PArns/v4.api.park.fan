@@ -13,7 +13,7 @@ tickets, hotel, pace, `moveBuffer` in a region with bases) and says which days m
 rides' wait before and after; `trip_undo` takes Parky's last change back; `review_plan_day` prices
 a planned day with the day optimizer ("how long do I wait in total"); `suggest_replies` puts two to
 four tappable replies under an answer and ends it without another round; `interview` leads a trip
-or a park day question by question, each answer applied at once, and asks in Japan how a hotel
+or a park day from simple to detailed, a plan after the first few answers and the rest offered as replies, each answer applied at once, and asks in Japan how a hotel
 change should go, with the luggage courier. `plan_move` moves an entry to a time, `plan_trip`
-files the party's smallest rider with the days. Prompt version 53; 13 eval cases
+files the party's smallest rider with the days. Prompt version 53; 15 eval cases
 ([assistant](frontend/assistant.md#the-visitors-plans)).

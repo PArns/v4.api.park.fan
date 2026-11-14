@@ -158,31 +158,41 @@ export const tripsSnapshotSchema = lenientList(
 );
 export type TripSnapshot = z.infer<typeof tripsSnapshotSchema>[number];
 
-/** The trip interview's steps, in the order Parky asks them. */
-export const TRIP_INTERVIEW_STEPS = [
-  "region",
-  "dates",
+/**
+ * The interview goes from simple to detailed: the core steps first, in this order, then the plan
+ * at once, then the refinements, which Parky offers as replies and the visitor may pick or leave
+ * (`refine`). A visitor who stops after the core has a plan.
+ */
+export const TRIP_INTERVIEW_CORE = ["region", "dates", "parks"] as const;
+/** A trip's refinements, offered once its plan stands. */
+export const TRIP_INTERVIEW_REFINE = [
   "party",
-  "mustdo",
   "tickets",
   "hotel",
   "pace",
   "file",
 ] as const;
-/** The park-day interview's steps, in the order Parky asks them. */
-export const DAY_INTERVIEW_STEPS = [
-  "day",
-  "arrival",
-  "mustdo",
-  "heights",
-  "shows",
-  "sort",
-] as const;
+/** A park day's core: the park and date, the must-dos. */
+export const DAY_INTERVIEW_CORE = ["day", "mustdo"] as const;
+/** A park day's refinements, offered once the day is planned. */
+export const DAY_INTERVIEW_REFINE = ["heights", "shows", "arrival"] as const;
+/** The phase after the core: the plan stands, the refinements are on offer. */
+export const INTERVIEW_REFINE = "refine";
 const interviewStep = z.enum([
-  ...new Set([...TRIP_INTERVIEW_STEPS, ...DAY_INTERVIEW_STEPS]),
+  ...new Set([
+    ...TRIP_INTERVIEW_CORE,
+    ...TRIP_INTERVIEW_REFINE,
+    ...DAY_INTERVIEW_CORE,
+    ...DAY_INTERVIEW_REFINE,
+    INTERVIEW_REFINE,
+  ]),
 ] as [string, ...string[]]);
 export type InterviewStep =
-  (typeof TRIP_INTERVIEW_STEPS)[number] | (typeof DAY_INTERVIEW_STEPS)[number];
+  | (typeof TRIP_INTERVIEW_CORE)[number]
+  | (typeof TRIP_INTERVIEW_REFINE)[number]
+  | (typeof DAY_INTERVIEW_CORE)[number]
+  | (typeof DAY_INTERVIEW_REFINE)[number]
+  | typeof INTERVIEW_REFINE;
 
 /**
  * Parky's interview as the browser holds it beside the chat: which kind, the step being asked,
