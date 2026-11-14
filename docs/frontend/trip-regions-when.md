@@ -1,7 +1,7 @@
 # When to go (`/v1/trip-regions/:region/when`, `/school-breaks`)
 
-The contract behind the Orlando hub's "find the best dates" mode, the best-time landing pages and
-Parky's `find_trip_dates`. A visitor knows which parks and how long, not when. `/when` ranks every
+The contract behind the region hubs' "find the best dates" mode (Orlando's first), the best-time
+landing pages and Parky's `find_trip_dates`, for every trip region alike. A visitor knows which parks and how long, not when. `/when` ranks every
 trip window of that length in a search range by the plan it would get, and returns the best few
 with their plans and the year strip by week and month. `/school-breaks` lists the school breaks
 of the visitors' home regions by the codes `within` takes. Open this page before reading either
@@ -34,7 +34,7 @@ by the key guard). It answers 400 for:
 | ----------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `from`, `to`                                                                                    | today … today + 365 | the search range; every window lies inside it                                                                                   |
 | `days`                                                                                          | 10                  | trip days, arrival and departure day included                                                                                   |
-| `parks`, `hotel`, `area`, `arrival`, `departure`, `blocks`, `fireworks`, `split`, `rest`, `hop` | as `/plan`          | the trip each window is planned for, validated and defaulted by the plan's own `normalizePlanQuery`                             |
+| `parks`, `hotel`, `area`, `arrival`, `departure`, `blocks`, `fireworks`, `split`, `rest`, `hop`, `bases`, `startBase`, `endBase` | as `/plan`          | the trip each window is planned for, validated and defaulted by the plan's own `normalizePlanQuery`; in a region with bases each window's stays are searched ([bases](./trip-regions.md#bases-a-trip-across-several-cities)) |
 | `parties`                                                                                       | none                | deprecated name of `fireworks`: `avoid` reads as `want`, `allow` and `prefer` as `any`; `fireworks` wins                        |
 | `within`                                                                                        | none                | a code from `/school-breaks` (`DE-NW`, `NL-GR`, `GB-ENG` …): only windows lying wholly inside one of that region's breaks count |
 | `tickets`                                                                                       | none                | owned tickets as on `/plan`, without `@date`: each window searches their starts ([tickets](#tickets))                           |
@@ -82,7 +82,7 @@ by the key guard). It answers 400 for:
       "from": "2027-02-16",
       "to": "2027-02-25",
       "headlinerWait": 34, // the window's plan: mean over its park days, without penalties
-      "penalties": { "hurricane": 6.4, "heat": 1.2 }, // minutes per park day the ranking added; absent when none
+      "penalties": { "hurricane": 6.4, "heat": 1.2 }, // minutes per park day the ranking added (Japan: typhoon); absent when none
       "rangeAverageWait": 44, // the same trip's plan, averaged over the range's windows
       "basis": "forecast", // forecast | mixed | last_year | none
       "reasons": ["no_school_break", "after_holidays", "mild_weather"],
@@ -117,16 +117,17 @@ by the key guard). It answers 400 for:
         "basis": "climate_normal",
         "period": "2015-2024",
       },
-      "usSchoolBreakDays": [
+      "localSchoolBreakDays": [
         {
           "date": "2027-01-01",
           "name": "Winter break (Orange County Public Schools), New Year's Day",
         },
       ],
+      "usSchoolBreakDays": ["… the same, in the US regions only (deprecated)"],
       "seasons": ["…"],
       "partyNights": 1,
       "dayGuestHours": 11.5,
-      "hurricaneSeason": false,
+      "hurricaneSeason": false, // Orlando; Japan: typhoonSeason and rainySeason
     },
   ],
   "seasons": [
@@ -157,8 +158,9 @@ by the key guard). It answers 400 for:
   February window on a forecast at 36 ranks above a late-August one at 34 from last year, in the
   heat and the hurricane peak. Days without published hours are ranked on their figures like any
   other (priced as open, above).
-- **`penalties`** (`{ heat?, hurricane? }`): what heat and the hurricane season added to the
-  ranking, in minutes per park day, one decimal, absent when both are zero. `headlinerWait` never
+- **`penalties`** (`{ heat?, hurricane? }`, `{ heat?, typhoon? }` in Japan): what heat and the
+  region's storm season added to the ranking, in minutes per park day, one decimal, absent when both
+  are zero. `headlinerWait` never
   includes them, so the client can say "ranked lower: hurricane peak" beside a plain figure.
 - **`rangeAverageWait`** is the same trip's plan figure meaned over the range's windows, so "27 %
   below the range's average" compares like with like. It plans every `averageStride`-th window
@@ -174,24 +176,32 @@ by the key guard). It answers 400 for:
 - **`months`**, one per calendar month the range touches:
   - `headlinerWait`: the `weeks` figures, each weighted by its days in the month; `basis` combines
     theirs.
-  - `climate`: the climate normals (2015–2024, ERA5) at Magic Kingdom, the reference park for the
-    region, from `WeatherService.getClimateNormals`: the month's mean high and low and its total
+  - `climate`: the climate normals (2015–2024, ERA5) at the region's climate park
+    (`weather.climatePark` on the region route: Magic Kingdom in Orlando, one park for a region in
+    several cities), from `WeatherService.getClimateNormals`: the month's mean high and low and its total
     precipitation. Never a forecast. Absent while the normals are not cached yet (the service
     fetches them in the background). No `rainDays`: a normal is a mean per calendar day, and a mean
     of 3 mm does not say on how many days it rains.
-  - `usSchoolBreakDays`: the days of the range in the month that the region's calendar flags
-    `isSchoolVacation` or `isHoliday`, each with its holiday names joined.
+  - `localSchoolBreakDays`: the days of the range in the month that the region's calendar flags
+    `isSchoolVacation` or `isHoliday`, each with its holiday names joined: the region's own school
+    breaks and holidays (the US's in Orlando, Japan's in Japan, France's in Paris).
+    `usSchoolBreakDays` is the same list under its first name, sent in the US regions only
+    (Orlando, Southern California); read `localSchoolBreakDays`.
   - `seasons`: the ids of the seasons the chosen parks' days carry in the month.
   - `partyNights`: park-days of the chosen parks that close early (`closesEarly`) for a ticketed
     evening.
   - `dayGuestHours`: the mean day-guest open hours over the month's OPERATING days of the chosen
     headliner parks, one decimal; absent where no hours are published.
-  - `hurricaneSeason`: June to November.
+  - `hurricaneSeason` (a region with a hurricane season: Orlando, June to November) or
+    `typhoonSeason` (Japan): the month touches the storm season, by its mid-month weight. Absent in
+    a region without one.
+  - `rainySeason` (Japan only): a day of the month in the range lies in the rainy season.
 
-  `weeks` and `months` show the plain figures, without the heat and hurricane terms.
+  `weeks` and `months` show the plain figures, without the heat and storm terms.
 
 - **Reasons** (the client translates the codes and shows nothing for an unknown one):
-  - `no_school_break`: no day of the window is a US school break and none is unknown;
+  - `no_school_break`: no day of the window is a school break of the region's own calendar (the
+    US's in Orlando) and none is unknown;
   - `after_holidays`: and a school break ended within 7 days before it;
   - `before_spring_break`: and the next school break starts within 14 days after it, in February
     to April;
@@ -199,15 +209,19 @@ by the key guard). It answers 400 for:
     `summer_nights` season that needs no separate ticket runs in the window;
   - `long_days`: the chosen headliner parks' mean day-guest hours in the window beat the range's by
     an hour or more;
-  - `mild_weather`: the climate normals over the window give a mean high of 20–29 °C and at most
-    3 mm of rain a day. Never a forecast.
+  - `mild_weather`: the climate normals over the window (at the region's climate park) give a mean
+    high of 20–29 °C and at most 3 mm of rain a day. Never a forecast.
 
   **Warnings**:
-  - `school_break`: a day of the window is a US school break;
+  - `school_break`: a day of the window is a school break of the region's own calendar;
   - `hurricane_season`: the window touches 1 June to 30 November, a fact about the season;
   - `hurricane_peak`: and touches its peak, 15 August to 15 October;
-  - `extreme_heat`: a planned theme-park day is extremely hot (a forecast from 35 °C, else a
-    climate normal from 31.5 °C);
+  - `typhoon_season`, `typhoon_peak`: the same for Japan's typhoon season and its peak (the
+    region route's `weather.storm`); a region has the codes of its own storm season only;
+  - `rainy_season`: the window touches Japan's rainy season, a fact about the season that ranks
+    nothing;
+  - `extreme_heat`: a planned theme-park day is extremely hot (against the region's thresholds; in
+    Orlando a forecast from 35 °C, else a climate normal from 31.5 °C);
   - `party_nights` (with `closesEarlyDays`, the planned park days that close early): a planned day
     closes early for a ticketed evening;
   - `fireworks_missed`: with `fireworks=want`, a planned night loses the evening show anyway;
@@ -218,7 +232,7 @@ by the key guard). It answers 400 for:
   - `ticket_window_relaxed`: an owned ticket's window could not hold every planned day
     ([tickets](#tickets)).
 
-  The school-break codes are about the region's own (US) school calendar, which is what fills the
+  The school-break codes are about the region's own school calendar, which is what fills the
   parks; `within` is about the visitor's.
 
 - **`within`** restricts windows to those that lie completely inside one of the region's breaks as
@@ -302,12 +316,14 @@ kept six hours in Redis (`trip-regions:when:v1:{region}:{query}`) by its normali
 
 ## School breaks (`GET /v1/trip-regions/:region/school-breaks`)
 
-Open, no key: holidays are not forecasts. An hour in the browser, a day at the edge.
+Open, no key: holidays are not forecasts. An hour in the browser, a day at the edge. The markets
+are the same in every region: visitors from the site's six locales (en, de, nl, fr, es, it) plan
+trips to all of them, so every region offers every country below; only "today" is the region's.
 
 | Parameter    | Default                | Meaning                                                                                           |
 | ------------ | ---------------------- | ------------------------------------------------------------------------------------------------- |
 | `from`, `to` | today … today + 365    | the range; a break reaching into it is listed whole                                               |
-| `countries`  | DE, NL, GB, BE, FR, AT | ISO codes; by default a country is listed only when its stored school data reaches 180 days ahead |
+| `countries`  | DE, NL, GB, BE, FR, AT, ES, IT | ISO codes; by default a country is listed only when its stored school data reaches 180 days ahead |
 
 ```jsonc
 {
@@ -348,6 +364,16 @@ Open, no key: holidays are not forecasts. An hour in the browser, a day at the e
     subdivisions when an entry has any, so the middle and south codes lack those breaks (measured
     2026-11-12). "Noord" maps to `NL-GR`; "Midden" and "Zuid" have no code whose breaks are
     complete and are not offered until the sync also stores the groups.
+  - ES: the communities as OpenHolidays codes them (`ES-AR` Aragón … `ES-VC` Comunitat
+    Valenciana, `ES-CE` Ceuta, `ES-ML` Melilla), Andalusia by province, which is how its rows come
+    (`ES-AN-AL` … `ES-AN-SE`).
+  - IT: the regions (`IT-AB` Abruzzo … `IT-VE` Veneto), Trentino-Alto Adige by province
+    (`IT-TR-BZ` Alto Adige, `IT-TR-TN` Trentino).
+  - **Spain and Italy drop out of the default list** while their data does not reach 180 days
+    ahead: OpenHolidays (the source for all of Europe here) supports both, but held no Spanish or
+    Italian school break after the 2025–26 school year (measured 2026-11-13; Italy's rows are its
+    summer, Christmas and Easter breaks and single days). `countries=ES` still lists them, with
+    `through` saying where the data ends, so a later break reads as unknown, never as absent.
   - Any other country asked for with `countries` lists every code its rows carry, named by the
     code.
 - **`through`** is the last day the region's own rows or its country's nationwide rows reach, null

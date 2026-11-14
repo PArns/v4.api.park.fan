@@ -26,9 +26,11 @@ import { toPublicSeason } from "../parks/park-seasons.controller";
 import type { Park } from "../parks/entities/park.entity";
 import {
   findRegion,
+  TRIP_REGIONS,
   type RegionConfig,
   type RegionParkConfig,
 } from "./regions";
+import { MAX_TRIP_DAYS } from "./trip-optimizer";
 import type { ScheduleRowLike } from "./trip-calendar.util";
 import {
   readLastYearMonths,
@@ -42,6 +44,7 @@ import {
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
+  summarizeRegion,
   validateWindow,
   type InternalRegionCalendar,
   type ParkCalendarSource,
@@ -51,6 +54,7 @@ import { regionBestDays, type TripBestDays } from "./trip-best-days";
 import type {
   TripCalendarDto,
   TripRegionDto,
+  TripRegionListDto,
 } from "./dto/trip-region-response.dto";
 import type { TripTicketCatalogDto } from "./dto/trip-tickets.dto";
 import { TicketCatalogService } from "./ticket-catalog.service";
@@ -188,6 +192,20 @@ export class TripRegionService {
     }
     this.resolved.set(region.slug, { at: Date.now(), parks });
     return parks;
+  }
+
+  /** `GET /v1/trip-regions`: every region, in the order `regions.ts` lists them. */
+  async list(): Promise<TripRegionListDto> {
+    const regions = await Promise.all(
+      Object.values(TRIP_REGIONS).map(async (region) =>
+        summarizeRegion(
+          region,
+          (await this.resolveParks(region)).map(toRecord),
+          MAX_TRIP_DAYS,
+        ),
+      ),
+    );
+    return { regions };
   }
 
   /** `GET /v1/trip-regions/:region` */

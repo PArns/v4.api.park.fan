@@ -19,8 +19,15 @@ import {
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
 import type { TripWhenQueryDto } from "./dto/trip-when.dto";
 
-/** The park whose climate normals stand for the region's months. */
-export const CLIMATE_REFERENCE_PARK = "magic-kingdom-park";
+/**
+ * The park whose climate normals stand for the region's months and its
+ * `mild_weather` reason (`RegionConfig.weather.climatePark`; Magic Kingdom in
+ * Orlando). One park for a region in several cities: Japan's months read
+ * Tokyo's climate.
+ */
+export function climateParkOf(region: RegionConfig): string {
+  return region.weather.climatePark;
+}
 
 const daysBetween = (from: string, to: string): number =>
   Math.round(
@@ -96,6 +103,9 @@ function planQueryOf(
     ticket: query.ticket,
     hopper: query.hopper,
     tickets: query.tickets,
+    bases: query.bases,
+    startBase: query.startBase,
+    endBase: query.endBase,
   };
 }
 

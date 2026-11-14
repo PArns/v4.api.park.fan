@@ -14,7 +14,7 @@ uncommitted. Tracked:
 | `scripts/backup/parkfan-backup.sh`, `backup.env.example` | The nightly host backup ([backup](../deployment/backup.md)).                                                                                                                                  |
 | `scripts/python-deps/`                                   | Artefact compatibility checks for a Python dependency upgrade ([Python dependencies](python-dependencies.md#re-running-the-check)).                                                           |
 | `scripts/generate-swagger-spec.ts`                       | Runs as `postbuild` and writes the Swagger spec; skipped with a warning when it fails.                                                                                                        |
-| `scripts/trip-regions/` | `build-travel-matrix.mjs` rebuilds the trip regions' OSRM travel matrix; `import-seasons.mjs` imports researched park seasons through the admin API, a dry run unless `--apply` (the Orlando list researched for 2026/27, with its sources per row, is `seasons/orlando-2026-27.json`); `dev-server.ts` is the local stand-in for the trip-region routes (below) ([trip regions](../frontend/trip-regions.md)) |
+| `scripts/trip-regions/` | `build-travel-matrix.mjs <region>` rebuilds one OSRM region's travel matrix and keeps the others' (a region whose travel is curated, Japan's trains, has none); `import-seasons.mjs` imports researched park seasons through the admin API, a dry run unless `--apply` (the lists researched for 2026/27, with their sources per row, are `seasons/orlando-2026-27.json` and `seasons/japan-2026-27.json`, whose 15 rows without an end date the import skips; neither is imported into production without the owner's approval); `dev-server.ts` is the local stand-in for the trip-region routes (below) ([trip regions](../frontend/trip-regions.md)) |
 | [`scripts/README.md`](../../scripts/README.md)           | A pointer to this page.                                                                                                                                                                       |
 
 ## Package commands
@@ -48,8 +48,9 @@ the same jobs run from tracked code:
 ## The trip-region dev shim
 
 `pnpm trip-regions:dev` serves `http://localhost:3001` for the frontend while the trip-region
-routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions/:region`,
-`/calendar`, `/best-days`, `/plan`, `/when`, `/school-breaks` and `/tickets`, and `POST
+routes and the day optimizer are not deployed. It answers `GET /v1/trip-regions` and, for every
+region of `regions.ts`, `GET /v1/trip-regions/:region`, `/calendar`, `/best-days`, `/plan`,
+`/when`, `/school-breaks` and `/tickets`, and `POST
 /v1/parks/…/plan/optimize`, by running the API's own modules (`trip-region.assembly`,
 `trip-best-days`, `trip-plan.assembly`, `trip-evening`, `trip-optimizer`, `trip-when`, `trip-when.assembly`,
 `trip-school-breaks`, the day optimizer's `engine`) on production's public answers (`/calendar`,

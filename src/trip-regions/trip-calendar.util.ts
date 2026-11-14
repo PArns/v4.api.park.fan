@@ -13,7 +13,8 @@ import { addIsoDays, lastYearDays } from "../common/utils/date.util";
 
 export type TripDayStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
 export type TripBasis = "forecast" | "long_range" | "last_year" | "none";
-export type EarlyKind = "early_entry" | "early_park_admission";
+/** The before-opening slot's name, the region's own (`RegionGroupConfig.earlyKind`). */
+export type EarlyKind = string;
 export type EveningKind = "extended_evening" | "ticketed_event";
 
 /** The schedule types that describe a slot beside the day guests' hours. */

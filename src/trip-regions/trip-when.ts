@@ -21,12 +21,13 @@ import { CLIMATE_NORMAL_PERIOD } from "../external-apis/weather/climate-normals"
 import type { RegionConfig, PerkRule } from "./regions";
 import {
   dayCostParts,
-  hurricaneWeight,
-  isHurricanePeak,
+  inSeasonNote,
+  isStormPeak,
   medianDayHours,
   penaltiesOf,
-  PERK_SHARE,
   PlanCostModel,
+  stormWeight,
+  type StormWarning,
   type DayCostContext,
   type DayCostParts,
   type OptimizedPlan,
@@ -124,8 +125,8 @@ export type WhenReason =
 
 export type WhenWarning =
   | "school_break"
-  | "hurricane_season"
-  | "hurricane_peak"
+  | StormWarning
+  | "rainy_season"
   | "extreme_heat"
   | "party_nights"
   | "fireworks_missed"
@@ -185,7 +186,7 @@ export interface TripWhenWindow {
   to: string;
   /** The plan's mean over its park days, without `penalties`. */
   headlinerWait?: number;
-  /** Heat and hurricane minutes per park day the ranking added. */
+  /** Heat and storm-season minutes per park day the ranking added. */
   penalties?: PlanPenalties;
   rangeAverageWait?: number;
   basis: WhenBasis;
@@ -194,8 +195,16 @@ export interface TripWhenWindow {
   seasons: string[];
   closesEarlyDays: number;
   plan: {
-    days: Array<{ date: string; kind: PlannedDay["kind"]; parks: string[] }>;
+    days: Array<{
+      date: string;
+      kind: PlannedDay["kind"];
+      parks: string[];
+      /** A region with bases: where the night is spent. */
+      base?: string;
+    }>;
     unplaced?: string[];
+    /** A region with bases: the window's stays, as on `/plan`. */
+    stays?: OptimizedPlan["stays"];
   };
   /** The owned tickets as the window's plan used them, in short. */
   tickets?: WhenTicket[];
@@ -233,11 +242,19 @@ export interface TripWhenMonth {
   headlinerWait?: number;
   basis: WhenBasis;
   climate?: TripWhenClimate;
-  usSchoolBreakDays: Array<{ date: string; name: string }>;
+  /** The region's own school breaks in the month (the US's in Orlando, Japan's in Japan). */
+  localSchoolBreakDays: Array<{ date: string; name: string }>;
+  /** `localSchoolBreakDays` under its first name; in the US regions only. Deprecated. */
+  usSchoolBreakDays?: Array<{ date: string; name: string }>;
   seasons: string[];
   partyNights: number;
   dayGuestHours?: number;
-  hurricaneSeason: boolean;
+  /** The month touches the hurricane season; in a region with one only. */
+  hurricaneSeason?: boolean;
+  /** The month touches the typhoon season; in a region with one only. */
+  typhoonSeason?: boolean;
+  /** The month touches the rainy season (tsuyu); in a region with one only. */
+  rainySeason?: boolean;
 }
 
 export interface TripWhen {
@@ -274,7 +291,7 @@ type TripCalendarSeason = InternalRegionCalendar["seasons"][number];
 // The two places `/when` touches the plan's pricing and search. Everything
 // below them goes through these, so a change to the plan lands here only.
 
-/** One park on one day in minutes, exactly as the plan prices it, with its heat and hurricane terms. */
+/** One park on one day in minutes, exactly as the plan prices it, with its heat and storm terms. */
 export function priceDay(cell: PlanCell, ctx: DayCostContext): DayCostParts {
   return dayCostParts(cell, ctx);
 }
@@ -316,18 +333,29 @@ const round1 = (v: number): number => Math.round(v * 10) / 10;
 const waitOf = (c: PlanCell): number | undefined =>
   c.exactWait ?? c.headlinerWait;
 
-/** The hotel's perk factor for a park on a day, as the plan applies it. */
-function perkFactor(slug: string, cell: PlanCell, rules: PerkRule[]): number {
+/**
+ * The hotel's perk factor for a park on a day, as the plan applies it. A
+ * perk after the first night counts on every day: across windows the check-in
+ * day moves, and counting it keeps the bound below every plan.
+ */
+function perkFactor(
+  slug: string,
+  cell: PlanCell,
+  rules: PerkRule[],
+  date: string,
+): number {
   if (cell.status === "CLOSED") return 1;
   let factor = 1;
   for (const rule of rules) {
     if (!rule.parks.includes(slug)) continue;
+    if (rule.blackoutDates?.includes(date)) continue;
     const applies =
       rule.needs === "always" ||
+      rule.needs === "after_first_night" ||
       (rule.needs === "extended_evening"
         ? cell.evening?.kind === "extended_evening"
         : !!cell.early);
-    if (applies) factor *= 1 - PERK_SHARE[rule.perk];
+    if (applies) factor *= 1 - rule.share;
   }
   return factor;
 }
@@ -364,17 +392,17 @@ function pricingOver(
 interface DayPrice {
   /** The plan's cost: ranks windows and bounds them. */
   rank: number;
-  /** The cost without the `fireworks=want`, heat and hurricane terms: the shown figure. */
+  /** The cost without the `fireworks=want`, heat and storm terms: the shown figure. */
   plain: number;
   heat: number;
-  hurricane: number;
+  storm: number;
 }
 
 const NO_DAY: DayPrice = {
   rank: Infinity,
   plain: Infinity,
   heat: 0,
-  hurricane: 0,
+  storm: 0,
 };
 
 /**
@@ -383,13 +411,14 @@ const NO_DAY: DayPrice = {
  * but between windows it would only say "too far ahead", and a year's search
  * is mostly too far ahead. The shown figure leaves out the `fireworks=want`
  * penalty, which ranks a window but is no number of minutes, and the heat and
- * hurricane terms, which `penalties` reports beside it.
+ * storm terms, which `penalties` reports beside it.
  */
 function priceOf(
   q: NormalizedPlanQuery,
   rules: PerkRule[],
   pricing: ParkPricing,
   day: InternalCalendarDay,
+  weather: RegionConfig["weather"],
 ): DayPrice {
   const raw = day.parks[pricing.slug];
   if (!raw) return NO_DAY;
@@ -401,16 +430,17 @@ function priceOf(
     medianHours: pricing.medianHours,
     neutralWait: pricing.neutralWait,
     fireworks: q.fireworks,
-    perkFactor: perkFactor(pricing.slug, cell, rules),
+    perkFactor: perkFactor(pricing.slug, cell, rules, day.date),
     date: day.date,
+    weather,
   };
   const rank = priceDay(open, ctx);
   const any = priceDay(open, { ...ctx, fireworks: "any" });
   return {
     rank: rank.cost,
-    plain: any.cost - any.heat - any.hurricane,
+    plain: any.cost - any.heat - any.storm,
     heat: rank.heat,
-    hurricane: rank.hurricane,
+    storm: rank.storm,
   };
 }
 
@@ -465,7 +495,7 @@ interface Evaluated {
   perVisit: number;
   basis: WhenBasis;
   basisRank: number;
-  /** Heat and hurricane minutes per park day: comfort, between equal windows. */
+  /** Heat and storm minutes per park day: comfort, between equal windows. */
   penaltyTotal: number;
   /** The plan's mean over its park days, without its penalties. */
   figure?: number;
@@ -521,7 +551,7 @@ interface Rankable {
  * The ranking's tiers. From the cheapest window left (by cost per visit), it
  * and every window within {@link WHEN_TIE_MINUTES} of it count as equal and
  * form a tier, ordered by comfort: forecast before mixed before last year,
- * then the lower heat and hurricane penalty, then the exact cost and the
+ * then the lower heat and storm penalty, then the exact cost and the
  * earlier start. Then the next tier from the cheapest window left.
  */
 function tiersOf<T extends Rankable>(
@@ -566,7 +596,14 @@ function tierStartOf<T extends Rankable>(
 export function findTripDates(input: WhenInput): TripWhen {
   const { region, calendar, query } = input;
   const q = query.plan;
-  const rules = region.perks[q.hotel] ?? [];
+  // A region with bases: every stay's hotel perks may count, so the bound
+  // takes them all.
+  const rules = q.stays
+    ? q.stays.bases.flatMap((b) => {
+        const hotel = region.hotelAreas.find((h) => h.key === b.area)?.hotel;
+        return hotel ? (region.perks[hotel] ?? []) : [];
+      })
+    : (region.perks[q.hotel] ?? []);
   const days = calendar.days;
   const dates = days.map((d) => d.date);
   const length = query.days;
@@ -631,7 +668,13 @@ export function findTripDates(input: WhenInput): TripWhen {
     const costsOf = (slug: string) =>
       open.map(
         (d) =>
-          priceOf(q, rules, pricing.get(slug) as ParkPricing, days[d]).rank,
+          priceOf(
+            q,
+            rules,
+            pricing.get(slug) as ParkPricing,
+            days[d],
+            region.weather,
+          ).rank,
       );
     // The plan pairs parks on a hop day only when the visits outnumber the days.
     if (q.hop && total > open.length) {
@@ -669,7 +712,7 @@ export function findTripDates(input: WhenInput): TripWhen {
     let score = 0;
     let shown = 0;
     let heat = 0;
-    let hurricane = 0;
+    let storm = 0;
     let parkDays = 0;
     const bases: Array<string | undefined> = [];
     for (const day of plan.days) {
@@ -682,6 +725,7 @@ export function findTripDates(input: WhenInput): TripWhen {
           rules,
           pricing.get(v.slug) as ParkPricing,
           calendarDay,
+          region.weather,
         );
       });
       const hop = prices.length > 1;
@@ -690,7 +734,7 @@ export function findTripDates(input: WhenInput): TripWhen {
       score += prices.reduce((sum, p) => sum + share * p.rank, move);
       shown += prices.reduce((sum, p) => sum + share * p.plain, move);
       heat += prices.reduce((sum, p) => sum + share * p.heat, 0);
-      hurricane += prices.reduce((sum, p) => sum + share * p.hurricane, 0);
+      storm += prices.reduce((sum, p) => sum + share * p.storm, 0);
       parkDays++;
     }
     // A day outside an owned ticket's window counts as a visit the window cannot hold.
@@ -698,15 +742,25 @@ export function findTripDates(input: WhenInput): TripWhen {
       d.warnings.includes("outside_ticket_window"),
     ).length;
     score += UNPLACED_VISIT_COST * (plan.unplaced.length + outside);
+    // A region with bases: what the stays add (travel hours, the moves).
+    score += plan.stayPenalty ?? 0;
     const basis = basisOf(bases);
-    const penalties = penaltiesOf(heat, hurricane, parkDays);
+    const penalties = penaltiesOf(
+      heat,
+      storm,
+      parkDays,
+      region.weather.storm?.kind,
+    );
     const evaluated: Evaluated = {
       index: i,
       score,
       perVisit: score / visitCount(i),
       basis,
       basisRank: BASIS_RANK[basis],
-      penaltyTotal: (penalties?.heat ?? 0) + (penalties?.hurricane ?? 0),
+      penaltyTotal:
+        (penalties?.heat ?? 0) +
+        (penalties?.hurricane ?? 0) +
+        (penalties?.typhoon ?? 0),
       ...(parkDays > 0 && { figure: shown / parkDays }),
       ...(penalties && { penalties }),
       plan,
@@ -987,11 +1041,19 @@ function describeWindow(
 
   const warnings: WhenWarning[] = [];
   if (schoolDays.length > 0) warnings.push("school_break");
-  if (window.some((d) => hurricaneWeight(d.date) > 0)) {
-    warnings.push("hurricane_season");
+  const storm = region.weather.storm;
+  if (storm && window.some((d) => stormWeight(storm, d.date) > 0)) {
+    warnings.push(`${storm.kind}_season`);
   }
-  if (window.some((d) => isHurricanePeak(d.date))) {
-    warnings.push("hurricane_peak");
+  if (storm && window.some((d) => isStormPeak(storm, d.date))) {
+    warnings.push(`${storm.kind}_peak`);
+  }
+  if (
+    window.some((d) =>
+      inSeasonNote(region.weather.notes, "rainy_season", d.date),
+    )
+  ) {
+    warnings.push("rainy_season");
   }
   const closesEarlyDays = visits.filter((c) => c?.closesEarly).length;
   if (
@@ -1048,8 +1110,10 @@ function describeWindow(
         date: d.date,
         kind: d.kind,
         parks: d.parks.map((v) => v.slug),
+        ...(d.base && { base: d.base }),
       })),
       ...(unplaced.length > 0 && { unplaced }),
+      ...(e.plan.stays && { stays: e.plan.stays }),
     },
   };
 }
@@ -1084,7 +1148,7 @@ function weekStrip(input: WhenInput, rules: PerkRule[]): WeekFigure[] {
       let best = Infinity;
       let basis: string | undefined;
       for (const day of weekDays) {
-        const c = priceOf(q, rules, pricing, day).plain;
+        const c = priceOf(q, rules, pricing, day, region.weather).plain;
         if (c < best) {
           best = c;
           basis = day.parks[slug]?.basis;
@@ -1146,18 +1210,33 @@ function monthStrip(input: WhenInput, weeks: WeekFigure[]): TripWhenMonth[] {
       monthDays.flatMap((d) => headlinerHours(region, slugs, d)),
     );
     const climate = monthClimate(input.climate, month);
+    const storm = region.weather.storm;
+    const rainy = region.weather.notes?.some((n) => n.kind === "rainy_season");
     return {
       month,
       ...(weight > 0 && { headlinerWait: Math.round(weighted / weight) }),
       basis: basisOf(bases),
       ...(climate && { climate }),
-      usSchoolBreakDays: breaks,
+      localSchoolBreakDays: breaks,
+      ...(isUsRegion(region) && { usSchoolBreakDays: breaks }),
       seasons: seasonsOn(monthDays, slugs),
       partyNights,
       ...(hours != null && { dayGuestHours: round1(hours) }),
-      hurricaneSeason: hurricaneWeight(`${month}-15`) > 0,
+      ...(storm && {
+        [`${storm.kind}Season`]: stormWeight(storm, `${month}-15`) > 0,
+      }),
+      ...(rainy && {
+        rainySeason: monthDays.some((d) =>
+          inSeasonNote(region.weather.notes, "rainy_season", d.date),
+        ),
+      }),
     };
   });
+}
+
+/** A region whose parks are in the US: its months keep `usSchoolBreakDays`. */
+function isUsRegion(region: RegionConfig): boolean {
+  return region.parks.every((p) => p.country === "united-states");
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   linksOf,
   shopUrlOf,
   hopSetsOf,
+  minuteOfClock,
   onSaleAt,
   parksOf,
   sellsDays,
@@ -313,6 +314,10 @@ export function planTicketsOf(
           parks,
           hopSetsOf(product, o.days, hopper),
         ),
+        ...(minuteOfClock(product.entryFrom) !== undefined && {
+          entryMinute: minuteOfClock(product.entryFrom),
+        }),
+        ...(product.validDays && { validDays: product.validDays }),
       },
     ];
   });
@@ -568,7 +573,8 @@ export function suggestTickets(input: SuggestionInput): {
           p.resort === group.key &&
           p.suggest !== undefined &&
           !p.archived &&
-          p.markets.includes("us"),
+          !p.entryFrom &&
+          p.markets.includes(region.ticketMarkets.home),
       )
       .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
     const notCoveredBy = input.owned
@@ -596,6 +602,7 @@ export function suggestTickets(input: SuggestionInput): {
       }
       const alternatives = alternativesFor(
         catalog,
+        region.ticketMarkets.home,
         group.key,
         chosen.visits,
         // A resort the visitor holds a ticket for needs no other offer.
@@ -632,6 +639,7 @@ export function suggestTickets(input: SuggestionInput): {
  */
 function alternativesFor(
   catalog: TicketProduct[],
+  home: string,
   resort: string,
   visits: Visit[],
   tripDays: number,
@@ -643,7 +651,7 @@ function alternativesFor(
     if (p.days === "unlimited") continue;
     if (
       tripDays >= LONG_STAY_DAYS &&
-      !p.markets.includes("us") &&
+      !p.markets.includes(home) &&
       p.days.min >= 14 &&
       onSaleAt(p, start)
     ) {
@@ -655,7 +663,12 @@ function alternativesFor(
       });
       continue;
     }
-    if (p.suggest === undefined && p.onSale && p.markets.includes("us")) {
+    if (
+      p.suggest === undefined &&
+      p.onSale &&
+      !p.entryFrom &&
+      p.markets.includes(home)
+    ) {
       const fit = fitOf(p, visits);
       if (fit && fit.days !== "unlimited" && fit.extra === 0) {
         out.push({

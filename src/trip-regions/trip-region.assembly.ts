@@ -10,9 +10,12 @@ import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
 import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import type { PublicParkSeason } from "../parks/park-seasons.controller";
 import {
+  hotelKinds,
+  stayRulesOf,
   venuePoint,
   type RegionConfig,
   type RegionParkConfig,
+  type StormSeasonConfig,
 } from "./regions";
 import {
   heatOf,
@@ -20,7 +23,7 @@ import {
   medianDayHours,
   type PlanCell,
 } from "./trip-optimizer";
-import { buildLegs, regionMatrix } from "./travel";
+import { buildLegs, travelSource } from "./travel";
 import { publicTicketCatalog } from "./tickets";
 import {
   buildParkDay,
@@ -39,6 +42,7 @@ import { monthOf, type LastYearMonth } from "./last-year-snapshot";
 import type {
   TripCalendarDto,
   TripRegionDto,
+  TripRegionSummaryDto,
 } from "./dto/trip-region-response.dto";
 
 /** The calendar route's window: at most this many days. */
@@ -149,6 +153,39 @@ function groupName(curated: string, parks: RegionParkRecord[]): string {
   return curated;
 }
 
+/** The region's groups that hold one of its parks, named as {@link groupName} says. */
+function regionGroups(region: RegionConfig, parks: RegionParkRecord[]) {
+  return region.groups
+    .filter((g) => parks.some((p) => p.config.group === g.key))
+    .map((g) => ({
+      key: g.key,
+      name: groupName(
+        g.name,
+        parks.filter((p) => p.config.group === g.key),
+      ),
+      kind: g.kind,
+    }));
+}
+
+/**
+ * One region in `GET /v1/trip-regions`: what the site's navigation shows of
+ * it. `parkCount` is the region route's `parks`, the parks the planner places.
+ */
+export function summarizeRegion(
+  region: RegionConfig,
+  parks: RegionParkRecord[],
+  maxTripDays: number,
+): TripRegionSummaryDto {
+  return {
+    slug: region.slug,
+    name: region.name,
+    timezone: region.timezone,
+    parkCount: parks.length,
+    maxTripDays,
+    groups: regionGroups(region, parks),
+  };
+}
+
 /** `GET /v1/trip-regions/:region`. */
 export function describeRegion(
   region: RegionConfig,
@@ -161,25 +198,19 @@ export function describeRegion(
     ...region.hotelAreas.map((h) => `hotel:${h.key}`),
     ...venues.map((v) => venuePoint(v.key)),
   ]);
-  const matrix = regionMatrix(region);
+  const source = travelSource(region);
+  const slugs = new Set(parks.map((p) => p.config.slug));
+  const stayRules = stayRulesOf(region);
   return {
     slug: region.slug,
     name: region.name,
     timezone: region.timezone,
-    groups: region.groups
-      .filter((g) => parks.some((p) => p.config.group === g.key))
-      .map((g) => ({
-        key: g.key,
-        name: groupName(
-          g.name,
-          parks.filter((p) => p.config.group === g.key),
-        ),
-        kind: g.kind,
-      })),
+    groups: regionGroups(region, parks),
     parks: parks.map((p) => ({
       id: p.id,
       slug: p.slug,
       name: p.name,
+      ...(p.config.code && { code: p.config.code }),
       path: p.path,
       group: p.config.group,
       type: p.config.type,
@@ -209,15 +240,71 @@ export function describeRegion(
       ...(v.viewOf && { viewOf: v.viewOf }),
     })),
     travel: {
-      source: matrix.source,
-      computedOn: matrix.computedOn,
-      attribution: matrix.attribution,
-      basis: matrix.basis,
+      ...source,
       legs: buildLegs(region).filter(
         (leg) => points.has(leg.from) && points.has(leg.to),
       ),
     },
+    hotels: hotelKinds(region).map((key) => ({
+      key,
+      perks: [...new Set(region.perks[key].map((r) => r.perk))],
+    })),
+    ticketMarkets: {
+      home: region.ticketMarkets.home,
+      codes: [...region.ticketMarkets.codes],
+    },
+    weather: {
+      ...(region.weather.storm && {
+        storm: stormSeasonSpan(region.weather.storm),
+      }),
+      ...(region.weather.notes &&
+        region.weather.notes.length > 0 && {
+          notes: region.weather.notes.map((n) => ({ ...n })),
+        }),
+      climatePark: region.weather.climatePark,
+    },
+    ...(region.bases && {
+      bases: region.bases.map((b) => ({
+        key: b.key,
+        name: b.name,
+        ...(b.order !== undefined && { order: b.order }),
+        hotelAreas: [...b.hotelAreas],
+        ...(b.defaultArea && { defaultArea: b.defaultArea }),
+        ...(b.gateways && { gateways: b.gateways.map((g) => ({ ...g })) }),
+        ...(b.stayNote && { stayNote: b.stayNote }),
+        parks: b.parks.filter((p) => slugs.has(p.slug)).map((p) => ({ ...p })),
+      })),
+      baseLegs: (region.baseLegs ?? []).map((l) => ({
+        ...l,
+        parkDay: l.parkDay ?? l.minutes <= stayRules.parkDayMaxLegMinutes,
+      })),
+      stayRules,
+    }),
     tickets: publicTicketCatalog(region),
+  };
+}
+
+/** Days in a month of a common year; a storm season never ends in February. */
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** A storm season's first and last day (`MM-DD`) and its peak, as the region route names them. */
+export function stormSeasonSpan(storm: StormSeasonConfig): {
+  kind: StormSeasonConfig["kind"];
+  from: string;
+  to: string;
+  peak: { from: string; to: string };
+} {
+  const months = storm.weights
+    .filter(([, a, b]) => a > 0 || b > 0)
+    .map(([m]) => m);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const first = Math.min(...months);
+  const last = Math.max(...months);
+  return {
+    kind: storm.kind,
+    from: `${pad(first)}-01`,
+    to: `${pad(last)}-${pad(MONTH_DAYS[last - 1])}`,
+    peak: { ...storm.peak },
   };
 }
 
@@ -260,6 +347,11 @@ export const levelRank = (level: string): number => {
 export const rankWait = (d: TripParkDayInternal): number | undefined =>
   d.waitExact ?? d.headlinerWait;
 
+/** The park-local clock of an ISO time with the park's offset, in minutes after midnight. */
+function localMinute(iso: string): number {
+  return Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+}
+
 /** A calendar cell as the cost model reads it (`dayCost`). */
 export function planCellOf(c: TripParkDayInternal): PlanCell {
   return {
@@ -269,6 +361,7 @@ export function planCellOf(c: TripParkDayInternal): PlanCell {
     ...(c.waitExact != null && { exactWait: c.waitExact }),
     ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
     ...(c.dayHours != null && { dayHours: c.dayHours }),
+    ...(c.opensAt && { opensMinute: localMinute(c.opensAt) }),
     ...(c.usualHours != null && { usualHours: c.usualHours }),
     ...(c.early && { early: { kind: c.early.kind } }),
     ...(c.evening && { evening: { kind: c.evening.kind } }),
@@ -400,7 +493,7 @@ export function bestOfDay(
             status: "OPERATING",
             dayHours: c.day.dayHours ?? c.day.usualHours,
           },
-          { type: "theme_park" },
+          { type: "theme_park", weather: region.weather },
         ),
       }))
       .sort(
@@ -512,7 +605,11 @@ export function assembleRegionCalendar(
     );
     for (const s of sources) {
       const cell = parks[s.park.config.slug];
-      if (s.park.config.type === "theme_park" && cell && heatOf(cell.weather)) {
+      if (
+        s.park.config.type === "theme_park" &&
+        cell &&
+        heatOf(cell.weather, region.weather.heat)
+      ) {
         cell.warnings = ["extreme_heat"];
       }
     }

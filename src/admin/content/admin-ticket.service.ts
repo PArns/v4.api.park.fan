@@ -410,7 +410,8 @@ export function adminView(row: TicketProductRecord): AdminTicketProductDto {
  * A PATCH (or an edit's check) merged onto the stored product: a field given
  * replaces it, `null` clears an optional one (description, notes, blockoutUrl,
  * reservationUrl, until, suggestRank, windowDays, allowance, onSale, hopSets,
- * caps, reservedDayParks, sources, pass, blockouts), a field left out stays.
+ * caps, reservedDayParks, sources, pass, blockouts, entryFrom, validDays), a
+ * field left out stays.
  */
 export function mergeDraft(
   row: TicketProductRecord,

@@ -97,7 +97,11 @@ export class TicketProductWriteDto {
   @ApiPropertyOptional({ example: "walt-disney-world" })
   @Allow()
   resort?: unknown;
-  @ApiPropertyOptional({ type: [String], enum: ["us", "uk", "intl"] })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Codes of the region's `ticketMarkets` (Orlando: us, uk, intl).",
+  })
   @Allow()
   markets?: unknown;
   @ApiPropertyOptional({ type: [String] }) @Allow() parks?: unknown;
@@ -136,6 +140,13 @@ export class TicketProductWriteDto {
   @ApiPropertyOptional() @Allow() pass?: unknown;
   @ApiPropertyOptional() @Allow() blockouts?: unknown;
   @ApiPropertyOptional() @Allow() blockoutUrl?: unknown;
+  @ApiPropertyOptional({ example: "15:00" }) @Allow() entryFrom?: unknown;
+  @ApiPropertyOptional({
+    type: [String],
+    enum: ["weekday", "weekend", "holiday"],
+  })
+  @Allow()
+  validDays?: unknown;
   @ApiPropertyOptional() @Allow() reservationUrl?: unknown;
   @ApiPropertyOptional({ enum: ["high", "medium", "low"] })
   @Allow()
