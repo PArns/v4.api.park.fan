@@ -42,7 +42,12 @@ jest.mock("@anthropic-ai/sdk", () => {
                       name: calling.name,
                       input:
                         calling.name === "suggest_replies"
-                          ? { replies: ["Nächsten Sommer", "Finde die besten Tage"] }
+                          ? {
+                              replies: [
+                                "Nächsten Sommer",
+                                "Finde die besten Tage",
+                              ],
+                            }
                           : { slug: "a-post" },
                     },
                   ],

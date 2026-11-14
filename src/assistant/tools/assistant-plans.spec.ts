@@ -44,8 +44,16 @@ describe("the trip planner's state", () => {
   it("keeps one trip per known region, the one on screen first, and drops empty ones", () => {
     const trips = visitorTrips([
       { region: "orlando", query: "from=2027-10-14&to=2027-10-21" },
-      { region: "atlantis", query: "from=2027-10-14&to=2027-10-21", onScreen: true },
-      { region: "orlando", query: "from=2028-01-01&to=2028-01-05", onScreen: true },
+      {
+        region: "atlantis",
+        query: "from=2027-10-14&to=2027-10-21",
+        onScreen: true,
+      },
+      {
+        region: "orlando",
+        query: "from=2028-01-01&to=2028-01-05",
+        onScreen: true,
+      },
       { region: "orlando", query: "nothing=here" },
     ] as never);
     expect(trips).toHaveLength(1);
@@ -62,11 +70,20 @@ describe("the trip planner's state", () => {
       message: "Warum ist Magic Kingdom am Montag?",
       sessionToken: "s",
       trips: [
-        { region: "orlando", query: "from=2027-10-14&to=2027-10-21", onScreen: true },
+        {
+          region: "orlando",
+          query: "from=2027-10-14&to=2027-10-21",
+          onScreen: true,
+        },
         { region: "orlando", query: "<script>" },
         "nonsense",
       ],
-      interview: { kind: "trip", step: "party", answered: ["dates", "nope"], source: "elsewhere" },
+      interview: {
+        kind: "trip",
+        step: "party",
+        answered: ["dates", "nope"],
+        source: "elsewhere",
+      },
     });
     expect(parsed.success).toBe(true);
     expect(parsed.data?.trips).toHaveLength(1);
@@ -79,14 +96,18 @@ describe("the trip planner's state", () => {
   });
 
   it("splits the plan's query from a date search", () => {
-    const planned = tripParams("from=2027-10-14&to=2027-10-21&hotel=disney&when=2027-01-01_2027-12-31");
+    const planned = tripParams(
+      "from=2027-10-14&to=2027-10-21&hotel=disney&when=2027-01-01_2027-12-31",
+    );
     expect(planQueryOf(planned)).toEqual({
       from: "2027-10-14",
       to: "2027-10-21",
       hotel: "disney",
     });
     expect(tripSearchOf(planned)).toBeNull();
-    const searching = tripParams("when=2027-06-01_2027-09-30&days=10&within=DE-NW");
+    const searching = tripParams(
+      "when=2027-06-01_2027-09-30&days=10&within=DE-NW",
+    );
     expect(planQueryOf(searching)).toBeNull();
     expect(tripSearchOf(searching)).toEqual({
       from: "2027-06-01",
@@ -115,7 +136,9 @@ describe("the trip planner's state", () => {
     expect(tripLine(searching)).toContain(
       "no dates yet, searching 10 days between 2027-06-01 and 2027-09-30",
     );
-    expect(tripLine(searching)).toContain("the region's headliners (untouched)");
+    expect(tripLine(searching)).toContain(
+      "the region's headliners (untouched)",
+    );
   });
 });
 
@@ -132,7 +155,9 @@ describe("changing a trip", () => {
       { dates: { from: "2027-07-10", to: "2027-07-03" } },
       options,
     );
-    expect(writeTripQuery(params)).toBe("from=2027-07-03&to=2027-07-10&parks=epcot");
+    expect(writeTripQuery(params)).toBe(
+      "from=2027-07-03&to=2027-07-10&parks=epcot",
+    );
     expect(kinds).toEqual(["dates"]);
     const moved = changeTripParams(
       current,
@@ -185,7 +210,11 @@ describe("changing a trip", () => {
       options,
     );
     expect(rest.kinds).toEqual(["rest"]);
-    const unpinned = changeTripParams(current, { unpin: ["2027-10-20", "2027-10-15"] }, options);
+    const unpinned = changeTripParams(
+      current,
+      { unpin: ["2027-10-20", "2027-10-15"] },
+      options,
+    );
     expect(unpinned.params.has("lock")).toBe(false);
   });
 
@@ -193,7 +222,11 @@ describe("changing a trip", () => {
     const days = [
       { date: "2027-10-14", kind: "arrival", parks: [] },
       { date: "2027-10-15", kind: "park", parks: [{ slug: "epcot" }] },
-      { date: "2027-10-18", kind: "park", parks: [{ slug: "magic-kingdom-park" }] },
+      {
+        date: "2027-10-18",
+        kind: "park",
+        parks: [{ slug: "magic-kingdom-park" }],
+      },
       { date: "2027-10-20", kind: "rest", parks: [] },
     ];
     const { params, kinds } = changeTripParams(
@@ -206,39 +239,67 @@ describe("changing a trip", () => {
     );
     expect(kinds).toEqual(["swap"]);
     expect(() =>
-      changeTripParams(current, { swap: { a: "2027-10-14", b: "2027-10-18" } }, { ...options, days }),
+      changeTripParams(
+        current,
+        { swap: { a: "2027-10-14", b: "2027-10-18" } },
+        { ...options, days },
+      ),
     ).toThrow("travel");
     expect(() =>
-      changeTripParams(current, { swap: { a: "2027-10-15", b: "2027-11-01" } }, { ...options, days }),
+      changeTripParams(
+        current,
+        { swap: { a: "2027-10-15", b: "2027-11-01" } },
+        { ...options, days },
+      ),
     ).toThrow("2027-11-01 is not a day of the trip");
   });
 
   it("leaves the planner's defaults out of the query, as the page does", () => {
     const { params, kinds } = changeTripParams(
       tripParams("from=2027-10-14&to=2027-10-21&rest=max:3&fireworks=want"),
-      { rest: "auto", fireworks: "any", evenings: false, tickets: "wdw-date-based.4" },
+      {
+        rest: "auto",
+        fireworks: "any",
+        evenings: false,
+        tickets: "wdw-date-based.4",
+      },
       options,
     );
     expect(writeTripQuery(params)).toBe(
       "from=2027-10-14&to=2027-10-21&tickets=wdw-date-based.4&evenings=0",
     );
     expect(kinds).toEqual(["rest", "tickets", "pace"]);
-    expect(() => changeTripParams(current, {}, options)).toThrow("nothing changed");
+    expect(() => changeTripParams(current, {}, options)).toThrow(
+      "nothing changed",
+    );
   });
 });
 
 const day = (
   date: string,
   kind: string,
-  parks: Array<{ park: string; headlinerWait?: number; partyNight?: string }> = [],
+  parks: Array<{
+    park: string;
+    headlinerWait?: number;
+    partyNight?: string;
+  }> = [],
   extra: Record<string, unknown> = {},
 ) => ({ date, weekday: "Friday", kind, parks, ...extra });
 
-const itinerary = (days: ReturnType<typeof day>[], extra: Record<string, unknown> = {}) =>
+const itinerary = (
+  days: ReturnType<typeof day>[],
+  extra: Record<string, unknown> = {},
+) =>
   ({
     region: "Orlando",
     days,
-    totals: { headlinerWait: 38, averageDayWait: 45, parkDays: 5, restDays: 1, visits: 5 },
+    totals: {
+      headlinerWait: 38,
+      averageDayWait: 45,
+      parkDays: 5,
+      restDays: 1,
+      visits: 5,
+    },
     ...extra,
   }) as unknown as Itinerary;
 
@@ -250,12 +311,24 @@ describe("the trip's digest and what a change did", () => {
           day("2027-10-15", "park", [{ park: "EPCOT", headlinerWait: 33 }], {
             why: ["its quietest day of the trip"],
           }),
-          day("2027-10-18", "park", [
-            { park: "Magic Kingdom", headlinerWait: 31, partyNight: "19:00–24:00" },
-          ], { watch: ["party night: day guests leave at the early close"] }),
+          day(
+            "2027-10-18",
+            "park",
+            [
+              {
+                park: "Magic Kingdom",
+                headlinerWait: 31,
+                partyNight: "19:00–24:00",
+              },
+            ],
+            { watch: ["party night: day guests leave at the early close"] },
+          ),
           day("2027-10-20", "rest"),
         ],
-        { season: "peak of the hurricane season (August to October), a fact about the season, not a forecast" },
+        {
+          season:
+            "peak of the hurricane season (August to October), a fact about the season, not a forecast",
+        },
       ),
     );
     expect(lines).toEqual([
@@ -281,8 +354,18 @@ describe("the trip's digest and what a change did", () => {
     );
     expect(tripPlanChange(before, after)).toEqual({
       daysChanged: [
-        { date: "2027-10-15", weekday: "Friday", now: "Magic Kingdom", was: "EPCOT" },
-        { date: "2027-10-18", weekday: "Friday", now: "EPCOT", was: "Magic Kingdom" },
+        {
+          date: "2027-10-15",
+          weekday: "Friday",
+          now: "Magic Kingdom",
+          was: "EPCOT",
+        },
+        {
+          date: "2027-10-18",
+          weekday: "Friday",
+          now: "EPCOT",
+          was: "Magic Kingdom",
+        },
       ],
       bigRidesWait: "38 min before, 41 min now",
     });
@@ -297,15 +380,47 @@ const planner: PlannerSnapshot = {
       date: "2026-11-21",
       prefs: { riderHeightCm: 110 },
       entries: [
-        { id: "e1", kind: "ride", name: "Taron", rideSlug: "taron", start: "10:00", startMinute: 600 },
-        { id: "e2", kind: "show", name: "Rookburgh show", showSlug: "rookburgh-show", startMinute: 1530, durationMinutes: 30 },
-        { id: "e3", kind: "block", name: "Lunch", start: "12:30", durationMinutes: 60, done: true },
+        {
+          id: "e1",
+          kind: "ride",
+          name: "Taron",
+          rideSlug: "taron",
+          start: "10:00",
+          startMinute: 600,
+        },
+        {
+          id: "e2",
+          kind: "show",
+          name: "Rookburgh show",
+          showSlug: "rookburgh-show",
+          startMinute: 1530,
+          durationMinutes: 30,
+        },
+        {
+          id: "e3",
+          kind: "block",
+          name: "Lunch",
+          start: "12:30",
+          durationMinutes: 60,
+          done: true,
+        },
       ],
     },
   ],
   more: [
-    { park: { slug: "efteling", name: "Efteling" }, date: "2026-12-05", entries: 0, reserved: true },
-    { park: { slug: "toverland", name: "Toverland" }, date: "2026-12-12", entries: 9, done: 2, riderHeightCm: 120 },
+    {
+      park: { slug: "efteling", name: "Efteling" },
+      date: "2026-12-05",
+      entries: 0,
+      reserved: true,
+    },
+    {
+      park: { slug: "toverland", name: "Toverland" },
+      date: "2026-12-12",
+      entries: 9,
+      done: 2,
+      riderHeightCm: 120,
+    },
   ],
 };
 
@@ -328,7 +443,10 @@ describe("the day planner in This chat and its review", () => {
       attractionSlug: "taron",
       attractionName: "Taron",
       hours: [{ hour: 10, wait: 40 }],
-      slots: [{ minute: 600, wait: 25 }, { minute: 615, wait: 35 }],
+      slots: [
+        { minute: 600, wait: 25 },
+        { minute: 615, wait: 35 },
+      ],
     };
     expect(waitAt(ride, 610)).toBe(25);
     expect(waitAt(ride, 615)).toBe(35);
@@ -338,7 +456,12 @@ describe("the day planner in This chat and its review", () => {
 
   it("sends the optimizer the day as planned, blocks and shows as fixed blocks", () => {
     const [ride, show, block] = planner.days[0].entries.map(optimizerEntry);
-    expect(ride).toEqual({ id: "e1", attractionSlug: "taron", attractionName: "Taron", startMinute: 600 });
+    expect(ride).toEqual({
+      id: "e1",
+      attractionSlug: "taron",
+      attractionName: "Taron",
+      startMinute: 600,
+    });
     expect(show).toEqual({
       id: "e2",
       custom: { label: "Rookburgh show", icon: "show", durationMinutes: 30 },
@@ -356,41 +479,76 @@ describe("the day planner in This chat and its review", () => {
 });
 
 describe("the interview", () => {
-  const interview = (patch: Partial<InterviewSnapshot> = {}): InterviewSnapshot =>
-    interviewSnapshotSchema.parse({ kind: "trip", step: "region", source: "planner", ...patch });
+  const interview = (
+    patch: Partial<InterviewSnapshot> = {},
+  ): InterviewSnapshot =>
+    interviewSnapshotSchema.parse({
+      kind: "trip",
+      step: "region",
+      source: "planner",
+      ...patch,
+    });
 
   it("asks the steps in order, past the answered and the skipped", () => {
     expect(nextInterviewStep(interview())).toBe("region");
-    expect(nextInterviewStep(interview({ answered: ["region", "dates"], skipped: ["party"] }))).toBe(
-      "mustdo",
-    );
+    expect(
+      nextInterviewStep(
+        interview({ answered: ["region", "dates"], skipped: ["party"] }),
+      ),
+    ).toBe("mustdo");
     expect(
       nextInterviewStep(
         interview({
-          answered: ["region", "dates", "party", "mustdo", "tickets", "hotel", "pace", "file"],
+          answered: [
+            "region",
+            "dates",
+            "party",
+            "mustdo",
+            "tickets",
+            "hotel",
+            "pace",
+            "file",
+          ],
         }),
       ),
     ).toBeNull();
-    expect(nextInterviewStep(interview({ kind: "day", step: "day", answered: ["day"] }))).toBe(
-      "arrival",
-    );
+    expect(
+      nextInterviewStep(
+        interview({ kind: "day", step: "day", answered: ["day"] }),
+      ),
+    ).toBe("arrival");
   });
 
   it("confirms what the plans already hold instead of asking again", () => {
     const [trip] = visitorTrips([
-      { region: "orlando", query: "from=2027-10-14&to=2027-10-21", party: { size: 2, heightsCm: [] } },
+      {
+        region: "orlando",
+        query: "from=2027-10-14&to=2027-10-21",
+        party: { size: 2, heightsCm: [] },
+      },
     ]);
-    expect(interviewHolds(interview(), "dates", trip, null)).toBe("2027-10-14 to 2027-10-21");
+    expect(interviewHolds(interview(), "dates", trip, null)).toBe(
+      "2027-10-14 to 2027-10-21",
+    );
     expect(interviewHolds(interview(), "party", trip, null)).toBe("2 people");
     expect(interviewHolds(interview(), "tickets", trip, null)).toBeNull();
-    const dayInterview = interview({ kind: "day", step: "heights", park: "phantasialand", date: "2026-11-21" });
-    expect(interviewHolds(dayInterview, "heights", null, planner)).toBe("110 cm");
+    const dayInterview = interview({
+      kind: "day",
+      step: "heights",
+      park: "phantasialand",
+      date: "2026-11-21",
+    });
+    expect(interviewHolds(dayInterview, "heights", null, planner)).toBe(
+      "110 cm",
+    );
     const line = interviewLine(
       interview({ step: "dates", answered: ["region"] }),
       "2027-10-14 to 2027-10-21",
     );
     expect(line).toContain('step 2 of 8 "dates"; answered region');
-    expect(line).toContain("confirm what the plan holds (2027-10-14 to 2027-10-21)");
+    expect(line).toContain(
+      "confirm what the plan holds (2027-10-14 to 2027-10-21)",
+    );
     expect(line).toContain("change_trip dates");
   });
 });

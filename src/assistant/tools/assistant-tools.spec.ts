@@ -1,4 +1,6 @@
 import { DataSource } from "typeorm";
+import { PlanOptimizeService } from "../../planner/plan-optimize.service";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { ParksService } from "../../parks/parks.service";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
@@ -2310,6 +2312,306 @@ describe("planner tools", () => {
     const result = await call(name, input);
     expect(result.isError).toBeFalsy();
     expect(result.action).toEqual({ park: plannerPark, date: DATE, ...action });
+  });
+
+  it("moves an entry to a time, given a time or a place but not both", async () => {
+    const moved = await call("plan_move", { entryId: "r1", start: "14:00" });
+    expect(moved.action).toEqual({
+      type: "planner_move",
+      park: plannerPark,
+      date: DATE,
+      entryId: "r1",
+      start: "14:00",
+    });
+    expect((await call("plan_move", { entryId: "r1" })).isError).toBe(true);
+    expect(
+      (await call("plan_move", { entryId: "r1", toIndex: 0, start: "14:00" }))
+        .isError,
+    ).toBe(true);
+  });
+
+  it("files reserved days with the party's smallest rider", async () => {
+    const result = await runAssistantTool(
+      "plan_trip",
+      { park: PARK_ID, dates: [DATE], riderHeightCm: 105 },
+      { ...context(providers), planner },
+      jest.fn(),
+    );
+    expect(result.action).toEqual({
+      type: "planner_reserve_days",
+      park: plannerPark,
+      dates: [DATE],
+      prefs: { riderHeightCm: 105 },
+    });
+  });
+
+  it("prices a planned day: each ride's wait at its start, the totals and what sorting saves", async () => {
+    const day = {
+      park: { slug: "phantasialand", name: "Phantasialand" },
+      date: DATE,
+      prefs: { riderHeightCm: 110 },
+      entries: [
+        {
+          id: "r1",
+          kind: "ride" as const,
+          name: "Taron",
+          rideSlug: "taron",
+          startMinute: 600,
+        },
+        {
+          id: "r2",
+          kind: "ride" as const,
+          name: "Raik",
+          rideSlug: "raik",
+          startMinute: 660,
+        },
+        {
+          id: "s1",
+          kind: "show" as const,
+          name: "Stunt Show",
+          showSlug: "stunt-show",
+          startMinute: 900,
+          durationMinutes: 30,
+        },
+      ],
+    };
+    const optimize = jest.fn(async () => ({
+      status: "optimized",
+      refusal: null,
+      before: {
+        totalWaitMinutes: 75,
+        idleMinutes: 10,
+        endMinute: 1000,
+        overflow: 0,
+        clashes: 0,
+      },
+      after: {
+        totalWaitMinutes: 55,
+        idleMinutes: 5,
+        endMinute: 980,
+        overflow: 0,
+        clashes: 0,
+      },
+    }));
+    const priced = new Map<unknown, unknown>([
+      ...providers,
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({ ...park })),
+          findByGeographicPath: jest.fn(async () => ({ ...park, id: PARK_ID })),
+        },
+      ],
+      [
+        PlanDayService,
+        {
+          buildPlanDay: jest.fn(async () => ({
+            context: { openHour: 9, closeHour: 18 },
+            rides: [
+              {
+                attractionSlug: "taron",
+                attractionName: "Taron",
+                minimumHeight: 130,
+                hours: [{ hour: 10, wait: 45 }],
+                slots: [{ minute: 600, wait: 40 }],
+              },
+              {
+                attractionSlug: "raik",
+                attractionName: "Raik",
+                hours: [{ hour: 11, wait: 10 }],
+              },
+            ],
+            shows: [
+              {
+                showSlug: "stunt-show",
+                showName: "Stunt Show",
+                times: ["14:00", "16:30"],
+              },
+            ],
+          })),
+          ridesInWorks: jest.fn(async () => []),
+        },
+      ],
+      [
+        REDIS_CLIENT,
+        { get: jest.fn(async () => null), set: jest.fn(async () => "OK") },
+      ],
+      [PlanOptimizeService, { optimize }],
+    ]);
+    const result = await runAssistantTool(
+      "review_plan_day",
+      { park: PARK_ID, date: DATE },
+      { ...context(priced), planner: { days: [day] } },
+      jest.fn(),
+    );
+    expect(result.isError).toBeFalsy();
+    const json = JSON.parse(result.content);
+    expect(json.entries).toEqual([
+      {
+        id: "r1",
+        kind: "ride",
+        name: "Taron",
+        at: "10:00",
+        waitMinutes: 40,
+        tooShortForParty: { minimumHeightCm: 130 },
+      },
+      { id: "r2", kind: "ride", name: "Raik", at: "11:00", waitMinutes: 10 },
+      {
+        id: "s1",
+        kind: "show",
+        name: "Stunt Show",
+        at: "15:00",
+        notAShowTime: { showTimes: ["14:00", "16:30"] },
+      },
+    ]);
+    expect(json).toMatchObject({
+      totalWaitMinutes: 75,
+      endsAt: "16:40",
+      closes: "18:00",
+      sortingSaves: "plan_optimize would save about 20 min of queueing",
+    });
+    expect(optimize).toHaveBeenCalledWith(
+      {
+        continent: "europe",
+        country: "germany",
+        city: "bruehl",
+        parkSlug: "phantasialand",
+      },
+      expect.objectContaining({
+        mode: "day",
+        preview: true,
+        prefs: { riderHeightCm: 110 },
+      }),
+    );
+  });
+
+  describe("reply chips and the interview", () => {
+    const answer = () => ({ round: 0, done: new Set<string>() });
+    const ask = (
+      name: string,
+      input: Record<string, unknown>,
+      extra: Record<string, unknown> = {},
+    ) =>
+      runAssistantTool(
+        name,
+        input,
+        { ...context(providers), planner, answer: answer(), ...extra },
+        jest.fn(),
+      );
+
+    it("sends two to four clean replies, once per answer", async () => {
+      const result = await ask("suggest_replies", {
+        replies: [
+          "Next summer",
+          "**I know our dates**",
+          "next summer",
+          "see https://x.y",
+        ],
+      });
+      expect(result.action).toEqual({
+        type: "replies",
+        replies: ["Next summer", "I know our dates"],
+      });
+      expect((await ask("suggest_replies", { replies: ["Yes"] })).isError).toBe(
+        true,
+      );
+      const state = answer();
+      const twice = async () =>
+        runAssistantTool(
+          "suggest_replies",
+          { replies: ["Yes", "No"] },
+          { ...context(providers), answer: state },
+          jest.fn(),
+        );
+      expect((await twice()).isError).toBeFalsy();
+      expect((await twice()).content).toMatch(/already ran/);
+    });
+
+    it("starts an interview on its first step and names what to ask", async () => {
+      const result = await ask("interview", {
+        op: "start",
+        kind: "trip",
+        region: "orlando",
+      });
+      expect(result.action).toEqual({
+        type: "interview_state",
+        interview: {
+          kind: "trip",
+          region: "orlando",
+          step: "region",
+          answered: [],
+          skipped: [],
+          mustDoRides: [],
+          source: "chat",
+        },
+      });
+      expect(JSON.parse(result.content).next).toMatchObject({
+        step: "region",
+        of: "1 of 8",
+      });
+    });
+
+    it("marks a step answered, keeps the party for the trip and moves on", async () => {
+      const running = {
+        kind: "trip" as const,
+        region: "orlando",
+        step: "party",
+        answered: ["region", "dates"],
+        skipped: [],
+        mustDoRides: [],
+        source: "planner" as const,
+      };
+      const result = await ask(
+        "interview",
+        { op: "answered", party: { size: 4, heightsCm: [105, 132] } },
+        { interview: running },
+      );
+      expect(result.action).toEqual({
+        type: "interview_state",
+        interview: {
+          ...running,
+          step: "mustdo",
+          answered: ["region", "dates", "party"],
+        },
+        party: { size: 4, heightsCm: [105, 132] },
+        region: "orlando",
+      });
+      const left = await ask(
+        "interview",
+        { op: "end" },
+        { interview: running },
+      );
+      expect(left.action).toEqual({
+        type: "interview_state",
+        interview: null,
+        outcome: "left",
+      });
+      const done = await ask(
+        "interview",
+        { op: "answered", step: "file" },
+        {
+          interview: {
+            ...running,
+            step: "file",
+            answered: [
+              "region",
+              "dates",
+              "party",
+              "mustdo",
+              "tickets",
+              "hotel",
+              "pace",
+            ],
+          },
+        },
+      );
+      expect(done.action).toMatchObject({
+        type: "interview_state",
+        interview: null,
+        outcome: "done",
+      });
+      expect((await ask("interview", { op: "answered" })).isError).toBe(true);
+    });
   });
 
   describe("plan_add_rides and maintenance", () => {

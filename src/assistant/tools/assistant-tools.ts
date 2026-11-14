@@ -1944,6 +1944,12 @@ function visitorTrip(ctx: AssistantToolContext, region?: string): VisitorTrip {
   );
 }
 
+/**
+ * The plan route's refusals the trip planner shows as a problem with a way out rather than an
+ * error: more visits than the days hold. A change that leads there is still made.
+ */
+const PLANNER_PROBLEM = /^More park visits|park visits$/;
+
 /** A trip route's 400 or 404 as a refusal the model reads. */
 async function tripCall<T>(run: () => Promise<T> | T): Promise<T> {
   try {
@@ -3287,7 +3293,9 @@ export const ASSISTANT_TOOLS = [
       evenings: z
         .boolean()
         .optional()
-        .describe("An evening at a second park or a venue after an early close"),
+        .describe(
+          "An evening at a second park or a venue after an early close",
+        ),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
     }),
@@ -3340,26 +3348,51 @@ export const ASSISTANT_TOOLS = [
       const before = current ? planQueryOf(current.params) : null;
       // A swap reads what is on each day, and the comparison needs the plan before: one plan,
       // and the planner on screen asked for the same a moment ago.
-      const was = before ? await itineraryOf(ctx, trip, before).catch(() => null) : null;
+      const was = before
+        ? await itineraryOf(ctx, trip, before).catch(() => null)
+        : null;
       let edited: ReturnType<typeof changeTripParams>;
       try {
-        edited = changeTripParams(current?.params ?? new URLSearchParams(), change, {
-          headliners: region.parks.filter((p) => p.headliner).map((p) => p.slug),
-          days: was?.days.map((day) => ({
-            date: day.date,
-            kind: day.kind,
-            parks: (day.parks ?? []).map((p) => ({
-              slug:
-                parks.find((park) => park.name === p.park)?.slug ?? String(p.park),
+        edited = changeTripParams(
+          current?.params ?? new URLSearchParams(),
+          change,
+          {
+            headliners: region.parks
+              .filter((p) => p.headliner)
+              .map((p) => p.slug),
+            days: was?.days.map((day) => ({
+              date: day.date,
+              kind: day.kind,
+              parks: (day.parks ?? []).map((p) => ({
+                slug:
+                  parks.find((park) => park.name === p.park)?.slug ??
+                  String(p.park),
+              })),
             })),
-          })),
-        });
+          },
+        );
       } catch (error) {
         throw new McpToolError((error as Error).message);
       }
       const after = planQueryOf(edited.params);
-      // The plan route checks the new trip; a refusal sends nothing to the planner.
-      const plan = after ? await itineraryOf(ctx, trip, after) : null;
+      // The plan route checks the new trip; a refusal sends nothing to the planner. Too many
+      // visits for the days is the planner's own problem state, which it shows with its way out,
+      // so the change still lands: an interview sets the dates before the parks.
+      let plan: Awaited<ReturnType<typeof itineraryOf>> | null = null;
+      let problem: string | null = null;
+      if (after) {
+        try {
+          plan = await itineraryOf(ctx, trip, after);
+        } catch (error) {
+          if (
+            !(error instanceof McpToolError) ||
+            !PLANNER_PROBLEM.test(error.message)
+          ) {
+            throw error;
+          }
+          problem = error.message;
+        }
+      }
       return new ActionOutcome(
         {
           type: "trip_set",
@@ -3374,7 +3407,11 @@ export const ASSISTANT_TOOLS = [
             : "the hub, which opens with it",
           ...(plan
             ? tripPlanChange(was, plan)
-            : { plan: "no dates yet, so nothing is planned" }),
+            : problem
+              ? {
+                  notPlannedYet: `${problem}; the planner says the same with its way out, so the parks or the days come next`,
+                }
+              : { plan: "no dates yet, so nothing is planned" }),
         },
       );
     },
@@ -5221,16 +5258,13 @@ export const ASSISTANT_TOOLS = [
         planDays.ridesInWorks(park, date).catch(() => []),
         ctx
           .get(PlanOptimizeService)
-          .optimize(
-            { ...planned.geo, parkSlug: planned.slug },
-            {
-              date,
-              mode: "day",
-              entries,
-              ...(day.prefs && { prefs: day.prefs }),
-              preview: true,
-            } as PlanOptimizeRequestDto,
-          )
+          .optimize({ ...planned.geo, parkSlug: planned.slug }, {
+            date,
+            mode: "day",
+            entries,
+            ...(day.prefs && { prefs: day.prefs }),
+            preview: true,
+          } as PlanOptimizeRequestDto)
           .catch(() => null),
       ]);
       const party = day.prefs?.riderHeightCm;
@@ -5251,10 +5285,14 @@ export const ASSISTANT_TOOLS = [
         entries: day.entries.map((entry) => {
           const minute = entryMinute(entry);
           const ride = entry.rideSlug ? rides.get(entry.rideSlug) : undefined;
-          const works = entry.rideSlug ? inWorks.get(entry.rideSlug) : undefined;
+          const works = entry.rideSlug
+            ? inWorks.get(entry.rideSlug)
+            : undefined;
           const show = entry.showSlug ? shows.get(entry.showSlug) : undefined;
           const wait =
-            ride && minute !== null && !entry.done ? waitAt(ride, minute) : null;
+            ride && minute !== null && !entry.done
+              ? waitAt(ride, minute)
+              : null;
           return {
             id: entry.id,
             kind: entry.kind,
@@ -5318,7 +5356,8 @@ export const ASSISTANT_TOOLS = [
         .map((reply) => reply.replace(/\s+/g, " ").replace(/[*_`#>[\]]/g, ""))
         .filter((reply) => {
           const key = reply.toLowerCase();
-          if (!reply || seen.has(key) || /https?:|www\./i.test(reply)) return false;
+          if (!reply || seen.has(key) || /https?:|www\./i.test(reply))
+            return false;
           if (junkReason(reply)) return false;
           seen.add(key);
           return true;
@@ -5327,7 +5366,10 @@ export const ASSISTANT_TOOLS = [
         throw new McpToolError("None of these replies can be shown");
       }
       return Promise.resolve(
-        new ActionOutcome({ type: "replies", replies: kept }, { shown: kept.length }),
+        new ActionOutcome(
+          { type: "replies", replies: kept },
+          { shown: kept.length },
+        ),
       );
     },
   }),
@@ -5397,8 +5439,13 @@ export const ASSISTANT_TOOLS = [
         }
         const region =
           input.region ??
-          (input.kind === "trip" ? pickTrip(ctx.trips ?? [])?.region.slug : undefined);
-        const first = input.kind === "trip" ? TRIP_INTERVIEW_STEPS[0] : DAY_INTERVIEW_STEPS[0];
+          (input.kind === "trip"
+            ? pickTrip(ctx.trips ?? [])?.region.slug
+            : undefined);
+        const first =
+          input.kind === "trip"
+            ? TRIP_INTERVIEW_STEPS[0]
+            : DAY_INTERVIEW_STEPS[0];
         state = {
           kind: input.kind,
           ...(region && { region }),
@@ -5425,10 +5472,14 @@ export const ASSISTANT_TOOLS = [
           const found = await planPark(mcp(ctx), reference);
           if ("ambiguous" in found) return found;
           const kept = state.mustDoRides.filter((m) => m.park !== found.slug);
-          const had = state.mustDoRides.find((m) => m.park === found.slug)?.rides ?? [];
+          const had =
+            state.mustDoRides.find((m) => m.park === found.slug)?.rides ?? [];
           state.mustDoRides = [
             ...kept,
-            { park: found.slug, rides: [...new Set([...had, ...rideIds])].slice(0, 12) },
+            {
+              park: found.slug,
+              rides: [...new Set([...had, ...rideIds])].slice(0, 12),
+            },
           ].slice(0, 8);
         }
       }
@@ -5444,7 +5495,12 @@ export const ASSISTANT_TOOLS = [
       };
       if (!next) {
         return new ActionOutcome(
-          { type: "interview_state", interview: null, outcome: "done", ...extras },
+          {
+            type: "interview_state",
+            interview: null,
+            outcome: "done",
+            ...extras,
+          },
           {
             done: true,
             say: "the plan is in the planner: two sentences on what stands out (the order and one hint), then suggest_replies for changes (swap two days, why this order, add a rest day)",
@@ -5461,7 +5517,9 @@ export const ASSISTANT_TOOLS = [
             next,
             interviewHolds(state, next, trip, ctx.planner),
           ),
-          ...(state.mustDoRides.length > 0 && { mustDoRides: state.mustDoRides }),
+          ...(state.mustDoRides.length > 0 && {
+            mustDoRides: state.mustDoRides,
+          }),
           then: "ask it in one short question in your voice and end with suggest_replies",
         },
       );

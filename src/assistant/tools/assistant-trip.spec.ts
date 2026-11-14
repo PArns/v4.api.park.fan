@@ -1,7 +1,8 @@
 import { DataSource } from "typeorm";
 import { fromZonedTime } from "date-fns-tz";
 import type { Redis } from "ioredis";
-import { runAssistantTool } from "./assistant-tools";
+import { runAssistantTool, type AssistantToolContext } from "./assistant-tools";
+import { visitorTrips } from "./assistant-plans";
 import { localizePageUrls } from "./assistant-actions";
 import {
   dateRuns,
@@ -312,12 +313,21 @@ function setup(
       },
     ],
   ]);
-  const call = async (name: string, input: unknown, locale = "de") => {
+  const call = async (
+    name: string,
+    input: unknown,
+    locale = "de",
+    extra: Partial<AssistantToolContext> = {},
+  ) => {
     const onError = jest.fn();
     const result = await runAssistantTool(
       name,
       input,
-      { get: <T>(token: unknown) => providers.get(token) as T, locale },
+      {
+        get: <T>(token: unknown) => providers.get(token) as T,
+        locale,
+        ...extra,
+      },
       onError,
     );
     expect(onError).not.toHaveBeenCalled();
@@ -459,6 +469,138 @@ describe("the hub's address", () => {
       hubUrl: "https://park.fan/nl/orlando?from=2027-03-03#planner",
       other: "https://park.fan/orlandox",
     });
+  });
+});
+
+describe("the visitor's own trip", () => {
+  const onScreen = (
+    query: string,
+    party?: { size?: number; heightsCm: number[] },
+  ) => ({
+    trips: visitorTrips([
+      { region: "orlando", query, onScreen: true, ...(party && { party }) },
+    ]),
+    answer: { round: 0, done: new Set<string>() },
+  });
+  const planned = `from=${day(10)}&to=${day(14)}&parks=magic-kingdom-park,epcot,universal-epic-universe`;
+
+  it("reads the trip on screen as plan_vacation would plan it, with the party", async () => {
+    const { call } = setup();
+    const { json } = await call(
+      "get_trip_plan",
+      {},
+      "de",
+      onScreen(planned, { size: 4, heightsCm: [105] }),
+    );
+    expect(json?.shown).toBe("on screen in the hub's planner now");
+    expect(json?.party).toEqual({ size: 4, heightsCm: [105] });
+    expect(json?.days.map((d: { kind: string }) => d.kind)).toEqual([
+      "arrival",
+      "park",
+      "park",
+      "park",
+      "departure",
+    ]);
+  });
+
+  it("says what is missing instead of guessing a plan", async () => {
+    const { call } = setup();
+    const none = await call("get_trip_plan", {}, "de", { trips: [] });
+    expect(none.isError).toBe(true);
+    expect(none.content).toMatch(/no trip in the trip planner/);
+    const searching = await call(
+      "get_trip_plan",
+      {},
+      "de",
+      onScreen(`when=${day(10)}_${day(90)}&days=7&within=DE-NW`),
+    );
+    expect(searching.content).toMatch(
+      /searching 7 days .* find_trip_dates answers that/,
+    );
+  });
+
+  it("pins a park through the planner's own query and says which days moved", async () => {
+    const { call } = setup();
+    const result = await call(
+      "change_trip",
+      { pin: [{ park: "Magic Kingdom", date: day(13) }] },
+      "de",
+      onScreen(planned),
+    );
+    expect(result.action).toEqual({
+      type: "trip_set",
+      region: "orlando",
+      query: `${planned}&lock=magic-kingdom-park@${day(13)}`,
+      change: ["pin"],
+    });
+    expect(result.json?.shownIn).toBe("the planner on screen, which re-plans");
+    const moved = result.json?.daysChanged as Array<{
+      date: string;
+      now: string;
+    }>;
+    expect(moved.find((d) => d.date === day(13))?.now).toBe(
+      "Magic Kingdom Park",
+    );
+  });
+
+  it("swaps two park days and refuses a trip the plan route refuses, sending nothing", async () => {
+    const { call } = setup();
+    const before = await call("get_trip_plan", {}, "de", onScreen(planned));
+    const [a, b] = (
+      before.json?.days as Array<{
+        kind: string;
+        date: string;
+        parks: Array<{ park: string }>;
+      }>
+    ).filter((d) => d.kind === "park");
+    const swapped = await call(
+      "change_trip",
+      { swap: { a: a.date, b: b.date } },
+      "de",
+      onScreen(planned),
+    );
+    expect(swapped.action).toMatchObject({
+      type: "trip_set",
+      change: ["swap"],
+    });
+    const days = swapped.json?.daysChanged as Array<{
+      date: string;
+      now: string;
+      was: string;
+    }>;
+    expect(days.find((d) => d.date === a.date)).toMatchObject({
+      now: b.parks[0].park,
+      was: a.parks[0].park,
+    });
+    const tooLong = await call(
+      "change_trip",
+      { dates: { from: day(10), to: day(40) } },
+      "de",
+      onScreen(planned),
+    );
+    expect(tooLong.isError).toBe(true);
+    expect(tooLong.action).toBeUndefined();
+  });
+
+  it("starts a trip from dates when the visitor has none yet", async () => {
+    const { call } = setup();
+    const result = await call(
+      "change_trip",
+      { dates: { from: day(10), to: day(14) } },
+      "de",
+      { trips: [], answer: { round: 0, done: new Set<string>() } },
+    );
+    expect(result.action).toEqual({
+      type: "trip_set",
+      region: "orlando",
+      query: `from=${day(10)}&to=${day(14)}`,
+      change: ["dates"],
+    });
+    expect(result.json?.shownIn).toBe("the hub, which opens with it");
+    // Seven headliners on three park days: the planner's own problem, said, not refused.
+    expect(result.json?.notPlannedYet).toMatch(
+      /^More park visits than trip days/,
+    );
   });
 });
 

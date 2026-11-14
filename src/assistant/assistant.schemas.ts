@@ -182,8 +182,7 @@ const interviewStep = z.enum([
   ...new Set([...TRIP_INTERVIEW_STEPS, ...DAY_INTERVIEW_STEPS]),
 ] as [string, ...string[]]);
 export type InterviewStep =
-  | (typeof TRIP_INTERVIEW_STEPS)[number]
-  | (typeof DAY_INTERVIEW_STEPS)[number];
+  (typeof TRIP_INTERVIEW_STEPS)[number] | (typeof DAY_INTERVIEW_STEPS)[number];
 
 /**
  * Parky's interview as the browser holds it beside the chat: which kind, the step being asked,

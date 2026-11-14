@@ -157,7 +157,9 @@ export function pickTrip(
   region?: string,
 ): VisitorTrip | null {
   if (region) return trips.find((t) => t.region.slug === region) ?? null;
-  return trips.find((t) => t.onScreen) ?? (trips.length === 1 ? trips[0] : null);
+  return (
+    trips.find((t) => t.onScreen) ?? (trips.length === 1 ? trips[0] : null)
+  );
 }
 
 /** The `/plan` query of a trip with dates; null while it has none (nothing chosen, or a search). */
@@ -192,7 +194,9 @@ export function tripSearchOf(
 export function partyPhrase(party: TripParty): string {
   const heights = party.heightsCm;
   return [
-    party.size ? `${party.size} ${party.size === 1 ? "person" : "people"}` : null,
+    party.size
+      ? `${party.size} ${party.size === 1 ? "person" : "people"}`
+      : null,
     heights.length > 0
       ? `${heights.length === 1 ? "a child" : "children"} ${heights.join(" and ")} cm`
       : null,
@@ -341,14 +345,7 @@ export interface TripChange {
 
 /** What kind of change a trip got, for the widget's receipt and the statistic. */
 export type TripChangeKind =
-  | "dates"
-  | "parks"
-  | "pin"
-  | "swap"
-  | "rest"
-  | "tickets"
-  | "hotel"
-  | "pace";
+  "dates" | "parks" | "pin" | "swap" | "rest" | "tickets" | "hotel" | "pace";
 
 /** A plan day as `swap` reads it: its kind and parks. */
 export interface SwapDay {
@@ -447,7 +444,9 @@ export function changeTripParams(
     const kept = new Set(picks.map((p) => p.slug));
     writeLocks(
       params,
-      readLocks(params).filter((l) => l.target === "rest" || kept.has(l.target)),
+      readLocks(params).filter(
+        (l) => l.target === "rest" || kept.has(l.target),
+      ),
     );
     kinds.add("parks");
   }
@@ -574,7 +573,9 @@ export function clockOfMinute(minute: number): string {
 }
 
 /** A planner minute from an entry: its own, else its HH:MM; null without either. */
-export function entryMinute(entry: PlannerDay["entries"][number]): number | null {
+export function entryMinute(
+  entry: PlannerDay["entries"][number],
+): number | null {
   if (entry.startMinute !== undefined) return entry.startMinute;
   if (!entry.start) return null;
   const [h, m] = entry.start.split(":").map(Number);
@@ -640,7 +641,9 @@ export interface ReviewRide {
  * quarter hour's slot, else the hour's figure; null where the day has none.
  */
 export function waitAt(ride: ReviewRide, minute: number): number | null {
-  const slot = ride.slots?.find((s) => minute >= s.minute && minute < s.minute + 15);
+  const slot = ride.slots?.find(
+    (s) => minute >= s.minute && minute < s.minute + 15,
+  );
   if (slot) return slot.wait;
   const hour = ride.hours.find((h) => h.hour === Math.floor(minute / 60));
   return hour ? hour.wait : null;
@@ -660,10 +663,12 @@ export function optimizerEntry(entry: PlannerDay["entries"][number]) {
         };
   return {
     id: entry.id,
-    ...(entry.kind === "ride" && entry.rideSlug && { attractionSlug: entry.rideSlug }),
+    ...(entry.kind === "ride" &&
+      entry.rideSlug && { attractionSlug: entry.rideSlug }),
     ...(entry.kind === "ride" && { attractionName: entry.name }),
     ...(custom && { custom }),
-    ...(entry.kind === "show" && entry.showSlug && { showSlug: entry.showSlug }),
+    ...(entry.kind === "show" &&
+      entry.showSlug && { showSlug: entry.showSlug }),
     startMinute,
     ...(entry.done && { done: true }),
   };
@@ -701,7 +706,8 @@ const STEP_GUIDE: Record<InterviewStep | "mustdo_day", StepGuide> = {
     ask: "the parks they must see and any ride they must not miss",
     apply:
       "change_trip parks (visits 1-3, 0 removes); must-do rides go into interview's mustDoRides by ride id, for the filing",
-    chips: "two of the region's headline parks by name / all the big ones / no idea yet",
+    chips:
+      "two of the region's headline parks by name / all the big ones / no idea yet",
   },
   tickets: {
     ask: "which tickets they already hold, if any",
@@ -788,7 +794,8 @@ export function interviewHolds(
   if (interview.kind === "trip") {
     const p = trip?.params;
     if (step === "region" && trip) return trip.region.name;
-    if (step === "dates" && p?.get("from")) return `${p.get("from")} to ${p.get("to")}`;
+    if (step === "dates" && p?.get("from"))
+      return `${p.get("from")} to ${p.get("to")}`;
     if (step === "party" && trip?.party) return partyPhrase(trip.party);
     if (step === "mustdo" && p?.get("parks")) return p.get("parks");
     if (step === "tickets" && p?.get("tickets")) return p.get("tickets");
@@ -796,7 +803,10 @@ export function interviewHolds(
       return [p.get("hotel"), p.get("area")].filter(Boolean).join(", ");
     }
     if (step === "pace" && (p?.get("rest") || p?.get("evenings"))) {
-      return [p.get("rest") && `rest ${p.get("rest")}`, p.get("evenings") === "0" && "no evenings"]
+      return [
+        p.get("rest") && `rest ${p.get("rest")}`,
+        p.get("evenings") === "0" && "no evenings",
+      ]
         .filter(Boolean)
         .join(", ");
     }
@@ -828,7 +838,9 @@ export function interviewGuide(
   return {
     step,
     of: `${steps.indexOf(step) + 1} of ${steps.length}`,
-    ask: holds ? `confirm what the plan holds (${holds}) or change it` : guide.ask,
+    ask: holds
+      ? `confirm what the plan holds (${holds}) or change it`
+      : guide.ask,
     applyAnswerWith: guide.apply,
     chipIdeas: `${guide.chips} (in the user's language, as they would say it)`,
   };
