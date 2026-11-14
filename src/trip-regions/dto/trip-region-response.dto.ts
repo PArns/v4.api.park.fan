@@ -419,11 +419,21 @@ export class TripParkDayDto {
   @ApiProperty({ example: "low" }) crowdLevel: string;
   @ApiPropertyOptional({
     description:
-      "Mean expected standby of the park's headliners, rounded to 5.",
+      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the same weekday a year back as measured. What every trip surface ranks by.",
   })
   headlinerWait?: number;
   @ApiProperty({ enum: ["forecast", "long_range", "last_year", "none"] })
   basis: string;
+  @ApiPropertyOptional({
+    description:
+      "The served forecast, unscaled and rounded to 5, as the park calendar shows it; shown, never ranked.",
+  })
+  forecastWait?: number;
+  @ApiPropertyOptional({
+    description:
+      "The same weekday a year back as measured, rounded to 5, from today on.",
+  })
+  lastYearWait?: number;
   @ApiPropertyOptional({ type: [String] }) seasons?: string[];
   @ApiPropertyOptional({
     description: "The curated closure season behind a CLOSED day.",

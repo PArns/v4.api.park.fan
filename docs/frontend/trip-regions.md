@@ -428,8 +428,10 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
             "closesAt": "…24:00…",
           },
           "crowdLevel": "low", // very_low … extreme | unknown | closed
-          "headlinerWait": 45, // minutes, see below; absent when unknown
+          "headlinerWait": 50, // minutes on the measured scale, see below; absent when unknown
           "basis": "forecast", // forecast | long_range | last_year | none
+          "forecastWait": 45, // the served forecast, unscaled, as the park calendar shows it
+          "lastYearWait": 55, // the same weekday a year back, as measured
           "seasons": ["5b0c…"], // ids into `seasons`
         },
         "disneys-typhoon-lagoon-water-park": {
@@ -462,30 +464,57 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 }
 ```
 
-- **`headlinerWait`** is the calendar's `headlinerForecast.avgWait`, rounded to five minutes: the
-  daily model predicts each headliner's wait at its busy time of the day (a day peak per ride),
-  and this is the mean of those across the park's headliners. It is the optimizer's cost and the
-  one number a day is compared by across parks. Call it "the big rides' wait at their busiest";
-  it is not a total, not the wait at every hour and not the longest single queue. An hourly curve
-  of the same day (`/plan/day`) runs lower for most of the day, so never put the two side by side
-  without saying which is which.
+- **`headlinerWait`** is the day's figure on the measured scale, rounded to five minutes: the mean
+  across the park's headliners of each ride's day peak (the measured side is each ride's day-P90
+  standby wait). It is the optimizer's cost and the one number a day is compared by, across parks
+  and across dates: every trip surface (`/plan`, `/when`, `/best-days`, `best`) ranks by it and
+  nothing else. `basis` says which figure it is:
+  - within the TFT horizon (`basis: "forecast"`, up to 60 days, `SERVING_TFT_DAYS`) the calendar's
+    forecast **times its lead factor** (`forecastLeadFactor`): 1.10 up to a day ahead, 1.11 to three
+    days, 1.12 to a week, 1.16 to two weeks, 1.21 to 30 days, 1.29 to 60 days. The factors are the
+    realised day P90 over the predicted one, 2.5 M comparisons over the 45 days to 2026-09-03
+    ([long-range forecasting §2](../ml/long-range-forecasting.md)): TFT reads low, more so further
+    out. They are replaced by factors measured per region from `prediction_lead_snapshots` once its
+    30- and 60-day buckets hold enough served rows;
+  - past it (`basis: "last_year"`) the same weekday a year back as measured, **not** the long-range
+    forecast: on production's answers of 2026-11-14 that level read 42 % below the same dates of
+    2026 in Orlando and was almost flat
+    ([long-range forecasting §9](../ml/long-range-forecasting.md)), so a day ranked on it won on its
+    basis, not its date (PAR-1319);
+  - past it with nothing measured a year back (`basis: "long_range"`: the park was closed, or not
+    yet measured, that day a year back; USJ before 20 April 2026), the long-range forecast, unscaled,
+    as the one figure there is.
+
+  Call it "the big rides' wait at their busiest"; it is not a total, not the wait at every hour and
+  not the longest single queue. An hourly curve of the same day (`/plan/day`) runs lower for most
+  of the day, so never put the two side by side without saying which is which. Within 60 days it
+  is higher than the park calendar's figure for the same day by the lead factor: the park calendar
+  shows the forecast unscaled, which the trip surfaces carry as `forecastWait`.
+- **`forecastWait`** is the served forecast for the day, unscaled and rounded, as the park's own
+  calendar shows it: present wherever the calendar has a forecast (to about six months), so also on
+  a `last_year` day past 60 days, where it is only shown, never ranked. **`lastYearWait`** is the
+  same weekday a year back as measured, wherever one exists, also on a `forecast` day. Both sit
+  beside `headlinerWait` so a client can show either; neither ranks anything.
 - **`crowdLevel`** is the calendar's own level for that park (the day against that park's typical
   day), so two parks' levels say how each compares with itself, not with each other. Compare parks
   by `headlinerWait`.
 - **`basis`** says where the day's figures come from:
   - `forecast`: the calendar's forecast, up to 60 days ahead (TFT serves the headliners there,
-    `SERVING_TFT_DAYS`).
-  - `long_range`: the calendar's forecast past 60 days, CatBoost's long tail; wider error
-    ([long-range forecasting](../ml/long-range-forecasting.md)).
-  - `last_year`: a day the forecast does not cover (past `forecastUntil`, or a gap in it) and that
-    is not CLOSED reads the same weekday a year earlier: `lastYearDays(date).sameWeekday`, the day
-    of that weekday nearest the same date a year back, at most three days off. Its `crowdLevel` is
-    the level the calendar measured that day (the typical-day-peak rating of
-    `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's recorded
-    `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners of each
-    ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled "last
-    year", never shown as a forecast. A day that was closed last year gives no figure.
-  - `none`: nothing to say.
+    `SERVING_TFT_DAYS`), its `headlinerWait` times the lead factor above, its `crowdLevel` the
+    calendar's predicted level.
+  - `last_year`: a day past 60 days, or one the forecast does not cover (past `forecastUntil`, or a
+    gap in it), that was not CLOSED a year back reads the same weekday a year earlier:
+    `lastYearDays(date).sameWeekday`, the day of that weekday nearest the same date a year back, at
+    most three days off. Its `crowdLevel` is the level the calendar measured that day (the
+    typical-day-peak rating of `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's
+    recorded `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners
+    of each ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled
+    "last year", never shown as a forecast. A moving holiday is not lined up: Easter 2026 was on
+    5 April, Easter 2027 is on 28 March.
+  - `long_range`: a day past 60 days with nothing measured a year back: the calendar's long-range
+    forecast (CatBoost's long tail), unscaled; reads low and flat
+    ([long-range forecasting §9](../ml/long-range-forecasting.md)).
+  - `none`: nothing to say. A day that was closed last year and has no forecast gives no figure.
 - **`meta.forecastUntil`** is the last day any of the region's parks carries a forecast, as the
   calendar warmup last read it off the warm months (not a constant; CatBoost reaches about six
   months, as far as a park's published schedule). Absent until the warmup has run once.
@@ -514,11 +543,13 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`best`** names per resort (`walt-disney-world`, `universal-orlando`, `seaworld-orlando`, never the
   day trips) the open theme park with the lowest day cost ([below](#how-a-day-is-priced));
   ties go to the longer day-guest day, then the lower level. A day whose hours are not published
-  yet (`UNKNOWN`, `hoursPublished: false`) counts when its figure is a `forecast` or `long_range`:
-  it is priced as the park's usual day (`usualHours`, else no hours factor), since its real hours
-  are not known, and the day says **`bestHoursUnpublished: true`** so the client can add "hours not
-  published yet". From January 2027 that is every Disney and Universal day. Absent for a resort on
-  `last_year` days and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
+  yet (`UNKNOWN`, `hoursPublished: false`) counts when it has a figure: it is priced as the park's
+  usual day (`usualHours`, else no hours factor), since its real hours are not known, and the day
+  says **`bestHoursUnpublished: true`** so the client can add "hours not published yet". From
+  January 2027 that is every Disney and Universal day. The resort's parks must read on one basis:
+  past 60 days that is `last_year`, so the pick is last year's on that weekday and is worded as an
+  estimate (the picked park's `basis` says so). Absent for a resort whose parks read on two bases
+  that day and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
   `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
   Kingdom's party night on 24 November 2026, 40 minutes but out at 18:00, against Animal Kingdom's
   full day at 45).
@@ -544,9 +575,10 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 ## How a day is priced
 
 One cost, `dayCost` in `trip-optimizer.ts`, for the plan, the calendar's `best`, `/best-days` and
-Parky. A park's day costs its headliners' **unrounded** mean wait (the calendar's `exactWait`; the
-rounded `headlinerWait` is only shown, because a ranking decided by rounding to five is a tie the
-rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
+Parky. A park's day costs its headliners' **unrounded** mean wait on the measured scale (the day's
+`waitExact`: within 60 days the forecast times its lead factor, past them last year's measured
+day, [above](#the-days-get-v1trip-regionsorlandocalendarfromto); the rounded `headlinerWait` is
+only shown, because a ranking decided by rounding to five is a tie the rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
 median day-guest hours over its open days within 14 days of the date without a ticketed evening
 (the longest day where every day has one; `usualDay`) ÷ that day's hours, at least 1, at most 1.5. So a party night at 18:00 against a usual 23:00 costs up to half as much again,
 and is the pick only when its waits are low enough to make up for the hours. A Disney After Hours
@@ -596,6 +628,10 @@ region's own figures (`regions.ts`, `weather`):
   `hurricane_peak` from 15 August to 15 October. **Japan's typhoons** are set the same way from
   the Japan Meteorological Agency's climatology (most landfalls August to October, the peak in
   September) with the region's data.
+- **The storm peak in `/when`** (`weather.storm.peakWindowMinutes`, ranking only): a window that
+  touches the peak on any day, travel days included, adds **10 minutes per visit** to its score
+  ([when to go](./trip-regions-when.md#how-the-storm-peak-ranks)). No plan, no day and no shown
+  figure carries it.
 
 Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
 window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
@@ -655,9 +691,10 @@ calendar does not.
 }
 ```
 
-- **`quiet`** (`limit` long) and **`busy`** (two) rank a park's days by their day cost. A night the
-  day guests lose to a party ranks behind every full day whatever its waits. `last_year` days take
-  part with their basis; label them.
+- **`quiet`** (`limit` long) and **`busy`** (two) rank a park's days by their day cost, on the
+  measured scale whatever their basis (a window across day 60 ranks TFT times its lead factor
+  against last year's days). A night the day guests lose to a party ranks behind every full day
+  whatever its waits. `last_year` days take part with their basis; label them.
 - **`basis`** is the basis most of the park's ranked days have. **`flat`** is set when the window's
   rounded waits spread less than ten minutes: there is no better day to name.
 - **`groups[].quiet`**: per resort, the three dates whose `best` park costs least.
@@ -1753,7 +1790,7 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v2:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v3:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
@@ -1770,8 +1807,9 @@ their starts searched 0.22–0.25 s; two UK 14-day tickets with dates 0.21–0.2
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
 month caches), records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
-and keeps the past months the `last_year` days read (−6 … −2; the current and previous month are
-in the ordinary window) as week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
+and keeps the past months the days read last year from (−12 … −1: every day from today on carries
+the same weekday a year back, ranked on it past 60 days; the running month is built on read) as
+week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:
 [caching](../architecture/caching-strategy.md#cache-warmup).

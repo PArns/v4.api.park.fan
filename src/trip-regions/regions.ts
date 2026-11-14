@@ -229,7 +229,8 @@ export interface HeatModelConfig {
 
 /**
  * A storm season (Orlando's Atlantic hurricanes, Japan's typhoons) as a cost:
- * `peakMinutes` × the date's weight added to every park's day. Weights by
+ * `peakMinutes` × the date's weight added to every park's day, and in `/when`
+ * `peakWindowMinutes` per visit on a window that touches the peak. Weights by
  * half month, `[month, firstHalf, secondHalf]`, the halves split after the
  * 15th unless `firstHalfEnds` names another day for the month; the peak is
  * `peak.from` … `peak.to` (`MM-DD`, inclusive). Curated relative to the
@@ -242,6 +243,13 @@ export interface StormSeasonConfig {
   firstHalfEnds?: Readonly<Record<number, number>>;
   peak: { from: string; to: string };
   peakMinutes: number;
+  /**
+   * What `/when` adds per visit to a window that touches the peak on any day,
+   * travel days included: the term that keeps a peak window out of the
+   * recommendations when, on measured days, it is also the quietest. Ranking
+   * only; no plan and no shown figure carries it. Absent: none.
+   */
+  peakWindowMinutes?: number;
 }
 
 /**
@@ -471,6 +479,16 @@ export const ORLANDO_HEAT: HeatModelConfig = {
  * weights are curated relative to that peak, not NHC figures, and never a
  * forecast. August splits after the 14th, so the peak starts on 15 August.
  * Eight minutes at the peak is about a fifth of a typical headliner figure.
+ *
+ * `peakWindowMinutes` keeps a window that touches the peak (the NHC's mid
+ * August to mid October, as above) out of `/when`'s top three (PAR-1319). On
+ * measured days late August is Orlando's quietest stretch: 34 minutes a park
+ * day for a ten-day trip from 23 August, against 42–43 for the best ones
+ * outside the peak (26 October, 12 April). Ranked on 2026's measured days,
+ * no window touching the peak stays in the top three of the region's,
+ * Disney's or Universal's 7-, 10- or 14-day search from 7 minutes on
+ * (Japan's typhoon peak from 8, the same rule); 10 keeps a margin for the
+ * next year's measurements.
  */
 export const ATLANTIC_HURRICANES: StormSeasonConfig = {
   kind: "hurricane",
@@ -485,6 +503,7 @@ export const ATLANTIC_HURRICANES: StormSeasonConfig = {
   firstHalfEnds: { 8: 14 },
   peak: { from: "08-15", to: "10-15" },
   peakMinutes: 8,
+  peakWindowMinutes: 10,
 };
 
 /** A region's stay rules, its own over the defaults. */
@@ -1653,7 +1672,9 @@ export const JAPAN: RegionConfig = {
     // Typhoon approaches by month, curated relative to September from JMA's
     // 1991–2020 normals (Kanto-Koshin Jun 0.2, Jul 0.4, Aug 0.8, Sep 1.2,
     // Oct 0.7; Kinki 0.3, 0.6, 0.7, 1.1, 0.7). Monthly data only: the
-    // half-month split is curated, never a forecast.
+    // half-month split is curated, never a forecast. The peak window term is
+    // Orlando's, by its rule (ATLANTIC_HURRICANES): on 2026's measured days no
+    // window touching the peak stays in a top three from 8 minutes on.
     storm: {
       kind: "typhoon",
       weights: [
@@ -1666,6 +1687,7 @@ export const JAPAN: RegionConfig = {
       ],
       peak: { from: "09-01", to: "10-15" },
       peakMinutes: 8,
+      peakWindowMinutes: 10,
     },
     // Tsuyu: JMA's normal onset and end, Kanto-Koshin 06-07 … 07-19, Kinki
     // and Tokai 06-06 … 07-19. Named, not priced: rain on most days, not a
