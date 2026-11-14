@@ -11,11 +11,12 @@ breaks: [trip regions: when](./trip-regions-when.md).
 A region is curated in code (`regions.ts`), not synced: which parks belong to Orlando is a planning
 decision (LEGOLAND Florida is in Winter Haven, Busch Gardens in Tampa, both day trips from an
 Orlando hotel), not a fact any feed carries. The regions are `orlando`, `southern-california`,
-`japan` and `paris` (release 2.21.0; until their data lands only `orlando` answers, the others are
-a 404). Every route below takes any of them; the examples are Orlando's. What differs by region is
-the region's own config, never a branch in the code: its hotel kinds and perks, the name of its
-early slot, its storm season and heat thresholds, where its travel times come from, the markets
-its tickets are sold in, and, in Japan, its bases ([below](#what-a-region-defines)).
+`japan` and `paris` (release 2.21.0), in that order. Every route below takes any of them; the
+examples are Orlando's, and what sets the others apart is under
+[the regions](#the-regions-southern-california-and-paris). What differs by region is the region's
+own config, never a branch in the code: its hotel kinds and perks, the name of its early slot, its
+storm season and heat thresholds, where its travel times come from, the markets its tickets are
+sold in, and, in Japan and Paris, its bases ([below](#what-a-region-defines)).
 
 | Route                                    | Key  | Cache                                                   | What                                            |
 | ---------------------------------------- | ---- | ------------------------------------------------------- | ----------------------------------------------- |
@@ -88,14 +89,84 @@ region route serves the parts a client needs:
 | `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
 | `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name; `home` is sold to anyone, what plan first suggests from ([tickets](#tickets))                                  |
-| `bases`, `baseLegs`                    | `bases`, `baseLegs`              | the cities a trip stays in, Japan only ([bases](#bases-a-trip-across-several-cities))                                                                       |
+| `bases`, `baseLegs`                    | `bases`, `baseLegs`              | the cities a trip stays in, Japan and Paris ([bases](#bases-a-trip-across-several-cities))                                                                       |
 
 **The codes a client translates are the region's own.** A perk or early slot is a code like
-Orlando's: `early_entry` and `early_park_admission` (Orlando, and `early_entry` for Disneyland
-Resort's Early Entry), `happy_entry` (Tokyo Disney Resort's Happy Entry), `extra_magic_time`
+Orlando's: `early_entry` and `early_park_admission` (Orlando, and `early_entry` for the Early Entry
+of Parc Astérix's hotels), `happy_entry` (Tokyo Disney Resort's Happy Entry), `extra_magic_time`
 (Disneyland Paris' Extra Magic Time): the same shape, a slot before the day guests' opening that
 some hotel guests get, priced the same (5 %). The region data names the codes it uses; a client
 shows nothing for a code it does not know. Orlando's codes and values are unchanged.
+
+## The regions: Southern California and Paris
+
+What sets these two apart from Orlando's examples, all of it in their config (`regions.ts`, the
+ticket seeds `tickets.southern-california.ts` and `tickets.paris.ts`). Both take their travel from
+OSRM and have no storm season: `weather.storm` is absent, so no day carries a `hurricane_*` code
+or a `hurricane` penalty.
+
+### Southern California (`southern-california`)
+
+- **Parks.** The Disneyland Resort (`disneyland-resort`: Disneyland Park and Disney California
+  Adventure); Universal Studios Hollywood as a `day_trip` group of its own (one park, no hotel of
+  Universal's, 54 km from the Disneyland gates, so no `best`); and as day trips Knott's Berry Farm,
+  Six Flags Magic Mountain, SeaWorld San Diego, LEGOLAND California and Sesame Place San Diego. The
+  headliners and second visits: Disneyland, California Adventure, Universal.
+- **No hotel perks.** `hotels` are `disney` and `offsite`, both with `perks: []`. Disneyland ended
+  Early Entry on 2026-01-05; its hotel guests now get one Lightning Lane Multi Pass entry per stay,
+  which no perk stands for. Universal's daily slot an hour before opening, most likely the
+  separately sold SUPER NINTENDO WORLD Early Access, is `early.kind: "early_access_ticket"`: no
+  stay's perk counts it, and a client shows nothing for it.
+- **Travel.** A drive to either Disney park ends at Mickey & Friends, then the tram
+  (`via: "tram"`, 15 minutes). Curated: the 5-minute walk between the two gates (their hop pair),
+  the walks from the Disneyland hotels, Harbor Boulevard, Knott's Hotel and the LEGOLAND Hotel, the
+  Metro B Line to Universal from Hollywood and Downtown LA, the COASTER from San Diego to LEGOLAND.
+- **Evenings.** Downtown Disney and Universal CityWalk Hollywood; night shows at Disneyland
+  (Believe… In Holiday Magic, Halloween Screams, Fantasmic!, Tapestry of Happiness, Shadows of
+  Memory), California Adventure (World of Color – ONE) and SeaWorld San Diego.
+- **Heat** counts from a 35 °C forecast or a 30.5 °C normal (Disneyland's normals); Magic Mountain,
+  inland, is the park it prices most.
+- **Tickets** (`us` home, `uk`, `intl`): Disneyland's 2- to 5-day tickets are good for 13 days
+  from the first use; its 1-day ticket is priced by date tier, one product; the Park Hopper (`.h`)
+  works at any time of day since 2026-06-09, and every day needs a park reservation. Universal's
+  2-day ticket runs 7 days from its date. On a separately ticketed night the day guests' close is
+  the feed's; the Disneyland After Dark nights, which the feed lists without an evening row, carry
+  their evening on the season.
+
+### Paris (`paris`)
+
+- **Parks.** Disneyland Paris (`disneyland-paris`: Disneyland Park and Disney Adventure World,
+  Walt Disney Studios Park renamed when it reopened on 29 March 2026) and Parc Astérix
+  (`parc-asterix`), a resort of its own with its hotels. All three are headliners; second visits
+  go to Disneyland Park, Disney Adventure World, then Parc Astérix. Disneyland Park's slug is also
+  Anaheim's: its path, `europe/france/paris/disneyland-park`, tells the two apart, and a season
+  row names its `region`.
+- **Hotel perks.** `disney`: **Extra Magic Time** (`extra_magic_time`), an hour before opening at
+  both parks for the guests of every Disney Hotel, Davy Crockett Ranch included, on a day the feed
+  carries the slot (every day since September 2026). Disneyland Pass Gold holders get it too, a
+  ticket's perk no hotel kind carries. `parc_asterix`: the Early Entry its hotel stays include
+  (`early_entry`, some rides 30 minutes early, never on nocturne or special days); the feed carries
+  no slot for the park, so it counts on no day yet. `offsite`, the partner hotels included: none.
+- **Bases.** `disneyland-paris` (the Disney hotels, Val d'Europe, Val de France), `parc-asterix`
+  (the park's three hotels) and `paris` (central Paris), with no `order`: the stays come in any
+  order. Gateways: Marne-la-Vallée–Chessy (`XED`, a station: the TGV, and the Eurostar with a change
+  at Lille) and CDG for Disneyland Paris, CDG for Parc Astérix, CDG and ORY for Paris. Base legs:
+  60 minutes by car between the resorts, 45 by RER A from Paris to Disneyland Paris, 45 by car from
+  Paris to Parc Astérix. `hotel` and `area` are a 400 here: a stay's area goes with its base
+  (`bases=disneyland-paris:3@disney_lake`), and only then do its hotel's perks count.
+- **Travel.** Both Disney parks share the guest car park, 15 minutes' walk from the gates
+  (`via: "walk"`). Curated: the 5-minute walk between the gates (their hop pair), the walks from the
+  lake hotels (15) and Cheyenne and Santa Fe (20, or the Disney Hotels shuttle), RER A from central
+  Paris (45) and Val d'Europe (15); to Parc Astérix, RER B and the park's shuttle from Roissypôle
+  (75), the Paris City Vision coach, and from the Disney parks the TGV to Aéroport CDG 2 and the
+  shuttle; the walk from the park's hotels (15).
+- **Evenings.** Disney Village; night shows Disney Tales of Magic (Disneyland Park) and Disney
+  Cascade of Lights (Disney Adventure World).
+- **Heat** counts from a 30 °C forecast or a 25 °C normal (Disneyland Park's normals).
+- **Tickets** (`eu` home, the operators' own shops; `intl`, sellers abroad): Disney's dated 1-day
+  ticket (`.h` for both parks), its dated 2- to 4-day tickets on consecutive days with both parks,
+  the undated Liberté ticket and the passes; Parc Astérix's dated day, Christmas, gate-only 2-day
+  and season tickets, each of `resort: "parc-asterix"`. No ticket covers both resorts.
 
 ## The region (`GET /v1/trip-regions/orlando`)
 
@@ -844,7 +915,7 @@ fireworks are the party's.
 
 **Status: proposed (PAR-1302), not built yet.** Japan's parks lie in four cities, two to three
 hours apart by train; no hotel serves them all. A region may therefore define **bases**: the cities
-a visitor sleeps in. A region without bases (Orlando, Southern California, Paris) has none of the
+a visitor sleeps in. A region without bases (Orlando, Southern California) has none of the
 fields, parameters or codes of this section and plans exactly as before; `bases`, `startBase` and
 `endBase` on such a region are a 400.
 
