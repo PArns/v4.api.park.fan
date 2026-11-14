@@ -63,6 +63,7 @@ rotation in detail: [data API keys](../frontend/api-keys.md).
 | DELETE | `api-keys/:id`          | owner | `204`, revokes the key and any secret still in its grace period; audited `api-key.revoke`                                                                                                                              |
 | POST   | `api-keys/:id/rotate`   | owner | `{ graceHours: 0–720 }` → `200 { key, item }`: a new secret, the old one valid until `item.previousExpiresAt` (refused at once with 0); `409` for a revoked or expired key; audited `api-key.rotate` with `graceHours` |
 | DELETE | `api-keys/:id/previous` | owner | `204`, ends the grace period now; `404` when none runs; audited `api-key.previous.revoke`                                                                                                                              |
+| POST   | `api-keys/:id/delete`   | owner | `204`, deletes a revoked key for good, with its request statistics; `409` for a key not yet revoked; audited `api-key.delete`                                                                                          |
 
 ## Sync and background jobs
 

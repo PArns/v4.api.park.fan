@@ -177,8 +177,8 @@ key counts as none. `isAnonymousDataRequest` and `CfThrottlerGuard.handleRequest
 ## Issuing keys
 
 `/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update`,
-`api-key.revoke`, `api-key.rotate` and `api-key.previous.revoke`): `GET` lists every key, active
-first, with `requestsThisHour`;
+`api-key.revoke`, `api-key.rotate`, `api-key.previous.revoke` and `api-key.delete`): `GET` lists
+every key, active first, with `requestsThisHour`;
 `POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt? }` returns `{ key, item }` with the key in
 clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds?, expiresAt? }` changes any of them from the next request on
 (an unknown park id is a 400); `DELETE /:id` revokes; rotation is below. The table `api_keys`
@@ -187,6 +187,14 @@ key in Redis for five minutes and an unknown one for one minute, and stores only
 cached (`NX`). A revocation writes the refusal over the entry and a `PATCH` writes the new state, so
 a lookup that read the old row a moment earlier cannot put it back. `last_used_at` is written at
 most every ten minutes per key, and a process asks Redis about it at most that often.
+
+`POST /:id/delete` deletes a revoked key for good, so it leaves the list; an active key is a 409
+and has to be revoked first, so its holder is always refused before anything is erased. The row
+goes, and with it every Redis counter of the key (hour, day, refusals, month) and its last-use
+markers: nothing else reads them, since the list shows each key's own use and no total across
+keys. Both secrets' lookups are written as refused again, in case the revocation's refusal never
+reached Redis. No table points at `api_keys`; the audit rows name the key by id and label, so its
+history stays readable there, `api-key.delete` with usage, prefix and both dates included.
 
 ## Rotation
 
