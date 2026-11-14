@@ -451,6 +451,9 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
+    // Skip the cache read and ask the model: for a caller that stores the
+    // answer as this run's forecast (PAR-1330). The build still fills the cache.
+    fresh = false,
   ): Promise<BulkPredictionResponseDto> {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
@@ -471,7 +474,7 @@ export class MLService {
     // Try cache first (include date in park timezone to invalidate daily)
     const today = getCurrentDateInTimezone(park.timezone);
     const cacheKey = CacheKeys.mlParkPredictions(parkId, predictionType, today);
-    const cached = await this.redis.get(cacheKey);
+    const cached = fresh ? null : await this.redis.get(cacheKey);
 
     if (cached) {
       const cachedData = JSON.parse(cached);

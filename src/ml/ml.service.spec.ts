@@ -301,6 +301,40 @@ describe("MLService", () => {
       expect(results).toEqual([payload, payload]);
       build.mockRestore();
     });
+
+    it("skips a cached answer when asked for a fresh one (PAR-1330)", async () => {
+      const parkId = "park-fresh";
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "UTC",
+      });
+      const stale = { predictions: [], count: 0, modelVersion: "old" };
+      mockRedis.get.mockResolvedValue(JSON.stringify(stale));
+      const payload = { predictions: [], count: 0, modelVersion: "new" };
+      const build = jest
+        .spyOn(
+          service as unknown as {
+            buildRawParkPredictions: () => Promise<unknown>;
+          },
+          "buildRawParkPredictions",
+        )
+        .mockResolvedValue(payload);
+
+      expect(await service.getRawParkPredictions(parkId, "hourly")).toEqual(
+        stale,
+      );
+      expect(
+        await service.getRawParkPredictions(
+          parkId,
+          "hourly",
+          undefined,
+          undefined,
+          true,
+        ),
+      ).toEqual(payload);
+      expect(build).toHaveBeenCalledTimes(1);
+      build.mockRestore();
+    });
   });
 
   // PAR-1048: Knoebels (schedule UNKNOWN) served 192 round-the-clock slots and

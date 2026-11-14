@@ -121,7 +121,30 @@ describe("PredictionGeneratorProcessor", () => {
         "hourly",
         undefined,
         "OPERATING",
+        false,
       );
+    });
+
+    it("asks the model instead of the cache when GENERATE_HOURLY_FRESH is on (PAR-1330)", async () => {
+      process.env.GENERATE_HOURLY_FRESH = "true";
+      try {
+        parksService.getBatchParkStatus.mockResolvedValue(
+          new Map([["p1", "OPERATING"]]),
+        );
+        mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getRawParkPredictions).toHaveBeenCalledWith(
+          "p1",
+          "hourly",
+          undefined,
+          "OPERATING",
+          true,
+        );
+      } finally {
+        delete process.env.GENERATE_HOURLY_FRESH;
+      }
     });
 
     it("stores raw CatBoost, never the served PCN curve (PAR-817)", async () => {

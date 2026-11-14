@@ -14,7 +14,10 @@ which of its quantiles reaches a reader is on [Quantile serving](quantile-servin
 - **Target:** the hourly median of a ride's OPERATING STANDBY readings ≥ 5 min. Serving predicts
   15-minute slots with the same model.
 - **Hourly:** 48 hours of 15-minute slots (`HOURLY_PREDICTIONS` = 48, 192 slots; 24 until
-  2026-09-23), regenerated for every park every 15 minutes by `predictions/generate-hourly`.
+  2026-09-23), written for every park every 15 minutes by `predictions/generate-hourly`. The
+  job reads through the 30-minute Redis answer of `getRawParkPredictions`, so two of three runs
+  store the previous inference again and the model is asked every 30–45 minutes;
+  `GENERATE_HOURLY_FRESH=true` (default off, PAR-1330) makes every run ask the model.
   Three places in the API break silently if this number grows past them: the dedup window in
   `MLService.deduplicatePredictions` (48 h), the cutoff of the `cleanup-old` job, and
   `PlanDayService.HOURLY_HORIZON_DAYS`.

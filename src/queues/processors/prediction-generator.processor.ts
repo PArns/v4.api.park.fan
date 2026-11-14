@@ -142,6 +142,9 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 "hourly",
                 undefined,
                 liveStatus,
+                // Off unless `GENERATE_HOURLY_FRESH=true`: without it two of
+                // three runs store the 30-minute Redis answer again (PAR-1330).
+                process.env.GENERATE_HOURLY_FRESH === "true",
               );
 
               if (response.predictions.length > 0) {
