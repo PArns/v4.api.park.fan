@@ -197,6 +197,27 @@ const P90_NEGATIVE_SENTINEL = "-1";
 /** TTL (seconds) of the global `queue_data` row total (PAR-872). */
 export const QUEUE_DATA_TOTAL_COUNT_TTL_SECONDS = 6 * 60 * 60;
 
+/**
+ * Whether a park-local "HH:mm" peak hour lies at or after today's closing.
+ * A park closing at or after midnight (16:00–00:00, 18:00–01:00) has no hour
+ * of today after its close.
+ */
+export function isPeakAfterClosing(
+  peakHour: string,
+  closingTime: Date,
+  timezone: string,
+  todayStr: string,
+): boolean {
+  if (formatInTimeZone(closingTime, timezone, "yyyy-MM-dd") !== todayStr) {
+    return false;
+  }
+  const closingHour = parseInt(
+    formatInTimeZone(closingTime, timezone, "H"),
+    10,
+  );
+  return parseInt(peakHour.split(":")[0], 10) >= closingHour;
+}
+
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
@@ -1832,16 +1853,18 @@ export class AnalyticsService {
       parkId,
       resolvedTimezone,
     );
-    if (closingTime && displayPeakHour) {
-      const closingHour = parseInt(
-        formatInTimeZone(closingTime, resolvedTimezone, "H"),
-        10,
-      );
-      const peakHour = parseInt(displayPeakHour.split(":")[0], 10);
-      if (peakHour >= closingHour) {
-        displayPeakHour = null;
-        peakHourSource = null;
-      }
+    if (
+      closingTime &&
+      displayPeakHour &&
+      isPeakAfterClosing(
+        displayPeakHour,
+        closingTime,
+        resolvedTimezone,
+        getCurrentDateInTimezone(resolvedTimezone),
+      )
+    ) {
+      displayPeakHour = null;
+      peakHourSource = null;
     }
 
     let history: import("./types/analytics-response.type").WaitTimeHistoryItem[] =
