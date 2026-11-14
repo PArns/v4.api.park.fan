@@ -330,8 +330,10 @@ export function stormSeasonSpan(storm: StormSeasonConfig): {
 }
 
 /**
- * The past months a window's days without a forecast read last year from:
- * the same weekday a year back, for each day from today on.
+ * The past months a window's days read last year from: the same weekday a
+ * year back, for each day from today on. Every day, forecast or not: past
+ * TFT's reach the day is ranked on last year, and within it last year sits
+ * beside the forecast (`lastYearWait`).
  */
 export function lastYearMonthsNeeded(
   days: CalendarDayLike[],
@@ -340,7 +342,6 @@ export function lastYearMonthsNeeded(
   const months = new Set<string>();
   for (const day of days) {
     if (day.date < today) continue;
-    if (day.headlinerForecast && !day.headlinerForecast.actual) continue;
     const ly = lastYearDateFor(day.date);
     if (ly < today) months.add(monthOf(ly));
   }
@@ -472,13 +473,17 @@ function markUsualDay(
 export type BestWhy = "shortest_wait" | "closes_early_elsewhere";
 
 /**
- * Per resort, the theme park of the day to pick: OPERATING, with a forecast
- * (`forecast` or `long_range`; a `last_year` figure is last year's day, not a
- * statement about this one), the lowest {@link dayCost} (the unrounded wait,
- * dearer where the day guests must leave early); ties go to the longer
- * day-guest day, then the lower crowd level. `why` says whether the pick also
- * has the lowest raw wait, or won because that park closes early. Day trips
- * are no resort; a resort with no such park is left out.
+ * Per resort, the theme park of the day to pick: OPERATING, with the day's
+ * figure (`headlinerWait`, on the measured scale whatever its basis), the
+ * lowest {@link dayCost} (the unrounded wait, dearer where the day guests
+ * must leave early); ties go to the longer day-guest day, then the lower crowd
+ * level. The candidates must share one basis: a resort whose parks read on two
+ * (one a forecast, one last year) gets no pick that day, since two bases are
+ * no comparison. Past TFT's reach every park reads last year, so the pick is
+ * last year's on that weekday, and the day's `basis` says so. `why` says
+ * whether the pick also has the lowest raw wait, or won because that park
+ * closes early. Day trips are no resort; a resort with no such park is left
+ * out.
  */
 export function bestOfDay(
   region: RegionConfig,
@@ -500,7 +505,7 @@ export function bestOfDay(
       .filter(
         (c) =>
           (c.day?.status === "OPERATING" || c.day?.status === "UNKNOWN") &&
-          (c.day.basis === "forecast" || c.day.basis === "long_range") &&
+          c.day.basis !== "none" &&
           rankWait(c.day) !== undefined,
       )
       .map((c) => ({
@@ -525,6 +530,7 @@ export function bestOfDay(
           a.slug.localeCompare(b.slug),
       );
     if (candidates.length === 0) continue;
+    if (new Set(candidates.map((c) => c.day.basis)).size > 1) continue;
     const pick = candidates[0];
     const lowestRaw = Math.min(
       ...candidates.map((c) => rankWait(c.day) as number),

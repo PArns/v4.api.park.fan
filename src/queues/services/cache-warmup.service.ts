@@ -46,11 +46,12 @@ const CALENDAR_MONTHS_AHEAD = 3;
 const REGION_CALENDAR_MONTHS_AHEAD = 13;
 /**
  * And their past months, back to this one, are kept as last-year snapshots:
- * the region calendar's days past the forecast (months 7–12) read the same
- * weekday a year earlier. The current and the previous month are in the
- * ordinary window; the snapshots cover -6 … -2.
+ * every day of the region calendar from today on reads the same weekday a
+ * year earlier, ranked on it past TFT's 60 days and shown beside the forecast
+ * within them, so a year's search reads months -12 … 0. The snapshots cover
+ * -12 … -1; the running month is built on read, as it never stops changing.
  */
-const REGION_LAST_YEAR_MONTHS_BACK = 6;
+const REGION_LAST_YEAR_MONTHS_BACK = 12;
 
 /**
  * Cache Warmup Service
@@ -372,9 +373,9 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * The two things a trip region's calendar reads besides the month caches:
    * the last day this park's calendar carries a forecast (`forecastUntil`,
    * read off what the warm months actually returned, not a constant), and the
-   * last-year snapshots of the past months its days past the forecast fall
-   * back to. A snapshot that exists is left alone: a passed month does not
-   * change, and it lives a week (`TRIP_LAST_YEAR_TTL`).
+   * last-year snapshots of the past months its days read the same weekday a
+   * year back from. A snapshot that exists is left alone: a passed month does
+   * not change, and it lives a week (`TRIP_LAST_YEAR_TTL`).
    */
   private async warmTripRegionPark(
     park: Park,
@@ -402,7 +403,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       }
 
       const current = todayStr.slice(0, 7);
-      for (let back = REGION_LAST_YEAR_MONTHS_BACK; back >= 2; back--) {
+      for (let back = REGION_LAST_YEAR_MONTHS_BACK; back >= 1; back--) {
         const ym = shiftMonth(current, -back);
         const exists = await this.redis.exists(
           CacheKeys.tripLastYearMonth(park.id, ym),
