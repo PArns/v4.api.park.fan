@@ -413,87 +413,261 @@ describe("Trip planner metrics (e2e)", () => {
     ]);
   });
 
-  it("reads the trip planner's events per region, its purchase links by product", async () => {
-    const bucket = new Date();
-    bucket.setUTCMinutes(0, 0, 0);
-    const event = (
-      name: string,
-      props: Record<string, string>,
-      count: number,
-    ) => [
-      bucket,
-      name,
-      Object.keys(props)
-        .sort()
-        .map((k) => `${k}=${props[k]}`)
-        .join("&"),
-      JSON.stringify(props),
-      count,
-    ];
-    const rows = [
-      event("trip_planner_started", { region: "orlando", source: "hero" }, 7),
-      event(
-        "trip_plan_requested",
-        { region: "orlando", mode: "when", parks: "0" },
-        4,
-      ),
-      event(
-        "trip_plan_shown",
-        { region: "orlando", mode: "when", outcome: "ok", windows: "3" },
-        4,
-      ),
-      event("trip_planner_started", { region: "japan", source: "hero" }, 2),
-      event(
-        "ticket_link_clicked",
-        { product: "wdw-date-based", kind: "official", position: "1" },
-        3,
-      ),
-    ];
-    for (const values of rows) {
+  /** A trip event as the flusher writes it: the UTC hour `daysAgo` back, a page type. */
+  const insertEvents = async (
+    events: Array<{
+      name: string;
+      props: Record<string, string>;
+      count: number;
+      daysAgo?: number;
+      pageType?: string;
+    }>,
+  ) => {
+    for (const e of events) {
+      const bucket = new Date();
+      bucket.setUTCMinutes(0, 0, 0);
+      bucket.setUTCDate(bucket.getUTCDate() - (e.daysAgo ?? 0));
       await dataSource.query(
         `INSERT INTO site_events (bucket, name, locale, path, page_type, device, browser, os,
                                   country, network, props_key, props, count)
-         VALUES ($1, $2, 'en', '/en/orlando/planner', 'trip_planner', 'desktop', 'chrome',
-                 'windows', 'us', 'other', $3, $4::jsonb, $5)`,
-        values,
+         VALUES ($1, $2, 'en', '/en/orlando', $3, 'desktop', 'chrome', 'windows', 'us', 'other',
+                 $4, $5::jsonb, $6)`,
+        [
+          bucket,
+          e.name,
+          e.pageType ?? "trip_hub",
+          Object.keys(e.props)
+            .sort()
+            .map((k) => `${k}=${e.props[k]}`)
+            .join("&"),
+          JSON.stringify(e.props),
+          e.count,
+        ],
       );
     }
-    const report = await app.get(SiteAnalyticsTripService).report(
+  };
+  const lastDays = (days: number) => ({
+    days,
+    from: null,
+    to: null,
+    interval: null,
+    locale: null,
+    filter: [],
+    datacenter: null,
+  });
+
+  it("splits the trip funnel at the first day of the dates-first planner's events, and reads page types", async () => {
+    const orlando = { region: "orlando" };
+    await insertEvents([
+      // The old planner, four days back.
       {
-        days: 1,
-        from: null,
-        to: null,
-        interval: null,
-        locale: null,
-        filter: [],
-        datacenter: null,
+        name: "trip_planner_started",
+        props: { ...orlando, source: "hero" },
+        count: 6,
+        daysAgo: 4,
+        pageType: "other",
       },
       {
-        region: "orlando",
-        knownRegions: ["orlando"],
-        productRegions: new Map([["wdw-date-based", "orlando"]]),
-        series: true,
+        name: "trip_tickets_answered",
+        props: { ...orlando, answer: "yes" },
+        count: 2,
+        daysAgo: 4,
       },
-    );
+      {
+        name: "trip_plan_shown",
+        props: { ...orlando, mode: "dates", outcome: "ok" },
+        count: 5,
+        daysAgo: 4,
+      },
+      // The dates-first planner, today.
+      {
+        name: "trip_planner_started",
+        props: { ...orlando, source: "dates" },
+        count: 7,
+      },
+      {
+        name: "trip_plan_requested",
+        props: { ...orlando, mode: "when", parks: "0" },
+        count: 4,
+        pageType: "trip_best_time",
+      },
+      {
+        name: "trip_plan_shown",
+        props: { ...orlando, mode: "when", outcome: "ok", windows: "3" },
+        count: 4,
+      },
+      {
+        name: "trip_edit_opened",
+        props: { ...orlando, panel: "parks", from: "answer" },
+        count: 3,
+      },
+      {
+        name: "trip_tickets_opened",
+        props: { ...orlando, from: "card", first: "true" },
+        count: 2,
+      },
+      {
+        name: "trip_tickets_answered",
+        props: { ...orlando, answer: "yes" },
+        count: 1,
+      },
+      {
+        name: "trip_planner_started",
+        props: { region: "japan", source: "hero" },
+        count: 2,
+      },
+      {
+        name: "ticket_link_clicked",
+        props: { product: "wdw-date-based", kind: "official", position: "1" },
+        count: 3,
+      },
+    ]);
+    const options = {
+      region: "orlando",
+      knownRegions: ["orlando"],
+      productRegions: new Map([["wdw-date-based", "orlando"]]),
+      series: true,
+    };
+    const report = await app
+      .get(SiteAnalyticsTripService)
+      .report(lastDays(7), options);
+    expect(report.newFunnelFrom).toBe(today);
+    const step = (name: string) => report.funnel.find((s) => s.step === name);
+    expect(step("datesPicked")).toEqual({
+      step: "datesPicked",
+      before: 6,
+      since: 7,
+    });
+    expect(step("planShown")).toMatchObject({ before: 5, since: 4 });
+    expect(step("changed")).toMatchObject({ before: null, since: 3 });
+    // A yes before the cut-over, the ticket step's openings since; today's yes is neither.
+    expect(step("ticketsEntered")).toMatchObject({ before: 2, since: 2 });
     expect(report.totals).toMatchObject({
-      started: 7,
       planRequested: 4,
       datesSearched: 4,
       parksHeadliners: 4,
       findDatesShown: 4,
       ticketLinks: 3,
     });
-    expect(report.windowsFound).toEqual([{ value: "3", count: 4 }]);
-    expect(report.ticketLinksByProduct).toEqual([
-      { value: "wdw-date-based", count: 3 },
+    expect(report.lists.windowsFound).toEqual([{ windows: "3", count: 4 }]);
+    expect(report.lists.linksByProduct).toEqual([
+      { product: "wdw-date-based", count: 3 },
     ]);
-    // Japan is no region of this list yet: its starts are (other).
-    expect(report.regions.map((row) => [row.region, row.started])).toEqual([
-      ["orlando", 7],
+    expect(report.pageTypes).toEqual([
+      expect.objectContaining({
+        pageType: "trip_hub",
+        datesPicked: 7,
+        planShown: 9,
+      }),
+      expect.objectContaining({ pageType: "other", datesPicked: 6 }),
+      expect.objectContaining({ pageType: "trip_best_time", planRequested: 4 }),
+    ]);
+    // Japan is no region of this list: its starts are (other).
+    expect(report.regions.map((row) => [row.region, row.datesPicked])).toEqual([
+      ["orlando", 13],
       ["(other)", 2],
     ]);
-    expect(report.series?.reduce((sum, point) => sum + point.started, 0)).toBe(
-      7,
+    expect(
+      report.series?.reduce((sum, point) => sum + point.datesPicked, 0),
+    ).toBe(13);
+
+    // One day, hourly: today's rows by their hour, all of it the new planner's.
+    const hourly = await app
+      .get(SiteAnalyticsTripService)
+      .report(lastDays(1), options);
+    expect(hourly.interval).toBe("hour");
+    expect(hourly.funnel.find((s) => s.step === "datesPicked")).toMatchObject({
+      before: null,
+      since: 7,
+    });
+    expect(
+      hourly.series?.reduce((sum, point) => sum + point.datesPicked, 0),
+    ).toBe(7);
+  });
+
+  it("records Parky's calls with the caller, and the stays and parks left out of every row", async () => {
+    const answer = {
+      meta: {
+        exact: true,
+        stays: [{ base: "tokyo" }, { base: "osaka" }],
+        staySuggestion: { base: "nagoya" },
+      },
+      days: [],
+      parks: [],
+      totals: { moves: 1 },
+      unplaced: [],
+      parksLeftOut: [{ park: "legoland-japan", reason: "no_day_left" }],
+    };
+    await metrics.measure(
+      { route: "plan", region: "japan", caller: "parky" },
+      async () => answer,
     );
+    metrics.record(
+      metricRowOf({
+        route: "plan",
+        region: "japan",
+        at: new Date(),
+        latencyMs: 40,
+        trace: { cache: "hit", shape: { moveBuffer: 60, gateways: "both" } },
+        status: 200,
+        facts: facts({ bases: 2, leftOut: 0, staySuggested: false }),
+      }),
+    );
+    await metrics.flush();
+    const rows = await dataSource.query(
+      `SELECT caller, left_out, move_buffer, gateways, stay_suggested, bases, moves
+         FROM trip_request_metrics ORDER BY id`,
+    );
+    expect(rows).toEqual([
+      {
+        caller: "parky",
+        left_out: 1,
+        move_buffer: null,
+        gateways: null,
+        stay_suggested: true,
+        bases: 2,
+        moves: 1,
+      },
+      {
+        caller: "site",
+        left_out: 0,
+        move_buffer: 60,
+        gateways: "both",
+        stay_suggested: false,
+        bases: 2,
+        moves: null,
+      },
+    ]);
+
+    const report = await metrics.ops({
+      from: today,
+      to: today,
+      limit: 5,
+      series: false,
+    });
+    expect(
+      report.routes.map((row) => [
+        row.caller,
+        row.leftOutShare,
+        row.staySuggestedShare,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["parky", 1, 1],
+        ["site", 0, 0],
+      ]),
+    );
+    expect(report.stays).toEqual([
+      { route: "plan", dim: "gateways", value: "both", requests: 1 },
+      { route: "plan", dim: "move_buffer", value: "60", requests: 1 },
+    ]);
+    const parky = await metrics.ops({
+      from: today,
+      to: today,
+      caller: "parky",
+      limit: 5,
+      series: false,
+    });
+    expect(parky.totals.requests).toBe(1);
   });
 });

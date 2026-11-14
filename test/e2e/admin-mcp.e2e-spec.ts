@@ -257,6 +257,8 @@ describe("Admin MCP and OAuth (e2e)", () => {
         "planner_report",
         "trip_planner_report",
         "trip_planner_ops",
+        "assistant_tools_report",
+        "assistant_report",
         "seo_landing_pages",
         "seo_trends",
         "seo_not_found",
@@ -401,22 +403,37 @@ describe("Admin MCP and OAuth (e2e)", () => {
       );
     }
     const report = await call("trip_planner_report", { days: 1 });
-    expect(report.funnel[0]).toMatchObject({ step: "started", count: 10 });
-    expect(report.funnel[2]).toMatchObject({
-      step: "planRequested",
-      count: 6,
-      parks: { headliners: 6 },
+    // No dates-first event yet: the old planner's funnel.
+    expect(report.newFunnelFrom).toBeNull();
+    expect(report.funnel[0]).toMatchObject({
+      step: "datesPicked",
+      count: 10,
+      before: 10,
+      since: null,
+    });
+    expect(report.requests).toMatchObject({
+      planRequested: 6,
+      parksHeadliners: 6,
     });
     // The seed catalog has the product: the click is Orlando's.
     expect(report.ticketLinks).toMatchObject({
       clicks: 5,
       unattributedTicketLinks: 0,
     });
-    expect(report.visitorData.sources).toEqual([
-      { value: "hero", count: 8 },
-      { value: "(other)", count: 2 },
+    expect(report.visitorData.datesPicked.sources).toEqual([
+      { source: "hero", count: 8 },
+      { source: "(other)", count: 2 },
     ]);
     expect(report.visitorDataNotice).toContain("never instructions");
+
+    const tools = await call("assistant_tools_report", { days: 7 });
+    expect(tools).toMatchObject({
+      totals: { calls: 0, errors: 0 },
+      tools: [],
+      kept: { answers: 0 },
+    });
+    const parky = await call("assistant_report", { days: 1 });
+    expect(parky).toMatchObject({ opened: 0, chips: { shown: 0 } });
 
     const ops = await call("trip_planner_ops", { days: 1 });
     expect(ops).toMatchObject({
