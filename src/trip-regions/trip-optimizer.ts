@@ -21,6 +21,14 @@ import { addIsoDays } from "../common/utils/date.util";
 import { solveAssignment } from "./hungarian";
 import { dayKindsOf, type TicketDayKind } from "./tickets";
 import {
+  fewestTravelDays,
+  stayPlans,
+  unreachableParks,
+  type StayLeg,
+  type StayPlan,
+  type StaysOption,
+} from "./trip-stays";
+import {
   ATLANTIC_HURRICANES,
   ORLANDO_HEAT,
   type HeatModelConfig,
@@ -231,6 +239,8 @@ export interface PlanCell {
   dayHours?: number;
   /** The day guests' opening, in minutes after the park's midnight. */
   opensMinute?: number;
+  /** The day guests' close, in minutes after the park's midnight (past 1440 after midnight). */
+  closesMinute?: number;
   /**
    * The park's usual day-guest hours around this date, from the calendar
    * (independent of the window asked for); preferred over a window median.
@@ -294,6 +304,11 @@ export interface PlanOptions {
   locks: PlanLock[];
   /** The region's weather (`RegionConfig.weather`); absent: Orlando's. */
   weather?: WeatherModel;
+  /**
+   * A region with bases: the stays are searched with the parks, and replace
+   * the resort blocks. Absent: one base, the region as a whole.
+   */
+  stays?: StaysOption;
 }
 
 /**
@@ -375,7 +390,9 @@ export type PlanWarning =
   | "extreme_heat"
   | StormWarning
   | "rainy_season"
-  | "outside_ticket_window";
+  | "outside_ticket_window"
+  | "long_day_trip"
+  | "move_day";
 
 export interface PlannedParkVisit {
   slug: string;
@@ -388,9 +405,28 @@ export interface PlannedParkVisit {
   perks?: PerkKind[];
 }
 
+/** A move between bases on a plan day (a region with bases). */
+export interface PlannedMove {
+  from: string;
+  to: string;
+  minutes: number;
+  mode: StayLeg["mode"];
+  name?: string;
+  /**
+   * `morning`: the move comes first and the day's park is in the base
+   * reached; `evening`: after the day's park, in the base left; `day`: the
+   * day is the move.
+   */
+  when: "morning" | "evening" | "day";
+  /** Leaving and arriving, in minutes after the park-local midnight. */
+  departMinute: number;
+  arriveMinute: number;
+}
+
 export interface PlannedDay {
   date: string;
-  kind: "arrival" | "park" | "hop" | "rest" | "departure";
+  /** `travel`: a move between bases and no park (a region with bases). */
+  kind: "arrival" | "park" | "hop" | "rest" | "departure" | "travel";
   parks: PlannedParkVisit[];
   headlinerWait?: number;
   crowdLevel?: string;
@@ -406,6 +442,22 @@ export interface PlannedDay {
   ticketAllowance?: true;
   /** An evening ticket's day: the park admits the guest from this time (`HH:MM`). */
   entryFrom?: string;
+  /** A region with bases: where the night is spent (the departure day: where it starts). */
+  base?: string;
+  /** The day's move between bases. */
+  move?: PlannedMove;
+  /** After a morning move: when the guest gets into the park, in minutes after midnight. */
+  startMinute?: number;
+}
+
+/** A stay of the plan: a base and its nights, `from` the check-in day, `to` the check-out day. */
+export interface PlannedStay {
+  base: string;
+  from: string;
+  to: string;
+  nights: number;
+  /** The search picked the base, its place or its nights. */
+  auto?: true;
 }
 
 export interface PlanAlternative {
@@ -441,6 +493,9 @@ export interface PlanTotals {
   parkDays: number;
   visits: number;
   restDays: number;
+  /** A region with bases: the moves between them, and the days that are only a move. */
+  moves?: number;
+  travelDays?: number;
 }
 
 /**
@@ -467,7 +522,8 @@ export interface PlannedTicket {
   allowanceVisits: number;
 }
 
-export type UnplacedReason = "no_open_day" | "no_day_left" | "no_ticket_day";
+export type UnplacedReason =
+  "no_open_day" | "no_day_left" | "no_ticket_day" | "no_base";
 
 export interface OptimizedPlan {
   exact: boolean;
@@ -484,8 +540,21 @@ export interface OptimizedPlan {
   tickets: PlannedTicket[];
   ignoredLocks: Array<{
     lock: string;
-    reason: "outside_trip" | "closed" | "day_taken" | "no_visit_left";
+    reason:
+      | "outside_trip"
+      | "closed"
+      | "day_taken"
+      | "no_visit_left"
+      | "base_unreachable";
   }>;
+  /** A region with bases: the stays, in route order. */
+  stays?: PlannedStay[];
+  /**
+   * A region with bases: what the stays added to the plan's cost (the hours
+   * day trips and moves take, and each move's own cost), in minutes summed
+   * over the trip; `/when` ranks by it.
+   */
+  stayPenalty?: number;
 }
 
 // ── internals ───────────────────────────────────────────────────────────────
@@ -524,6 +593,8 @@ interface Structure {
   starts: number[];
   /** Visits this structure leaves out for lack of days. */
   dropped: Unit[];
+  /** A region with bases: the stays the structure plans in. */
+  stay?: StayPlan;
 }
 
 interface SearchResult {
@@ -532,6 +603,23 @@ interface SearchResult {
   dropped: Unit[];
   exact: boolean;
   starts: number[];
+  stay?: StayPlan;
+}
+
+/** Stay plans solved per pairing and ticket structure, cheapest quick bound first. */
+const STAY_PLAN_LIMIT = 400;
+
+/** How a row is priced on a day of a stay plan, and why. */
+interface StayCell {
+  cost: number;
+  /** On a move day: the park before or after the move. */
+  when?: "morning" | "evening";
+  /** Hours of the park's day the travel takes. */
+  lostHours: number;
+  /** After a morning move: when the guest gets into the park. */
+  startMinute?: number;
+  /** A day trip past the free travel time. */
+  longTrip: boolean;
 }
 
 /**
@@ -830,6 +918,10 @@ class TripOptimizer {
   private readonly offSale = new Set<number>();
   /** The region's weather: heat, storm season, noted seasons. */
   private readonly weather: WeatherModel;
+  /** A region with bases: every stay plan of the trip. */
+  private stayPlans: StayPlan[] = [];
+  /** The stay plan of the structure being solved, which every objective prices by. */
+  private activeStay: StayPlan | null = null;
 
   constructor(private readonly input: PlanInput) {
     this.weather = input.options.weather ?? ORLANDO_WEATHER;
@@ -873,17 +965,28 @@ class TripOptimizer {
     slug: string,
     date: string,
     evening = false,
+    rules: PerkRule[] = this.input.options.perkRules,
   ): { listed: PerkKind[]; factor: number } {
     const c = this.cell(slug, date);
     const listed: PerkKind[] = [];
     let factor = 1;
     if (c.status === "CLOSED") return { listed, factor };
-    for (const rule of this.input.options.perkRules) {
+    for (const rule of rules) {
       if (!rule.parks.includes(slug)) continue;
-      if (evening && rule.needs === "early") continue;
+      // An evening visit misses the slots before opening.
+      if (
+        evening &&
+        (rule.needs === "early" || rule.needs === "after_first_night")
+      ) {
+        continue;
+      }
+      if (rule.blackoutDates?.includes(date)) continue;
       let applies = false;
       if (rule.needs === "always") applies = true;
-      else if (rule.needs === "extended_evening") {
+      else if (rule.needs === "after_first_night") {
+        // The guest checks in on the trip's first day: no perk that morning.
+        applies = this.dateIndex.get(date) !== 0;
+      } else if (rule.needs === "extended_evening") {
         applies = c.evening?.kind === "extended_evening";
       } else if (c.early) {
         applies = true;
@@ -922,21 +1025,36 @@ class TripOptimizer {
     return this.costParts(slug, date).cost;
   }
 
-  /** One park's cost on a date with its heat and storm terms. */
-  costParts(slug: string, date: string, entryMinute?: number): DayCostParts {
+  /**
+   * One park's cost on a date with its heat and storm terms. `lostHours`:
+   * hours travel takes off the day (a region with bases), counted with an
+   * evening ticket's late entry as the larger of the two; `rules`: the stay's
+   * hotel perks.
+   */
+  costParts(
+    slug: string,
+    date: string,
+    entryMinute?: number,
+    lostHours = 0,
+    rules?: PerkRule[],
+  ): DayCostParts {
     const park = this.parkBySlug.get(slug);
     if (!park) return { cost: Infinity, heat: 0, storm: 0, hurricane: 0 };
     const cell = this.cell(slug, date);
     const evening = entryMinute !== undefined;
+    const lost = Math.max(
+      lostHours,
+      evening ? lateEntryHours(cell, entryMinute) : 0,
+    );
     return dayCostParts(cell, {
       type: park.type,
       medianHours: this.medianHours.get(slug),
       neutralWait: this.neutral.get(slug),
       fireworks: this.input.options.fireworks,
-      perkFactor: this.perks(slug, date, evening).factor,
+      perkFactor: this.perks(slug, date, evening, rules).factor,
       date,
       weather: this.weather,
-      ...(evening && { lostHours: lateEntryHours(cell, entryMinute) }),
+      ...((evening || lostHours > 0) && { lostHours: lost }),
     });
   }
 
@@ -971,6 +1089,140 @@ class TripOptimizer {
       0.5 * this.cost(b.slug, day) +
       PlanCostModel.hopTransferPenalty
     );
+  }
+
+  /** The stays' base by its key. */
+  private stayBase(key: string) {
+    return this.input.options.stays?.bases.find((b) => b.key === key);
+  }
+
+  /** A park's cost on a trip day under a stay: its travel's lost hours, its hotel's perks. */
+  private stayCost(
+    slug: string,
+    day: number,
+    entry: number | undefined,
+    lost: number,
+    wokeAt: string,
+  ): number {
+    const key = `${slug}|${day}|s${entry ?? ""}|${lost}|${wokeAt}`;
+    const cached = this.costCache.get(key);
+    if (cached !== undefined) return cached;
+    const value = this.costParts(
+      slug,
+      this.dates[day],
+      entry,
+      lost,
+      this.stayBase(wokeAt)?.perkRules ?? [],
+    ).cost;
+    this.costCache.set(key, value);
+    return value;
+  }
+
+  private readonly stayCellCache = new Map<string, StayCell>();
+
+  /**
+   * How a row is priced on a day of a stay plan. A day within one base: its
+   * park must be one the base reaches, travel past the free day-trip time
+   * (both ways) taken off its hours. A move day: a park the base reached
+   * reaches within the free time after a morning move (the hours until the
+   * guest gets in lost), or a park the base left reaches before an evening
+   * move that still arrives by the region's last arrival (nothing lost), the cheaper; never on
+   * a leg too long for a park, never a hop. An airport's move day takes no park.
+   */
+  stayCell(plan: StayPlan, row: Row, day: number): StayCell {
+    const none: StayCell = { cost: Infinity, lostHours: 0, longTrip: false };
+    if (row.lockedDay !== undefined && row.lockedDay !== day) return none;
+    const opt = this.input.options.stays as StaysOption;
+    const morning = plan.morning[day];
+    const evening = plan.evening[day];
+    const leg = plan.moveOf[day];
+    const entry = this.entryOf(row.units[0]);
+    const key = `${row.units.map((u) => u.slug).join("+")}|${entry ?? ""}|${day}|${morning}>${evening}|${plan.endMove[day] ? 1 : 0}`;
+    const hit = this.stayCellCache.get(key);
+    if (hit) return hit;
+    const free = opt.rules.dayTripFreeMinutes;
+    const cellOf = (): StayCell => {
+      if (plan.endMove[day]) return none;
+      const A = this.stayBase(morning);
+      const B = this.stayBase(evening);
+      if (!A || !B) return none;
+      if (row.units.length > 1) {
+        if (leg) return none;
+        if (
+          !row.units.every(
+            (u) => (B.reach.get(u.slug)?.minutes ?? Infinity) <= free,
+          )
+        ) {
+          return none;
+        }
+        const [a, b] = row.units;
+        return {
+          cost:
+            0.5 * this.stayCost(a.slug, day, undefined, 0, morning) +
+            0.5 * this.stayCost(b.slug, day, undefined, 0, morning) +
+            PlanCostModel.hopTransferPenalty,
+          lostHours: 0,
+          longTrip: false,
+        };
+      }
+      const slug = row.units[0].slug;
+      if (!leg) {
+        const reach = B.reach.get(slug);
+        if (!reach) return none;
+        const lost = (2 * Math.max(0, reach.minutes - free)) / 60;
+        return {
+          cost: this.stayCost(slug, day, entry, lost, morning),
+          lostHours: lost,
+          longTrip: lost > 0,
+        };
+      }
+      if (!leg.parkDay) return none;
+      const cell = this.cell(slug, this.dates[day]);
+      const open = cell.opensMinute ?? DEFAULT_OPEN_MINUTE;
+      const options: StayCell[] = [];
+      const toB = B.reach.get(slug);
+      if (toB && toB.minutes <= free) {
+        const start =
+          opt.rules.moveStartMinute +
+          leg.minutes +
+          opt.rules.moveOverheadMinutes +
+          toB.minutes;
+        const lost = Math.max(0, start - open) / 60;
+        options.push({
+          cost: this.stayCost(slug, day, entry, lost, morning),
+          when: "morning",
+          lostHours: lost,
+          startMinute: Math.max(start, open),
+          longTrip: false,
+        });
+      }
+      const fromA = A.reach.get(slug);
+      if (fromA && fromA.minutes <= free) {
+        const close =
+          cell.closesMinute ??
+          open + (cell.dayHours ?? cell.usualHours ?? DEFAULT_DAY_HOURS) * 60;
+        if (
+          close + fromA.minutes + leg.minutes <=
+          opt.rules.lastArrivalMinute
+        ) {
+          options.push({
+            cost: this.stayCost(slug, day, entry, 0, morning),
+            when: "evening",
+            lostHours: 0,
+            longTrip: false,
+          });
+        }
+      }
+      return options.sort((x, y) => x.cost - y.cost)[0] ?? none;
+    };
+    const out = cellOf();
+    this.stayCellCache.set(key, out);
+    return out;
+  }
+
+  /** A row's cost on a day: under the structure's stays where it has them. */
+  cellCost(row: Row, day: number, stay: StayPlan | null): number {
+    return stay ? this.stayCell(stay, row, day).cost : this.rowCost(row, day);
   }
 
   rowGroup(row: Row): string {
@@ -1014,11 +1266,25 @@ class TripOptimizer {
     const unplaced: OptimizedPlan["unplaced"] = [];
 
     const units: Unit[] = [];
+    // A region with bases: a park no base can reach leaves the plan at once.
+    const noBase = options.stays
+      ? new Set(
+          unreachableParks(
+            options.stays,
+            this.input.parks.map((p) => p.slug),
+          ),
+        )
+      : new Set<string>();
     for (const park of this.input.parks) {
       for (let v = 1; v <= park.visits; v++) {
-        units.push({ slug: park.slug, visit: v });
+        if (noBase.has(park.slug)) {
+          unplaced.push({ slug: park.slug, reason: "no_base" });
+        } else units.push({ slug: park.slug, visit: v });
       }
     }
+    this.stayPlans = options.stays
+      ? stayPlans(options.stays, n, [...new Set(units.map((u) => u.slug))])
+      : [];
 
     // Locks first: they take their day before anything is searched.
     const restLocked = new Set<number>();
@@ -1049,6 +1315,16 @@ class TripOptimizer {
       }
       if (this.cell(unit.slug, lock.date).status === "CLOSED") {
         ignoredLocks.push({ lock: label, reason: "closed" });
+        continue;
+      }
+      if (
+        options.stays &&
+        !this.stayPlans.some((plan) =>
+          Number.isFinite(this.stayCell(plan, { units: [unit] }, day).cost),
+        )
+      ) {
+        // No stay the trip can make reaches the park that day.
+        ignoredLocks.push({ lock: label, reason: "base_unreachable" });
         continue;
       }
       lockedUnitDay.set(unit, day);
@@ -1099,7 +1375,13 @@ class TripOptimizer {
     }
 
     let pool = placeable.filter((u) => !overTicket.includes(u));
-    let useBlocks = options.blocks;
+    if (options.stays && this.stayPlans.length === 0) {
+      // No stays fit the trip (its nights, its pinned bases): nothing is placed.
+      for (const u of pool) unplaced.push({ slug: u.slug, reason: "no_base" });
+      pool = [];
+    }
+    // A region with bases keeps a resort's days together by its stay.
+    let useBlocks = options.blocks && !options.stays;
     let best: SearchResult | null = null;
     const windowed = this.tickets.some(
       (t) => Number.isFinite(t.window) || (t.reservedDayParks?.length ?? 0) > 0,
@@ -1142,6 +1424,8 @@ class TripOptimizer {
         unplaced.push({ slug: u.slug, reason: "no_day_left" });
       }
     }
+    this.activeStay =
+      best?.stay ?? (pool.length === 0 ? (this.stayPlans[0] ?? null) : null);
 
     return this.describe(
       best?.rows ?? [],
@@ -1628,13 +1912,18 @@ class TripOptimizer {
           available,
           block.segmentOf,
         )) {
-          structures.push({
+          const base: Structure = {
             rows,
             mask: (row, day) => ticket.mask(row, day) || block.mask(row, day),
             ...(ticket.penalty && { penalty: ticket.penalty }),
             starts: ticket.starts,
             dropped,
-          });
+          };
+          if (this.stayPlans.length === 0 && !this.input.options.stays) {
+            structures.push(base);
+          } else {
+            structures.push(...this.withStays(base, available));
+          }
         }
       }
     }
@@ -1662,14 +1951,14 @@ class TripOptimizer {
     > = [];
     for (const s of structures) {
       if (!this.budgetLeft()) break;
-      const matrix = this.matrix(s.rows, available, s.mask, s.penalty);
+      const matrix = this.matrix(s.rows, available, s.mask, s.penalty, s.stay);
       const result = this.solve(matrix);
       if (result.feasible) {
         bounded.push({
           ...s,
           matrix,
           rowToCol: result.rowToCol,
-          bound: result.cost,
+          bound: result.cost + (s.stay?.fixedCost ?? 0),
         });
       }
     }
@@ -1684,6 +1973,44 @@ class TripOptimizer {
       this.relaxed.add("streak_relaxed");
     }
   }
+
+  /**
+   * A structure once per stay plan of the trip, the plans with the cheapest
+   * quick bound first (each visit on its cheapest allowed day, days shared,
+   * plus the moves' cost) and at most {@link STAY_PLAN_LIMIT} of them. A plan
+   * left out whose quick bound could beat the result makes it inexact.
+   */
+  private withStays(s: Structure, available: number[]): Structure[] {
+    const scored = this.stayPlans.map((stay) => {
+      let bound = stay.fixedCost;
+      for (const row of s.rows) {
+        let min = Infinity;
+        for (const day of available) {
+          if (s.mask(row, day)) continue;
+          const c =
+            this.stayCell(stay, row, day).cost + (s.penalty?.(row, day) ?? 0);
+          if (c < min) min = c;
+        }
+        bound += min;
+        if (!Number.isFinite(bound)) break;
+      }
+      return { stay, bound };
+    });
+    const feasible = scored
+      .filter((x) => Number.isFinite(x.bound))
+      .sort((a, b) => a.bound - b.bound);
+    const kept = feasible.slice(0, STAY_PLAN_LIMIT);
+    if (feasible.length > kept.length) {
+      this.stayCutBound = Math.min(
+        this.stayCutBound,
+        feasible[kept.length].bound,
+      );
+    }
+    return kept.map(({ stay }) => ({ ...s, stay }));
+  }
+
+  /** The cheapest quick bound of a stay plan left unsolved: a result above it is not proven. */
+  private stayCutBound = Infinity;
 
   /** Branch and bound over the structures, cheapest bound first. */
   private evaluate(
@@ -1701,6 +2028,7 @@ class TripOptimizer {
       if (best && s.bound >= best.solution.objective) break;
       if (!this.budgetLeft()) break;
       this.activePenalty = s.penalty ?? null;
+      this.activeStay = s.stay ?? null;
       const outcome = this.solveStructure(
         s.rows,
         available,
@@ -1719,6 +2047,7 @@ class TripOptimizer {
           dropped: s.dropped,
           exact: true,
           starts: s.starts,
+          ...(s.stay && { stay: s.stay }),
         };
       }
     }
@@ -1727,6 +2056,7 @@ class TripOptimizer {
       // plain assignment is still a plan, and the answer says it is not exact.
       const s = bounded[0];
       this.activePenalty = s.penalty ?? null;
+      this.activeStay = s.stay ?? null;
       if (
         longestRun(this.parkDayFlags(s.rowToCol.map((c) => available[c]))) >
         limit
@@ -1742,12 +2072,17 @@ class TripOptimizer {
         dropped: s.dropped,
         exact: false,
         starts: s.starts,
+        ...(s.stay && { stay: s.stay }),
       };
     }
     if (!best) return null;
     const objective = best.solution.objective;
     best.exact =
-      !this.cutShort && unproven.every((bound) => bound >= objective - 1e-9);
+      !this.cutShort &&
+      unproven.every((bound) => bound >= objective - 1e-9) &&
+      this.stayCutBound >= objective - 1e-9;
+    // The stays of the result price what is described.
+    this.activeStay = best.stay ?? null;
     return best;
   }
 
@@ -1922,6 +2257,7 @@ class TripOptimizer {
     days: number[],
     mask: (row: Row, day: number) => boolean,
     penalty?: (row: Row, day: number) => number,
+    stay?: StayPlan,
   ): number[][] {
     const lockedDays = new Set(
       rows.filter((r) => r.lockedDay !== undefined).map((r) => r.lockedDay),
@@ -1930,17 +2266,22 @@ class TripOptimizer {
       days.map((day) => {
         if (mask(row, day)) return Infinity;
         if (row.lockedDay === undefined && lockedDays.has(day)) return Infinity;
-        return this.rowCost(row, day) + (penalty?.(row, day) ?? 0);
+        return (
+          this.cellCost(row, day, stay ?? null) + (penalty?.(row, day) ?? 0)
+        );
       }),
     );
   }
 
   private objective(rows: Row[], dayOf: number[]): Solution {
     const penalty = this.activePenalty;
+    const stay = this.activeStay;
     const base = rows.reduce(
       (s, row, r) =>
-        s + this.rowCost(row, dayOf[r]) + (penalty?.(row, dayOf[r]) ?? 0),
-      0,
+        s +
+        this.cellCost(row, dayOf[r], stay) +
+        (penalty?.(row, dayOf[r]) ?? 0),
+      stay?.fixedCost ?? 0,
     );
     return {
       dayOf,
@@ -2423,10 +2764,12 @@ class TripOptimizer {
 
     const out: PlannedDay[] = [];
     const ticketDays = this.tickets.map(() => 0);
+    const stay = this.activeStay;
     let run = 0;
     for (let i = 0; i < n; i++) {
       const date = this.dates[i];
       const row = rowOnDay.get(i);
+      const where = stay ? this.stayDay(stay, row, i) : {};
       const ti = row?.units[0].ticket;
       let ticket: Pick<PlannedDay, "ticket" | "ticketDay" | "ticketAllowance"> =
         {};
@@ -2444,13 +2787,14 @@ class TripOptimizer {
         run = 0;
         const isArrival = i === 0;
         const isDeparture = i === n - 1 && n > 1;
-        if (restLocked.has(i)) {
+        if (restLocked.has(i) && !where.move) {
           out.push({
             date,
             kind: "rest",
             parks: [],
             reasons: ["locked"],
             warnings: [],
+            ...where,
           });
           continue;
         }
@@ -2461,6 +2805,19 @@ class TripOptimizer {
             parks: [],
             reasons: [],
             warnings: [],
+            ...where,
+          });
+          continue;
+        }
+        if (where.move) {
+          // A pinned rest day that is a move day is the move.
+          out.push({
+            date,
+            kind: "travel",
+            parks: [],
+            reasons: restLocked.has(i) ? ["locked"] : [],
+            warnings: [],
+            ...where,
           });
           continue;
         }
@@ -2472,7 +2829,14 @@ class TripOptimizer {
           }
           if (precededBy >= 3) reasons.push("rest_after_streak");
         }
-        out.push({ date, kind: "rest", parks: [], reasons, warnings: [] });
+        out.push({
+          date,
+          kind: "rest",
+          parks: [],
+          reasons,
+          warnings: [],
+          ...where,
+        });
         continue;
       }
 
@@ -2497,10 +2861,18 @@ class TripOptimizer {
       }
 
       const entry = this.entryOf(row.units[0]);
+      const rules = stay
+        ? (this.stayBase(stay.morning[i])?.perkRules ?? [])
+        : undefined;
+      if (stay) {
+        const cell = this.stayCell(stay, row, i);
+        if (cell.longTrip) warnings.add("long_day_trip");
+        if (cell.when === "morning") warnings.add("move_day");
+      }
       const visits: PlannedParkVisit[] = row.units.map((u) => {
         const c = this.cell(u.slug, date);
         const park = this.parkBySlug.get(u.slug) as PlanPark;
-        const { listed } = this.perks(u.slug, date, entry !== undefined);
+        const { listed } = this.perks(u.slug, date, entry !== undefined, rules);
         listed.forEach((p) => reasons.add(p));
         if (c.status === "UNKNOWN") warnings.add("hours_not_published");
         const storm = stormWarning(this.weather.storm, date);
@@ -2566,6 +2938,7 @@ class TripOptimizer {
           warnings: [...warnings],
           ...ticket,
           ...(entry !== undefined && { entryFrom: clockOf(entry) }),
+          ...where,
         });
       } else {
         out.push({
@@ -2575,20 +2948,103 @@ class TripOptimizer {
           reasons: [...reasons],
           warnings: [...warnings],
           ...ticket,
+          ...where,
         });
       }
     }
 
+    const totals = this.totals(rowOnDay, out);
     return {
       exact,
       relaxed: [...this.relaxed],
       days: out,
       parks: this.summaries(visitDates),
-      totals: this.totals(rowOnDay, out),
+      totals: stay
+        ? {
+            ...totals,
+            moves: stay.moves,
+            travelDays: out.filter((d) => d.kind === "travel").length,
+          }
+        : totals,
       unplaced,
       ignoredLocks,
       tickets: this.ticketSummaries(out, starts),
+      ...(stay && {
+        stays: stay.stays.map((st) => ({
+          base: st.base,
+          from: this.dates[st.firstDay],
+          to: this.dates[st.lastDay],
+          nights: st.nights,
+          ...(st.auto && { auto: true as const }),
+        })),
+        stayPenalty: this.stayPenalty(stay, rowOnDay),
+      }),
     };
+  }
+
+  /** A day's base and move under the plan's stays, as a plan day carries them. */
+  private stayDay(
+    stay: StayPlan,
+    row: Row | undefined,
+    day: number,
+  ): Pick<PlannedDay, "base" | "move" | "startMinute"> {
+    const opt = this.input.options.stays as StaysOption;
+    const base = day === this.n - 1 ? stay.morning[day] : stay.evening[day];
+    const leg = stay.moveOf[day];
+    if (!leg) return { base };
+    const cell = row ? this.stayCell(stay, row, day) : undefined;
+    const from = stay.morning[day];
+    const to = stay.evening[day];
+    let depart = opt.rules.moveStartMinute;
+    if (cell?.when === "evening" && row) {
+      const slug = row.units[0].slug;
+      const c = this.cell(slug, this.dates[day]);
+      const open = c.opensMinute ?? DEFAULT_OPEN_MINUTE;
+      depart =
+        (c.closesMinute ??
+          open + (c.dayHours ?? c.usualHours ?? DEFAULT_DAY_HOURS) * 60) +
+        (this.stayBase(from)?.reach.get(slug)?.minutes ?? 0);
+    }
+    return {
+      base,
+      move: {
+        from,
+        to,
+        minutes: leg.minutes,
+        mode: leg.mode,
+        ...(leg.name && { name: leg.name }),
+        when: cell?.when ?? "day",
+        departMinute: depart,
+        arriveMinute: depart + leg.minutes,
+      },
+      ...(cell?.startMinute !== undefined && {
+        startMinute: cell.startMinute,
+      }),
+    };
+  }
+
+  /**
+   * What the stays added to the plan's cost: the hours travel takes off each
+   * placed visit (its cost under the stays less the same day without the
+   * travel) and the moves' own cost. Never below 0, so `/when`'s bound holds.
+   */
+  private stayPenalty(stay: StayPlan, rowOnDay: Map<number, Row>): number {
+    let total = stay.fixedCost;
+    for (const [day, row] of rowOnDay) {
+      if (row.units.length > 1) continue;
+      const under = this.stayCell(stay, row, day).cost;
+      const still = this.stayCost(
+        row.units[0].slug,
+        day,
+        this.entryOf(row.units[0]),
+        0,
+        stay.morning[day],
+      );
+      if (Number.isFinite(under) && Number.isFinite(still)) {
+        total += Math.max(0, under - still);
+      }
+    }
+    return total;
   }
 
   /**
@@ -2826,7 +3282,20 @@ export function extraVisitRoom(input: PlanInput): number {
       ? Math.max(0, Math.floor(n / 5) - restDates.size)
       : 0;
   const visits = parks.reduce((sum, p) => sum + p.visits, 0);
-  return Math.max(0, available - visits - Math.max(streakRest, ratioRest));
+  // A region with bases: the days that can only be a move take no visit.
+  const travel = options.stays
+    ? fewestTravelDays(
+        stayPlans(
+          options.stays,
+          n,
+          parks.map((p) => p.slug),
+        ),
+      )
+    : 0;
+  return Math.max(
+    0,
+    available - visits - travel - Math.max(streakRest, ratioRest),
+  );
 }
 
 /** Plans a trip; see the module comment and docs/frontend/trip-regions.md. */

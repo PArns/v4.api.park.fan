@@ -1,4 +1,8 @@
-import { TEST_PARIS, TEST_TOKYO } from "./__fixtures__/test-regions";
+import {
+  TEST_JAPAN,
+  TEST_PARIS,
+  TEST_TOKYO,
+} from "./__fixtures__/test-regions";
 import { hotelKinds, TRIP_REGIONS, type RegionConfig } from "./regions";
 import { seedTickets } from "./tickets";
 import { TRAVEL_MATRICES } from "./travel-matrix.generated";
@@ -112,12 +116,46 @@ function problemsOf(region: RegionConfig): string[] {
     if (!bases.has(leg.from) || !bases.has(leg.to)) {
       say(`base leg ${leg.from}–${leg.to} names an unknown base`);
     }
+    if (!(leg.minutes > 0)) say(`base leg ${leg.from}–${leg.to} minutes`);
   }
+  if (region.bases) {
+    const ordered = region.bases.filter((b) => b.order !== undefined).length;
+    if (ordered !== 0 && ordered !== region.bases.length) {
+      say("either every base has an order on the route line or none");
+    }
+    for (const area of areas) {
+      if (!areaBase.has(area)) say(`area ${area} is in no base`);
+    }
+    for (const base of region.bases) {
+      if (base.defaultArea && !base.hotelAreas.includes(base.defaultArea)) {
+        say(`base ${base.key}'s default area is not its own`);
+      }
+      for (const g of base.gateways ?? []) {
+        if (!g.code || !g.name || !["airport", "station"].includes(g.kind)) {
+          say(`base ${base.key} gateway ${g.code}`);
+        }
+      }
+    }
+    for (const park of region.parks) {
+      if (
+        !region.bases.some((b) => b.parks.some((p) => p.slug === park.slug))
+      ) {
+        say(`no base reaches ${park.slug}`);
+      }
+    }
+  }
+  const codes = region.parks.map((p) => p.code).filter((c) => c !== undefined);
+  if (new Set(codes).size !== codes.length) say("park codes repeat");
   return out;
 }
 
 describe("the region configs", () => {
-  const regions = [...Object.values(TRIP_REGIONS), TEST_TOKYO, TEST_PARIS];
+  const regions = [
+    ...Object.values(TRIP_REGIONS),
+    TEST_TOKYO,
+    TEST_PARIS,
+    TEST_JAPAN,
+  ];
 
   it.each(regions.map((r) => [r.slug, r] as const))(
     "%s holds together",
