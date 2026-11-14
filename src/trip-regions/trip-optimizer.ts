@@ -610,36 +610,60 @@ interface SearchResult {
 const STAY_PLAN_LIMIT = 400;
 
 /**
- * Two stay plans whose objectives differ by no more than this cost the same:
- * the sums differ by rounding only.
+ * How much dearer than the cheapest a stay plan may be and still tie it:
+ * {@link ORDER_MATTERS_MINUTES} per park day, the plan's own "any order will
+ * do", a lead inside a forecast's error.
  */
-const STAY_TIE_MINUTES = 1e-6;
-
-/** Whether a stay plan lies closer to the trip's parks than another ({@link StayPlan.reachMinutes}). */
-function closerStay(a: StayPlan | undefined, b: StayPlan | undefined): boolean {
-  return !!a && !!b && a.reachMinutes < b.reachMinutes;
+function stayTieBand(result: SearchResult): number {
+  return ORDER_MATTERS_MINUTES * new Set(result.solution.dayOf).size;
 }
 
 /**
- * Whether a solved structure beats the best so far: the lower objective, and
- * between two stay plans that cost the same the one closer to the parks, so
- * a tie never goes to the base listed first (central Paris for a Disney
- * trip). Without stays, the first of equals stays, as always.
+ * Whether a stay plan may tie the cheapest: the same number of moves, so the
+ * band never trades a hotel change against a long day trip (Japan's Fuji-Q
+ * from Tokyo against a night by the lake), and a cost within its band.
  */
-function betterResult(
-  objective: number,
+function tiesWith(
   stay: StayPlan | undefined,
-  best: SearchResult,
+  objective: number,
+  cheapest: SearchResult,
 ): boolean {
-  const bestObjective = best.solution.objective;
-  if (
-    stay &&
-    best.stay &&
-    Math.abs(objective - bestObjective) <= STAY_TIE_MINUTES
-  ) {
-    return closerStay(stay, best.stay);
+  return (
+    !!stay &&
+    !!cheapest.stay &&
+    stay.moves === cheapest.stay.moves &&
+    objective < cheapest.solution.objective + stayTieBand(cheapest)
+  );
+}
+
+/**
+ * The result kept from the solved structures: the cheapest, or among the
+ * stay plans that tie it ({@link tiesWith}) the one closer to the trip's
+ * parks ({@link StayPlan.reachMinutes}), the cheaper of two as close. So a
+ * Disneyland Park and Parc Astérix trip whose day-trip minutes land on one
+ * park or the other stays at the Disney hotels, not in central Paris. A
+ * region without bases keeps its cheapest, the first of equals, as always.
+ */
+function keptResult(
+  cheapest: SearchResult,
+  solved: readonly SearchResult[],
+): SearchResult {
+  let kept = cheapest;
+  for (const r of solved) {
+    if (r === kept || !tiesWith(r.stay, r.solution.objective, cheapest)) {
+      continue;
+    }
+    const a = r.stay as StayPlan;
+    const b = kept.stay as StayPlan;
+    if (
+      a.reachMinutes < b.reachMinutes ||
+      (a.reachMinutes === b.reachMinutes &&
+        r.solution.objective < kept.solution.objective)
+    ) {
+      kept = r;
+    }
   }
-  return objective < bestObjective;
+  return kept;
 }
 
 /** How a row is priced on a day of a stay plan, and why. */
@@ -2056,15 +2080,28 @@ class TripOptimizer {
     limit: number,
   ): SearchResult | null {
     let best: SearchResult | null = null;
+    /** The stay plans solved, for the tie with the cheapest ({@link keptResult}). */
+    const solved: SearchResult[] = [];
     const unproven: number[] = [];
     for (const s of bounded) {
       if (best && s.bound >= best.solution.objective) {
-        // Past the best, only a stay plan that may tie it and lies closer to
-        // the parks is still worth solving.
-        if (!s.stay || s.bound > best.solution.objective + STAY_TIE_MINUTES) {
+        // Past the cheapest, only a stay plan that may tie it and lies
+        // closer to the parks than the one kept is still worth solving; the
+        // bounds rise, so past the band nothing is.
+        if (
+          !s.stay ||
+          !best.stay ||
+          s.bound >= best.solution.objective + stayTieBand(best)
+        ) {
           break;
         }
-        if (!closerStay(s.stay, best.stay)) continue;
+        const kept = keptResult(best, solved).stay as StayPlan;
+        if (
+          s.stay.moves !== kept.moves ||
+          s.stay.reachMinutes >= kept.reachMinutes
+        ) {
+          continue;
+        }
       }
       if (!this.budgetLeft()) break;
       this.activePenalty = s.penalty ?? null;
@@ -2080,15 +2117,17 @@ class TripOptimizer {
       );
       if (!outcome.solution) continue;
       if (!outcome.provable) unproven.push(s.bound);
-      if (!best || betterResult(outcome.solution.objective, s.stay, best)) {
-        best = {
-          rows: s.rows,
-          solution: outcome.solution,
-          dropped: s.dropped,
-          exact: true,
-          starts: s.starts,
-          ...(s.stay && { stay: s.stay }),
-        };
+      const result: SearchResult = {
+        rows: s.rows,
+        solution: outcome.solution,
+        dropped: s.dropped,
+        exact: true,
+        starts: s.starts,
+        ...(s.stay && { stay: s.stay }),
+      };
+      if (s.stay) solved.push(result);
+      if (!best || outcome.solution.objective < best.solution.objective) {
+        best = result;
       }
     }
     if (!best && this.cutShort && bounded.length > 0) {
@@ -2116,14 +2155,16 @@ class TripOptimizer {
       };
     }
     if (!best) return null;
+    // The proof is the cheapest's: the result kept ties it.
     const objective = best.solution.objective;
-    best.exact =
+    const kept = keptResult(best, solved);
+    kept.exact =
       !this.cutShort &&
       unproven.every((bound) => bound >= objective - 1e-9) &&
       this.stayCutBound >= objective - 1e-9;
     // The stays of the result price what is described.
-    this.activeStay = best.stay ?? null;
-    return best;
+    this.activeStay = kept.stay ?? null;
+    return kept;
   }
 
   /**

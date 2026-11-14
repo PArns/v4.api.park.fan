@@ -1121,10 +1121,15 @@ base legs connect. Each base is stayed in at most once.
 reaches the chosen parks, in every order the route allows, with every split of the nights. Each
 plan's quick bound (every visit on its cheapest allowed day, days shared, plus the moves) ranks
 them; the 400 cheapest are solved, branch and bound as before, and a plan left out whose bound
-could beat the result makes `meta.exact` false. **A tie** between two plans that cost the same goes
-to the one whose bases lie closer to the trip's parks (each park's reach from the closest of the
-plan's bases, summed), never to the base listed first: a Paris trip to Parc Astérix alone ties the
-park's hotels with central Paris (both within the free day-trip time) and stays at the park. `split=auto` keeps the days that can only be a
+could beat the result makes `meta.exact` false (proven for the cheapest). **A tie:** a plan with
+the same number of moves as the cheapest that costs less than 3 minutes per park day more (the
+plan's "any order will do", `ORDER_MATTERS_MINUTES`) ties it, and the tie goes to the plan whose
+bases lie closer to the trip's parks (each park's reach from the closest of the plan's bases,
+summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix pays 5
+minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
+the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
+tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
+bases has no stays and keeps its cheapest plan. `split=auto` keeps the days that can only be a
 move out of the room it gives second visits. On the test region (four cities, five parks, ten
 days) a plan takes 5–40 ms.
 
