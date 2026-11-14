@@ -35,6 +35,10 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { parkColumnsFollowingAttraction } from "../../parks/utils/merge-dependencies";
+import {
+  resolveCuratedFacts,
+  type CuratedFactsSource,
+} from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * Rows already matched during the current park's sync pass. A park can hold
@@ -316,15 +320,21 @@ export function coordinateChanged(
  * editor set one, `false` included: that is "the detector is wrong, this is
  * not seasonal", and such a row is retired like any other.
  *
+ * A park season that binds the row counts the same way (the resolver's
+ * precedence: curated, then a bound season, then the detector), so a skate
+ * hire that leaves the feed after Wintertraum is not retired either.
+ *
  * A seasonal row the wiki re-issues under a new id is not left behind as a
  * twin either: `findExistingAttraction` hands it the new id, because its old
  * one is no longer listed.
  */
-export function isSeasonalRow(row: {
-  isSeasonal: boolean;
-  curatedIsSeasonal: boolean | null;
-}): boolean {
-  return (row.curatedIsSeasonal ?? row.isSeasonal) === true;
+export function isSeasonalRow(
+  row: Pick<
+    CuratedFactsSource,
+    "isSeasonal" | "curatedIsSeasonal" | "curatedSeasonMonths" | "seasonBindings"
+  >,
+): boolean {
+  return resolveCuratedFacts(row).isSeasonal;
 }
 
 /**
@@ -1875,6 +1885,8 @@ export class ChildrenMetadataProcessor {
         absentSince: true,
         isSeasonal: true,
         curatedIsSeasonal: true,
+        curatedSeasonMonths: true,
+        seasonBindings: true,
       },
     });
 

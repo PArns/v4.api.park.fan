@@ -23,8 +23,16 @@ import type { ParkSeason } from "../../parks/entities/park-season.entity";
 import { SEASON_WINDOW_DAYS } from "../../parks/park-seasons.controller";
 import { seasonView } from "./trip-season.inputs";
 
+/**
+ * The status a ride is counted under. A ride its season rules out reads
+ * `OUT_OF_SEASON` unless it is running, as the park page leaves it out of its
+ * open and closed counts.
+ */
 function rideStatus(ride: ParkAttractionDto): string {
-  return ride.effectiveStatus ?? ride.status ?? "UNKNOWN";
+  const status = ride.effectiveStatus ?? ride.status ?? "UNKNOWN";
+  return ride.isCurrentlyInSeason === false && status !== "OPERATING"
+    ? "OUT_OF_SEASON"
+    : status;
 }
 
 /** How far ahead `maintenanceAhead` looks for a window about to start. */
@@ -155,6 +163,14 @@ function summarize(
       notRunToday: rides
         .filter((ride) => ride.notRunToday)
         .map((ride) => ({ id: ride.id, name: ride.name })),
+      // With the park season a ride is bound to, when one is: its days are the ride's window.
+      outOfSeason: rides
+        .filter((ride) => rideStatus(ride) === "OUT_OF_SEASON")
+        .map((ride) => ({
+          id: ride.id,
+          name: ride.name,
+          season: ride.boundSeason ?? null,
+        })),
     },
     shows: (dto.shows ?? []).length,
     restaurants: (dto.restaurants ?? []).length,
@@ -169,11 +185,13 @@ export const getParkTool = defineMcpTool({
   title: "Park status",
   description:
     "Live state of one park, as park.fan shows it now: open or closed, today's schedule in the " +
-    "park's timezone, crowd level and average/peak waits, current weather, ride counts by status, " +
+    "park's timezone, crowd level and average/peak waits, current weather, ride counts by status " +
+    "(OUT_OF_SEASON for a ride its season rules out today, never counted as closed or down), " +
     "the longest standby waits, rides that are down (since when, and whether the park reported it " +
     "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
     "(since when, and the curated window with its end where one runs today), maintenance windows " +
-    "starting in the next 30 days (maintenanceAhead), rides that have not run today, the " +
+    "starting in the next 30 days (maintenanceAhead), rides that have not run today, rides " +
+    "out of season (outOfSeason, with the park season a ride runs in when one is bound), the " +
     "editors' fun facts about the park per locale, and the park's seasons and events running " +
     "today or starting within a year (seasons, as list_trip_seasons gives them; null when " +
     "they could not be read). Pass the park id from find_parks, or its slug when that is " +

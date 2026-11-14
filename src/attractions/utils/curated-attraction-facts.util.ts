@@ -1,4 +1,8 @@
-import { formatInParkTimezone } from "../../common/utils/date.util";
+import {
+  addIsoDays,
+  formatInParkTimezone,
+} from "../../common/utils/date.util";
+import type { SeasonBinding } from "../../common/types/season-binding.type";
 
 /**
  * Merges the hand-curated attraction facts over the synced ones.
@@ -35,6 +39,8 @@ export interface CuratedFactsSource {
   curatedSeasonMonths?: number[] | null;
   /** The last day the detector saw this ride OPERATING. See the entity. */
   seasonOutSince?: string | null;
+  /** The park seasons that bind this ride (`Attraction.seasonBindings`). */
+  seasonBindings?: readonly SeasonBinding[] | null;
 }
 
 export interface ResolvedCuratedFacts {
@@ -55,6 +61,15 @@ export interface ResolvedCuratedFacts {
    * detector's verdict.
    */
   seasonOutSince: string | null;
+
+  /**
+   * The park seasons whose days are this ride's operating window, oldest
+   * first. Empty unless a binding decides the season: none binds the ride, or
+   * the ride's own curated `false` or curated months override it. When it is
+   * not empty the ride is seasonal and `seasonMonths` and `seasonOutSince` are
+   * null, because the season's days say more than either.
+   */
+  seasonBindings: SeasonBinding[];
 
   /**
    * Whether the resolved seasonality came from a human.
@@ -167,27 +182,40 @@ export function resolveCuratedFacts(
   // two halves are one statement. A curated `false` ("the detector is wrong,
   // this ride is not seasonal") must take the months down with it, or the API
   // serves a not-seasonal ride carrying a list of the months it operates in.
+  //
+  // Three writers, in this order: the ride's own curation, a park season that
+  // binds the ride, the detector. A curated `true` without months agrees with a
+  // binding and leaves the window to it; a curated `false` or curated months
+  // override it. The SQL twin is `attractionIsOutOfSeason`.
   const curatedIsSeasonal = attraction.curatedIsSeasonal;
   const curatedMonths = attraction.curatedSeasonMonths;
+  const hasCuratedMonths =
+    Array.isArray(curatedMonths) && curatedMonths.length > 0;
   const seasonalityCurated =
     (curatedIsSeasonal !== null && curatedIsSeasonal !== undefined) ||
-    (Array.isArray(curatedMonths) && curatedMonths.length > 0);
+    hasCuratedMonths;
+
+  const seasonBindings =
+    curatedIsSeasonal === false || hasCuratedMonths
+      ? []
+      : [...(attraction.seasonBindings ?? [])];
+  const bound = seasonBindings.length > 0;
 
   const isSeasonal = seasonalityCurated
-    ? (curatedIsSeasonal ??
-      (Array.isArray(curatedMonths) && curatedMonths.length > 0))
-    : (attraction.isSeasonal ?? false);
+    ? (curatedIsSeasonal ?? hasCuratedMonths)
+    : bound || (attraction.isSeasonal ?? false);
 
-  const seasonMonths = !isSeasonal
-    ? null
-    : Array.isArray(curatedMonths) && curatedMonths.length > 0
-      ? curatedMonths
-      : (attraction.seasonMonths ?? null);
+  const seasonMonths =
+    !isSeasonal || bound
+      ? null
+      : hasCuratedMonths
+        ? curatedMonths
+        : (attraction.seasonMonths ?? null);
 
   return {
-    seasonOutSince: seasonalityCurated
-      ? null
-      : (attraction.seasonOutSince ?? null),
+    seasonOutSince:
+      seasonalityCurated || bound ? null : (attraction.seasonOutSince ?? null),
+    seasonBindings,
     // `name` is the one field with no meaningful null: a ride always has a
     // name, and the curated column only ever replaces it.
     name: resolveAttractionName(attraction),
@@ -215,8 +243,74 @@ export function resolveCuratedFacts(
   };
 }
 
+/** Whether one of the bound seasons runs on a park-local `YYYY-MM-DD` day. */
+export function seasonBindingRunsOn(
+  bindings: readonly SeasonBinding[],
+  day: string,
+): boolean {
+  return bindings.some(
+    (season) =>
+      season.startDate <= day &&
+      day <= season.endDate &&
+      (!season.dates?.length || season.dates.includes(day)),
+  );
+}
+
+/**
+ * The bound season a reader is shown: the one whose bounds hold `day`, else the next
+ * to start, else the last to end. Null when nothing binds the ride.
+ */
+export function shownSeasonBinding(
+  bindings: readonly SeasonBinding[],
+  day: string,
+): SeasonBinding | null {
+  const running = bindings.find(
+    (season) => season.startDate <= day && day <= season.endDate,
+  );
+  if (running) return running;
+  const next = bindings
+    .filter((season) => season.startDate > day)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+  if (next) return next;
+  return (
+    [...bindings].sort((a, b) => b.endDate.localeCompare(a.endDate))[0] ?? null
+  );
+}
+
+/**
+ * The first park-local day after `day` that a bound season runs on, or null
+ * when it has none left: the answer to "when can I ride it again".
+ */
+export function nextSeasonBindingDay(
+  season: SeasonBinding,
+  day: string,
+): string | null {
+  if (season.dates?.length) return season.dates.find((d) => d > day) ?? null;
+  if (season.startDate > day) return season.startDate;
+  return season.endDate > day ? addIsoDays(day, 1) : null;
+}
+
+/**
+ * The `boundSeason` key of an attraction payload: the season `shownSeasonBinding`
+ * picks for the park's today, or no key at all, since nearly no ride has one.
+ */
+export function boundSeasonOf(
+  facts: Pick<ResolvedCuratedFacts, "seasonBindings">,
+  timezone: string | null | undefined,
+  now: Date = new Date(),
+): { boundSeason?: SeasonBinding } {
+  if (facts.seasonBindings.length === 0) return {};
+  const today = formatInParkTimezone(now, timezone || "UTC").slice(0, 10);
+  const boundSeason = shownSeasonBinding(facts.seasonBindings, today);
+  return boundSeason ? { boundSeason } : {};
+}
+
 /**
  * Whether a resolved seasonality says the ride is running this month.
+ *
+ * A ride a park season binds is a calendar question by the day: in season on
+ * the season's days (its `dates`, or every day between its bounds), out of it
+ * on every other, before the months are looked at.
  *
  * Three answers, and the third is the point. With months, it is a calendar
  * question. Without months but with a `seasonOutSince`, it is a different
@@ -238,15 +332,17 @@ export function isCurrentlyInSeason(
   facts: Pick<
     ResolvedCuratedFacts,
     "isSeasonal" | "seasonMonths" | "seasonOutSince"
-  >,
+  > & { seasonBindings?: readonly SeasonBinding[] | null },
   timezone: string | null | undefined,
   now: Date = new Date(),
 ): boolean | null {
   if (!facts.isSeasonal) return null;
+  const today = formatInParkTimezone(now, timezone || "UTC");
+  if (facts.seasonBindings && facts.seasonBindings.length > 0) {
+    return seasonBindingRunsOn(facts.seasonBindings, today.slice(0, 10));
+  }
   if (facts.seasonMonths && facts.seasonMonths.length > 0) {
-    const month = Number(
-      formatInParkTimezone(now, timezone || "UTC").slice(5, 7),
-    );
+    const month = Number(today.slice(5, 7));
     return facts.seasonMonths.includes(month);
   }
   return facts.seasonOutSince ? false : null;

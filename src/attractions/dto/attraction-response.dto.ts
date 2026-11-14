@@ -1,5 +1,9 @@
 import { ApiExtraModels, ApiProperty, OmitType } from "@nestjs/swagger";
 import {
+  BOUND_SEASON_PROPERTY,
+  BoundSeasonDto,
+} from "./bound-season.dto";
+import {
   ParkSummaryDto,
   mapParkSummary,
 } from "../../common/dto/park-summary.dto";
@@ -29,6 +33,7 @@ import { ScheduleItemDto } from "../../parks/dto/schedule-item.dto";
 import { cleanSlugSuffix } from "../../common/utils/slug.util";
 import {
   isCurrentlyInSeason,
+  boundSeasonOf,
   resolveCuratedFacts,
 } from "../utils/curated-attraction-facts.util";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
@@ -366,6 +371,9 @@ export class AttractionResponseDto {
     nullable: true,
   })
   isCurrentlyInSeason?: boolean | null;
+
+  @ApiProperty(BOUND_SEASON_PROPERTY)
+  boundSeason?: BoundSeasonDto;
 
   @ApiProperty({
     description: "Minimum rider height in cm. Null if unrestricted or unknown.",
@@ -734,6 +742,7 @@ export class AttractionResponseDto {
         curated,
         attraction.park?.timezone,
       ),
+      ...boundSeasonOf(curated, attraction.park?.timezone),
     };
   }
 

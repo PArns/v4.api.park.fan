@@ -325,6 +325,7 @@ export class AttractionIntegrationService {
         // two disagree: the same ride showed as running on the park page and
         // closed on its own page, on a date a human had explicitly written down.
         seasonMonths: resolveCuratedFacts(attraction).seasonMonths,
+        seasonBindings: resolveCuratedFacts(attraction).seasonBindings,
         parkTimezone: attraction.park?.timezone,
       })
     ) {
