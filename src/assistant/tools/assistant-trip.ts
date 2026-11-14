@@ -14,7 +14,11 @@ import type {
   PlannedParkVisit,
   PlanTotals,
 } from "../../trip-regions/trip-optimizer";
-import { TRIP_REGIONS, type RegionConfig } from "../../trip-regions/regions";
+import {
+  stayRulesOf,
+  TRIP_REGIONS,
+  type RegionConfig,
+} from "../../trip-regions/regions";
 import { stormSeasonSpan } from "../../trip-regions/trip-region.assembly";
 import { travelSource, type TripLeg } from "../../trip-regions/travel";
 import type {
@@ -22,7 +26,7 @@ import type {
   PlanEvening,
 } from "../../trip-regions/trip-evening";
 import type { TripParkDayInternal } from "../../trip-regions/trip-calendar.util";
-import { ASSISTANT_LOCALES } from "../system-prompt";
+import { ASSISTANT_LOCALES } from "../assistant-locales";
 import { TICKETS_PATTERN } from "../../trip-regions/dto/trip-region-query.dto";
 import {
   canonicalTickets,
@@ -247,18 +251,33 @@ const TICKET_WARNINGS: Record<string, string> = {
   covers_no_planned_park: "covers none of the planned parks",
 };
 
-/** The before-opening and evening slots, as get_park_events names them; others by the region's perk name. */
-const SLOTS: Record<string, string> = {
-  early_entry: "Early Entry (Disney resort hotel guests)",
-  early_park_admission: "Early Park Admission (Universal hotel guests)",
-  extended_evening: "Extended Evening Hours (Disney deluxe hotel guests)",
-  ticketed_event:
-    "ticketed evening event, a separate ticket; day guests leave at dayGuestsLeave",
-};
+/** A ticketed evening is no hotel perk: the same words in every region. */
+const TICKETED_EVENT =
+  "ticketed evening event, a separate ticket; day guests leave at dayGuestsLeave";
 
-/** A slot's name: Orlando's curated phrase, else the region's perk name, else its code. */
-function slotName(region: RegionConfig | undefined, kind: string): string {
-  return SLOTS[kind] ?? region?.perkNames[kind] ?? kind;
+/** "a, b or c". */
+function orList(items: readonly string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+}
+
+/**
+ * A before-opening or evening slot as get_park_events names it, from the region: the perk's own
+ * name and the hotels whose stay grants it ("Early Entry (guests of a Walt Disney World resort
+ * hotel …)"). Paris' Early Entry is Parc Astérix's hotel and Tokyo's slot is Happy Entry, so no
+ * name is fixed here; a perk no hotel grants keeps its name alone, and an unknown one its code.
+ */
+export function slotName(
+  region: RegionConfig | undefined,
+  kind: string,
+): string {
+  if (kind === "ticketed_event") return TICKETED_EVENT;
+  const name = region?.perkNames[kind] ?? kind;
+  const hotels = Object.entries(region?.perks ?? {})
+    .filter(([, rules]) => rules.some((rule) => rule.perk === kind))
+    .map(([hotel]) => region?.hotelNames[hotel] ?? hotel);
+  return hotels.length > 0 ? `${name} (guests of ${orList(hotels)})` : name;
 }
 
 /** A season without a name of its own goes by its kind, as the site's label does. */
@@ -358,10 +377,11 @@ const HUB_PARAMS = [
   "bases",
   "startBase",
   "endBase",
+  "moveBuffer",
 ] as const;
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
-const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
+export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   from: /^\d{4}-\d{2}-\d{2}$/,
   to: /^\d{4}-\d{2}-\d{2}$/,
   parks: /^[a-z0-9-]+(:[1-9])?(,[a-z0-9-]+(:[1-9])?)*$/,
@@ -382,17 +402,19 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
     /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?)*$/,
   startBase: /^[a-z0-9-]+$/,
   endBase: /^[a-z0-9-]+$/,
+  moveBuffer: /^(30|60|90|120)$/,
 };
 
 /**
- * A region's hub on the site: `/<region slug>`, the same in every language. Orlando's,
- * `/orlando`, is the one live; each region's hub must sit at its slug.
+ * A region's hub as Parky links it: `/trip-regions/<slug>`, the site's own route folder, which the
+ * site redirects to the region's segment in the reader's language (`/de/kalifornien`), and the chat
+ * widget resolves from its registry straight away. The API does not know those segments.
  */
 export function hubPathOf(region: Pick<RegionConfig, "slug">): string {
-  return `/${region.slug}`;
+  return `/trip-regions/${region.slug}`;
 }
 
-/** Orlando's hub, `/orlando`. */
+/** Orlando's hub, `/trip-regions/orlando`. */
 export const HUB_PATH = hubPathOf({ slug: "orlando" });
 
 /** The plan's query string in the hub's parameter names, from the normalized plan. */
@@ -430,6 +452,9 @@ function hubQuery(q: NormalizedPlanQuery): string {
       }),
     ...(q.stays?.startBase && { startBase: q.stays.startBase }),
     ...(q.stays?.endBase && { endBase: q.stays.endBase }),
+    ...(q.stays?.moveBuffer !== undefined && {
+      moveBuffer: String(q.stays.moveBuffer),
+    }),
   };
   const params = new URLSearchParams();
   for (const name of HUB_PARAMS) {
@@ -474,18 +499,19 @@ export function hubPath(url: string): string | null {
   if (parsed.username || parsed.password) return null;
   const segments = parsed.pathname.split("/").filter(Boolean);
   if (
-    segments.length === 2 &&
+    segments.length >= 2 &&
     (ASSISTANT_LOCALES as readonly string[]).includes(segments[0])
   ) {
     segments.shift();
   }
-  const hub = `/${segments[0]}`;
-  if (
-    segments.length !== 1 ||
-    !Object.values(TRIP_REGIONS).some((r) => hubPathOf(r) === hub)
-  ) {
-    return null;
-  }
+  // `/trip-regions/<slug>`, and an older answer's `/<slug>` for a region whose segment it is.
+  const region = Object.values(TRIP_REGIONS).find((r) =>
+    segments.length === 2
+      ? segments[0] === "trip-regions" && segments[1] === r.slug
+      : segments.length === 1 && segments[0] === r.slug,
+  );
+  if (!region) return null;
+  const hub = hubPathOf(region);
   if (parsed.hash && parsed.hash !== "#planner") return null;
   const params = new URLSearchParams();
   for (const [name, value] of parsed.searchParams) {
@@ -749,6 +775,10 @@ export function vacationItinerary(input: {
         names,
       ),
     }),
+    ...(plan.meta.stays !== undefined && {
+      hotelChange: moveBufferPhrase(region, query.stays?.moveBuffer),
+      ...(luggagePhrase(region) && { luggage: luggagePhrase(region) }),
+    }),
     ...(tripSeason(region, planned) && {
       season: tripSeason(region, planned),
     }),
@@ -836,6 +866,33 @@ interface StaySuggestionLike {
 /** A base's name, else its key. */
 function baseName(region: RegionConfig, key: string): string {
   return region.bases?.find((b) => b.key === key)?.name ?? key;
+}
+
+/**
+ * How bags travel between a region's hotels, in Parky's words: Japan's courier, which most
+ * travellers use, so its moves are priced with 30 minutes (PAR-1304). No prices: the hotel or the
+ * shop states them. Elsewhere the general phrase.
+ */
+const LUGGAGE: Record<string, string> = {
+  japan:
+    "luggage goes ahead by courier (takkyubin): booked at the hotel front desk or a convenience store, it reaches the next hotel the same or the next day, so a move needs no bags on the train; never give a price",
+};
+const LUGGAGE_ELSEWHERE =
+  "bags carried along on the move; ask at the hotel whether it sends luggage ahead";
+
+/** The region's luggage phrase; null in a region without bases, where nobody changes hotel. */
+export function luggagePhrase(region: RegionConfig): string | null {
+  if (!region.bases?.length) return null;
+  return LUGGAGE[region.slug] ?? LUGGAGE_ELSEWHERE;
+}
+
+/** The minutes a hotel change takes on top of the train: the visitor's own, else the region's. */
+export function moveBufferPhrase(
+  region: RegionConfig,
+  chosen: number | undefined,
+): string {
+  const minutes = chosen ?? stayRulesOf(region).moveOverheadMinutes;
+  return `${minutes} min for each hotel change on top of the train (${chosen !== undefined ? "the user's choice" : "the region's default"}; moveBuffer: 30 with bags sent ahead, 60 carried along, 90 or 120 for a slower pace)`;
 }
 
 /** A move in one phrase: where, how, when, and what it does to the day. */

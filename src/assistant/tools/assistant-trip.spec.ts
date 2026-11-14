@@ -1,7 +1,8 @@
 import { DataSource } from "typeorm";
 import { fromZonedTime } from "date-fns-tz";
 import type { Redis } from "ioredis";
-import { runAssistantTool } from "./assistant-tools";
+import { runAssistantTool, type AssistantToolContext } from "./assistant-tools";
+import { visitorTrips } from "./assistant-plans";
 import { localizePageUrls } from "./assistant-actions";
 import {
   dateRuns,
@@ -312,12 +313,21 @@ function setup(
       },
     ],
   ]);
-  const call = async (name: string, input: unknown, locale = "de") => {
+  const call = async (
+    name: string,
+    input: unknown,
+    locale = "de",
+    extra: Partial<AssistantToolContext> = {},
+  ) => {
     const onError = jest.fn();
     const result = await runAssistantTool(
       name,
       input,
-      { get: <T>(token: unknown) => providers.get(token) as T, locale },
+      {
+        get: <T>(token: unknown) => providers.get(token) as T,
+        locale,
+        ...extra,
+      },
       onError,
     );
     expect(onError).not.toHaveBeenCalled();
@@ -426,18 +436,25 @@ describe("the hub's address", () => {
   it("takes a hubUrl with or without a locale and keeps only the plan's parameters", () => {
     expect(
       hubPath(
-        "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
+        "https://park.fan/de/trip-regions/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
       ),
     ).toBe(
-      "/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
+      "/trip-regions/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
     );
-    expect(hubPath("https://park.fan/orlando")).toBe("/orlando");
+    expect(hubPath("https://park.fan/trip-regions/orlando")).toBe(
+      "/trip-regions/orlando",
+    );
+    // An older answer's link at the region's slug lands on the route folder.
+    expect(hubPath("https://park.fan/de/orlando?from=2027-03-03")).toBe(
+      "/trip-regions/orlando?from=2027-03-03#planner",
+    );
   });
 
   it("refuses another host, another page, an unknown parameter or value and another anchor", () => {
     for (const url of [
       "https://evil.example/orlando?from=2027-03-03",
       "https://park.fan/de/orlando/2027/3?from=2027-03-03",
+      "https://park.fan/trip-regions/atlantis?from=2027-03-03",
       "https://park.fan/orlando?from=2027-03-03&next=https://evil.example",
       "https://park.fan/orlando?parks=<script>",
       "https://park.fan/orlando?from=2027-03-03#top",
@@ -450,15 +467,153 @@ describe("the hub's address", () => {
     expect(
       localizePageUrls(
         {
-          hubUrl: "https://park.fan/orlando?from=2027-03-03#planner",
-          other: "https://park.fan/orlandox",
+          hubUrl:
+            "https://park.fan/trip-regions/orlando?from=2027-03-03#planner",
+          other: "https://park.fan/trip-regions/orlandox",
         },
         "nl",
       ),
     ).toEqual({
-      hubUrl: "https://park.fan/nl/orlando?from=2027-03-03#planner",
-      other: "https://park.fan/orlandox",
+      hubUrl:
+        "https://park.fan/nl/trip-regions/orlando?from=2027-03-03#planner",
+      other: "https://park.fan/trip-regions/orlandox",
     });
+  });
+});
+
+describe("the visitor's own trip", () => {
+  const onScreen = (
+    query: string,
+    party?: { size?: number; heightsCm: number[] },
+  ) => ({
+    trips: visitorTrips([
+      { region: "orlando", query, onScreen: true, ...(party && { party }) },
+    ]),
+    answer: { round: 0, done: new Set<string>() },
+  });
+  const planned = `from=${day(10)}&to=${day(14)}&parks=magic-kingdom-park,epcot,universal-epic-universe`;
+
+  it("reads the trip on screen as plan_vacation would plan it, with the party", async () => {
+    const { call } = setup();
+    const { json } = await call(
+      "get_trip_plan",
+      {},
+      "de",
+      onScreen(planned, { size: 4, heightsCm: [105] }),
+    );
+    expect(json?.shown).toBe("on screen in the hub's planner now");
+    expect(json?.party).toEqual({ size: 4, heightsCm: [105] });
+    expect(json?.days.map((d: { kind: string }) => d.kind)).toEqual([
+      "arrival",
+      "park",
+      "park",
+      "park",
+      "departure",
+    ]);
+  });
+
+  it("says what is missing instead of guessing a plan", async () => {
+    const { call } = setup();
+    const none = await call("get_trip_plan", {}, "de", { trips: [] });
+    expect(none.isError).toBe(true);
+    expect(none.content).toMatch(/no trip in the trip planner/);
+    const searching = await call(
+      "get_trip_plan",
+      {},
+      "de",
+      onScreen(`when=${day(10)}_${day(90)}&days=7&within=DE-NW`),
+    );
+    expect(searching.content).toMatch(
+      /searching 7 days .* find_trip_dates answers that/,
+    );
+  });
+
+  it("pins a park through the planner's own query and says which days moved", async () => {
+    const { call } = setup();
+    const result = await call(
+      "change_trip",
+      { pin: [{ park: "Magic Kingdom", date: day(13) }] },
+      "de",
+      onScreen(planned),
+    );
+    expect(result.action).toEqual({
+      type: "trip_set",
+      region: "orlando",
+      query: `${planned}&lock=magic-kingdom-park@${day(13)}`,
+      change: ["pin"],
+    });
+    expect(result.json?.shownIn).toBe("the planner on screen, which re-plans");
+    const moved = result.json?.daysChanged as Array<{
+      date: string;
+      now: string;
+    }>;
+    expect(moved.find((d) => d.date === day(13))?.now).toBe(
+      "Magic Kingdom Park",
+    );
+  });
+
+  it("swaps two park days and refuses a trip the plan route refuses, sending nothing", async () => {
+    const { call } = setup();
+    const before = await call("get_trip_plan", {}, "de", onScreen(planned));
+    const [a, b] = (
+      before.json?.days as Array<{
+        kind: string;
+        date: string;
+        parks: Array<{ park: string }>;
+      }>
+    ).filter((d) => d.kind === "park");
+    const swapped = await call(
+      "change_trip",
+      { swap: { a: a.date, b: b.date } },
+      "de",
+      onScreen(planned),
+    );
+    expect(swapped.action).toMatchObject({
+      type: "trip_set",
+      change: ["swap"],
+    });
+    const days = swapped.json?.daysChanged as Array<{
+      date: string;
+      now: string;
+      was: string;
+    }>;
+    expect(days.find((d) => d.date === a.date)).toMatchObject({
+      now: b.parks[0].park,
+      was: a.parks[0].park,
+    });
+    const tooLong = await call(
+      "change_trip",
+      { dates: { from: day(10), to: day(40) } },
+      "de",
+      onScreen(planned),
+    );
+    expect(tooLong.isError).toBe(true);
+    expect(tooLong.action).toBeUndefined();
+  });
+
+  it("starts a trip from dates when the visitor has none yet", async () => {
+    const { call } = setup();
+    const result = await call(
+      "change_trip",
+      { dates: { from: day(10), to: day(14) } },
+      "de",
+      { trips: [], answer: { round: 0, done: new Set<string>() } },
+    );
+    expect(result.action).toEqual({
+      type: "trip_set",
+      region: "orlando",
+      query: `from=${day(10)}&to=${day(14)}`,
+      change: ["dates"],
+    });
+    expect(result.json?.shownIn).toBe("the hub, which opens with it");
+    // Seven headliners on three park days: the plan fills the days and names the parks it left
+    // out, which Parky reads as the next thing to settle.
+    expect(result.json?.notPlannedYet).toBeUndefined();
+    expect(result.json?.notPlaced).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ why: expect.any(String) }),
+      ]),
+    );
   });
 });
 
@@ -505,7 +660,7 @@ describe("plan_vacation", () => {
       "EPCOT International Food & Wine Festival (expected)",
     ]);
     expect(json?.hubUrl).toBe(
-      `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=1&fireworks=any&split=auto&rest=auto&hop=0&arrival=free&departure=free#planner`,
+      `https://park.fan/de/trip-regions/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=1&fireworks=any&split=auto&rest=auto&hop=0&arrival=free&departure=free#planner`,
     );
     expect(json?.reserve).toHaveLength(3);
     expect(json?.reserve).toContainEqual({
@@ -722,7 +877,7 @@ describe("get_park_events", () => {
     expect(json?.statusMeans.expected).toMatch(/last year's pattern/);
     expect(json?.slots).toContainEqual({
       park: "Magic Kingdom Park",
-      slot: "Early Entry (Disney resort hotel guests)",
+      slot: "Early Entry (guests of a Walt Disney World resort hotel or a Disney Deluxe or Deluxe Villa resort hotel)",
       minutesBeforeOpening: 30,
       days: [`${day(10)}..${day(14)}`],
     });
@@ -832,17 +987,17 @@ describe("the trip in the planner and the hub", () => {
     const { call } = setup();
     expect((await call("open_page", { page: "orlando" })).action).toEqual({
       type: "navigate",
-      path: "/orlando",
+      path: "/trip-regions/orlando",
     });
     expect(
       (
         await call("open_page", {
-          url: `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}#planner`,
+          url: `https://park.fan/de/trip-regions/orlando?from=${day(10)}&to=${day(14)}#planner`,
         })
       ).action,
     ).toEqual({
       type: "navigate",
-      path: `/orlando?from=${day(10)}&to=${day(14)}#planner`,
+      path: `/trip-regions/orlando?from=${day(10)}&to=${day(14)}#planner`,
     });
     expect(
       (await call("open_page", { url: "https://park.fan/orlando?x=1" }))

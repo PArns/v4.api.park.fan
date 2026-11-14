@@ -28,10 +28,17 @@ import {
   runAssistantTool,
   storedToolInput,
   toolStatus,
+  visitorTripItinerary,
   type AnswerState,
   type AssistantToolContext,
   type AssistantToolStatus,
 } from "./tools/assistant-tools";
+import {
+  pickTrip,
+  tripDigest,
+  visitorTrips,
+  type VisitorTrip,
+} from "./tools/assistant-plans";
 import type { ClientAction } from "./tools/assistant-actions";
 
 export const ASSISTANT_MODEL = "claude-haiku-5-5";
@@ -44,6 +51,13 @@ const HISTORY_MESSAGES = 10;
 const MAX_TOKENS = 2048;
 /** Parks and rides of earlier answers named in "This chat", newest first. */
 const MAX_LOOKED_UP = 8;
+/**
+ * How long the on-screen trip's plan may take for "This chat": the planner asked the same plan a
+ * moment ago, so it is a Redis hit, and a miss is not worth holding the answer for.
+ */
+const TRIP_DIGEST_BUDGET_MS = 1500;
+/** The tool that only adds the reply chips: a round of nothing else ends the answer. */
+const REPLIES_TOOL = "suggest_replies";
 
 /** US dollars per million tokens for Claude Haiku 5.5, up to 100K tokens of prompt. */
 const PRICE_PER_MTOK = {
@@ -188,35 +202,7 @@ export class AssistantChatService {
       maxRetries: 1,
       timeout: 60_000,
     });
-    const system: Anthropic.TextBlockParam[] = [
-      {
-        type: "text",
-        text: SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: chatContext({
-          locale: request.locale,
-          now: nowIn(timeZone),
-          timeZone,
-          pagePath: request.pagePath,
-          pageSubject: await this.pages.subject(
-            request.pagePath,
-            request.locale,
-          ),
-          planner: request.planner,
-          alerts: request.alerts,
-          favorites: request.favorites,
-          riddenCount: request.ridden?.length ?? 0,
-          lookedUp: await this.namesOf(chat.lookedUp ?? []),
-        }),
-      },
-    ];
-    const messages: Anthropic.MessageParam[] = [
-      ...chat.history,
-      { role: "user", content: request.message },
-    ];
+    const trips = visitorTrips(request.trips);
     const answer: AnswerState = { round: 0, done: new Set() };
     const toolContext: AssistantToolContext = {
       get: <T>(token: Parameters<ModuleRef["get"]>[0]) =>
@@ -226,6 +212,8 @@ export class AssistantChatService {
       location: request.location ?? null,
       timeZone,
       planner: request.planner ?? null,
+      trips,
+      interview: request.interview ?? null,
       alerts: request.alerts ?? null,
       favorites: request.favorites ?? null,
       ridden: new Set(request.ridden ?? []),
@@ -239,6 +227,41 @@ export class AssistantChatService {
       },
       answer,
     };
+    const [pageSubject, digest] = await Promise.all([
+      this.pages.subject(request.pagePath, request.locale),
+      this.tripDigestOf(toolContext, pickTrip(trips)),
+    ]);
+    const system: Anthropic.TextBlockParam[] = [
+      {
+        type: "text",
+        text: SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: chatContext({
+          locale: request.locale,
+          now: nowIn(timeZone),
+          timeZone,
+          pagePath: request.pagePath,
+          pageSubject,
+          planner: request.planner,
+          trips,
+          tripDigest: digest,
+          // Only the first question of a chat answers the greeting.
+          opener: chat.history.length === 0 ? (request.opener ?? null) : null,
+          interview: request.interview ?? null,
+          alerts: request.alerts,
+          favorites: request.favorites,
+          riddenCount: request.ridden?.length ?? 0,
+          lookedUp: await this.namesOf(chat.lookedUp ?? []),
+        }),
+      },
+    ];
+    const messages: Anthropic.MessageParam[] = [
+      ...chat.history,
+      { role: "user", content: request.message },
+    ];
     const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const toolCalls: AssistantToolCall[] = [];
     let text = "";
@@ -295,8 +318,20 @@ export class AssistantChatService {
         if (reply.stop_reason !== "tool_use" || calls.length === 0) break;
 
         messages.push({ role: "assistant", content: reply.content });
+        // The replies close an answer: alone in a round they need no round after them, and beside
+        // a lookup they would sit under text the next round is still to write.
+        const repliesOnly = calls.every((call) => call.name === REPLIES_TOOL);
         const results = await Promise.all(
           calls.map(async (call) => {
+            if (call.name === REPLIES_TOOL && !repliesOnly) {
+              return {
+                type: "tool_result" as const,
+                tool_use_id: call.id,
+                content:
+                  "Not shown: call suggest_replies last, alone, after your answer's text",
+                is_error: true,
+              };
+            }
             const status = toolStatus(call.name);
             if (status) emit({ type: "status", tool: status });
             const result = await runAssistantTool(
@@ -323,6 +358,7 @@ export class AssistantChatService {
           }),
         );
         messages.push({ role: "user", content: results });
+        if (repliesOnly) break;
       }
     } catch (error) {
       // Tokens of a round cut short are spent all the same: a dropped connection must not be a
@@ -353,6 +389,34 @@ export class AssistantChatService {
       conversationId: conversation.id,
       messageId: message.id,
     });
+  }
+
+  /**
+   * The trip on screen in the hub's planner, planned as the planner sees it, one line a day: what
+   * Parky's unasked hints read. Null without such a trip, past the budget or on a refusal; the
+   * trip's own line in "This chat" says then to read it with get_trip_plan.
+   */
+  private async tripDigestOf(
+    ctx: AssistantToolContext,
+    trip: VisitorTrip | null,
+  ): Promise<string[] | null> {
+    if (!trip?.onScreen) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), TRIP_DIGEST_BUDGET_MS);
+    });
+    try {
+      const itinerary = await Promise.race([
+        visitorTripItinerary(ctx, trip).catch((error: unknown) => {
+          this.logger.warn(`Trip digest failed: ${describeError(error)}`);
+          return null;
+        }),
+        late,
+      ]);
+      return itinerary ? tripDigest(itinerary) : null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

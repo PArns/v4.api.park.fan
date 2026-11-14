@@ -6,6 +6,8 @@ import type { AssistantConversation } from "./entities/assistant-conversation.en
 import type { AssistantMessage } from "./entities/assistant-message.entity";
 
 const requests: Array<Record<string, unknown>> = [];
+/** The tool every round calls; the replies test swaps it. */
+const calling = { name: "get_post" };
 
 /** Every request answers with a tool call, so only the round limit ends the loop. */
 jest.mock("@anthropic-ai/sdk", () => {
@@ -37,8 +39,16 @@ jest.mock("@anthropic-ai/sdk", () => {
                     {
                       type: "tool_use",
                       id: `call-${requests.length}`,
-                      name: "get_post",
-                      input: { slug: "a-post" },
+                      name: calling.name,
+                      input:
+                        calling.name === "suggest_replies"
+                          ? {
+                              replies: [
+                                "Nächsten Sommer",
+                                "Finde die besten Tage",
+                              ],
+                            }
+                          : { slug: "a-post" },
                     },
                   ],
             });
@@ -150,6 +160,52 @@ describe("AssistantChatService.answer", () => {
       const last = messages[messages.length - 1].content;
       expect(marked).toEqual([last[last.length - 1]]);
     }
+  });
+});
+
+describe("AssistantChatService.answer with reply chips", () => {
+  it("ends the answer on a round that only suggests replies, and sends them", async () => {
+    requests.length = 0;
+    calling.name = "suggest_replies";
+    const service = new AssistantChatService(
+      { addTokens: jest.fn() } as unknown as AssistantSettingsService,
+      { get: () => ({}) } as unknown as ModuleRef,
+      repository<AssistantConversation>({}),
+      repository<AssistantMessage>({ id: "message-2" }),
+      {
+        subject: () => Promise.resolve(null),
+      } as unknown as AssistantPageService,
+    );
+    const events: ChatEvent[] = [];
+    await service.answer(
+      {
+        apiKey: "sk-ant-test",
+        conversation: { id: "chat-2" } as AssistantConversation,
+        history: [],
+        request: {
+          locale: "de",
+          pagePath: "/de/orlando",
+          message: "Wir wollen nach Orlando",
+          sessionToken: "s1.checked-by-the-controller",
+        },
+        session: "session-2",
+        sessionHash: "session-hash-2",
+      },
+      (event) => events.push(event),
+      new AbortController().signal,
+      null,
+    );
+    calling.name = "get_post";
+    // No round after the chips: they close the answer.
+    expect(requests).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: "action",
+      action: {
+        type: "replies",
+        replies: ["Nächsten Sommer", "Finde die besten Tage"],
+      },
+    });
+    expect(events[events.length - 1]).toMatchObject({ type: "done" });
   });
 });
 

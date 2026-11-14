@@ -12,9 +12,11 @@ import {
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
-import { ASSISTANT_LOCALES, type AssistantLocale } from "../system-prompt";
+import { ASSISTANT_LOCALES, type AssistantLocale } from "../assistant-locales";
 import { hubPathOf } from "./assistant-trip";
 import { TRIP_REGIONS } from "../../trip-regions/regions";
+import type { InterviewSnapshot } from "../assistant.schemas";
+import type { TripChangeKind } from "./assistant-plans";
 
 /**
  * Parky's actions on the page: what the browser does for it, never the API. A tool returns an
@@ -358,12 +360,14 @@ export type ClientAction =
       date: string;
       entryIds: string[];
     }
+  /** `toIndex` (0-based, within the day) or `start` (HH:MM on the park's clock), never both. */
   | {
       type: "planner_move";
       park: PlannerPark;
       date: string;
       entryId: string;
-      toIndex: number;
+      toIndex?: number;
+      start?: string;
     }
   | {
       type: "planner_update_block";
@@ -434,11 +438,45 @@ export type ClientAction =
       name: string;
       on: boolean;
     }
-  | { type: "planner_reserve_days"; park: PlannerPark; dates: string[] }
+  | {
+      type: "planner_reserve_days";
+      park: PlannerPark;
+      dates: string[];
+      /** The party's smallest rider, written to every day reserved. */
+      prefs?: { riderHeightCm: number };
+    }
   /** A trip across parks, a hop day's two parks on one date: one entry per park and day. */
   | {
       type: "planner_reserve_trip";
       days: Array<{ park: PlannerPark; date: string }>;
+      /** The party's smallest rider, written to every day reserved. */
+      prefs?: { riderHeightCm: number };
+    }
+  /**
+   * The trip planner of `region` set to `query`, the hub's own query (its whole state), through
+   * the planner's own state: on screen it re-plans, elsewhere the hub opens with it. `change`
+   * names what changed, for the receipt.
+   */
+  | {
+      type: "trip_set";
+      region: string;
+      query: string;
+      change: TripChangeKind[];
+    }
+  /** Put the trip back as before Parky's last change, unless the visitor changed it since. */
+  | { type: "trip_undo"; region: string }
+  /** Tappable replies under the answer, each sent as the visitor's message when pressed. */
+  | { type: "replies"; replies: string[] }
+  /**
+   * The interview's new state, or null once it is over (`outcome`). `party` belongs to the
+   * region's remembered trip, where the widget keeps it.
+   */
+  | {
+      type: "interview_state";
+      interview: InterviewSnapshot | null;
+      outcome?: "done" | "left";
+      region?: string;
+      party?: { size?: number; heightsCm: number[] };
     }
   | { type: "planner_undo"; park: PlannerPark; date: string }
   | { type: "planner_share" }
