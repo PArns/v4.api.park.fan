@@ -842,6 +842,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "parkDays": 7,
     "visits": 8,
     "restDays": 1,
+    "spareDays": 0, // of restDays, those with `spare` (none here: the rule needs 2 December)
   },
   "unplaced": [
     { "slug": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
@@ -862,6 +863,29 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   both are this optimizer on the same days, so the plan for a window's dates leaves out the same
   parks, unless days without published hours, which `/when` prices as if open
   ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **`spare: true`** marks a rest day the visitor did not ask for: not pinned (`rest@date`), and a
+  park on it would still keep the rest rule (with `rest=auto`, no run past four park days; with
+  `rest=none` every rest day is spare). The chosen visits have no use for it. `kind` stays `rest`
+  for the clients that read it; a client words such a day as a free one ("freier Tag") rather than
+  as rest, and may offer it something: a park from `spareDayParks`, the city. `totals.spareDays`
+  counts them among `restDays`. Japan, 14–30 January 2027, Tokyo Disneyland, DisneySea and
+  Universal Studios Japan twice each: 6 park days, 8 rest days, all 8 spare.
+- **`spareDayParks`** lists the region's parks the visitor did not choose that are open on one of
+  the spare days, in the region's order, absent when there is none. Each is `{ park, days }`, `days`
+  its three cheapest spare days at most, cheapest first, `{ date, headlinerWait?, crowdLevel? }`
+  as in `parks[].alternatives`. A day counts only where the plan could put the park: in a region
+  with bases, reached from that day's base and priced with its travel (Fuji-Q from Tokyo is a long
+  day trip); a day the park is `CLOSED` or has no published hours never does. It is a suggestion:
+  the client adds a park by asking for the plan again with it in `parks`, which places it where it
+  fits best.
+
+  ```jsonc
+  "spareDayParks": [
+    { "park": "fuji-q-highland", "days": [{ "date": "2027-01-25", "headlinerWait": 50, "crowdLevel": "moderate" }] },
+    { "park": "legoland-japan", "days": [{ "date": "2027-01-16", "headlinerWait": 25, "crowdLevel": "high" }] },
+  ]
+  ```
+
 - **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
   the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
   `/when`.
@@ -882,8 +906,9 @@ changes. `meta.split` lists `{ slug, visits, auto: true }` for each park that go
 
 **Repeat visits.** A park takes up to three visits, never two on one day, and at least a day apart:
 the search keeps the gap as a rule (branch and bound on the assignment) and breaks it only where no
-placement can, with `adjacent_repeat` on the second day. When the trip has too few days for its visits, a repeat visit is
-dropped before a park loses its only one (`unplaced`, `no_day_left`).
+placement can, with `adjacent_repeat` on the second day. Among placements that tie (below), a park's
+visits go at least three days apart where they can. When the trip has too few days for its visits,
+a repeat visit is dropped before a park loses its only one (`unplaced`, `no_day_left`).
 
 **Rest days.** Every available day the visits do not need is a rest day, and the optimizer puts the
 visits on the quietest days, so the rest days fall on the busiest (`busiest_day_spared`). With
@@ -895,7 +920,25 @@ little as possible, `meta.relaxed` says `streak_relaxed` and each day past the f
 carries `long_streak`; the plan never drops a visit to make a rest day. `rest=max:n` holds n the
 same way. `rest=none` keeps no rule and gives the spare days no reasons. `rest@date` pins a rest
 day; a free arrival or departure day stays `arrival`/`departure`, also when `arrival=park` left it
-empty.
+empty. Which rest days are the visitor's and which are only spare: `spare` (above).
+
+**Spread among ties.** Where several placements tie the cheapest, the plan takes the one that
+spreads the park days best over the trip, and so over each of its stays: no long run of days
+without a park, no park days bunched together, a park's visits a few days apart. A placement ties
+when it costs less than 3 minutes per park day more than the cheapest (`ORDER_MATTERS_MINUTES`,
+the band stay plans tie in, [bases](#bases-a-trip-across-several-cities)) and puts no visit on a day more than 5
+minutes dearer than the cheapest plan's day for it (a park's visits compared cheapest with
+cheapest; 5 minutes is `runner_up_close`): a clearly better day is never given up. The spread
+is the sum of the squares of each run of park days and of each run of days without one (rest,
+travel, the arrival and departure day) over the whole trip, plus, for two visits of a park fewer
+than three days apart, the square of the days missing. Starting from the cheapest, the best move of
+a visit to a free day or swap of two visits is taken while it lowers that sum. It matters most on
+last year's measured days, rounded to 5 minutes and so often equal: Japan's 17-day trip of
+14–30 January 2027 (three parks twice) had Tokyo Disneyland and DisneySea on the 19th and 20th,
+rest from the 21st to the 25th, Disneyland on the 26th and rest again; on the same days it now has
+DisneySea on the 19th, Disneyland on the 22nd and 26th and DisneySea on the 29th, at the same
+waits. `meta.exact` is still the cheapest's proof, and `/when` ranks each window by the plan it
+shows.
 
 **Hop days.** With `ticket=hopper`, `hop=1` and more visits than days, two theme parks one hopper
 ticket covers (Disney's four; Universal Studios and Islands of Adventure, never Epic Universe) whose
@@ -1206,7 +1249,9 @@ summed), never to the base listed first. A Paris trip to Disneyland Park and Par
 minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
 the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
 tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
-bases has no stays and keeps its cheapest plan. `split=auto` keeps the days that can only be a
+bases has no stays and keeps its cheapest plan. Inside the stays kept, the visits take the
+placement that spreads them best among those that tie ([spread among ties](#the-plan-get-v1trip-regionsorlandoplan)),
+over the whole trip and so within each stay. `split=auto` keeps the days that can only be a
 move out of the room it gives second visits. On the test region (four cities, five parks, ten
 days) a plan takes 5–40 ms.
 
@@ -1791,7 +1836,7 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v3:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).

@@ -1,6 +1,7 @@
 import {
   DEFAULT_MAX_STREAK,
   optimizeTrip,
+  ORDER_MATTERS_MINUTES,
   PlanCostModel,
   type OptimizedPlan,
   type PlanCell,
@@ -235,7 +236,7 @@ describe("optimizeTrip", () => {
       expect(plan.totals.visits).toBe(2);
     });
 
-    it("finds the optimum brute force finds, whenever it says exact", () => {
+    it("ties the optimum brute force finds, whenever it says exact", () => {
       const random = lcg(42);
       const slugs = [
         "magic-kingdom-park",
@@ -277,7 +278,12 @@ describe("optimizeTrip", () => {
             0,
           ) +
           PlanCostModel.adjacentRepeatPenalty * adjacentRepeats(plan);
-        expect(got).toBeCloseTo(expected, 6);
+        // The spread may take a placement that ties the cheapest: never
+        // below it, less than ORDER_MATTERS_MINUTES per park day above.
+        expect(got).toBeGreaterThanOrEqual(expected - 1e-6);
+        expect(got).toBeLessThan(
+          expected + ORDER_MATTERS_MINUTES * plan.totals.parkDays,
+        );
       }
       expect(checked).toBeGreaterThan(50);
     });
@@ -546,6 +552,163 @@ describe("optimizeTrip", () => {
       );
       expect(plan.days[1]).toMatchObject({ kind: "rest", reasons: ["locked"] });
       expect(placement(plan).epcot).not.toContain("2026-12-01");
+    });
+
+    it("marks a rest day spare where the rule would hold with a park on it", () => {
+      // Six visits on eight days: the day after four park days is the
+      // rule's, the other is free for anything.
+      const parks = ["a", "b", "c", "d", "e", "f"].map((s) => park(s));
+      const waits = Object.fromEntries(
+        parks.map((p) => [p.slug, [10, 10, 10, 10, 90, 10, 10, 95, 10]]),
+      );
+      const auto = optimizeTrip(
+        input(9, parks, waits, { rest: { mode: "auto" }, departure: "free" }),
+      );
+      const rests = auto.days.filter((d) => d.kind === "rest");
+      expect(rests.map((d) => [d.date, d.spare ?? false])).toEqual([
+        ["2026-12-04", false],
+        ["2026-12-07", true],
+      ]);
+      expect(auto.totals).toMatchObject({ restDays: 2, spareDays: 1 });
+      // rest=none keeps no rule: every day without a park is spare.
+      const none = optimizeTrip(
+        input(9, parks, waits, { rest: { mode: "none" }, departure: "free" }),
+      );
+      expect(none.days.filter((d) => d.kind === "rest")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ spare: true })]),
+      );
+      expect(none.totals.spareDays).toBe(none.totals.restDays);
+      // A pinned rest day is the visitor's own.
+      const pinned = optimizeTrip(
+        input(
+          3,
+          [park("epcot")],
+          { epcot: [50, 10, 50] },
+          { locks: [{ target: "rest", date: "2026-12-01" }] },
+        ),
+      );
+      expect(pinned.days[1].spare).toBeUndefined();
+    });
+  });
+
+  describe("spreading the park days", () => {
+    const flat = (n: number, wait = 60) =>
+      Array.from({ length: n }, () => wait);
+
+    /** Runs of days without a park, rest and travel and the ends included. */
+    function longestGap(plan: OptimizedPlan): number {
+      return longestRun(plan.days.map((d) => d.parks.length === 0));
+    }
+
+    it("spreads the visits of a long trip over its flat days", () => {
+      // Seventeen days of equal waits, three parks twice: any placement is
+      // the cheapest, and the plan takes the one with no rest week.
+      const parks = [
+        park("magic-kingdom-park", 2),
+        park("epcot", 2),
+        park("universal-studios-florida", 2),
+      ];
+      const plan = optimizeTrip(
+        input(
+          17,
+          parks,
+          Object.fromEntries(parks.map((p) => [p.slug, flat(17)])),
+          { rest: { mode: "auto" }, arrival: "free", departure: "free" },
+        ),
+      );
+      expect(plan.totals.visits).toBe(6);
+      expect(plan.totals.headlinerWait).toBe(60);
+      expect(longestRun(parkDayFlags(plan))).toBe(1);
+      expect(longestGap(plan)).toBeLessThanOrEqual(2);
+      // Each park's two visits a few days apart.
+      for (const p of plan.parks) {
+        const [a, b] = p.dates.map((d) => Date.parse(d) / 86_400_000);
+        expect(b - a).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it("moves a visit to a day at most five minutes dearer for it", () => {
+      // EPCOT's quietest day sits next to Magic Kingdom's; its runner-up,
+      // five minutes dearer, breaks up the cluster and the rest days.
+      const plan = optimizeTrip(
+        input(
+          9,
+          [park("magic-kingdom-park"), park("epcot")],
+          {
+            "magic-kingdom-park": [80, 40, 80, 80, 80, 80, 80, 80, 80],
+            epcot: [80, 80, 50, 80, 80, 55, 80, 80, 80],
+          },
+          { rest: { mode: "auto" }, arrival: "free", departure: "free" },
+        ),
+      );
+      expect(placement(plan)).toEqual({
+        "magic-kingdom-park": ["2026-12-01"],
+        epcot: ["2026-12-05"],
+      });
+    });
+
+    it("never gives up a clearly better day for it", () => {
+      // EPCOT's next best day is six minutes dearer: the cluster stays.
+      const plan = optimizeTrip(
+        input(
+          9,
+          [park("magic-kingdom-park"), park("epcot")],
+          {
+            "magic-kingdom-park": [80, 40, 80, 80, 80, 80, 80, 80, 80],
+            epcot: [80, 80, 50, 80, 80, 56, 80, 80, 80],
+          },
+          { rest: { mode: "auto" }, arrival: "free", departure: "free" },
+        ),
+      );
+      expect(placement(plan)).toEqual({
+        "magic-kingdom-park": ["2026-12-01"],
+        epcot: ["2026-12-02"],
+      });
+    });
+
+    it("names the unchosen parks that fit a spare day, with their cheapest", () => {
+      const ds = dates(6);
+      const cells = {
+        epcot: Object.fromEntries(ds.map((d) => [d, open(50)])),
+        "universal-studios-florida": Object.fromEntries(
+          ds.map((d, i) => [d, i === 2 ? closed : open(70 - 5 * i)]),
+        ),
+        "seaworld-orlando": Object.fromEntries(ds.map((d) => [d, closed])),
+      };
+      const plan = optimizeTrip({
+        ...input(6, [park("epcot")], { epcot: flat(6, 50) }),
+        candidates: [
+          park("universal-studios-florida"),
+          park("seaworld-orlando"),
+        ],
+        cells,
+        options: {
+          ...BASE_OPTIONS,
+          rest: { mode: "auto" },
+          arrival: "free",
+          departure: "free",
+        },
+      });
+      const spare = plan.days.filter((d) => d.spare).map((d) => d.date);
+      expect(spare).toHaveLength(3);
+      expect(plan.spareDayParks).toEqual([
+        {
+          park: "universal-studios-florida",
+          days: spare
+            .filter((d) => d !== ds[2])
+            .sort((a, b) => b.localeCompare(a))
+            .map((date) => ({
+              date,
+              headlinerWait: 70 - 5 * ds.indexOf(date),
+            })),
+        },
+      ]);
+      // Never a park the visitor chose, and nothing without a spare day.
+      const full = optimizeTrip({
+        ...input(2, [park("epcot", 2)], { epcot: flat(2, 50) }),
+        candidates: [park("universal-studios-florida")],
+      });
+      expect(full.spareDayParks).toBeUndefined();
     });
   });
 

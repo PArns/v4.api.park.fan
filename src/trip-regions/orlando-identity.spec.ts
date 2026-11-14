@@ -22,6 +22,14 @@ import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
  * with the answers the code gave before the multi-region refactor (PAR-1302),
  * kept in `__fixtures__/orlando-identity.json`.
  *
+ * One change moved them on purpose since: the spread among placements that
+ * tie the cheapest (`spreadDays` in `trip-optimizer.ts`) put the visits of
+ * five of the seven plans and of three windows of the second `/when` search
+ * on other days, each within five minutes of its old one, so that the park
+ * days spread wider; the windows rank on those plans, so one of them starts
+ * a day earlier. It also added each spare rest day's `spare`, `spareDays`
+ * and `spareDayParks`.
+ *
  * `WRITE_ORLANDO_IDENTITY=1` rewrites the file: only for a change that is
  * meant to move Orlando's answers, and the diff then says how.
  */

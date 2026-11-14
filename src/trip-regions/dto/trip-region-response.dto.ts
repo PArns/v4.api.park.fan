@@ -531,7 +531,9 @@ export class TripPlanDto {
   meta: Record<string, unknown>;
   @ApiProperty({
     description:
-      "One entry per trip day: arrival | park | hop | rest | departure. A park day that " +
+      "One entry per trip day: arrival | park | hop | rest | departure. A rest day the " +
+      "visitor did not ask for (not pinned, not needed by the rest rule) carries `spare: true`. " +
+      "A park day that " +
       "ends early carries `evening` (a hop park or a venue, with up to two alternatives). " +
       "A park or hop day carries `ticket` (an owned ticket's id or a suggestion's) and " +
       "`ticketDay`, or `ticketAllowance` on an allowance visit.",
@@ -560,4 +562,22 @@ export class TripPlanDto {
   parksLeftOut: Array<{ park: string; reason: string }>;
   @ApiPropertyOptional({ type: "array", items: { type: "object" } })
   ignoredLocks?: Array<Record<string, unknown>>;
+  @ApiPropertyOptional({
+    type: "array",
+    items: { type: "object" },
+    description:
+      "The region's parks the visitor did not choose that are open on one of the plan's spare " +
+      "days (in a region with bases, reached from that day's base), in the region's order, " +
+      "each with its three cheapest spare days. Absent without any.",
+    example: [
+      {
+        park: "legoland-japan",
+        days: [{ date: "2027-01-16", headlinerWait: 25, crowdLevel: "high" }],
+      },
+    ],
+  })
+  spareDayParks?: Array<{
+    park: string;
+    days: Array<{ date: string; headlinerWait?: number; crowdLevel?: string }>;
+  }>;
 }
