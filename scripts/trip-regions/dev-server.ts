@@ -32,6 +32,8 @@
  *   production already has and one whose `region` is another region's (the
  *   Paris file's Disneyland Park is not Anaheim's).
  * - **Cache:** each fetched park answer is kept 15 minutes in memory.
+ * - **Accuracy:** `/accuracy` reads the lead-time archive, which only the
+ *   database holds, so the shim passes it to production like any other path.
  * - **Tickets:** the shim has no database, so its ticket catalog is the seed
  *   (`tickets.ts` with `ticket-seed-links.ts`, `seedCatalog`), put on the region
  *   explicitly like `TicketCatalogService.withTickets` puts the table's. An

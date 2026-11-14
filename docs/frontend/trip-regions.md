@@ -26,6 +26,7 @@ sold in, and, in Japan and Paris, its bases ([below](#what-a-region-defines)).
 | `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
 | `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
 | `GET /v1/trip-regions/:region/tickets`   | none | five minutes at the edge, ten more stale                | the ticket catalog ([tickets](#tickets))        |
+| `GET /v1/trip-regions/:region/accuracy`  | none | an hour in the browser, a day at the edge; Redis a day  | how accurate the forecast was ([accuracy](#how-accurate-the-forecast-was-get-v1trip-regionsregionaccuracy)) |
 
 Before the routes are deployed, `pnpm trip-regions:dev` serves all four on `localhost:3001` from
 production's data through the same modules
@@ -286,6 +287,7 @@ or a `hurricane` penalty.
   "hotels": [
     { "key": "disney", "perks": ["early_entry"] },
     { "key": "disney_deluxe", "perks": ["early_entry", "extended_evening"] },
+    { "key": "disney_springs", "perks": ["early_entry"] },
     { "key": "universal", "perks": ["early_park_admission"] },
     {
       "key": "universal_premier",
@@ -359,9 +361,19 @@ or a `hurricane` penalty.
   for the buses, whose waits vary too much to name one.
 - **Hotel areas** stand for where a visitor sleeps: `disney` (Caribbean Beach, the Skyliner hub in
   the middle of the resort), `universal` (by the Royal Pacific and Sapphire Falls hotels),
-  `international_drive`, `lake_buena_vista` (Hotel Plaza Boulevard by Disney Springs) and
-  `kissimmee` (US-192). An area's `perks` are those of the hotel a stay there usually means;
-  the plan's `hotel` parameter decides which count.
+  `international_drive`, `disney_springs`, `lake_buena_vista` and `kissimmee` (US-192). An area's
+  `perks` are those of the hotel a stay there usually means; the plan's `hotel` parameter decides
+  which count.
+- **The Disney Springs Resort Area** (`disney_springs`, hotel kind `disney_springs`) is the hotels on
+  Hotel Plaza Boulevard that Disney lists among the "other select hotels" with Early Entry: the
+  Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree
+  Suites, Holiday Inn Orlando, Wyndham Lake Buena Vista and Wyndham Garden. Their guests get Early
+  Entry at the four Disney theme parks and no Extended Evening Hours, which Disney's list keeps for
+  its Deluxe and Deluxe Villa hotels, the Swan, Dolphin, Swan Reserve and Shades of Green
+  ([Early Entry](https://disneyworld.disney.go.com/guest-services/early-entry/),
+  [Extended Evening Hours](https://disneyworld.disney.go.com/guest-services/extended-evening/)).
+  `lake_buena_vista` stays `offsite`: the B Resort on the same boulevard, on neither list, and the
+  hotels along SR 535. Both areas drive from the same point on Hotel Plaza Boulevard.
 - **Venues** are where an evening goes outside the parks, curated in `regions.ts` with the
   operator's page as `url`: Disney Springs (`district`), Disney's BoardWalk (`resort_area`, a view
   of EPCOT's fireworks), the Polynesian beach (`viewpoint` across the lagoon from Magic Kingdom, on
@@ -659,7 +671,7 @@ calendar does not.
 | ------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `from`, `to` | `2026-11-28`, `2026-12-06`                           | the trip, arrival and departure day included; at most 21 days, from today to a year ahead                                               |
 | `parks`      | `magic-kingdom-park:2,epcot,universal-epic-universe` | the parks and how many visits each (default 1, at most 3); default: the headliner parks; at most 16 visits                              |
-| `hotel`      | `disney`                                             | a hotel kind of the region (its `hotels`; Orlando: `disney`, `disney_deluxe`, `universal`, `universal_premier`, `offsite`): which perks count; default: the area's hotel, else `offsite` |
+| `hotel`      | `disney`                                             | a hotel kind of the region (its `hotels`; Orlando: `disney`, `disney_deluxe`, `disney_springs`, `universal`, `universal_premier`, `offsite`): which perks count; default: the area's hotel, else `offsite` |
 | `area`       | `disney`                                             | a `hotelAreas` key: each day's travel is read from there; without it the days carry no travel                                           |
 | `arrival`    | `free`                                               | `free` (no park on the arrival day, default) or `park`                                                                                  |
 | `departure`  | `free`                                               | the same for the last day                                                                                                               |
@@ -1690,6 +1702,52 @@ ticket does not allow, and the catalog's `confidence` and `notes` say so:
   UK store says 2027-03-24). The curated closure in `park_seasons` (to 2027-03-23) closes those
   days; 24 to 31 March read as days without published hours, which the plan uses only when nothing
   else fits.
+
+## How accurate the forecast was (`GET /v1/trip-regions/:region/accuracy`)
+
+Open, no key: it is a statement about our forecasts, not one. An hour in the browser, a day at the
+edge, and a day in Redis under the region's date (`trip-regions:accuracy:v1:{region}:{date}`), so
+each region reads the archive once a day. For the hub's line on how far to trust the calendar.
+
+```jsonc
+{
+  "region": "orlando",
+  "forecastAccuracy": {
+    "days": 30, // the window
+    "from": "2026-10-14", // park-local, inclusive
+    "to": "2026-11-12", // the region's last measured day
+    "leadDays": 7, // the forecasts were made a week ahead
+    "maeMinutes": 16.4, // the mean absolute error, minutes, one decimal
+    "parks": 14, // the parks counted
+    "sampleDays": 28, // the window's days with a scored forecast
+  }, // null where too little is measured: show nothing
+}
+```
+
+- **What it measures:** the day's peak wait at the headliners (the calendar's `headlinerWait`, the
+  "peak wait"), as forecast `leadDays` ahead, against what the day did (each headliner's day P90):
+  the mean absolute error per park, then the mean over the counted parks, so a park with many
+  headliners weighs as much as one with few. It is the measurement the plan's `expectedError`
+  quotes ([reader-facing accuracy](../ml/reader-facing-accuracy.md)): `prediction_lead_snapshots`,
+  the **served** daily level (TFT or CatBoost, whichever the reader was shown), scored rows only.
+  Never a second definition: the plan reads the same rows by lead, this route by region.
+- **Which lead:** a week ahead (`ACCURACY_LEAD_DAYS`), a typical look at the calendar before a
+  trip. The day-ahead figure would flatter a page people plan weeks ahead with; the error grows
+  with the lead ([long-range forecasting](../ml/long-range-forecasting.md)). Say the lead with the
+  figure: "a week ahead, our peak-wait forecast was off by 16 minutes on average over the last 30
+  days".
+- **Which days:** the 30 park-local days ending on the region's last measured day. A day counts
+  once it is over in the park (date.util, the park's timezone) and the nightly scoring has filled
+  it, so `to` is usually two days back; a region closed for a while answers from before its
+  closure (the read reaches 45 days back).
+- **When it is null:** a park counts with 20 scored rows or more in the window (about three
+  headliners for a week); the figure needs 100 scored rows over the counted parks, the floor the
+  plan's own figure publishes at (`PredictionLeadSnapshotService.MIN_SCORED`), and 14 measured
+  days, half the window. Below that it is `null`, never a guess. Paris in November, with Parc
+  Astérix closed, still counts its Disney parks.
+- **Code:** `trip-accuracy.ts` (the figure), `trip-accuracy.service.ts` (read and cache),
+  `PredictionLeadSnapshotService.parkDayErrors` (the archive read). The dev shim has no database
+  and passes the route to production.
 
 ## Caching and cost
 

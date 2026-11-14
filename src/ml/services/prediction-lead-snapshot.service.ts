@@ -11,7 +11,23 @@ import { PredictionDto } from "../dto/prediction-response.dto";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { Park } from "../../parks/entities/park.entity";
 import { formatInParkTimezone } from "../../common/utils/date.util";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import { predictionLocalDate } from "../utils/prediction-local-date.util";
+
+/**
+ * One park's scored error on one target day at one lead distance: the
+ * snapshots' served rows (`source` set) with an actual, counted and summed.
+ * What {@link PredictionLeadSnapshotService.parkDayErrors} returns.
+ */
+export interface ParkDayError {
+  parkId: string;
+  /** Park-local day the forecasts were about (YYYY-MM-DD). */
+  targetDate: string;
+  /** Scored headliner rows that day. */
+  scored: number;
+  /** Their absolute errors summed, in minutes. */
+  errorSum: number;
+}
 
 /** Rows scored per run. The backlog drains over a few nights rather than
  *  holding one transaction open across the whole catalogue. */
@@ -116,7 +132,7 @@ export class PredictionLeadSnapshotService {
    * jumps is worse than no number: a caller widens the band by distance anyway,
    * and `plan-day.dto.ts` says so.
    */
-  private static readonly MIN_SCORED = 100;
+  static readonly MIN_SCORED = 100;
 
   /** How long a published bucket mean is reused. It moves once a night. */
   private static readonly MAE_TTL_SECONDS = 6 * 60 * 60;
@@ -156,6 +172,52 @@ export class PredictionLeadSnapshotService {
       if (mae !== null) return mae;
     }
     return null;
+  }
+
+  /**
+   * The served daily level's error per park and target day, at one lead
+   * distance: the same rows {@link getLeadTimeMae} averages (scored, served),
+   * restricted to the parks' headliners and to target days `from` … `to`
+   * (park-local dates, inclusive). For a figure per park or per region, such
+   * as a trip region's forecast accuracy, without a second definition of the
+   * error. Ids that are no canonical uuid are dropped before binding.
+   */
+  async parkDayErrors(
+    parkIds: readonly string[],
+    leadDays: number,
+    from: string,
+    to: string,
+  ): Promise<ParkDayError[]> {
+    const ids = parkIds.filter(isCanonicalUuid);
+    if (ids.length === 0) return [];
+    const rows = await this.snapshotRepository.query<
+      Array<{
+        park_id: string;
+        target_date: string;
+        scored: number;
+        error_sum: number;
+      }>
+    >(
+      `SELECT a."parkId" AS park_id,
+              s.target_date::text AS target_date,
+              COUNT(*)::int AS scored,
+              SUM(s.absolute_error)::float8 AS error_sum
+         FROM prediction_lead_snapshots s
+         JOIN attractions a ON a.id = s.attraction_id
+        WHERE a."parkId" = ANY($1::uuid[])
+          AND s.lead_days = $2::smallint
+          AND s.target_date BETWEEN $3::date AND $4::date
+          AND s.absolute_error IS NOT NULL
+          AND s.source IS NOT NULL
+        GROUP BY a."parkId", s.target_date`,
+      [ids, leadDays, from, to],
+    );
+    return rows.map((r) => ({
+      parkId: r.park_id,
+      targetDate: r.target_date,
+      scored: Number(r.scored),
+      errorSum: Number(r.error_sum),
+    }));
   }
 
   /** One bucket's published mean, null below {@link MIN_SCORED}; cached either way. */

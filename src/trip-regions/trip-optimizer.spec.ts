@@ -904,6 +904,43 @@ describe("optimizeTrip", () => {
       expect(deluxe.days[0].reasons).toContain("extended_evening");
       expect(placement(moderate).epcot).toEqual(["2026-12-01"]);
     });
+
+    it("gives the Disney Springs Resort Area hotels Early Entry and no extended evening", () => {
+      const rules = { perkRules: ORLANDO.perks.disney_springs };
+      const withEarly = optimizeTrip(
+        input(
+          2,
+          [park("magic-kingdom-park")],
+          {
+            "magic-kingdom-park": (i) =>
+              i === 0 ? open(41.5, { early }) : open(40),
+          },
+          rules,
+        ),
+      );
+      expect(placement(withEarly)["magic-kingdom-park"]).toEqual([
+        "2026-11-30",
+      ]);
+      expect(withEarly.days[0].perks).toEqual(["early_entry"]);
+      const evening = optimizeTrip(
+        input(
+          2,
+          [park("epcot")],
+          {
+            epcot: (i) =>
+              i === 0
+                ? open(42, { evening: { kind: "extended_evening" } })
+                : open(40),
+          },
+          rules,
+        ),
+      );
+      // As for a moderate Disney hotel: the extended evening is the deluxe guests'.
+      expect(placement(evening).epcot).toEqual(["2026-12-01"]);
+      expect(evening.days.flatMap((d) => d.perks ?? [])).not.toContain(
+        "extended_evening",
+      );
+    });
   });
 
   describe("water parks and reservation parks", () => {
