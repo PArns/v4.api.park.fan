@@ -33,16 +33,24 @@ describe("MCP_TOOLS", () => {
     },
   );
 
-  it("opens every read to a viewer and every write only to an editor's write token", () => {
+  it("opens a read to a viewer and a write to an editor, or both to an owner where the admin does", () => {
     for (const tool of MCP_TOOLS) {
-      if (tool.writes) expect(tool.minRole).toBe("editor");
-      else expect(tool.minRole ?? "viewer").toBe("viewer");
+      const role = tool.minRole ?? "viewer";
+      if (tool.writes) expect(["editor", "owner"]).toContain(role);
+      else expect(["viewer", "owner"]).toContain(role);
     }
   });
 
-  it("makes every delete name its confirm", () => {
+  it("makes every delete name its confirm or show a dry run first", () => {
     for (const tool of MCP_TOOLS.filter((t) => t.writes === "delete")) {
-      expect(tool.input.confirm).toBeDefined();
+      const dryRun = tool.input.dryRun?.safeParse(undefined).data;
+      expect({
+        tool: tool.name,
+        guarded: Boolean(tool.input.confirm) || dryRun === true,
+      }).toEqual({
+        tool: tool.name,
+        guarded: true,
+      });
     }
   });
 });

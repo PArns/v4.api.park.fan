@@ -53,6 +53,9 @@ export function toolRefusal(
       ? ADMIN_TOKEN_SCOPES[scope as AdminTokenScope]
       : null;
   if (cap && !roleAtLeast(cap, minRole)) {
+    if (!roleAtLeast(ADMIN_TOKEN_SCOPES[WRITE_ADMIN_TOKEN_SCOPE], minRole)) {
+      return `${tool.name} needs the ${minRole} role, which no token scope reaches; it is done in the admin`;
+    }
     return (
       `${tool.name} changes data and needs a token with the ${WRITE_ADMIN_TOKEN_SCOPE} scope; ` +
       `this one has ${scope}. An editor or owner connects again and allows writing on the ` +
@@ -82,12 +85,12 @@ export async function asToolRefusal<T>(work: () => Promise<T>): Promise<T> {
  * A body checked as the global `ValidationPipe` checks the admin route's: its
  * DTO, implicit conversion on, a field the DTO does not list refused. Throws
  * the failed constraints for the model; answers the DTO as a plain object, as
- * the route hands it to its service.
+ * the route hands it to its service or its handler.
  */
-export async function routeBody(
-  dto: ClassConstructor<object>,
+export async function routeBody<T extends object>(
+  dto: ClassConstructor<T>,
   body: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
+): Promise<T & Record<string, unknown>> {
   const instance = plainToInstance(dto, body, {
     enableImplicitConversion: true,
   });
@@ -100,7 +103,7 @@ export async function routeBody(
       `Invalid input: ${constraintsOf(errors).join("; ")}`,
     );
   }
-  return { ...instance };
+  return { ...instance } as T & Record<string, unknown>;
 }
 
 function constraintsOf(errors: ValidationError[], path = ""): string[] {
