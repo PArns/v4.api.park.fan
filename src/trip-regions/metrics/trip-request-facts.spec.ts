@@ -4,9 +4,14 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { addIsoDays } from "../../common/utils/date.util";
-import { ORLANDO } from "../regions";
+import { JAPAN, ORLANDO } from "../regions";
 import { productOf } from "../trip-tickets";
-import { normalizePlanQuery } from "../trip-plan.assembly";
+import {
+  normalizePlanQuery,
+  optimizePlan,
+  planResponse,
+} from "../trip-plan.assembly";
+import type { InternalRegionCalendar } from "../trip-region.assembly";
 import { normalizeWhenQuery } from "../trip-when.assembly";
 import type { TripPlanQueryDto } from "../dto/trip-region-query.dto";
 import type { TripPlanDto } from "../dto/trip-region-response.dto";
@@ -119,6 +124,110 @@ describe("errorOf", () => {
     ]) {
       expect(TRIP_ERROR_CODES).toContain(errorOf(error).code);
     }
+  });
+});
+
+describe("a region with bases", () => {
+  const JAPAN_TODAY = "2027-01-04";
+  const japan = (over: Record<string, string>) =>
+    normalizePlanQuery(
+      JAPAN,
+      JAPAN.parks.map((p) => p.slug),
+      {
+        from: "2027-04-10",
+        to: "2027-04-19",
+        parks: "tokyo-disneyland,universal-studios-japan",
+        ...over,
+      } as TripPlanQueryDto,
+      JAPAN_TODAY,
+    );
+  const codeIn = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (error) {
+      return errorOf(error).code;
+    }
+    throw new Error("the query was valid");
+  };
+
+  it.each([
+    [{ bases: "atlantis" }, "bad_bases"],
+    [{ bases: "tokyo,tokyo" }, "bad_bases"],
+    [{ bases: "tokyo@atlantis" }, "bad_bases"],
+    [{ startBase: "atlantis" }, "bad_bases"],
+    [{ bases: "tokyo:5,osaka:5" }, "stay_nights_exceed_trip"],
+    [{ area: "maihama" }, "area_needs_base"],
+  ])("tells a stay refused for %j as %s", (over, code) => {
+    expect(codeIn(() => japan(over))).toBe(code);
+  });
+
+  it("tells bases asked of a region without them", () => {
+    expect(codeOf({ bases: "tokyo" })).toEqual({
+      status: 400,
+      code: "no_bases_in_region",
+    });
+  });
+
+  it("counts the stays and moves of a real answer", () => {
+    const q = japan({
+      parks:
+        "tokyo-disneyland,tokyo-disneysea,fuji-q-highland,legoland-japan,universal-studios-japan",
+      split: "fixed",
+      startBase: "tokyo",
+      endBase: "osaka",
+      bases: "tokyo:4,fujikawaguchiko:1,nagoya:1,osaka:3",
+    });
+    const days: InternalRegionCalendar["days"] = [];
+    for (let i = 0; i < 10; i++) {
+      const date = addIsoDays(q.from, i);
+      days.push({
+        date,
+        isHoliday: false,
+        isSchoolVacation: false,
+        parks: Object.fromEntries(
+          JAPAN.parks.map((p, k) => [
+            p.slug,
+            {
+              status: "OPERATING",
+              hoursPublished: true,
+              crowdLevel: "moderate",
+              headlinerWait: 30,
+              waitExact: 25 + ((k * 11 + i * 9) % 30),
+              basis: "forecast",
+              dayHours: 12,
+              usualHours: 12,
+              opensAt: `${date}T09:00:00+09:00`,
+              closesAt: `${date}T21:00:00+09:00`,
+            },
+          ]),
+        ),
+      });
+    }
+    const calendar: InternalRegionCalendar = {
+      meta: {
+        region: "japan",
+        timezone: "Asia/Tokyo",
+        from: q.from,
+        to: q.to,
+        computedAt: "t",
+        publishedHoursUntil: {},
+      },
+      parks: JAPAN.parks.map((p) => p.slug),
+      days,
+      seasons: [],
+    };
+    const answer = planResponse(
+      JAPAN,
+      q,
+      calendar,
+      optimizePlan(JAPAN, q, calendar),
+      {
+        computedAt: "t",
+        today: JAPAN_TODAY,
+        leadMae: new Map(),
+      },
+    );
+    expect(planAnswerFacts(answer)).toMatchObject({ bases: 4, moves: 3 });
   });
 });
 
@@ -253,7 +362,14 @@ describe("the facts of an answer", () => {
     const when = {
       meta: { search: { exact: false, planned: 41 } },
       windows: [
-        { warnings: [], plan: { days: [], unplaced: ["epcot"] } },
+        {
+          warnings: [],
+          plan: {
+            days: [],
+            unplaced: ["epcot"],
+            stays: [{ base: "tokyo" }, { base: "osaka" }],
+          },
+        },
         { warnings: ["ticket_window_relaxed"], plan: { days: [] } },
       ],
     } as unknown as TripWhen;
@@ -261,7 +377,7 @@ describe("the facts of an answer", () => {
       exact: false,
       relaxed: ["ticket_window_relaxed"],
       unplacedReasons: ["unknown"],
-      bases: null,
+      bases: 2,
       moves: null,
       windows: 2,
       windowsPlanned: 41,

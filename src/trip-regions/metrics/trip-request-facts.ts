@@ -59,6 +59,10 @@ export const TRIP_ERROR_CODES = [
   "bad_lock",
   "bad_tickets",
   "bad_within",
+  "bad_bases",
+  "no_bases_in_region",
+  "area_needs_base",
+  "stay_nights_exceed_trip",
   "bad_request",
   "forbidden",
   "unavailable",
@@ -72,6 +76,11 @@ export type TripErrorCode = (typeof TRIP_ERROR_CODES)[number];
  */
 const BAD_REQUEST_CODES: ReadonlyArray<readonly [RegExp, TripErrorCode]> = [
   [/^tickets\b/, "bad_tickets"],
+  // Before the area and twice patterns below, which a base's messages share.
+  [/^(bases|startBase|endBase):/, "bad_bases"],
+  [/ has no bases: /, "no_bases_in_region"],
+  [/hotel area goes with its base/, "area_needs_base"],
+  [/^Your stays add up to/, "stay_nights_exceed_trip"],
   [/^within:/, "bad_within"],
   [/^hopper:/, "bad_hopper"],
   [/^lock /, "bad_lock"],
@@ -219,8 +228,8 @@ export function planAnswerFacts(body: TripPlanDto): TripAnswerFacts {
 
 /**
  * Facts of a `/when` answer: whether the search was proven, how much it
- * planned, the windows found, the parks the best window left out, and a
- * loosened ticket window on any window.
+ * planned, the windows found, the parks the best window left out and its
+ * stays, and a loosened ticket window on any window.
  */
 export function whenAnswerFacts(body: TripWhen): TripAnswerFacts {
   const search = body.meta?.search;
@@ -233,7 +242,8 @@ export function whenAnswerFacts(body: TripWhen): TripAnswerFacts {
       : [],
     // A window's plan names the parks it left out, not why.
     unplacedReasons: (best?.plan?.unplaced ?? []).map(() => "unknown"),
-    bases: null,
+    // A window names its stays but not its moves.
+    bases: Array.isArray(best?.plan?.stays) ? best.plan.stays.length : null,
     moves: null,
     windows: windows.length,
     windowsPlanned: count(search?.planned),

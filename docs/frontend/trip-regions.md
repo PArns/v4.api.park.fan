@@ -1631,7 +1631,7 @@ Parky's `plan_vacation` and `find_trip_dates`, which call the services without t
 | `trip_days`, `parks`, `parks_named`, `visits`, `locks` | the normalized query in counts: trip length with arrival and departure, parks (named or the headliners), visits with second ones, pinned days             |
 | `ticket_kinds`                                         | one entry per owned ticket: `pass`, `evening`, `reserved_day`, `one_day`, `multi_day`, `unknown` (a product the catalog no longer has)                     |
 | `hopper`                                               | plan first's hopper resorts, or an owned ticket with the hopper                                                                                            |
-| `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; null in the others                                                                           |
+| `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; `/when`: the best window's stays (a window names no moves); null in the other regions        |
 | `range_days`, `windows`, `windows_planned`, `within`   | `/when`: the search range in days, the windows answered, those planned (`meta.search.planned`), a school-break filter. `/best-days`: `range_days`          |
 
 The shape is read from the normalized query, so a request refused while its query is read has
@@ -1642,8 +1642,10 @@ only its route, region, status, code and latency.
 its message, which names the parameter at fault: `bad_date`, `window_in_past`, `window_reversed`,
 `window_past_horizon`, `window_too_long`, `range_shorter_than_trip`, `unknown_park`,
 `park_listed_twice`, `visits_per_park`, `too_many_visits`, `visits_exceed_days`, `bad_hopper`,
-`unknown_area`, `bad_hotel`, `bad_lock`, `bad_tickets`, `bad_within`, and `bad_request` for a
-message the list does not know yet (`TRIP_ERROR_CODES` in `trip-request-facts.ts`, pinned by its
+`unknown_area`, `bad_hotel`, `bad_lock`, `bad_tickets`, `bad_within`; in a region with bases
+`bad_bases` (`bases`, `startBase`, `endBase`), `stay_nights_exceed_trip` and `area_needs_base`, and
+`no_bases_in_region` for those parameters elsewhere; and `bad_request` for a message the list does
+not know yet (`TRIP_ERROR_CODES` in `trip-request-facts.ts`, pinned by its
 spec against the messages the code throws). 503 is `unavailable`, any other failure `internal`.
 Only the code is kept: the messages carry the visitor's own values.
 

@@ -101,7 +101,10 @@ function services(rows: TripEventRow[] = ROWS) {
     catalog: jest.fn(async (region: { slug: string }) => ({
       region: region.slug,
       version: "v1",
-      products: [{ id: "wdw-date-based" }, { id: "archived-product" }],
+      products:
+        region.slug === "orlando"
+          ? [{ id: "wdw-date-based" }, { id: "archived-product" }]
+          : [{ id: `${region.slug}-1-day` }],
     })),
   };
   return {
@@ -142,10 +145,9 @@ describe("trip_planner_report", () => {
     );
     const options = trip.report.mock.calls[0][1];
     expect(options).toMatchObject({ region: null, series: false });
-    expect([...options.productRegions]).toEqual([
-      ["wdw-date-based", "orlando"],
-      ["archived-product", "orlando"],
-    ]);
+    expect(options.productRegions.get("wdw-date-based")).toBe("orlando");
+    expect(options.productRegions.get("archived-product")).toBe("orlando");
+    expect(options.productRegions.get("japan-1-day")).toBe("japan");
 
     const step = (name: string) =>
       answer.funnel.find((s: { step: string }) => s.step === name);
