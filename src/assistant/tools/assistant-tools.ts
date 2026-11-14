@@ -5792,7 +5792,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Two to four short replies the user can tap under your answer, each sent as their " +
       "message: written as they would say it, in their language, under 40 characters, the " +
-      "likeliest first. Call it last, alone, after your answer's text (# Replies).",
+      "likeliest first. Call it last, alone, after your answer's text (# Calling suggest_replies).",
     input: z.object({
       replies: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
     }),

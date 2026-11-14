@@ -1078,7 +1078,7 @@ export function interviewGuide(
       ? `confirm what the plan holds (${holds}) or change it`
       : guide.ask,
     applyAnswerWith: guide.apply,
-    chipIdeas: `${guide.chips} (in the user's language, as they would say it)`,
+    suggestRepliesFrom: `${guide.chips} (in the user's language, as they would say it)`,
   };
 }
 
@@ -1099,5 +1099,5 @@ export function interviewLine(
     interview.answered.length && `answered ${interview.answered.join(", ")}`,
     interview.skipped.length && `passed ${interview.skipped.join(", ")}`,
   ].filter(Boolean);
-  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, at "${step}" (${guide.of})${done.length ? `; ${done.join("; ")}` : ""}. Now: ${guide.ask}. ${step === INTERVIEW_REFINE ? guide.applyAnswerWith : `Apply the answer with ${guide.applyAnswerWith}, then interview answered`}. Replies: ${guide.chipIdeas}. Anything the user says for another step, take at once with its tool and mark that step answered too.`;
+  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, at "${step}" (${guide.of})${done.length ? `; ${done.join("; ")}` : ""}. Now: ${guide.ask}. ${step === INTERVIEW_REFINE ? guide.applyAnswerWith : `Apply the answer with ${guide.applyAnswerWith}, then interview answered`}. End with the suggest_replies call, built from these ideas: ${guide.suggestRepliesFrom}. Anything the user says for another step, take at once with its tool and mark that step answered too.`;
 }
