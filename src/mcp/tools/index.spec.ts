@@ -33,8 +33,24 @@ describe("MCP_TOOLS", () => {
     },
   );
 
-  it("is read-only in v1: every tool is open to a viewer", () => {
-    for (const tool of MCP_TOOLS)
-      expect(tool.minRole ?? "viewer").toBe("viewer");
+  it("opens a read to a viewer and a write to an editor, or both to an owner where the admin does", () => {
+    for (const tool of MCP_TOOLS) {
+      const role = tool.minRole ?? "viewer";
+      if (tool.writes) expect(["editor", "owner"]).toContain(role);
+      else expect(["viewer", "owner"]).toContain(role);
+    }
+  });
+
+  it("makes every delete name its confirm or show a dry run first", () => {
+    for (const tool of MCP_TOOLS.filter((t) => t.writes === "delete")) {
+      const dryRun = tool.input.dryRun?.safeParse(undefined).data;
+      expect({
+        tool: tool.name,
+        guarded: Boolean(tool.input.confirm) || dryRun === true,
+      }).toEqual({
+        tool: tool.name,
+        guarded: true,
+      });
+    }
   });
 });

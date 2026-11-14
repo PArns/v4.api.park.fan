@@ -294,9 +294,9 @@ export type RegionTravelConfig =
 
 /**
  * The markets a region's tickets are sold in (`TicketProduct.markets`, a
- * link's `markets`). `home` is sold to anyone at the operator's own shop: what
- * plan first suggests from. Orlando: `us` home, `uk` (UK and Ireland residents
- * only), `intl` (sellers abroad).
+ * link's `markets`), labels that never filter. `home` is the operators' own
+ * shops. Orlando: `us` home, `uk` (shops in the UK and Ireland), `intl`
+ * (sellers elsewhere).
  */
 export interface TicketMarketsConfig {
   home: string;
@@ -516,6 +516,11 @@ export function stayRulesOf(
 /** Every region's `hotel=` values, in the order its `perks` lists them. */
 export function hotelKinds(region: Pick<RegionConfig, "perks">): string[] {
   return Object.keys(region.perks);
+}
+
+/** The keys of a region's resorts (`hopper=`, the plan's blocks), in its order. */
+export function resortKeys(region: Pick<RegionConfig, "groups">): string[] {
+  return region.groups.filter((g) => g.kind === "resort").map((g) => g.key);
 }
 
 const US = { continent: "north-america", country: "united-states" } as const;
@@ -2680,6 +2685,12 @@ export const TRIP_REGIONS: Record<string, RegionConfig> = {
   [JAPAN.slug]: JAPAN,
   [PARIS.slug]: PARIS,
 };
+
+/** Every region's slug, in that order; a non-empty tuple, as `z.enum` takes it. */
+export const TRIP_REGION_SLUGS = Object.keys(TRIP_REGIONS) as [
+  string,
+  ...string[],
+];
 
 /** The region a slug names, or null. */
 export function findRegion(slug: string): RegionConfig | null {

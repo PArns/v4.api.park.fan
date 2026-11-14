@@ -6,7 +6,12 @@
  * docs/frontend/trip-regions.md#tickets.
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  eachIsoDate,
+  isoDaysBetween,
+  isRealIsoDate,
+} from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
 import {
   allowanceOf,
@@ -30,6 +35,8 @@ import {
   type PlanTicket,
   type PlannedDay,
   type PlannedTicket,
+  type TicketCost,
+  type TicketVisit,
 } from "./trip-optimizer";
 import { hopPairs, type TripLeg } from "./travel";
 
@@ -43,7 +50,7 @@ export const MAX_TICKETS = 6;
  */
 export const HOPPER_SAVED_PER_RIDE = ORDER_MATTERS_MINUTES;
 
-/** Trips this long or longer get the UK 14-day tickets as an alternative. */
+/** Trips this long or longer get the 14-day tickets as an alternative. */
 export const LONG_STAY_DAYS = 10;
 
 /** An owned ticket as the query names it. */
@@ -58,19 +65,6 @@ export interface OwnedTicket {
 }
 
 const ITEM = /^([a-z0-9-]+)(?:\.(\d{1,2}))?(\.h\??)?(?:@(\d{4}-\d{2}-\d{2}))?$/;
-
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
-/** Every date from `from` to `to`, both included. */
-function datesFrom(from: string, to: string): string[] {
-  const out: string[] = [];
-  for (let d = from; d <= to; d = addIsoDays(d, 1)) out.push(d);
-  return out;
-}
 
 /** The catalog's product, or undefined. */
 /** What reads a catalog: a region, with the catalog loaded on it or not (the seed). */
@@ -156,7 +150,7 @@ export function parseTickets(
     if (start !== undefined) {
       validateStart(product, item, start, days, trip, starts);
     } else if (product.onSale) {
-      const anyOnSale = datesFrom(trip.from, trip.to).some((d) =>
+      const anyOnSale = eachIsoDate(trip.from, trip.to).some((d) =>
         onSaleAt(product, d),
       );
       if (!anyOnSale) {
@@ -286,7 +280,7 @@ export function planTicketsOf(
     if (product.until && product.until < last) {
       // A pass or Fun Card that ends inside the trip: its days end there.
       start = first;
-      window = Math.max(0, daysBetween(first, product.until) + 1);
+      window = Math.max(0, isoDaysBetween(first, product.until) + 1);
     }
     const allowance = allowanceOf(product, o.days);
     return [
@@ -380,10 +374,7 @@ export type DayTicket = Pick<
 >;
 
 /** A plan day's visits as a ticket sees them. */
-interface Visit {
-  date: string;
-  parks: string[];
-}
+type Visit = TicketVisit;
 
 /** The parks of a planned day's visits. */
 const parksOfDay = (d: PlannedDay): string[] => d.parks.map((p) => p.slug);
@@ -414,7 +405,7 @@ function fitOf(product: TicketProduct, visits: Visit[]): Fit | null {
   const first = visits[0].date;
   const last = visits[visits.length - 1].date;
   if (!onSaleAt(product, first)) return null;
-  const span = daysBetween(first, last) + 1;
+  const span = isoDaysBetween(first, last) + 1;
   const lengths: Array<number | "unlimited"> =
     product.days === "unlimited"
       ? ["unlimited"]
@@ -522,6 +513,49 @@ function chooseTickets(products: TicketProduct[], visits: Visit[]): Chosen[] {
   return out;
 }
 
+/** The products plan first suggests for a resort, in the catalog's order of suggestion. */
+function suggestedProducts(
+  region: RegionConfig,
+  resort: string,
+): TicketProduct[] {
+  // Whatever its market: a visitor buys from a shop abroad (a UK 14-day
+  // ticket) as readily as from the operator's own, and `markets` only says
+  // where a product is sold.
+  return ticketCatalog(region)
+    .filter(
+      (p) =>
+        p.resort === resort &&
+        p.suggest !== undefined &&
+        !p.archived &&
+        !p.entryFrom,
+    )
+    .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
+}
+
+/**
+ * What plan first's tickets for one resort's visits (in date order) come to,
+ * chosen as {@link suggestTickets} chooses them: the optimizer's spread may
+ * not make it dearer (`PlanInput.planFirstTickets`).
+ */
+export function planFirstTicketCost(
+  region: RegionConfig,
+  resort: string,
+  visits: TicketVisit[],
+): TicketCost {
+  const chosen = chooseTickets(suggestedProducts(region, resort), visits);
+  return {
+    uncovered:
+      visits.length - chosen.reduce((sum, c) => sum + c.visits.length, 0),
+    tickets: chosen.length,
+    days: chosen.reduce(
+      (sum, c) =>
+        sum + (c.fit.days === "unlimited" ? c.fit.dayUse : c.fit.days),
+      0,
+    ),
+    products: chosen.map((c) => `${c.product.id}:${c.fit.days}`).join(","),
+  };
+}
+
 /** What the suggestion needs from the plan route. */
 export interface SuggestionInput {
   region: RegionConfig;
@@ -563,20 +597,11 @@ export function suggestTickets(input: SuggestionInput): {
   }
   const suggestions: TicketSuggestion[] = [];
   const days = new Map<string, DayTicket>();
-  const tripDays = daysBetween(trip.from, trip.to) + 1;
+  const tripDays = isoDaysBetween(trip.from, trip.to) + 1;
   for (const group of region.groups) {
     const visits = byResort.get(group.key);
     if (!visits) continue;
-    const products = catalog
-      .filter(
-        (p) =>
-          p.resort === group.key &&
-          p.suggest !== undefined &&
-          !p.archived &&
-          !p.entryFrom &&
-          p.markets.includes(region.ticketMarkets.home),
-      )
-      .sort((a, b) => (a.suggest ?? 0) - (b.suggest ?? 0));
+    const products = suggestedProducts(region, group.key);
     const notCoveredBy = input.owned
       .filter((o) => productOf(region, o.product)?.resort === group.key)
       .map((o) => o.id);
@@ -596,13 +621,13 @@ export function suggestTickets(input: SuggestionInput): {
           n++;
           days.set(v.date, {
             ticket: id,
-            ticketDay: windowDay ? daysBetween(start, v.date) + 1 : n,
+            ticketDay: windowDay ? isoDaysBetween(start, v.date) + 1 : n,
           });
         }
       }
       const alternatives = alternativesFor(
         catalog,
-        region.ticketMarkets.home,
+        product.id,
         group.key,
         chosen.visits,
         // A resort the visitor holds a ticket for needs no other offer.
@@ -633,13 +658,13 @@ export function suggestTickets(input: SuggestionInput): {
 }
 
 /**
- * The UK 14-day tickets on a long trip (named on a resort's first suggestion
- * only), and a promotion (sold in the US, with sale dates, never suggested
- * itself) that covers the same visits without extra days.
+ * The 14-day tickets on a long trip (named on a resort's first suggestion
+ * only, the suggested product left out), and a promotion (with sale dates,
+ * never suggested itself) that covers the same visits without extra days.
  */
 function alternativesFor(
   catalog: TicketProduct[],
-  home: string,
+  suggested: string,
   resort: string,
   visits: Visit[],
   tripDays: number,
@@ -648,13 +673,8 @@ function alternativesFor(
   const out: TicketAlternative[] = [];
   for (const p of catalog) {
     if (p.resort !== resort || p.pass || p.archived) continue;
-    if (p.days === "unlimited") continue;
-    if (
-      tripDays >= LONG_STAY_DAYS &&
-      !p.markets.includes(home) &&
-      p.days.min >= 14 &&
-      onSaleAt(p, start)
-    ) {
+    if (p.days === "unlimited" || p.id === suggested) continue;
+    if (tripDays >= LONG_STAY_DAYS && p.days.min >= 14 && onSaleAt(p, start)) {
       out.push({
         product: p.id,
         days: p.days.min,
@@ -663,12 +683,7 @@ function alternativesFor(
       });
       continue;
     }
-    if (
-      p.suggest === undefined &&
-      p.onSale &&
-      !p.entryFrom &&
-      p.markets.includes(home)
-    ) {
+    if (p.suggest === undefined && p.onSale && !p.entryFrom) {
       const fit = fitOf(p, visits);
       if (fit && fit.days !== "unlimited" && fit.extra === 0) {
         out.push({

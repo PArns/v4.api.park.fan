@@ -1,5 +1,10 @@
 import { addIsoDays } from "../common/utils/date.util";
-import { ORLANDO } from "./regions";
+import {
+  regionPlan,
+  type CellTweak,
+  type PlanAnswer,
+} from "./__fixtures__/region-days";
+import { ORLANDO, PARIS } from "./regions";
 import type { OptimizedPlan, PlannedDay } from "./trip-optimizer";
 import {
   normalizePlanQuery,
@@ -266,7 +271,7 @@ describe("plan first: the suggestion", () => {
       product: "uor-date-based",
       days: 3,
     });
-    // A 14-day trip: the UK tickets as alternatives, UK and Ireland only.
+    // A 14-day trip: the 14-day tickets as alternatives, with where they are sold.
     expect(disney.alternatives).toContainEqual({
       product: "wdw-uk-14-day-magic",
       days: 14,
@@ -306,6 +311,39 @@ describe("plan first: the suggestion", () => {
     } as unknown as OptimizedPlan).suggestions[0];
     expect(epic).toMatchObject({ product: "uor-epic-1-day", days: 1 });
     expect(epic.hopper).toBeUndefined();
+  });
+
+  it("suggests a ticket sold abroad where it fits the visits best", () => {
+    const run = (slug: string, count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        parkDay(addIsoDays(FROM, i), i % 2 ? slug : DISNEY[i % 4]),
+      );
+    // Eleven Disney days: no date-based ticket has them, the UK 14-day one does.
+    const disney = suggest({
+      days: run("epcot", 11),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(disney.map((s) => [s.product, s.days])).toEqual([
+      ["wdw-uk-14-day-magic", 14],
+    ]);
+    // Seven Universal days: one UK 14-day ticket instead of two date-based ones.
+    const universal = suggest({
+      days: Array.from({ length: 7 }, (_, i) =>
+        parkDay(addIsoDays(FROM, i), i % 2 ? USF : IOA),
+      ),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(universal.map((s) => s.product)).toEqual([
+      "uor-uk-three-park-adventure",
+    ]);
+    // Where both fit as well, the operator's own ticket comes first.
+    const week = suggest({
+      days: run("epcot", 7),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(week.map((s) => [s.product, s.days])).toEqual([
+      ["wdw-date-based", 7],
+    ]);
   });
 
   it("covers a Disney water park with the Plus option's allowance", () => {
@@ -690,3 +728,100 @@ function suggest(plan: OptimizedPlan) {
   };
   return suggestTickets(input);
 }
+
+describe("the spread keeps plan first's tickets", () => {
+  /** The same wait on every day: every placement ties the cheapest. */
+  const flat: CellTweak = (_slug, _date, cell) => {
+    cell.waitExact = 40;
+    cell.headlinerWait = 40;
+  };
+  const tickets = (answer: PlanAnswer) =>
+    (answer.meta.ticketSuggestion ?? []).map(
+      (t) => `${t.product}:${t.days}${t.extraDays ? `+${t.extraDays}` : ""}`,
+    );
+  const parkDays = (answer: PlanAnswer) =>
+    answer.days
+      .filter((d) => d.parks.length > 0)
+      .map((d) => `${d.date.slice(5)} ${d.parks[0].slug}`);
+  const paris = (parks: string, extra: Record<string, string> = {}) =>
+    regionPlan(
+      PARIS,
+      { from: "2027-05-07", to: "2027-05-14", parks, split: "fixed", ...extra },
+      TODAY,
+      flat,
+    );
+
+  it("keeps Disneyland Paris's days together on its consecutive ticket", () => {
+    // Spread apart, the two days would need the 4-day ticket.
+    const two = paris("disneyland-park,disney-adventure-world");
+    expect(tickets(two)).toEqual(["dlp-multi-day:2"]);
+    const [a, b] = parkDays(two).map((d) =>
+      Date.parse(`2027-${d.slice(0, 5)}`),
+    );
+    expect(b - a).toBe(86_400_000);
+    // Three days and Parc Astérix: one 3-day ticket, not a 2-day and a 1-day.
+    expect(
+      tickets(paris("disneyland-park:2,disney-adventure-world,parc-asterix")),
+    ).toEqual(["dlp-multi-day:3", "asterix-1-day:1"]);
+    // An owned 2-day ticket holds its days by its window, as before.
+    const owned = paris("disneyland-park,disney-adventure-world", {
+      tickets: "dlp-multi-day.2",
+    });
+    expect(
+      owned.days.filter((d) => d.ticket === "t1").map((d) => d.date),
+    ).toEqual(["2027-05-08", "2027-05-09"]);
+  });
+
+  it("closes a rest day inside a consecutive ticket where the waits allow", () => {
+    // The cheapest plan rests on the 9th between the two Disney days, a day
+    // the 3-day ticket pays for; Adventure World's 9th is 4 minutes dearer.
+    const waits: CellTweak = (slug, date, cell) => {
+      const wait =
+        slug === "disneyland-park" && date === "2027-05-08"
+          ? 40
+          : slug === "disney-adventure-world" && date === "2027-05-10"
+            ? 40
+            : slug === "disney-adventure-world" && date === "2027-05-09"
+              ? 44
+              : 80;
+      cell.waitExact = wait;
+      cell.headlinerWait = wait;
+    };
+    const answer = regionPlan(
+      PARIS,
+      {
+        from: "2027-05-07",
+        to: "2027-05-14",
+        parks: "disneyland-park,disney-adventure-world",
+        split: "fixed",
+      },
+      TODAY,
+      waits,
+    );
+    expect(parkDays(answer)).toEqual([
+      "05-08 disneyland-park",
+      "05-09 disney-adventure-world",
+    ]);
+    expect(tickets(answer)).toEqual(["dlp-multi-day:2"]);
+  });
+
+  it("keeps Walt Disney World's four days inside the 4-day ticket's week", () => {
+    // Ten days with a park allowed on the first and last: spread over all of
+    // them, the four days would need the 5-day ticket.
+    const answer = regionPlan(
+      ORLANDO,
+      {
+        from: "2027-05-07",
+        to: "2027-05-16",
+        parks: DISNEY.join(","),
+        split: "fixed",
+        arrival: "park",
+        departure: "park",
+      },
+      TODAY,
+      flat,
+    );
+    expect(tickets(answer)).toEqual(["wdw-date-based:4"]);
+    expect(parkDays(answer)).toHaveLength(4);
+  });
+});

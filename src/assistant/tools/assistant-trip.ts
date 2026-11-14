@@ -1,7 +1,7 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { nameKey } from "../../mcp/tools/park-ref";
-import { addIsoDays } from "../../common/utils/date.util";
+import { addIsoDays, ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import type { NormalizedPlanQuery } from "../../trip-regions/trip-plan.service";
 import type {
   InternalCalendarDay,
@@ -299,6 +299,7 @@ export function slotName(
 const SEASON_KINDS: Record<string, string> = {
   halloween: "Halloween season",
   christmas: "Christmas season",
+  winter: "winter season",
   summer_nights: "summer nights",
   special_event: "special event",
   opening: "opening season",
@@ -397,8 +398,8 @@ const HUB_PARAMS = [
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
 export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
-  from: /^\d{4}-\d{2}-\d{2}$/,
-  to: /^\d{4}-\d{2}-\d{2}$/,
+  from: ISO_DATE_PATTERN,
+  to: ISO_DATE_PATTERN,
   parks: /^[a-z0-9-]+(:[1-9])?(,[a-z0-9-]+(:[1-9])?)*$/,
   hotel: /^[a-z_]+$/,
   area: /^[a-z_]+$/,
@@ -1061,11 +1062,17 @@ function ownedTicketSummary(
   };
 }
 
-/** Whom an alternative is sold to, where not to everyone: "(UK/Ireland only)" in Orlando. */
-function marketNote(region: RegionConfig, markets: readonly string[]): string {
-  if (markets.includes(region.ticketMarkets.home)) return "";
-  if (markets.includes("uk")) return " (UK/Ireland only)";
-  return ` (${markets.join(", ")} only)`;
+/**
+ * A ticket by its name, and where it is sold when the operators' own shops do
+ * not sell it: "… (sold by UK shops)" in Orlando. Information, not a limit:
+ * anyone may buy it there.
+ */
+function ticketName(region: RegionConfig, id: string): string {
+  const product = productOf(region, id);
+  if (!product) return id;
+  const { markets } = product;
+  if (markets.includes(region.ticketMarkets.home)) return product.name;
+  return `${product.name} (sold by ${markets.includes("uk") ? "UK shops" : "shops abroad"})`;
 }
 
 function suggestionSummary(
@@ -1074,9 +1081,8 @@ function suggestionSummary(
   names: ReadonlyMap<string, string>,
   withShop: boolean,
 ) {
-  const product = productOf(region, s.product);
   return {
-    ticket: product?.name ?? s.product,
+    ticket: ticketName(region, s.product),
     days: s.days,
     valid: `${s.start}..${s.end}`,
     ...(s.extraDays && {
@@ -1084,10 +1090,7 @@ function suggestionSummary(
     }),
     ...(s.hopper && { hopper: hopperPhrase(s.hopper, names) }),
     ...(s.alternatives?.length && {
-      alternatives: s.alternatives.map(
-        (a) =>
-          `${productOf(region, a.product)?.name ?? a.product}${marketNote(region, a.markets)}`,
-      ),
+      alternatives: s.alternatives.map((a) => ticketName(region, a.product)),
     }),
     ...(withShop && { shop: s.shopUrl }),
   };
@@ -1394,7 +1397,7 @@ export function tripDatesSummary(input: {
         ...(w.ticketSuggestion && {
           ticketsToBuy: w.ticketSuggestion.map(
             (s) =>
-              `${productOf(region, s.product)?.name ?? s.product}, ${s.days} days from ${s.start}`,
+              `${ticketName(region, s.product)}, ${s.days} days from ${s.start}`,
           ),
         }),
         hubUrl: hubUrl(region, { ...plan, from: w.from, to: w.to }),

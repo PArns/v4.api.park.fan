@@ -58,6 +58,20 @@ export class TripTicketAllowanceDto {
 }
 
 /** Where a ticket is bought. */
+/** The country store a link leads to, for a seller with one store per country. */
+export class TripTicketStoreDto {
+  @ApiProperty({
+    example: "IE",
+    description: "ISO 3166-1 alpha-2, upper case: GB, IE, NL, DE, US.",
+  })
+  country: string;
+  @ApiProperty({
+    example: "EUR",
+    description: "ISO 4217: the currency the store sells in.",
+  })
+  currency: string;
+}
+
 export class TripTicketLinkDto {
   @ApiProperty({
     example: "Walt Disney World",
@@ -81,15 +95,22 @@ export class TripTicketLinkDto {
     type: [String],
     example: ["uk"],
     description:
-      "Whom the link is for, codes of the region's `ticketMarkets`; absent: everyone.",
+      "The market its seller sells in, codes of the region's `ticketMarkets` (a UK shop: uk); absent: every one. A label, never a filter.",
   })
   markets?: string[];
   @ApiPropertyOptional({
     type: [String],
     enum: ["en", "de", "nl", "fr", "es", "it"],
-    description: "The site languages it is for; absent: every one.",
+    description:
+      "The site languages it is for; absent: every one. Orders the links, labels nothing.",
   })
   locales?: string[];
+  @ApiPropertyOptional({
+    type: () => TripTicketStoreDto,
+    description:
+      "The seller's country store it leads to, with the currency it sells in (Attraction Tickets has one per country, each with its own prices): the client names the link by it. Absent: a seller with one shop.",
+  })
+  store?: TripTicketStoreDto;
 }
 
 export class TripTicketOnSaleDto {
@@ -113,7 +134,7 @@ export class TripTicketProductDto {
     type: [String],
     example: ["us", "intl"],
     description:
-      "Codes of the region's `ticketMarkets`; its `home` is sold to anyone. Orlando: us sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only.",
+      "Where it is sold, codes of the region's `ticketMarkets`: a label, never a filter, and plan first suggests from every market. Orlando: us the operators' own shops; uk shops in the UK and Ireland; intl sellers elsewhere.",
   })
   markets: string[];
   @ApiProperty({ type: [String], description: "Parks a ticket day covers." })
@@ -321,7 +342,12 @@ export class TripPlanTicketDto {
 export class TripTicketAlternativeDto {
   @ApiProperty({ example: "wdw-uk-14-day-magic" }) product: string;
   @ApiProperty({ example: 14 }) days: number;
-  @ApiProperty({ type: [String], example: ["uk"] }) markets: string[];
+  @ApiProperty({
+    type: [String],
+    example: ["uk"],
+    description: "Where it is sold, as the product's `markets`.",
+  })
+  markets: string[];
   @ApiProperty({ enum: ["long_stay", "promotion"] })
   reason: "long_stay" | "promotion";
 }

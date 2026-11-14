@@ -8,7 +8,7 @@ import {
 import {
   HOURLY_FROM_DESCRIPTION,
   eventWindowInput,
-  round3,
+  ratio,
   siteQuery,
   windowOf,
 } from "./site-analytics.inputs";
@@ -19,10 +19,6 @@ import {
   isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
-
-/** A ratio to three places, null without both counts or a base. */
-const ratio = (count: number | null, base: number | null): number | null =>
-  count === null || base === null || base === 0 ? null : round3(count / base);
 
 export const assistantReportTool = defineMcpTool({
   name: "assistant_report",

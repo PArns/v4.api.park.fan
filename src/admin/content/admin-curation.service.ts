@@ -37,6 +37,7 @@ import {
   TRANSLATE_FUN_FACTS_JOB,
 } from "./fun-fact-translation.constants";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import {
   AdminAuditService,
   PARK_VERIFY_ACTION,
@@ -931,6 +932,25 @@ export class AdminCurationService {
    * instead of immediately, which is a delay, not a lie.
    */
   async publish(parkId: string, attractionIds: string[]): Promise<void> {
+    await this.evictPark(parkId, attractionIds);
+    await this.revalidateParks();
+  }
+
+  /**
+   * {@link publish} for a write across several parks, such as a season
+   * import: every park leaves Redis first, then the frontend is told once
+   * rather than once per park.
+   */
+  async publishParks(parkIds: string[]): Promise<void> {
+    if (parkIds.length === 0) return;
+    for (const parkId of new Set(parkIds)) await this.evictPark(parkId, []);
+    await this.revalidateParks();
+  }
+
+  private async evictPark(
+    parkId: string,
+    attractionIds: string[],
+  ): Promise<void> {
     try {
       await invalidateParkCaches(this.redis, parkId, attractionIds);
     } catch (error) {
@@ -942,7 +962,9 @@ export class AdminCurationService {
         }`,
       );
     }
+  }
 
+  private async revalidateParks(): Promise<void> {
     await this.revalidation.revalidateTags(["parks", "attractions"]);
 
     try {
@@ -984,7 +1006,7 @@ function parseParkLocalDate(label: string, raw: unknown): string | null {
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+  if (!ISO_DATE_PATTERN.test(trimmed)) {
     throw new BadRequestException(`${label} must be a date in YYYY-MM-DD form`);
   }
   // Rejects 2026-02-30 and 2026-13-01, which the pattern lets through.

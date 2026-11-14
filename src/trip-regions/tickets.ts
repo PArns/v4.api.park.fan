@@ -19,9 +19,10 @@ import { PARIS_TICKETS } from "./tickets.paris";
 import { SOUTHERN_CALIFORNIA_TICKETS } from "./tickets.southern-california";
 
 /**
- * Whom a product or a link is sold to: a code of the region's
- * `ticketMarkets` (Orlando: `us` sold to anyone, `uk` UK and Ireland residents
- * only, `intl` sellers abroad).
+ * Where a product or a link is sold: a code of the region's `ticketMarkets`
+ * (Orlando: `us` the operators' own shops, `uk` shops in the UK and Ireland,
+ * `intl` sellers elsewhere). It describes and never filters: plan first
+ * suggests from every market, and the client shows it as a label.
  */
 export type TicketMarket = string;
 
@@ -59,6 +60,18 @@ export interface TicketCap extends ByLength {
   max: number;
 }
 
+/**
+ * The country store a link leads to, for a seller with one store per country
+ * (Attraction Tickets' UK, Irish, Dutch, German and US stores), each with its
+ * own prices: the client names the link by it ("Attraction Tickets · UK (£)").
+ */
+export interface TicketStore {
+  /** ISO 3166-1 alpha-2, upper case: `GB`, `IE`, `NL`, `DE`, `US`. */
+  country: string;
+  /** ISO 4217, the currency the store sells in: `GBP`, `EUR`, `USD`. */
+  currency: string;
+}
+
 /** Where a ticket is bought; exactly one link of a product is the operator's own shop. */
 export interface TicketLink {
   /** The seller's own name, not translated. */
@@ -67,10 +80,12 @@ export interface TicketLink {
   official?: true;
   /** An affiliate or paid link. */
   sponsored: boolean;
-  /** Whom it is for; absent: everyone. */
+  /** The market its seller sells in (a UK shop: `uk`); absent: every one. */
   markets?: TicketMarket[];
-  /** The site languages it is for; absent: every one. */
+  /** The site languages it is for; absent: every one. Orders the links, labels nothing. */
   locales?: string[];
+  /** The seller's country store it leads to; absent: a seller with one shop. */
+  store?: TicketStore;
 }
 
 /** The fields of a product the optimizer reads: `ticket_products.rules`. */
@@ -241,7 +256,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
   },
   {
     id: "wdw-date-based-plus",
-    name: "Walt Disney World date-based ticket with Water Park and Sports (Park Hopper Plus with .h)",
+    name: "Walt Disney World date-based ticket with Water Park and Sports (Park Hopper Plus)",
     resort: "walt-disney-world",
     markets: ["us", "uk", "intl"],
     parks: DISNEY,
@@ -296,6 +311,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
       "UK and Ireland residents, bought before travel. 14 theme-park days within 18 days of the " +
       "chosen start; expires in full on day 18. Park hopping, the open water park, mini golf and " +
       "Memory Maker included; a water-park day uses no theme-park day.",
+    suggest: 40,
   },
   {
     id: "wdw-uk-7-day-magic",
@@ -313,6 +329,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     notes:
       "UK and Ireland residents. 7 days within 15 days of the chosen start, hopping and the water " +
       "parks included. The number of water-park visits is not stated; the plan assumes 7.",
+    suggest: 30,
   },
   {
     id: "wdw-annual-pass",
@@ -339,7 +356,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
   // ── Universal Orlando ──────────────────────────────────────────────────
   {
     id: "uor-date-based",
-    name: "Universal Orlando date-based ticket (park-to-park with .h)",
+    name: "Universal Orlando date-based ticket (1 park per day or park-to-park)",
     resort: "universal-orlando",
     markets: ["us", "intl"],
     parks: [USF, IOA, EPIC],
@@ -476,6 +493,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
       "Every day of 14 consecutive days from the selected start, with unlimited park-to-park " +
       "including Epic Universe and Volcano Bay. Not sold while Volcano Bay is closed (the UK " +
       "store lists arrivals from 2027-03-25, other pages 2027-04-01).",
+    suggest: 60,
   },
   {
     id: "uor-uk-three-park-adventure",
@@ -493,6 +511,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     notes:
       "The All Parks Ticket without Volcano Bay, for arrivals while it is closed: every day of 14 " +
       "consecutive days, unlimited park-to-park including Epic Universe.",
+    suggest: 50,
   },
   {
     id: "uor-annual-pass",
@@ -621,6 +640,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     notes:
       "Open-dated to the end of the calendar year chosen at booking, then 14 consecutive days from " +
       "the first visit; three visits in any combination, the same park included.",
+    suggest: 35,
   },
   {
     id: "seaworld-uk-ultimate",
@@ -637,6 +657,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
     notes:
       "Unlimited visits for 14 days from the first, parking and three all-day dining days " +
       "included. One seller's page.",
+    suggest: 45,
   },
   {
     id: "seaworld-fun-card",
@@ -893,12 +914,36 @@ export function ticketCatalog(region: {
 export const ATTRACTION_TICKETS_SELLER = "Attraction Tickets";
 
 /**
+ * Attraction Tickets' country stores by the first segment of a page's path
+ * (`/en-ie/…`): each sells in its own currency, at its own prices.
+ */
+export const ATTRACTION_TICKETS_STORES: Readonly<Record<string, TicketStore>> =
+  {
+    en: { country: "GB", currency: "GBP" },
+    "en-ie": { country: "IE", currency: "EUR" },
+    "en-nl": { country: "NL", currency: "EUR" },
+    de: { country: "DE", currency: "EUR" },
+    us: { country: "US", currency: "USD" },
+  };
+
+/** The store of an Attraction Tickets page; undefined for any other url. */
+export function attractionTicketsStore(url: string): TicketStore | undefined {
+  const { host, pathname } = new URL(url);
+  if (host !== "www.attractiontickets.com") return undefined;
+  const prefix = pathname.split("/")[1];
+  return Object.prototype.hasOwnProperty.call(ATTRACTION_TICKETS_STORES, prefix)
+    ? { ...ATTRACTION_TICKETS_STORES[prefix] }
+    : undefined;
+}
+
+/**
  * A seed product's links from its entry in `ticket-seed-links.ts`, in display
  * order: the cheapest authorized seller, then Attraction Tickets' pages (each
- * for its locale, or for all), then the operator's own shop (`official`). A
- * link that repeats one before it (the cheapest seller is Attraction Tickets,
- * or the operator itself) is left out. Never sponsored. Without an entry, the
- * product's `shopUrl` is the official link, named by its host.
+ * for its locale, or for all), then the operator's own shop (`official`). An
+ * Attraction Tickets page carries its country store. A link that repeats one
+ * before it (the cheapest seller is Attraction Tickets, or the operator
+ * itself) is left out. Never sponsored. Without an entry, the product's
+ * `shopUrl` is the official link, named by its host.
  */
 export function seedLinksFrom(
   entry: SeedLinkEntry | undefined,
@@ -912,18 +957,22 @@ export function seedLinksFrom(
   };
   const links: TicketLink[] = [];
   if (entry?.cheapest) {
+    const store = attractionTicketsStore(entry.cheapest.url);
     links.push({
       seller: entry.cheapest.seller,
       url: entry.cheapest.url,
       sponsored: false,
+      ...(store && { store }),
     });
   }
   for (const page of entry?.attractionTickets ?? []) {
+    const store = attractionTicketsStore(page.url);
     links.push({
       seller: ATTRACTION_TICKETS_SELLER,
       url: page.url,
       sponsored: false,
       ...(page.locale && { locales: [page.locale] }),
+      ...(store && { store }),
     });
   }
   const seen = new Set<string>([official.url]);

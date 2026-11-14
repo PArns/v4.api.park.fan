@@ -210,7 +210,7 @@ describe("Admin MCP and OAuth (e2e)", () => {
     expect(resource.body).toEqual({
       resource: getMcpResourceUrl(),
       authorization_servers: [getApiPublicUrl()],
-      scopes_supported: ["admin:read"],
+      scopes_supported: ["admin:read", "admin:write", "admin:owner"],
       bearer_methods_supported: ["header"],
       resource_name: "park.fan admin",
     });

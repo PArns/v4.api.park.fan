@@ -1,3 +1,5 @@
+import { isoDateWeekday, isoDaysBetween } from "./date.util";
+
 /**
  * How far back a ride's operating days are read, in days. Eight weeks: long
  * enough that each weekday occurs eight times, short enough that a schedule
@@ -53,15 +55,8 @@ export const RUN_WEEKDAYS_EVERY_OPEN_DAY_SHARE = 0.9;
 
 /** ISO weekday (Monday 1 … Sunday 7) of a `YYYY-MM-DD` calendar date. */
 export function isoWeekdayOf(date: string): number {
-  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  const day = isoDateWeekday(date);
   return day === 0 ? 7 : day;
-}
-
-function daysBetween(from: string, to: string): number {
-  return Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
 }
 
 /**
@@ -86,8 +81,8 @@ export function runWeekdays(
   if (days.length === 0) return null;
   const first = days[0];
   const last = days[days.length - 1];
-  if (daysBetween(first, today) < RUN_WEEKDAYS_MIN_HISTORY_DAYS) return null;
-  if (daysBetween(last, today) > RUN_WEEKDAYS_MAX_IDLE_DAYS) return null;
+  if (isoDaysBetween(first, today) < RUN_WEEKDAYS_MIN_HISTORY_DAYS) return null;
+  if (isoDaysBetween(last, today) > RUN_WEEKDAYS_MAX_IDLE_DAYS) return null;
 
   const ran = new Set(days);
   const openDays = new Array<number>(8).fill(0);

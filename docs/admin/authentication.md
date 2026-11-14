@@ -198,7 +198,9 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
   weeks and a Redis flush must not forget that a refresh token was already used.
 - **Checked at request time.** Every lookup joins `admin_users`: an inactive account is refused at
   its next request, and `mustChangePassword` / the `ADMIN_REQUIRE_TOTP` debt refuse it as they do a
-  session. The role is the lesser of the account's and the token's cap (`viewer` in v1).
+  session. The role is the lesser of the account's and the token's cap: `viewer` for `admin:read`,
+  `editor` for `admin:write`, which only an editor or owner can be given, `owner` for
+  `admin:owner`, which only an owner can be given ([writing](mcp.md#writing)).
 - **One audience.** Only `@AdminTokenOnly()` endpoints resolve them, and those accept no session and
   no shared pass, so a token never reaches an admin REST route, the token endpoints or the consent.
 - **Ended with the sessions.** `AdminAuthService.signOutEverywhere` revokes them wherever the
@@ -209,7 +211,7 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
   and the consent endpoints are `@AdminLegacyAccess(false)` and reachable by sessions only; creating,
   revoking and granting write audit rows. `POST` asks the account for its password again and, with
   two-factor on, for a current `totpCode` (`AdminAuthService.confirmIdentity`): a stolen session
-  must not mint a read-only credential that outlives it. The refusals are 401 `invalid-password`,
+  must not mint a credential that outlives it. The refusals are 401 `invalid-password`,
   `totp-required` (a missing code, not counted as a failure) and `invalid-totp` (wrong, or its step
   already spent, e.g. by the login a minute ago), and a 429 `rate-limited` with `retryAfterSeconds`
   from the action limiter (action `token-create`, 10 failures per account per 15 min). The password

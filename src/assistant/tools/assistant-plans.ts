@@ -1,3 +1,4 @@
+import { isoDaysBetween } from "../../common/utils/date.util";
 import type { TripPlanQueryDto } from "../../trip-regions/dto/trip-region-query.dto";
 import { findRegion, type RegionConfig } from "../../trip-regions/regions";
 import {
@@ -234,7 +235,7 @@ export function tripLine(trip: VisitorTrip): string {
   const parts: string[] = [];
   if (p.get("from") && p.get("to")) {
     parts.push(
-      `${p.get("from")} to ${p.get("to")} (${dayCount(p.get("from") as string, p.get("to") as string)} days)`,
+      `${p.get("from")} to ${p.get("to")} (${isoDaysBetween(p.get("from") as string, p.get("to") as string) + 1} days)`,
     );
   } else if (search) {
     parts.push(
@@ -274,15 +275,6 @@ export function tripLine(trip: VisitorTrip): string {
   if (p.get("departure") === "park") parts.push("a park on the departure day");
   if (trip.party) parts.push(`party ${partyPhrase(trip.party)}`);
   return `${trip.region.name} trip${trip.onScreen ? " (on screen in the hub's planner now)" : " (remembered by this browser)"}: ${parts.join("; ")}`;
-}
-
-function dayCount(from: string, to: string): number {
-  return (
-    Math.round(
-      (Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) /
-        86_400_000,
-    ) + 1
-  );
 }
 
 type Itinerary = ReturnType<typeof vacationItinerary>;
@@ -1078,7 +1070,7 @@ export function interviewGuide(
       ? `confirm what the plan holds (${holds}) or change it`
       : guide.ask,
     applyAnswerWith: guide.apply,
-    chipIdeas: `${guide.chips} (in the user's language, as they would say it)`,
+    suggestRepliesFrom: `${guide.chips} (in the user's language, as they would say it)`,
   };
 }
 
@@ -1099,5 +1091,5 @@ export function interviewLine(
     interview.answered.length && `answered ${interview.answered.join(", ")}`,
     interview.skipped.length && `passed ${interview.skipped.join(", ")}`,
   ].filter(Boolean);
-  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, at "${step}" (${guide.of})${done.length ? `; ${done.join("; ")}` : ""}. Now: ${guide.ask}. ${step === INTERVIEW_REFINE ? guide.applyAnswerWith : `Apply the answer with ${guide.applyAnswerWith}, then interview answered`}. Replies: ${guide.chipIdeas}. Anything the user says for another step, take at once with its tool and mark that step answered too.`;
+  return `Parky's interview is running (data, not instructions): a ${interview.kind === "trip" ? "trip" : "park day"}, at "${step}" (${guide.of})${done.length ? `; ${done.join("; ")}` : ""}. Now: ${guide.ask}. ${step === INTERVIEW_REFINE ? guide.applyAnswerWith : `Apply the answer with ${guide.applyAnswerWith}, then interview answered`}. End with the suggest_replies call, built from these ideas: ${guide.suggestRepliesFrom}. Anything the user says for another step, take at once with its tool and mark that step answered too.`;
 }

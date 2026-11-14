@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, LessThanOrEqual, MoreThanOrEqual, Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import {
   PARK_SEASON_KINDS,
   PARK_SEASON_STATUSES,
@@ -17,7 +17,9 @@ import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import {
+  CLOCK_PATTERN,
   getCurrentDateInTimezone,
+  ISO_DATE_PATTERN,
   isRealIsoDate,
 } from "../../common/utils/date.util";
 
@@ -42,6 +44,8 @@ export interface SeasonInput {
 
 export interface SeasonQuery {
   parkId?: string;
+  /** Seasons of any of these parks, e.g. a trip region's; an empty list matches none. */
+  parkIds?: string[];
   kind?: ParkSeasonKind;
   status?: ParkSeasonStatus;
   year?: number;
@@ -50,9 +54,6 @@ export interface SeasonQuery {
   limit?: number;
   offset?: number;
 }
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 @Injectable()
 export class ParkSeasonService {
@@ -87,6 +88,12 @@ export class ParkSeasonService {
 
     if (query.parkId)
       qb.andWhere("season.parkId = :parkId", { parkId: query.parkId });
+    if (query.parkIds) {
+      if (query.parkIds.length === 0) return { seasons: [], total: 0 };
+      qb.andWhere("season.parkId IN (:...parkIds)", {
+        parkIds: query.parkIds,
+      });
+    }
     if (query.kind) qb.andWhere("season.kind = :kind", { kind: query.kind });
     if (query.status)
       qb.andWhere("season.status = :status", { status: query.status });
@@ -196,6 +203,14 @@ export class ParkSeasonService {
     return this.seasons.save(season);
   }
 
+  /**
+   * The checks a create runs, without writing: 400 with the first problem, as
+   * `create` would answer. A season import's dry run calls it per row.
+   */
+  async validate(parkId: string, input: SeasonInput): Promise<void> {
+    await this.normalize(parkId, input);
+  }
+
   async remove(id: string): Promise<ParkSeason> {
     const season = await this.findOne(id);
     await this.seasons.delete({ id });
@@ -216,38 +231,19 @@ export class ParkSeasonService {
   }
 
   /**
-   * Seasons overlapping a date, for the public read endpoint.
+   * A park's seasons overlapping a range, for the public read endpoint.
    *
    * Deliberately its own query rather than a field on the park payload: the
    * park response is fetched on every park page and re-polled every five
    * minutes, and seasons are day-stable. Putting them in it would pay for them
    * on every poll of every park, including the ~80 % with none on file.
    */
-  async forParkOnDate(parkId: string, date: string): Promise<ParkSeason[]> {
-    return this.seasons.find({
-      where: {
-        parkId,
-        startDate: LessThanOrEqual(date),
-        endDate: MoreThanOrEqual(date),
-      },
-      order: { startDate: "ASC" },
-    });
-  }
-
   async forParkInRange(
     parkId: string,
     from: string,
     to: string,
   ): Promise<ParkSeason[]> {
-    return this.seasons
-      .createQueryBuilder("season")
-      .where("season.parkId = :parkId", { parkId })
-      .andWhere("season.startDate <= :to AND season.endDate >= :from", {
-        from,
-        to,
-      })
-      .orderBy("season.startDate", "ASC")
-      .getMany();
+    return this.forParksInRange([parkId], from, to);
   }
 
   /** The seasons of several parks overlapping a range, in one query. */
@@ -317,10 +313,10 @@ export class ParkSeasonService {
       }
     }
 
-    if (input.opensAt && !TIME_RE.test(input.opensAt)) {
+    if (input.opensAt && !CLOCK_PATTERN.test(input.opensAt)) {
       throw new BadRequestException("opensAt must be HH:MM");
     }
-    if (input.closesAt && !TIME_RE.test(input.closesAt)) {
+    if (input.closesAt && !CLOCK_PATTERN.test(input.closesAt)) {
       throw new BadRequestException("closesAt must be HH:MM");
     }
 
@@ -427,7 +423,7 @@ export class ParkSeasonService {
   }
 
   private requireDate(value: string, field: string): string {
-    if (typeof value !== "string" || !DATE_RE.test(value)) {
+    if (typeof value !== "string" || !ISO_DATE_PATTERN.test(value)) {
       throw new BadRequestException(`${field} must be a YYYY-MM-DD date`);
     }
     if (!isRealIsoDate(value)) {

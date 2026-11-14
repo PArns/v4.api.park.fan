@@ -264,11 +264,54 @@ export function addIsoDays(isoDate: string, days: number): string {
 }
 
 /**
+ * Calendar days from one `YYYY-MM-DD` to another, negative when `to` comes
+ * first. Dates, not instants: no timezone and no DST hour enters.
+ */
+export function isoDaysBetween(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+      86_400_000,
+  );
+}
+
+/** Every `YYYY-MM-DD` from `from` to `to`, both included; none when `to` comes first. */
+export function eachIsoDate(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let d = from; d <= to; d = addIsoDays(d, 1)) out.push(d);
+  return out;
+}
+
+/** The weekday of a `YYYY-MM-DD`, 0 = Sunday … 6 = Saturday, as `getUTCDay` counts. */
+export function isoDateWeekday(date: string): number {
+  return new Date(`${date}T12:00:00Z`).getUTCDay();
+}
+
+/** Saturday or Sunday, from the date string itself (no timezone involved). */
+export function isWeekendDate(date: string): boolean {
+  const day = isoDateWeekday(date);
+  return day === 0 || day === 6;
+}
+
+/** Monday of a `YYYY-MM-DD`'s ISO week. */
+export function isoWeekStart(date: string): string {
+  return addIsoDays(date, -((isoDateWeekday(date) + 6) % 7));
+}
+
+/**
+ * The shape of a `YYYY-MM-DD`. A shape only: {@link isRealIsoDate} also asks
+ * whether the calendar has the day.
+ */
+export const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A clock time `HH:MM`, 00:00 to 23:59; a midnight close is written 00:00. */
+export const CLOCK_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
  * True for a `YYYY-MM-DD` string that names a day the calendar has. The shape
  * alone lets `2026-02-31` through, and Postgres refuses it later with a 500.
  */
 export function isRealIsoDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (typeof value !== "string" || !ISO_DATE_PATTERN.test(value)) {
     return false;
   }
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -291,8 +334,7 @@ export function lastYearDays(date: string): {
 } {
   const [year, month, day] = date.split("-");
   const sameDate = `${Number(year) - 1}-${month}-${month === "02" && day === "29" ? "28" : day}`;
-  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
-  const ahead = (weekday(date) - weekday(sameDate) + 7) % 7;
+  const ahead = (isoDateWeekday(date) - isoDateWeekday(sameDate) + 7) % 7;
   return {
     sameDate,
     sameWeekday: addIsoDays(sameDate, ahead > 3 ? ahead - 7 : ahead),

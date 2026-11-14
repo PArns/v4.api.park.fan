@@ -1,6 +1,7 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PartialType } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -23,6 +24,7 @@ import {
   type ParkSeasonKind,
   type ParkSeasonStatus,
 } from "../../../parks/entities/park-season.entity";
+import { ISO_DATE_PATTERN } from "../../../common/utils/date.util";
 
 export class CurationPatchDto {
   @ApiProperty({
@@ -135,6 +137,18 @@ export class BulkCurationDto {
   sourceUrl?: string;
 }
 
+/**
+ * The longest text a season field takes, here and in the MCP server's season
+ * tools, so a row the one accepts the other accepts too.
+ */
+export const SEASON_LIMITS = {
+  name: 200,
+  url: 2000,
+  note: 4000,
+  /** Dates a season may list in `dates`: a whole year, every day. */
+  dates: 366,
+} as const;
+
 export class SeasonWriteDto {
   @ApiProperty({ enum: PARK_SEASON_KINDS })
   @IsIn(PARK_SEASON_KINDS as unknown as string[])
@@ -147,17 +161,17 @@ export class SeasonWriteDto {
   })
   @IsOptional()
   @IsString()
-  @MaxLength(200)
+  @MaxLength(SEASON_LIMITS.name)
   name?: string | null;
 
   @ApiProperty({ example: "2026-10-03" })
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "startDate must be YYYY-MM-DD" })
+  @Matches(ISO_DATE_PATTERN, { message: "startDate must be YYYY-MM-DD" })
   startDate: string;
 
   @ApiProperty({ example: "2026-11-01" })
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "endDate must be YYYY-MM-DD" })
+  @Matches(ISO_DATE_PATTERN, { message: "endDate must be YYYY-MM-DD" })
   endDate: string;
 
   @ApiPropertyOptional({
@@ -170,6 +184,7 @@ export class SeasonWriteDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(SEASON_LIMITS.dates)
   @IsString({ each: true })
   dates?: string[] | null;
 
@@ -220,13 +235,13 @@ export class SeasonWriteDto {
   @ApiPropertyOptional({ description: "The park's own page for the event." })
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(SEASON_LIMITS.url)
   url?: string | null;
 
   @ApiPropertyOptional({ description: "Where the dates were read." })
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(SEASON_LIMITS.url)
   sourceUrl?: string | null;
 
   @ApiPropertyOptional({
@@ -241,103 +256,12 @@ export class SeasonWriteDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  @MaxLength(4000)
+  @MaxLength(SEASON_LIMITS.note)
   note?: string | null;
 }
 
-export class SeasonPatchDto {
-  @ApiPropertyOptional({ enum: PARK_SEASON_KINDS })
-  @IsOptional()
-  @IsIn(PARK_SEASON_KINDS as unknown as string[])
-  kind?: ParkSeasonKind;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  name?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "startDate must be YYYY-MM-DD" })
-  startDate?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: "endDate must be YYYY-MM-DD" })
-  endDate?: string;
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  dates?: string[] | null;
-
-  @ApiPropertyOptional({ enum: PARK_SEASON_STATUSES })
-  @IsOptional()
-  @IsIn(PARK_SEASON_STATUSES as unknown as string[])
-  status?: ParkSeasonStatus;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  separateTicket?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @Min(0)
-  priceFrom?: number | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(3)
-  priceCurrency?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(5)
-  opensAt?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(5)
-  closesAt?: string | null;
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  attractionIds?: string[] | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  url?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  sourceUrl?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  confirmedAt?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(4000)
-  note?: string | null;
-}
+/** A season PATCH: every field of {@link SeasonWriteDto}, each optional; `null` clears one. */
+export class SeasonPatchDto extends PartialType(SeasonWriteDto) {}
 
 export class RideProfileProvenanceDto {
   @ApiPropertyOptional({

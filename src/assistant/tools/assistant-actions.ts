@@ -6,7 +6,11 @@ import { isAmbiguous, resolvePark } from "../../mcp/tools/park-ref";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import type { Park } from "../../parks/entities/park.entity";
-import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import {
+  CLOCK_PATTERN,
+  getCurrentDateInTimezone,
+  ISO_DATE_PATTERN,
+} from "../../common/utils/date.util";
 import {
   worksPeriodOn,
   type WorksPeriod,
@@ -502,7 +506,7 @@ export type PlannerBlockIcon = (typeof PLANNER_BLOCK_ICONS)[number];
 /** "HH:MM" in the park's clock as minutes since midnight. */
 export const clockTime = z
   .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+  .regex(CLOCK_PATTERN)
   .transform((value) => {
     const [hours, minutes] = value.split(":").map(Number);
     return hours * 60 + minutes;
@@ -598,7 +602,7 @@ export function localizePageUrls(value: unknown, locale: string): unknown {
 /** A day as the planner keys it, YYYY-MM-DD, no further back than yesterday and within a year. */
 export const planDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .regex(ISO_DATE_PATTERN)
   .refine((value) => {
     const day = Date.parse(`${value}T00:00:00Z`);
     const now = Date.now();

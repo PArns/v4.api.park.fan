@@ -22,7 +22,7 @@ import type { TicketProduct } from "./tickets";
 export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
   {
     id: "dlr-1-day",
-    name: "Disneyland Resort 1-Day ticket (1 Park Per Day, Park Hopper with .h)",
+    name: "Disneyland Resort 1-Day ticket (1 Park Per Day or Park Hopper)",
     resort: "disneyland-resort",
     markets: ["us", "uk", "intl"],
     parks: ["disneyland-park", "disney-california-adventure-park"],
@@ -51,7 +51,7 @@ export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
   },
   {
     id: "dlr-multi-day",
-    name: "Disneyland Resort 2- to 5-Day ticket (1 Park Per Day, Park Hopper with .h)",
+    name: "Disneyland Resort 2- to 5-Day ticket (1 Park Per Day or Park Hopper)",
     resort: "disneyland-resort",
     markets: ["us", "uk", "intl"],
     parks: ["disneyland-park", "disney-california-adventure-park"],
@@ -534,6 +534,7 @@ export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
     shopUrl: "https://seaworld.com/san-diego/tickets/",
     notes:
       "Attraction Tickets' version: open-dated within the calendar year chosen; the second visit within 7 days of the first; expires in full 7 days after first use.",
+    suggest: 40,
   },
   {
     id: "seaworld-sesame-two-park",
@@ -773,6 +774,10 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
         locale: "nl",
       },
@@ -788,6 +793,10 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
     attractionTickets: [
       {
         url: "https://www.attractiontickets.com/en/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+        locale: "en",
+      },
+      {
+        url: "https://www.attractiontickets.com/en-ie/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
         locale: "en",
       },
       {
@@ -840,8 +849,16 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/san-diego-citypassr",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/san-diego-citypassr",
         locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/san-diego-attraction-tickets/san-diego-citypassr",
+        locale: "en",
       },
     ],
     official: {
@@ -858,12 +875,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/tagesticket-mit-early-park-admission",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+        locale: "en",
       },
     ],
     official: {
@@ -880,12 +905,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/universal-studios-hollywood/buy-a-day-get-a-2nd-day-free",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+        locale: "en",
       },
     ],
     official: {
@@ -902,12 +935,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/universal-express-tickets",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+        locale: "en",
       },
     ],
     official: {
@@ -924,12 +965,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/vip-experience-tickets",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+        locale: "en",
       },
     ],
     official: {
@@ -973,12 +1022,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-1-tagesticket",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+        locale: "en",
       },
     ],
     official: {
@@ -1013,12 +1070,20 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-2-tagesticket",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+        locale: "en",
       },
     ],
     official: {
@@ -1089,8 +1154,16 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
         locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+        locale: "en",
       },
     ],
     official: {
@@ -1107,8 +1180,16 @@ export const SOUTHERN_CALIFORNIA_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
         locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+        locale: "en",
       },
     ],
     official: {

@@ -5,7 +5,7 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { TRIP_ACCURACY_TTL } from "../common/cache/cache-ttl";
 import {
   addIsoDays,
-  getCurrentDateInTimezone,
+  getYesterdayDateInTimezone,
 } from "../common/utils/date.util";
 import { safeJsonParse } from "../common/utils/json.util";
 import { SingleFlight } from "../common/utils/single-flight.util";
@@ -50,7 +50,7 @@ export class TripAccuracyService {
         ({ park }) => ({
           id: park.id,
           // The park's own "yesterday": its last day that can be measured.
-          yesterday: addIsoDays(getCurrentDateInTimezone(park.timezone), -1),
+          yesterday: getYesterdayDateInTimezone(park.timezone),
         }),
       );
       if (parks.length === 0)

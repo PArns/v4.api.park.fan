@@ -22,7 +22,7 @@
  * after the 2025–26 school year (measured 2026-11-13).
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays } from "../common/utils/date.util";
+import { addIsoDays, isWeekendDate } from "../common/utils/date.util";
 import type { SchoolCoverage } from "../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import type { SchoolBreakPeriod, WhenWithin } from "./trip-when";
@@ -165,11 +165,6 @@ export const MIN_COVERAGE_DAYS = 180;
 const sameCode = (a: string | null, b: string): boolean =>
   !!a && a.toUpperCase() === b.toUpperCase();
 
-/** 0 = Sunday … 6 = Saturday, of a calendar date. */
-const weekday = (date: string): number =>
-  new Date(`${date}T12:00:00Z`).getUTCDay();
-const isWeekend = (date: string): boolean => [0, 6].includes(weekday(date));
-
 /**
  * A region's breaks: its own rows and the country's nationwide ones, merged
  * into runs of consecutive days, each widened over the weekend before and
@@ -200,8 +195,8 @@ export function schoolBreakPeriods(
     if (!start || !last) return;
     let a = start;
     let b = last;
-    while (isWeekend(addIsoDays(a, -1))) a = addIsoDays(a, -1);
-    while (isWeekend(addIsoDays(b, 1))) b = addIsoDays(b, 1);
+    while (isWeekendDate(addIsoDays(a, -1))) a = addIsoDays(a, -1);
+    while (isWeekendDate(addIsoDays(b, 1))) b = addIsoDays(b, 1);
     const counts = new Map<string, number>();
     for (const n of runNames) counts.set(n, (counts.get(n) ?? 0) + 1);
     const name = [...counts].sort(
@@ -213,7 +208,7 @@ export function schoolBreakPeriods(
     // A break that ends on a Friday and one that starts the Monday after are one stretch.
     let joins = !!last;
     for (let d = last ? addIsoDays(last, 1) : date; joins && d < date;) {
-      joins = isWeekend(d);
+      joins = isWeekendDate(d);
       d = addIsoDays(d, 1);
     }
     if (!joins) {

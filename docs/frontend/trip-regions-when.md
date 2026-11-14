@@ -231,8 +231,8 @@ by the key guard). It answers 400 for:
     holidays). A break the search range starts inside counts, since it began before the range;
   - `before_spring_break`: and the next school break starts within 14 days after it, in February
     to April;
-  - `festival` (with `seasons`): a chosen park's `special_event`, `halloween`, `christmas` or
-    `summer_nights` season that needs no separate ticket runs in the window;
+  - `festival` (with `seasons`): a chosen park's `special_event`, `halloween`, `christmas`,
+    `winter` or `summer_nights` season that needs no separate ticket runs in the window;
   - `long_days`: the chosen headliner parks' mean day-guest hours in the window beat the range's by
     an hour or more;
   - `mild_weather`: the climate normals over the window (at the region's climate park) give a mean
@@ -339,7 +339,7 @@ two-week reference span: one read per park and month from the month caches, the 
 snapshots for every day (−12 … 0 for a year's range), no ML call. The warmup keeps a region park's
 months to +13 and the snapshots −12 … −1 so a year's range is all cache hits
 ([trip regions](./trip-regions.md#caching-and-cost)). An answer is kept six hours in Redis
-(`trip-regions:when:v3:{region}:{query}`) by its normalized query.
+(`trip-regions:when:v4:{region}:{query}`) by its normalized query.
 
 ## School breaks (`GET /v1/trip-regions/:region/school-breaks`)
 

@@ -482,19 +482,27 @@ describe("tickets per region", () => {
     ]);
   });
 
-  it("suggests whole-day tickets of the home market only, never an evening ticket", () => {
-    const answer = plan(tokyo, {
+  it("suggests whole-day tickets of any market, never an evening ticket", () => {
+    const query = {
       from: "2027-02-01",
       to: "2027-02-05",
       parks: "test-land",
       split: "fixed",
-    });
-    const meta = answer.meta as {
-      ticketSuggestion?: Array<{ product: string }>;
     };
-    expect(meta.ticketSuggestion?.map((s) => s.product)).toEqual([
-      "test-1-day",
-    ]);
+    const suggested = (answer: ReturnType<typeof plan>) =>
+      (
+        answer.meta as { ticketSuggestion?: Array<{ product: string }> }
+      ).ticketSuggestion?.map((s) => s.product);
+    expect(suggested(plan(tokyo, query))).toEqual(["test-1-day"]);
+    // Sold only abroad, it is suggested all the same.
+    const abroad = withCatalog(TEST_TOKYO, {
+      region: TEST_TOKYO.slug,
+      version: "abroad",
+      products: TEST_TOKYO_TICKETS.map((p) =>
+        p.id === "test-1-day" ? { ...p, markets: ["intl"] } : p,
+      ),
+    });
+    expect(suggested(plan(abroad, query))).toEqual(["test-1-day"]);
   });
 });
 

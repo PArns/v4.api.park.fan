@@ -9,9 +9,10 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const DATE_MESSAGE = "must be a YYYY-MM-DD date";
+/** What a `from` or `to` that is no `YYYY-MM-DD` is told. */
+export const DATE_MESSAGE = "must be a YYYY-MM-DD date";
 /** One owned ticket: `product[.days][.h][@YYYY-MM-DD]`. */
 const TICKET_ITEM =
   "[a-z0-9-]+(\\.[0-9]{1,2})?(\\.h\\??)?(@\\d{4}-\\d{2}-\\d{2})?";
@@ -27,7 +28,7 @@ export class TripCalendarQueryDto {
     example: "2026-11-28",
   })
   @IsOptional()
-  @Matches(DATE, { message: `from ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `from ${DATE_MESSAGE}` })
   from?: string;
 
   @ApiPropertyOptional({
@@ -36,7 +37,7 @@ export class TripCalendarQueryDto {
     example: "2026-12-06",
   })
   @IsOptional()
-  @Matches(DATE, { message: `to ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `to ${DATE_MESSAGE}` })
   to?: string;
 }
 
@@ -59,14 +60,14 @@ export class TripPlanQueryDto {
     description: "Arrival day (region-local).",
     example: "2026-11-28",
   })
-  @Matches(DATE, { message: `from ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `from ${DATE_MESSAGE}` })
   from: string;
 
   @ApiProperty({
     description: "Departure day, included. The trip runs at most 21 days.",
     example: "2026-12-06",
   })
-  @Matches(DATE, { message: `to ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `to ${DATE_MESSAGE}` })
   to: string;
 
   @ApiPropertyOptional({

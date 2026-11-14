@@ -228,7 +228,12 @@ comes with the planner's three fixes, which he offers in their order; figures fu
 about two months are "estimated from last year" (PAR-1319); in a hurricane or typhoon region the
 storm peak is never the quietest time; `get_trip_region`, `get_trip_days` and
 `get_forecast_accuracy` answer a region's facts, its days at a glance and how sure the forecast is.
-Eight eval cases cover it.
+Eight eval cases cover it. Version 55 calls the UK 14-Day Magic Ticket "sold by UK shops" instead
+of "for UK and Ireland residents": a ticket's market is where it is sold, not who may buy it.
+Version 56 renames "# Replies" to "# Calling suggest_replies" and says the chips exist only as that
+call, never as a line, heading or list in the text; the interview line hands its ideas to the call
+instead of listing them after "Replies:", and a request to plan step by step starts the interview
+unless "This chat" shows one running ([reply chips](#reply-chips)).
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -615,6 +620,16 @@ it is answered "call suggest_replies last, alone" and shows nothing. The last ro
 (`tool_choice: none`) has none. The call is stored with the answer's tool calls, so the admin and
 the admin MCP's `assistant_conversation` show the chips offered; no column was added.
 
+Chips written as text never reach the page (`RepliesTextGuard` in `assistant-replies-text.ts`). A
+label of the chips' own (Replies, Antworten, Antwoorden, Réponses, Respuestas, Risposte and their
+"suggested" or "quick" forms, with or without `#`, bold or a colon) over up to four list items of
+at most 60 characters at the answer's very end is held back while it streams, left out of the
+streamed and stored text, and its items run through `suggest_replies` as if Parky had called it
+(unless he did), so the same checks apply. A line that may still become such a label is held only
+until it cannot, a few characters at most, and trailing white space until text follows; a list
+under any other line, five items or text after the block stream as written. The stream needs no
+new event: nothing of the block is ever sent.
+
 ### The interview
 
 Parky can lead a visitor through a trip or a park day from simple to detailed, the owner's rule: a
@@ -742,7 +757,8 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   valid dates, the days used, why some go unused, a `.h?` ticket's hopper verdict as "worth
   adding: an evening at EPCOT on …" or "not needed", what to watch), `resortsMixed`, and
   `ticketsToBuy` (plan first's suggestion per resort by name: days, valid dates, extra days, the
-  hopper verdict, the UK alternatives marked "UK/Ireland only", each shop once). Then `totals`
+  hopper verdict, a ticket and an alternative the operators' own shops do not sell marked "sold by
+  UK shops" or "sold by shops abroad", each shop once). Then `totals`
   with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season

@@ -430,6 +430,61 @@ describe("OAuthAuthorizationService", () => {
       });
     });
 
+    it("grants admin:write to an editor or owner and admin:owner to an owner, asked or chosen", async () => {
+      const { service, tokens } = build();
+      const granted = async (
+        asked: string,
+        role: AdminPrincipal["role"],
+        chosen?: "admin:read" | "admin:write" | "admin:owner",
+      ) => {
+        tokens.issueOAuthGrant.mockClear();
+        const outcome = await service.authorize(
+          { ...validRequest, scope: asked },
+          null,
+        );
+        const id = new URL(
+          (outcome as { location: string }).location,
+        ).searchParams.get("request")!;
+        expect((await service.describe(id)).scope).toBe(
+          ["admin:owner", "admin:write"].find((scope) =>
+            asked.split(" ").includes(scope),
+          ) ?? "admin:read",
+        );
+        const { redirectTo } = await service.approve(
+          id,
+          { ...ADMIN, role },
+          chosen,
+        );
+        await service.exchangeCode(
+          exchange(new URL(redirectTo).searchParams.get("code")!),
+        );
+        return (
+          tokens.issueOAuthGrant.mock.calls[0] as unknown as [{ scope: string }]
+        )[0].scope;
+      };
+      expect(await granted("admin:read admin:write", "owner")).toBe(
+        "admin:write",
+      );
+      expect(await granted("admin:read", "editor", "admin:write")).toBe(
+        "admin:write",
+      );
+      expect(
+        await granted("admin:read admin:write", "owner", "admin:read"),
+      ).toBe("admin:read");
+      expect(await granted("admin:write", "viewer")).toBe("admin:read");
+      expect(await granted("admin:read admin:owner", "owner")).toBe(
+        "admin:owner",
+      );
+      expect(await granted("admin:read", "owner", "admin:owner")).toBe(
+        "admin:owner",
+      );
+      expect(await granted("admin:owner", "editor")).toBe("admin:write");
+      expect(await granted("admin:read", "editor", "admin:owner")).toBe(
+        "admin:write",
+      );
+      expect(await granted("admin:owner", "viewer")).toBe("admin:read");
+    });
+
     it("burns the code on a wrong verifier", async () => {
       const { service } = build();
       const code = await approvedCode(service);

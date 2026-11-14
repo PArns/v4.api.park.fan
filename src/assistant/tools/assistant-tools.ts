@@ -47,6 +47,8 @@ import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
+  ISO_DATE_PATTERN,
+  isoDaysBetween,
   lastYearDays,
 } from "../../common/utils/date.util";
 import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
@@ -121,7 +123,9 @@ import {
   ORLANDO,
   regionOfPark,
   MOVE_BUFFER_OPTIONS,
+  resortKeys,
   stayRulesOf,
+  TRIP_REGION_SLUGS,
   TRIP_REGIONS,
   type RegionConfig,
 } from "../../trip-regions/regions";
@@ -1079,7 +1083,7 @@ const parkRef = z
     'Park id, its slug like "phantasialand", or its name like "Europa-Park" (several matches come back to pick from)',
   );
 
-const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const isoDay = z.string().regex(ISO_DATE_PATTERN);
 
 /** A rider's height in cm, as the planner and the height filters take it. */
 const riderHeight = z.number().int().min(50).max(250);
@@ -1089,14 +1093,6 @@ const HISTORY_DAYS = 366;
 
 /** How far `park_forecast` looks ahead, today included. */
 const FORECAST_DAYS = 60;
-
-/** Days from `from` to `to`, both YYYY-MM-DD: calendar days, no clock involved. */
-function daysBetween(from: string, to: string): number {
-  return Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-}
 
 /** The calendar or tiles card of one park, from `park_forecast` and, live, `get_park`. */
 async function dayCard(
@@ -1111,7 +1107,7 @@ async function dayCard(
   const today = getCurrentDateInTimezone(found.timezone);
   const first = start ?? today;
   const count = kind === "calendar" ? days : 1;
-  const ahead = daysBetween(today, first);
+  const ahead = isoDaysBetween(today, first);
   if (ahead < 0 || ahead + count > FORECAST_DAYS) {
     throw new McpToolError(
       `Pick days from ${today} up to ${FORECAST_DAYS} days ahead`,
@@ -1174,7 +1170,7 @@ function pastDay(
   if (!day) return null;
   return {
     date: day.date,
-    weekday: formatInTimeZone(new Date(`${day.date}T12:00:00Z`), "UTC", "EEEE"),
+    weekday: weekdayOf(day.date),
     status: day.status,
     opens: day.opens,
     closes: day.closes,
@@ -1676,7 +1672,7 @@ async function comparedParkDay(
 ) {
   const today = getCurrentDateInTimezone(park.timezone);
   const day = date ?? today;
-  const ahead = daysBetween(today, day);
+  const ahead = isoDaysBetween(today, day);
   if (ahead < 0) {
     return { park, day, why: "that day is over in the park's time zone" };
   }
@@ -1801,9 +1797,6 @@ function behindFullDays<
   return out;
 }
 
-/** The trip regions the trip tools take (`region`), Orlando first. */
-const REGION_SLUGS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
-
 /** The trip regions' names in one phrase: "Orlando", "Orlando, Japan and Paris". */
 function tripRegionNames(): string {
   const names = Object.values(TRIP_REGIONS).map((r) => r.name);
@@ -1814,9 +1807,11 @@ function tripRegionNames(): string {
 
 /** The `region` every trip tool takes; Orlando without it, as before regions were many. */
 const regionInput = z
-  .enum(REGION_SLUGS)
+  .enum(TRIP_REGION_SLUGS)
   .optional()
-  .describe(`The trip region: ${REGION_SLUGS.join(", ")}; default orlando`);
+  .describe(
+    `The trip region: ${TRIP_REGION_SLUGS.join(", ")}; default orlando`,
+  );
 
 /** A hotel kind, validated by the region (Orlando's in the description). */
 const hotelInput = z
@@ -2231,7 +2226,7 @@ export const ASSISTANT_TOOLS = [
       const today = getCurrentDateInTimezone(found.timezone);
       if (on) {
         if (date) throw new McpToolError("Give either date or on");
-        const back = daysBetween(on, today);
+        const back = isoDaysBetween(on, today);
         if (back <= 0 || back > HISTORY_DAYS) {
           throw new McpToolError(
             `Pick a past day from ${addIsoDays(today, -HISTORY_DAYS)} to yesterday`,
@@ -2454,9 +2449,7 @@ export const ASSISTANT_TOOLS = [
     input: z.object({
       ...rideRef,
       park: parkRef.optional().describe("With ride: the ride's park"),
-      date: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
+      date: isoDay
         .optional()
         .describe("YYYY-MM-DD in the park's calendar; default today"),
     }),
@@ -2812,14 +2805,8 @@ export const ASSISTANT_TOOLS = [
       "next three months; later days and particular days are get_days.",
     input: z.object({
       park: parkRef,
-      from: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional()
-        .describe("First day, YYYY-MM-DD; default today"),
-      to: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
+      from: isoDay.optional().describe("First day, YYYY-MM-DD; default today"),
+      to: isoDay
         .optional()
         .describe("Last day, YYYY-MM-DD; default 90 days ahead"),
     }),
@@ -3089,7 +3076,7 @@ export const ASSISTANT_TOOLS = [
       const asked = dates
         ? [...new Set(dates)].sort()
         : Array.from(
-            { length: Math.max(0, daysBetween(first, lastAsked) + 1) },
+            { length: Math.max(0, isoDaysBetween(first, lastAsked) + 1) },
             (_, i) => addIsoDays(first, i),
           );
       if (asked.length === 0 || asked.length > MAX_COMPARED_DATES) {
@@ -3115,11 +3102,7 @@ export const ASSISTANT_TOOLS = [
       const rows = await Promise.all(
         asked.map(async (date) => {
           const day = days.get(date);
-          const weekday = formatInTimeZone(
-            new Date(`${date}T12:00:00Z`),
-            "UTC",
-            "EEEE",
-          );
+          const weekday = weekdayOf(date);
           if (!day)
             return { date, weekday, status: "UNKNOWN", why: "no calendar day" };
           const compact = compactDay(day, found.timezone, maintenance);
@@ -3285,7 +3268,7 @@ export const ASSISTANT_TOOLS = [
         .describe("Days the user fixed"),
     }),
     run: async (input, ctx) => {
-      if (daysBetween(input.from, input.to) + 1 > MAX_TRIP_DAYS) {
+      if (isoDaysBetween(input.from, input.to) + 1 > MAX_TRIP_DAYS) {
         throw new McpToolError(
           `A plan covers at most ${MAX_TRIP_DAYS} days, arrival and departure included; plan the trip in parts`,
         );
@@ -3780,10 +3763,7 @@ export const ASSISTANT_TOOLS = [
       );
       if (resorts.length === 0) {
         throw new McpToolError(
-          `No resort ${resort} in ${region.name}: ${region.groups
-            .filter((g) => g.kind === "resort")
-            .map((g) => g.key)
-            .join(", ")}`,
+          `No resort ${resort} in ${region.name}: ${resortKeys(region).join(", ")}`,
         );
       }
       const calendar = await tripCall(() =>
@@ -4091,7 +4071,7 @@ export const ASSISTANT_TOOLS = [
           throw new McpToolError(`Pick days from ${today} on, in order`);
         }
         if (
-          daysBetween(first, last) >= MAX_CALENDAR_DAYS ||
+          isoDaysBetween(first, last) >= MAX_CALENDAR_DAYS ||
           last > addIsoDays(today, DAYS_AHEAD)
         ) {
           throw new McpToolError(
@@ -5792,7 +5772,7 @@ export const ASSISTANT_TOOLS = [
     description:
       "Two to four short replies the user can tap under your answer, each sent as their " +
       "message: written as they would say it, in their language, under 40 characters, the " +
-      "likeliest first. Call it last, alone, after your answer's text (# Replies).",
+      "likeliest first. Call it last, alone, after your answer's text (# Calling suggest_replies).",
     input: z.object({
       replies: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
     }),

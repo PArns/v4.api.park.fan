@@ -1,5 +1,6 @@
 import {
   ATTRACTION_TICKETS_SELLER,
+  attractionTicketsStore,
   seedLinksFrom,
   seedLinksOf,
   TICKET_CATALOGS,
@@ -65,6 +66,17 @@ describe("the catalog's seed links", () => {
       for (const page of entry.attractionTickets ?? []) {
         if (page.locale !== null) {
           expect(TICKET_LOCALES).toContain(page.locale);
+        }
+      }
+    }
+  });
+
+  it("names the country store of every Attraction Tickets link", () => {
+    for (const product of SEED_PRODUCTS) {
+      for (const link of seedLinksOf(product)) {
+        if (new URL(link.url).host === "www.attractiontickets.com") {
+          expect(link.store).toEqual(attractionTicketsStore(link.url));
+          expect(link.store).toBeDefined();
         }
       }
     }

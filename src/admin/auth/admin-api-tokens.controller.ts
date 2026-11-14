@@ -28,6 +28,11 @@ import { AdminApiTokenStore } from "./admin-api-token.store";
 import { AdminAuditService } from "./admin-audit.service";
 import { AdminAuthService } from "./admin-auth.service";
 import { AdminCreateApiTokenDto } from "./dto/auth.dto";
+import {
+  ADMIN_TOKEN_SCOPES,
+  DEFAULT_ADMIN_TOKEN_SCOPE,
+  grantableScope,
+} from "./admin-api-token.constants";
 import { roleAtLeast } from "./entities/admin-user.entity";
 import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import { stripInvisibleCharacters } from "../../common/utils/visible-text.util";
@@ -89,13 +94,20 @@ export class AdminApiTokensController {
   @ApiOperation({
     summary: "Create a personal access token",
     description:
-      "Read-only (`admin:read`), for the MCP server at /v1/mcp. Asks for the " +
+      "For the MCP server at /v1/mcp: `admin:read` (the default), " +
+      "`admin:write` (`scope`, editor or above) or `admin:owner` (owner " +
+      "only). Asks for the " +
       "account password again, and for a current two-factor code when the " +
       "account has two-factor on: a stolen session must not mint a credential " +
       "that outlives it. The token is in this response and nowhere else; only " +
       "its hash is stored.",
   })
   @ApiResponse({ status: 201, description: "`{ token, item }`" })
+  @ApiResponse({
+    status: 403,
+    description:
+      "`admin:write` asked for by an account below editor, or `admin:owner` by one below owner",
+  })
   @ApiResponse({
     status: 401,
     description:
@@ -111,6 +123,12 @@ export class AdminApiTokensController {
     const userId = requireAccount(admin);
     const name = stripInvisibleCharacters(body.name);
     if (!name) throw new BadRequestException("A token needs a name");
+    const scope = body.scope ?? DEFAULT_ADMIN_TOKEN_SCOPE;
+    if (grantableScope(scope, admin.role) !== scope) {
+      throw new ForbiddenException(
+        `A token with ${scope} needs the "${ADMIN_TOKEN_SCOPES[scope]}" role or above; this account is "${admin.role}"`,
+      );
+    }
 
     // After the cheap checks, so a rejected body spends neither a scrypt nor
     // an attempt.
@@ -125,6 +143,7 @@ export class AdminApiTokensController {
       userId,
       name,
       body.expiresInDays ?? null,
+      scope,
     );
     await this.audit.record({
       actor: admin,

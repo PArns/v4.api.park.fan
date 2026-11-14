@@ -15,6 +15,7 @@ import { DbJobBudget, mapWithDbBudget } from "../common/utils/db-job-budget";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
+  isoDaysBetween,
 } from "../common/utils/date.util";
 import { parseDateRange } from "../common/utils/date-parsing.util";
 import { frontendParkPath } from "../common/utils/frontend-url.util";
@@ -240,13 +241,7 @@ export class TripRegionService {
     const from = fromQuery ?? this.today(region);
     const to = toQuery ?? addIsoDays(from, 30);
     this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
-    noteTripShape({
-      rangeDays:
-        Math.round(
-          (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-            86_400_000,
-        ) + 1,
-    });
+    noteTripShape({ rangeDays: isoDaysBetween(from, to) + 1 });
     const calendar = await this.internalCalendar(region, from, to);
     return regionBestDays(region, calendar, limit);
   }

@@ -22,7 +22,7 @@ import type { TicketProduct } from "./tickets";
 export const PARIS_TICKETS: TicketProduct[] = [
   {
     id: "dlp-1-day",
-    name: "Disneyland Paris 1-Day dated ticket (1 Park, or 2 Parks with .h)",
+    name: "Disneyland Paris 1-Day dated ticket (1 Park, or 2 Parks)",
     resort: "disneyland-paris",
     markets: ["eu", "intl"],
     parks: ["disneyland-park", "disney-adventure-world"],
@@ -288,12 +288,20 @@ export const PARIS_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/paris/disneyland-paris/1-tag-1-park-ticket",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+        locale: "en",
       },
     ],
     official: {
@@ -310,12 +318,20 @@ export const PARIS_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneyland-paris-tickets",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneyland-paris-tickets",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/paris/disneyland-paris",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/paris-attraction-tickets/disneyland-paris-tickets",
+        locale: "en",
       },
     ],
     official: {
@@ -332,8 +348,16 @@ export const PARIS_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
         locale: "nl",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+        locale: "en",
       },
     ],
     official: {
@@ -368,12 +392,20 @@ export const PARIS_SEED_LINKS: SeedLinkEntry[] = [
         locale: "en",
       },
       {
+        url: "https://www.attractiontickets.com/en-ie/node/280257",
+        locale: "en",
+      },
+      {
         url: "https://www.attractiontickets.com/en-nl/node/280257",
         locale: "nl",
       },
       {
         url: "https://www.attractiontickets.com/de/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
         locale: "de",
+      },
+      {
+        url: "https://www.attractiontickets.com/us/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
+        locale: "en",
       },
     ],
     official: {

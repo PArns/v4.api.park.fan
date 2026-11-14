@@ -9,7 +9,12 @@
  * them on the shapes the Orlando feed really sends.
  */
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import { addIsoDays, lastYearDays } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  isoDaysBetween,
+  lastYearDays,
+} from "../common/utils/date.util";
+import { median } from "../common/utils/stats.util";
 
 export type TripDayStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
 export type TripBasis = "forecast" | "long_range" | "last_year" | "none";
@@ -144,7 +149,8 @@ export interface LastYearEntry {
 }
 
 const round5 = (min: number): number => Math.round(min / 5) * 5;
-const round1 = (min: number): number => Math.round(min * 10) / 10;
+/** One decimal: the unrounded figures a ranking reads, and the averages `/when` shows. */
+export const round1 = (min: number): number => Math.round(min * 10) / 10;
 
 /**
  * What a TFT day figure is multiplied by to sit on the measured scale, by
@@ -202,6 +208,19 @@ export function seasonCovers(season: SeasonLike, date: string): boolean {
     return season.dates.includes(date);
   }
   return season.startDate <= date && date <= season.endDate;
+}
+
+/**
+ * The seasons a day lists: those running on the date, a cancelled one left
+ * out. The region calendar's cells and the MCP's days both read it.
+ */
+export function seasonsOn<T extends SeasonLike>(
+  seasons: readonly T[],
+  date: string,
+): T[] {
+  return seasons.filter(
+    (season) => season.status !== "cancelled" && seasonCovers(season, date),
+  );
 }
 
 /** A season that states something: not last year's pattern, not called off. */
@@ -304,6 +323,33 @@ export function seasonEvening(
   return undefined;
 }
 
+/** A day's holiday flags, as the region calendar and the plan's day info carry them. */
+interface HolidayFlags {
+  isHoliday?: boolean;
+  isSchoolVacation?: boolean;
+}
+
+/** Monday to Friday and no public holiday: the `weekday` reason of a plan day and a best day. */
+export function isPlainWeekday(
+  weekday: number,
+  isHoliday: boolean | undefined,
+): boolean {
+  return weekday >= 1 && weekday <= 5 && !isHoliday;
+}
+
+/** The first day after a holiday or school break that is neither: the `holiday_ends` reason. */
+export function endsHolidays(
+  previous: HolidayFlags | undefined,
+  day: HolidayFlags | undefined,
+): boolean {
+  return (
+    !!previous &&
+    !!(previous.isHoliday || previous.isSchoolVacation) &&
+    !day?.isHoliday &&
+    !day?.isSchoolVacation
+  );
+}
+
 /** A day "closes early" when the day guests leave this long before the usual close. */
 export const CLOSES_EARLY_MINUTES = 120;
 
@@ -314,26 +360,18 @@ export const CLOSES_EARLY_MINUTES = 120;
 export function closeMinute(date: string, closesAt: string): number {
   const [closeDate, time] = closesAt.split("T");
   const [h, m] = time.split(":").map(Number);
-  const days = Math.round(
-    (Date.parse(`${closeDate}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) /
-      86_400_000,
-  );
-  return days * 1440 + h * 60 + m;
+  return isoDaysBetween(date, closeDate) * 1440 + h * 60 + m;
 }
 
 /** A park's usual close over some open days: the median of their closes. */
 export function usualCloseMinute(
   days: Array<{ date: string; closesAt?: string }>,
 ): number | undefined {
-  const minutes = days
-    .filter((d): d is { date: string; closesAt: string } => !!d.closesAt)
-    .map((d) => closeMinute(d.date, d.closesAt))
-    .sort((a, b) => a - b);
-  if (minutes.length === 0) return undefined;
-  const mid = Math.floor(minutes.length / 2);
-  return minutes.length % 2
-    ? minutes[mid]
-    : (minutes[mid - 1] + minutes[mid]) / 2;
+  return median(
+    days
+      .filter((d): d is { date: string; closesAt: string } => !!d.closesAt)
+      .map((d) => closeMinute(d.date, d.closesAt)),
+  );
 }
 
 /** The day guests leave at least {@link CLOSES_EARLY_MINUTES} before the usual close. */
@@ -380,12 +418,6 @@ export interface ParkDayInput {
   lastYear?: LastYearEntry;
 }
 
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
 /** The day a year back that `last_year` reads for a date (lastYearDays' weekday). */
 export function lastYearDateFor(date: string): string {
   return lastYearDays(date).sameWeekday;
@@ -407,7 +439,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     status = "UNKNOWN";
   }
 
-  const daySeasons = seasons.filter((s) => seasonCovers(s, date));
+  const daySeasons = seasonsOn(seasons, date);
   let closedBy: string | undefined;
   if (status !== "OPERATING") {
     // A curated closure is a stated fact (the operator's page), so it may close
@@ -432,9 +464,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     crowdLevel: "unknown",
     basis: "none",
   };
-  const seasonIds = daySeasons
-    .filter((s) => s.status !== "cancelled")
-    .map((s) => s.id);
+  const seasonIds = daySeasons.map((s) => s.id);
   if (seasonIds.length > 0) out.seasons = seasonIds;
   if (closedBy) out.closedBy = closedBy;
 
@@ -488,7 +518,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     out.lastYearWait = lastYear.w;
     if (lastYear.x != null) out.lastYearExact = lastYear.x;
   }
-  const lead = daysBetween(today, date);
+  const lead = isoDaysBetween(today, date);
   const forecastDay = future && (!!forecast || rated);
   if (forecastDay && lead <= input.longRangeAfterDays) {
     if (forecast) {

@@ -10,7 +10,11 @@ import {
   MinLength,
 } from "class-validator";
 import { ADMIN_ROLES, type AdminRole } from "../entities/admin-user.entity";
-import { PAT_EXPIRY_DAYS } from "../admin-api-token.constants";
+import {
+  ADMIN_TOKEN_SCOPE_NAMES,
+  PAT_EXPIRY_DAYS,
+  type AdminTokenScope,
+} from "../admin-api-token.constants";
 
 export class AdminLoginDto {
   @ApiProperty({ example: "you@park.fan" })
@@ -168,6 +172,20 @@ export class AdminCreateApiTokenDto {
   @IsIn(PAT_EXPIRY_DAYS)
   expiresInDays?: (typeof PAT_EXPIRY_DAYS)[number] | null;
 
+  @ApiPropertyOptional({
+    description:
+      "`admin:read` (absent: the default) reads through the MCP server; " +
+      "`admin:write` also writes what an editor writes and needs an account " +
+      "of editor or above; `admin:owner` also does what only an owner may " +
+      "(merges, retirement, maintenance, API keys) and needs an owner " +
+      "account (403 otherwise).",
+    enum: ADMIN_TOKEN_SCOPE_NAMES,
+    default: "admin:read",
+  })
+  @IsOptional()
+  @IsIn(ADMIN_TOKEN_SCOPE_NAMES)
+  scope?: AdminTokenScope;
+
   @ApiProperty({
     description:
       "The account password, asked again: a session alone does not mint a " +
@@ -197,4 +215,16 @@ export class AdminCreateApiTokenDto {
 export class AdminOAuthApproveDto extends PickType(AdminCreateApiTokenDto, [
   "password",
   "totpCode",
-] as const) {}
+] as const) {
+  @ApiPropertyOptional({
+    description:
+      "The scope to grant, whatever the client asked for: `admin:read`, " +
+      "`admin:write` or `admin:owner`. Absent: the one the request asked " +
+      "for. `admin:write` is granted to an editor or owner, `admin:owner` " +
+      "to an owner; anyone else gets the widest one their role reaches.",
+    enum: ADMIN_TOKEN_SCOPE_NAMES,
+  })
+  @IsOptional()
+  @IsIn(ADMIN_TOKEN_SCOPE_NAMES)
+  scope?: AdminTokenScope;
+}

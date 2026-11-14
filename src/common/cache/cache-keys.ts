@@ -126,10 +126,10 @@ export const CacheKeys = {
   tripRegionCalendar: (region: string, from: string, to: string): string =>
     `trip-regions:calendar:v2:${region}:${from}:${to}`,
   tripRegionPlan: (region: string, query: string): string =>
-    `trip-regions:plan:v3:${region}:${query}`,
+    `trip-regions:plan:v4:${region}:${query}`,
   /** `/when` by its normalized query, six hours (`TRIP_WHEN_TTL`). */
   tripRegionWhen: (region: string, query: string): string =>
-    `trip-regions:when:v3:${region}:${query}`,
+    `trip-regions:when:v4:${region}:${query}`,
   /** A region's forecast accuracy on its park-local `date`, a day (`TRIP_ACCURACY_TTL`). */
   tripRegionAccuracy: (region: string, date: string): string =>
     `trip-regions:accuracy:v1:${region}:${date}`,

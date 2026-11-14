@@ -57,7 +57,7 @@ describe("OAuthClientService.register", () => {
       redirect_uris: ["http://localhost:33418/callback"],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
-      scope: "admin:read",
+      scope: "admin:read admin:write admin:owner",
     });
     expect(answer.client_id).toMatch(/^pfc_[\w-]{22}$/);
     expect(answer).not.toHaveProperty("client_secret");

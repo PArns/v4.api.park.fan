@@ -95,7 +95,12 @@ export function daysBetween(from: string, to: string): number {
 export interface PlanAnswer {
   meta: Record<string, unknown> & {
     stays?: Array<Record<string, unknown>>;
-    ticketSuggestion?: Array<{ resort: string; product: string }>;
+    ticketSuggestion?: Array<{
+      resort: string;
+      product: string;
+      days?: number;
+      extraDays?: number;
+    }>;
   };
   days: Array<
     Record<string, unknown> & {
@@ -107,6 +112,8 @@ export interface PlanAnswer {
     }
   >;
   unplaced: Array<{ slug: string; reason: string }>;
+  totals: Record<string, unknown>;
+  spareDayParks?: Array<{ park: string; days: Array<Record<string, unknown>> }>;
 }
 
 /** The days of a longer calendar from `from` to `to`, as a calendar of their own. */

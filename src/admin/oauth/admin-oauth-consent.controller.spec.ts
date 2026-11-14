@@ -36,7 +36,7 @@ describe("AdminOAuthConsentController.approve", () => {
       "123456",
       "oauth-approve",
     );
-    expect(authorization.approve).toHaveBeenCalledWith("req", ADMIN);
+    expect(authorization.approve).toHaveBeenCalledWith("req", ADMIN, undefined);
   });
 
   it("leaves the request pending when the proof is refused", async () => {

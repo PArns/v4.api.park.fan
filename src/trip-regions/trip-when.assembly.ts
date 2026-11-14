@@ -5,9 +5,10 @@
  * docs/frontend/trip-regions-when.md.
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
+import { addIsoDays, isoDaysBetween } from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
 import { normalizePlanQuery, planCacheQuery } from "./trip-plan.assembly";
+import { validateWindow } from "./trip-region.assembly";
 import {
   WHEN_DEFAULT_DAYS,
   WHEN_DEFAULT_GAP,
@@ -29,12 +30,6 @@ export function climateParkOf(region: RegionConfig): string {
   return region.weather.climatePark;
 }
 
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
 /**
  * A search range: real dates, from today to a year ahead (today + 365), at
  * most 366 days; `to` defaults to a year after `from`, cut at the last day.
@@ -49,24 +44,7 @@ export function whenRange(
   const from = fromQuery ?? today;
   const fallback = addIsoDays(from, WHEN_MAX_RANGE_DAYS - 1);
   const to = toQuery ?? (fallback < last ? fallback : last);
-  for (const [name, value] of [
-    ["from", from],
-    ["to", to],
-  ] as const) {
-    if (!isRealIsoDate(value)) {
-      throw new BadRequestException(`${name} is not a date the calendar has`);
-    }
-  }
-  if (from < today) {
-    throw new BadRequestException(`from must not be before today (${today})`);
-  }
-  if (to < from) throw new BadRequestException("to must not be before from");
-  if (to > last) throw new BadRequestException(`to must not be after ${last}`);
-  if (daysBetween(from, to) + 1 > WHEN_MAX_RANGE_DAYS) {
-    throw new BadRequestException(
-      `The search range is at most ${WHEN_MAX_RANGE_DAYS} days`,
-    );
-  }
+  validateWindow(from, to, WHEN_MAX_RANGE_DAYS, today);
   return { from, to };
 }
 
@@ -124,7 +102,7 @@ export function normalizeWhenQuery(
 ): WhenQuery {
   const { from, to } = whenRange(query.from, query.to, today);
   const days = query.days ?? WHEN_DEFAULT_DAYS;
-  if (daysBetween(from, to) + 1 < days) {
+  if (isoDaysBetween(from, to) + 1 < days) {
     throw new BadRequestException(
       `The search range is shorter than a ${days}-day trip`,
     );

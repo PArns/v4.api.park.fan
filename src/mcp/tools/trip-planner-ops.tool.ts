@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
-import { TRIP_REGIONS } from "../../trip-regions/regions";
+import { TRIP_REGION_SLUGS } from "../../trip-regions/regions";
 import {
   TRIP_METRIC_CALLERS,
   TRIP_METRIC_ROUTES,
@@ -12,10 +12,7 @@ import {
 } from "../../trip-regions/metrics/trip-request-metrics.service";
 import { utcDaysInput, utcDaysWindow } from "./utc-window";
 
-const REGIONS = Object.keys(TRIP_REGIONS).concat(UNKNOWN_REGION) as [
-  string,
-  ...string[],
-];
+const REGIONS = [...TRIP_REGION_SLUGS, UNKNOWN_REGION] as [string, ...string[]];
 
 /** The rows reach back as far as they are kept; a week by default. */
 const LIMITS = { maxDays: TRIP_METRICS_RETENTION_DAYS, defaultDays: 7 };

@@ -31,8 +31,10 @@ const OAUTH_APPROVE_ACTION = "oauth-approve";
 
 /**
  * What park.fan's consent page calls, through the admin proxy with the
- * signed-in session. Any role may approve: a grant is read-only whatever the
- * account could do, and never more than the account itself.
+ * signed-in session. Any role may approve: a grant reads (`admin:read`),
+ * also writes as an editor (`admin:write`) when an editor or owner chooses it,
+ * or also does what only an owner may (`admin:owner`) when an owner chooses
+ * it, and is never more than the account itself.
  *
  * The shared pass is refused: a grant is a credential bound to a person, and
  * the pass has none. API tokens are refused like everywhere but `/v1/mcp`,
@@ -94,7 +96,7 @@ export class AdminOAuthConsentController {
       body.totpCode,
       OAUTH_APPROVE_ACTION,
     );
-    return this.authorization.approve(id, admin);
+    return this.authorization.approve(id, admin, body.scope);
   }
 
   @Post(":id/deny")

@@ -1,39 +1,36 @@
 #!/usr/bin/env node
 /**
  * Imports researched park seasons (parties, festivals, closures) through the
- * admin seasons API, the same route the curation editor writes with, so each
- * row is validated, audited and published like a hand-made one.
+ * admin MCP server's `import_trip_seasons`, which checks, audits and publishes
+ * each row as the admin's season form does. The matching, the checks and the
+ * report are the server's (`src/admin/content/season-import.ts`); this only
+ * sends a file and prints the answer. Claude does the same through the
+ * connector (docs/admin/mcp.md#writing).
  *
- *   PARKFAN_ADMIN_TOKEN=… node scripts/trip-regions/import-seasons.mjs seasons.json          # dry run
- *   PARKFAN_ADMIN_TOKEN=… node scripts/trip-regions/import-seasons.mjs seasons.json --apply  # write
+ *   PARKFAN_API_TOKEN=pfa_… node scripts/trip-regions/import-seasons.mjs seasons.json          # dry run
+ *   PARKFAN_API_TOKEN=pfa_… node scripts/trip-regions/import-seasons.mjs seasons.json --apply  # write
  *
  * Input: a JSON array of
  *   { region?, parkSlug, kind, name, startDate, endDate, dates?, status,
  *     separateTicket, priceFrom?, priceCurrency?, opensAt?, closesAt?, url?,
  *     sourceUrl?, notes? }
  *
- * - **Dry run by default.** It prints what it would create and what it skips;
+ * - **Dry run by default.** It prints what the server would create and skip;
  *   only `--apply` writes.
  * - **Skips what is already on file:** a season of the same park, kind and name
- *   whose dates overlap the row's.
- * - **Never invents an end.** A row without `endDate` (an announced closure
- *   with no reopening date) is reported and skipped; `park_seasons.end_date` is
- *   NOT NULL, and a made-up end would read as a reopening.
- * - **Auth:** `PARKFAN_ADMIN_TOKEN` holds an admin session token of an editor
- *   or owner (from `POST /v1/admin/auth/login`), sent as `Authorization:
- *   Bearer`. The token is never printed. An API token (`pfa_…`) is refused by
- *   these routes.
+ *   whose dates overlap the row's, and a row that repeats an earlier one.
+ * - **Never invents an end.** A row without `endDate` is reported and skipped.
+ * - **Auth:** `PARKFAN_API_TOKEN` holds a personal access token with the
+ *   `admin:write` scope, of an editor or owner (the admin account page, "API
+ *   access / MCP"), sent as `Authorization: Bearer`. It is never printed.
  * - **Target:** `PARKFAN_API_URL`, default `http://localhost:3000`. Pointing it
  *   at production is a production write: read
  *   docs/rules/automated-retirement-and-identity.md#7 first, dry-run, then apply.
- *
- * A park is found by its geographic path in src/trip-regions/regions.ts when
- * a region lists it (slugs repeat across cities: Disneyland Park is in
- * Anaheim and in Paris), else by an exact slug match in the admin park search,
- * which must be unique. `region` names the trip region whose park the row
- * means; a slug that two regions list is refused without it.
  */
 import { readFileSync } from "node:fs";
+
+/** What one call takes; the server says the same. */
+const MAX_ROWS = 100;
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
@@ -44,154 +41,10 @@ if (!file) {
 }
 
 const base = (process.env.PARKFAN_API_URL ?? "http://localhost:3000").replace(/\/$/, "");
-const token = process.env.PARKFAN_ADMIN_TOKEN;
+const token = process.env.PARKFAN_API_TOKEN;
 if (!token) {
-  console.error("Set PARKFAN_ADMIN_TOKEN to an admin session token (editor or owner).");
+  console.error("Set PARKFAN_API_TOKEN to a personal access token with admin:write.");
   process.exit(2);
-}
-
-const { TRIP_REGIONS } = await import(
-  new URL("../../src/trip-regions/regions.ts", import.meta.url).href
-);
-
-const KINDS = new Set([
-  "halloween",
-  "christmas",
-  "summer_nights",
-  "special_event",
-  "opening",
-  "closure",
-  "maintenance",
-]);
-const STATUSES = new Set(["confirmed", "announced", "expected", "cancelled"]);
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-/** The admin route's own rule: 00:00–23:59. A midnight close is 00:00, read as the next day. */
-const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-async function api(method, path, body) {
-  const res = await fetch(`${base}/v1/${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let json;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = text;
-  }
-  if (!res.ok) {
-    const message = typeof json === "object" && json ? json.message ?? json.error : json;
-    throw new Error(`${method} ${path}: HTTP ${res.status} ${JSON.stringify(message)}`);
-  }
-  return json;
-}
-
-/** The region parks a row's slug may mean: its region's, else every region's that lists it. */
-function regionParksOf(slug, regionSlug) {
-  if (regionSlug != null) {
-    const region = TRIP_REGIONS[regionSlug];
-    if (!region) throw new Error(`region ${regionSlug} is no trip region`);
-    const config = region.parks.find((p) => p.slug === slug);
-    if (!config) throw new Error(`${slug} is no park of ${regionSlug}`);
-    return [config];
-  }
-  return Object.values(TRIP_REGIONS).flatMap((r) =>
-    r.parks.filter((p) => p.slug === slug).map((p) => ({ ...p, region: r.slug })),
-  );
-}
-
-/** The park id for a slug: the region's geographic path first, else a unique admin match. */
-const parkIds = new Map();
-async function parkIdOf(slug, regionSlug) {
-  const key = `${regionSlug ?? ""}|${slug}`;
-  if (parkIds.has(key)) return parkIds.get(key);
-  let id = null;
-  const configs = regionParksOf(slug, regionSlug);
-  if (configs.length > 1) {
-    throw new Error(
-      `${slug} is a park of ${configs.map((c) => c.region).join(" and ")}: give the row its region`,
-    );
-  }
-  for (const config of configs) {
-    const park = await api(
-      "GET",
-      `parks/${config.continent}/${config.country}/${config.city}/${config.slug}`,
-    );
-    id = park?.id ?? null;
-  }
-  if (!id) {
-    const found = await api("GET", `admin/content/parks?q=${encodeURIComponent(slug)}&limit=50`);
-    const rows = (found?.parks ?? found?.data ?? found ?? []).filter((p) => p.slug === slug);
-    if (rows.length !== 1) {
-      throw new Error(`${slug}: ${rows.length} parks carry this slug; add it to a region or fix the file`);
-    }
-    id = rows[0].id;
-  }
-  parkIds.set(key, id);
-  return id;
-}
-
-/** Every season on file, once, for the duplicate check. */
-async function existingSeasons() {
-  const all = [];
-  for (let offset = 0; ; offset += 500) {
-    const page = await api("GET", `admin/content/seasons?limit=500&offset=${offset}`);
-    all.push(...(page?.seasons ?? []));
-    if (!page || all.length >= page.total || (page.seasons ?? []).length === 0) break;
-  }
-  return all;
-}
-
-const norm = (s) => (s ?? "").trim().toLowerCase();
-
-/** What is wrong with a row before the API sees it, or null. */
-function problem(row) {
-  if (!row.parkSlug) return "no parkSlug";
-  if (row.region != null && typeof row.region !== "string") return "region is not a slug";
-  if (!KINDS.has(row.kind)) return `kind "${row.kind}" is not one of ${[...KINDS].join(", ")}`;
-  if (!row.startDate || !DATE.test(row.startDate)) return "startDate is not YYYY-MM-DD";
-  if (row.endDate == null) return "no endDate: the end is not announced, so the row waits";
-  if (!DATE.test(row.endDate)) return "endDate is not YYYY-MM-DD";
-  if (row.endDate < row.startDate) return "endDate is before startDate";
-  if (row.status && !STATUSES.has(row.status)) return `status "${row.status}" is unknown`;
-  for (const f of ["opensAt", "closesAt"]) {
-    if (row[f] === "24:00") return `${f} is 24:00: write midnight as 00:00`;
-    if (row[f] != null && !TIME.test(row[f])) return `${f} is not HH:MM`;
-  }
-  if (row.dates != null && !Array.isArray(row.dates)) return "dates is not a list";
-  for (const d of row.dates ?? []) {
-    if (!DATE.test(d) || d < row.startDate || d > row.endDate) {
-      return `date ${d} is outside ${row.startDate} – ${row.endDate}`;
-    }
-  }
-  return null;
-}
-
-/** The admin route's body; `notes` is the row's `note`. */
-function body(row) {
-  const out = {
-    kind: row.kind,
-    name: row.name ?? null,
-    startDate: row.startDate,
-    endDate: row.endDate,
-    dates: row.dates && row.dates.length > 0 ? row.dates : null,
-    status: row.status ?? "announced",
-    separateTicket: row.separateTicket === true,
-    priceFrom: row.priceFrom ?? null,
-    priceCurrency: row.priceCurrency ?? null,
-    opensAt: row.opensAt ?? null,
-    closesAt: row.closesAt ?? null,
-    url: row.url ?? null,
-    sourceUrl: row.sourceUrl ?? null,
-    note: row.notes ?? null,
-  };
-  return out;
 }
 
 const rows = JSON.parse(readFileSync(file, "utf8"));
@@ -199,58 +52,45 @@ if (!Array.isArray(rows)) {
   console.error("The file must hold a JSON array of seasons.");
   process.exit(2);
 }
-
-console.log(`${apply ? "APPLY" : "DRY RUN"} against ${base}: ${rows.length} rows from ${file}`);
-const onFile = await existingSeasons();
-const counts = { create: 0, exists: 0, invalid: 0, failed: 0 };
-
-for (const [i, row] of rows.entries()) {
-  const label = `#${i + 1} ${row.region ? `${row.region}/` : ""}${row.parkSlug} ${row.kind} "${row.name ?? ""}" ${row.startDate} – ${row.endDate ?? "?"}`;
-  const issue = problem(row);
-  if (issue) {
-    counts.invalid++;
-    console.log(`  skip   ${label}: ${issue}`);
-    continue;
-  }
-  let parkId;
-  try {
-    parkId = await parkIdOf(row.parkSlug, row.region);
-  } catch (err) {
-    counts.invalid++;
-    console.log(`  skip   ${label}: ${err.message}`);
-    continue;
-  }
-  const duplicate = onFile.find(
-    (s) =>
-      (s.parkId ?? s.park?.id) === parkId &&
-      s.kind === row.kind &&
-      norm(s.name) === norm(row.name) &&
-      s.startDate <= row.endDate &&
-      s.endDate >= row.startDate,
-  );
-  if (duplicate) {
-    counts.exists++;
-    console.log(`  exists ${label} (season ${duplicate.id})`);
-    continue;
-  }
-  if (!apply) {
-    counts.create++;
-    console.log(`  create ${label}`);
-    continue;
-  }
-  try {
-    const created = await api("POST", `admin/content/parks/${parkId}/seasons`, body(row));
-    onFile.push({ ...created, parkId });
-    counts.create++;
-    console.log(`  created ${label} → ${created.id}`);
-  } catch (err) {
-    counts.failed++;
-    console.log(`  FAILED ${label}: ${err.message}`);
-  }
+if (rows.length > MAX_ROWS) {
+  console.error(`The file has ${rows.length} rows; one import takes ${MAX_ROWS}. Split it.`);
+  process.exit(2);
 }
 
+console.log(`${apply ? "APPLY" : "DRY RUN"} against ${base}: ${rows.length} rows from ${file}`);
+
+const res = await fetch(`${base}/v1/mcp`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json, text/event-stream",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "import_trip_seasons", arguments: { rows, dryRun: !apply } },
+  }),
+});
+const answer = await res.json().catch(() => null);
+const result = answer?.result;
+const text = result?.content?.[0]?.text;
+if (!res.ok || !result || result.isError) {
+  const why = text ?? answer?.error?.message ?? answer?.error_description ?? `HTTP ${res.status}`;
+  console.error(`The import was refused: ${why}`);
+  process.exit(1);
+}
+
+const report = JSON.parse(text);
+for (const row of report.rows) {
+  const id = row.seasonId ? ` (season ${row.seasonId})` : "";
+  const reason = row.reason ? `: ${row.reason}` : "";
+  console.log(`  ${row.outcome.padEnd(7)} ${row.label}${id}${reason}`);
+}
+const { create, exists, invalid, failed } = report.counts;
 console.log(
-  `${apply ? "Created" : "Would create"} ${counts.create}, already on file ${counts.exists}, ` +
-    `skipped ${counts.invalid}${apply ? `, failed ${counts.failed}` : ""}.`,
+  `${apply ? "Created" : "Would create"} ${create}, already on file ${exists}, ` +
+    `skipped ${invalid}${apply ? `, failed ${failed}` : ""}.`,
 );
-if (counts.failed > 0) process.exit(1);
+if (failed > 0) process.exit(1);

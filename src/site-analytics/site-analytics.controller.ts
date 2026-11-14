@@ -41,6 +41,10 @@ import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
+import {
+  SHOW_EVERY_COUNT,
+  SiteAnalyticsTripService,
+} from "./site-analytics-trip.service";
 import { BODY_TOO_LARGE } from "./collect-body.middleware";
 import { BEACON_RESOURCE_POLICY, isFromSite } from "./from-site.util";
 import {
@@ -66,6 +70,7 @@ import {
   SiteTrafficCrosstabQueryDto,
   SiteTrendsDto,
   SiteTrendsQueryDto,
+  SiteTripPlannerQueryDto,
   SiteUncoveredDto,
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
@@ -156,6 +161,7 @@ export class AdminSiteAnalyticsController {
     private readonly seo: SiteAnalyticsSeoService,
     private readonly blocklist: SiteAnalyticsBlocklist,
     private readonly liveView: SiteAnalyticsLiveService,
+    private readonly trip: SiteAnalyticsTripService,
   ) {}
 
   @Get("overview")
@@ -285,6 +291,24 @@ export class AdminSiteAnalyticsController {
   @ApiResponse({ status: 503, description: REPORT_BUSY })
   planner(@Query() query: SiteAnalyticsQueryDto): Promise<SitePlannerDto> {
     return this.analytics.planner(query);
+  }
+
+  @Get("trip-planner")
+  @ApiOperation({
+    summary:
+      "How the multi-day trip planner and the region hubs are used: funnel, requests, find dates, tickets, regions",
+    description:
+      "The MCP tool trip_planner_report's answer with every count as counted: `head` the funnel, " +
+      "totals and rates, `lists` the breakdowns. docs/admin/endpoints.md.",
+  })
+  @ApiResponse({ status: 503, description: REPORT_BUSY })
+  tripPlanner(@Query() query: SiteTripPlannerQueryDto) {
+    const { region, limit, series, ...window } = query;
+    return this.trip.answer(
+      window,
+      { region: region ?? null, limit, series },
+      SHOW_EVERY_COUNT,
+    );
   }
 
   @Get("seo/landing-pages")

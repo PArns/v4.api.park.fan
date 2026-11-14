@@ -15,6 +15,9 @@ export interface McpToolContext {
 
 type ToolInputShape = Record<string, z.ZodType>;
 
+/** How a tool changes data: see {@link McpToolDefinition.writes}. */
+export type McpToolWrites = "add" | "change" | "delete";
+
 export interface McpToolDefinition<Shape extends ToolInputShape> {
   /** snake_case; what the model calls. */
   name: string;
@@ -29,6 +32,13 @@ export interface McpToolDefinition<Shape extends ToolInputShape> {
   input: Shape;
   /** The least role that sees the tool; `viewer` when absent. */
   minRole?: AdminRole;
+  /**
+   * What the tool changes; absent for a read. `add` only adds rows, `change`
+   * changes them, `delete` removes or retires them. A tool that writes needs
+   * `minRole` `editor` or above, which a token with `admin:write` reaches,
+   * or `owner`, which only `admin:owner` does (`mcp-write.ts`).
+   */
+  writes?: McpToolWrites;
   /**
    * Returns a plain JSON value. Keep it compact: names and numbers the model
    * needs, ids for follow-up calls, lists cut to the limit the input allows.
