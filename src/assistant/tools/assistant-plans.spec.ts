@@ -27,7 +27,7 @@ import {
   writeTripQuery,
 } from "./assistant-plans";
 import type { vacationItinerary } from "./assistant-trip";
-import { chatContext, SYSTEM_PROMPT } from "../system-prompt";
+import { chatContext, regionsLine, SYSTEM_PROMPT } from "../system-prompt";
 
 type Itinerary = ReturnType<typeof vacationItinerary>;
 
@@ -745,6 +745,50 @@ describe("the greeting the chat opened with", () => {
     expect(
       chatContext({ locale: "de", now: "x", timeZone: "UTC", pagePath: "/de" }),
     ).not.toContain("The chat opened with");
+  });
+
+  it("names the live regions and the coming ones, from what the widget sends", () => {
+    expect(regionsLine(["orlando"])).toBe(
+      "Trip regions with a hub and trip planner on park.fan: Orlando. Coming later, not on park.fan yet: Southern California, Japan and Paris.",
+    );
+    expect(regionsLine(null)).toBe(
+      "Trip regions with a hub and trip planner on park.fan: Orlando, Southern California, Japan and Paris.",
+    );
+    expect(
+      chatContext({
+        locale: "de",
+        now: "x",
+        timeZone: "UTC",
+        pagePath: "/de",
+        liveRegions: ["orlando", "japan"],
+      }),
+    ).toContain("on park.fan: Orlando and Japan. Coming later");
+    const base = {
+      locale: "de",
+      pagePath: "/de",
+      message: "Hallo",
+      sessionToken: "a".repeat(32),
+    };
+    expect(
+      chatRequestSchema.safeParse({
+        ...base,
+        liveRegions: ["orlando", "orlando"],
+      }).data?.liveRegions,
+    ).toEqual(["orlando"]);
+    expect(
+      chatRequestSchema.safeParse({ ...base, liveRegions: "orlando" }).data
+        ?.liveRegions,
+    ).toBeUndefined();
+    expect(SYSTEM_PROMPT).toContain(
+      "A region still coming gets no plan, no link and no offer",
+    );
+    expect(SYSTEM_PROMPT).toContain("offer its leftOutFixes as the ways in");
+    expect(SYSTEM_PROMPT).toContain(
+      'say "estimated from last year", never forecast',
+    );
+    expect(SYSTEM_PROMPT).toContain(
+      "never call it the quietest or best time to go",
+    );
   });
 
   it("knows the user the way a friend who planned with them would, and no more", () => {
