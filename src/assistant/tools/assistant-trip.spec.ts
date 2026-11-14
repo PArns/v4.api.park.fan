@@ -606,9 +606,13 @@ describe("the visitor's own trip", () => {
       change: ["dates"],
     });
     expect(result.json?.shownIn).toBe("the hub, which opens with it");
-    // Seven headliners on three park days: the planner's own problem, said, not refused.
-    expect(result.json?.notPlannedYet).toMatch(
-      /^More park visits than trip days/,
+    // Seven headliners on three park days: the plan fills the days and names the parks it left
+    // out, which Parky reads as the next thing to settle.
+    expect(result.json?.notPlannedYet).toBeUndefined();
+    expect(result.json?.notPlaced).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ why: expect.any(String) }),
+      ]),
     );
   });
 });

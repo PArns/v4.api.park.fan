@@ -567,9 +567,11 @@ change on top of the train; the region's own, Japan's 30, stays out of the query
 does not touch stays as written (`blocks`, the stays' `bases`), and the planner's defaults stay out
 of it, as the page writes them. New dates leave a date search and drop pins outside them; a removed
 park takes its pins along. The plan route then checks the result: a refusal (an unknown park, hotel
-or ticket, over 21 days) is the route's sentence and sends nothing. More visits than the days hold is
+or ticket, over 21 days) is the route's sentence and sends nothing. More chosen parks than the days
+hold plan what fits and come back as parks not placed (`parksLeftOut` on the route), so an interview
+that sets the dates before the parks gets a plan at once. Pinned visits beyond the trip's days are
 the planner's own problem state with its way out (`PLANNER_PROBLEM`), so that change still goes, with
-`notPlannedYet`: an interview sets the dates before the parks. Otherwise the result says
+`notPlannedYet`. Otherwise the result says
 `daysChanged` (date, weekday, `now`, `was`) and `bigRidesWait` before and after (`tripPlanChange`),
 plus pins not kept and parks not placed. Without a trip, `dates` start one. `query` is written in
 the planner's own order and spelling (`writeTripQuery`); the widget applies it through the planner's
