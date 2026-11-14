@@ -12,7 +12,7 @@ calibrated. Open it before touching a prediction's wait, crowd level or band on 
 | CatBoost q0.95 | trained | **served as a distance, never as a wait**: `q0.95 − q0.5` → `uncertaintyMinutes` | the half-width of the band, a spread rather than an interval to compute off the published wait |
 | **PCN** (`pcn-service`) | pinball loss at q0.5 / q0.8 / q0.9, monotonic | **q0.5** → wait, **q0.8** → crowd signal (both through the persistence blend) | no band: `pcn_forecasts` keeps only q0.5 and q0.8, so a PCN slot serves `uncertaintyMinutes: null` |
 | **Chronos-2** (45–120 min, when switched on) | zero-shot | q50 → wait, q80 → crowd, q95 − q50 → band | [Chronos-2 served](forward-archive/chronos-serving.md) |
-| **TFT** (`nf-service`) | daily **P90** target (`NF_TARGET_PERCENTILE=0.9`, StudentT) | distribution **median** → `predicted_peak` | a per-day forecast of the daily-P90 peak |
+| **TFT** (`nf-service`) | daily **P90** target (`NF_TARGET_PERCENTILE=0.9`, StudentT) | distribution **mean** (1,000 draws) → `predicted_peak` | a per-day forecast of the daily-P90 peak |
 | TFT band | **nothing** — `tft_forecasts` stores a point and no spread | `forecast_accuracy_profile.uncertainty_p95` → `uncertaintyMinutes` | a **measured** 95th percentile of that cell's realised residuals, not a model output (PAR-111) |
 
 The crowd level is **always** a wait ÷ a baseline downstream — never a raw quantile. The
@@ -119,10 +119,12 @@ is on the ML dashboard (`performance.operating`). See
 
 ⚠️ **Naming hazard, by design.** The TFT trains on a **daily-P90 target**
 (`NF_TARGET_PERCENTILE=0.9`) with a StudentT `DistributionLoss` (`NF_LOSS`), but serves the
-**median of the predictive distribution** as `predicted_peak`:
+**mean of 1,000 draws from the predictive distribution** as `predicted_peak` (NeuralForecast's
+`TFT` column; the median is `TFT-median`, which `nf-service` `_tft_column` passes over — this
+page said "median" until PAR-1334):
 
 ```
-predicted_peak  =  E[ daily-P90 ]   (a MEDIAN forecast of a P90 target)
+predicted_peak  =  E[ daily-P90 ]   (a central forecast of a P90 target)
               ≠  P90 of the forecast distribution
 ```
 
