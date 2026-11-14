@@ -6,6 +6,8 @@ import {
 } from "../assistant.schemas";
 import {
   changeTripParams,
+  readStays,
+  writeStays,
   clockOfMinute,
   interviewHolds,
   interviewLine,
@@ -123,7 +125,7 @@ describe("the trip planner's state", () => {
     expect(writeTripQuery(slower.params)).toBe(
       "from=2027-04-01&to=2027-04-10&bases=tokyo:4,osaka:5&moveBuffer=60",
     );
-    expect(slower.kinds).toEqual(["hotel"]);
+    expect(slower.kinds).toEqual(["buffer"]);
     // The route takes it as a number; Parky's path has no pipe to make it one.
     expect(planQueryOf(slower.params)).toMatchObject({ moveBuffer: 60 });
     const back = changeTripParams(slower.params, { moveBuffer: 30 }, options);
@@ -133,6 +135,67 @@ describe("the trip planner's state", () => {
         "moveBuffer",
       ),
     ).toBe(false);
+  });
+
+  it("sets the route: the stays, the ends, the stay suggestion's nights", () => {
+    const japan = tripParams(
+      "from=2027-04-01&to=2027-04-10&bases=tokyo:4@maihama,osaka&area=x&moveBuffer=60",
+    );
+    const options = { headliners: [], moveBufferDefault: 30 };
+    const route = changeTripParams(
+      japan,
+      {
+        bases: "tokyo:3@maihama,fujikawaguchiko:1,osaka",
+        startBase: "tokyo",
+        endBase: "",
+      },
+      options,
+    );
+    expect(writeTripQuery(route.params)).toBe(
+      "from=2027-04-01&to=2027-04-10&bases=tokyo:3@maihama,fujikawaguchiko:1,osaka&startBase=tokyo&moveBuffer=60",
+    );
+    expect(route.kinds).toEqual(["route"]);
+    // The stay suggestion's nights land on the stays, each keeping its hotel area.
+    const suggested = changeTripParams(
+      japan,
+      { stayNights: { tokyo: 3, nagoya: 1 } },
+      options,
+    );
+    expect(suggested.params.get("bases")).toBe(
+      "tokyo:3@maihama,osaka,nagoya:1",
+    );
+    expect(readStays("tokyo:3@maihama,fujikawaguchiko:0")).toEqual([
+      { base: "tokyo", nights: 3, area: "maihama" },
+      { base: "fujikawaguchiko", nights: 0, area: null },
+    ]);
+    expect(writeStays(readStays("tokyo:3@maihama,osaka"))).toBe(
+      "tokyo:3@maihama,osaka",
+    );
+    const cleared = changeTripParams(route.params, { bases: "" }, options);
+    expect(cleared.params.has("bases")).toBe(false);
+  });
+
+  it("turns a trip into a date search, dropping its dates and pins", () => {
+    const trip = tripParams(
+      "from=2027-10-14&to=2027-10-21&lock=epcot@2027-10-15",
+    );
+    const { params, kinds } = changeTripParams(
+      trip,
+      {
+        search: {
+          from: "2027-03-01",
+          to: "2027-05-31",
+          days: 8,
+          within: "DE-NW",
+        },
+      },
+      { headliners: [] },
+    );
+    expect(writeTripQuery(params)).toBe(
+      "when=2027-03-01_2027-05-31&days=8&within=DE-NW",
+    );
+    expect(kinds).toEqual(["dates"]);
+    expect(planQueryOf(params)).toBeNull();
   });
 
   it("splits the plan's query from a date search", () => {
@@ -588,7 +651,9 @@ describe("the interview", () => {
     const tripInterview = interview({ region: "japan", step: "hotel" });
     const line = interviewLine(tripInterview, null, japan.region);
     expect(line).toContain("takkyubin");
-    expect(line).toContain("change_trip moveBuffer");
+    expect(line).toContain("change_trip bases");
+    expect(line).toContain("moveBuffer (30: bags sent ahead");
+    expect(line).toContain("never hotel or area here");
     expect(line).not.toMatch(/yen|¥|price of/i);
     expect(interviewHolds(tripInterview, "hotel", japan, null)).toBeNull();
     const [chosen] = visitorTrips([

@@ -8,9 +8,12 @@ import {
   dateRuns,
   eveningPhrase,
   hubPath,
+  LAST_YEAR_PHRASE,
+  leftOutFixes,
   regionParkFor,
   type RegionParkName,
 } from "./assistant-trip";
+import { TripAccuracyService } from "../../trip-regions/trip-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import type { CalendarService } from "../../parks/services/calendar.service";
@@ -301,6 +304,23 @@ function setup(
     [TripRegionService, regions],
     [TripPlanService, plans],
     [TripWhenService, whens],
+    [
+      TripAccuracyService,
+      {
+        accuracy: jest.fn(async (region: string) => ({
+          region,
+          forecastAccuracy: {
+            days: 30,
+            from: "2026-10-14",
+            to: "2026-11-12",
+            leadDays: 7,
+            maeMinutes: 11.4,
+            parks: 7,
+            sampleDays: 30,
+          },
+        })),
+      },
+    ],
     [ParksService, parks],
     [ParkSeasonService, seasons],
     [
@@ -609,11 +629,18 @@ describe("the visitor's own trip", () => {
     // Seven headliners on three park days: the plan fills the days and names the parks it left
     // out, which Parky reads as the next thing to settle.
     expect(result.json?.notPlannedYet).toBeUndefined();
-    expect(result.json?.notPlaced).toEqual(
+    expect(result.json?.parksLeftOut).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ why: expect.any(String) }),
+        { park: expect.any(String), why: "no day left for it" },
       ]),
     );
+    expect(result.json?.leftOutFixes).toEqual([
+      "the arrival or departure day as a park day: change_trip arrival park or departure park",
+      "fewer parks: change_trip parks with visits 0 for one they can do without",
+      expect.stringMatching(
+        /^a longer trip: change_trip dates, \d+ more days?$/,
+      ),
+    ]);
   });
 });
 
@@ -651,8 +678,8 @@ describe("plan_vacation", () => {
       (d: { parks: Array<{ park: string }> }) =>
         d.parks[0].park === "Epic Universe",
     );
-    expect(epic.parks[0].basis).toBe("last_year");
-    expect(epic.watch).toContain("estimate from last year, not a forecast");
+    expect(epic.parks[0].basis).toBe("estimated from last year");
+    expect(epic.watch).toContain(LAST_YEAR_PHRASE);
     const epcot = parkDays.find(
       (d: { parks: Array<{ park: string }> }) => d.parks[0].park === "EPCOT",
     );
@@ -985,7 +1012,7 @@ describe("the trip in the planner and the hub", () => {
 
   it("opens the hub, empty or with a plan", async () => {
     const { call } = setup();
-    expect((await call("open_page", { page: "orlando" })).action).toEqual({
+    expect((await call("open_page", { page: "trip_hub" })).action).toEqual({
       type: "navigate",
       path: "/trip-regions/orlando",
     });
@@ -1003,5 +1030,176 @@ describe("the trip in the planner and the hub", () => {
       (await call("open_page", { url: "https://park.fan/orlando?x=1" }))
         .isError,
     ).toBe(true);
+  });
+});
+
+describe("2.21.0: live regions, the route, parks left out, a region's facts", () => {
+  const onlyOrlando = { liveRegions: new Set(["orlando"]) };
+
+  it("plans, changes, opens and interviews only the regions the site has live", async () => {
+    const { call } = setup();
+    const coming =
+      /Japan's trip planner is not on park.fan yet; it opens later/;
+    for (const [name, input] of [
+      ["plan_vacation", { region: "japan", from: day(10), to: day(14) }],
+      [
+        "change_trip",
+        { region: "japan", dates: { from: day(10), to: day(14) } },
+      ],
+      ["get_trip_region", { region: "japan" }],
+      ["open_page", { page: "trip_hub", region: "japan" }],
+      [
+        "open_page",
+        {
+          url: "https://park.fan/trip-regions/japan?from=2027-04-01&to=2027-04-05",
+        },
+      ],
+      ["interview", { op: "start", kind: "trip", region: "japan" }],
+    ] as const) {
+      const result = await call(name, input, "de", {
+        ...onlyOrlando,
+        answer: { round: 0, done: new Set<string>() },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(coming);
+    }
+    expect(
+      (await call("open_page", { page: "trip_hub" }, "de", onlyOrlando)).action,
+    ).toEqual({ type: "navigate", path: "/trip-regions/orlando" });
+    // An older widget sends no list: every region, as before.
+    expect(
+      (await call("open_page", { page: "trip_hub", region: "japan" })).action,
+    ).toEqual({ type: "navigate", path: "/trip-regions/japan" });
+  });
+
+  it("starts a trip from parks alone, or from a date search, without dates", async () => {
+    const { call } = setup();
+    const empty = { trips: [], answer: { round: 0, done: new Set<string>() } };
+    const parks = await call(
+      "change_trip",
+      { parks: [{ park: "EPCOT", visits: 1 }] },
+      "de",
+      empty,
+    );
+    expect(parks.action).toEqual({
+      type: "trip_set",
+      region: "orlando",
+      query: "parks=epcot:1",
+      change: ["parks"],
+    });
+    expect(parks.json?.plan).toBe("no dates yet, so nothing is planned");
+    const search = await call(
+      "change_trip",
+      { search: { from: day(30), to: day(120), days: 7 } },
+      "de",
+      empty,
+    );
+    expect(search.action).toMatchObject({
+      query: `when=${day(30)}_${day(120)}&days=7`,
+      change: ["dates"],
+    });
+    const both = await call(
+      "change_trip",
+      {
+        dates: { from: day(10), to: day(14) },
+        search: { from: day(30), to: day(120), days: 7 },
+      },
+      "de",
+      empty,
+    );
+    expect(both.content).toBe("Give dates or a search, not both");
+  });
+
+  it("takes no route in a region with one base", async () => {
+    const { call } = setup();
+    const result = await call(
+      "change_trip",
+      { dates: { from: day(10), to: day(14) }, moveBuffer: 60 },
+      "de",
+      { trips: [], answer: { round: 0, done: new Set<string>() } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/^Orlando has one base for the whole trip/);
+  });
+
+  it("names the ways to fit parks the plan left out, by why they are out", () => {
+    expect(
+      leftOutFixes([{ reason: "no_day_left" }, { reason: "no_day_left" }], {
+        arrival: "park",
+        departure: "free",
+      }),
+    ).toEqual([
+      "the departure day as a park day: change_trip departure park",
+      "fewer parks: change_trip parks with visits 0 for one they can do without",
+      "a longer trip: change_trip dates, 2 more days",
+    ]);
+    expect(
+      leftOutFixes([{ reason: "no_base" }, { reason: "no_open_day" }], {
+        arrival: "free",
+        departure: "free",
+      }),
+    ).toEqual([
+      "other dates, when the park is open: change_trip dates",
+      "a city that reaches it: change_trip bases",
+    ]);
+  });
+
+  it("gives a region's facts: resorts, hotels and perks, tickets, storm season, hub", async () => {
+    const { call } = setup();
+    const { json } = await call("get_trip_region", {}, "de", onlyOrlando);
+    expect(json?.name).toBe("Orlando");
+    expect(json?.hubUrl).toMatch(/\/trip-regions\/orlando$/);
+    const disney = json?.resorts.find(
+      (r: { key: string }) => r.key === "walt-disney-world",
+    );
+    expect(disney.parks).toContain("Magic Kingdom Park (headliner)");
+    expect(json?.hotels.length).toBeGreaterThan(2);
+    expect(json?.tickets.join(" ")).toMatch(/wdw-date-based/);
+    expect(json?.stormSeason).toMatch(
+      /^hurricane season, its peak 08-15 to 10-15/,
+    );
+    expect(json?.bases).toBeUndefined();
+  });
+
+  it("shows each resort's park of the day over a span, quietest and busiest first", async () => {
+    const { call } = setup(() => {
+      const base = calendar();
+      return {
+        ...base,
+        days: base.days.map((d, i) => ({
+          ...d,
+          best: { "walt-disney-world": i % 2 ? "epcot" : "magic-kingdom-park" },
+        })),
+      };
+    });
+    const { json } = await call(
+      "get_trip_days",
+      { from: day(10), to: day(14), resort: "walt-disney-world" },
+      "de",
+      onlyOrlando,
+    );
+    expect(json?.resorts).toHaveLength(1);
+    expect(json?.resorts[0].days).toHaveLength(5);
+    expect(json?.resorts[0].quietest[0]).toMatch(
+      /: (Magic Kingdom Park|EPCOT) \d+ min/,
+    );
+    const unknown = await call(
+      "get_trip_days",
+      { resort: "tokyo-disney-resort" },
+      "de",
+      onlyOrlando,
+    );
+    expect(unknown.content).toMatch(
+      /^No resort tokyo-disney-resort in Orlando: /,
+    );
+  });
+
+  it("says how accurate the region's forecast was, as a typical miss", async () => {
+    const { call } = setup();
+    const { json } = await call("get_forecast_accuracy", {}, "de", onlyOrlando);
+    expect(json?.accuracy).toBe(
+      "a week ahead, the big rides' peak wait was off by 11.4 minutes on average, over 7 parks and the 30 days 2026-10-14 to 2026-11-12",
+    );
+    expect(json?.means).toMatch(/estimated from last year/);
   });
 });

@@ -330,9 +330,14 @@ export function tripDigest(itinerary: Itinerary): string[] {
         ]
       : []),
     ...(itinerary.season ? [`Season: ${itinerary.season}`] : []),
-    ...(itinerary.notPlaced?.length
+    ...(itinerary.parksLeftOut?.length
       ? [
-          `Not placed: ${itinerary.notPlaced.map((n) => `${String(n.park)} (${String(n.why)})`).join(", ")}`,
+          `Parks left out: ${itinerary.parksLeftOut.map((n) => `${String(n.park)} (${String(n.why)})`).join(", ")}; fixes: ${(itinerary.leftOutFixes ?? []).join("; ")}`,
+        ]
+      : []),
+    ...(itinerary.visitsDropped?.length
+      ? [
+          `Second visits dropped: ${itinerary.visitsDropped.map((n) => String(n.park)).join(", ")}`,
         ]
       : []),
     ...(itinerary.pinsNotKept?.length
@@ -366,11 +371,66 @@ export interface TripChange {
   departure?: "free" | "park";
   /** A region with bases: minutes a hotel change takes on top of the train. */
   moveBuffer?: number;
+  /**
+   * A region with bases: the stays they fixed, `base[:nights][@area]` comma-separated, as the
+   * planner's `bases=`; empty: the plan picks every stay again.
+   */
+  bases?: string;
+  /** A region with bases: the base the trip lands at; empty, the plan picks. */
+  startBase?: string;
+  /** A region with bases: the base the trip flies home from; empty, the plan picks. */
+  endBase?: string;
+  /** Nights per base to fix, kept with the stays' areas: the plan's stay suggestion, applied. */
+  stayNights?: Record<string, number>;
+  /** Look for the best dates instead (the planner's date search, `when=`): the dates go. */
+  search?: { from: string; to: string; days: number; within?: string };
 }
 
 /** What kind of change a trip got, for the widget's receipt and the statistic. */
 export type TripChangeKind =
-  "dates" | "parks" | "pin" | "swap" | "rest" | "tickets" | "hotel" | "pace";
+  | "dates"
+  | "parks"
+  | "pin"
+  | "swap"
+  | "rest"
+  | "tickets"
+  | "hotel"
+  | "pace"
+  | "route"
+  | "buffer";
+
+/** One fixed stay of `bases=`: a base, its nights where fixed, its hotel area where named. */
+interface StayPick {
+  base: string;
+  nights: number | null;
+  area: string | null;
+}
+
+/** `bases=` read: `tokyo:4@maihama,fujikawaguchiko:0` gives two stays. */
+export function readStays(value: string | null): StayPick[] {
+  return (value ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((item) => {
+      const [head, area] = item.split("@");
+      const [base, nights] = head.split(":");
+      return {
+        base,
+        nights: nights === undefined ? null : Number(nights),
+        area: area ?? null,
+      };
+    });
+}
+
+/** `bases=` written back, in the order the stays came. */
+export function writeStays(stays: readonly StayPick[]): string {
+  return stays
+    .map(
+      (s) =>
+        `${s.base}${s.nights === null ? "" : `:${s.nights}`}${s.area ? `@${s.area}` : ""}`,
+    )
+    .join(",");
+}
 
 /** A plan day as `swap` reads it: its kind and parks. */
 export interface SwapDay {
@@ -545,7 +605,47 @@ export function changeTripParams(
       String(change.moveBuffer),
       String(options.moveBufferDefault ?? ""),
     );
-    kinds.add("hotel");
+    kinds.add("buffer");
+  }
+  if (change.bases !== undefined) {
+    if (change.bases) params.set("bases", change.bases);
+    else params.delete("bases");
+    // In a region with bases the area goes with its base: `area` and `hotel` are refused there.
+    params.delete("area");
+    params.delete("hotel");
+    kinds.add("route");
+  }
+  if (change.stayNights) {
+    const stays = readStays(params.get("bases"));
+    for (const [base, nights] of Object.entries(change.stayNights)) {
+      const at = stays.findIndex((s) => s.base === base);
+      if (at === -1) stays.push({ base, nights, area: null });
+      else stays[at] = { ...stays[at], nights };
+    }
+    params.set("bases", writeStays(stays));
+    params.delete("area");
+    params.delete("hotel");
+    kinds.add("route");
+  }
+  if (change.startBase !== undefined) {
+    setOrDefault(params, "startBase", change.startBase, "");
+    kinds.add("route");
+  }
+  if (change.endBase !== undefined) {
+    setOrDefault(params, "endBase", change.endBase, "");
+    kinds.add("route");
+  }
+  if (change.search) {
+    const [from, to] = [change.search.from, change.search.to].sort();
+    params.delete("from");
+    params.delete("to");
+    params.set("when", `${from}_${to}`);
+    params.set("days", String(change.search.days));
+    if (change.search.within) params.set("within", change.search.within);
+    else params.delete("within");
+    // Pins hold dates the search has not chosen yet.
+    params.delete("lock");
+    kinds.add("dates");
   }
   if (change.fireworks !== undefined) {
     setOrDefault(params, "fireworks", change.fireworks, "any");
@@ -599,8 +699,27 @@ export function tripPlanChange(before: Itinerary | null, after: Itinerary) {
         bigRidesWait: `${wait(before)} min before, ${wait(after)} min now`,
       }),
     ...(after.pinsNotKept && { pinsNotKept: after.pinsNotKept }),
-    ...(after.notPlaced && { notPlaced: after.notPlaced }),
+    ...(after.parksLeftOut && {
+      parksLeftOut: after.parksLeftOut,
+      leftOutFixes: after.leftOutFixes,
+    }),
+    ...(after.visitsDropped && { visitsDropped: after.visitsDropped }),
+    ...(staysChanged(before, after) && {
+      staysChanged: staysChanged(before, after),
+    }),
+    ...(after.staySuggestion && { staySuggestion: after.staySuggestion }),
   };
+}
+
+/** The stays before and after, where they differ: "Tokyo: 4 nights …" lines, as the plan says them. */
+function staysChanged(
+  before: Itinerary | null,
+  after: Itinerary,
+): { before: string[]; now: string[] } | null {
+  const was = before?.stays ?? [];
+  const now = after.stays ?? [];
+  if (now.length === 0 || was.join("|") === now.join("|")) return null;
+  return { before: was, now };
 }
 
 // ── The day planner, as "This chat" shows it ─────────────────────────────────
@@ -810,16 +929,21 @@ const REFINEMENT_OFFER: Record<string, string> = {
 };
 
 /**
- * A trip's hotel step in a region with bases (Japan): the cities come with the plan, so the
- * question is how a hotel change goes, which the visitor chooses (`moveBuffer`, PAR-1304).
+ * A trip's hotel step in a region with bases (Japan, Paris): the plan picks the cities and their
+ * nights, so the question is what the visitor has fixed (a city's nights, a hotel, the airport)
+ * and, where bags can go ahead, how a hotel change goes (`moveBuffer`, PAR-1304). `hotel` and
+ * `area` are refused there: the area goes with its city in `bases`.
  */
-function basesHotelGuide(luggage: string): StepGuide {
+function basesHotelGuide(luggage: string | null): StepGuide {
   return {
-    ask: `how a hotel change should go: say in a sentence that ${luggage}, then ask whether they send the bags ahead, carry them, or want more time`,
+    ask: luggage
+      ? `where they sleep and how a hotel change goes: the plan picks the cities and nights; say in a sentence that ${luggage}, then ask whether they send the bags ahead, carry them, or want more time, and whether a hotel or city is fixed`
+      : "where they sleep: the plan picks the cities and nights; ask whether a hotel, a city's nights or their airport is fixed",
     apply:
-      "change_trip moveBuffer (30: bags sent ahead, 60: carried along, 90 or 120: more time); area or bases only if they name a hotel",
-    chips:
-      "send the bags ahead (30 min) / carry our own bags (60 min) / rather more time",
+      "change_trip bases (city:nights@hotel area for what they fixed), landAt or leaveFrom for their airport or station, moveBuffer (30: bags sent ahead, 60: carried along, 90 or 120: more time); never hotel or area here",
+    chips: luggage
+      ? "send the bags ahead (30 min) / carry our own bags (60 min) / the plan's cities are fine"
+      : "the plan's cities are fine / we have a hotel already / we land at the airport",
   };
 }
 
@@ -940,7 +1064,7 @@ export function interviewGuide(
   const guide =
     step === INTERVIEW_REFINE
       ? refineGuide(interview)
-      : kind === "trip" && step === "hotel" && luggage
+      : kind === "trip" && step === "hotel" && region?.bases?.length
         ? basesHotelGuide(luggage)
         : STEP_GUIDE[step];
   return {

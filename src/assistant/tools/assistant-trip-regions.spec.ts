@@ -3,6 +3,7 @@ import {
   TEST_TOKYO,
 } from "../../trip-regions/__fixtures__/test-regions";
 import { JAPAN, ORLANDO, PARIS } from "../../trip-regions/regions";
+import { gatewayBase } from "./assistant-tools";
 import {
   heatAndStormWatch,
   hubPathOf,
@@ -63,5 +64,18 @@ describe("the early and evening slots", () => {
       "Early Entry",
     );
     expect(slotName(ORLANDO, "moonlight_magic")).toBe("moonlight_magic");
+  });
+});
+
+describe("change_trip's gateways", () => {
+  it("starts or ends a trip in the one city an airport or station serves", () => {
+    expect(gatewayBase(JAPAN, "hnd")).toBe("tokyo");
+    expect(gatewayBase(JAPAN, "KIX")).toBe("osaka");
+    // CDG serves all three of Paris's bases: it pins nothing, the plan picks.
+    expect(gatewayBase(PARIS, "CDG")).toBe("");
+    expect(gatewayBase(PARIS, "ORY")).toBe("paris");
+    expect(() => gatewayBase(JAPAN, "LAX")).toThrow(
+      /^LAX is not a way into Japan: HND \(Haneda Airport\)/,
+    );
   });
 });

@@ -202,7 +202,13 @@ export class AssistantChatService {
       maxRetries: 1,
       timeout: 60_000,
     });
-    const trips = visitorTrips(request.trips);
+    // The site's live regions, when the widget says; a trip elsewhere is not the visitor's to see.
+    const liveRegions = request.liveRegions
+      ? new Set(request.liveRegions)
+      : undefined;
+    const trips = visitorTrips(request.trips).filter(
+      (trip) => !liveRegions || liveRegions.has(trip.region.slug),
+    );
     const answer: AnswerState = { round: 0, done: new Set() };
     const toolContext: AssistantToolContext = {
       get: <T>(token: Parameters<ModuleRef["get"]>[0]) =>
@@ -213,6 +219,7 @@ export class AssistantChatService {
       timeZone,
       planner: request.planner ?? null,
       trips,
+      ...(liveRegions && { liveRegions }),
       interview: request.interview ?? null,
       alerts: request.alerts ?? null,
       favorites: request.favorites ?? null,
@@ -250,6 +257,7 @@ export class AssistantChatService {
           tripDigest: digest,
           // Only the first question of a chat answers the greeting.
           opener: chat.history.length === 0 ? (request.opener ?? null) : null,
+          liveRegions: request.liveRegions ?? null,
           interview: request.interview ?? null,
           alerts: request.alerts,
           favorites: request.favorites,
