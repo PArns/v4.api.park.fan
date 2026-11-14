@@ -1,4 +1,4 @@
-import type { AdminRole } from "./entities/admin-user.entity";
+import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
 
 /**
  * Personal access tokens and OAuth grants: the credentials an MCP client holds
@@ -22,16 +22,50 @@ export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const PAT_EXPIRY_DAYS = [30, 90, 365] as const;
 
 /**
- * Every scope a token can carry, and the most its holder may do with it.
- * v1 has one, read-only; the effective role is the lesser of this and the
- * account's own role, so a token never outranks the person who made it.
+ * Every scope a token can carry, and the most its holder may do with it. The
+ * effective role is the lesser of this and the account's own role, so a token
+ * never outranks the person who made it. `admin:write` reads too, and stops at
+ * `editor`: curation (seasons, tickets) and nothing an owner alone may do.
  */
 export const ADMIN_TOKEN_SCOPES = {
   "admin:read": "viewer",
+  "admin:write": "editor",
 } as const satisfies Record<string, AdminRole>;
 
 export type AdminTokenScope = keyof typeof ADMIN_TOKEN_SCOPES;
 export const DEFAULT_ADMIN_TOKEN_SCOPE: AdminTokenScope = "admin:read";
+export const WRITE_ADMIN_TOKEN_SCOPE: AdminTokenScope = "admin:write";
+
+/** Every scope, for the discovery documents and the DTOs. */
+export const ADMIN_TOKEN_SCOPE_NAMES = Object.keys(
+  ADMIN_TOKEN_SCOPES,
+) as AdminTokenScope[];
+
+/**
+ * The scope an OAuth request asks for: `admin:write` when its space-separated
+ * `scope` names it, else `admin:read`. Anything else asked for is not granted,
+ * which RFC 6749 §3.3 allows; the token response names what was.
+ */
+export function requestedScope(raw: string | undefined): AdminTokenScope {
+  const asked = (raw ?? "").split(/\s+/);
+  return asked.includes(WRITE_ADMIN_TOKEN_SCOPE)
+    ? WRITE_ADMIN_TOKEN_SCOPE
+    : DEFAULT_ADMIN_TOKEN_SCOPE;
+}
+
+/**
+ * The scope an account may hand out: one whose cap it reaches itself. A viewer
+ * or author asking for `admin:write` gets `admin:read`, so a token's stored
+ * scope never claims a write its account could not make.
+ */
+export function grantableScope(
+  scope: AdminTokenScope,
+  role: AdminRole,
+): AdminTokenScope {
+  return roleAtLeast(role, ADMIN_TOKEN_SCOPES[scope])
+    ? scope
+    : DEFAULT_ADMIN_TOKEN_SCOPE;
+}
 
 export const ADMIN_API_TOKEN_KINDS = ["pat", "oauth"] as const;
 export type AdminApiTokenKind = (typeof ADMIN_API_TOKEN_KINDS)[number];

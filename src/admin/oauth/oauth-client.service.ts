@@ -12,7 +12,7 @@ import { AdminOAuthClient } from "./entities/admin-oauth-client.entity";
 import { getOAuthRedirectPolicy } from "../../config/oauth.config";
 import { checkRedirectUri } from "./redirect-uri.util";
 import { OAuthError } from "./oauth-error";
-import { DEFAULT_ADMIN_TOKEN_SCOPE } from "../auth/admin-api-token.constants";
+import { ADMIN_TOKEN_SCOPE_NAMES } from "../auth/admin-api-token.constants";
 import { stripInvisibleCharacters } from "../../common/utils/visible-text.util";
 
 /** Registrations one address may make per hour. Claude Code makes one per login. */
@@ -142,7 +142,8 @@ export class OAuthClientService {
       // Whatever the client asked for: there are no client secrets here, and
       // RFC 7591 lets the server replace a requested value.
       token_endpoint_auth_method: "none",
-      scope: DEFAULT_ADMIN_TOKEN_SCOPE,
+      // What it may ask for; the admin decides at the consent what it gets.
+      scope: ADMIN_TOKEN_SCOPE_NAMES.join(" "),
     };
   }
 

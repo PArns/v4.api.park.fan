@@ -143,12 +143,12 @@ export class AdminApiTokenStore {
     userId: string,
     name: string,
     expiresInDays: number | null,
+    scope: AdminTokenScope = DEFAULT_ADMIN_TOKEN_SCOPE,
   ): Promise<{ token: string; item: AdminApiTokenItem }> {
     const token = generateToken(PAT_PREFIX);
     const expiresAt = expiresInDays
       ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
       : null;
-    const scope = DEFAULT_ADMIN_TOKEN_SCOPE;
 
     const row = await this.tokens.manager.transaction(async (manager) => {
       // Counted under the account's row lock, so two parallel creations

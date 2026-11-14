@@ -1694,7 +1694,8 @@ For each resort with park days on plan first, the plan as made (blocks as today)
 
 The products live in `ticket_products`, one row per product and region, edited under
 `/v1/admin/content/regions/:region/tickets` ([admin endpoints](../admin/endpoints.md)). Reads need any
-admin role, writes `editor`.
+admin role, writes `editor`. The admin MCP server's `list_ticket_products`, `upsert_ticket_product`
+and `archive_ticket_product` call the same `AdminTicketService` ([writing](../admin/mcp.md#writing)).
 
 | Method | Path                      | What                                                              |
 | ------ | ------------------------- | ----------------------------------------------------------------- |

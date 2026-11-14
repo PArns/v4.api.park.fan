@@ -60,7 +60,7 @@ export class InFlightCounter {
  * carries its own bearer token and gets a server built for that principal,
  * so no session state has to survive between requests or containers.
  *
- * Answers are JSON rather than an SSE stream: every tool is a single read,
+ * Answers are JSON rather than an SSE stream: every tool is a single call,
  * and JSON goes through the compression middleware and Cloudflare unchanged.
  */
 @ApiTags("mcp")
@@ -84,7 +84,8 @@ export class McpController {
     summary: "MCP endpoint (JSON-RPC over Streamable HTTP)",
     description:
       "Needs `Authorization: Bearer` with a personal access token (`pfa_…`) or an OAuth " +
-      "access token from /v1/oauth/token. Read-only tools; see docs/admin/mcp.md.",
+      "access token from /v1/oauth/token. Reads; a token with `admin:write` also writes " +
+      "as an editor. See docs/admin/mcp.md.",
   })
   @ApiResponse({
     status: 401,

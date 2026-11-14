@@ -33,8 +33,16 @@ describe("MCP_TOOLS", () => {
     },
   );
 
-  it("is read-only in v1: every tool is open to a viewer", () => {
-    for (const tool of MCP_TOOLS)
-      expect(tool.minRole ?? "viewer").toBe("viewer");
+  it("opens every read to a viewer and every write only to an editor's write token", () => {
+    for (const tool of MCP_TOOLS) {
+      if (tool.writes) expect(tool.minRole).toBe("editor");
+      else expect(tool.minRole ?? "viewer").toBe("viewer");
+    }
+  });
+
+  it("makes every delete name its confirm", () => {
+    for (const tool of MCP_TOOLS.filter((t) => t.writes === "delete")) {
+      expect(tool.input.confirm).toBeDefined();
+    }
   });
 });

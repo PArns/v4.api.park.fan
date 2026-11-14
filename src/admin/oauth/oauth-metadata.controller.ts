@@ -1,7 +1,7 @@
 import { Controller, Get } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { getApiPublicUrl, getMcpResourceUrl } from "../../config/oauth.config";
-import { DEFAULT_ADMIN_TOKEN_SCOPE } from "../auth/admin-api-token.constants";
+import { ADMIN_TOKEN_SCOPE_NAMES } from "../auth/admin-api-token.constants";
 
 /**
  * Discovery documents, at the host root (excluded from the `/v1` prefix in
@@ -41,7 +41,7 @@ export class OAuthMetadataController {
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
       revocation_endpoint_auth_methods_supported: ["none"],
-      scopes_supported: [DEFAULT_ADMIN_TOKEN_SCOPE],
+      scopes_supported: ADMIN_TOKEN_SCOPE_NAMES,
       authorization_response_iss_parameter_supported: true,
       service_documentation:
         "https://github.com/PArns/v4.api.park.fan/blob/main/docs/admin/mcp.md",
@@ -53,7 +53,7 @@ function protectedResourceMetadata() {
   return {
     resource: getMcpResourceUrl(),
     authorization_servers: [getApiPublicUrl()],
-    scopes_supported: [DEFAULT_ADMIN_TOKEN_SCOPE],
+    scopes_supported: ADMIN_TOKEN_SCOPE_NAMES,
     bearer_methods_supported: ["header"],
     resource_name: "park.fan admin",
   };
