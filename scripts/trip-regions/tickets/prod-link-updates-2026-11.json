@@ -1,0 +1,2637 @@
+{
+  "about": "Purchase links for the production ticket catalogs: each Attraction Tickets link gets its country store, and the store pages each product lacked are added. One entry per product, written as an admin write body ({ region, slug, links }) for upsert_ticket_product.",
+  "generatedAt": "2026-11-14",
+  "apply": "Send each entry of `products` as a partial update of that product ({ region, slug, links }, the admin editor's write body narrowed to `links`): `links` replaces the stored list whole, so it is the full list, production's links in production's order with the changes made. `review` says per product what changed and from which catalog version; skip a product whose region's catalog has moved past that version and recompute it.",
+  "requires": "The API with the link field `store` (wt/ticket-links, PAR-1322). The production API before that refuses `store` with \"is not a link field\".",
+  "source": {
+    "read": "GET https://api.park.fan/v1/trip-regions/{orlando,southern-california,paris}/tickets on 2026-11-14",
+    "verified": "every added url answered 200 without a redirect, found among the hreflang alternates of the product page production already links"
+  },
+  "totals": {
+    "products": 37,
+    "linksAdded": 52,
+    "linksUpdated": 91
+  },
+  "products": [
+    {
+      "region": "orlando",
+      "slug": "wdw-date-based",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://disneyworld.disney.go.com/admission/tickets/",
+          "seller": "Walt Disney World",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-date-based-plus",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag-mit",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://disneyworld.disney.go.com/admission/tickets/",
+          "seller": "Walt Disney World",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-4-park-magic",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-tickets/disney-4-park-magic-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-tickets/disney-4-park-magic-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://disneyworld.disney.go.com/admission/tickets/four-park-magic-ticket-offer/",
+          "seller": "Walt Disney World",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-uk-14-day-magic",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
+          "seller": "Disney Holidays UK",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-uk-7-day-magic",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-7-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-resort/disney-7-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.disneyholidays.co.uk/walt-disney-world/uk-ireland-exclusive-tickets/",
+          "seller": "Disney Holidays UK",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-date-based",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/universal-orlando-resort/2-park-1-day-park-to-park-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
+          "seller": "Universal Orlando Resort",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-1-day-plus-epic",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-resort/universal-orlando-1-tag-park-park-plus-1-tag",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets",
+          "seller": "Universal Orlando Resort",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-2-day-p2p-plus-epic",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-2-tages-park-park-plus-1-tages-universal-epic-universe",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.universalorlando.com/web/en/us/tickets-packages/offers/ticketoffer",
+          "seller": "Universal Orlando Resort",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-uk-all-parks",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-4-park-explorer-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://ukstore.universalorlando.com/park-tickets",
+          "seller": "Universal Orlando UK store",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-uk-three-park-adventure",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://ukstore.universalorlando.com/park-tickets",
+          "seller": "Universal Orlando UK store",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/seaworld-orlando/tagestickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-single-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-two-park",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/2-visit-seaworld-and-aquatica-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/seaworld-orlando-tickets/2-visit-seaworld-and-aquatica-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-two-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/seaworld-orlando/2-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-three-park-3-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/seaworld-orlando/3-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-four-parks-14-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
+          "seller": "Attraction Tickets",
+          "sponsored": false,
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/seaworld-orlando/unlimited-seaworld-aquatica-busch-gardens-adventure-island-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-uk-3-visit",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando/seaworld/three-park-ticket-plus-all-day-dining",
+          "seller": "Attraction Tickets",
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando/seaworld/three-park-ticket-plus-all-day-dining",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-uk-ultimate",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket",
+          "seller": "Attraction Tickets",
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://seaworld.com/orlando/tickets/",
+          "seller": "SeaWorld Orlando",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-tageserlebnis",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://discoverycove.com/orlando/pricing/",
+          "seller": "Discovery Cove",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove-plus-2",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://discoverycove.com/orlando/pricing/",
+          "seller": "Discovery Cove",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove-plus-3",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/discovery-cove-orlando/discovery-cove-ultimate-package-swim",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://discoverycove.com/orlando/pricing/",
+          "seller": "Discovery Cove",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "busch-gardens-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tagesticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://buschgardens.com/tampa/tickets/",
+          "seller": "Busch Gardens Tampa Bay",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "legoland-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/legoland-florida/legoland-florida-promo-ticket",
+          "seller": "Attraction Tickets",
+          "sponsored": false,
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando/legoland-florida/tagestickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.legoland.com/florida/tickets-passes/tickets/",
+          "seller": "LEGOLAND Florida",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "legoland-merlin-7-attractions",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/us/orlando-attraction-tickets/merlin-florida-combo-ticket",
+          "seller": "Attraction Tickets",
+          "sponsored": false,
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en/orlando-attraction-tickets/merlin-florida-combo-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/merlin-florida-combo-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/merlin-florida-combo-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/orlando-attraction-tickets/peppa-pig-legoland-florida-legoland-waterpark",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.legoland.com/florida/tickets-passes/tickets/",
+          "seller": "LEGOLAND Florida",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "dlr-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://disneyland.disney.go.com/admission/tickets/",
+          "seller": "Disneyland Resort",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "dlr-multi-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/los-angeles/disneyland-resort-california",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://disneyland.disney.go.com/admission/tickets/",
+          "seller": "Disneyland Resort",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "citypass-san-diego",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/san-diego-attraction-tickets/san-diego-citypass",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/san-diego-citypassr",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/san-diego-citypassr",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/san-diego-attraction-tickets/san-diego-citypassr",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.citypass.com/san-diego",
+          "seller": "CityPASS",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/tagesticket-mit-early-park-admission",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://store.universalstudioshollywood.com/en/us/store/c/uh_ice_default_pb_tickets",
+          "seller": "Universal Studios Hollywood",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-2-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/universal-studios-hollywood/buy-a-day-get-a-2nd-day-free",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://store.universalstudioshollywood.com/en/us/store/c/uh_ice_default_pb_tickets",
+          "seller": "Universal Studios Hollywood",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-express",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/universal-express-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://store.universalstudioshollywood.com/en/us/store/c/uh_ice_default_pb_tickets",
+          "seller": "Universal Studios Hollywood",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-vip-experience",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/vip-experience-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.universalstudioshollywood.com/web/en/us/vip-experience",
+          "seller": "Universal Studios Hollywood",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "seaworld-sd-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-1-tagesticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://seaworld.com/san-diego/tickets/",
+          "seller": "SeaWorld San Diego",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "seaworld-sd-2-day-intl",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-2-tagesticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://seaworld.com/san-diego/tickets/",
+          "seller": "SeaWorld San Diego",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "gocity-la-all-inclusive",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://gocity.com/en/los-angeles",
+          "seller": "Go City",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "gocity-la-all-inclusive-plus",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://gocity.com/en/los-angeles",
+          "seller": "Go City",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/paris/disneyland-paris/1-tag-1-park-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://tickets.disneylandparis.com/en-gb/tickets",
+          "seller": "Disneyland Paris",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-multi-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/paris-attraction-tickets/disneyland-paris-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneyland-paris-tickets",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneyland-paris-tickets",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/paris/disneyland-paris",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/paris-attraction-tickets/disneyland-paris-tickets",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://tickets.disneylandparis.com/en-gb/tickets",
+          "seller": "Disneyland Paris",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-1-day-liberte",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://tickets.disneylandparis.com/en-gb/tickets",
+          "seller": "Disneyland Paris",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "asterix-1-day",
+      "links": [
+        {
+          "url": "https://www.attractiontickets.com/en/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "en"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "GB",
+            "currency": "GBP"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/en-ie/node/280257",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "IE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/en-nl/node/280257",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "nl"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "NL",
+            "currency": "EUR"
+          }
+        },
+        {
+          "url": "https://www.attractiontickets.com/de/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
+          "seller": "Attraction Tickets",
+          "locales": [
+            "de"
+          ],
+          "sponsored": false,
+          "store": {
+            "country": "DE",
+            "currency": "EUR"
+          }
+        },
+        {
+          "seller": "Attraction Tickets",
+          "url": "https://www.attractiontickets.com/us/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
+          "sponsored": false,
+          "locales": [
+            "en"
+          ],
+          "store": {
+            "country": "US",
+            "currency": "USD"
+          }
+        },
+        {
+          "url": "https://www.parcasterix.fr/offres/billets",
+          "seller": "Parc Astérix",
+          "official": true,
+          "sponsored": false
+        }
+      ]
+    }
+  ],
+  "review": [
+    {
+      "region": "orlando",
+      "slug": "wdw-date-based",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-date-based-plus",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-base-ticket-with-water-park",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-themenparks/disney-basis-ticket-1-park-pro-tag-mit"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-4-park-magic",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-tickets/disney-4-park-magic-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-tickets/disney-4-park-magic-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/walt-disney-world-tickets/disney-four-park-magic-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-uk-14-day-magic",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/walt-disney-world-resort/disney-14-day-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "wdw-uk-7-day-magic",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/walt-disney-world-resort/disney-7-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/walt-disney-world-resort/disney-7-day-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-date-based",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort/universal-one-day-park-to-park-ticket",
+        "https://www.attractiontickets.com/de/orlando/universal-orlando-resort/2-park-1-day-park-to-park-tickets"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-1-day-plus-epic",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-1-day-park-park-plus",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-resort/universal-orlando-1-tag-park-park-plus-1-tag"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-2-day-p2p-plus-epic",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-resort-tickets/universal-orlando-2-day-park-park-plus",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-2-tages-park-park-plus-1-tages-universal-epic-universe"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-uk-all-parks",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-all-parks-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-all-parks-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-4-park-explorer-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "uor-uk-three-park-adventure",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/universal-orlando-adventure-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/universal-orlando-adventure-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/universal-orlando-adventure-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-1-day",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-single-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/de/orlando/seaworld-orlando/tagestickets"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-two-park",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/seaworld-orlando-tickets/2-visit-seaworld-and-aquatica-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/2-visit-seaworld-and-aquatica-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-two-park-ticket",
+        "https://www.attractiontickets.com/de/orlando/seaworld-orlando/2-park-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-three-park-3-day",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-three-park-ticket",
+        "https://www.attractiontickets.com/de/orlando/seaworld-orlando/3-park-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-four-parks-14-day",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-unlimited-ticket",
+        "https://www.attractiontickets.com/de/orlando/seaworld-orlando/unlimited-seaworld-aquatica-busch-gardens-adventure-island-tickets"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-uk-3-visit",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando/seaworld/three-park-ticket-plus-all-day-dining"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando/seaworld/three-park-ticket-plus-all-day-dining"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "seaworld-uk-ultimate",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/seaworld-orlando-tickets/seaworld-ultimate-ticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/day-only-experience",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-tageserlebnis"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove-plus-2",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-package-swim"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "discovery-cove-plus-3",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/discovery-cove-tickets/discovery-cove-ultimate-package-swim",
+        "https://www.attractiontickets.com/de/discovery-cove-orlando/discovery-cove-ultimate-package-swim"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "busch-gardens-1-day",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tampa-bay-single-day-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/busch-gardensr-tickets/busch-gardens-tagesticket"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "legoland-1-day",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/legoland-florida/legoland-florida-promo-ticket",
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/legoland-florida/legoland-florida-one-day-ticket",
+        "https://www.attractiontickets.com/de/orlando/legoland-florida/tagestickets"
+      ]
+    },
+    {
+      "region": "orlando",
+      "slug": "legoland-merlin-7-attractions",
+      "catalogVersion": "f37efba8a0bf",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/orlando-attraction-tickets/merlin-florida-combo-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/us/orlando-attraction-tickets/merlin-florida-combo-ticket",
+        "https://www.attractiontickets.com/en/orlando-attraction-tickets/merlin-florida-combo-ticket",
+        "https://www.attractiontickets.com/en-nl/orlando-attraction-tickets/merlin-florida-combo-ticket",
+        "https://www.attractiontickets.com/de/orlando-attraction-tickets/peppa-pig-legoland-florida-legoland-waterpark"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "dlr-1-day",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park",
+        "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/disneyland-california/disneyland-california-1-day-ticket-one-park"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "dlr-multi-day",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/anaheim-buena-park-attraction-tickets/disneyland-california-tickets"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+        "https://www.attractiontickets.com/en-nl/anaheim-buena-park-attraction-tickets/disneyland-california-tickets",
+        "https://www.attractiontickets.com/de/los-angeles/disneyland-resort-california"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "citypass-san-diego",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/san-diego-citypassr",
+        "https://www.attractiontickets.com/us/san-diego-attraction-tickets/san-diego-citypassr"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/san-diego-attraction-tickets/san-diego-citypass",
+        "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/san-diego-citypassr"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-1-day",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+        "https://www.attractiontickets.com/us/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+        "https://www.attractiontickets.com/en-nl/universal-studios-hollywood/universal-studios-hollywood-one-day-ticket",
+        "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/tagesticket-mit-early-park-admission"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-2-day",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+        "https://www.attractiontickets.com/us/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+        "https://www.attractiontickets.com/en-nl/universal-studios-hollywood-tickets/universal-studios-hollywood-buy-day-get-2nd-day-free-special-off",
+        "https://www.attractiontickets.com/de/universal-studios-hollywood/buy-a-day-get-a-2nd-day-free"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-express",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+        "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+        "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-front-line-pass",
+        "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/universal-express-tickets"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "ush-vip-experience",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/california-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+        "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+        "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/universal-studios-hollywood-tickets/universal-studios-hollywood-vip-experience",
+        "https://www.attractiontickets.com/de/kalifornien/universal-studios-hollywood/vip-experience-tickets"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "seaworld-sd-1-day",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+        "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+        "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-one-day-ticket",
+        "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-1-tagesticket"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "seaworld-sd-2-day-intl",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+        "https://www.attractiontickets.com/us/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+        "https://www.attractiontickets.com/en-nl/san-diego-attraction-tickets/seaworld-california/seaworld-san-diego-two-day-ticket",
+        "https://www.attractiontickets.com/de/san-diego-attraction-tickets/seaworldr-california-2022/seaworldr-california-2-tagesticket"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "gocity-la-all-inclusive",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+        "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass",
+        "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-los-angeles-all-inclusive-pass"
+      ]
+    },
+    {
+      "region": "southern-california",
+      "slug": "gocity-la-all-inclusive-plus",
+      "catalogVersion": "3feea1c26d64",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+        "https://www.attractiontickets.com/us/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus",
+        "https://www.attractiontickets.com/en-nl/los-angeles-attraction-tickets/go-city-los-angeles-all-inclusive-pass-plus"
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-1-day",
+      "catalogVersion": "234a4824e118",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+        "https://www.attractiontickets.com/us/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+        "https://www.attractiontickets.com/en-nl/disneyland-paris-tickets/1-day-1-park-disneyland-paris-ticket",
+        "https://www.attractiontickets.com/de/paris/disneyland-paris/1-tag-1-park-ticket"
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-multi-day",
+      "catalogVersion": "234a4824e118",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneyland-paris-tickets",
+        "https://www.attractiontickets.com/us/paris-attraction-tickets/disneyland-paris-tickets"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/paris-attraction-tickets/disneyland-paris-tickets",
+        "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneyland-paris-tickets",
+        "https://www.attractiontickets.com/de/paris/disneyland-paris"
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "dlp-1-day-liberte",
+      "catalogVersion": "234a4824e118",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+        "https://www.attractiontickets.com/us/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket",
+        "https://www.attractiontickets.com/en-nl/paris-attraction-tickets/disneylandr-paris-tickets/disneylandr-paris-1-day-open-dated-ticket"
+      ]
+    },
+    {
+      "region": "paris",
+      "slug": "asterix-1-day",
+      "catalogVersion": "234a4824e118",
+      "add": [
+        "https://www.attractiontickets.com/en-ie/node/280257",
+        "https://www.attractiontickets.com/us/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport"
+      ],
+      "storeSetOn": [
+        "https://www.attractiontickets.com/en/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport",
+        "https://www.attractiontickets.com/en-nl/node/280257",
+        "https://www.attractiontickets.com/de/paris-attraction-tickets/asterix-parkr-ticket-transport/asterix-parkr-ticket-transport"
+      ]
+    }
+  ]
+}
