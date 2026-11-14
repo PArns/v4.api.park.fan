@@ -367,6 +367,11 @@ export interface PlanTicket {
 export interface PlanInput {
   days: PlanDayInfo[];
   parks: PlanPark[];
+  /**
+   * The region's parks the visitor did not choose, with their cells: never
+   * planned, only priced on the plan's spare days ({@link OptimizedPlan.spareDayParks}).
+   */
+  candidates?: PlanPark[];
   /** cells[slug][date]; a missing cell reads as UNKNOWN. */
   cells: Record<string, Record<string, PlanCell>>;
   options: PlanOptions;
@@ -465,6 +470,12 @@ export interface PlannedDay {
   move?: PlannedMove;
   /** After a morning move: when the guest gets into the park, in minutes after midnight. */
   startMinute?: number;
+  /**
+   * A rest day the visitor did not ask for: not pinned, and the rest rule
+   * would still hold with a park on it (always so with `rest=none`). The
+   * chosen visits have no use for it; a day for another park or the city.
+   */
+  spare?: true;
 }
 
 /** A stay of the plan: a base and its nights, `from` the check-in day, `to` the check-out day. */
@@ -510,6 +521,8 @@ export interface PlanTotals {
   parkDays: number;
   visits: number;
   restDays: number;
+  /** Of the rest days, the spare ones ({@link PlannedDay.spare}). */
+  spareDays: number;
   /** A region with bases: the moves between them, and the days that are only a move. */
   moves?: number;
   travelDays?: number;
@@ -567,6 +580,12 @@ export interface OptimizedPlan {
   /** A region with bases: the stays, in route order. */
   stays?: PlannedStay[];
   /**
+   * The parks of `candidates` open on a spare day (in a region with bases,
+   * reached from that day's base), in input order, each with its three
+   * cheapest spare days; absent without any.
+   */
+  spareDayParks?: Array<{ park: string; days: PlanAlternative[] }>;
+  /**
    * A region with bases: what the stays added to the plan's cost (the hours
    * day trips and moves take, and each move's own cost), in minutes summed
    * over the trip; `/when` ranks by it.
@@ -621,7 +640,18 @@ interface SearchResult {
   exact: boolean;
   starts: number[];
   stay?: StayPlan;
+  /** The structure's costs, row by available day, which the spread reads. */
+  matrix?: number[][];
 }
+
+/**
+ * A park's visits closer together than this many days count against a
+ * placement's spread ({@link TripOptimizer.spreadScore}): "a few days apart".
+ */
+const REPEAT_SPACING_DAYS = 3;
+
+/** Rounds of moves and swaps the spread tries before it keeps what it has. */
+const SPREAD_ROUNDS = 40;
 
 /** Stay plans solved per pairing and ticket structure, cheapest quick bound first. */
 const STAY_PLAN_LIMIT = 400;
@@ -1003,7 +1033,7 @@ class TripOptimizer {
     this.n = input.days.length;
     this.dates = input.days.map((d) => d.date);
     this.dates.forEach((d, i) => this.dateIndex.set(d, i));
-    for (const park of input.parks) {
+    for (const park of [...input.parks, ...(input.candidates ?? [])]) {
       this.parkBySlug.set(park.slug, park);
       const cells = this.dates.map((d) => this.cell(park.slug, d));
       const waits = cells
@@ -2141,6 +2171,7 @@ class TripOptimizer {
         exact: true,
         starts: s.starts,
         ...(s.stay && { stay: s.stay }),
+        matrix: s.matrix,
       };
       if (s.stay) solved.push(result);
       if (!best || outcome.solution.objective < best.solution.objective) {
@@ -2181,6 +2212,17 @@ class TripOptimizer {
       this.stayCutBound >= objective - 1e-9;
     // The stays of the result price what is described.
     this.activeStay = kept.stay ?? null;
+    if (kept.matrix) {
+      kept.solution = this.spreadDays(
+        kept.rows,
+        available,
+        kept.matrix,
+        kept.solution,
+        objective + stayTieBand(best),
+        limit,
+        kept.stay?.fixedCost ?? 0,
+      );
+    }
     return kept;
   }
 
@@ -2814,6 +2856,148 @@ class TripOptimizer {
     return best;
   }
 
+  /**
+   * How unevenly a placement spreads its park days, lower is better: the
+   * square of every run of park days and of every run of days without one
+   * (rest, travel, the arrival and departure day) over the whole trip, so a
+   * five-day rest run weighs more than two runs of two and two park days in
+   * a row more than the same days apart; plus, for a park's visits closer
+   * than {@link REPEAT_SPACING_DAYS}, the square of the days missing.
+   */
+  private spreadScore(rows: Row[], dayOf: number[]): number {
+    const flags = this.parkDayFlags(dayOf);
+    let score = 0;
+    let run = 1;
+    for (let i = 1; i <= this.n; i++) {
+      if (i < this.n && flags[i] === flags[i - 1]) {
+        run++;
+        continue;
+      }
+      score += run * run;
+      run = 1;
+    }
+    const daysBySlug = new Map<string, number[]>();
+    rows.forEach((row, r) => {
+      for (const u of row.units) {
+        daysBySlug.set(u.slug, [...(daysBySlug.get(u.slug) ?? []), dayOf[r]]);
+      }
+    });
+    for (const days of daysBySlug.values()) {
+      days.sort((a, b) => a - b);
+      for (let k = 1; k < days.length; k++) {
+        const short = REPEAT_SPACING_DAYS - (days[k] - days[k - 1]);
+        if (short > 0) score += short * short;
+      }
+    }
+    return score;
+  }
+
+  /**
+   * Among the placements that tie the cheapest, the one that spreads the
+   * park days best ({@link spreadScore}), then the cheaper. A placement ties
+   * when it keeps the structure's rules (its masks, locks and the streak
+   * `limit`), costs less than `ceiling` (the cheapest plus the stays' tie
+   * band, {@link stayTieBand}), and puts no visit on a day more than
+   * `runnerUpMinutes` dearer than the day `start` gave it, a park's visits
+   * compared cheapest with cheapest: a clearly better day is never given up
+   * for the spread. Moves of a visit to a free day and swaps of two, the
+   * best of each round, while one improves. Without it, on the flat days of
+   * a long trip (last year's measured waits) the visits stay wherever the
+   * assignment happened to put them, a week of rest between two park days.
+   */
+  private spreadDays(
+    rows: Row[],
+    available: number[],
+    matrix: number[][],
+    start: Solution,
+    ceiling: number,
+    limit: number,
+    fixedCost: number,
+  ): Solution {
+    const colOf = new Map(available.map((d, c) => [d, c]));
+    const costAt = (r: number, day: number): number => {
+      const col = colOf.get(day);
+      return col === undefined ? Infinity : matrix[r][col];
+    };
+    const movable = rows
+      .map((row, r) => (row.lockedDay === undefined ? r : -1))
+      .filter((r) => r >= 0);
+    // A park's visits (the same parks on the same ticket) may trade days.
+    const groups = new Map<string, number[]>();
+    const groupOf: string[] = [];
+    for (const r of movable) {
+      const key = rows[r].units
+        .map((u) => `${u.slug}|${u.ticket ?? ""}|${u.allowance ? 1 : 0}`)
+        .join("+");
+      groupOf[r] = key;
+      groups.set(key, [...(groups.get(key) ?? []), r]);
+    }
+    const sortedCosts = (members: number[], dayOf: number[]) =>
+      members.map((r) => costAt(r, dayOf[r])).sort((a, b) => a - b);
+    const caps = [...groups.values()].map((members) => ({
+      members,
+      cap: sortedCosts(members, start.dayOf).map(
+        (c) => c + PlanCostModel.runnerUpMinutes + 1e-9,
+      ),
+    }));
+    const ties = (objective: number) =>
+      objective < ceiling - 1e-9 || objective <= start.objective + 1e-9;
+    const evaluate = (dayOf: number[]) => {
+      const base = dayOf.reduce((s, day, r) => s + costAt(r, day), fixedCost);
+      if (!ties(base)) return null;
+      const objective =
+        base +
+        PlanCostModel.adjacentRepeatPenalty * this.adjacency(rows, dayOf);
+      if (!ties(objective)) return null;
+      for (const { members, cap } of caps) {
+        const costs = sortedCosts(members, dayOf);
+        if (costs.some((c, k) => !(c <= cap[k]))) return null;
+      }
+      if (longestRun(this.parkDayFlags(dayOf)) > limit) return null;
+      return {
+        solution: { dayOf, base, objective },
+        score: this.spreadScore(rows, dayOf),
+      };
+    };
+    const better = (
+      a: { solution: Solution; score: number },
+      b: { solution: Solution; score: number },
+    ) =>
+      a.score < b.score ||
+      (a.score === b.score &&
+        a.solution.objective < b.solution.objective - 1e-9);
+    let current = {
+      solution: start,
+      score: this.spreadScore(rows, start.dayOf),
+    };
+    for (let round = 0; round < SPREAD_ROUNDS; round++) {
+      const taken = new Set(current.solution.dayOf);
+      const free = available.filter((d) => !taken.has(d));
+      const candidates: number[][] = [];
+      for (const r of movable) {
+        for (const day of free) {
+          const moved = [...current.solution.dayOf];
+          moved[r] = day;
+          candidates.push(moved);
+        }
+        for (const q of movable) {
+          if (q <= r || groupOf[q] === groupOf[r]) continue;
+          const swapped = [...current.solution.dayOf];
+          [swapped[r], swapped[q]] = [swapped[q], swapped[r]];
+          candidates.push(swapped);
+        }
+      }
+      let next = current;
+      for (const dayOf of candidates) {
+        const found = evaluate(dayOf);
+        if (found && better(found, next)) next = found;
+      }
+      if (next === current) break;
+      current = next;
+    }
+    return current.solution;
+  }
+
   // ── the answer ────────────────────────────────────────────────────────────
 
   private describe(
@@ -2927,12 +3111,18 @@ class TripOptimizer {
           }
           if (precededBy >= 3) reasons.push("rest_after_streak");
         }
+        let followedBy = 0;
+        while (rowOnDay.has(i + 1 + followedBy)) followedBy++;
+        const spare =
+          options.rest.mode === "none" ||
+          precededBy + 1 + followedBy <= defaultLimit;
         out.push({
           date,
           kind: "rest",
           parks: [],
           reasons,
           warnings: [],
+          ...(spare && { spare: true as const }),
           ...where,
         });
         continue;
@@ -3052,6 +3242,7 @@ class TripOptimizer {
     }
 
     const totals = this.totals(rowOnDay, out);
+    const spareDayParks = this.spareDayParks(out);
     return {
       exact,
       relaxed: [...this.relaxed],
@@ -3077,7 +3268,49 @@ class TripOptimizer {
         })),
         stayPenalty: this.stayPenalty(stay, rowOnDay),
       }),
+      ...(spareDayParks.length > 0 && { spareDayParks }),
     };
+  }
+
+  /**
+   * The candidates open on one of the plan's spare days, each with its three
+   * cheapest: priced as a visit of the plan would be (in a region with bases
+   * under the day's stay, so a base that does not reach the park is no day for
+   * it). In input order; a park with no such day is left out.
+   */
+  private spareDayParks(
+    days: PlannedDay[],
+  ): NonNullable<OptimizedPlan["spareDayParks"]> {
+    const spare = days.flatMap((d, i) => (d.spare ? [i] : []));
+    if (spare.length === 0) return [];
+    const stay = this.activeStay;
+    const out: NonNullable<OptimizedPlan["spareDayParks"]> = [];
+    for (const park of this.input.candidates ?? []) {
+      const row: Row = { units: [{ slug: park.slug, visit: 1 }] };
+      const best = spare
+        .filter(
+          (i) => this.cell(park.slug, this.dates[i]).status === "OPERATING",
+        )
+        .map((i) => ({
+          i,
+          cost: stay
+            ? this.stayCell(stay, row, i).cost
+            : this.cost(park.slug, i),
+        }))
+        .filter(({ cost }) => Number.isFinite(cost))
+        .sort((a, b) => a.cost - b.cost || a.i - b.i)
+        .slice(0, 3)
+        .map(({ i }) => {
+          const c = this.cell(park.slug, this.dates[i]);
+          return {
+            date: this.dates[i],
+            ...(c.headlinerWait != null && { headlinerWait: c.headlinerWait }),
+            ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
+          };
+        });
+      if (best.length > 0) out.push({ park: park.slug, days: best });
+    }
+    return out;
   }
 
   /** A day's base and move under the plan's stays, as a plan day carries them. */
@@ -3305,6 +3538,7 @@ class TripOptimizer {
         .length,
       visits,
       restDays: days.filter((d) => d.kind === "rest").length,
+      spareDays: days.filter((d) => d.spare).length,
     };
   }
 }

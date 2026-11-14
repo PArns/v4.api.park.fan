@@ -107,6 +107,8 @@ export interface PlanAnswer {
     }
   >;
   unplaced: Array<{ slug: string; reason: string }>;
+  totals: Record<string, unknown>;
+  spareDayParks?: Array<{ park: string; days: Array<Record<string, unknown>> }>;
 }
 
 /** The days of a longer calendar from `from` to `to`, as a calendar of their own. */
