@@ -41,6 +41,13 @@ export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
 export const TRIP_WHEN_TTL = 6 * 60 * 60;
 
 /**
+ * A trip region's forecast accuracy (`/accuracy`): a day. The archive it
+ * reads is scored once a night, and the key carries the region's date, so a
+ * new day starts a new entry.
+ */
+export const TRIP_ACCURACY_TTL = 24 * 60 * 60;
+
+/**
  * A trip region's ticket catalog in Redis. An admin write evicts it, so the
  * hour only bounds a write made outside the admin (a raw UPDATE).
  */

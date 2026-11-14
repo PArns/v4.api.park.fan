@@ -19,7 +19,25 @@
  */
 import { addIsoDays } from "../common/utils/date.util";
 import { solveAssignment } from "./hungarian";
-import type { PerkKind, PerkRule, TripParkType } from "./regions";
+import { dayKindsOf, type TicketDayKind } from "./tickets";
+import {
+  fewestTravelDays,
+  stayPlans,
+  unreachableParks,
+  type StayLeg,
+  type StayPlan,
+  type StaysOption,
+} from "./trip-stays";
+import {
+  ATLANTIC_HURRICANES,
+  ORLANDO_HEAT,
+  type HeatModelConfig,
+  type PerkKind,
+  type PerkRule,
+  type RegionWeatherConfig,
+  type StormSeasonConfig,
+  type TripParkType,
+} from "./regions";
 
 /** A trip runs at most three weeks, arrival and departure included. */
 export const MAX_TRIP_DAYS = 21;
@@ -39,19 +57,6 @@ const HOP_COMBO_LIMIT = 200;
 const REST_LOCAL_SEARCH_EVALS = 600;
 /** Combinations of the owned tickets' free starts tried per pairing. */
 const START_COMBO_LIMIT = 3000;
-
-/**
- * The share a hotel perk takes off a park's cost on the day it applies. Fixed
- * shares, not measurements: an early hour at a Disney park is worth a ride or
- * two before the day guests arrive, an extended evening more, and Express
- * Unlimited at the two Universal parks most of the queue.
- */
-export const PERK_SHARE: Record<PerkKind, number> = {
-  early_entry: 0.05,
-  early_park_admission: 0.05,
-  extended_evening: 0.1,
-  express_included: 0.6,
-};
 
 /**
  * The cost model, in minutes of headliner standby (the calendar's
@@ -89,74 +94,135 @@ export const PlanCostModel = {
 } as const;
 
 /**
- * Extreme heat at a theme park: the day's cost rises by `perDegree` for each
- * degree of the day's high above the threshold, up to `cap`. A forecast high
- * counts from 35 °C, a day clearly hotter than Orlando's usual summer day: Magic
- * Kingdom's 2015–2024 daily normals (ERA5) top out at 32.1 °C in late June and
- * run 30.9 °C at the June–October median. Past the forecast the climate normal
- * stands in, from 31.5 °C (the top fifth of those June–October normals, "typically
- * very hot") at half the weight: a normal is a 70-day mean, so it is flatter
- * than any one day and says less about the day the visitor gets. Water parks
- * and Discovery Cove take no heat term: a hot dry day is already their good
- * one (`weatherFactor`). Contract: docs/frontend/trip-regions.md.
+ * Orlando's heat model ({@link ORLANDO_HEAT}): the default where a caller
+ * names no region's, which only the specs do. Every region carries its own
+ * (`RegionConfig.weather.heat`). Water parks and Discovery Cove take no heat
+ * term: a hot dry day is already their good one (`weatherFactor`). Contract:
+ * docs/frontend/trip-regions.md.
  */
-export const HeatModel = {
-  forecastFromC: 35,
-  normalFromC: 31.5,
-  perDegree: 0.08,
-  normalWeight: 0.5,
-  cap: 1.4,
-} as const;
+export const HeatModel: HeatModelConfig = ORLANDO_HEAT;
+
+/** What the weather does to a day's cost: a region's heat, storm season and notes. */
+export type WeatherModel = Pick<
+  RegionWeatherConfig,
+  "heat" | "storm" | "notes"
+>;
 
 /**
- * The Atlantic hurricane season, 1 June to 30 November, weighted by half
- * month to the shape of the National Hurricane Center's climatology
- * (nhc.noaa.gov/climo, 1991–2020): the first named storm usually forms in
- * mid to late June, the first hurricane in early to mid August; the peak is
- * 10 September, with most activity between mid-August and mid-October. The
- * weights are curated relative to that peak, not NHC figures, and never a
- * forecast. `[month, firstHalf, secondHalf]`, the halves split after the 15th
- * (the 14th in August, so the peak starts on 15 August).
+ * Orlando's weather, the default of {@link dayCostParts} and the plan where a
+ * caller names none (the specs written for the first region). Every route
+ * passes its region's (`RegionConfig.weather`).
  */
-export const HURRICANE_WEIGHTS: ReadonlyArray<[number, number, number]> = [
-  [6, 0.05, 0.1],
-  [7, 0.15, 0.2],
-  [8, 0.4, 0.8],
-  [9, 1, 1],
-  [10, 0.8, 0.4],
-  [11, 0.15, 0.05],
-];
+export const ORLANDO_WEATHER: WeatherModel = {
+  heat: ORLANDO_HEAT,
+  storm: ATLANTIC_HURRICANES,
+};
 
-/** What a park day at the season's peak costs more, in minutes of headliner wait. */
-export const HURRICANE_PEAK_MINUTES = 8;
+/** Orlando's hurricane weights, `[month, firstHalf, secondHalf]` ({@link ATLANTIC_HURRICANES}). */
+export const HURRICANE_WEIGHTS = ATLANTIC_HURRICANES.weights;
+
+/** What a park day at the hurricane season's peak costs more, in minutes of headliner wait. */
+export const HURRICANE_PEAK_MINUTES = ATLANTIC_HURRICANES.peakMinutes;
+
+/** A storm season's weight on a date: 0 outside it; by half month. */
+export function stormWeight(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): number {
+  if (!storm) return 0;
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  const row = storm.weights.find(([m]) => m === month);
+  if (!row) return 0;
+  const split = storm.firstHalfEnds?.[month] ?? 15;
+  return day <= split ? row[1] : row[2];
+}
+
+/** Whether a date lies in a storm season's peak (`peak.from` … `peak.to`). */
+export function isStormPeak(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): boolean {
+  if (!storm) return false;
+  const md = date.slice(5, 10);
+  return md >= storm.peak.from && md <= storm.peak.to;
+}
+
+/**
+ * Whether a trip from `from` to `to` (inclusive) touches a storm season's
+ * peak on any day, travel days included: the window `hurricane_peak` /
+ * `typhoon_peak` warns about, and the one `/when` adds `peakWindowMinutes` to.
+ */
+export function touchesStormPeak(
+  storm: StormSeasonConfig | undefined,
+  from: string,
+  to: string,
+): boolean {
+  if (!storm) return false;
+  for (let d = from; d <= to; d = addIsoDays(d, 1)) {
+    if (isStormPeak(storm, d)) return true;
+  }
+  return false;
+}
+
+/** A storm season's minutes on a date, the same for every park that day. */
+export function stormMinutes(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): number {
+  return storm ? storm.peakMinutes * stormWeight(storm, date) : 0;
+}
+
+/**
+ * The storm warning a date carries: `<kind>_peak` in the peak,
+ * `<kind>_season` elsewhere in the season, none outside it.
+ */
+export function stormWarning(
+  storm: StormSeasonConfig | undefined,
+  date: string,
+): StormWarning | undefined {
+  if (!storm) return undefined;
+  if (isStormPeak(storm, date)) return `${storm.kind}_peak`;
+  return stormWeight(storm, date) > 0 ? `${storm.kind}_season` : undefined;
+}
+
+/** Whether a date lies in one of a region's noted seasons of that kind (Japan's rainy season). */
+export function inSeasonNote(
+  notes: WeatherModel["notes"],
+  kind: "rainy_season",
+  date: string,
+): boolean {
+  const md = date.slice(5, 10);
+  return (notes ?? []).some(
+    (n) => n.kind === kind && md >= n.from && md <= n.to,
+  );
+}
 
 /** The hurricane season's weight on a date: 0 outside 1 June … 30 November. */
 export function hurricaneWeight(date: string): number {
-  const month = Number(date.slice(5, 7));
-  const day = Number(date.slice(8, 10));
-  const row = HURRICANE_WEIGHTS.find(([m]) => m === month);
-  if (!row) return 0;
-  const split = month === 8 ? 14 : 15;
-  return day <= split ? row[1] : row[2];
+  return stormWeight(ATLANTIC_HURRICANES, date);
 }
 
 /** The season's peak, mid-August to mid-October (15 August … 15 October). */
 export function isHurricanePeak(date: string): boolean {
-  const md = date.slice(5, 10);
-  return md >= "08-15" && md <= "10-15";
+  return isStormPeak(ATLANTIC_HURRICANES, date);
 }
 
 /** The hurricane season's minutes on a date, the same for every park that day. */
 export function hurricaneMinutes(date: string): number {
-  return HURRICANE_PEAK_MINUTES * hurricaneWeight(date);
+  return stormMinutes(ATLANTIC_HURRICANES, date);
 }
 
 /**
  * How much hotter than its threshold a day's high is, and the factor it puts
  * on a theme park's cost; null when it is not extreme or nothing is known.
- * The forecast high where the calendar has one, else the day's climate normal.
+ * The forecast high where the calendar has one, else the day's climate normal,
+ * against the region's thresholds (Orlando's without one).
  */
-export function heatOf(weather: PlanCell["weather"]): {
+export function heatOf(
+  weather: PlanCell["weather"],
+  model: HeatModelConfig = HeatModel,
+): {
   excess: number;
   factor: number;
   basis: "forecast" | "climate_normal";
@@ -164,14 +230,13 @@ export function heatOf(weather: PlanCell["weather"]): {
   if (!weather || weather.tempMax == null) return null;
   const basis =
     weather.basis === "climate_normal" ? "climate_normal" : "forecast";
-  const from =
-    basis === "forecast" ? HeatModel.forecastFromC : HeatModel.normalFromC;
+  const from = basis === "forecast" ? model.forecastFromC : model.normalFromC;
   const excess = weather.tempMax - from;
   if (excess <= 0) return null;
-  const weight = basis === "forecast" ? 1 : HeatModel.normalWeight;
+  const weight = basis === "forecast" ? 1 : model.normalWeight;
   return {
     excess,
-    factor: Math.min(HeatModel.cap, 1 + HeatModel.perDegree * weight * excess),
+    factor: Math.min(model.cap, 1 + model.perDegree * weight * excess),
     basis,
   };
 }
@@ -189,6 +254,10 @@ export interface PlanCell {
   basis: PlanBasis;
   /** Hours the day guest has: the OPERATING row's open to close. */
   dayHours?: number;
+  /** The day guests' opening, in minutes after the park's midnight. */
+  opensMinute?: number;
+  /** The day guests' close, in minutes after the park's midnight (past 1440 after midnight). */
+  closesMinute?: number;
   /**
    * The park's usual day-guest hours around this date, from the calendar
    * (independent of the window asked for); preferred over a window median.
@@ -250,6 +319,13 @@ export interface PlanOptions {
   hopPairs: Array<[string, string]>;
   perkRules: PerkRule[];
   locks: PlanLock[];
+  /** The region's weather (`RegionConfig.weather`); absent: Orlando's. */
+  weather?: WeatherModel;
+  /**
+   * A region with bases: the stays are searched with the parks, and replace
+   * the resort blocks. Absent: one base, the region as a whole.
+   */
+  stays?: StaysOption;
 }
 
 /**
@@ -279,6 +355,13 @@ export interface PlanTicket {
   caps: Array<{ parks: string[]; max: number }>;
   /** Parks one hop day of this ticket may combine. */
   hopPairs: Array<[string, string]>;
+  /**
+   * An evening ticket: it admits from this many minutes after midnight, so a
+   * day on it is the evening of the day (`entryFrom`).
+   */
+  entryMinute?: number;
+  /** The kinds of day it may be used on; absent: every day. */
+  validDays?: TicketDayKind[];
 }
 
 export interface PlanInput {
@@ -294,16 +377,23 @@ export interface PlanInput {
   tickets?: PlanTicket[];
 }
 
-export type PlanReason =
+/** The plan's own reasons; a hotel perk's code joins them ({@link PlanReason}). */
+export type PlanDayReason =
   | "quietest_in_window"
   | "runner_up_close"
   | "weekday"
   | "holiday_ends"
-  | PerkKind
   | "water_park_weather"
   | "busiest_day_spared"
   | "rest_after_streak"
   | "locked";
+
+/** A plan day's reason: the plan's own, or a hotel perk the region names. */
+export type PlanReason = PlanDayReason | PerkKind;
+
+/** A storm season's two warnings, by its kind. */
+export type StormWarning =
+  "hurricane_season" | "hurricane_peak" | "typhoon_season" | "typhoon_peak";
 
 export type PlanWarning =
   | "party_night_short_hours"
@@ -315,13 +405,16 @@ export type PlanWarning =
   | "adjacent_repeat"
   | "long_streak"
   | "extreme_heat"
-  | "hurricane_season"
-  | "hurricane_peak"
-  | "outside_ticket_window";
+  | StormWarning
+  | "rainy_season"
+  | "outside_ticket_window"
+  | "long_day_trip"
+  | "move_day";
 
 export interface PlannedParkVisit {
   slug: string;
-  part: "full" | "half";
+  /** `evening`: on an evening ticket, from its entry time. */
+  part: "full" | "half" | "evening";
   /** On a hop day each park carries its own figures. */
   headlinerWait?: number;
   crowdLevel?: string;
@@ -329,9 +422,28 @@ export interface PlannedParkVisit {
   perks?: PerkKind[];
 }
 
+/** A move between bases on a plan day (a region with bases). */
+export interface PlannedMove {
+  from: string;
+  to: string;
+  minutes: number;
+  mode: StayLeg["mode"];
+  name?: string;
+  /**
+   * `morning`: the move comes first and the day's park is in the base
+   * reached; `evening`: after the day's park, in the base left; `day`: the
+   * day is the move.
+   */
+  when: "morning" | "evening" | "day";
+  /** Leaving and arriving, in minutes after the park-local midnight. */
+  departMinute: number;
+  arriveMinute: number;
+}
+
 export interface PlannedDay {
   date: string;
-  kind: "arrival" | "park" | "hop" | "rest" | "departure";
+  /** `travel`: a move between bases and no park (a region with bases). */
+  kind: "arrival" | "park" | "hop" | "rest" | "departure" | "travel";
   parks: PlannedParkVisit[];
   headlinerWait?: number;
   crowdLevel?: string;
@@ -345,6 +457,24 @@ export interface PlannedDay {
   ticketDay?: number;
   /** A visit on the ticket's allowance, which uses no ticket day. */
   ticketAllowance?: true;
+  /** An evening ticket's day: the park admits the guest from this time (`HH:MM`). */
+  entryFrom?: string;
+  /** A region with bases: where the night is spent (the departure day: where it starts). */
+  base?: string;
+  /** The day's move between bases. */
+  move?: PlannedMove;
+  /** After a morning move: when the guest gets into the park, in minutes after midnight. */
+  startMinute?: number;
+}
+
+/** A stay of the plan: a base and its nights, `from` the check-in day, `to` the check-out day. */
+export interface PlannedStay {
+  base: string;
+  from: string;
+  to: string;
+  nights: number;
+  /** The search picked the base, its place or its nights. */
+  auto?: true;
 }
 
 export interface PlanAlternative {
@@ -373,19 +503,27 @@ export interface PlanTotals {
   /** The planned order saves at least {@link ORDER_MATTERS_MINUTES} per ride. */
   orderMatters: boolean;
   /**
-   * What heat and the hurricane season added to the plan's cost, in minutes
-   * per park day, beside `headlinerWait`, which they leave alone.
+   * What heat and the storm season added to the plan's cost, in minutes per
+   * park day, beside `headlinerWait`, which they leave alone.
    */
   penalties?: PlanPenalties;
   parkDays: number;
   visits: number;
   restDays: number;
+  /** A region with bases: the moves between them, and the days that are only a move. */
+  moves?: number;
+  travelDays?: number;
 }
 
-/** Minutes of cost per park day that are not waiting: what ranked a plan lower. */
+/**
+ * Minutes of cost per park day that are not waiting: what ranked a plan
+ * lower. The storm season's under its kind: `hurricane` in Orlando, `typhoon`
+ * in Japan.
+ */
 export interface PlanPenalties {
   heat?: number;
   hurricane?: number;
+  typhoon?: number;
 }
 
 /** An owned ticket as the plan used it. */
@@ -401,7 +539,8 @@ export interface PlannedTicket {
   allowanceVisits: number;
 }
 
-export type UnplacedReason = "no_open_day" | "no_day_left" | "no_ticket_day";
+export type UnplacedReason =
+  "no_open_day" | "no_day_left" | "no_ticket_day" | "no_base";
 
 export interface OptimizedPlan {
   exact: boolean;
@@ -418,8 +557,21 @@ export interface OptimizedPlan {
   tickets: PlannedTicket[];
   ignoredLocks: Array<{
     lock: string;
-    reason: "outside_trip" | "closed" | "day_taken" | "no_visit_left";
+    reason:
+      | "outside_trip"
+      | "closed"
+      | "day_taken"
+      | "no_visit_left"
+      | "base_unreachable";
   }>;
+  /** A region with bases: the stays, in route order. */
+  stays?: PlannedStay[];
+  /**
+   * A region with bases: what the stays added to the plan's cost (the hours
+   * day trips and moves take, and each move's own cost), in minutes summed
+   * over the trip; `/when` ranks by it.
+   */
+  stayPenalty?: number;
 }
 
 // ── internals ───────────────────────────────────────────────────────────────
@@ -458,6 +610,8 @@ interface Structure {
   starts: number[];
   /** Visits this structure leaves out for lack of days. */
   dropped: Unit[];
+  /** A region with bases: the stays the structure plans in. */
+  stay?: StayPlan;
 }
 
 interface SearchResult {
@@ -466,6 +620,80 @@ interface SearchResult {
   dropped: Unit[];
   exact: boolean;
   starts: number[];
+  stay?: StayPlan;
+}
+
+/** Stay plans solved per pairing and ticket structure, cheapest quick bound first. */
+const STAY_PLAN_LIMIT = 400;
+
+/**
+ * How much dearer than the cheapest a stay plan may be and still tie it:
+ * {@link ORDER_MATTERS_MINUTES} per park day, the plan's own "any order will
+ * do", a lead inside a forecast's error.
+ */
+function stayTieBand(result: SearchResult): number {
+  return ORDER_MATTERS_MINUTES * new Set(result.solution.dayOf).size;
+}
+
+/**
+ * Whether a stay plan may tie the cheapest: the same number of moves, so the
+ * band never trades a hotel change against a long day trip (Japan's Fuji-Q
+ * from Tokyo against a night by the lake), and a cost within its band.
+ */
+function tiesWith(
+  stay: StayPlan | undefined,
+  objective: number,
+  cheapest: SearchResult,
+): boolean {
+  return (
+    !!stay &&
+    !!cheapest.stay &&
+    stay.moves === cheapest.stay.moves &&
+    objective < cheapest.solution.objective + stayTieBand(cheapest)
+  );
+}
+
+/**
+ * The result kept from the solved structures: the cheapest, or among the
+ * stay plans that tie it ({@link tiesWith}) the one closer to the trip's
+ * parks ({@link StayPlan.reachMinutes}), the cheaper of two as close. So a
+ * Disneyland Park and Parc Astérix trip whose day-trip minutes land on one
+ * park or the other stays at the Disney hotels, not in central Paris. A
+ * region without bases keeps its cheapest, the first of equals, as always.
+ */
+function keptResult(
+  cheapest: SearchResult,
+  solved: readonly SearchResult[],
+): SearchResult {
+  let kept = cheapest;
+  for (const r of solved) {
+    if (r === kept || !tiesWith(r.stay, r.solution.objective, cheapest)) {
+      continue;
+    }
+    const a = r.stay as StayPlan;
+    const b = kept.stay as StayPlan;
+    if (
+      a.reachMinutes < b.reachMinutes ||
+      (a.reachMinutes === b.reachMinutes &&
+        r.solution.objective < kept.solution.objective)
+    ) {
+      kept = r;
+    }
+  }
+  return kept;
+}
+
+/** How a row is priced on a day of a stay plan, and why. */
+interface StayCell {
+  cost: number;
+  /** On a move day: the park before or after the move. */
+  when?: "morning" | "evening";
+  /** Hours of the park's day the travel takes. */
+  lostHours: number;
+  /** After a morning move: when the guest gets into the park. */
+  startMinute?: number;
+  /** A day trip past the free travel time. */
+  longTrip: boolean;
 }
 
 /**
@@ -536,8 +764,15 @@ export interface DayCostContext {
   fireworks?: FireworksOption;
   /** The product of (1 − share) of the hotel perks that day; 1 without a hotel. */
   perkFactor?: number;
-  /** The date priced, for the hurricane season's term; without it there is none. */
+  /** The date priced, for the storm season's term; without it there is none. */
   date?: string;
+  /** The region's heat and storm season; absent: Orlando's ({@link ORLANDO_WEATHER}). */
+  weather?: WeatherModel;
+  /**
+   * Hours of the day the guest cannot spend in the park: an evening ticket's
+   * late entry. Priced like a short day ({@link shortenedHoursFactor}).
+   */
+  lostHours?: number;
 }
 
 /**
@@ -555,6 +790,46 @@ export function hoursFactor(
     PlanCostModel.hoursFactorCap,
     Math.max(1, usual / cell.dayHours),
   );
+}
+
+/** The day a guest's hours are read against where nothing else says: a usual park day. */
+export const DEFAULT_DAY_HOURS = 10;
+
+/** Minutes after midnight as `HH:MM`. */
+const clockOf = (minute: number): string =>
+  `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+
+/** A day's opening where the calendar has none: the usual 09:00. */
+const DEFAULT_OPEN_MINUTE = 9 * 60;
+
+/** The hours an evening ticket's late entry takes off a day: entry − opening, at least 0. */
+export function lateEntryHours(
+  cell: Pick<PlanCell, "opensMinute">,
+  entryMinute: number,
+): number {
+  return (
+    Math.max(0, entryMinute - (cell.opensMinute ?? DEFAULT_OPEN_MINUTE)) / 60
+  );
+}
+
+/**
+ * {@link hoursFactor} for a day the guest spends `lostHours` less of: the
+ * park's usual hours ÷ the hours left, at least 1, at most
+ * {@link PlanCostModel.hoursFactorCap}, an early close included (the hours
+ * left are the day guest's hours less the lost ones). Without the day's
+ * hours, its usual ones (else {@link DEFAULT_DAY_HOURS}) stand in.
+ */
+export function shortenedHoursFactor(
+  cell: Pick<PlanCell, "dayHours" | "usualHours">,
+  medianHours: number | undefined,
+  lostHours: number,
+): number {
+  if (lostHours <= 0) return hoursFactor(cell, medianHours);
+  const usual = cell.usualHours ?? medianHours ?? DEFAULT_DAY_HOURS;
+  const day = cell.dayHours && cell.dayHours > 0 ? cell.dayHours : usual;
+  const left = day - lostHours;
+  if (left <= 0) return PlanCostModel.hoursFactorCap;
+  return Math.min(PlanCostModel.hoursFactorCap, Math.max(1, usual / left));
 }
 
 /**
@@ -587,7 +862,9 @@ export interface DayCostParts {
   cost: number;
   /** What extreme heat added (theme parks only). */
   heat: number;
-  /** What the hurricane season added (every park alike that date). */
+  /** What the region's storm season added (every park alike that date). */
+  storm: number;
+  /** `storm` where the season is Orlando's hurricanes, else 0: the name the first specs read. */
   hurricane: number;
 }
 
@@ -597,7 +874,7 @@ export interface DayCostParts {
  * night at 18:00 costs more than its waits), by the hotel's perks and by
  * extreme heat ({@link HeatModel}), plus a penalty for a day without published
  * hours, with `fireworks=want` one for a night that costs the evening show,
- * and the hurricane season's minutes for the date ({@link hurricaneMinutes}).
+ * and the region's storm season's minutes for the date ({@link stormMinutes}).
  * A water park or reservation park is a flat day the weather moves. Infinity
  * when the park is closed.
  */
@@ -606,18 +883,26 @@ export function dayCostParts(
   ctx: DayCostContext,
 ): DayCostParts {
   if (cell.status === "CLOSED") {
-    return { cost: Infinity, heat: 0, hurricane: 0 };
+    return { cost: Infinity, heat: 0, storm: 0, hurricane: 0 };
   }
+  const weather = ctx.weather ?? ORLANDO_WEATHER;
   const unknown =
     cell.status === "UNKNOWN" ? PlanCostModel.unknownDayPenalty : 0;
-  const hurricane = ctx.date ? hurricaneMinutes(ctx.date) : 0;
+  const storm = ctx.date ? stormMinutes(weather.storm, ctx.date) : 0;
+  const hurricane = weather.storm?.kind === "hurricane" ? storm : 0;
+  const lost = ctx.lostHours ?? 0;
   if (ctx.type !== "theme_park") {
+    const shortened =
+      lost > 0 ? shortenedHoursFactor(cell, ctx.medianHours, lost) : 1;
     return {
       cost:
-        PlanCostModel.flatDayCost * weatherFactor(cell.weather).factor +
+        PlanCostModel.flatDayCost *
+          weatherFactor(cell.weather).factor *
+          shortened +
         unknown +
-        hurricane,
+        storm,
       heat: 0,
+      storm,
       hurricane,
     };
   }
@@ -629,12 +914,16 @@ export function dayCostParts(
     ctx.fireworks === "want" && losesEvening(cell, ctx.medianHours)
       ? PlanCostModel.fireworksMissedPenalty
       : 0;
-  const core =
-    base * hoursFactor(cell, ctx.medianHours) * (ctx.perkFactor ?? 1);
-  const heat = core * ((heatOf(cell.weather)?.factor ?? 1) - 1);
+  const hours =
+    lost > 0
+      ? shortenedHoursFactor(cell, ctx.medianHours, lost)
+      : hoursFactor(cell, ctx.medianHours);
+  const core = base * hours * (ctx.perkFactor ?? 1);
+  const heat = core * ((heatOf(cell.weather, weather.heat)?.factor ?? 1) - 1);
   return {
-    cost: core + heat + unknown + missed + hurricane,
+    cost: core + heat + unknown + missed + storm,
     heat,
+    storm,
     hurricane,
   };
 }
@@ -701,8 +990,15 @@ class TripOptimizer {
   private activePenalty: Structure["penalty"] | null = null;
   /** Owned tickets with no start on sale in the trip: every day on them is outside. */
   private readonly offSale = new Set<number>();
+  /** The region's weather: heat, storm season, noted seasons. */
+  private readonly weather: WeatherModel;
+  /** A region with bases: every stay plan of the trip. */
+  private stayPlans: StayPlan[] = [];
+  /** The stay plan of the structure being solved, which every objective prices by. */
+  private activeStay: StayPlan | null = null;
 
   constructor(private readonly input: PlanInput) {
+    this.weather = input.options.weather ?? ORLANDO_WEATHER;
     this.tickets = input.tickets ?? [];
     this.n = input.days.length;
     this.dates = input.days.map((d) => d.date);
@@ -735,23 +1031,42 @@ class TripOptimizer {
     );
   }
 
-  /** The hotel perks that count for a park on a day: listed, and the cost factor. */
-  perks(slug: string, date: string): { listed: PerkKind[]; factor: number } {
+  /**
+   * The hotel perks that count for a park on a day: listed, and the cost
+   * factor. An evening visit (an evening ticket) misses the early slot.
+   */
+  perks(
+    slug: string,
+    date: string,
+    evening = false,
+    rules: PerkRule[] = this.input.options.perkRules,
+  ): { listed: PerkKind[]; factor: number } {
     const c = this.cell(slug, date);
     const listed: PerkKind[] = [];
     let factor = 1;
     if (c.status === "CLOSED") return { listed, factor };
-    for (const rule of this.input.options.perkRules) {
+    for (const rule of rules) {
       if (!rule.parks.includes(slug)) continue;
+      // An evening visit misses the slots before opening.
+      if (
+        evening &&
+        (rule.needs === "early" || rule.needs === "after_first_night")
+      ) {
+        continue;
+      }
+      if (rule.blackoutDates?.includes(date)) continue;
       let applies = false;
       if (rule.needs === "always") applies = true;
-      else if (rule.needs === "extended_evening") {
+      else if (rule.needs === "after_first_night") {
+        // The guest checks in on the trip's first day: no perk that morning.
+        applies = this.dateIndex.get(date) !== 0;
+      } else if (rule.needs === "extended_evening") {
         applies = c.evening?.kind === "extended_evening";
       } else if (c.early) {
         applies = true;
       }
       if (!applies) continue;
-      factor *= 1 - PERK_SHARE[rule.perk];
+      factor *= 1 - rule.share;
       if (!listed.includes(rule.perk)) listed.push(rule.perk);
     }
     return { listed, factor };
@@ -784,29 +1099,204 @@ class TripOptimizer {
     return this.costParts(slug, date).cost;
   }
 
-  /** One park's cost on a date with its heat and hurricane terms. */
-  costParts(slug: string, date: string): DayCostParts {
+  /**
+   * One park's cost on a date with its heat and storm terms. `lostHours`:
+   * hours travel takes off the day (a region with bases), counted with an
+   * evening ticket's late entry as the larger of the two; `rules`: the stay's
+   * hotel perks.
+   */
+  costParts(
+    slug: string,
+    date: string,
+    entryMinute?: number,
+    lostHours = 0,
+    rules?: PerkRule[],
+  ): DayCostParts {
     const park = this.parkBySlug.get(slug);
-    if (!park) return { cost: Infinity, heat: 0, hurricane: 0 };
-    return dayCostParts(this.cell(slug, date), {
+    if (!park) return { cost: Infinity, heat: 0, storm: 0, hurricane: 0 };
+    const cell = this.cell(slug, date);
+    const evening = entryMinute !== undefined;
+    const lost = Math.max(
+      lostHours,
+      evening ? lateEntryHours(cell, entryMinute) : 0,
+    );
+    return dayCostParts(cell, {
       type: park.type,
       medianHours: this.medianHours.get(slug),
       neutralWait: this.neutral.get(slug),
       fireworks: this.input.options.fireworks,
-      perkFactor: this.perks(slug, date).factor,
+      perkFactor: this.perks(slug, date, evening, rules).factor,
       date,
+      weather: this.weather,
+      ...((evening || lostHours > 0) && { lostHours: lost }),
     });
+  }
+
+  /** An evening ticket's visit: the day from the ticket's entry time. */
+  private eveningCost(slug: string, day: number, entryMinute: number): number {
+    const key = `${slug}|${day}|e${entryMinute}`;
+    const cached = this.costCache.get(key);
+    if (cached !== undefined) return cached;
+    const value = this.costParts(slug, this.dates[day], entryMinute).cost;
+    this.costCache.set(key, value);
+    return value;
+  }
+
+  /** The entry minute of the evening ticket a visit uses, if it uses one. */
+  entryOf(unit: Unit): number | undefined {
+    return unit.ticket === undefined || unit.allowance
+      ? undefined
+      : this.tickets[unit.ticket].entryMinute;
   }
 
   rowCost(row: Row, day: number): number {
     if (row.lockedDay !== undefined && row.lockedDay !== day) return Infinity;
-    if (row.units.length === 1) return this.cost(row.units[0].slug, day);
+    if (row.units.length === 1) {
+      const entry = this.entryOf(row.units[0]);
+      return entry === undefined
+        ? this.cost(row.units[0].slug, day)
+        : this.eveningCost(row.units[0].slug, day, entry);
+    }
     const [a, b] = row.units;
     return (
       0.5 * this.cost(a.slug, day) +
       0.5 * this.cost(b.slug, day) +
       PlanCostModel.hopTransferPenalty
     );
+  }
+
+  /** The stays' base by its key. */
+  private stayBase(key: string) {
+    return this.input.options.stays?.bases.find((b) => b.key === key);
+  }
+
+  /** A park's cost on a trip day under a stay: its travel's lost hours, its hotel's perks. */
+  private stayCost(
+    slug: string,
+    day: number,
+    entry: number | undefined,
+    lost: number,
+    wokeAt: string,
+  ): number {
+    const key = `${slug}|${day}|s${entry ?? ""}|${lost}|${wokeAt}`;
+    const cached = this.costCache.get(key);
+    if (cached !== undefined) return cached;
+    const value = this.costParts(
+      slug,
+      this.dates[day],
+      entry,
+      lost,
+      this.stayBase(wokeAt)?.perkRules ?? [],
+    ).cost;
+    this.costCache.set(key, value);
+    return value;
+  }
+
+  private readonly stayCellCache = new Map<string, StayCell>();
+
+  /**
+   * How a row is priced on a day of a stay plan. A day within one base: its
+   * park must be one the base reaches, travel past the free day-trip time
+   * (both ways) taken off its hours. A move day: a park the base reached
+   * reaches within the free time after a morning move (the hours until the
+   * guest gets in lost), or a park the base left reaches before an evening
+   * move that still arrives by the region's last arrival (nothing lost), the cheaper; never on
+   * a leg too long for a park, never a hop. An airport's move day takes no park.
+   */
+  stayCell(plan: StayPlan, row: Row, day: number): StayCell {
+    const none: StayCell = { cost: Infinity, lostHours: 0, longTrip: false };
+    if (row.lockedDay !== undefined && row.lockedDay !== day) return none;
+    const opt = this.input.options.stays as StaysOption;
+    const morning = plan.morning[day];
+    const evening = plan.evening[day];
+    const leg = plan.moveOf[day];
+    const entry = this.entryOf(row.units[0]);
+    const key = `${row.units.map((u) => u.slug).join("+")}|${entry ?? ""}|${day}|${morning}>${evening}|${plan.endMove[day] ? 1 : 0}`;
+    const hit = this.stayCellCache.get(key);
+    if (hit) return hit;
+    const free = opt.rules.dayTripFreeMinutes;
+    const cellOf = (): StayCell => {
+      if (plan.endMove[day]) return none;
+      const A = this.stayBase(morning);
+      const B = this.stayBase(evening);
+      if (!A || !B) return none;
+      if (row.units.length > 1) {
+        if (leg) return none;
+        if (
+          !row.units.every(
+            (u) => (B.reach.get(u.slug)?.minutes ?? Infinity) <= free,
+          )
+        ) {
+          return none;
+        }
+        const [a, b] = row.units;
+        return {
+          cost:
+            0.5 * this.stayCost(a.slug, day, undefined, 0, morning) +
+            0.5 * this.stayCost(b.slug, day, undefined, 0, morning) +
+            PlanCostModel.hopTransferPenalty,
+          lostHours: 0,
+          longTrip: false,
+        };
+      }
+      const slug = row.units[0].slug;
+      if (!leg) {
+        const reach = B.reach.get(slug);
+        if (!reach) return none;
+        const lost = (2 * Math.max(0, reach.minutes - free)) / 60;
+        return {
+          cost: this.stayCost(slug, day, entry, lost, morning),
+          lostHours: lost,
+          longTrip: lost > 0,
+        };
+      }
+      if (!leg.parkDay) return none;
+      const cell = this.cell(slug, this.dates[day]);
+      const open = cell.opensMinute ?? DEFAULT_OPEN_MINUTE;
+      const options: StayCell[] = [];
+      const toB = B.reach.get(slug);
+      if (toB && toB.minutes <= free) {
+        const start =
+          opt.rules.moveStartMinute +
+          leg.minutes +
+          opt.rules.moveOverheadMinutes +
+          toB.minutes;
+        const lost = Math.max(0, start - open) / 60;
+        options.push({
+          cost: this.stayCost(slug, day, entry, lost, morning),
+          when: "morning",
+          lostHours: lost,
+          startMinute: Math.max(start, open),
+          longTrip: false,
+        });
+      }
+      const fromA = A.reach.get(slug);
+      if (fromA && fromA.minutes <= free) {
+        const close =
+          cell.closesMinute ??
+          open + (cell.dayHours ?? cell.usualHours ?? DEFAULT_DAY_HOURS) * 60;
+        if (
+          close + fromA.minutes + leg.minutes <=
+          opt.rules.lastArrivalMinute
+        ) {
+          options.push({
+            cost: this.stayCost(slug, day, entry, 0, morning),
+            when: "evening",
+            lostHours: 0,
+            longTrip: false,
+          });
+        }
+      }
+      return options.sort((x, y) => x.cost - y.cost)[0] ?? none;
+    };
+    const out = cellOf();
+    this.stayCellCache.set(key, out);
+    return out;
+  }
+
+  /** A row's cost on a day: under the structure's stays where it has them. */
+  cellCost(row: Row, day: number, stay: StayPlan | null): number {
+    return stay ? this.stayCell(stay, row, day).cost : this.rowCost(row, day);
   }
 
   rowGroup(row: Row): string {
@@ -850,11 +1340,25 @@ class TripOptimizer {
     const unplaced: OptimizedPlan["unplaced"] = [];
 
     const units: Unit[] = [];
+    // A region with bases: a park no base can reach leaves the plan at once.
+    const noBase = options.stays
+      ? new Set(
+          unreachableParks(
+            options.stays,
+            this.input.parks.map((p) => p.slug),
+          ),
+        )
+      : new Set<string>();
     for (const park of this.input.parks) {
       for (let v = 1; v <= park.visits; v++) {
-        units.push({ slug: park.slug, visit: v });
+        if (noBase.has(park.slug)) {
+          unplaced.push({ slug: park.slug, reason: "no_base" });
+        } else units.push({ slug: park.slug, visit: v });
       }
     }
+    this.stayPlans = options.stays
+      ? stayPlans(options.stays, n, [...new Set(units.map((u) => u.slug))])
+      : [];
 
     // Locks first: they take their day before anything is searched.
     const restLocked = new Set<number>();
@@ -885,6 +1389,16 @@ class TripOptimizer {
       }
       if (this.cell(unit.slug, lock.date).status === "CLOSED") {
         ignoredLocks.push({ lock: label, reason: "closed" });
+        continue;
+      }
+      if (
+        options.stays &&
+        !this.stayPlans.some((plan) =>
+          Number.isFinite(this.stayCell(plan, { units: [unit] }, day).cost),
+        )
+      ) {
+        // No stay the trip can make reaches the park that day.
+        ignoredLocks.push({ lock: label, reason: "base_unreachable" });
         continue;
       }
       lockedUnitDay.set(unit, day);
@@ -921,13 +1435,27 @@ class TripOptimizer {
 
     // Owned tickets: each visit takes the ticket that covers it, and a visit
     // beyond a ticket's days or caps leaves the plan at once.
-    const overTicket = this.assignTickets(placeable, lockedUnitDay, available);
+    const overTicket = [
+      ...this.assignTickets(placeable, lockedUnitDay, available),
+    ];
+    overTicket.push(
+      ...this.offValidDays(
+        placeable.filter((u) => !overTicket.includes(u)),
+        available,
+      ),
+    );
     for (const u of overTicket) {
       unplaced.push({ slug: u.slug, reason: "no_ticket_day" });
     }
 
     let pool = placeable.filter((u) => !overTicket.includes(u));
-    let useBlocks = options.blocks;
+    if (options.stays && this.stayPlans.length === 0) {
+      // No stays fit the trip (its nights, its pinned bases): nothing is placed.
+      for (const u of pool) unplaced.push({ slug: u.slug, reason: "no_base" });
+      pool = [];
+    }
+    // A region with bases keeps a resort's days together by its stay.
+    let useBlocks = options.blocks && !options.stays;
     let best: SearchResult | null = null;
     const windowed = this.tickets.some(
       (t) => Number.isFinite(t.window) || (t.reservedDayParks?.length ?? 0) > 0,
@@ -964,6 +1492,14 @@ class TripOptimizer {
     for (const u of best?.dropped ?? []) {
       unplaced.push({ slug: u.slug, reason: "no_day_left" });
     }
+    if (!best) {
+      // Nothing could be placed at all: every visit left says so.
+      for (const u of pool) {
+        unplaced.push({ slug: u.slug, reason: "no_day_left" });
+      }
+    }
+    this.activeStay =
+      best?.stay ?? (pool.length === 0 ? (this.stayPlans[0] ?? null) : null);
 
     return this.describe(
       best?.rows ?? [],
@@ -1166,6 +1702,37 @@ class TripOptimizer {
     );
   }
 
+  /**
+   * The visits an owned ticket's kinds of day cannot hold: more of them than
+   * the trip has open days of those kinds (an evening ticket for weekends on
+   * a trip of weekdays). They leave the plan at once (`no_ticket_day`).
+   */
+  private offValidDays(units: Unit[], available: number[]): Unit[] {
+    const out: Unit[] = [];
+    this.tickets.forEach((t, ti) => {
+      if (!t.validDays || t.validDays.length === 0) return;
+      const mine = units.filter((u) => u.ticket === ti && !u.allowance);
+      const days = available.filter(
+        (d) =>
+          !this.wrongDay({ units: [{ slug: "", visit: 1, ticket: ti }] }, d) &&
+          mine.some(
+            (u) => this.cell(u.slug, this.dates[d]).status !== "CLOSED",
+          ),
+      ).length;
+      out.push(...mine.slice(days));
+    });
+    return out;
+  }
+
+  /** Whether a row's owned ticket may not be used on that kind of day (`validDays`). */
+  private wrongDay(row: Row, day: number): boolean {
+    const unit = row.units[0];
+    if (unit.ticket === undefined || unit.allowance) return false;
+    const valid = this.tickets[unit.ticket].validDays;
+    if (!valid || valid.length === 0) return false;
+    return !dayKindsOf(this.input.days[day]).some((k) => valid.includes(k));
+  }
+
   /** Whether a row on a day lies outside its owned ticket's window (or off its reserved day). */
   private outsideTicket(row: Row, day: number, starts: number[]): boolean {
     const ti = row.units[0].ticket;
@@ -1330,17 +1897,19 @@ class TripOptimizer {
       }
     };
     walk(0, []);
+    // A ticket's kinds of day (an evening ticket's weekends) hold even when
+    // its window is relaxed: it admits nobody on the others.
     return combos.map((starts) =>
       this.relaxWindows
         ? {
-            mask: () => false,
+            mask: (row: Row, day: number) => this.wrongDay(row, day),
             penalty: (row: Row, day: number) =>
               this.outsideTicket(row, day, starts) ? TICKET_WINDOW_PENALTY : 0,
             starts,
           }
         : {
             mask: (row: Row, day: number) =>
-              this.outsideTicket(row, day, starts),
+              this.outsideTicket(row, day, starts) || this.wrongDay(row, day),
             starts,
           },
     );
@@ -1417,13 +1986,18 @@ class TripOptimizer {
           available,
           block.segmentOf,
         )) {
-          structures.push({
+          const base: Structure = {
             rows,
             mask: (row, day) => ticket.mask(row, day) || block.mask(row, day),
             ...(ticket.penalty && { penalty: ticket.penalty }),
             starts: ticket.starts,
             dropped,
-          });
+          };
+          if (this.stayPlans.length === 0 && !this.input.options.stays) {
+            structures.push(base);
+          } else {
+            structures.push(...this.withStays(base, available));
+          }
         }
       }
     }
@@ -1451,14 +2025,14 @@ class TripOptimizer {
     > = [];
     for (const s of structures) {
       if (!this.budgetLeft()) break;
-      const matrix = this.matrix(s.rows, available, s.mask, s.penalty);
+      const matrix = this.matrix(s.rows, available, s.mask, s.penalty, s.stay);
       const result = this.solve(matrix);
       if (result.feasible) {
         bounded.push({
           ...s,
           matrix,
           rowToCol: result.rowToCol,
-          bound: result.cost,
+          bound: result.cost + (s.stay?.fixedCost ?? 0),
         });
       }
     }
@@ -1474,6 +2048,44 @@ class TripOptimizer {
     }
   }
 
+  /**
+   * A structure once per stay plan of the trip, the plans with the cheapest
+   * quick bound first (each visit on its cheapest allowed day, days shared,
+   * plus the moves' cost) and at most {@link STAY_PLAN_LIMIT} of them. A plan
+   * left out whose quick bound could beat the result makes it inexact.
+   */
+  private withStays(s: Structure, available: number[]): Structure[] {
+    const scored = this.stayPlans.map((stay) => {
+      let bound = stay.fixedCost;
+      for (const row of s.rows) {
+        let min = Infinity;
+        for (const day of available) {
+          if (s.mask(row, day)) continue;
+          const c =
+            this.stayCell(stay, row, day).cost + (s.penalty?.(row, day) ?? 0);
+          if (c < min) min = c;
+        }
+        bound += min;
+        if (!Number.isFinite(bound)) break;
+      }
+      return { stay, bound };
+    });
+    const feasible = scored
+      .filter((x) => Number.isFinite(x.bound))
+      .sort((a, b) => a.bound - b.bound);
+    const kept = feasible.slice(0, STAY_PLAN_LIMIT);
+    if (feasible.length > kept.length) {
+      this.stayCutBound = Math.min(
+        this.stayCutBound,
+        feasible[kept.length].bound,
+      );
+    }
+    return kept.map(({ stay }) => ({ ...s, stay }));
+  }
+
+  /** The cheapest quick bound of a stay plan left unsolved: a result above it is not proven. */
+  private stayCutBound = Infinity;
+
   /** Branch and bound over the structures, cheapest bound first. */
   private evaluate(
     bounded: Array<
@@ -1485,11 +2097,32 @@ class TripOptimizer {
     limit: number,
   ): SearchResult | null {
     let best: SearchResult | null = null;
+    /** The stay plans solved, for the tie with the cheapest ({@link keptResult}). */
+    const solved: SearchResult[] = [];
     const unproven: number[] = [];
     for (const s of bounded) {
-      if (best && s.bound >= best.solution.objective) break;
+      if (best && s.bound >= best.solution.objective) {
+        // Past the cheapest, only a stay plan that may tie it and lies
+        // closer to the parks than the one kept is still worth solving; the
+        // bounds rise, so past the band nothing is.
+        if (
+          !s.stay ||
+          !best.stay ||
+          s.bound >= best.solution.objective + stayTieBand(best)
+        ) {
+          break;
+        }
+        const kept = keptResult(best, solved).stay as StayPlan;
+        if (
+          s.stay.moves !== kept.moves ||
+          s.stay.reachMinutes >= kept.reachMinutes
+        ) {
+          continue;
+        }
+      }
       if (!this.budgetLeft()) break;
       this.activePenalty = s.penalty ?? null;
+      this.activeStay = s.stay ?? null;
       const outcome = this.solveStructure(
         s.rows,
         available,
@@ -1501,14 +2134,17 @@ class TripOptimizer {
       );
       if (!outcome.solution) continue;
       if (!outcome.provable) unproven.push(s.bound);
+      const result: SearchResult = {
+        rows: s.rows,
+        solution: outcome.solution,
+        dropped: s.dropped,
+        exact: true,
+        starts: s.starts,
+        ...(s.stay && { stay: s.stay }),
+      };
+      if (s.stay) solved.push(result);
       if (!best || outcome.solution.objective < best.solution.objective) {
-        best = {
-          rows: s.rows,
-          solution: outcome.solution,
-          dropped: s.dropped,
-          exact: true,
-          starts: s.starts,
-        };
+        best = result;
       }
     }
     if (!best && this.cutShort && bounded.length > 0) {
@@ -1516,6 +2152,7 @@ class TripOptimizer {
       // plain assignment is still a plan, and the answer says it is not exact.
       const s = bounded[0];
       this.activePenalty = s.penalty ?? null;
+      this.activeStay = s.stay ?? null;
       if (
         longestRun(this.parkDayFlags(s.rowToCol.map((c) => available[c]))) >
         limit
@@ -1531,13 +2168,20 @@ class TripOptimizer {
         dropped: s.dropped,
         exact: false,
         starts: s.starts,
+        ...(s.stay && { stay: s.stay }),
       };
     }
     if (!best) return null;
+    // The proof is the cheapest's: the result kept ties it.
     const objective = best.solution.objective;
-    best.exact =
-      !this.cutShort && unproven.every((bound) => bound >= objective - 1e-9);
-    return best;
+    const kept = keptResult(best, solved);
+    kept.exact =
+      !this.cutShort &&
+      unproven.every((bound) => bound >= objective - 1e-9) &&
+      this.stayCutBound >= objective - 1e-9;
+    // The stays of the result price what is described.
+    this.activeStay = kept.stay ?? null;
+    return kept;
   }
 
   /**
@@ -1711,6 +2355,7 @@ class TripOptimizer {
     days: number[],
     mask: (row: Row, day: number) => boolean,
     penalty?: (row: Row, day: number) => number,
+    stay?: StayPlan,
   ): number[][] {
     const lockedDays = new Set(
       rows.filter((r) => r.lockedDay !== undefined).map((r) => r.lockedDay),
@@ -1719,17 +2364,22 @@ class TripOptimizer {
       days.map((day) => {
         if (mask(row, day)) return Infinity;
         if (row.lockedDay === undefined && lockedDays.has(day)) return Infinity;
-        return this.rowCost(row, day) + (penalty?.(row, day) ?? 0);
+        return (
+          this.cellCost(row, day, stay ?? null) + (penalty?.(row, day) ?? 0)
+        );
       }),
     );
   }
 
   private objective(rows: Row[], dayOf: number[]): Solution {
     const penalty = this.activePenalty;
+    const stay = this.activeStay;
     const base = rows.reduce(
       (s, row, r) =>
-        s + this.rowCost(row, dayOf[r]) + (penalty?.(row, dayOf[r]) ?? 0),
-      0,
+        s +
+        this.cellCost(row, dayOf[r], stay) +
+        (penalty?.(row, dayOf[r]) ?? 0),
+      stay?.fixedCost ?? 0,
     );
     return {
       dayOf,
@@ -2212,10 +2862,12 @@ class TripOptimizer {
 
     const out: PlannedDay[] = [];
     const ticketDays = this.tickets.map(() => 0);
+    const stay = this.activeStay;
     let run = 0;
     for (let i = 0; i < n; i++) {
       const date = this.dates[i];
       const row = rowOnDay.get(i);
+      const where = stay ? this.stayDay(stay, row, i) : {};
       const ti = row?.units[0].ticket;
       let ticket: Pick<PlannedDay, "ticket" | "ticketDay" | "ticketAllowance"> =
         {};
@@ -2233,13 +2885,14 @@ class TripOptimizer {
         run = 0;
         const isArrival = i === 0;
         const isDeparture = i === n - 1 && n > 1;
-        if (restLocked.has(i)) {
+        if (restLocked.has(i) && !where.move) {
           out.push({
             date,
             kind: "rest",
             parks: [],
             reasons: ["locked"],
             warnings: [],
+            ...where,
           });
           continue;
         }
@@ -2250,6 +2903,19 @@ class TripOptimizer {
             parks: [],
             reasons: [],
             warnings: [],
+            ...where,
+          });
+          continue;
+        }
+        if (where.move) {
+          // A pinned rest day that is a move day is the move.
+          out.push({
+            date,
+            kind: "travel",
+            parks: [],
+            reasons: restLocked.has(i) ? ["locked"] : [],
+            warnings: [],
+            ...where,
           });
           continue;
         }
@@ -2261,7 +2927,14 @@ class TripOptimizer {
           }
           if (precededBy >= 3) reasons.push("rest_after_streak");
         }
-        out.push({ date, kind: "rest", parks: [], reasons, warnings: [] });
+        out.push({
+          date,
+          kind: "rest",
+          parks: [],
+          reasons,
+          warnings: [],
+          ...where,
+        });
         continue;
       }
 
@@ -2285,14 +2958,26 @@ class TripOptimizer {
         reasons.add("holiday_ends");
       }
 
+      const entry = this.entryOf(row.units[0]);
+      const rules = stay
+        ? (this.stayBase(stay.morning[i])?.perkRules ?? [])
+        : undefined;
+      if (stay) {
+        const cell = this.stayCell(stay, row, i);
+        if (cell.longTrip) warnings.add("long_day_trip");
+        if (cell.when === "morning") warnings.add("move_day");
+      }
       const visits: PlannedParkVisit[] = row.units.map((u) => {
         const c = this.cell(u.slug, date);
         const park = this.parkBySlug.get(u.slug) as PlanPark;
-        const { listed } = this.perks(u.slug, date);
+        const { listed } = this.perks(u.slug, date, entry !== undefined, rules);
         listed.forEach((p) => reasons.add(p));
         if (c.status === "UNKNOWN") warnings.add("hours_not_published");
-        if (isHurricanePeak(date)) warnings.add("hurricane_peak");
-        else if (hurricaneWeight(date) > 0) warnings.add("hurricane_season");
+        const storm = stormWarning(this.weather.storm, date);
+        if (storm) warnings.add(storm);
+        if (inSeasonNote(this.weather.notes, "rainy_season", date)) {
+          warnings.add("rainy_season");
+        }
         if (c.basis === "last_year") warnings.add("estimate_last_year");
         if (c.basis === "long_range") warnings.add("long_range");
         if (park.type === "theme_park") {
@@ -2309,7 +2994,9 @@ class TripOptimizer {
                 : "party_night_short_hours",
             );
           }
-          if (heatOf(c.weather)) warnings.add("extreme_heat");
+          if (heatOf(c.weather, this.weather.heat)) {
+            warnings.add("extreme_heat");
+          }
         } else if (weatherFactor(c.weather).warmDry) {
           reasons.add("water_park_weather");
         }
@@ -2338,11 +3025,18 @@ class TripOptimizer {
         out.push({
           date,
           kind: "park",
-          parks: [{ slug: visits[0].slug, part: "full" }],
+          parks: [
+            {
+              slug: visits[0].slug,
+              part: entry === undefined ? "full" : "evening",
+            },
+          ],
           ...figures,
           reasons: [...reasons],
           warnings: [...warnings],
           ...ticket,
+          ...(entry !== undefined && { entryFrom: clockOf(entry) }),
+          ...where,
         });
       } else {
         out.push({
@@ -2352,20 +3046,103 @@ class TripOptimizer {
           reasons: [...reasons],
           warnings: [...warnings],
           ...ticket,
+          ...where,
         });
       }
     }
 
+    const totals = this.totals(rowOnDay, out);
     return {
       exact,
       relaxed: [...this.relaxed],
       days: out,
       parks: this.summaries(visitDates),
-      totals: this.totals(rowOnDay, out),
+      totals: stay
+        ? {
+            ...totals,
+            moves: stay.moves,
+            travelDays: out.filter((d) => d.kind === "travel").length,
+          }
+        : totals,
       unplaced,
       ignoredLocks,
       tickets: this.ticketSummaries(out, starts),
+      ...(stay && {
+        stays: stay.stays.map((st) => ({
+          base: st.base,
+          from: this.dates[st.firstDay],
+          to: this.dates[st.lastDay],
+          nights: st.nights,
+          ...(st.auto && { auto: true as const }),
+        })),
+        stayPenalty: this.stayPenalty(stay, rowOnDay),
+      }),
     };
+  }
+
+  /** A day's base and move under the plan's stays, as a plan day carries them. */
+  private stayDay(
+    stay: StayPlan,
+    row: Row | undefined,
+    day: number,
+  ): Pick<PlannedDay, "base" | "move" | "startMinute"> {
+    const opt = this.input.options.stays as StaysOption;
+    const base = day === this.n - 1 ? stay.morning[day] : stay.evening[day];
+    const leg = stay.moveOf[day];
+    if (!leg) return { base };
+    const cell = row ? this.stayCell(stay, row, day) : undefined;
+    const from = stay.morning[day];
+    const to = stay.evening[day];
+    let depart = opt.rules.moveStartMinute;
+    if (cell?.when === "evening" && row) {
+      const slug = row.units[0].slug;
+      const c = this.cell(slug, this.dates[day]);
+      const open = c.opensMinute ?? DEFAULT_OPEN_MINUTE;
+      depart =
+        (c.closesMinute ??
+          open + (c.dayHours ?? c.usualHours ?? DEFAULT_DAY_HOURS) * 60) +
+        (this.stayBase(from)?.reach.get(slug)?.minutes ?? 0);
+    }
+    return {
+      base,
+      move: {
+        from,
+        to,
+        minutes: leg.minutes,
+        mode: leg.mode,
+        ...(leg.name && { name: leg.name }),
+        when: cell?.when ?? "day",
+        departMinute: depart,
+        arriveMinute: depart + leg.minutes,
+      },
+      ...(cell?.startMinute !== undefined && {
+        startMinute: cell.startMinute,
+      }),
+    };
+  }
+
+  /**
+   * What the stays added to the plan's cost: the hours travel takes off each
+   * placed visit (its cost under the stays less the same day without the
+   * travel) and the moves' own cost. Never below 0, so `/when`'s bound holds.
+   */
+  private stayPenalty(stay: StayPlan, rowOnDay: Map<number, Row>): number {
+    let total = stay.fixedCost;
+    for (const [day, row] of rowOnDay) {
+      if (row.units.length > 1) continue;
+      const under = this.stayCell(stay, row, day).cost;
+      const still = this.stayCost(
+        row.units[0].slug,
+        day,
+        this.entryOf(row.units[0]),
+        0,
+        stay.morning[day],
+      );
+      if (Number.isFinite(under) && Number.isFinite(still)) {
+        total += Math.max(0, under - still);
+      }
+    }
+    return total;
   }
 
   /**
@@ -2490,17 +3267,22 @@ class TripOptimizer {
     const averageDayWait = mean(average);
     // Per park day, as a hop day is costed: half of each park.
     let heat = 0;
-    let hurricane = 0;
+    let storm = 0;
     for (const [day, row] of rowOnDay) {
       const share = row.units.length > 1 ? 0.5 : 1;
       for (const u of row.units) {
-        const parts = this.costParts(u.slug, this.dates[day]);
+        const parts = this.costParts(u.slug, this.dates[day], this.entryOf(u));
         heat += share * parts.heat;
-        hurricane += share * parts.hurricane;
+        storm += share * parts.storm;
       }
     }
     const parkDays = rowOnDay.size;
-    const penalties = penaltiesOf(heat, hurricane, parkDays);
+    const penalties = penaltiesOf(
+      heat,
+      storm,
+      parkDays,
+      this.weather.storm?.kind,
+    );
     return {
       ...(headlinerWait != null && {
         headlinerWait: Math.round(headlinerWait),
@@ -2528,19 +3310,21 @@ class TripOptimizer {
 }
 
 /**
- * Heat and hurricane minutes summed over a plan's park days, as the mean per
- * park day, one decimal; undefined when both are zero.
+ * Heat and storm minutes summed over a plan's park days, as the mean per
+ * park day, one decimal, the storm's under its kind (`hurricane` without
+ * one); undefined when both are zero.
  */
 export function penaltiesOf(
   heat: number,
-  hurricane: number,
+  storm: number,
   parkDays: number,
+  kind: StormSeasonConfig["kind"] = "hurricane",
 ): PlanPenalties | undefined {
   if (parkDays === 0) return undefined;
   const per = (v: number) => Math.round((v / parkDays) * 10) / 10;
   const out: PlanPenalties = {
     ...(per(heat) > 0 && { heat: per(heat) }),
-    ...(per(hurricane) > 0 && { hurricane: per(hurricane) }),
+    ...(per(storm) > 0 && { [kind]: per(storm) }),
   };
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -2596,7 +3380,20 @@ export function extraVisitRoom(input: PlanInput): number {
       ? Math.max(0, Math.floor(n / 5) - restDates.size)
       : 0;
   const visits = parks.reduce((sum, p) => sum + p.visits, 0);
-  return Math.max(0, available - visits - Math.max(streakRest, ratioRest));
+  // A region with bases: the days that can only be a move take no visit.
+  const travel = options.stays
+    ? fewestTravelDays(
+        stayPlans(
+          options.stays,
+          n,
+          parks.map((p) => p.slug),
+        ),
+      )
+    : 0;
+  return Math.max(
+    0,
+    available - visits - travel - Math.max(streakRest, ratioRest),
+  );
 }
 
 /** Plans a trip; see the module comment and docs/frontend/trip-regions.md. */

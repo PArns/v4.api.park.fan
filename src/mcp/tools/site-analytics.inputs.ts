@@ -11,6 +11,7 @@ import {
   MAX_RANGE_DAYS,
   PAGE_DIMS,
   SITE_LOCALES,
+  SITE_PAGE_TYPES,
   type SiteInterval,
 } from "../../site-analytics/site-analytics.constants";
 import {
@@ -66,9 +67,16 @@ export const datacenterInput = z
       "not from a data centre",
   );
 
+/** The page types for the descriptions: the trip regions' three first, the rest after. */
+export const PAGE_TYPE_HELP =
+  `${SITE_PAGE_TYPES.join(", ")}; a trip region's hub is trip_hub (/de/orlando), its month ` +
+  "pages trip_month (/de/orlando/2026/12), its best-time pages trip_best_time; before release " +
+  "2.21.0 all three were other";
+
 export const FILTER_DIM_HELP =
-  "path (e.g. /de/parks/europe/germany/bruehl/phantasialand), page_type (home, park, attraction, " +
-  "guide, news, search, not_found …), country (ISO alpha-2, zz unknown), device (mobile, " +
+  "path (e.g. /de/parks/europe/germany/bruehl/phantasialand), page_type (" +
+  PAGE_TYPE_HELP +
+  "), country (ISO alpha-2, zz unknown), device (mobile, " +
   "tablet, desktop, from the User-Agent), browser, os, locale, browser_language (the browser's first language, " +
   "two letters, zz unknown; page views only, not events); and the visit dimensions entry (the visit's first " +
   "path), referrer (google, chatgpt, a site name), channel (search, ai, social, referral, " +
@@ -150,9 +158,11 @@ export const pageWindowInput = {
   ...siteWindowInput,
   filters: filtersOf(
     PAGE_DIMS,
-    "path, page_type, country, device, browser, os, locale, browser_language; the " +
-      "visit dimensions do not apply to page views",
-    "{dim:'page_type',value:'park'}",
+    "path, page_type (" +
+      PAGE_TYPE_HELP +
+      "), country, device, browser, os, locale, browser_language; the visit dimensions do not " +
+      "apply to page views",
+    "{dim:'page_type',value:'trip_hub'}",
   ),
 };
 
@@ -161,9 +171,11 @@ export const eventWindowInput = {
   ...siteWindowInput,
   filters: filtersOf(
     EVENT_DIMS,
-    "path, page_type, country, device, browser, os, locale; events carry neither " +
-      "the visit dimensions nor the browser language",
-    "{dim:'page_type',value:'park'}",
+    "path, page_type (" +
+      PAGE_TYPE_HELP +
+      "), country, device, browser, os, locale; events carry neither the visit dimensions nor " +
+      "the browser language",
+    "{dim:'page_type',value:'trip_hub'}",
   ),
 };
 

@@ -1,6 +1,8 @@
 import { ASSISTANT_TOOL_PARAMS } from "./tools/assistant-tools";
 import {
   alertsSnapshotSchema,
+  interviewSnapshotSchema,
+  tripsSnapshotSchema,
   plannerSnapshotSchema,
 } from "./assistant.schemas";
 import { judge } from "./assistant-eval";
@@ -95,9 +97,16 @@ describe("assistant eval", () => {
       for (const name of used)
         expect([c.id, names.has(name)]).toEqual([c.id, true]);
       if (c.planner)
-        expect(plannerSnapshotSchema.parse(c.planner)).toEqual(c.planner);
+        expect(plannerSnapshotSchema.parse(c.planner)).toEqual({
+          more: [],
+          ...c.planner,
+        });
       if (c.alerts)
         expect(alertsSnapshotSchema.parse(c.alerts)).toEqual(c.alerts);
+      if (c.trips)
+        expect(tripsSnapshotSchema.parse(c.trips)).toHaveLength(c.trips.length);
+      if (c.interview)
+        expect(interviewSnapshotSchema.parse(c.interview)).toEqual(c.interview);
     }
     expect(new Set(EVAL_CASES.map((c) => c.id)).size).toBe(EVAL_CASES.length);
   });

@@ -26,9 +26,11 @@ import { toPublicSeason } from "../parks/park-seasons.controller";
 import type { Park } from "../parks/entities/park.entity";
 import {
   findRegion,
+  TRIP_REGIONS,
   type RegionConfig,
   type RegionParkConfig,
 } from "./regions";
+import { MAX_TRIP_DAYS } from "./trip-optimizer";
 import type { ScheduleRowLike } from "./trip-calendar.util";
 import {
   readLastYearMonths,
@@ -42,6 +44,7 @@ import {
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
+  summarizeRegion,
   validateWindow,
   type InternalRegionCalendar,
   type ParkCalendarSource,
@@ -51,9 +54,11 @@ import { regionBestDays, type TripBestDays } from "./trip-best-days";
 import type {
   TripCalendarDto,
   TripRegionDto,
+  TripRegionListDto,
 } from "./dto/trip-region-response.dto";
 import type { TripTicketCatalogDto } from "./dto/trip-tickets.dto";
 import { TicketCatalogService } from "./ticket-catalog.service";
+import { noteTripCache, noteTripShape } from "./metrics/trip-request-trace";
 import {
   seedCatalog,
   ticketCatalogResponse,
@@ -190,6 +195,20 @@ export class TripRegionService {
     return parks;
   }
 
+  /** `GET /v1/trip-regions`: every region, in the order `regions.ts` lists them. */
+  async list(): Promise<TripRegionListDto> {
+    const regions = await Promise.all(
+      Object.values(TRIP_REGIONS).map(async (region) =>
+        summarizeRegion(
+          region,
+          (await this.resolveParks(region)).map(toRecord),
+          MAX_TRIP_DAYS,
+        ),
+      ),
+    );
+    return { regions };
+  }
+
   /** `GET /v1/trip-regions/:region` */
   async describe(slug: string): Promise<TripRegionDto> {
     const region = await this.regionWithTickets(slug);
@@ -221,6 +240,13 @@ export class TripRegionService {
     const from = fromQuery ?? this.today(region);
     const to = toQuery ?? addIsoDays(from, 30);
     this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
+    noteTripShape({
+      rangeDays:
+        Math.round(
+          (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+            86_400_000,
+        ) + 1,
+    });
     const calendar = await this.internalCalendar(region, from, to);
     return regionBestDays(region, calendar, limit);
   }
@@ -235,8 +261,13 @@ export class TripRegionService {
     const cached = safeJsonParse<InternalRegionCalendar>(
       await this.redis.get(key),
     );
-    if (cached) return cached;
+    if (cached) {
+      noteTripCache("calendarCache", "hit");
+      return cached;
+    }
+    noteTripCache("calendarCache", "joined");
     return this.calendarFlight.run(key, async () => {
+      noteTripCache("calendarCache", "miss");
       const built = await this.buildCalendar(region, from, to);
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)

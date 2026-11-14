@@ -28,6 +28,8 @@ import {
 } from "./trip-plan.assembly";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
 import type { TripPlanDto } from "./dto/trip-region-response.dto";
+import { planShapeOf } from "./metrics/trip-request-facts";
+import { noteTripCache, noteTripShape } from "./metrics/trip-request-trace";
 
 export type { NormalizedPlanQuery } from "./trip-plan.assembly";
 
@@ -77,10 +79,17 @@ export class TripPlanService {
     // One catalog for the whole request: the version in the key is the one planned with.
     const region = await this.regions.regionWithTickets(slug);
     const q = await this.normalizeIn(region, query);
+    noteTripShape(planShapeOf(region, q, Boolean(query.parks)));
     const key = CacheKeys.tripRegionPlan(slug, planCacheQuery(q));
     const cached = safeJsonParse<TripPlanDto>(await this.redis.get(key));
-    if (cached) return cached;
+    if (cached) {
+      noteTripCache("cache", "hit");
+      return cached;
+    }
+    // Only the caller that builds runs the function, and notes the miss.
+    noteTripCache("cache", "joined");
     return this.flight.run(key, async () => {
+      noteTripCache("cache", "miss");
       const built = await this.build(region, q);
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)

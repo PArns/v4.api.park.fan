@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, OnModuleInit } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { RedisModule } from "../common/redis/redis.module";
 import { AssistantController } from "./assistant.controller";
@@ -14,6 +14,8 @@ import { AssistantSettings } from "./entities/assistant-settings.entity";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import { AssistantMessage } from "./entities/assistant-message.entity";
 import { SiteFeedback } from "./entities/site-feedback.entity";
+import { ASSISTANT_TOOLS } from "./tools/assistant-tools";
+import { TRIP_REGIONS } from "../trip-regions/regions";
 
 /**
  * Parky, the chat assistant on park.fan, with its settings, chats and the
@@ -43,4 +45,14 @@ import { SiteFeedback } from "./entities/site-feedback.entity";
   ],
   exports: [AssistantRecordsService, AssistantSettingsService],
 })
-export class AssistantModule {}
+export class AssistantModule implements OnModuleInit {
+  constructor(private readonly records: AssistantRecordsService) {}
+
+  /** The names the tool sums keep: the tools import the records, so the records cannot import them. */
+  onModuleInit(): void {
+    this.records.setToolVocabulary(
+      ASSISTANT_TOOLS.map((tool) => tool.name),
+      Object.keys(TRIP_REGIONS),
+    );
+  }
+}

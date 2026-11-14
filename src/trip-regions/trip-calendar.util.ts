@@ -13,7 +13,8 @@ import { addIsoDays, lastYearDays } from "../common/utils/date.util";
 
 export type TripDayStatus = "OPERATING" | "CLOSED" | "UNKNOWN";
 export type TripBasis = "forecast" | "long_range" | "last_year" | "none";
-export type EarlyKind = "early_entry" | "early_park_admission";
+/** The before-opening slot's name, the region's own (`RegionGroupConfig.earlyKind`). */
+export type EarlyKind = string;
 export type EveningKind = "extended_evening" | "ticketed_event";
 
 /** The schedule types that describe a slot beside the day guests' hours. */
@@ -39,8 +40,21 @@ export interface TripParkDay {
   early?: TripSlot<EarlyKind>;
   evening?: TripSlot<EveningKind>;
   crowdLevel: string;
+  /**
+   * The figure every trip surface ranks and shows, on the measured scale
+   * (`basis` says which): within the TFT horizon (`SERVING_TFT_DAYS`, 60
+   * days) the forecast times its lead factor ({@link forecastLeadFactor}),
+   * past it the same weekday a year back as measured.
+   */
   headlinerWait?: number;
   basis: TripBasis;
+  /**
+   * The served forecast as the park's own calendar shows it, unscaled, where
+   * there is one. It differs from `headlinerWait` on every forecast day.
+   */
+  forecastWait?: number;
+  /** The same weekday a year back as measured, where there is one, from today on. */
+  lastYearWait?: number;
   seasons?: string[];
   /** The curated closure season that makes the day CLOSED. */
   closedBy?: string;
@@ -62,6 +76,10 @@ export interface TripParkDayInternal extends TripParkDay {
   dayHours?: number;
   /** `headlinerWait` before rounding, for ranking days; never sent. */
   waitExact?: number;
+  /** `forecastWait` before rounding; never sent. */
+  forecastExact?: number;
+  /** `lastYearWait` before rounding; never sent. */
+  lastYearExact?: number;
   /**
    * The park's usual day-guest hours around this date (the median over its
    * open days within `REFERENCE_DAYS`), which `dayCost` reads a short day
@@ -126,6 +144,35 @@ export interface LastYearEntry {
 }
 
 const round5 = (min: number): number => Math.round(min / 5) * 5;
+const round1 = (min: number): number => Math.round(min * 10) / 10;
+
+/**
+ * What a TFT day figure is multiplied by to sit on the measured scale, by
+ * lead (days from the region's today): realised day P90 ÷ predicted, over
+ * 2.5 M comparisons in the 45 days to 2026-09-03, all rides pooled
+ * (docs/ml/long-range-forecasting.md §2). The model reads low and more so
+ * further out; a last-year day is measured, so without this a December
+ * window would beat a June one on its basis alone. Replaced by factors
+ * measured per region from `prediction_lead_snapshots` once their 30- and
+ * 60-day buckets hold enough served rows.
+ */
+export const TFT_LEAD_FACTORS: ReadonlyArray<{
+  upToLead: number;
+  factor: number;
+}> = [
+  { upToLead: 1, factor: 1.1 },
+  { upToLead: 3, factor: 1.11 },
+  { upToLead: 7, factor: 1.12 },
+  { upToLead: 14, factor: 1.16 },
+  { upToLead: 30, factor: 1.21 },
+  { upToLead: 60, factor: 1.29 },
+];
+
+/** {@link TFT_LEAD_FACTORS} at a lead; today counts as lead 1, past 60 the last row. */
+export function forecastLeadFactor(lead: number): number {
+  const row = TFT_LEAD_FACTORS.find((r) => lead <= r.upToLead);
+  return (row ?? TFT_LEAD_FACTORS[TFT_LEAD_FACTORS.length - 1]).factor;
+}
 
 /** An instant as ISO 8601 with the park's own offset. */
 export function isoInZone(instant: Date | string, timezone: string): string {
@@ -415,30 +462,55 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
     }
   }
 
-  // A future day the calendar rates is a forecast; its headliner figure comes
-  // with it where the model named the rides.
-  const forecast = day?.headlinerForecast;
+  // Both figures sit side by side; one of them is the day's, on the measured
+  // scale. Within TFT's reach that is the forecast times its lead factor; past
+  // it, the same weekday a year back as measured, because the long-range level
+  // reads about 40 % low and nearly flat against it (PAR-1319); the long-range
+  // forecast stands in only where nothing was measured a year back.
+  const forecast =
+    day?.headlinerForecast && !day.headlinerForecast.actual
+      ? day.headlinerForecast
+      : undefined;
   const level = day?.crowdLevel;
   const rated = !!level && level !== "unknown" && level !== "closed";
-  if (date >= today && ((forecast && !forecast.actual) || rated)) {
-    if (forecast && !forecast.actual) {
-      out.headlinerWait = round5(forecast.avgWait);
-      if (forecast.exactWait != null) out.waitExact = forecast.exactWait;
-    }
-    out.crowdLevel = level ?? "unknown";
-    out.basis =
-      daysBetween(today, date) > input.longRangeAfterDays
-        ? "long_range"
-        : "forecast";
-  } else if (
+  const lastYear =
     input.lastYear &&
     input.lastYear.c !== "closed" &&
     (input.lastYear.w != null || input.lastYear.c !== "unknown")
-  ) {
-    out.crowdLevel = input.lastYear.c;
-    if (input.lastYear.w != null) out.headlinerWait = input.lastYear.w;
-    if (input.lastYear.x != null) out.waitExact = input.lastYear.x;
+      ? input.lastYear
+      : undefined;
+  const future = date >= today;
+  if (future && forecast) {
+    out.forecastWait = round5(forecast.avgWait);
+    if (forecast.exactWait != null) out.forecastExact = forecast.exactWait;
+  }
+  if (future && lastYear?.w != null) {
+    out.lastYearWait = lastYear.w;
+    if (lastYear.x != null) out.lastYearExact = lastYear.x;
+  }
+  const lead = daysBetween(today, date);
+  const forecastDay = future && (!!forecast || rated);
+  if (forecastDay && lead <= input.longRangeAfterDays) {
+    if (forecast) {
+      const exact =
+        (forecast.exactWait ?? forecast.avgWait) * forecastLeadFactor(lead);
+      out.headlinerWait = round5(exact);
+      out.waitExact = round1(exact);
+    }
+    out.crowdLevel = level ?? "unknown";
+    out.basis = "forecast";
+  } else if (lastYear) {
+    out.crowdLevel = lastYear.c;
+    if (lastYear.w != null) out.headlinerWait = lastYear.w;
+    if (lastYear.x != null) out.waitExact = lastYear.x;
     out.basis = "last_year";
+  } else if (forecastDay) {
+    if (forecast) {
+      out.headlinerWait = out.forecastWait;
+      if (out.forecastExact != null) out.waitExact = out.forecastExact;
+    }
+    out.crowdLevel = level ?? "unknown";
+    out.basis = "long_range";
   }
 
   if (day?.weather) {
@@ -458,6 +530,8 @@ export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
     dayHours: _dayHours,
     weather: _weather,
     waitExact: _waitExact,
+    forecastExact: _forecastExact,
+    lastYearExact: _lastYearExact,
     usualHours: _usualHours,
     ...rest
   } = day;

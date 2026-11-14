@@ -21,6 +21,8 @@ import { auditLogTool } from "./audit-log.tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
 import { siteFeedbackTool } from "./site-feedback.tool";
+import { assistantToolsReportTool } from "./assistant-tools-report.tool";
+import { assistantReportTool } from "./assistant-report.tool";
 import { downtimeTool } from "./downtime.tool";
 import { analyticsOverviewTool } from "./analytics-overview.tool";
 import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
@@ -30,6 +32,8 @@ import { analyticsCrosstabTool } from "./analytics-crosstab.tool";
 import { analyticsTrafficCrosstabTool } from "./analytics-traffic-crosstab.tool";
 import { analyticsLiveTool } from "./analytics-live.tool";
 import { plannerReportTool } from "./planner-report.tool";
+import { tripPlannerOpsTool } from "./trip-planner-ops.tool";
+import { tripPlannerReportTool } from "./trip-planner-report.tool";
 import { searchReportTool } from "./search-report.tool";
 import { seoLandingPagesTool } from "./seo-landing-pages.tool";
 import { seoTrendsTool } from "./seo-trends.tool";
@@ -67,6 +71,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   assistantConversationsTool,
   assistantConversationTool,
   siteFeedbackTool,
+  assistantToolsReportTool,
+  assistantReportTool,
   downtimeTool,
   analyticsOverviewTool,
   analyticsLiveTool,
@@ -77,6 +83,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   analyticsCrosstabTool,
   searchReportTool,
   plannerReportTool,
+  tripPlannerReportTool,
+  tripPlannerOpsTool,
   seoLandingPagesTool,
   seoTrendsTool,
   seoNotFoundTool,

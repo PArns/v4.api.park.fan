@@ -10,9 +10,13 @@ import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
 import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import type { PublicParkSeason } from "../parks/park-seasons.controller";
 import {
+  hotelKinds,
+  stayRulesOf,
+  MOVE_BUFFER_OPTIONS,
   venuePoint,
   type RegionConfig,
   type RegionParkConfig,
+  type StormSeasonConfig,
 } from "./regions";
 import {
   heatOf,
@@ -20,7 +24,7 @@ import {
   medianDayHours,
   type PlanCell,
 } from "./trip-optimizer";
-import { buildLegs, regionMatrix } from "./travel";
+import { buildLegs, travelSource } from "./travel";
 import { publicTicketCatalog } from "./tickets";
 import {
   buildParkDay,
@@ -39,6 +43,7 @@ import { monthOf, type LastYearMonth } from "./last-year-snapshot";
 import type {
   TripCalendarDto,
   TripRegionDto,
+  TripRegionSummaryDto,
 } from "./dto/trip-region-response.dto";
 
 /** The calendar route's window: at most this many days. */
@@ -149,6 +154,39 @@ function groupName(curated: string, parks: RegionParkRecord[]): string {
   return curated;
 }
 
+/** The region's groups that hold one of its parks, named as {@link groupName} says. */
+function regionGroups(region: RegionConfig, parks: RegionParkRecord[]) {
+  return region.groups
+    .filter((g) => parks.some((p) => p.config.group === g.key))
+    .map((g) => ({
+      key: g.key,
+      name: groupName(
+        g.name,
+        parks.filter((p) => p.config.group === g.key),
+      ),
+      kind: g.kind,
+    }));
+}
+
+/**
+ * One region in `GET /v1/trip-regions`: what the site's navigation shows of
+ * it. `parkCount` is the region route's `parks`, the parks the planner places.
+ */
+export function summarizeRegion(
+  region: RegionConfig,
+  parks: RegionParkRecord[],
+  maxTripDays: number,
+): TripRegionSummaryDto {
+  return {
+    slug: region.slug,
+    name: region.name,
+    timezone: region.timezone,
+    parkCount: parks.length,
+    maxTripDays,
+    groups: regionGroups(region, parks),
+  };
+}
+
 /** `GET /v1/trip-regions/:region`. */
 export function describeRegion(
   region: RegionConfig,
@@ -161,25 +199,19 @@ export function describeRegion(
     ...region.hotelAreas.map((h) => `hotel:${h.key}`),
     ...venues.map((v) => venuePoint(v.key)),
   ]);
-  const matrix = regionMatrix(region);
+  const source = travelSource(region);
+  const slugs = new Set(parks.map((p) => p.config.slug));
+  const stayRules = stayRulesOf(region);
   return {
     slug: region.slug,
     name: region.name,
     timezone: region.timezone,
-    groups: region.groups
-      .filter((g) => parks.some((p) => p.config.group === g.key))
-      .map((g) => ({
-        key: g.key,
-        name: groupName(
-          g.name,
-          parks.filter((p) => p.config.group === g.key),
-        ),
-        kind: g.kind,
-      })),
+    groups: regionGroups(region, parks),
     parks: parks.map((p) => ({
       id: p.id,
       slug: p.slug,
       name: p.name,
+      ...(p.config.code && { code: p.config.code }),
       path: p.path,
       group: p.config.group,
       type: p.config.type,
@@ -209,21 +241,99 @@ export function describeRegion(
       ...(v.viewOf && { viewOf: v.viewOf }),
     })),
     travel: {
-      source: matrix.source,
-      computedOn: matrix.computedOn,
-      attribution: matrix.attribution,
-      basis: matrix.basis,
+      ...source,
       legs: buildLegs(region).filter(
         (leg) => points.has(leg.from) && points.has(leg.to),
       ),
     },
+    hotels: hotelKinds(region).map((key) => ({
+      key,
+      perks: [...new Set(region.perks[key].map((r) => r.perk))],
+    })),
+    ticketMarkets: {
+      home: region.ticketMarkets.home,
+      codes: [...region.ticketMarkets.codes],
+    },
+    weather: {
+      ...(region.weather.storm && {
+        storm: stormSeasonSpan(region.weather.storm),
+      }),
+      ...(region.weather.notes &&
+        region.weather.notes.length > 0 && {
+          notes: region.weather.notes.map((n) => ({ ...n })),
+        }),
+      climatePark: region.weather.climatePark,
+    },
+    ...(region.bases && {
+      bases: region.bases.map((b) => ({
+        key: b.key,
+        name: b.name,
+        ...(b.order !== undefined && { order: b.order }),
+        hotelAreas: [...b.hotelAreas],
+        ...(b.defaultArea && { defaultArea: b.defaultArea }),
+        ...(b.gateways && {
+          gateways: b.gateways.map((g) => ({
+            ...g,
+            bases: basesOfGateway(region, g.code),
+          })),
+        }),
+        ...(b.stayNote && { stayNote: b.stayNote }),
+        parks: b.parks.filter((p) => slugs.has(p.slug)).map((p) => ({ ...p })),
+      })),
+      baseLegs: (region.baseLegs ?? []).map((l) => ({
+        ...l,
+        parkDay: l.parkDay ?? l.minutes <= stayRules.parkDayMaxLegMinutes,
+      })),
+      stayRules: { ...stayRules, moveBufferOptions: [...MOVE_BUFFER_OPTIONS] },
+    }),
     tickets: publicTicketCatalog(region),
   };
 }
 
 /**
- * The past months a window's days without a forecast read last year from:
- * the same weekday a year back, for each day from today on.
+ * Every base that lists a gateway, in the region's order. A client maps the
+ * gateway to `startBase` or `endBase` only where this is one base; where
+ * several list it (CDG serves all three of Paris'), it sends neither and the
+ * plan picks.
+ */
+export function basesOfGateway(
+  region: Pick<RegionConfig, "bases">,
+  code: string,
+): string[] {
+  return (region.bases ?? [])
+    .filter((b) => (b.gateways ?? []).some((g) => g.code === code))
+    .map((b) => b.key);
+}
+
+/** Days in a month of a common year; a storm season never ends in February. */
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** A storm season's first and last day (`MM-DD`) and its peak, as the region route names them. */
+export function stormSeasonSpan(storm: StormSeasonConfig): {
+  kind: StormSeasonConfig["kind"];
+  from: string;
+  to: string;
+  peak: { from: string; to: string };
+} {
+  const months = storm.weights
+    .filter(([, a, b]) => a > 0 || b > 0)
+    .map(([m]) => m);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const first = Math.min(...months);
+  const last = Math.max(...months);
+  return {
+    kind: storm.kind,
+    from: `${pad(first)}-01`,
+    to: `${pad(last)}-${pad(MONTH_DAYS[last - 1])}`,
+    peak: { ...storm.peak },
+  };
+}
+
+/**
+ * The past months a window's days read last year from: the same weekday a
+ * year back, for each day from today on. Every day, forecast or not: past
+ * TFT's reach the day is ranked on last year, and within it last year sits
+ * beside the forecast (`lastYearWait`).
  */
 export function lastYearMonthsNeeded(
   days: CalendarDayLike[],
@@ -232,7 +342,6 @@ export function lastYearMonthsNeeded(
   const months = new Set<string>();
   for (const day of days) {
     if (day.date < today) continue;
-    if (day.headlinerForecast && !day.headlinerForecast.actual) continue;
     const ly = lastYearDateFor(day.date);
     if (ly < today) months.add(monthOf(ly));
   }
@@ -260,6 +369,11 @@ export const levelRank = (level: string): number => {
 export const rankWait = (d: TripParkDayInternal): number | undefined =>
   d.waitExact ?? d.headlinerWait;
 
+/** The park-local clock of an ISO time with the park's offset, in minutes after midnight. */
+function localMinute(iso: string): number {
+  return Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+}
+
 /** A calendar cell as the cost model reads it (`dayCost`). */
 export function planCellOf(c: TripParkDayInternal): PlanCell {
   return {
@@ -269,6 +383,7 @@ export function planCellOf(c: TripParkDayInternal): PlanCell {
     ...(c.waitExact != null && { exactWait: c.waitExact }),
     ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
     ...(c.dayHours != null && { dayHours: c.dayHours }),
+    ...(c.opensAt && { opensMinute: localMinute(c.opensAt) }),
     ...(c.usualHours != null && { usualHours: c.usualHours }),
     ...(c.early && { early: { kind: c.early.kind } }),
     ...(c.evening && { evening: { kind: c.evening.kind } }),
@@ -358,13 +473,17 @@ function markUsualDay(
 export type BestWhy = "shortest_wait" | "closes_early_elsewhere";
 
 /**
- * Per resort, the theme park of the day to pick: OPERATING, with a forecast
- * (`forecast` or `long_range`; a `last_year` figure is last year's day, not a
- * statement about this one), the lowest {@link dayCost} (the unrounded wait,
- * dearer where the day guests must leave early); ties go to the longer
- * day-guest day, then the lower crowd level. `why` says whether the pick also
- * has the lowest raw wait, or won because that park closes early. Day trips
- * are no resort; a resort with no such park is left out.
+ * Per resort, the theme park of the day to pick: OPERATING, with the day's
+ * figure (`headlinerWait`, on the measured scale whatever its basis), the
+ * lowest {@link dayCost} (the unrounded wait, dearer where the day guests
+ * must leave early); ties go to the longer day-guest day, then the lower crowd
+ * level. The candidates must share one basis: a resort whose parks read on two
+ * (one a forecast, one last year) gets no pick that day, since two bases are
+ * no comparison. Past TFT's reach every park reads last year, so the pick is
+ * last year's on that weekday, and the day's `basis` says so. `why` says
+ * whether the pick also has the lowest raw wait, or won because that park
+ * closes early. Day trips are no resort; a resort with no such park is left
+ * out.
  */
 export function bestOfDay(
   region: RegionConfig,
@@ -386,7 +505,7 @@ export function bestOfDay(
       .filter(
         (c) =>
           (c.day?.status === "OPERATING" || c.day?.status === "UNKNOWN") &&
-          (c.day.basis === "forecast" || c.day.basis === "long_range") &&
+          c.day.basis !== "none" &&
           rankWait(c.day) !== undefined,
       )
       .map((c) => ({
@@ -400,7 +519,7 @@ export function bestOfDay(
             status: "OPERATING",
             dayHours: c.day.dayHours ?? c.day.usualHours,
           },
-          { type: "theme_park" },
+          { type: "theme_park", weather: region.weather },
         ),
       }))
       .sort(
@@ -411,6 +530,7 @@ export function bestOfDay(
           a.slug.localeCompare(b.slug),
       );
     if (candidates.length === 0) continue;
+    if (new Set(candidates.map((c) => c.day.basis)).size > 1) continue;
     const pick = candidates[0];
     const lowestRaw = Math.min(
       ...candidates.map((c) => rankWait(c.day) as number),
@@ -512,7 +632,11 @@ export function assembleRegionCalendar(
     );
     for (const s of sources) {
       const cell = parks[s.park.config.slug];
-      if (s.park.config.type === "theme_park" && cell && heatOf(cell.weather)) {
+      if (
+        s.park.config.type === "theme_park" &&
+        cell &&
+        heatOf(cell.weather, region.weather.heat)
+      ) {
         cell.warnings = ["extreme_heat"];
       }
     }

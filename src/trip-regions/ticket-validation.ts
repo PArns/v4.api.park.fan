@@ -10,8 +10,11 @@ import type { RegionConfig } from "./regions";
 import type { TicketSource } from "./entities/ticket-product.entity";
 import { withCatalog } from "./ticket-catalog";
 import {
+  minuteOfClock,
   onSaleAt,
   ticketCatalog,
+  TICKET_DAY_KINDS,
+  type TicketDayKind,
   type TicketLink,
   type TicketMarket,
   type TicketProduct,
@@ -37,7 +40,6 @@ export interface ValidTicketProduct {
   sources: TicketSource[];
 }
 
-export const TICKET_MARKETS: readonly TicketMarket[] = ["us", "uk", "intl"];
 /** The site's languages, which a link's `locales` name. */
 export const TICKET_LOCALES = ["en", "de", "nl", "fr", "es", "it"] as const;
 export const MAX_TICKET_DAYS = 30;
@@ -196,15 +198,10 @@ export function validateTicketProduct(
   if (resort && !groups.includes(resort)) {
     p.add("resort", `must be a group of ${region.slug}: ${groups.join(", ")}`);
   }
-  const markets = list<TicketMarket>(
-    p,
-    "markets",
-    draft.markets,
-    TICKET_MARKETS,
-    {
-      min: 1,
-    },
-  );
+  const marketCodes = region.ticketMarkets.codes;
+  const markets = list<TicketMarket>(p, "markets", draft.markets, marketCodes, {
+    min: 1,
+  });
   const parks = list<string>(p, "parks", draft.parks, regionParks, { min: 1 });
 
   // ── days and windows ────────────────────────────────────────────────────
@@ -471,7 +468,38 @@ export function validateTicketProduct(
     p.add("suggestRank", "must be null or a whole number from 0 to 1000");
   }
 
-  const links = validateLinks(p, draft.links);
+  // ── an evening ticket ───────────────────────────────────────────────────
+  let entryFrom: string | undefined;
+  if (draft.entryFrom !== undefined && draft.entryFrom !== null) {
+    if (
+      typeof draft.entryFrom !== "string" ||
+      minuteOfClock(draft.entryFrom) === undefined
+    ) {
+      p.add("entryFrom", "must be a park-local time HH:MM");
+    } else entryFrom = draft.entryFrom;
+    if (
+      draft.suggestRank !== undefined &&
+      draft.suggestRank !== null &&
+      entryFrom
+    ) {
+      p.add(
+        "suggestRank",
+        "must be null for a ticket with entryFrom: plan first plans whole days",
+      );
+    }
+  }
+  let validDays: TicketDayKind[] | undefined;
+  if (draft.validDays !== undefined && draft.validDays !== null) {
+    validDays = list<TicketDayKind>(
+      p,
+      "validDays",
+      draft.validDays,
+      TICKET_DAY_KINDS,
+      { min: 1 },
+    );
+  }
+
+  const links = validateLinks(p, draft.links, marketCodes);
   const sources = validateSources(p, draft.sources);
 
   if (p.list.length > 0) return { problems: p.list };
@@ -498,6 +526,8 @@ export function validateTicketProduct(
       draft.blockoutUrl !== "" && { blockoutUrl: draft.blockoutUrl }),
     ...(typeof draft.reservationUrl === "string" &&
       draft.reservationUrl !== "" && { reservationUrl: draft.reservationUrl }),
+    ...(entryFrom && { entryFrom }),
+    ...(validDays && validDays.length > 0 && { validDays }),
     confidence: confidence as TicketProduct["confidence"],
     shopUrl: (links.find((l) => l.official) as TicketLink).url,
     links,
@@ -517,7 +547,11 @@ export function validateTicketProduct(
   };
 }
 
-function validateLinks(p: Problems, value: unknown): TicketLink[] {
+function validateLinks(
+  p: Problems,
+  value: unknown,
+  marketCodes: readonly string[],
+): TicketLink[] {
   if (!Array.isArray(value) || value.length === 0) {
     p.add("links", "needs at least the official link");
     return [];
@@ -557,12 +591,7 @@ function validateLinks(p: Problems, value: unknown): TicketLink[] {
     const markets =
       link.markets == null
         ? undefined
-        : list<TicketMarket>(
-            p,
-            `${path}.markets`,
-            link.markets,
-            TICKET_MARKETS,
-          );
+        : list<TicketMarket>(p, `${path}.markets`, link.markets, marketCodes);
     const locales =
       link.locales == null
         ? undefined

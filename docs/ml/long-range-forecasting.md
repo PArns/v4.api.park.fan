@@ -153,3 +153,35 @@ the average ride's thinnest bucket holds 18.
 Widening the window would average two model versions into one number. The second axis therefore
 stays the predicted band, which carries most of the spread anyway (13 minutes down a column, 4
 across a row).
+
+## 9. Beyond day 60 the daily level is flat and low (PAR-1319, PAR-1320)
+
+Measured on production data on 2026-11-14 for Orlando's seven headliner parks and Tokyo Disney
+Resort, against the same dates of 2026 (the full tables, code references and SQL are in PAR-1319).
+
+- **Low.** From day 61 the served daily level is CatBoost's, and for February to April 2027 it reads
+  **42 % below** the measured 2026 days: 38.6 against 66.3 minutes on `exactWait`, from 13 %
+  (EPCOT, January) to 63 % (Islands of Adventure, February). Tokyo Disney reads about 13 % low.
+- **Flat.** Its day-to-day spread is 12–23 % of the measured one; every February–April day at Magic
+  Kingdom reads `low`, where 45 of 89 were `high` or `very_high` in 2026.
+- **Why.** CatBoost's daily level is the highest of three hourly medians while the measured side is
+  a day P90; no model has seen a full year yet (data starts 2025-12-24), so a far day is read
+  through recent-level features; its holiday flags carry about 0 % of its weight. TFT (days 1–60)
+  is biased low too, growing with lead: about −10 % at a week and −22 % at 31–60 days (§2).
+
+**What 2.21.0 does about it.** No ranking surface reads the long-range level any more: from day 61
+`/when`, the best-time pages, `/best-days`, the calendar's best park of a day and the plan's day
+costs rank on the last-year measured day (the long-range level stands in only where nothing was
+measured a year back), TFT is scaled by its measured lead factor within 60 days (the pooled factors
+of §2, 1.10 at a day to 1.29 at 31–60 days, `TFT_LEAD_FACTORS`, until the lead snapshots give
+factors per region), and the tie-break that favoured the forecast is gone (PAR-1319,
+[trip regions](../frontend/trip-regions.md)). The trip caches moved to new keys
+(`trip-regions:calendar:v2`, `trip-regions:plan:v3`, `trip-regions:when:v3`).
+
+**What still shows it.** The crowd levels of every park calendar beyond day 60 still come from
+this level, so they read too quiet and too even (PAR-1320).
+
+**Re-measure** after 2026-11-24: from about 19–24 November CatBoost reads last year's slot for days
+more than 28 days ahead (PAR-1045), which moves these figures. The long-range level earns its way
+back into a ranking only when the lead snapshots show a ratio of 0.9–1.1 at d60 and d90, a spread
+ratio of at least 0.5, and a lower MAE than "same weekday last year" on the same ride-days.

@@ -19,6 +19,8 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import { TripWhenService } from "./trip-when.service";
+import { TripAccuracyService } from "./trip-accuracy.service";
+import { MeasureTripRequest } from "./metrics/trip-request-metrics.interceptor";
 import type { TripWhen } from "./trip-when";
 import type { TripSchoolBreaks } from "./trip-school-breaks";
 import {
@@ -34,10 +36,12 @@ import {
 } from "./dto/trip-region-query.dto";
 import type { TripBestDays } from "./trip-best-days";
 import {
+  TripAccuracyDto,
   TripCalendarDto,
   TripParkDayDto,
   TripPlanDto,
   TripRegionDto,
+  TripRegionListDto,
 } from "./dto/trip-region-response.dto";
 import {
   TripPlanTicketDto,
@@ -55,10 +59,13 @@ const KEYED_CACHE_CONTROL =
   "public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400";
 
 /**
- * Trip regions: a curated region of parks (Orlando), its days side by side and
- * the plan that puts each park on its quietest trip day. The region route is
- * static facts and stays open; the calendar and the plan carry forecasts and
- * need a data key. Contract: docs/frontend/trip-regions.md.
+ * Trip regions: curated regions of parks (Orlando, Southern California, Japan,
+ * Paris), their days side by side and the plan that puts each park on its
+ * quietest trip day. The list and the region route are static facts and stay
+ * open; the calendar and the plan carry forecasts and need a data key.
+ * The plan, `/when` and `/best-days` each leave a metric row
+ * (docs/frontend/trip-regions.md#what-the-server-records).
+ * Contract: docs/frontend/trip-regions.md.
  */
 @ApiTags("trip-regions")
 @ApiExtraModels(
@@ -73,7 +80,22 @@ export class TripRegionsController {
     private readonly regions: TripRegionService,
     private readonly plans: TripPlanService,
     private readonly whens: TripWhenService,
+    private readonly accuracies: TripAccuracyService,
   ) {}
+
+  @Get()
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
+  @ApiOperation({
+    summary: "Every trip region: slug, name, timezone, park count and groups",
+    description:
+      "For the site's navigation: one entry per region with a planner, in a fixed order. " +
+      "`parkCount` is the region route's `parks`. No key. Cache: an hour in the browser, " +
+      "a day at the edge.",
+  })
+  @ApiResponse({ status: 200, type: TripRegionListDto })
+  list(): Promise<TripRegionListDto> {
+    return this.regions.list();
+  }
 
   @Get(":region")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
@@ -81,8 +103,8 @@ export class TripRegionsController {
     summary: "A trip region: its parks, groups, hotel areas and travel times",
     description:
       "No forecast figures, so no key. Travel times are a drive with no traffic from " +
-      "OpenStreetMap (OSRM), stored in code; `alternatives` are the resort's own transport. " +
-      "Cache: an hour in the browser, a day at the edge.",
+      "OpenStreetMap (OSRM) or curated from timetables (`travel.source`), stored in code; " +
+      "`alternatives` are the resort's own transport. Cache: an hour in the browser, a day at the edge.",
   })
   @ApiParam({ name: "region", example: "orlando" })
   @ApiResponse({ status: 200, type: TripRegionDto })
@@ -138,6 +160,7 @@ export class TripRegionsController {
 
   @Get(":region/best-days")
   @RequiresApiKey()
+  @MeasureTripRequest("best_days")
   @ApiOperation({
     summary:
       "Per park its quietest and busiest days, per resort the quietest dates",
@@ -170,6 +193,7 @@ export class TripRegionsController {
 
   @Get(":region/plan")
   @RequiresApiKey()
+  @MeasureTripRequest("plan")
   @ApiOperation({
     summary: "The optimized itinerary for a trip",
     description:
@@ -192,6 +216,7 @@ export class TripRegionsController {
   }
   @Get(":region/when")
   @RequiresApiKey()
+  @MeasureTripRequest("when")
   @ApiOperation({
     summary: "The best dates for a trip of given parks and length",
     description:
@@ -216,6 +241,24 @@ export class TripRegionsController {
     const body = await this.whens.when(region, query);
     if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
     return body;
+  }
+
+  @Get(":region/accuracy")
+  @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
+  @ApiOperation({
+    summary:
+      "How accurate the region's forecast was over the last 30 measured days",
+    description:
+      "The day's peak wait at the headliners as forecast a week ahead, against what the day " +
+      "did: the mean absolute error in minutes, averaged over the region's parks, from the " +
+      "same archive the planner's expected error reads. `forecastAccuracy` is null where too " +
+      "little is measured. No key. Cache: an hour in the browser, a day at the edge.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, type: TripAccuracyDto })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  accuracy(@Param("region") region: string): Promise<TripAccuracyDto> {
+    return this.accuracies.accuracy(region);
   }
 
   @Get(":region/school-breaks")

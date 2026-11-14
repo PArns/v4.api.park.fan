@@ -5,7 +5,15 @@
  * docs/frontend/trip-regions.md.
  */
 import { BadRequestException } from "@nestjs/common";
-import { HOTEL_KINDS, type HotelKind, type RegionConfig } from "./regions";
+import {
+  hotelKinds,
+  stayRulesOf,
+  type HotelKind,
+  type RegionConfig,
+} from "./regions";
+import type { StaysOption } from "./trip-stays";
+import { minuteOfClock } from "./tickets";
+import { isoAt } from "./trip-evening";
 import {
   extraVisitRoom,
   ORDER_MATTERS_MINUTES,
@@ -20,9 +28,11 @@ import {
   type PlanLock,
   type PlannedDay,
   type RestOption,
+  type UnplacedReason,
 } from "./trip-optimizer";
 import {
   buildLegs,
+  doorToDoorMinutes,
   findLeg,
   hopPairs,
   legFromHotel,
@@ -89,6 +99,17 @@ export interface NormalizedPlanQuery {
   blocksWritten: boolean;
   /** The ticket catalog's version the plan is made with: part of every cache key. */
   catalogVersion: string;
+  /**
+   * A region with bases: the stays the visitor fixed (by base key, in key
+   * order) and the trip's ends. Absent in a region without bases.
+   */
+  stays?: {
+    bases: Array<{ base: string; nights?: number; area?: string }>;
+    startBase?: string;
+    endBase?: string;
+    /** `moveBuffer=`: the visitor's own minutes for a hotel change, over the region's. */
+    moveBuffer?: number;
+  };
 }
 
 /** A plan before its answer is written: the optimizer's result and what split added. */
@@ -124,6 +145,55 @@ const daysBetween = (from: string, to: string): number =>
     (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
       86_400_000,
   );
+
+/**
+ * The visits a query pins: the counts of two or more it writes. A park
+ * without a count, or with one, may be left out where the trip has no day
+ * for it ({@link parksLeftOut}); pinned visits that exceed the trip's days
+ * are a 400.
+ */
+export function pinnedVisits(
+  parks: ReadonlyArray<{ visits: number; explicit: boolean }>,
+): number {
+  return parks
+    .filter((p) => p.explicit && p.visits > 1)
+    .reduce((sum, p) => sum + p.visits, 0);
+}
+
+/** A chosen park the plan has no visit of, and why. */
+export interface ParkLeftOut {
+  park: string;
+  reason: UnplacedReason;
+}
+
+/**
+ * The chosen parks a plan has no visit of, in the region's order, each with
+ * the reason its visit found no day (`unplaced`): `no_day_left` where the
+ * trip's park days went to the others. A dropped second visit is not one:
+ * its park is in the plan. The same field on `/plan` and on each `/when`
+ * window, so a client can say "EPCOT and Epic Universe don't fit into 5
+ * park days".
+ */
+export function parksLeftOut(
+  region: Pick<RegionConfig, "parks">,
+  chosen: readonly string[],
+  plan: Pick<OptimizedPlan, "days" | "unplaced">,
+): ParkLeftOut[] {
+  const planned = new Set(plan.days.flatMap((d) => d.parks.map((v) => v.slug)));
+  const order = new Map(region.parks.map((p, i) => [p.slug, i]));
+  return [...new Set(chosen)]
+    .filter((slug) => !planned.has(slug))
+    .sort(
+      (a, b) =>
+        (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) ||
+        a.localeCompare(b),
+    )
+    .map((park) => ({
+      park,
+      reason:
+        plan.unplaced.find((u) => u.slug === park)?.reason ?? "no_day_left",
+    }));
+}
 
 /**
  * Validates the query against the region and today; 400 with the reason
@@ -200,7 +270,10 @@ export function normalizePlanQuery(
       `A plan takes at most ${MAX_PARK_DAYS} park visits`,
     );
   }
-  if (parkDays > tripDays * (hop ? 2 : 1)) {
+  // Only visits the visitor pinned (a count of two or three) can make a trip
+  // impossible; a park without a count, or with one, is planned where it
+  // fits and named in `parksLeftOut` where it does not.
+  if (pinnedVisits(parks) > tripDays * (hop ? 2 : 1)) {
     throw new BadRequestException(
       hop
         ? "More park visits than two a day"
@@ -208,6 +281,7 @@ export function normalizePlanQuery(
     );
   }
 
+  const stays = normalizeStays(region, query, tripDays - 1);
   const area = query.area;
   const areaConfig = area
     ? region.hotelAreas.find((h) => h.key === area)
@@ -217,11 +291,10 @@ export function normalizePlanQuery(
       `${area} is not a hotel area of ${region.name}`,
     );
   }
-  const hotel = (query.hotel ?? areaConfig?.hotel ?? "offsite") as HotelKind;
-  if (!HOTEL_KINDS.includes(hotel)) {
-    throw new BadRequestException(
-      `hotel must be one of ${HOTEL_KINDS.join(", ")}`,
-    );
+  const hotel: HotelKind = query.hotel ?? areaConfig?.hotel ?? "offsite";
+  const hotels = hotelKinds(region);
+  if (!hotels.includes(hotel)) {
+    throw new BadRequestException(`hotel must be one of ${hotels.join(", ")}`);
   }
 
   const rest: RestOption =
@@ -271,6 +344,170 @@ export function normalizePlanQuery(
     hopperResorts,
     blocksWritten: query.blocks !== undefined,
     catalogVersion: catalogVersionOf(region),
+    ...(stays && { stays }),
+  };
+}
+
+/**
+ * `bases`, `startBase`, `endBase` and `moveBuffer`: only in a region with bases, where they
+ * replace `area` and `hotel`; every base known, its area its own, its nights
+ * within the trip's. 400 otherwise.
+ */
+function normalizeStays(
+  region: RegionConfig,
+  query: TripPlanQueryDto,
+  nights: number,
+): NormalizedPlanQuery["stays"] {
+  const asked =
+    query.bases !== undefined ||
+    query.startBase !== undefined ||
+    query.endBase !== undefined ||
+    query.moveBuffer !== undefined;
+  if (!region.bases) {
+    if (asked) {
+      throw new BadRequestException(
+        `${region.name} has no bases: bases, startBase, endBase and moveBuffer are for a trip across several cities`,
+      );
+    }
+    return undefined;
+  }
+  if (query.area !== undefined || query.hotel !== undefined) {
+    throw new BadRequestException(
+      `In ${region.name} a stay's hotel area goes with its base: bases=<base>@<area>`,
+    );
+  }
+  const known = region.bases.map((b) => b.key);
+  const baseOf = (key: string, name: string) => {
+    const base = region.bases?.find((b) => b.key === key);
+    if (!base) {
+      throw new BadRequestException(
+        `${name}: ${key} is not a base of ${region.name} (${known.join(", ")})`,
+      );
+    }
+    return base;
+  };
+  const bases: NonNullable<NormalizedPlanQuery["stays"]>["bases"] = [];
+  for (const part of query.bases ? query.bases.split(",") : []) {
+    const m = /^([a-z0-9-]+)(?::(\d+))?(?:@([a-z0-9_-]+))?$/.exec(part);
+    if (!m)
+      throw new BadRequestException(
+        `bases: ${part} is not base[:nights][@area]`,
+      );
+    const base = baseOf(m[1], "bases");
+    if (bases.some((b) => b.base === base.key)) {
+      throw new BadRequestException(`bases: ${base.key} is listed twice`);
+    }
+    const n = m[2] === undefined ? undefined : Number(m[2]);
+    if (n !== undefined && n > nights) {
+      throw new BadRequestException(
+        `bases: ${part} has more nights than the trip (${nights})`,
+      );
+    }
+    if (m[3] !== undefined && !base.hotelAreas.includes(m[3])) {
+      throw new BadRequestException(
+        `bases: ${m[3]} is not a hotel area of ${base.name} (${base.hotelAreas.join(", ")})`,
+      );
+    }
+    if (m[3] !== undefined && n === 0) {
+      throw new BadRequestException(
+        `bases: ${part} has a hotel area but no night`,
+      );
+    }
+    bases.push({
+      base: base.key,
+      ...(n !== undefined && { nights: n }),
+      ...(m[3] !== undefined && { area: m[3] }),
+    });
+  }
+  const fixed = bases.reduce((sum, b) => sum + (b.nights ?? 0), 0);
+  if (fixed > nights) {
+    throw new BadRequestException(
+      `Your stays add up to ${fixed} nights; the trip has ${nights}`,
+    );
+  }
+  const startBase = query.startBase
+    ? baseOf(query.startBase, "startBase").key
+    : undefined;
+  const endBase = query.endBase
+    ? baseOf(query.endBase, "endBase").key
+    : undefined;
+  bases.sort((a, b) => a.base.localeCompare(b.base));
+  return {
+    bases,
+    ...(startBase && { startBase }),
+    ...(endBase && { endBase }),
+    ...(query.moveBuffer !== undefined && { moveBuffer: query.moveBuffer }),
+  };
+}
+
+/** The stays' canonical query, part of the cache key. */
+function staysCacheQuery(
+  stays: NonNullable<NormalizedPlanQuery["stays"]>,
+): string {
+  return [
+    stays.bases
+      .map(
+        (b) =>
+          `${b.base}${b.nights !== undefined ? `:${b.nights}` : ""}${b.area ? `@${b.area}` : ""}`,
+      )
+      .join(","),
+    stays.startBase ?? "-",
+    stays.endBase ?? "-",
+    stays.moveBuffer ?? "-",
+  ].join(";");
+}
+
+/** The optimizer's stays for a query in a region with bases. */
+export function staysOption(
+  region: RegionConfig,
+  stays: NonNullable<NormalizedPlanQuery["stays"]>,
+  legs: TripLeg[],
+): StaysOption {
+  const rules = stayRulesOf(region);
+  return {
+    bases: (region.bases ?? []).map((b) => {
+      const area = stays.bases.find((s) => s.base === b.key)?.area;
+      const hotel = area
+        ? region.hotelAreas.find((h) => h.key === area)?.hotel
+        : undefined;
+      const reach = new Map(
+        b.parks.map((p) => {
+          // The stay's own area refines the base's curated reach.
+          const leg = area ? legFromHotel(legs, area, p.slug) : undefined;
+          return [
+            p.slug,
+            leg
+              ? { minutes: doorToDoorMinutes(leg), mode: leg.mode }
+              : { minutes: p.minutes, mode: p.mode },
+          ] as const;
+        }),
+      );
+      return {
+        key: b.key,
+        ...(b.order !== undefined && { order: b.order }),
+        reach,
+        perkRules: hotel ? (region.perks[hotel] ?? []) : [],
+        ...(area && { area }),
+      };
+    }),
+    legs: (region.baseLegs ?? []).map((l) => ({
+      from: l.from,
+      to: l.to,
+      minutes: l.minutes,
+      mode: l.mode,
+      ...(l.name && { name: l.name }),
+      parkDay: l.parkDay ?? l.minutes <= rules.parkDayMaxLegMinutes,
+    })),
+    fixed: new Map(stays.bases.map((b) => [b.base, b.nights])),
+    ...(stays.startBase && { startBase: stays.startBase }),
+    ...(stays.endBase && { endBase: stays.endBase }),
+    rules: {
+      dayTripFreeMinutes: rules.dayTripFreeMinutes,
+      moveOverheadMinutes: stays.moveBuffer ?? rules.moveOverheadMinutes,
+      moveCost: rules.moveCost,
+      moveStartMinute: minuteOfClock(rules.moveStartsAt) ?? 8 * 60,
+      lastArrivalMinute: minuteOfClock(rules.lastArrivalAt) ?? 23 * 60,
+    },
   };
 }
 
@@ -304,6 +541,7 @@ export function planCacheQuery(q: NormalizedPlanQuery): string {
       : []),
     // An edited ticket rule never serves a plan made under the old one.
     `catalog:${q.catalogVersion}`,
+    ...(q.stays ? [`stays:${staysCacheQuery(q.stays)}`] : []),
   ].join("|");
 }
 
@@ -374,8 +612,11 @@ export function planInput(
       // A second plan's switched hopper may hop where the visitor did not ask.
       hop: q.hop || (change?.hopper ?? false),
       hopPairs: planFirstPairs,
-      perkRules: region.perks[q.hotel],
+      // A region with bases: each stay's hotel brings its own perks.
+      perkRules: q.stays ? [] : region.perks[q.hotel],
       locks: q.locks,
+      weather: region.weather,
+      ...(q.stays && { stays: staysOption(region, q.stays, legs) }),
     },
     ...(q.tickets.length > 0 && {
       tickets: planTicketsOf(region, q.tickets, dates, legs, hopperTicket),
@@ -592,6 +833,43 @@ function travelOf(leg: TripLeg | undefined) {
   };
 }
 
+/**
+ * A plan day as the route serves it in a region with bases: the move's times
+ * and the guest's way into the park after a morning move on the park's clock,
+ * the hotel area the day's travel starts from (the stay's).
+ */
+function withStay(
+  day: PlannedDay,
+  q: NormalizedPlanQuery,
+  timezone: string,
+): { day: PlannedDay; area?: string } {
+  if (!q.stays || !day.base) return { day };
+  const { startMinute, move, ...rest } = day;
+  const from = move?.when === "evening" ? move.from : (move?.to ?? day.base);
+  const area = q.stays.bases.find((b) => b.base === from)?.area;
+  return {
+    day: {
+      ...rest,
+      ...(move && {
+        move: {
+          from: move.from,
+          to: move.to,
+          minutes: move.minutes,
+          mode: move.mode,
+          ...(move.name && { name: move.name }),
+          when: move.when,
+          departAt: isoAt(day.date, move.departMinute, timezone),
+          arriveAt: isoAt(day.date, move.arriveMinute, timezone),
+        },
+      }),
+      ...(startMinute !== undefined && {
+        startAt: isoAt(day.date, startMinute, timezone),
+      }),
+    } as PlannedDay,
+    ...(area && { area }),
+  };
+}
+
 /** A park day's travel from the hotel area; a hop day's leg between its parks. */
 function withTravel(day: PlannedDay, legs: TripLeg[], area?: string) {
   if (day.parks.length === 0) return day;
@@ -722,6 +1000,98 @@ function windowDayOf(
   return { ticketDay: daysBetween(t.start, day.date) + 1 };
 }
 
+/** A one-night change to the visitor's fixed stays that saves waiting (`meta.staySuggestion`). */
+export interface StaySuggestion {
+  /** The nights to write into `bases` instead: the changed stays only. */
+  nights: Record<string, number>;
+  savedMinutesPerRide: number;
+  /** The park whose day moved to the cheaper one, and that day. */
+  park?: string;
+  date?: string;
+}
+
+/**
+ * With nights the visitor fixed: each fixed stay one night shorter or longer
+ * (the others' nights as they were, the plan's own ones searched again), the
+ * plan made once more, and the change that saves most per ride, at least
+ * {@link ORDER_MATTERS_MINUTES} and placing every visit the plan placed.
+ * Undefined without fixed nights or without such a change.
+ */
+export function staySuggestionOf(
+  region: RegionConfig,
+  q: NormalizedPlanQuery,
+  calendar: InternalRegionCalendar,
+  trip: OptimizedTrip,
+): StaySuggestion | undefined {
+  const stays = q.stays;
+  const planStays = trip.plan.stays;
+  if (!stays || !planStays) return undefined;
+  const fixed = stays.bases.filter((b) => (b.nights ?? 0) > 0);
+  if (fixed.length === 0) return undefined;
+  const now = trip.plan.totals.exactWait;
+  if (now === undefined) return undefined;
+  let best: StaySuggestion | undefined;
+  for (const f of fixed) {
+    for (const delta of [-1, 1]) {
+      const nights = (f.nights as number) + delta;
+      if (nights < 1) continue;
+      const variant: NormalizedPlanQuery = {
+        ...q,
+        stays: {
+          ...stays,
+          bases: stays.bases.map((b) =>
+            b.base === f.base ? { ...b, nights } : b,
+          ),
+        },
+      };
+      if (
+        variant.stays &&
+        variant.stays.bases.reduce((sum, b) => sum + (b.nights ?? 0), 0) >
+          daysBetween(q.from, q.to)
+      ) {
+        continue;
+      }
+      const other = optimizePlan(region, variant, calendar);
+      const then = other.plan.totals.exactWait;
+      if (then === undefined) continue;
+      if (other.plan.totals.visits < trip.plan.totals.visits) continue;
+      const saved = Math.round(now - then);
+      if (saved < ORDER_MATTERS_MINUTES) continue;
+      if (best && saved <= best.savedMinutesPerRide) continue;
+      const moved = movedVisit(trip.plan, other.plan);
+      best = {
+        nights: { [f.base]: nights },
+        savedMinutesPerRide: saved,
+        ...moved,
+      };
+    }
+  }
+  return best;
+}
+
+/** The park whose planned day changed most for the better between two plans. */
+function movedVisit(
+  before: OptimizedPlan,
+  after: OptimizedPlan,
+): { park?: string; date?: string } {
+  let best: { park: string; date: string; gain: number } | undefined;
+  for (const p of after.parks) {
+    const was = before.parks.find((x) => x.slug === p.slug);
+    for (const date of p.dates) {
+      if (was?.dates.includes(date)) continue;
+      const wait = after.days.find((d) => d.date === date)?.headlinerWait;
+      const old = was?.dates
+        .map((d) => before.days.find((x) => x.date === d)?.headlinerWait)
+        .find((w) => w !== undefined);
+      if (wait === undefined || old === undefined) continue;
+      if (!best || old - wait > best.gain) {
+        best = { park: p.slug, date, gain: old - wait };
+      }
+    }
+  }
+  return best ? { park: best.park, date: best.date } : {};
+}
+
 /** The plan route's answer. */
 export function planResponse(
   region: RegionConfig,
@@ -746,6 +1116,7 @@ export function planResponse(
     });
   const evenings = q.evenings ? eveningsWith(hopSetsOn) : new Map();
   const tickets = planTickets(region, q, calendar, trip, eveningsWith);
+  const suggestion = staySuggestionOf(region, q, calendar, trip);
   const errors = plan.days.flatMap((day) =>
     visitsOf(day).flatMap((visit) => {
       if (visit.basis !== "forecast" && visit.basis !== "long_range") return [];
@@ -776,11 +1147,23 @@ export function planResponse(
         ticketSuggestion: tickets.suggestions,
       }),
       ...(tickets.warnings.length > 0 && { warnings: tickets.warnings }),
+      ...(plan.stays && {
+        stays: plan.stays.map((st) => {
+          const area = q.stays?.bases.find((b) => b.base === st.base)?.area;
+          return { ...st, ...(area && { area }) };
+        }),
+      }),
+      ...(suggestion && { staySuggestion: suggestion }),
+      ...(q.stays && {
+        moveBuffer:
+          q.stays.moveBuffer ?? stayRulesOf(region).moveOverheadMinutes,
+      }),
     },
-    days: plan.days.map((day) => {
+    days: plan.days.map((raw) => {
+      const { day, area } = withStay(raw, q, region.timezone);
       const evening = evenings.get(day.date);
       return {
-        ...withTravel(day, legs, q.area),
+        ...withTravel(day, legs, q.stays ? area : q.area),
         ...(day.ticket
           ? windowDayOf(day, tickets.summaries)
           : tickets.days.get(day.date)),
@@ -797,8 +1180,17 @@ export function planResponse(
       parkDays: plan.totals.parkDays,
       restDays: plan.totals.restDays,
       visits: plan.totals.visits,
+      ...(plan.totals.moves !== undefined && {
+        moves: plan.totals.moves,
+        travelDays: plan.totals.travelDays,
+      }),
     },
     unplaced: plan.unplaced,
+    parksLeftOut: parksLeftOut(
+      region,
+      q.parks.map((p) => p.slug),
+      plan,
+    ),
     ...(plan.ignoredLocks.length > 0 && { ignoredLocks: plan.ignoredLocks }),
   };
 }

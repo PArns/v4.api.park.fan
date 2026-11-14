@@ -126,7 +126,8 @@ export function eveningTriggers(
 ): EveningTrigger[] {
   const out: EveningTrigger[] = [];
   for (const day of days) {
-    if (day.kind !== "park" || day.parks.length !== 1) continue;
+    // A move's day has its evening spoken for.
+    if (day.kind !== "park" || day.parks.length !== 1 || day.move) continue;
     if (day.date === trip.from || day.date === trip.to) continue;
     const park = day.parks[0].slug;
     const cells = calendar.days.find((d) => d.date === day.date)?.parks;
@@ -193,7 +194,12 @@ export function eveningTravel(leg: TripLeg): {
 }
 
 /** Minutes after a date's midnight (past midnight counts on) as park-local ISO. */
-const isoAt = (date: string, minute: number, timezone: string): string => {
+/** A park-local clock on a date (minutes past midnight run into the next day) as ISO with the zone's offset. */
+export const isoAt = (
+  date: string,
+  minute: number,
+  timezone: string,
+): string => {
   const day = addIsoDays(date, Math.floor(minute / 1440));
   const rest = minute % 1440;
   const hh = String(Math.floor(rest / 60)).padStart(2, "0");

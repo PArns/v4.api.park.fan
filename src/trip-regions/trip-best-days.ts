@@ -11,7 +11,7 @@
  * behind every full day whatever its waits.
  */
 import { addIsoDays } from "../common/utils/date.util";
-import type { RegionConfig } from "./regions";
+import type { EarlyKind, RegionConfig } from "./regions";
 import type { TripBasis, TripParkDayInternal } from "./trip-calendar.util";
 import {
   planCellOf,
@@ -28,19 +28,24 @@ const BUSY_DAYS = 2;
 /** Quietest dates named per resort. */
 const GROUP_QUIET_DATES = 3;
 
-export type BestDayReason =
+/** A best day's own reasons; the day's early slot joins them by its name ({@link BestDayReason}). */
+export type BestDayOwnReason =
   | "weekday"
   | "holiday_ends"
   | "school_break"
   | "party_night_short_hours"
   | "closes_early"
   | "extended_evening"
-  | "early_entry"
-  | "early_park_admission"
   | "long_range"
   | "extreme_heat"
   | "quietest_in_window"
   | "estimate_last_year";
+
+/**
+ * A best day's reason: its own, or the early slot the day has, by the
+ * region's name for it (`early_entry`, `early_park_admission` in Orlando).
+ */
+export type BestDayReason = BestDayOwnReason | EarlyKind;
 
 export interface BestDay {
   date: string;
@@ -104,7 +109,7 @@ export function regionBestDays(
 ): TripBestDays {
   const dayByDate = new Map(calendar.days.map((d) => [d.date, d]));
   const parks = calendar.parks.map((slug) =>
-    parkBestDays(slug, calendar.days, dayByDate, limit),
+    parkBestDays(region, slug, calendar.days, dayByDate, limit),
   );
 
   const groups = region.groups
@@ -119,6 +124,7 @@ export function regionBestDays(
           const wait = dayCost(planCellOf(park), {
             type: "theme_park",
             date: d.date,
+            weather: region.weather,
           });
           return [
             { date: d.date, slug, headlinerWait: park.headlinerWait, wait },
@@ -146,6 +152,7 @@ export function regionBestDays(
 }
 
 function parkBestDays(
+  region: RegionConfig,
   slug: string,
   days: InternalCalendarDay[],
   dayByDate: Map<string, InternalCalendarDay>,
@@ -159,7 +166,7 @@ function parkBestDays(
     const cell = planCellOf(day);
     const cost = dayCost(
       { ...cell, status: "OPERATING" },
-      { type: "theme_park", date },
+      { type: "theme_park", date, weather: region.weather },
     );
     const shortened = losesEvening(cell, undefined);
     return [{ date, day, wait, cost, shortened }];
@@ -182,7 +189,7 @@ function parkBestDays(
     headlinerWait: c.day.headlinerWait as number,
     crowdLevel: c.day.crowdLevel,
     basis: c.day.basis,
-    reasons: reasonsFor(c, dayByDate, c === quietest),
+    reasons: reasonsFor(region, c, dayByDate, c === quietest),
   });
 
   const counts = new Map<TripBasis, number>();
@@ -208,6 +215,7 @@ function parkBestDays(
 }
 
 function reasonsFor(
+  region: RegionConfig,
   c: Candidate,
   dayByDate: Map<string, InternalCalendarDay>,
   quietest: boolean,
@@ -232,7 +240,9 @@ function reasonsFor(
     reasons.push("extended_evening");
   }
   if (c.day.early) reasons.push(c.day.early.kind);
-  if (heatOf(c.day.weather)) reasons.push("extreme_heat");
+  if (heatOf(c.day.weather, region.weather.heat)) {
+    reasons.push("extreme_heat");
+  }
   if (c.day.basis === "long_range") reasons.push("long_range");
   if (c.day.basis === "last_year") reasons.push("estimate_last_year");
   if (quietest) reasons.push("quietest_in_window");

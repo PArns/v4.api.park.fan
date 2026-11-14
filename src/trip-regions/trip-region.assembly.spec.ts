@@ -76,14 +76,14 @@ describe("bestOfDay", () => {
     ).toBe("magic-kingdom-park");
   });
 
-  it("leaves a resort out on last-year days and where no park has a figure", () => {
+  it("leaves a resort out where its parks read on two bases or none has a figure", () => {
     expect(
       bestOfDay(ORLANDO, {
         "magic-kingdom-park": cell(40, 40, { basis: "last_year" }),
-        epcot: cell(40, 40, {
+        epcot: cell(35, 35, {
           status: "UNKNOWN",
           hoursPublished: false,
-          basis: "last_year",
+          basis: "long_range",
         }),
         "universal-studios-florida": {
           status: "OPERATING",
@@ -93,6 +93,15 @@ describe("bestOfDay", () => {
         },
       }).best,
     ).toEqual({});
+  });
+
+  it("picks on last year's days like on forecast ones: one basis, one scale", () => {
+    expect(
+      bestOfDay(ORLANDO, {
+        "magic-kingdom-park": cell(60, 61.3, { basis: "last_year" }),
+        epcot: cell(75, 76.2, { basis: "last_year" }),
+      }).best,
+    ).toEqual({ "walt-disney-world": "magic-kingdom-park" });
   });
 });
 
@@ -128,21 +137,23 @@ describe("best on days whose hours are not published", () => {
     expect(flagged).toBe(true);
   });
 
-  it("keeps a published day's pick unflagged and leaves last year's days out", () => {
+  it("keeps a published day's pick unflagged and picks on last year's days too", () => {
     expect(
       bestOfDay(ORLANDO, {
         "magic-kingdom-park": cell(40, 40),
         "disneys-animal-kingdom-theme-park": cell(45, 45),
       }).unpublished,
     ).toBe(false);
-    expect(
-      bestOfDay(ORLANDO, {
-        "magic-kingdom-park": unpublished(41.5, { basis: "last_year" }),
-        "disneys-animal-kingdom-theme-park": unpublished(33.2, {
-          basis: "last_year",
-        }),
-      }).best,
-    ).toEqual({});
+    const lastYear = bestOfDay(ORLANDO, {
+      "magic-kingdom-park": unpublished(41.5, { basis: "last_year" }),
+      "disneys-animal-kingdom-theme-park": unpublished(33.2, {
+        basis: "last_year",
+      }),
+    });
+    expect(lastYear.best).toEqual({
+      "walt-disney-world": "disneys-animal-kingdom-theme-park",
+    });
+    expect(lastYear.unpublished).toBe(true);
   });
 });
 
@@ -189,14 +200,17 @@ describe("assembleRegionCalendar on production's answers (fetched 2026-11-12)", 
   const day24 = calendar.days.find((d) => d.date === "2026-11-24")!;
 
   it("does not pick Magic Kingdom's party night (40 min, closes 18:00) over Animal Kingdom's full day (45 min)", () => {
+    // Forecast 40 and 45, twelve days out: × 1.16 on the measured scale.
     expect(day24.parks["magic-kingdom-park"]).toMatchObject({
-      headlinerWait: 40,
+      forecastWait: 40,
+      headlinerWait: 45,
       closesAt: "2026-11-24T18:00:00-05:00",
       closesEarly: true,
       dayGuestCloseAt: "2026-11-24T18:00:00-05:00",
     });
     expect(day24.parks["disneys-animal-kingdom-theme-park"]).toMatchObject({
-      headlinerWait: 45,
+      forecastWait: 45,
+      headlinerWait: 50,
     });
     expect(day24.best?.["walt-disney-world"]).toBe(
       "disneys-animal-kingdom-theme-park",

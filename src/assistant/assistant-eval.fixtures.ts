@@ -1,7 +1,9 @@
 import type {
   AlertsSnapshot,
   FavoritesSnapshot,
+  InterviewSnapshot,
   PlannerSnapshot,
+  TripSnapshot,
 } from "./assistant.schemas";
 import type { AssistantLocale } from "./system-prompt";
 
@@ -13,8 +15,14 @@ export interface EvalCase {
   pageSubject?: string;
   now?: string;
   planner?: PlannerSnapshot;
+  /** The trips the browser sends, and the on-screen one's plan as "This chat" lists it. */
+  trips?: TripSnapshot[];
+  tripDigest?: string[];
+  interview?: InterviewSnapshot;
   alerts?: AlertsSnapshot;
   favorites?: FavoritesSnapshot;
+  /** The trip regions live on the site, as the widget sends them; absent: every region. */
+  liveRegions?: string[];
   /** Earlier turns, oldest first. */
   history?: Array<["user" | "assistant", string]>;
   message: string;
@@ -139,6 +147,442 @@ const ORLANDO_HOPPER_RESULT = {
     "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&ticket=hopper#planner",
   reserve: [{ park: "disneys-animal-kingdom-theme-park", date: "2027-03-08" }],
 };
+
+/** The visitor's Orlando trip on screen in the hub's planner, and its plan as "This chat" lists it. */
+const OCT_TRIP: TripSnapshot = {
+  region: "orlando",
+  query:
+    "from=2027-10-14&to=2027-10-21&parks=magic-kingdom-park,epcot,universal-studios-florida,universal-islands-of-adventure,universal-epic-universe",
+  onScreen: true,
+};
+const OCT_DIGEST = [
+  "Thu 2027-10-14: arrival",
+  "Fri 2027-10-15: EPCOT (33 min); why: a weekday",
+  "Sat 2027-10-16: Universal Studios Florida (41 min)",
+  "Sun 2027-10-17: Islands of Adventure (39 min)",
+  "Mon 2027-10-18: Magic Kingdom Park (31 min); why: its quietest day of the trip",
+  "Tue 2027-10-19: Epic Universe (45 min)",
+  "Wed 2027-10-20: rest day; why: rest after a run of park days",
+  "Thu 2027-10-21: departure",
+  "Season: peak of the hurricane season (August to October), a fact about the season, not a forecast",
+];
+const OCT_HUB = "/de/orlando";
+const OCT_HUB_EN = "/en/orlando";
+
+const INTERVIEW_AT = (step: string, answered: string[]): InterviewSnapshot => ({
+  kind: "trip",
+  region: "orlando",
+  step,
+  answered,
+  skipped: [],
+  mustDoRides: [],
+  source: "planner",
+});
+
+/** Efteling planned for Thursday, five days from the eval's Saturday. */
+const EFTELING_THURSDAY: PlannerSnapshot = {
+  days: [
+    {
+      park: { slug: "efteling", name: "Efteling" },
+      date: "2026-11-12",
+      entries: [
+        {
+          id: "baron-1898-1",
+          kind: "ride",
+          name: "Baron 1898",
+          rideSlug: "baron-1898",
+          start: "10:30",
+        },
+      ],
+    },
+  ],
+};
+
+/** Parky as the user's park buddy: their plan is theirs, said in passing, and no false memory. */
+const BUDDY_CASES: EvalCase[] = [
+  {
+    id: "buddy-plan-thursday-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    planner: EFTELING_THURSDAY,
+    message: "Wie voll wird's?",
+    want: [
+      {
+        tool: ["get_days", "get_park_day", "get_hours", "review_plan_day"],
+        input: { park: "*" },
+      },
+    ],
+    forbid: ["plan_vacation"],
+    answer: [
+      { must: "Donnerstag" },
+      { must: "^(?![\\s\\S]*(deine Daten|Snapshot|Browser geschickt))" },
+    ],
+  },
+  {
+    id: "buddy-how-do-you-know-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    planner: EFTELING_THURSDAY,
+    history: [
+      ["user", "Wie voll wird's?"],
+      [
+        "assistant",
+        "Für deinen Donnerstag in der Efteling sieht es ruhig aus: niedrige Auslastung, Baron 1898 um 10:30 passt gut.",
+      ],
+    ],
+    message: "Woher weißt du, dass ich Donnerstag in die Efteling will?",
+    forbid: "any",
+    answer: [{ must: "Browser|Planer|Tagesplan" }],
+  },
+  {
+    id: "buddy-no-false-memory-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Weißt du noch, was ich dich gestern gefragt hab?",
+    forbid: "any",
+    answer: [{ must: "nicht|kein|neu|frisch" }],
+  },
+];
+
+/** The visitor's own plans: read them, change them, reply chips and the interview (prompt 53). */
+const PLAN_CASES: EvalCase[] = [
+  {
+    id: "trip-why-monday-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Warum ist Magic Kingdom am Montag?",
+    forbid: ["plan_vacation", "change_trip", "plan_trip"],
+    answer: [{ must: "ruhig|wenigsten|31" }],
+  },
+  {
+    id: "trip-swap-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Tausch Montag und Dienstag",
+    want: [
+      {
+        tool: "change_trip",
+        input: { swap: { a: "*", b: "*" } },
+      },
+    ],
+  },
+  {
+    id: "trip-pin-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Put Magic Kingdom on the Friday instead",
+    want: [
+      {
+        tool: "change_trip",
+        input: { pin: [{ park: "*", date: "2027-10-15" }] },
+      },
+    ],
+  },
+  {
+    id: "trip-rest-day-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Can we have a rest day on Sunday?",
+    want: [
+      {
+        tool: "change_trip",
+        input: { pin: [{ park: "rest", date: "2027-10-17" }] },
+      },
+    ],
+  },
+  {
+    id: "trip-remembered-read-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    trips: [{ ...OCT_TRIP, onScreen: undefined }],
+    message: "Which day is Epic Universe on my Orlando trip?",
+    want: [{ tool: "get_trip_plan" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "day-total-wait-de",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    planner: PLAN,
+    message: "Wie lange stehe ich am Samstag insgesamt an?",
+    want: [{ tool: "review_plan_day", input: { date: "2026-11-07" } }],
+  },
+  {
+    id: "day-move-to-time-en",
+    locale: "en",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    planner: PLAN,
+    message: "Move Taron to 14:00 on Saturday",
+    want: [
+      {
+        tool: "plan_move",
+        input: { entryId: "e1-taron", start: "14:00" },
+      },
+    ],
+  },
+  {
+    id: "replies-after-question-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir wollen nächstes Jahr mit den Kindern nach Orlando",
+    want: [{ tool: "suggest_replies" }],
+    forbid: "actions",
+  },
+  {
+    id: "interview-start-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    message:
+      "Can you interview me for my Orlando trip, one question at a time?",
+    want: [{ tool: "interview", input: { op: "start", kind: "trip" } }],
+  },
+  {
+    id: "interview-dates-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [{ region: "orlando", query: "", onScreen: true }],
+    interview: INTERVIEW_AT("dates", ["region"]),
+    history: [
+      ["user", "Plan meine Reise mit mir, Frage für Frage."],
+      ["assistant", "Machen wir. Orlando, richtig?"],
+      ["user", "Ja"],
+      ["assistant", "Super. Wann geht's los?"],
+    ],
+    message: "14. bis 21. Oktober 2027",
+    want: [
+      {
+        tool: "change_trip",
+        input: { dates: { from: "2027-10-14", to: "2027-10-21" } },
+      },
+    ],
+  },
+  {
+    id: "interview-party-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("party", ["region", "dates", "parks"]),
+    message: "2 adults and 2 kids, they're 105 and 132 cm",
+    want: [
+      {
+        tool: "interview",
+        input: { op: "answered", party: { heightsCm: [105, 132] } },
+      },
+    ],
+  },
+  {
+    id: "interview-luggage-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    trips: [
+      {
+        region: "japan",
+        query: "from=2027-04-01&to=2027-04-10&bases=tokyo:5,osaka:4",
+        onScreen: true,
+      },
+    ],
+    interview: {
+      ...INTERVIEW_AT("hotel", ["region", "dates", "parks", "party"]),
+      region: "japan",
+    },
+    history: [
+      ["user", "Weiter"],
+      [
+        "assistant",
+        "Zwischen Tokio und Osaka zieht ihr einmal um. Das Gepäck kann per Kurier (Takkyubin) vorausfahren. Wie wollt ihr es machen?",
+      ],
+    ],
+    message: "Gepäck vorausschicken",
+    want: [{ tool: "change_trip", input: { moveBuffer: 30 } }],
+  },
+  {
+    id: "interview-early-tickets-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [{ region: "orlando", query: "", onScreen: true }],
+    interview: INTERVIEW_AT("dates", ["region"]),
+    message: "October 14 to 21, 2027, and we already have 4-day Disney tickets",
+    want: [
+      {
+        tool: "change_trip",
+        input: { dates: { from: "2027-10-14", to: "2027-10-21" } },
+      },
+    ],
+  },
+  {
+    id: "interview-refine-pick-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("refine", ["region", "dates", "parks"]),
+    message: "Tickets",
+    want: [{ tool: "interview", input: { op: "ask", step: "tickets" } }],
+  },
+  {
+    id: "interview-leave-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("refine", ["region", "dates", "parks", "party"]),
+    message: "Lass uns später weitermachen",
+    want: [{ tool: "interview", input: { op: "end" } }],
+  },
+];
+
+/** Only Orlando live, as at the 2.21.0 release. */
+const ORLANDO_ONLY = ["orlando"];
+
+/** A Japan trip on screen, for the cases from the day Japan goes live. */
+const JAPAN_TRIP: TripSnapshot = {
+  region: "japan",
+  query:
+    "from=2027-04-01&to=2027-04-10&parks=tokyo-disneyland,tokyo-disneysea,universal-studios-japan&bases=tokyo:5,osaka:4",
+  onScreen: true,
+};
+
+/**
+ * 2.21.0: regions not live yet, the route in a region with bases, the parks a plan leaves out,
+ * figures estimated from last year, the storm peak and how sure the forecast is.
+ */
+const REGION_CASES: EvalCase[] = [
+  {
+    id: "region-coming-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message: "Plan uns 8 Tage Japan im April, mit Tokyo Disney und der USJ.",
+    forbid: ["plan_vacation", "change_trip", "find_trip_dates", "open_page"],
+    answer: [{ must: "noch nicht|später|bald|kommt" }],
+  },
+  {
+    id: "route-land-haneda-en",
+    locale: "en",
+    pagePath: "/en/japan",
+    pageSubject: "the trip planner hub of Japan",
+    trips: [JAPAN_TRIP],
+    message: "We land at Haneda and fly home from Kansai.",
+    want: [{ tool: "change_trip", input: { landAt: "*" } }],
+  },
+  {
+    id: "route-two-nights-osaka-de",
+    locale: "de",
+    pagePath: "/de/japan",
+    pageSubject: "the trip planner hub of Japan",
+    trips: [JAPAN_TRIP],
+    message: "Lieber nur zwei Nächte in Osaka, dafür mehr in Tokio.",
+    want: [{ tool: "change_trip", input: { bases: "*" } }],
+  },
+  {
+    id: "left-out-fixes-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    trips: [OCT_TRIP],
+    tripDigest: [
+      ...OCT_DIGEST.slice(0, -1),
+      "Parks left out: Hollywood Studios (no day left for it); fixes: the arrival or departure day as a park day: change_trip arrival park or departure park; fewer parks: change_trip parks with visits 0 for one they can do without; a longer trip: change_trip dates, 1 more day",
+    ],
+    message: "Wo ist Hollywood Studios?",
+    forbid: ["plan_vacation"],
+    answer: [{ must: "anreise|abreise|tag mehr|länger|weniger" }],
+  },
+  {
+    id: "last-year-figures-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message: "How busy will Magic Kingdom be on 14 May next year?",
+    allowBefore: ["get_trip_days", "find_trip_dates", "get_best_days"],
+    want: [{ tool: ["get_days", "get_park_day", "compare_parks"] }],
+    results: {
+      get_days: {
+        park: { name: "Magic Kingdom Park" },
+        days: [
+          {
+            date: "2027-05-14",
+            weekday: "Friday",
+            status: "OPERATING",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 55,
+            basis:
+              "estimated from last year: the same weekday a year back as measured, not a forecast",
+          },
+        ],
+      },
+    },
+    answer: [{ must: "last year" }],
+  },
+  {
+    id: "storm-peak-not-quiet-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message:
+      "Ist Ende August nicht die leerste Zeit für Orlando? Da sind doch alle wieder in der Schule.",
+    allowBefore: ["get_trip_days", "get_trip_region"],
+    want: [{ tool: ["find_trip_dates", "get_trip_days"] }],
+    answer: [{ must: "hurrikan|sturm" }],
+  },
+  {
+    id: "forecast-accuracy-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "How sure are you about those waits?",
+    want: [{ tool: "get_forecast_accuracy" }],
+  },
+  {
+    id: "resort-days-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    now: "2027-02-20 10:15",
+    message: "An welchen Tagen im März ist bei Disney am wenigsten los?",
+    want: [
+      {
+        tool: "get_trip_days",
+        input: { resort: "walt-disney-world" },
+      },
+    ],
+  },
+];
 
 export const EVAL_CASES: EvalCase[] = [
   {
@@ -970,4 +1414,7 @@ export const EVAL_CASES: EvalCase[] = [
       },
     ],
   },
+  ...PLAN_CASES,
+  ...BUDDY_CASES,
+  ...REGION_CASES,
 ];

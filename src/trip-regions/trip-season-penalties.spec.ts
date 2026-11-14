@@ -8,6 +8,7 @@ import {
   hurricaneWeight,
   isHurricanePeak,
   optimizeTrip,
+  touchesStormPeak,
   type PlanCell,
 } from "./trip-optimizer";
 import { regionBestDays } from "./trip-best-days";
@@ -73,6 +74,15 @@ describe("the hurricane season", () => {
     expect(isHurricanePeak("2027-10-15")).toBe(true);
     expect(isHurricanePeak("2027-10-16")).toBe(false);
     expect(hurricaneMinutes("2027-09-10")).toBe(8);
+  });
+
+  it("finds a trip touching the peak on any day, travel days included", () => {
+    const storm = ORLANDO.weather.storm;
+    expect(touchesStormPeak(storm, "2027-08-05", "2027-08-14")).toBe(false);
+    expect(touchesStormPeak(storm, "2027-08-06", "2027-08-15")).toBe(true);
+    expect(touchesStormPeak(storm, "2027-10-15", "2027-10-24")).toBe(true);
+    expect(touchesStormPeak(storm, "2027-10-16", "2027-10-25")).toBe(false);
+    expect(touchesStormPeak(undefined, "2027-09-01", "2027-09-10")).toBe(false);
   });
 
   it("adds the same minutes to every park on a date, so a day's pick is unchanged", () => {
@@ -262,8 +272,8 @@ describe("/when", () => {
 
   it("ranks Feb 16–25 on a forecast above a hot, peak-season late August from last year within 3 minutes", () => {
     // 36 minutes on a forecast in mid-February; 28 from last year in late
-    // August, 32 °C normals and the hurricane peak: about 35 a visit, within
-    // 3 minutes of February, so the forecast goes first.
+    // August, 32 °C normals and the hurricane peak: the heat and the storm
+    // terms put August behind February, its plain figure lower still.
     const from = "2027-02-01";
     const n = 222;
     const cal = flat(from, n);
@@ -315,13 +325,61 @@ describe("/when", () => {
     );
   });
 
-  it("prefers a forecast window over a last-year one when their figures are equal", () => {
-    // Out of the hurricane season; the first 20 days read last year.
+  it("keeps a window touching the hurricane peak out of the top three, even when it is quieter", () => {
+    // Measured days put late August at Orlando's quietest: 30 minutes from
+    // 20 August to 30 September against 40 elsewhere. The season's own term
+    // (at most 8) leaves August ahead; the peak window term (10 a visit)
+    // does not.
+    const cal = flat("2027-07-01", 150);
+    for (const d of cal.days) {
+      if (d.date < "2027-08-20" || d.date > "2027-09-30") continue;
+      for (const slug of parks) {
+        d.parks[slug].headlinerWait = 30;
+        d.parks[slug].waitExact = 30;
+      }
+    }
+    const result = run(cal, 3);
+    expect(result.windows).toHaveLength(3);
+    for (const w of result.windows) {
+      expect(w.warnings).not.toContain("hurricane_peak");
+    }
+    // Inside the peak the term ranks and is reported per park day; the shown
+    // figure stays plain.
+    const inside = flat("2027-08-20", 30);
+    for (const d of inside.days) {
+      for (const slug of parks) {
+        d.parks[slug].headlinerWait = 30;
+        d.parks[slug].waitExact = 30;
+      }
+    }
+    const peak = run(inside, 1).windows[0];
+    expect(peak.warnings).toContain("hurricane_peak");
+    expect(peak.headlinerWait).toBe(30);
+    expect(peak.penalties?.hurricane).toBeGreaterThanOrEqual(
+      ORLANDO.weather.storm!.peakWindowMinutes!,
+    );
+  });
+
+  it("never orders equal windows by their basis: the earlier one goes first", () => {
+    // Out of the hurricane season; the first 20 days read last year. Every
+    // figure is on the measured scale, so a forecast window wins nothing by
+    // being one (the tie-break that did read about 40 % low, PAR-1319).
     const result = run(
       flat("2027-01-04", 40, (i) => (i < 20 ? "last_year" : "forecast")),
       2,
     );
-    expect(result.windows[0].basis).toBe("forecast");
-    expect(result.windows[0].headlinerWait).toBe(40);
+    expect(result.windows[0]).toMatchObject({
+      from: "2027-01-04",
+      basis: "last_year",
+      headlinerWait: 40,
+    });
+    const reversed = run(
+      flat("2027-01-04", 40, (i) => (i < 20 ? "forecast" : "last_year")),
+      2,
+    );
+    expect(reversed.windows[0]).toMatchObject({
+      from: "2027-01-04",
+      basis: "forecast",
+    });
   });
 });

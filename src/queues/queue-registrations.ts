@@ -139,6 +139,9 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // few thousand rows. Its own queue, as the trips sweep has, because it is
   // maintenance on one table and shares nothing with the jobs around it.
   { name: "admin-audit" },
+  // The trip-region routes' metric rows: one nightly delete of those past
+  // their retention. Its own queue for the same reason as the audit sweep.
+  { name: "trip-metrics" },
   // Showtime patterns: the nightly rebuild that lets a planned day show a
   // projected programme, since no feed publishes showtimes ahead of today.
   { name: "show-patterns" },

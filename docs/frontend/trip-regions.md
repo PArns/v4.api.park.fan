@@ -1,24 +1,32 @@
 # Trip regions (`/v1/trip-regions/*`)
 
-The contract behind park.fan's Orlando hub and its vacation planner, and behind Parky's
-`plan_vacation`, `get_park_events` and `get_travel_time`: a curated region of parks, their days
-side by side, and the plan that puts each chosen park on the trip day where its headliners queue
-least. Open it before reading one of the three routes or changing the optimizer. Code:
+The contract behind park.fan's region hubs (Orlando's first) and their vacation planner, and behind
+Parky's `plan_vacation`, `get_park_events` and `get_travel_time`: a curated region of parks, their
+days side by side, and the plan that puts each chosen park on the trip day where its headliners
+queue least. Open it before reading one of the routes or changing the optimizer. Code:
 `src/trip-regions/`.
 When to go (every window of a trip in a range, ranked by its plan) and the visitors' school
 breaks: [trip regions: when](./trip-regions-when.md).
 
 A region is curated in code (`regions.ts`), not synced: which parks belong to Orlando is a planning
 decision (LEGOLAND Florida is in Winter Haven, Busch Gardens in Tampa, both day trips from an
-Orlando hotel), not a fact any feed carries. Orlando is the only region.
+Orlando hotel), not a fact any feed carries. The regions are `orlando`, `southern-california`,
+`japan` and `paris` (release 2.21.0), in that order. Every route below takes any of them; the
+examples are Orlando's, and what sets the others apart is under
+[the regions](#the-regions-southern-california-and-paris). What differs by region is the region's
+own config, never a branch in the code: its hotel kinds and perks, the name of its early slot, its
+storm season and heat thresholds, where its travel times come from, the markets its tickets are
+sold in, and, in Japan and Paris, its bases ([below](#what-a-region-defines)).
 
 | Route                                    | Key  | Cache                                                   | What                                            |
 | ---------------------------------------- | ---- | ------------------------------------------------------- | ----------------------------------------------- |
+| `GET /v1/trip-regions`                   | none | an hour in the browser, a day at the edge               | every region, for the navigation ([list](#the-list-get-v1trip-regions)) |
 | `GET /v1/trip-regions/:region`           | none | an hour in the browser, a day at the edge               | parks, groups, hotel areas, travel times        |
 | `GET /v1/trip-regions/:region/calendar`  | data | private, an hour; Redis an hour                         | every park's days side by side, with its events |
 | `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
 | `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
 | `GET /v1/trip-regions/:region/tickets`   | none | five minutes at the edge, ten more stale                | the ticket catalog ([tickets](#tickets))        |
+| `GET /v1/trip-regions/:region/accuracy`  | none | an hour in the browser, a day at the edge; Redis a day  | how accurate the forecast was ([accuracy](#how-accurate-the-forecast-was-get-v1trip-regionsregionaccuracy)) |
 
 Before the routes are deployed, `pnpm trip-regions:dev` serves all four on `localhost:3001` from
 production's data through the same modules
@@ -32,6 +40,140 @@ names no single park.
 
 An unknown region is a 404. A bad date, a window in the past, over its length (92 calendar days,
 21 trip days) or past a year from today is a 400, and so is an unknown query parameter.
+
+**Dates are the region's.** "Today", every default window and every date of a route are read in
+the region's `timezone` (`America/New_York`, `America/Los_Angeles`, `Asia/Tokyo`,
+`Europe/Paris`), never the server's clock ([park timezone](../rules/park-timezone.md)); each park's
+day and hours in its own (the same as the region's in every region so far).
+
+**Cache tags.** The frontend tags its reads per region: `trip-region:<slug>` on the region route,
+the calendar and the best days, `trip-tickets:<slug>` on the ticket catalog, which the API
+revalidates on every catalog edit of that region ([editing](#editing-the-catalog)). The list route
+changes only with a deploy.
+
+**Metrics.** Every answer of `/plan`, `/when` and `/best-days` leaves a row of operational facts
+for the planner's operators: no date, name, text, address or visitor id, and nothing a client sees
+([what the server records](#what-the-server-records)).
+
+## The list (`GET /v1/trip-regions`)
+
+Open, no key; an hour in the browser, a day at the edge, like the region route. For the site's
+navigation, which shows each region's park count and how long a trip it plans.
+
+```jsonc
+{
+  "regions": [
+    {
+      "slug": "orlando",
+      "name": "Orlando",
+      "timezone": "America/New_York",
+      "parkCount": 16, // the region route's `parks`: the parks the planner places
+      "maxTripDays": 21,
+      "groups": [
+        { "key": "walt-disney-world", "name": "Walt Disney World Resort", "kind": "resort" },
+        { "key": "day-trips", "name": "Day trips", "kind": "day_trip" },
+      ],
+    },
+  ],
+}
+```
+
+The order is `regions.ts`'s: Orlando first. `groups` are named as on the region route.
+
+## What a region defines
+
+Each region in `regions.ts` carries what differs between regions; the routes read it and the
+region route serves the parts a client needs:
+
+| In `regions.ts`                        | On the region route              | What                                                                                                                                                       |
+| -------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `perks` (keys: the hotel kinds)        | `hotels: [{ key, perks }]`       | the `hotel=` values the plan takes and the perks each carries. `offsite` (no perks) in every region; any other value is a 400 naming the region's ones       |
+| `perkNames`, a perk rule's `share`     | (the codes)                      | a perk's code, its English name (Parky) and what it takes off a day's cost                                                                                 |
+| a group's `earlyKind`                  | (on the calendar's `early.kind`) | what the resort calls its before-opening slot                                                                                                               |
+| `weather.heat`, `.storm`, `.notes`     | `weather`                        | heat thresholds, the storm season and the seasons the answers name but do not price ([how a day is priced](#how-a-day-is-priced))                           |
+| `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
+| `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
+| `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name; `home` is sold to anyone, what plan first suggests from ([tickets](#tickets))                                  |
+| `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
+| a park's `code`                        | `parks[].code`                   | a short curated code for tight views (Tokyo Disneyland `DL`, Tokyo DisneySea `DS`, where initials would give both `TD`); absent: the client derives one  |
+
+**The codes a client translates are the region's own.** A perk or early slot is a code like
+Orlando's: `early_entry` and `early_park_admission` (Orlando, and `early_entry` for the Early Entry
+of Parc Astérix's hotels), `happy_entry` (Tokyo Disney Resort's Happy Entry), `extra_magic_time`
+(Disneyland Paris' Extra Magic Time): the same shape, a slot before the day guests' opening that
+some hotel guests get, priced the same (5 %). The region data names the codes it uses; a client
+shows nothing for a code it does not know. Orlando's codes and values are unchanged.
+
+## The regions: Southern California and Paris
+
+What sets these two apart from Orlando's examples, all of it in their config (`regions.ts`, the
+ticket seeds `tickets.southern-california.ts` and `tickets.paris.ts`). Both take their travel from
+OSRM and have no storm season: `weather.storm` is absent, so no day carries a `hurricane_*` code
+or a `hurricane` penalty.
+
+### Southern California (`southern-california`)
+
+- **Parks.** The Disneyland Resort (`disneyland-resort`: Disneyland Park and Disney California
+  Adventure); Universal Studios Hollywood as a `day_trip` group of its own (one park, no hotel of
+  Universal's, 54 km from the Disneyland gates, so no `best`); and as day trips Knott's Berry Farm,
+  Six Flags Magic Mountain, SeaWorld San Diego, LEGOLAND California and Sesame Place San Diego. The
+  headliners and second visits: Disneyland, California Adventure, Universal.
+- **No hotel perks.** `hotels` are `disney` and `offsite`, both with `perks: []`. Disneyland ended
+  Early Entry on 2026-01-05; its hotel guests now get one Lightning Lane Multi Pass entry per stay,
+  which no perk stands for. Universal's daily slot an hour before opening, most likely the
+  separately sold SUPER NINTENDO WORLD Early Access, is `early.kind: "early_access_ticket"`: no
+  stay's perk counts it, and a client shows nothing for it.
+- **Travel.** A drive to either Disney park ends at Mickey & Friends, then the tram
+  (`via: "tram"`, 15 minutes). Curated: the 5-minute walk between the two gates (their hop pair),
+  the walks from the Disneyland hotels, Harbor Boulevard, Knott's Hotel and the LEGOLAND Hotel, the
+  Metro B Line to Universal from Hollywood and Downtown LA, the COASTER from San Diego to LEGOLAND.
+- **Evenings.** Downtown Disney and Universal CityWalk Hollywood; night shows at Disneyland
+  (Believe… In Holiday Magic, Halloween Screams, Fantasmic!, Tapestry of Happiness, Shadows of
+  Memory), California Adventure (World of Color – ONE) and SeaWorld San Diego.
+- **Heat** counts from a 35 °C forecast or a 30.5 °C normal (Disneyland's normals); Magic Mountain,
+  inland, is the park it prices most.
+- **Tickets** (`us` home, `uk`, `intl`): Disneyland's 2- to 5-day tickets are good for 13 days
+  from the first use; its 1-day ticket is priced by date tier, one product; the Park Hopper (`.h`)
+  works at any time of day since 2026-06-09, and every day needs a park reservation. Universal's
+  2-day ticket runs 7 days from its date. On a separately ticketed night the day guests' close is
+  the feed's; the Disneyland After Dark nights, which the feed lists without an evening row, carry
+  their evening on the season.
+
+### Paris (`paris`)
+
+- **Parks.** Disneyland Paris (`disneyland-paris`: Disneyland Park and Disney Adventure World,
+  Walt Disney Studios Park renamed when it reopened on 29 March 2026) and Parc Astérix
+  (`parc-asterix`), a resort of its own with its hotels. All three are headliners; second visits
+  go to Disneyland Park, Disney Adventure World, then Parc Astérix. Disneyland Park's slug is also
+  Anaheim's: its path, `europe/france/paris/disneyland-park`, tells the two apart, and a season
+  row names its `region`.
+- **Hotel perks.** `disney`: **Extra Magic Time** (`extra_magic_time`), an hour before opening at
+  both parks for the guests of every Disney Hotel, Davy Crockett Ranch included, on a day the feed
+  carries the slot (every day since September 2026). Disneyland Pass Gold holders get it too, a
+  ticket's perk no hotel kind carries. `parc_asterix`: the Early Entry its hotel stays include
+  (`early_entry`, some rides 30 minutes early, never on nocturne or special days); the feed carries
+  no slot for the park, so it counts on no day yet. `offsite`, the partner hotels included: none.
+- **Bases.** `disneyland-paris` (the Disney hotels, Val d'Europe, Val de France), `parc-asterix`
+  (the park's three hotels) and `paris` (central Paris), with no `order`: the stays come in any
+  order. Gateways: Marne-la-Vallée–Chessy (`XED`, a station: the TGV, and the Eurostar with a change
+  at Lille) and CDG for Disneyland Paris, CDG for Parc Astérix, CDG and ORY for Paris. Base legs:
+  60 minutes by car between the resorts, 50 by RER A from Paris to Disneyland Paris, 45 by car from
+  Paris to Parc Astérix. CDG serves all three bases, so it pins no `startBase` or `endBase`.
+  `hotel` and `area` are a 400 here: a stay's area goes with its base
+  (`bases=disneyland-paris:3@disney_lake`), and only then do its hotel's perks count.
+- **Travel.** Both Disney parks share the guest car park, 15 minutes' walk from the gates
+  (`via: "walk"`). Curated: the 5-minute walk between the gates (their hop pair), the walks from the
+  lake hotels (15) and Cheyenne and Santa Fe (20, or the Disney Hotels shuttle), RER A from central
+  Paris (50, the 40-minute ride with the walk and the wait) and Val d'Europe (15); to Parc Astérix, RER B and the park's shuttle from Roissypôle
+  (75), the Paris City Vision coach, and from the Disney parks the TGV to Aéroport CDG 2 and the
+  shuttle; the walk from the park's hotels (15).
+- **Evenings.** Disney Village; night shows Disney Tales of Magic (Disneyland Park) and Disney
+  Cascade of Lights (Disney Adventure World).
+- **Heat** counts from a 30 °C forecast or a 25 °C normal (Disneyland Park's normals).
+- **Tickets** (`eu` home, the operators' own shops; `intl`, sellers abroad): Disney's dated 1-day
+  ticket (`.h` for both parks), its dated 2- to 4-day tickets on consecutive days with both parks,
+  the undated Liberté ticket and the passes; Parc Astérix's dated day, Christmas, gate-only 2-day
+  and season tickets, each of `resort: "parc-asterix"`. No ticket covers both resorts.
 
 ## The region (`GET /v1/trip-regions/orlando`)
 
@@ -129,6 +271,7 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
         "km": 0.8,
         "minutes": 10,
         "mode": "walk",
+        "source": "curated", // not OSRM's: the region's own source is named above
         "alternatives": [
           { "mode": "walk", "minutes": 10, "via": "citywalk" },
           {
@@ -140,6 +283,28 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
         ],
       },
     ],
+  },
+  "hotels": [
+    { "key": "disney", "perks": ["early_entry"] },
+    { "key": "disney_deluxe", "perks": ["early_entry", "extended_evening"] },
+    { "key": "disney_springs", "perks": ["early_entry"] },
+    { "key": "universal", "perks": ["early_park_admission"] },
+    {
+      "key": "universal_premier",
+      "perks": ["early_park_admission", "express_included"],
+    },
+    { "key": "offsite", "perks": [] },
+  ],
+  "ticketMarkets": { "home": "us", "codes": ["us", "uk", "intl"] },
+  "weather": {
+    "storm": {
+      "kind": "hurricane", // hurricane | typhoon; absent where the region has none
+      "from": "06-01",
+      "to": "11-30",
+      "peak": { "from": "08-15", "to": "10-15" },
+    },
+    // "notes": [{ "kind": "rainy_season", "from": "06-05", "to": "07-19" }] in Japan
+    "climatePark": "magic-kingdom-park",
   },
   "tickets": [
     {
@@ -154,6 +319,10 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
 
 - **`tickets`** is the ticket catalog the planner's ticket step and Parky list
   ([tickets](#tickets)). No prices.
+- **`hotels`** are the `hotel=` values this region's plan takes, each with the perks a stay there
+  carries; a hotel area's `perks` are those of the hotel it usually means. **`ticketMarkets`**:
+  the codes a product's and a link's `markets` take in this region. **`weather`**: what the
+  region's days are priced and warned with ([how a day is priced](#how-a-day-is-priced)).
 - **The parks:** the four Disney theme parks and Typhoon Lagoon and Blizzard Beach; Universal
   Studios, Islands of Adventure, Epic Universe and Volcano Bay; SeaWorld, Aquatica and Discovery
   Cove (`reservation_park`); LEGOLAND Florida, Busch Gardens and Adventure Island as day trips. The
@@ -161,11 +330,20 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
   path; a park the database lacks or has retired is left out of every route.
 - **A group's name** is the `destinations` row its parks share (marks such as ® stripped), else the
   curated name: the day trips span two destinations and read "Day trips".
-- **Travel times are a drive with no traffic**, read once from OpenStreetMap through OSRM and
-  stored in code (`travel-matrix.generated.ts`, built by
-  `scripts/trip-regions/build-travel-matrix.mjs`). Both directions are averaged, so a leg serves
-  both ways; `from`/`to` is a park slug or `hotel:<key>`. Say "about" and name the attribution
-  where they are shown.
+- **Where travel times come from is the region's (`travel.source`).** `osrm` (Orlando, Southern
+  California, Paris): a drive with no traffic, read once from OpenStreetMap through OSRM and stored
+  in code (`travel-matrix.generated.ts`, one entry per region, built by
+  `scripts/trip-regions/build-travel-matrix.mjs <region>`), `basis: "free_flow"`. `curated` (Japan,
+  which travels by train): every leg is curated in `regions.ts` from timetables and the operators'
+  pages, door to door with the wait for the train, `basis: "timetable"`, no `attribution`. Inside an
+  OSRM region a leg that is not OSRM's drive (the walk between parks that share a garage, a train
+  from a Paris hotel) says `source: "curated"`. Both directions are averaged or curated as one, so
+  a leg serves both ways; `from`/`to` is a park slug or `hotel:<key>`. Say "about" and name the
+  attribution where one is given.
+- **`mode`** is `drive` or one of the transport modes: `monorail`, `skyliner`, `boat`, `bus`,
+  `walk`, `train` (a resort's own), `shinkansen`, `rail` (a regional or commuter line), `metro`,
+  `highway_bus` (a coach between cities), `shuttle` (a hotel's or a park's own). A rail leg may
+  carry `name`, the line ("Keiyo Line").
 - **A drive ends at the car park, not the gate.** Magic Kingdom's car park is the Transportation
   and Ticket Center: the leg says `via: "ttc"` and `transferMinutes: 15` (the monorail or ferry,
   a curated estimate). Volcano Bay has no car park of its own (`via: "garage_shuttle"`). Each
@@ -183,9 +361,20 @@ An unknown region is a 404. A bad date, a window in the past, over its length (9
   for the buses, whose waits vary too much to name one.
 - **Hotel areas** stand for where a visitor sleeps: `disney` (Caribbean Beach, the Skyliner hub in
   the middle of the resort), `universal` (by the Royal Pacific and Sapphire Falls hotels),
-  `international_drive`, `lake_buena_vista` (Hotel Plaza Boulevard by Disney Springs) and
-  `kissimmee` (US-192). An area's `perks` are those of the hotel a stay there usually means;
-  the plan's `hotel` parameter decides which count.
+  `international_drive`, `disney_springs`, `lake_buena_vista` and `kissimmee` (US-192). An area's
+  `perks` are those of the hotel a stay there usually means; the plan's `hotel` parameter decides
+  which count.
+- **The Disney Springs Resort Area** (`disney_springs`, hotel kind `disney_springs`) is the hotels on
+  Hotel Plaza Boulevard that Disney lists among the "other select hotels" with Early Entry: the
+  Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree
+  Suites, Holiday Inn Orlando, Renaissance Orlando Resort and Spa (the former B Resort), Wyndham Lake
+  Buena Vista and Wyndham Garden. Their guests get Early
+  Entry at the four Disney theme parks and no Extended Evening Hours, which Disney's list keeps for
+  its Deluxe and Deluxe Villa hotels, the Swan, Dolphin, Swan Reserve and Shades of Green
+  ([Early Entry](https://disneyworld.disney.go.com/guest-services/early-entry/),
+  [Extended Evening Hours](https://disneyworld.disney.go.com/guest-services/extended-evening/)).
+  `lake_buena_vista` stays `offsite`, for the hotels along SR 535, and drives from the same point on
+  Hotel Plaza Boulevard.
 - **Venues** are where an evening goes outside the parks, curated in `regions.ts` with the
   operator's page as `url`: Disney Springs (`district`), Disney's BoardWalk (`resort_area`, a view
   of EPCOT's fireworks), the Polynesian beach (`viewpoint` across the lagoon from Magic Kingdom, on
@@ -240,8 +429,10 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
             "closesAt": "…24:00…",
           },
           "crowdLevel": "low", // very_low … extreme | unknown | closed
-          "headlinerWait": 45, // minutes, see below; absent when unknown
+          "headlinerWait": 50, // minutes on the measured scale, see below; absent when unknown
           "basis": "forecast", // forecast | long_range | last_year | none
+          "forecastWait": 45, // the served forecast, unscaled, as the park calendar shows it
+          "lastYearWait": 55, // the same weekday a year back, as measured
           "seasons": ["5b0c…"], // ids into `seasons`
         },
         "disneys-typhoon-lagoon-water-park": {
@@ -274,35 +465,64 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 }
 ```
 
-- **`headlinerWait`** is the calendar's `headlinerForecast.avgWait`, rounded to five minutes: the
-  daily model predicts each headliner's wait at its busy time of the day (a day peak per ride),
-  and this is the mean of those across the park's headliners. It is the optimizer's cost and the
-  one number a day is compared by across parks. Call it "the big rides' wait at their busiest";
-  it is not a total, not the wait at every hour and not the longest single queue. An hourly curve
-  of the same day (`/plan/day`) runs lower for most of the day, so never put the two side by side
-  without saying which is which.
+- **`headlinerWait`** is the day's figure on the measured scale, rounded to five minutes: the mean
+  across the park's headliners of each ride's day peak (the measured side is each ride's day-P90
+  standby wait). It is the optimizer's cost and the one number a day is compared by, across parks
+  and across dates: every trip surface (`/plan`, `/when`, `/best-days`, `best`) ranks by it and
+  nothing else. `basis` says which figure it is:
+  - within the TFT horizon (`basis: "forecast"`, up to 60 days, `SERVING_TFT_DAYS`) the calendar's
+    forecast **times its lead factor** (`forecastLeadFactor`): 1.10 up to a day ahead, 1.11 to three
+    days, 1.12 to a week, 1.16 to two weeks, 1.21 to 30 days, 1.29 to 60 days. The factors are the
+    realised day P90 over the predicted one, 2.5 M comparisons over the 45 days to 2026-09-03
+    ([long-range forecasting §2](../ml/long-range-forecasting.md)): TFT reads low, more so further
+    out. They are replaced by factors measured per region from `prediction_lead_snapshots` once its
+    30- and 60-day buckets hold enough served rows;
+  - past it (`basis: "last_year"`) the same weekday a year back as measured, **not** the long-range
+    forecast: on production's answers of 2026-11-14 that level read 42 % below the same dates of
+    2026 in Orlando and was almost flat
+    ([long-range forecasting §9](../ml/long-range-forecasting.md)), so a day ranked on it won on its
+    basis, not its date (PAR-1319);
+  - past it with nothing measured a year back (`basis: "long_range"`: the park was closed, or not
+    yet measured, that day a year back; USJ before 20 April 2026), the long-range forecast, unscaled,
+    as the one figure there is.
+
+  Call it "the big rides' wait at their busiest"; it is not a total, not the wait at every hour and
+  not the longest single queue. An hourly curve of the same day (`/plan/day`) runs lower for most
+  of the day, so never put the two side by side without saying which is which. Within 60 days it
+  is higher than the park calendar's figure for the same day by the lead factor: the park calendar
+  shows the forecast unscaled, which the trip surfaces carry as `forecastWait`.
+- **`forecastWait`** is the served forecast for the day, unscaled and rounded, as the park's own
+  calendar shows it: present wherever the calendar has a forecast (to about six months), so also on
+  a `last_year` day past 60 days, where it is only shown, never ranked. **`lastYearWait`** is the
+  same weekday a year back as measured, wherever one exists, also on a `forecast` day. Both sit
+  beside `headlinerWait` so a client can show either; neither ranks anything.
 - **`crowdLevel`** is the calendar's own level for that park (the day against that park's typical
   day), so two parks' levels say how each compares with itself, not with each other. Compare parks
   by `headlinerWait`.
 - **`basis`** says where the day's figures come from:
   - `forecast`: the calendar's forecast, up to 60 days ahead (TFT serves the headliners there,
-    `SERVING_TFT_DAYS`).
-  - `long_range`: the calendar's forecast past 60 days, CatBoost's long tail; wider error
-    ([long-range forecasting](../ml/long-range-forecasting.md)).
-  - `last_year`: a day the forecast does not cover (past `forecastUntil`, or a gap in it) and that
-    is not CLOSED reads the same weekday a year earlier: `lastYearDays(date).sameWeekday`, the day
-    of that weekday nearest the same date a year back, at most three days off. Its `crowdLevel` is
-    the level the calendar measured that day (the typical-day-peak rating of
-    `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's recorded
-    `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners of each
-    ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled "last
-    year", never shown as a forecast. A day that was closed last year gives no figure.
-  - `none`: nothing to say.
+    `SERVING_TFT_DAYS`), its `headlinerWait` times the lead factor above, its `crowdLevel` the
+    calendar's predicted level.
+  - `last_year`: a day past 60 days, or one the forecast does not cover (past `forecastUntil`, or a
+    gap in it), that was not CLOSED a year back reads the same weekday a year earlier:
+    `lastYearDays(date).sameWeekday`, the day of that weekday nearest the same date a year back, at
+    most three days off. Its `crowdLevel` is the level the calendar measured that day (the
+    typical-day-peak rating of `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's
+    recorded `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners
+    of each ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled
+    "last year", never shown as a forecast. A moving holiday is not lined up: Easter 2026 was on
+    5 April, Easter 2027 is on 28 March.
+  - `long_range`: a day past 60 days with nothing measured a year back: the calendar's long-range
+    forecast (CatBoost's long tail), unscaled; reads low and flat
+    ([long-range forecasting §9](../ml/long-range-forecasting.md)).
+  - `none`: nothing to say. A day that was closed last year and has no forecast gives no figure.
 - **`meta.forecastUntil`** is the last day any of the region's parks carries a forecast, as the
   calendar warmup last read it off the warm months (not a constant; CatBoost reaches about six
   months, as far as a park's published schedule). Absent until the warmup has run once.
-- **`early`** is the slot before opening that only some guests get: `early_entry` (Disney resort
-  hotels, 30 minutes) or `early_park_admission` (Universal hotels, an hour). **`evening`** is after
+- **`early`** is the slot before opening that only some guests get, by the name its resort gives it
+  (the group's `earlyKind`): in Orlando `early_entry` (Disney resort hotels, 30 minutes) or
+  `early_park_admission` (Universal hotels, an hour); elsewhere `happy_entry`, `extra_magic_time`
+  and so on ([what a region defines](#what-a-region-defines)). **`evening`** is after
   the day guests' close: `extended_evening` (a slot under three hours: Disney's Extended Evening
   Hours for deluxe hotels, EPCOT on Mondays 21:00–23:00, Animal Kingdom on Wednesdays) or
   `ticketed_event` (three hours or more: a party night, a separate ticket). Both are read off the
@@ -324,11 +544,13 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`best`** names per resort (`walt-disney-world`, `universal-orlando`, `seaworld-orlando`, never the
   day trips) the open theme park with the lowest day cost ([below](#how-a-day-is-priced));
   ties go to the longer day-guest day, then the lower level. A day whose hours are not published
-  yet (`UNKNOWN`, `hoursPublished: false`) counts when its figure is a `forecast` or `long_range`:
-  it is priced as the park's usual day (`usualHours`, else no hours factor), since its real hours
-  are not known, and the day says **`bestHoursUnpublished: true`** so the client can add "hours not
-  published yet". From January 2027 that is every Disney and Universal day. Absent for a resort on
-  `last_year` days and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
+  yet (`UNKNOWN`, `hoursPublished: false`) counts when it has a figure: it is priced as the park's
+  usual day (`usualHours`, else no hours factor), since its real hours are not known, and the day
+  says **`bestHoursUnpublished: true`** so the client can add "hours not published yet". From
+  January 2027 that is every Disney and Universal day. The resort's parks must read on one basis:
+  past 60 days that is `last_year`, so the pick is last year's on that weekday and is worded as an
+  estimate (the picked park's `basis` says so). Absent for a resort whose parks read on two bases
+  that day and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
   `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
   Kingdom's party night on 24 November 2026, 40 minutes but out at 18:00, against Animal Kingdom's
   full day at 45).
@@ -354,9 +576,10 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 ## How a day is priced
 
 One cost, `dayCost` in `trip-optimizer.ts`, for the plan, the calendar's `best`, `/best-days` and
-Parky. A park's day costs its headliners' **unrounded** mean wait (the calendar's `exactWait`; the
-rounded `headlinerWait` is only shown, because a ranking decided by rounding to five is a tie the
-rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
+Parky. A park's day costs its headliners' **unrounded** mean wait on the measured scale (the day's
+`waitExact`: within 60 days the forecast times its lead factor, past them last year's measured
+day, [above](#the-days-get-v1trip-regionsorlandocalendarfromto); the rounded `headlinerWait` is
+only shown, because a ranking decided by rounding to five is a tie the rounding invented) times **how much shorter the day guest's day is** than the park's usual one: its
 median day-guest hours over its open days within 14 days of the date without a ticketed evening
 (the longest day where every day has one; `usualDay`) ÷ that day's hours, at least 1, at most 1.5. So a party night at 18:00 against a usual 23:00 costs up to half as much again,
 and is the pick only when its waits are low enough to make up for the hours. A Disney After Hours
@@ -365,11 +588,15 @@ fixed share off, `fireworks=want` adds 500 to a night that costs the evening sho
 without published hours adds 1000. Water parks and Discovery Cove are a flat day the weather
 moves. The constants are `PlanCostModel`.
 
-Two terms price the season, in every route alike (`dayCostParts` names them):
+Two terms price the season, in every route alike (`dayCostParts` names them), each with the
+region's own figures (`regions.ts`, `weather`):
 
-- **Extreme heat** (`HeatModel`), theme parks only. The day's high is the forecast where the
+- **Extreme heat** (`weather.heat`), theme parks only. The day's high is the forecast where the
   calendar has one (`weather.basis: "forecast"`, about 16 days), else the climate normal for the
-  date (`climate_normal`, the same 2015–2024 ERA5 normals `months[]` reads). A forecast high counts
+  date (`climate_normal`, the same 2015–2024 ERA5 normals `months[]` reads). The thresholds are
+  the region's, set the same way for each: the forecast threshold clearly above the region's usual
+  summer day, the normal's at the top fifth of its summer's daily normals at its climate park. In
+  Orlando a forecast high counts
   from **35 °C**: Magic Kingdom's daily normals top out at 32.1 °C (late June) and run 30.9 °C at the
   June–October median (measured 2026-11-12), so 35 °C is clearly hotter than a usual summer day. A
   normal counts from **31.5 °C**, the top fifth of those June–October normals ("typically very
@@ -380,8 +607,16 @@ Two terms price the season, in every route alike (`dayCostParts` names them):
   day is already their good day (× 0.8), and that bonus is not doubled. The calendar's park day
   says `warnings: ["extreme_heat"]`, a best day has the reason `extreme_heat`, a plan day the
   warning.
-- **The hurricane season** (`HURRICANE_WEIGHTS`), 1 June to 30 November, adds **8 minutes ×
-  the date's weight** to every park's day: weight 1 at the peak, by half month 0.05 / 0.1 in June,
+- **The storm season** (`weather.storm`), where the region has one: Orlando's Atlantic
+  hurricanes, Japan's typhoons; none in Southern California or Paris. It adds **its peak minutes ×
+  the date's weight** to every park's day, weighted by half month to the season's climatology,
+  curated relative to its peak and never a forecast. Its codes are the kind's own:
+  `hurricane_season` and `hurricane_peak` in Orlando, `typhoon_season` and `typhoon_peak` in Japan,
+  and `penalties` names it by its kind. We chose a code per kind over a generic `storm_*` with a
+  `kind`: the client translates each code into one sentence, the two seasons differ in months and
+  in wording, and Orlando's codes stay as they were. **Orlando's hurricane season**
+  (`ATLANTIC_HURRICANES`), 1 June to 30 November, adds **8 minutes × the date's weight** to every
+  park's day: weight 1 at the peak, by half month 0.05 / 0.1 in June,
   0.15 / 0.2 in July, 0.4 / 0.8 in August (the peak starting on the 15th), 1 / 1 in September,
   0.8 / 0.4 in October, 0.15 / 0.05 in November. The shape follows the National Hurricane
   Center's climatology (nhc.noaa.gov/climo, 1991–2020: first named storm mid to late June, first
@@ -391,12 +626,24 @@ Two terms price the season, in every route alike (`dayCostParts` names them):
   behind an equal May one without hiding a genuinely quieter one. Within one date every park
   carries the same minutes, so the calendar's `best` is unchanged; across dates (`/best-days`,
   the plan's days, `/when`'s windows) it counts. A plan day says `hurricane_season`, or
-  `hurricane_peak` from 15 August to 15 October.
+  `hurricane_peak` from 15 August to 15 October. **Japan's typhoons** are set the same way from
+  the Japan Meteorological Agency's climatology (most landfalls August to October, the peak in
+  September) with the region's data.
+- **The storm peak in `/when`** (`weather.storm.peakWindowMinutes`, ranking only): a window that
+  touches the peak on any day, travel days included, adds **10 minutes per visit** to its score
+  ([when to go](./trip-regions-when.md#how-the-storm-peak-ranks)). No plan, no day and no shown
+  figure carries it.
 
 Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
 window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
-(`{ heat?, hurricane? }`, minutes per park day, one decimal, absent when zero) say what the
-ranking added, so a client can say "ranked lower: hurricane peak".
+(`{ heat?, hurricane? }`, or `{ heat?, typhoon? }` in Japan, minutes per park day, one decimal,
+absent when zero) say what the ranking added, so a client can say "ranked lower: hurricane peak".
+
+**A season named, not priced** (`weather.notes`): Japan's rainy season (tsuyu, early June to mid
+July around Tokyo) makes a day wetter but its parks no emptier or fuller in a way a figure does not
+already carry: the forecast and last year's days hold the crowds, and a rain shower is not a reason
+to move a park to another day weeks ahead. So it costs nothing, and a plan day and a `/when` window
+that touch it say `rainy_season`, a month `rainySeason: true` ([when to go](./trip-regions-when.md)).
 
 ## The best days (`GET /v1/trip-regions/orlando/best-days?from=&to=&limit=5`)
 
@@ -445,9 +692,10 @@ calendar does not.
 }
 ```
 
-- **`quiet`** (`limit` long) and **`busy`** (two) rank a park's days by their day cost. A night the
-  day guests lose to a party ranks behind every full day whatever its waits. `last_year` days take
-  part with their basis; label them.
+- **`quiet`** (`limit` long) and **`busy`** (two) rank a park's days by their day cost, on the
+  measured scale whatever their basis (a window across day 60 ranks TFT times its lead factor
+  against last year's days). A night the day guests lose to a party ranks behind every full day
+  whatever its waits. `last_year` days take part with their basis; label them.
 - **`basis`** is the basis most of the park's ranked days have. **`flat`** is set when the window's
   rounded waits spread less than ten minutes: there is no better day to name.
 - **`groups[].quiet`**: per resort, the three dates whose `best` park costs least.
@@ -461,7 +709,7 @@ calendar does not.
 | ------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `from`, `to` | `2026-11-28`, `2026-12-06`                           | the trip, arrival and departure day included; at most 21 days, from today to a year ahead                                               |
 | `parks`      | `magic-kingdom-park:2,epcot,universal-epic-universe` | the parks and how many visits each (default 1, at most 3); default: the headliner parks; at most 16 visits                              |
-| `hotel`      | `disney`                                             | `disney`, `disney_deluxe`, `universal`, `universal_premier`, `offsite`: which perks count; default: the area's hotel, else `offsite`    |
+| `hotel`      | `disney`                                             | a hotel kind of the region (its `hotels`; Orlando: `disney`, `disney_deluxe`, `disney_springs`, `universal`, `universal_premier`, `offsite`): which perks count; default: the area's hotel, else `offsite` |
 | `area`       | `disney`                                             | a `hotelAreas` key: each day's travel is read from there; without it the days carry no travel                                           |
 | `arrival`    | `free`                                               | `free` (no park on the arrival day, default) or `park`                                                                                  |
 | `departure`  | `free`                                               | the same for the last day                                                                                                               |
@@ -474,8 +722,16 @@ calendar does not.
 | `hop`        | `1`                                                  | allow two parks on one day where the trip or a ticket has fewer days than visits; the day's ticket must allow it                        |
 | `evenings`   | `1`                                                  | `1` (default): an `evening` on park days that end early ([Evenings](#evenings)); `0`: none                                              |
 | `lock`       | `epcot@2026-12-01`                                   | pins, comma-separated; `rest@2026-12-02` pins a rest day                                                                                |
+| `bases`, `startBase`, `endBase` | `tokyo:4@maihama`, `tokyo`, `osaka` | a region with bases only, in place of `area` and `hotel`: the stays the visitor fixes and the trip's ends ([bases](#bases-a-trip-across-several-cities)) |
+| `moveBuffer` | `30` | a region with bases only: the visitor's own minutes for a hotel change on top of the train, one of `stayRules.moveBufferOptions` (30, 60, 90, 120); default the region's `moveOverheadMinutes` |
 
-More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
+**Which answer comes when.** A park listed without a count, or with `:1`, never makes the trip
+impossible: the plan gives the chosen parks the park days the trip has and names the ones it could
+not place in **`parksLeftOut`** (below), a 200. Orlando's seven default parks in a 7-day trip with
+a free arrival and departure day plan on its 5 park days, two parks out. **Only pinned visits can
+make a 400:** the counts of two or three a query writes (`magic-kingdom-park:2`) adding up to more
+than the trip's days (more than two a day with `hop`), "More park visits than trip days"; and more
+than 16 visits in all. That 400 is the one a client words as "too many visits". `hop=1` without
 a hopper (neither `ticket=hopper` nor an owned ticket with hopping) is ignored: the plan keeps one
 park a day and `meta.warnings` says `hop_needs_hopper`. A lock on a park
 not in `parks` or outside the trip is a 400; a lock the plan cannot keep (the park is closed that
@@ -590,8 +846,25 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   "unplaced": [
     { "slug": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
   ],
+  "parksLeftOut": [
+    // the chosen parks with no visit in the plan, in the region's order; [] when every one has a day
+    { "park": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
+  ],
 }
 ```
+
+- **`parksLeftOut`** lists each chosen park the plan has no visit of, `{ park, reason }`, always
+  present, `[]` when every chosen park has a day. `reason` is its visit's `unplaced` reason:
+  `no_day_left` (the trip's park days went to the other parks: "EPCOT and Epic Universe don't fit
+  into 5 park days", the 5 being `totals.parkDays`), `no_open_day`, `no_ticket_day` or `no_base`.
+  A dropped second visit is not in it, since its park is in the plan; `unplaced` lists every visit
+  left out. Each `/when` window's `plan` carries the same field for its dates, absent when empty:
+  both are this optimizer on the same days, so the plan for a window's dates leaves out the same
+  parks, unless days without published hours, which `/when` prices as if open
+  ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
+  the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
+  `/when`.
 
 **The objective.** Minimize the sum over planned visits of their [day cost](#how-a-day-is-priced).
 A hotel perk takes a fixed share off the day it applies: `early_entry` and `early_park_admission`
@@ -647,10 +920,12 @@ short. When no order of the resorts fits (closed days, locks), the plan is made 
 
 **`reasons` and `warnings`** are codes the client translates. Reasons: `quietest_in_window`,
 `runner_up_close` (another day is within five minutes), `weekday`, `holiday_ends`, the hotel perks
-(`early_entry`, `early_park_admission`, `extended_evening`, `express_included`),
-`water_park_weather`, `busiest_day_spared`, `rest_after_streak`, `locked`. Warnings:
-`party_night_short_hours`, `fireworks_missed`, `hours_not_published`, `estimate_last_year`, `long_range`,
-`no_forecast`, `adjacent_repeat`, `long_streak`, `extreme_heat`, `hurricane_season`, `hurricane_peak`
+by the region's codes (Orlando: `early_entry`, `early_park_admission`, `extended_evening`,
+`express_included`; [what a region defines](#what-a-region-defines)), `water_park_weather`,
+`busiest_day_spared`, `rest_after_streak`, `locked`. Warnings: `party_night_short_hours`,
+`fireworks_missed`, `hours_not_published`, `estimate_last_year`, `long_range`, `no_forecast`,
+`adjacent_repeat`, `long_streak`, `extreme_heat`, the region's storm season (`hurricane_season`,
+`hurricane_peak`; `typhoon_season`, `typhoon_peak`) and `rainy_season`
 ([how a day is priced](#how-a-day-is-priced)). `unplaced[].reason`: `no_open_day` (closed on every
 day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[].reason`:
 `outside_trip`, `closed`, `day_taken`, `no_visit_left`.
@@ -717,6 +992,228 @@ fireworks are the party's.
 **`reasons`**: `park_closes_early` (always first), `open_later`, `night_show`, `free_entry`,
 `fireworks_view`, `short_transfer` (15 minutes or less).
 
+## Bases: a trip across several cities
+
+Japan's parks lie in four cities, two to three hours apart by train; no hotel serves them all.
+Paris has three places to sleep (the Disney hotels, Parc Astérix's, central Paris). A region may
+therefore define **bases**: the cities a trip sleeps in. A trip there is a sequence of **stays**,
+one base for a run of nights, and the plan searches the stays with the parks. A region without
+bases (Orlando, Southern California) has none of the fields, parameters or codes of this
+section and plans exactly as before; `bases`, `startBase` and `endBase` there are a 400.
+
+### The region's bases
+
+```jsonc
+// GET /v1/trip-regions/japan
+{
+  "parks": [{ "slug": "tokyo-disneyland", "code": "DL", "…": "…" }], // code: short, curated
+  "bases": [
+    {
+      "key": "tokyo",
+      "name": "Tokyo",
+      "order": 1, // its place on the route line; absent on every base of a region without one
+      "hotelAreas": ["maihama", "disneysea_hotels", "bayside", "shin_urayasu", "tokyo_station", "shinjuku"],
+      "defaultArea": "maihama",
+      "gateways": [
+        // bases: every base that lists it; one base only, so the client may send it as startBase
+        { "code": "HND", "name": "Haneda Airport", "kind": "airport", "bases": ["tokyo"] },
+        { "code": "NRT", "name": "Narita Airport", "kind": "airport", "bases": ["tokyo"] },
+      ],
+      "stayNote": "Maihama for both Disney parks; Shinjuku for the buses to Fuji-Q",
+      "parks": [
+        // the parks a day from here reaches: door to door, one way, curated
+        { "slug": "tokyo-disneyland", "minutes": 10, "mode": "walk" },
+        { "slug": "tokyo-disneysea", "minutes": 15, "mode": "monorail" },
+        { "slug": "fuji-q-highland", "minutes": 110, "mode": "highway_bus" },
+      ],
+    },
+  ],
+  "baseLegs": [
+    {
+      "from": "tokyo",
+      "to": "nagoya",
+      "minutes": 150, // door to door between the bases' main areas, the wait included
+      "mode": "shinkansen",
+      "name": "Tokaido Shinkansen Nozomi",
+      "parkDay": true, // a park fits the day of this move
+      "fromStop": "Tokyo",
+      "toStop": "Nagoya",
+      "notes": ["reserve_seat", "forward_luggage"], // jr_pass | reserve_seat | forward_luggage
+    },
+  ],
+  "stayRules": {
+    "dayTripFreeMinutes": 45,
+    "moveOverheadMinutes": 60,
+    "parkDayMaxLegMinutes": 150,
+    "moveCost": 20,
+    "moveStartsAt": "08:00",
+    "lastArrivalAt": "23:00",
+  },
+}
+```
+
+- **`stayRules`** override the defaults above per region. Japan moves at 07:30 with a 30-minute
+  overhead, because most travellers there send their bags ahead by courier (takkyubin); every other
+  region keeps the defaults.
+- **`gateways`** are where a trip arrives or leaves: an airport, or a station a long-distance
+  train reaches (Marne-la-Vallée–Chessy for the TGV and the Eurostar, `kind: "station"`). The
+  client offers them as "you land in" and "you fly home from"; the API is the one place that
+  knows which airport belongs to which base. A gateway's **`bases`** are every base that lists
+  it, in the region's order. **A gateway maps to `startBase` or `endBase` only where exactly one
+  base lists it**; where several do, the client sends no `startBase` (or `endBase`) for it and the
+  plan picks the stays. Paris lists CDG under all three of its bases (`bases:
+  ["disneyland-paris", "parc-asterix", "paris"]`), Marne-la-Vallée–Chessy under Disneyland Paris
+  only and Orly under central Paris only, so landing at Orly starts the trip in Paris and landing
+  at CDG pins nothing.
+- **Each hotel area belongs to one base**, and a stay's hotel kind (its perks) is its area's.
+  **`defaultArea`** is where a stay without an area is reckoned from for its travel (the base's
+  `parks` minutes are that area's); it carries no perk. The visitor may sleep in any of the base's
+  areas (at Disneyland Paris, Val d'Europe as well as a Disney hotel), so a perk counts only for
+  the area they name in `bases=<base>@<area>`, as `hotel` without an area is `offsite` in a region
+  without bases.
+- **A base's `parks`** are the parks a day from it reaches. A stay whose area has a curated leg to
+  the park (`hotel:<area>` in `travel.legs`) uses that leg's minutes instead.
+- **`parkDay`** is the leg's own call where it has one (Fujikawaguchiko to Nagoya by bus and
+  Kodama is a full travel day), else whether the leg is at most `parkDayMaxLegMinutes`.
+- **`stayRules`** are the region's; the values above are the defaults every region gets
+  (`DEFAULT_STAY_RULES`, owner-approved starting values) unless it sets its own.
+
+### The plan's parameters
+
+| Parameter   | Example                                         | Meaning                                                                                                                                                                                                 |
+| ----------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bases`     | `tokyo:4@maihama,fujikawaguchiko:0,nagoya:1`     | what the visitor fixes, per base: `:n` its nights (`:0` no stay there, its parks as day trips), `@area` its hotel area. A base listed without nights is a stay whose nights the plan picks. The order of the list does not matter |
+| `startBase` | `tokyo`                                         | where the trip arrives: the first stay, unless `bases` rules it out with `:0`; then the arrival day moves on from it                                                                                    |
+| `endBase`   | `osaka`                                         | where the trip leaves: the last stay, or, where that is elsewhere (a round trip from Tokyo), the departure day moves there                                                                              |
+
+`area` and `hotel` are a 400 in a region with bases: the area goes with its base. Everything else
+is the plan's: which bases (those that reach the chosen parks; a base counts when it reaches one
+within `dayTripFreeMinutes`, or is named), in which order and with how many nights. A 400 names an
+unknown base, an area of another base, an area on a `:0` base, and nights the trip does not have
+("Your stays add up to 10 nights; the trip has 9").
+
+**The order follows the route.** Where the bases lie on one line (Japan: Tokyo, Fujikawaguchiko,
+Nagoya, Osaka), the stays follow it one way or the other and never double back; landing in Osaka
+and leaving from Tokyo reverses it. Where they lie on none (Paris), the stays come in any order the
+base legs connect. Each base is stayed in at most once.
+
+### How a day is priced across cities
+
+- **A day within one base** may go to a park the base reaches. Travel past
+  `dayTripFreeMinutes` each way is taken off the day's hours and priced like a short day (the hours
+  factor of [how a day is priced](#how-a-day-is-priced), at most 1.5 with an early close): Fuji-Q
+  from Tokyo (about 2 hours from Shinjuku) loses 2 h 10 of a 12-hour day. The day warns
+  `long_day_trip`.
+- **A move day** (the morning in one base, the night in the next) is one of three, the cheapest the
+  plan can use:
+  - **a morning move**, `move.when: "morning"`: the move leaves at `moveStartsAt`, and the day's
+    park is one the new base reaches within the free time; the guest gets in at `moveStartsAt` +
+    the leg + `moveOverheadMinutes` (luggage, check-in) + the way to the park (`startAt`), and
+    the day is priced by the hours left. Warns `move_day`. Only where the leg is a `parkDay`.
+  - **an evening move**, `move.when: "evening"`: the day's park is one the old base reaches
+    within the free time, the move leaves after its close and must arrive by `lastArrivalAt`; it
+    costs the park nothing. Only where the leg is a `parkDay`.
+  - **a travel day**, `kind: "travel"`, `move.when: "day"`: no park. It breaks a run of park days
+    like a rest day but is not counted as one.
+- **Each move adds `moveCost`** (20 minutes of headliner wait): the plan never changes hotels to
+  save less. With one Fuji-Q visit the plan keeps it a day trip from Tokyo unless a night by the
+  lake pays; a visitor who wants the night names `fujikawaguchiko` in `bases`.
+- **A move to or from an airport's city** on the arrival or departure day takes no park.
+- **The stay hotel's perks** count where the guest woke: a perk with `needs: "after_first_night"`
+  (Tokyo Disney Resort's Happy Entry, which no feed carries and which does not hold on the
+  check-in day) holds every morning after the first night, never on the day of a morning move into
+  the base; `blackoutDates` are skipped.
+- **Resort blocks** (`blocks`) are the stays here: a resort's parks are reached from its base, so
+  its days fall in that stay. `blocks` changes nothing in a region with bases.
+
+### The answer
+
+```jsonc
+{
+  "meta": {
+    "stays": [
+      { "base": "tokyo", "from": "2027-04-10", "to": "2027-04-14", "nights": 4, "area": "maihama" },
+      { "base": "fujikawaguchiko", "from": "2027-04-14", "to": "2027-04-15", "nights": 1, "auto": true },
+    ],
+    "staySuggestion": {
+      // with nights the visitor fixed, the one-night change that saves most
+      "nights": { "tokyo": 3 },
+      "savedMinutesPerRide": 6,
+      "park": "universal-studios-japan",
+      "date": "2027-04-16",
+    },
+  },
+  "days": [
+    {
+      "date": "2027-04-14",
+      "kind": "park",
+      "base": "fujikawaguchiko",
+      "parks": [{ "slug": "fuji-q-highland", "part": "full" }],
+      "move": {
+        "from": "tokyo",
+        "to": "fujikawaguchiko",
+        "minutes": 150,
+        "mode": "highway_bus",
+        "name": "highway bus Busta Shinjuku–Kawaguchiko",
+        "when": "morning", // morning | evening | day
+        "departAt": "2027-04-14T08:00:00+09:00",
+        "arriveAt": "2027-04-14T10:30:00+09:00",
+      },
+      "startAt": "2027-04-14T11:45:00+09:00", // after a morning move: when the guest gets in
+      "warnings": ["move_day"],
+    },
+    {
+      "date": "2027-04-15",
+      "kind": "travel",
+      "base": "nagoya",
+      "parks": [],
+      "move": { "from": "fujikawaguchiko", "to": "nagoya", "when": "day", "…": "…" },
+    },
+  ],
+  "totals": { "…": "…", "moves": 3, "travelDays": 1 },
+}
+```
+
+- **`stays[]`**: `from` the check-in day, `to` the check-out day (the next move day, or the
+  departure day); `auto: true` where the plan picked the base or its nights; `area` the visitor's.
+- **`days[].base`**: where that night is spent; the departure day's is where it starts.
+  **`move`** on a move day; its times are typical (the leg's minutes from `moveStartsAt`, or from
+  the park's close plus the way out), never a timetable. A park day's `travel` reads from the
+  hotel area of the base its park is reached from.
+- **`moveBuffer`** is the buffer the plan used for each hotel change: the visitor's `moveBuffer=`
+  or the region's `moveOverheadMinutes`. The client asks the visitor rather than deciding: in
+  Japan, bags sent ahead by courier (takkyubin) make 30 minutes enough, carrying them takes about
+  60, and a slower pace may want more. The region route lists the choices in
+  `stayRules.moveBufferOptions`.
+- **`staySuggestion`** appears only where the visitor fixed nights: each fixed stay one night
+  shorter or longer, the plan made again, the change that saves at least 3 minutes a ride and
+  places every visit; `park` and `date` name the visit that moved to the cheaper day. With every
+  night left to the plan there is nothing to suggest: the plan already has the best split.
+- **Codes.** Kind `travel`. Warnings `long_day_trip`, `move_day`. `unplaced[].reason`: `no_base`
+  (no base the trip may stay in reaches the park). `ignoredLocks[].reason`: `base_unreachable` (no
+  stay the trip can make reaches the park that day). `totals.moves` and `totals.travelDays` only in
+  a region with bases.
+
+**The search.** The stays are one more structure, like the resort blocks: every set of bases that
+reaches the chosen parks, in every order the route allows, with every split of the nights. Each
+plan's quick bound (every visit on its cheapest allowed day, days shared, plus the moves) ranks
+them; the 400 cheapest are solved, branch and bound as before, and a plan left out whose bound
+could beat the result makes `meta.exact` false (proven for the cheapest). **A tie:** a plan with
+the same number of moves as the cheapest that costs less than 3 minutes per park day more (the
+plan's "any order will do", `ORDER_MATTERS_MINUTES`) ties it, and the tie goes to the plan whose
+bases lie closer to the trip's parks (each park's reach from the closest of the plan's bases,
+summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix pays 5
+minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
+the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
+tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
+bases has no stays and keeps its cheapest plan. `split=auto` keeps the days that can only be a
+move out of the room it gives second visits. On the test region (four cities, five parks, ten
+days) a plan takes 5–40 ms.
+
+**`/when`** plans each window the same way, `bases`, `startBase` and `endBase` included, and ranks
+it with the stays' cost (the hours day trips and moves take, and the moves) on top of its park
+days; each window's `plan` carries its `stays` and each day its `base`.
+
 ## Tickets
 
 The planner's ticket step asks "Do you already have tickets?". **Plan first** (no `tickets`, or
@@ -759,7 +1256,7 @@ A product:
   "id": "uor-date-based", // stable, the contract's key
   "name": "Universal Orlando date-based ticket", // the operator's product name, not translated
   "resort": "universal-orlando", // the group whose operator sells it
-  "markets": ["us", "intl"], // us: sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only
+  "markets": ["us", "intl"], // the region's ticketMarkets codes; in Orlando us: sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only
   "parks": [
     "universal-studios-florida",
     "universal-islands-of-adventure",
@@ -849,8 +1346,26 @@ A product:
   `blockouts_unchecked`. **`blockoutUrl`**: the operator's page with the blockout calendar (Disney's
   passholder page, which links each pass's calendar). **`reservationUrl`**: where passholders reserve
   their park (Disney's pass).
+- **`markets`** (and a link's) are codes of the region's `ticketMarkets`, whose `home` is sold to
+  anyone at the operator's own shop: `us` in Orlando, the region's own elsewhere.
+- **An evening ticket**: **`entryFrom`** (`"15:00"`, park-local) admits only from that time, and
+  **`validDays`** (`weekday`, `weekend`, `holiday`; absent: every day) names the kinds of day it is
+  used on: Tokyo Disney Resort's Early Evening Passport (from 15:00, weekends and holidays) and
+  Weeknight Passport (from 17:00, weekdays). `weekday` is Monday to Friday that is no public
+  holiday, `weekend` Saturday and Sunday, `holiday` a public holiday of the region's calendar. An
+  owned one is planned on a day of its kinds only (a visit with none in the trip is `unplaced`,
+  `no_ticket_day`), as the evening of that day: the day's park says `part: "evening"`, the day
+  `entryFrom`, and it is priced as a day short by the hours before the entry (the hours factor of
+  [how a day is priced](#how-a-day-is-priced), at most 1.5), without the early slot's perk. Its
+  `headlinerWait` is the day's figure, the busiest time of the whole day, not the evening's. Plan
+  first never suggests one: it plans whole days.
+- **One park a day, several parks a day.** Tokyo Disney Resort's date-specific 1-Day Passport is a
+  one-day product of both parks without hopping (the plan picks the park, a lock keeps it), like a
+  1-day Disney ticket in Orlando; Disneyland Paris' 1-park and 2-park tickets are `hopping` `none`
+  and `included` (or one product with `optional`, the `.h` 2-park option). The model needs nothing
+  more for them.
 
-The v1 catalog: Walt Disney World date-based (1–10 days, `.h` Park Hopper) and with the Plus option
+The v1 catalog (Orlando's seed; each region seeds its own from `tickets.ts`, `TICKET_CATALOGS`): Walt Disney World date-based (1–10 days, `.h` Park Hopper) and with the Plus option
 (Water Park and Sports; `.h` Park Hopper Plus), the 4-Park Magic Ticket, the UK 14-Day and 7-Day
 Magic Tickets and the annual passes; Universal date-based (1–5 days, `.h` park-to-park), with
 Volcano Bay, the 1-Day + 1-Day Epic, the 2-Day Park-to-Park + 1 Day Epic promotion, the Epic
@@ -942,7 +1457,8 @@ pass, so an Epic visit with a pass is planned plan first and gets an Epic day ti
 
 For each resort with park days on plan first, the plan as made (blocks as today) gets a ticket:
 
-- **`product`**: the shortest product sold to everyone (`markets` has `us`) and on sale at the
+- **`product`**: the shortest product sold to everyone (`markets` has the region's home market,
+  `us` in Orlando), no evening ticket, and on sale at the
   start that covers the resort's planned days: Disney date-based (with the Plus option where a
   Disney water park is planned); Universal date-based without Epic Universe for one or two days,
   the 1-Day + 1-Day Epic for two days with Epic, date-based from three days; the Epic Universe or
@@ -1147,8 +1663,8 @@ from the official link) and the stamps.
 - **What a PATCH changes.** A field the body leaves out stays as stored; a field it gives replaces
   the stored one, and the merged product is checked whole. `null` clears an optional field:
   `description`, `notes`, `blockoutUrl`, `reservationUrl`, `until`, `suggestRank` (never suggested),
-  `pass`, `blockouts`, `windowDays`, `allowance`, `onSale`, `hopSets`, `caps`, `reservedDayParks`
-  and `sources`, and inside them a link's `markets`, `locales` and `official`, a source's `title`,
+  `pass`, `blockouts`, `windowDays`, `allowance`, `onSale`, `hopSets`, `caps`, `reservedDayParks`,
+  `entryFrom`, `validDays` and `sources`, and inside them a link's `markets`, `locales` and `official`, a source's `title`,
   `accessed` and `note`, an `onSale` range's `from` or `to`, a set's or cap's `ticketDays`. A
   required field sent as `null` is refused at its path (`name`: "is required"); `active` takes only
   `true` or `false`; `sortOrder: null` keeps the product where it is.
@@ -1164,8 +1680,10 @@ message, problems: [{ path: "windowTable[2].window", message }] }`), and `…/va
 
 - `slug` kebab-case, at most 60 characters, unique in the region; `name` 1–120 characters,
   `description` at most 1,000, `notes` at most 2,000;
-- `resort` a group of the region; `markets` a non-empty subset of `us`, `uk`, `intl`; `parks` region
-  parks, at least one, none twice;
+- `resort` a group of the region; `markets` a non-empty subset of the region's `ticketMarkets`
+  codes (Orlando: `us`, `uk`, `intl`); `parks` region parks, at least one, none twice;
+- `entryFrom` a time `HH:MM`, and then `suggestRank` `null`; `validDays` a non-empty subset of
+  `weekday`, `weekend`, `holiday`;
 - `days` `"unlimited"` or `{ min, max }` with 1 ≤ min ≤ max ≤ 30; `windowTable` exactly one row per
   length from `min` to `max`, each `window` at least its `days`, never shorter than the row before,
   at most 366; `windowDays` only with unlimited days; `pass` only with unlimited days and no
@@ -1223,11 +1741,57 @@ ticket does not allow, and the catalog's `confidence` and `notes` say so:
   days; 24 to 31 March read as days without published hours, which the plan uses only when nothing
   else fits.
 
+## How accurate the forecast was (`GET /v1/trip-regions/:region/accuracy`)
+
+Open, no key: it is a statement about our forecasts, not one. An hour in the browser, a day at the
+edge, and a day in Redis under the region's date (`trip-regions:accuracy:v1:{region}:{date}`), so
+each region reads the archive once a day. For the hub's line on how far to trust the calendar.
+
+```jsonc
+{
+  "region": "orlando",
+  "forecastAccuracy": {
+    "days": 30, // the window
+    "from": "2026-10-14", // park-local, inclusive
+    "to": "2026-11-12", // the region's last measured day
+    "leadDays": 7, // the forecasts were made a week ahead
+    "maeMinutes": 16.4, // the mean absolute error, minutes, one decimal
+    "parks": 14, // the parks counted
+    "sampleDays": 28, // the window's days with a scored forecast
+  }, // null where too little is measured: show nothing
+}
+```
+
+- **What it measures:** the day's peak wait at the headliners (the calendar's `headlinerWait`, the
+  "peak wait"), as forecast `leadDays` ahead, against what the day did (each headliner's day P90):
+  the mean absolute error per park, then the mean over the counted parks, so a park with many
+  headliners weighs as much as one with few. It is the measurement the plan's `expectedError`
+  quotes ([reader-facing accuracy](../ml/reader-facing-accuracy.md)): `prediction_lead_snapshots`,
+  the **served** daily level (TFT or CatBoost, whichever the reader was shown), scored rows only.
+  Never a second definition: the plan reads the same rows by lead, this route by region.
+- **Which lead:** a week ahead (`ACCURACY_LEAD_DAYS`), a typical look at the calendar before a
+  trip. The day-ahead figure would flatter a page people plan weeks ahead with; the error grows
+  with the lead ([long-range forecasting](../ml/long-range-forecasting.md)). Say the lead with the
+  figure: "a week ahead, our peak-wait forecast was off by 16 minutes on average over the last 30
+  days".
+- **Which days:** the 30 park-local days ending on the region's last measured day. A day counts
+  once it is over in the park (date.util, the park's timezone) and the nightly scoring has filled
+  it, so `to` is usually two days back; a region closed for a while answers from before its
+  closure (the read reaches 45 days back).
+- **When it is null:** a park counts with 20 scored rows or more in the window (about three
+  headliners for a week); the figure needs 100 scored rows over the counted parks, the floor the
+  plan's own figure publishes at (`PredictionLeadSnapshotService.MIN_SCORED`), and 14 measured
+  days, half the window. Below that it is `null`, never a guess. Paris in November, with Parc
+  Astérix closed, still counts its Disney parks.
+- **Code:** `trip-accuracy.ts` (the figure), `trip-accuracy.service.ts` (read and cache),
+  `PredictionLeadSnapshotService.parkDayErrors` (the archive read). The dev shim has no database
+  and passes the route to production.
+
 ## Caching and cost
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v3:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
@@ -1244,8 +1808,81 @@ their starts searched 0.22–0.25 s; two UK 14-day tickets with dates 0.21–0.2
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
 month caches), records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
-and keeps the past months the `last_year` days read (−6 … −2; the current and previous month are
-in the ordinary window) as week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
+and keeps the past months the days read last year from (−12 … −1: every day from today on carries
+the same weekday a year back, ranked on it past 60 days; the running month is built on read) as
+week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:
 [caching](../architecture/caching-strategy.md#cache-warmup).
+
+## What the server records
+
+Every answer of `/plan`, `/when` and `/best-days`, and every plan Parky's trip tools make through
+the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
+the MCP tool `trip_planner_ops` reads them
+([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
+frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
+answer. Code: `src/trip-regions/metrics/`.
+
+**Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
+the services (400, 404), a failure (5xx). Parky's `plan_vacation`, `change_trip`, `get_trip_plan`
+and `find_trip_dates` call the services without the route; their plans are recorded the same way,
+with `caller` `parky` (`TripRequestMetricsService.measure`). Not recorded: a request the data-key
+guard turns away (401, 403, 429: it never reaches the route), an answer Cloudflare serves from its
+cache, and the plan of the trip on screen Parky reads for every question (`visitorTripItinerary`),
+which would count one trip once per question.
+
+| Column                                                 | What                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
+| `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
+| `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
+| `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
+| `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
+| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
+| `calendar_cache`                                       | the region calendar a built answer read, the same three states                                                                                             |
+| `exact`                                                | `meta.exact` (`/plan`) or `meta.search.exact` (`/when`): the search was proven, not stopped by its time budget                                            |
+| `relaxed`                                              | the codes of `meta.relaxed`, sorted; `/when`: `ticket_window_relaxed` when a window answered carries that warning                                         |
+| `unplaced_reasons`                                     | one entry per `unplaced[]`, its reason; `/when` names none, so one `unknown` per park its best window left out                                            |
+| `trip_days`, `parks`, `parks_named`, `visits`, `locks` | the normalized query in counts: trip length with arrival and departure, parks (named or the headliners), visits with second ones, pinned days             |
+| `ticket_kinds`                                         | one entry per owned ticket: `pass`, `evening`, `reserved_day`, `one_day`, `multi_day`, `unknown` (a product the catalog no longer has)                     |
+| `hopper`                                               | plan first's hopper resorts, or an owned ticket with the hopper                                                                                            |
+| `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; `/when`: the best window's stays (a window names no moves); null in the other regions        |
+| `range_days`, `windows`, `windows_planned`, `within`   | `/when`: the search range in days, the windows answered, those planned (`meta.search.planned`), a school-break filter. `/best-days`: `range_days`          |
+| `left_out`                                             | the chosen parks the plan has no visit of (`parksLeftOut`); `/when`: those of its best window                                                              |
+| `move_buffer`, `gateways`, `stay_suggested`            | a region with bases: the visitor's `moveBuffer` (null: the region's own), which ends they fixed (`none`, `start`, `end`, `both`), and whether the answer carried `meta.staySuggestion` |
+
+The shape is read from the normalized query, so a request refused while its query is read has
+only its route, region, status, code and latency.
+
+**Error codes.** A 404 is `unknown_region`; a 400 of the query's own validation (a malformed date,
+`days` out of range, an unknown parameter) is `invalid_query`; a 400 the services raise is told by
+its message, which names the parameter at fault: `bad_date`, `window_in_past`, `window_reversed`,
+`window_past_horizon`, `window_too_long`, `range_shorter_than_trip`, `unknown_park`,
+`park_listed_twice`, `visits_per_park`, `too_many_visits`, `visits_exceed_days`, `bad_hopper`,
+`unknown_area`, `bad_hotel`, `bad_lock`, `bad_tickets`, `bad_within`; in a region with bases
+`bad_bases` (`bases`, `startBase`, `endBase`), `stay_nights_exceed_trip` and `area_needs_base`, and
+`no_bases_in_region` for those parameters elsewhere; and `bad_request` for a message the list does
+not know yet (`TRIP_ERROR_CODES` in `trip-request-facts.ts`, pinned by its
+spec against the messages the code throws). 503 is `unavailable`, any other failure `internal`.
+Only the code is kept: the messages carry the visitor's own values.
+
+**What a row never holds**: a date (the trip's, the range's, a lock's), a park, hotel, area or
+ticket name, a message, free text, an address, a User-Agent or a visitor id. Every string is the
+API's own vocabulary, a region only when `regions.ts` has it.
+
+**How it is written.** The routes wear `@MeasureTripRequest`, an interceptor that opens a trace
+(`AsyncLocalStorage`) around the route; the services note into it the caches that served and the
+trip's shape, and outside a measured request (Parky's tools) a note does nothing. Each API process
+keeps the rows in memory and writes them once a minute, 500 per `INSERT`, and on shutdown; a failed
+write keeps its rows for the next one, and past 5,000 rows waiting a row is dropped and counted
+(the ops tool's `writer`). Recording never touches the answer.
+
+**Retention and schema.** Rows are kept 90 days (`TRIP_METRICS_RETENTION_DAYS`, as long as the
+site statistic's hourly rows) and deleted nightly at 01:25 UTC by `trip-metrics` / `prune`, in
+batches of 10,000 ([job queues](../architecture/job-queues.md)). The table came with the entity
+(`synchronize`, [the entities are the schema](../rules/the-entities-are-the-schema.md)): additive,
+a plain table with an index on `bucket`, its array columns without a default because every insert
+names them. Every column added since is nullable or has a default: `caller` came with the default
+`site`, `left_out`, `move_buffer`, `gateways` and `stay_suggested` nullable (release 2.21.0).

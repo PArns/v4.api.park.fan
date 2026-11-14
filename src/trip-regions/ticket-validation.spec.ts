@@ -1,5 +1,10 @@
-import { ORLANDO } from "./regions";
-import { linksOf, ORLANDO_TICKETS, TICKET_RULE_KEYS } from "./tickets";
+import { ORLANDO, TRIP_REGIONS } from "./regions";
+import {
+  linksOf,
+  ORLANDO_TICKETS,
+  seedTickets,
+  TICKET_RULE_KEYS,
+} from "./tickets";
 import type { TicketProduct } from "./tickets";
 import {
   dryRunTicket,
@@ -60,6 +65,34 @@ describe("validateTicketProduct", () => {
       expect(run.planFirst).toBe("ok");
     }
   });
+
+  it.each(
+    Object.values(TRIP_REGIONS)
+      .filter((r) => r.slug !== ORLANDO.slug)
+      .map((r) => [r.slug, r] as const),
+  )(
+    "passes %s's seed products, and the dry run plans each",
+    (_slug, region) => {
+      const products = seedTickets(region);
+      expect(products.length).toBeGreaterThan(0);
+      for (const product of products) {
+        const { problems, valid } = validateTicketProduct(
+          region,
+          draftOf(product),
+          { creating: false, slugs: products.map((p) => p.id) },
+        );
+        expect({ id: product.id, problems }).toEqual({
+          id: product.id,
+          problems: [],
+        });
+        const run = dryRunTicket(region, valid!.product, TODAY);
+        expect({ id: product.id, problems: run.problems }).toEqual({
+          id: product.id,
+          problems: [],
+        });
+      }
+    },
+  );
 
   it("names the slug, name, resort, markets and parks by their paths", () => {
     expect(

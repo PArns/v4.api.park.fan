@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ASSISTANT_LOCALES } from "./system-prompt";
+import { ASSISTANT_LOCALES } from "./assistant-locales";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
   RIDE_ALERT_THRESHOLD_MIN,
@@ -27,6 +27,9 @@ const plannerName = z
  * version or a hand-edited value fills with anything. A bad entry is dropped and a long list cut,
  * so a stale cookie costs Parky one entry, never the whole chat.
  */
+/** The most live trip regions a request names. */
+export const LIVE_REGIONS_MAX = 20;
+
 function lenientList<T extends z.ZodType>(item: T, max: number) {
   // Optional first, so a missing list reaches the transform and comes out empty.
   return z
@@ -72,10 +75,18 @@ export const plannerPrefs = z.object({
   earlyEntry: z.boolean().optional(),
 });
 
+/** The planned days a question carries in full: the active one and the nearest. */
+export const PLANNER_DETAILED_DAYS = 8;
+/** Entries per detailed day. */
+export const PLANNER_DAY_ENTRIES = 40;
+/** The other planned days a question names by park and date only. */
+export const PLANNER_INDEX_DAYS = 60;
+
 /**
- * The visitor's trip planner as the browser holds it, sent with every question so Parky can read
- * and change it. Unknown keys are dropped, a bad day or entry too (see {@link lenientList}); at
- * most 6 days of 40 entries.
+ * The visitor's day planner as the browser holds it, sent with every question so Parky can read
+ * and change it. Unknown keys are dropped, a bad day or entry too (see {@link lenientList}): at
+ * most {@link PLANNER_DETAILED_DAYS} days of {@link PLANNER_DAY_ENTRIES} entries in full, and the
+ * rest of the planned days from today on in `more`, by park and date.
  */
 export const plannerSnapshotSchema = z.object({
   active: lenient(z.object({ park: slug, date: z.iso.date() })),
@@ -90,18 +101,122 @@ export const plannerSnapshotSchema = z.object({
           kind: z.enum(["ride", "show", "block"]),
           name: plannerName,
           rideSlug: lenient(slug),
+          showSlug: lenient(slug),
           start: lenient(plannerClock),
+          /** Park-local minutes since midnight, past 1440 on a day that runs past midnight. */
+          startMinute: lenient(z.number().int().min(0).max(2880)),
           durationMinutes: lenient(z.number().int().min(1).max(720)),
           done: lenient(z.boolean()),
         }),
-        40,
+        PLANNER_DAY_ENTRIES,
       ),
     }),
-    6,
+    PLANNER_DETAILED_DAYS,
+  ),
+  more: lenientList(
+    z.object({
+      park: z.object({ slug, name: plannerName }),
+      date: z.iso.date(),
+      entries: z.number().int().min(0).max(500),
+      done: lenient(z.number().int().min(0).max(500)),
+      reserved: lenient(z.boolean()),
+      riderHeightCm: lenient(plannerPrefs.shape.riderHeightCm),
+    }),
+    PLANNER_INDEX_DAYS,
   ),
 });
-export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
+type ParsedPlanner = z.infer<typeof plannerSnapshotSchema>;
+/** The snapshot as the tools read it; `more` is optional for snapshots built by hand. */
+export type PlannerSnapshot = Omit<ParsedPlanner, "more"> &
+  Partial<Pick<ParsedPlanner, "more">>;
 export type PlannerDay = PlannerSnapshot["days"][number];
+export type PlannerIndexDay = ParsedPlanner["more"][number];
+
+/** The longest trip query a question carries: a 21-day trip with pins and six tickets fits. */
+export const TRIP_QUERY_MAX = 1200;
+
+/** What the browser remembers of the party for a trip: how many, and the children's heights. */
+export const tripPartySchema = z.object({
+  size: lenient(z.number().int().min(1).max(30)),
+  heightsCm: lenientList(z.number().int().min(50).max(250), 10),
+});
+export type TripParty = z.infer<typeof tripPartySchema>;
+
+/**
+ * The visitor's trips, one per region: the hub planner's own query (its whole state, in the plan
+ * route's names) and whether that planner is on screen now. The query is checked here only for
+ * its characters; the tools read it through the plan route's own normalization.
+ */
+export const tripsSnapshotSchema = lenientList(
+  z.object({
+    region: slug,
+    query: z
+      .string()
+      .max(TRIP_QUERY_MAX)
+      .regex(/^[A-Za-z0-9=&:,@._%+?-]*$/),
+    onScreen: lenient(z.boolean()),
+    party: lenient(tripPartySchema),
+  }),
+  4,
+);
+export type TripSnapshot = z.infer<typeof tripsSnapshotSchema>[number];
+
+/**
+ * The interview goes from simple to detailed: the core steps first, in this order, then the plan
+ * at once, then the refinements, which Parky offers as replies and the visitor may pick or leave
+ * (`refine`). A visitor who stops after the core has a plan.
+ */
+export const TRIP_INTERVIEW_CORE = ["region", "dates", "parks"] as const;
+/** A trip's refinements, offered once its plan stands. */
+export const TRIP_INTERVIEW_REFINE = [
+  "party",
+  "tickets",
+  "hotel",
+  "pace",
+  "file",
+] as const;
+/** A park day's core: the park and date, the must-dos. */
+export const DAY_INTERVIEW_CORE = ["day", "mustdo"] as const;
+/** A park day's refinements, offered once the day is planned. */
+export const DAY_INTERVIEW_REFINE = ["heights", "shows", "arrival"] as const;
+/** The phase after the core: the plan stands, the refinements are on offer. */
+export const INTERVIEW_REFINE = "refine";
+const interviewStep = z.enum([
+  ...new Set([
+    ...TRIP_INTERVIEW_CORE,
+    ...TRIP_INTERVIEW_REFINE,
+    ...DAY_INTERVIEW_CORE,
+    ...DAY_INTERVIEW_REFINE,
+    INTERVIEW_REFINE,
+  ]),
+] as [string, ...string[]]);
+export type InterviewStep =
+  | (typeof TRIP_INTERVIEW_CORE)[number]
+  | (typeof TRIP_INTERVIEW_REFINE)[number]
+  | (typeof DAY_INTERVIEW_CORE)[number]
+  | (typeof DAY_INTERVIEW_REFINE)[number]
+  | typeof INTERVIEW_REFINE;
+
+/**
+ * Parky's interview as the browser holds it beside the chat: which kind, the step being asked,
+ * the steps answered or skipped, and the must-do rides of a trip, which wait for its filing into
+ * the day planner. Everything else the visitor answered is in the planners already.
+ */
+export const interviewSnapshotSchema = z.object({
+  kind: z.enum(["trip", "day"]),
+  region: lenient(slug),
+  park: lenient(slug),
+  date: lenient(z.iso.date()),
+  step: interviewStep,
+  answered: lenientList(interviewStep, 12),
+  skipped: lenientList(interviewStep, 12),
+  mustDoRides: lenientList(
+    z.object({ park: slug, rides: lenientList(z.uuid(), 12) }),
+    8,
+  ),
+  source: z.enum(["planner", "chat"]).catch("chat"),
+});
+export type InterviewSnapshot = z.infer<typeof interviewSnapshotSchema>;
 
 /**
  * The browser's push state and the alerts it holds, sent with every question. Lenient like the
@@ -213,6 +328,30 @@ export const chatRequestSchema = z.strictObject({
     }))
     .optional(),
   planner: lenient(plannerSnapshotSchema),
+  /**
+   * The line the chat opened with, sent with a chat's first question only: a greeting can name the
+   * user's next planned day, and "yes" may answer it. One line, at most 300 characters; data.
+   */
+  opener: lenient(
+    z
+      .string()
+      .max(2000)
+      .transform((value) => value.replace(/\s+/g, " ").trim().slice(0, 300))
+      .pipe(z.string().min(1)),
+  ),
+  trips: tripsSnapshotSchema.optional(),
+  /**
+   * The trip regions live on park.fan, as the site's region registry marks them: the one switch a
+   * region flips at go-live, which also opens its hub. Parky plans, changes and links these only.
+   * Absent (a widget from before 2.21.0): every region, as before.
+   */
+  liveRegions: lenient(
+    z
+      .array(z.string().regex(/^[a-z0-9-]{1,40}$/))
+      .max(LIVE_REGIONS_MAX)
+      .transform((slugs) => [...new Set(slugs)]),
+  ),
+  interview: lenient(interviewSnapshotSchema),
   alerts: lenient(alertsSnapshotSchema),
   favorites: lenient(favoritesSnapshotSchema),
   ridden: riddenSnapshotSchema.optional(),

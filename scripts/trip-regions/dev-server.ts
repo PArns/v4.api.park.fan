@@ -3,8 +3,9 @@
  * they are deployed, on production data. The frontend points its API base at
  * http://localhost:3001 and gets:
  *
- * - `GET /v1/trip-regions/:region`, `/calendar`, `/best-days`, `/plan`,
- *   `/when`, `/school-breaks`, `/tickets`
+ * - `GET /v1/trip-regions` (the list), and per region `GET /v1/trip-regions/:region`,
+ *   `/calendar`, `/best-days`, `/plan`, `/when`, `/school-breaks`, `/tickets`,
+ *   for every region of `regions.ts`
  * - `POST /v1/parks/:continent/:country/:city/:park/plan/optimize`
  *
  * answered by the same modules the API runs (`trip-region.assembly`,
@@ -27,9 +28,12 @@
  *   the shim re-starts itself with it when a proxy is configured.
  * - **Seasons:** production has no Orlando seasons yet. `DEV_SEASONS_FILE`
  *   adds the rows of a researcher's JSON (the shape
- *   `import-seasons.mjs` reads), skipping a row without an end date and one
- *   production already has.
+ *   `import-seasons.mjs` reads), skipping a row without an end date, one
+ *   production already has and one whose `region` is another region's (the
+ *   Paris file's Disneyland Park is not Anaheim's).
  * - **Cache:** each fetched park answer is kept 15 minutes in memory.
+ * - **Accuracy:** `/accuracy` reads the lead-time archive, which only the
+ *   database holds, so the shim passes it to production like any other path.
  * - **Tickets:** the shim has no database, so its ticket catalog is the seed
  *   (`tickets.ts` with `ticket-seed-links.ts`, `seedCatalog`), put on the region
  *   explicitly like `TicketCatalogService.withTickets` puts the table's. An
@@ -40,7 +44,7 @@
  *   no `forecastUntil` (it is the warmup's Redis key) and no group name from
  *   the `destinations` table (the curated names stand in); the day optimizer
  *   gets no `ridesInWorks` and its request is not validated. `/when` reads its
- *   climate normals off Magic Kingdom's calendar days marked `climate_normal`,
+ *   climate normals off the region's climate park's calendar days marked `climate_normal`,
  *   so the first two weeks (a forecast there) have none; its school coverage
  *   is what OpenHolidays holds for the next two years, not the database's.
  */
@@ -59,7 +63,12 @@ import {
   addIsoDays,
   getCurrentDateInTimezone,
 } from "../../src/common/utils/date.util";
-import { findRegion, type RegionConfig } from "../../src/trip-regions/regions";
+import {
+  findRegion,
+  TRIP_REGIONS,
+  type RegionConfig,
+} from "../../src/trip-regions/regions";
+import { MAX_TRIP_DAYS } from "../../src/trip-regions/trip-optimizer";
 import {
   seedCatalog,
   ticketCatalogResponse,
@@ -72,6 +81,7 @@ import {
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
+  summarizeRegion,
   validateWindow,
   type InternalRegionCalendar,
   type ParkCalendarSource,
@@ -101,7 +111,7 @@ import {
 import { runDayOptimizer } from "../../src/planner/day-optimizer/engine";
 import { findTripDates } from "../../src/trip-regions/trip-when";
 import {
-  CLIMATE_REFERENCE_PARK,
+  climateParkOf,
   normalizeWhenQuery,
   whenRange,
 } from "../../src/trip-regions/trip-when.assembly";
@@ -225,6 +235,8 @@ async function regionParks(region: RegionConfig): Promise<RegionParkRecord[]> {
 }
 
 interface DevSeasonRow {
+  /** The trip region whose park the row means, where the slug repeats (Disneyland Park). */
+  region?: string | null;
   parkSlug: string;
   kind: string;
   name?: string | null;
@@ -252,6 +264,7 @@ async function seasonsFor(
   park: RegionParkRecord,
   from: string,
   to: string,
+  regionSlug: string,
 ): Promise<RegionSeasonSource[]> {
   const live = await upstreamJson<{ seasons: RegionSeasonSource[] }>(
     `${parkBase(park.config)}/seasons?from=${from}&to=${to}`,
@@ -259,6 +272,7 @@ async function seasonsFor(
   const out = live.seasons.map((s) => ({ ...s, parkId: park.id }));
   devSeasons().forEach((row, i) => {
     if (row.parkSlug !== park.slug || !row.endDate) return;
+    if (row.region != null && row.region !== regionSlug) return;
     if (row.startDate > to || row.endDate < from) return;
     const known = out.some(
       (s) =>
@@ -371,7 +385,7 @@ async function regionCalendar(
     }),
   );
   const seasons = (
-    await Promise.all(parks.map((p) => seasonsFor(p, from, to)))
+    await Promise.all(parks.map((p) => seasonsFor(p, from, to, region.slug)))
   ).flat();
   return assembleRegionCalendar({
     region,
@@ -469,7 +483,7 @@ async function climateOf(
   from: string,
   to: string,
 ): Promise<ClimateNormals | null> {
-  const config = region.parks.find((p) => p.slug === CLIMATE_REFERENCE_PARK);
+  const config = region.parks.find((p) => p.slug === climateParkOf(region));
   if (!config) return null;
   const ref = referenceRange(from, to);
   const calendar = await parkCalendar(parkBase(config), ref.from, ref.to).catch(
@@ -546,6 +560,15 @@ async function readBody(req: IncomingMessage): Promise<Buffer> {
 
 /** The routes the shim answers itself; null for everything it passes on. */
 async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
+  if (/^\/v1\/trip-regions\/?$/.test(url.pathname) && req.method === "GET") {
+    return {
+      regions: await Promise.all(
+        Object.values(TRIP_REGIONS).map(async (region) =>
+          summarizeRegion(region, await regionParks(region), MAX_TRIP_DAYS),
+        ),
+      ),
+    };
+  }
   const trip =
     /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|when|school-breaks|tickets))?\/?$/.exec(
       url.pathname,
@@ -598,7 +621,7 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
           calendar: await regionCalendar(region, from, to),
           query: normalized,
           climate: await climateOf(region, from, to),
-          climatePark: CLIMATE_REFERENCE_PARK,
+          climatePark: climateParkOf(region),
           clock: () => performance.now(),
         });
         return {

@@ -107,22 +107,30 @@ import {
   TripRegionService,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import { TripAccuracyService } from "../../trip-regions/trip-accuracy.service";
+import { TripRequestMetricsService } from "../../trip-regions/metrics/trip-request-metrics.service";
+import type { TripMetricRoute } from "../../trip-regions/metrics/trip-request-facts";
+import type { AssistantToolErrorKind } from "../entities/assistant-message.entity";
 import {
   TICKETS_PATTERN,
   type TripPlanQueryDto,
 } from "../../trip-regions/dto/trip-region-query.dto";
 import {
-  HOTEL_KINDS,
+  findRegion,
   hotelPoint,
   ORLANDO,
   regionOfPark,
+  MOVE_BUFFER_OPTIONS,
+  stayRulesOf,
+  TRIP_REGIONS,
+  type RegionConfig,
 } from "../../trip-regions/regions";
 import {
   MAX_PARK_DAYS,
   MAX_TRIP_DAYS,
   MAX_VISITS_PER_PARK,
 } from "../../trip-regions/trip-optimizer";
-import { buildLegs, findLeg, regionMatrix } from "../../trip-regions/travel";
+import { buildLegs, findLeg } from "../../trip-regions/travel";
 import {
   closeMinute,
   closesEarly,
@@ -142,19 +150,46 @@ import {
 } from "../../trip-regions/trip-when";
 import type { TripWhenQueryDto } from "../../trip-regions/dto/trip-when.dto";
 import {
-  heatAndHurricaneWatch,
-  HUB_PATH,
+  heatAndStormWatch,
   hubPath,
+  hubPathOf,
+  luggagePhrase,
   regionParkFor,
   seasonsSummary,
   slotsSummary,
   travelSummary,
   tripDatesSummary,
   vacationItinerary,
+  weekdayOf,
   type AmbiguousRegionPark,
   type RegionParkName,
   type SeasonRow,
+  type TripPlanLike,
 } from "./assistant-trip";
+import {
+  changeTripParams,
+  clockOfMinute,
+  entryMinute,
+  interviewCore,
+  interviewGuide,
+  interviewHolds,
+  nextInterviewStep,
+  openRefinements,
+  optimizerEntry,
+  pickTrip,
+  planQueryOf,
+  tripPlanChange,
+  tripSearchOf,
+  type TripChange,
+  type VisitorTrip,
+  waitAt,
+  writeTripQuery,
+} from "./assistant-plans";
+import { PlanOptimizeService } from "../../planner/plan-optimize.service";
+import type { PlanOptimizeRequestDto } from "../../planner/dto/plan-optimize.dto";
+import { cachedPlanDay } from "../../parks/services/plan-day-cache";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import type { Redis } from "ioredis";
 
 /** How long a session may not chat after Parky ended one of its chats. */
 export const CHAT_END_COOLDOWN_MINUTES = 15;
@@ -189,6 +224,13 @@ import {
   type PostCardRow,
 } from "./assistant-actions";
 import {
+  DAY_INTERVIEW_CORE,
+  DAY_INTERVIEW_REFINE,
+  INTERVIEW_REFINE,
+  type InterviewSnapshot,
+  type InterviewStep,
+  TRIP_INTERVIEW_CORE,
+  TRIP_INTERVIEW_REFINE,
   plannerClock,
   plannerEntryId,
   plannerPrefs,
@@ -309,6 +351,15 @@ export interface AssistantToolContext {
   notePark?: (timezone: string) => void;
   /** The visitor's trip planner as the browser sent it; the only source of entry ids. */
   planner?: PlannerSnapshot | null;
+  /** The visitor's trips, one per region, the on-screen one first (`visitorTrips`). */
+  trips?: readonly VisitorTrip[];
+  /**
+   * The trip regions live on park.fan, as the widget's registry marks them; absent (an older
+   * widget): every region. Parky plans, changes and links these only (`regionLive`).
+   */
+  liveRegions?: ReadonlySet<string>;
+  /** Parky's interview, while one runs, as the browser holds it. */
+  interview?: InterviewSnapshot | null;
   /** The browser's push state and alerts as it sent them. */
   alerts?: AlertsSnapshot | null;
   /** The ids of the favourites as the browser sent them. */
@@ -801,25 +852,33 @@ async function missingSection(
   return null;
 }
 
-/** The site's pages without one park, ride or post that `open_page` can open. */
+/**
+ * The site's pages without one park, ride or post that `open_page` can open. `day_planner` is the
+ * day planner (`/trip-planner` on the site); `trip_hub` a live region's hub with its trip planner.
+ */
 const SITE_PAGES = [
   "alerts",
   "best_time",
   "favorites",
-  "trip_planner",
+  "day_planner",
   "how_it_works",
   "fancast",
-  "orlando",
+  "trip_hub",
 ] as const;
-const SITE_PAGE_PATHS: Record<(typeof SITE_PAGES)[number], string> = {
+const SITE_PAGE_PATHS: Record<
+  Exclude<(typeof SITE_PAGES)[number], "trip_hub">,
+  string
+> = {
   alerts: "/alerts",
   best_time: "/best-time-to-visit",
   favorites: "/favorites",
-  trip_planner: "/trip-planner",
+  day_planner: "/trip-planner",
   how_it_works: "/how-park-fan-works",
   fancast: "/fancast",
-  orlando: HUB_PATH,
 };
+
+/** The region a hub path (`/trip-regions/<slug>…`) belongs to. */
+const HUB_REGION = /^\/trip-regions\/([a-z0-9-]+)/;
 
 /**
  * A post's or glossary term's page: `/<locale>/blog|news/<slug>`, or the glossary under its
@@ -1742,16 +1801,40 @@ function behindFullDays<
   return out;
 }
 
-/** The hotel areas `plan_vacation` and `get_travel_time` take. */
-const ORLANDO_AREAS = ORLANDO.hotelAreas.map((area) => area.key) as [
-  string,
-  ...string[],
-];
+/** The trip regions the trip tools take (`region`), Orlando first. */
+const REGION_SLUGS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
 
-/** The resorts plan first's hopper is given per resort (`hopper=`). */
-const ORLANDO_RESORTS = ORLANDO.groups
-  .filter((g) => g.kind === "resort")
-  .map((g) => g.key) as [string, ...string[]];
+/** The trip regions' names in one phrase: "Orlando", "Orlando, Japan and Paris". */
+function tripRegionNames(): string {
+  const names = Object.values(TRIP_REGIONS).map((r) => r.name);
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The `region` every trip tool takes; Orlando without it, as before regions were many. */
+const regionInput = z
+  .enum(REGION_SLUGS)
+  .optional()
+  .describe(`The trip region: ${REGION_SLUGS.join(", ")}; default orlando`);
+
+/** A hotel kind, validated by the region (Orlando's in the description). */
+const hotelInput = z
+  .string()
+  .regex(/^[a-z0-9_]+$/)
+  .optional()
+  .describe(
+    `Whose perks count; default the area's. Orlando: ${Object.keys(ORLANDO.perks).join(", ")}`,
+  );
+
+/** A hotel area of the region, validated by it (Orlando's in the description). */
+const areaInput = z
+  .string()
+  .regex(/^[a-z0-9_-]+$/)
+  .optional()
+  .describe(
+    `Where they stay, a hotel area of the region. Orlando: ${ORLANDO.hotelAreas.map((a) => a.key).join(", ")}`,
+  );
 
 /**
  * How Parky writes the tickets a visitor holds: the compact form of `tickets=`
@@ -1760,22 +1843,42 @@ const ORLANDO_RESORTS = ORLANDO.groups
 const TICKETS_DESCRIPTION =
   "Tickets they already have, comma-separated: product[.days][.h|.h?][@first day]. .h: with " +
   "Park Hopper or park-to-park; .h?: they don't know (planned without, the result says what " +
-  "it would add). Products: wdw-date-based.1-10, wdw-date-based-plus.2-10 (water parks), " +
+  "it would add). Orlando's products: wdw-date-based.1-10, wdw-date-based-plus.2-10 (water parks), " +
   "wdw-uk-14-day-magic, wdw-uk-7-day-magic, wdw-4-park-magic, wdw-annual-pass, " +
   "uor-date-based.1-5, uor-date-based-volcano-bay.3-5, uor-1-day-plus-epic, uor-epic-1-day, " +
   "uor-uk-all-parks, uor-uk-three-park-adventure, uor-annual-pass, seaworld-1-day, " +
   "seaworld-two-park, seaworld-three-park-3-day, seaworld-uk-3-visit, discovery-cove, " +
-  "legoland-1-day, legoland-2-day; the rest in the Orlando hub's ticket list. Without a " +
-  "first day the plan picks it";
+  "legoland-1-day, legoland-2-day; the rest in the Orlando hub's ticket list. Another " +
+  "region's ids: an unknown id is answered with the region's list. Without a first day the plan picks it";
 
 /** The days `get_park_events` reads when given no end: a month. */
 const DEFAULT_EVENT_DAYS = 31;
 
-/** The Orlando region and its parks as the database has them, named as the site names them. */
-async function orlando(ctx: AssistantToolContext) {
+/** Whether a trip region is live on park.fan, so Parky may plan, change and link it. */
+export function regionLive(
+  ctx: Pick<AssistantToolContext, "liveRegions">,
+  slug: string,
+): boolean {
+  return !ctx.liveRegions || ctx.liveRegions.has(slug);
+}
+
+/** The refusal for a region not live yet: its hub is not on the site, so nothing links there. */
+function comingRegion(slug: string): McpToolError {
+  const name = TRIP_REGIONS[slug]?.name ?? slug;
+  return new McpToolError(
+    `${name}'s trip planner is not on park.fan yet; it opens later. Do not plan, offer or link a ${name} trip: say it is coming, and help with what park.fan has`,
+  );
+}
+
+/**
+ * A trip region and its parks as the database has them, named as the site names them; a region
+ * not live yet is refused (`regionLive`).
+ */
+async function tripRegion(ctx: AssistantToolContext, slug = ORLANDO.slug) {
+  if (!regionLive(ctx, slug)) throw comingRegion(slug);
   const regions = ctx.get(TripRegionService);
   // With its ticket catalog: the product names and links Parky gives are the admin's.
-  const region = await regions.regionWithTickets(ORLANDO.slug);
+  const region = await regions.regionWithTickets(slug);
   const resolved = await regions.resolveParks(region);
   const parks: RegionParkName[] = resolved.map(({ config, park }) => ({
     slug: config.slug,
@@ -1792,10 +1895,11 @@ async function orlando(ctx: AssistantToolContext) {
 }
 
 /**
- * The Orlando park a reference names, else the candidates. A park elsewhere is refused with
- * `elsewhere`, so the model says what is missing instead of guessing.
+ * The region park a reference names, else the candidates. A park elsewhere is refused with
+ * `elsewhere`, and a park of another trip region names that region, so the model says what is
+ * missing, or calls again with the right region, instead of guessing.
  */
-async function orlandoPark(
+async function regionPark(
   ctx: AssistantToolContext,
   reference: string,
   parks: readonly RegionParkName[],
@@ -1806,24 +1910,200 @@ async function orlandoPark(
   const found = await resolvePark(mcp(ctx), reference);
   if (isAmbiguous(found)) return found;
   const inRegion = parks.find((p) => p.id === found.id);
-  if (!inRegion) throw new McpToolError(`${found.name}: ${elsewhere}`);
+  if (!inRegion) {
+    const other = regionOfPark(found);
+    if (other && !regionLive(ctx, other.slug)) throw comingRegion(other.slug);
+    throw new McpToolError(
+      other
+        ? `${found.name} is in the trip region ${other.slug}: call again with region ${other.slug}`
+        : `${found.name}: ${elsewhere}`,
+    );
+  }
   return inRegion;
 }
 
-/** An Orlando park's heat and hurricane warnings on a compared day; nothing elsewhere. */
-function orlandoWatch(
+/** A trip region park's heat and storm warnings on a compared day; nothing elsewhere. */
+function regionWatch(
   park: Park,
   day: { date?: string; weather?: { tempMax?: number; basis?: string } | null },
 ): { watch?: string[] } {
   const region = regionOfPark(park);
   const config = region?.parks.find((p) => p.slug === park.slug);
-  if (!config || !day.date) return {};
-  const watch = heatAndHurricaneWatch(
+  if (!region || !config || !day.date) return {};
+  const watch = heatAndStormWatch(
+    region,
     day.date,
     day.weather,
     config.type === "theme_park",
   );
   return watch.length > 0 ? { watch } : {};
+}
+
+/**
+ * A trip's plan as the model retells it (`vacationItinerary`): normalized and planned by the plan
+ * route's own service, an hour in Redis by the normalized query, so the planner's own request and
+ * Parky's read share one plan. A 400 is a refusal the model reads.
+ */
+async function itineraryOf(
+  ctx: AssistantToolContext,
+  trip: Awaited<ReturnType<typeof tripRegion>>,
+  query: TripPlanQueryDto,
+  /** A tool's plan is recorded as his; the digest of the trip on screen, read each question, is not. */
+  measured = true,
+) {
+  const { regions, region, parks, names } = trip;
+  const plans = ctx.get(TripPlanService);
+  const normalized = await tripCall(() => plans.normalize(region.slug, query));
+  const plan = await tripCall(() =>
+    measured
+      ? parkyTripCall(ctx, "plan", region.slug, () =>
+          plans.plan(region.slug, query),
+        )
+      : plans.plan(region.slug, query),
+  );
+  // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
+  const calendar = await regions.internalCalendar(
+    region,
+    normalized.from,
+    normalized.to,
+  );
+  return vacationItinerary({
+    plan,
+    calendar,
+    query: normalized,
+    region,
+    names,
+    ids: new Map(parks.map((p) => [p.slug, p.id])),
+  });
+}
+
+/**
+ * The plan of the visitor's trip in a region, for "This chat"'s digest: null when the trip has no
+ * dates or the plan route refuses it.
+ */
+export async function visitorTripItinerary(
+  ctx: AssistantToolContext,
+  trip: VisitorTrip,
+): Promise<ReturnType<typeof vacationItinerary> | null> {
+  const query = planQueryOf(trip.params);
+  if (!query) return null;
+  return itineraryOf(
+    ctx,
+    await tripRegion(ctx, trip.region.slug),
+    query,
+    false,
+  );
+}
+
+/** The visitor's trip a trip tool means, or a refusal that says what is missing. */
+function visitorTrip(ctx: AssistantToolContext, region?: string): VisitorTrip {
+  const trips = ctx.trips ?? [];
+  const trip = pickTrip(trips, region);
+  if (trip) return trip;
+  throw new McpToolError(
+    trips.length > 1
+      ? `The user has trips in ${trips.map((t) => t.region.slug).join(" and ")}: call again with region`
+      : "The user has no trip in the trip planner; plan_vacation plans one, change_trip with dates starts one in their planner",
+  );
+}
+
+/**
+ * The plan route's refusals the trip planner shows as a problem with a way out rather than an
+ * error: more visits than the days hold. A change that leads there is still made.
+ */
+const PLANNER_PROBLEM = /^More park visits|park visits$/;
+
+/** A region with bases: the stays a visitor fixes, as the planner's `bases=`. */
+const basesInput = z
+  .string()
+  .regex(
+    /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?){0,9}$/,
+  )
+  .optional()
+  .describe(
+    "A region with bases (Japan, Paris): the stays they fixed, base[:nights][@hotel area], comma-separated; :0 means no night there (its parks a day trip); the plan picks the rest. In change_trip the whole list, empty clears it",
+  );
+
+/** A base of a region with bases, by its key (`tokyo`, `disneyland-paris`). */
+const baseInput = z
+  .string()
+  .regex(/^[a-z0-9-]+$/)
+  .optional();
+
+/** An airport or station a region's bases are reached from, by its code. */
+const gatewayInput = z
+  .string()
+  .regex(/^[A-Za-z]{3,4}$/)
+  .optional();
+
+/**
+ * The base a gateway starts or ends a trip in: the one base that lists it, or none (the plan
+ * picks) where several do, as the planner maps "you land in" (trip-regions.md#bases).
+ */
+export function gatewayBase(region: RegionConfig, code: string): string {
+  const wanted = code.toUpperCase();
+  const served = (region.bases ?? []).filter((b) =>
+    (b.gateways ?? []).some((g) => g.code === wanted),
+  );
+  if (served.length === 0) {
+    const codes = (region.bases ?? []).flatMap((b) =>
+      (b.gateways ?? []).map((g) => `${g.code} (${g.name})`),
+    );
+    throw new McpToolError(
+      `${wanted} is not a way into ${region.name}: ${[...new Set(codes)].join(", ")}`,
+    );
+  }
+  return served.length === 1 ? served[0].key : "";
+}
+
+/** The nights the plan's stay suggestion fixes, read off the plan route's own answer (cached). */
+async function staySuggestionOf(
+  ctx: AssistantToolContext,
+  region: string,
+  query: TripPlanQueryDto,
+): Promise<Record<string, number> | null> {
+  const plan = (await tripCall(() =>
+    ctx.get(TripPlanService).plan(region, query),
+  )) as unknown as TripPlanLike;
+  const suggestion = plan.meta.staySuggestion as
+    { nights?: Record<string, number> } | undefined;
+  return suggestion?.nights && Object.keys(suggestion.nights).length > 0
+    ? suggestion.nights
+    : null;
+}
+
+/**
+ * A region with bases: the minutes a hotel change takes on top of the train, the visitor's choice
+ * (PAR-1304); the region's own without it.
+ */
+const moveBufferInput = z
+  .union([z.literal(30), z.literal(60), z.literal(90), z.literal(120)])
+  .optional()
+  .describe(
+    "A region with bases: minutes for each hotel change on top of the train; 30 with bags sent ahead by courier, 60 carried along, 90 or 120 for a slower pace. Default the region's (Japan 30)",
+  );
+
+/**
+ * A trip route's service called for one of Parky's tools, recorded in the
+ * route's metrics as his (`caller: parky`,
+ * docs/frontend/trip-regions.md#what-the-server-records). Without the metrics
+ * (a spec's context) it only runs.
+ */
+function parkyTripCall<T>(
+  ctx: AssistantToolContext,
+  route: TripMetricRoute,
+  region: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  let metrics: TripRequestMetricsService | undefined;
+  try {
+    metrics = ctx.get(TripRequestMetricsService);
+  } catch {
+    metrics = undefined;
+  }
+  return metrics
+    ? metrics.measure({ route, region, caller: "parky" }, run)
+    : run();
 }
 
 /** A trip route's 400 or 404 as a refusal the model reads. */
@@ -2713,7 +2993,7 @@ export const ASSISTANT_TOOLS = [
         expectedPeakWaitMinutes: d.expectedPeakWaitMinutes,
         holiday: d.holiday,
         schoolVacation: d.schoolVacation,
-        ...orlandoWatch(park, d),
+        ...regionWatch(park, d),
       });
       // Past a park's published schedule its status is the calendar's estimate, never a fact.
       const inSchedule = known.filter((d) => "published" in d && d.published);
@@ -2916,15 +3196,18 @@ export const ASSISTANT_TOOLS = [
     name: "plan_vacation",
     status: "forecast",
     description:
-      "An Orlando trip day by day: which park when, so the big rides queue least, with rest " +
-      "days, hotel perks and party nights. Per day the parks with headlinerWait, crowd level, " +
-      "basis, hours, perks, events, travel and why, and evening where the park closes early " +
-      "(a second park with a hopper ticket, else a free venue); totals; hubUrl (the Orlando hub with this " +
-      "plan) and reserve (plan_trip's days). Up to 21 days and 16 visits; parks default to the " +
-      "7 big Disney and Universal parks. With tickets they already have, each ticket's valid dates " +
-      "and days bind the plan (tickets); without, ticketsToBuy says which ticket the plan needs " +
-      "per resort and whether a hopper is worth adding.",
+      "A trip in a trip region (Orlando by default) day by day: which park when, so the big " +
+      "rides queue least, with rest days, hotel perks and party nights. Per day the parks with " +
+      "headlinerWait, crowd level, basis, hours, perks, events, travel and why, and evening where " +
+      "the park closes early (a second park with a hopper ticket, else a free venue); totals; " +
+      "parksLeftOut with leftOutFixes where the chosen parks outnumber the park days; " +
+      "hubUrl (the region's hub with this plan) and reserve (plan_trip's days). Up to 21 days and " +
+      "16 visits; parks default to the region's headliners (Orlando: the 7 big Disney and " +
+      "Universal parks). With tickets they already have, each ticket's valid dates and days bind " +
+      "the plan (tickets); without, ticketsToBuy says which ticket the plan needs per resort and " +
+      "whether a hopper is worth adding.",
     input: z.object({
+      region: regionInput,
       from: isoDay.describe("Arrival day"),
       to: isoDay.describe("Departure day"),
       parks: z
@@ -2937,11 +3220,8 @@ export const ASSISTANT_TOOLS = [
         .min(1)
         .max(MAX_PARK_DAYS)
         .optional(),
-      hotel: z
-        .enum(HOTEL_KINDS)
-        .optional()
-        .describe("Whose perks count; default the area's"),
-      area: z.enum(ORLANDO_AREAS).optional().describe("Where they stay"),
+      hotel: hotelInput,
+      area: areaInput,
       blocks: z.boolean().optional().describe("Each resort's days together"),
       fireworks: z
         .enum(["want", "any"])
@@ -2961,9 +3241,11 @@ export const ASSISTANT_TOOLS = [
           "Without tickets: hopper plans every resort with Disney Park Hopper or Universal park-to-park (Universal Studios and Islands of Adventure, not Epic); base (default): one park a day",
         ),
       hopper: z
-        .array(z.enum(ORLANDO_RESORTS))
+        .array(z.string().regex(/^[a-z0-9-]+$/))
         .optional()
-        .describe("Without tickets: the resorts planned with the hopper"),
+        .describe(
+          "Without tickets: the resorts planned with the hopper (Orlando: walt-disney-world, universal-orlando)",
+        ),
       tickets: z
         .string()
         .regex(TICKETS_PATTERN)
@@ -2975,6 +3257,20 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "Two parks of a resort a day, for more visits than days; needs a hopper",
         ),
+      bases: basesInput,
+      startBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe(
+          "A region with bases: where they land (the base of the airport)",
+        ),
+      endBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe("A region with bases: where they fly home from"),
+      moveBuffer: moveBufferInput,
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       locks: z
@@ -2994,14 +3290,17 @@ export const ASSISTANT_TOOLS = [
           `A plan covers at most ${MAX_TRIP_DAYS} days, arrival and departure included; plan the trip in parts`,
         );
       }
-      const { regions, region, parks, names } = await orlando(ctx);
+      const { regions, region, parks, names } = await tripRegion(
+        ctx,
+        input.region,
+      );
       ctx.notePark?.(region.timezone);
-      const orlandoOnly = "plan_vacation plans the Orlando parks only";
+      const orlandoOnly = `plan_vacation plans the ${region.name} parks only`;
       let parkList: string | undefined;
       if (input.parks) {
         const visits = new Map<string, number>();
         for (const { park: reference, visits: count } of input.parks) {
-          const found = await orlandoPark(ctx, reference, parks, orlandoOnly);
+          const found = await regionPark(ctx, reference, parks, orlandoOnly);
           if ("ambiguous" in found) return found;
           visits.set(
             found.slug,
@@ -3021,7 +3320,7 @@ export const ASSISTANT_TOOLS = [
           locks.push(`rest@${lock.date}`);
           continue;
         }
-        const found = await orlandoPark(ctx, lock.park, parks, orlandoOnly);
+        const found = await regionPark(ctx, lock.park, parks, orlandoOnly);
         if ("ambiguous" in found) return found;
         locks.push(`${found.slug}@${lock.date}`);
       }
@@ -3035,6 +3334,10 @@ export const ASSISTANT_TOOLS = [
         area: input.area,
         arrival: input.arrival,
         departure: input.departure,
+        bases: input.bases,
+        startBase: input.startBase,
+        endBase: input.endBase,
+        moveBuffer: input.moveBuffer,
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
         rest: input.rest,
@@ -3044,25 +3347,531 @@ export const ASSISTANT_TOOLS = [
         hop: flag(input.hop),
         lock: locks.length > 0 ? locks.join(",") : undefined,
       };
-      const plans = ctx.get(TripPlanService);
-      const normalized = await tripCall(() =>
-        plans.normalize(region.slug, query),
+      return itineraryOf(ctx, { regions, region, parks, names }, query);
+    },
+  }),
+  // The visitor's own trip in the hub's planner: read it, change it, undo Parky's change
+  // (docs/frontend/assistant.md#the-visitors-plans).
+  tool({
+    name: "get_trip_plan",
+    status: "forecast",
+    description:
+      "The user's own trip in the trip planner (This chat names it): the plan day by day as " +
+      "plan_vacation gives one (parks, headlinerWait, hours, party nights, why, watch, evening, " +
+      "tickets, ticketsToBuy, season, stays, parksLeftOut with leftOutFixes, visitsDropped, " +
+      "pinsNotKept, hubUrl, reserve), plus the party " +
+      "they told you. region only when they have trips in several.",
+    input: z.object({ region: regionInput }),
+    run: async ({ region }, ctx) => {
+      const trip = visitorTrip(ctx, region);
+      const search = tripSearchOf(trip.params);
+      const query = planQueryOf(trip.params);
+      if (!query) {
+        throw new McpToolError(
+          search
+            ? `The trip has no dates yet: they are searching ${search.days} days between ${search.from} and ${search.to}${search.within ? ` in the school breaks of ${search.within}` : ""}; find_trip_dates answers that`
+            : "The trip has no dates yet: ask for them, then change_trip with dates",
+        );
+      }
+      ctx.notePark?.(trip.region.timezone);
+      const plan = await itineraryOf(
+        ctx,
+        await tripRegion(ctx, trip.region.slug),
+        query,
       );
-      const plan = await tripCall(() => plans.plan(region.slug, query));
-      // The plan read this calendar a moment ago: an hour in Redis, so this is a cache hit.
-      const calendar = await regions.internalCalendar(
-        region,
-        normalized.from,
-        normalized.to,
+      return {
+        ...(trip.onScreen
+          ? { shown: "on screen in the hub's planner now" }
+          : { shown: "remembered by this browser; the hub opens it" }),
+        ...(trip.party && { party: trip.party }),
+        ...plan,
+      };
+    },
+  }),
+  tool({
+    name: "change_trip",
+    status: "forecast",
+    description:
+      "Change the user's trip in the trip planner; the planner shows the change and an undo. " +
+      "Any of: dates; parks (visits 1-3 sets a park, 0 removes it; the others stay); pin (a " +
+      'park or "rest" on a date: "Magic Kingdom on Thursday", "a rest day on the 6th"); unpin ' +
+      "(dates); swap (two dates trade what is on them); rest (auto, none, max:n park days in a " +
+      "row); tickets (the compact form, empty clears); hotel, area; hopper (resorts); fireworks; " +
+      "evenings; arrival, departure (park: a park that day); search (look for the best dates " +
+      "instead, as the planner's date finder: the dates go). A region with bases (Japan, Paris), " +
+      "the route: bases (the stays they fix: city, nights, hotel area), startBase or endBase " +
+      "(the city they land in or fly home from), landAt or leaveFrom (an airport or station " +
+      "code; it picks the city where only one is served from it), moveBuffer, " +
+      "applyStaySuggestion (the plan's staySuggestion). Without a trip, dates, parks or search " +
+      "start one. The result says which days moved, the big rides' wait before and after, the " +
+      "stays before and after, and parksLeftOut with leftOutFixes.",
+    input: z.object({
+      region: regionInput,
+      dates: z.object({ from: isoDay, to: isoDay }).optional(),
+      parks: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            visits: z.number().int().min(0).max(MAX_VISITS_PER_PARK),
+          }),
+        )
+        .min(1)
+        .max(MAX_PARK_DAYS)
+        .optional(),
+      pin: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120).describe('A park, or "rest"'),
+            date: isoDay,
+          }),
+        )
+        .min(1)
+        .max(MAX_TRIP_DAYS)
+        .optional(),
+      unpin: z.array(isoDay).min(1).max(MAX_TRIP_DAYS).optional(),
+      swap: z.object({ a: isoDay, b: isoDay }).optional(),
+      rest: z
+        .string()
+        .regex(/^(auto|none|max:[1-9])$/)
+        .optional(),
+      tickets: z
+        .string()
+        .regex(TICKETS_PATTERN)
+        .or(z.literal(""))
+        .optional()
+        .describe(TICKETS_DESCRIPTION),
+      hotel: hotelInput,
+      area: areaInput,
+      hopper: z
+        .array(z.string().regex(/^[a-z0-9-]+$/))
+        .max(6)
+        .optional()
+        .describe("The resorts planned with a hopper; empty: none"),
+      fireworks: z.enum(["want", "any"]).optional(),
+      evenings: z
+        .boolean()
+        .optional()
+        .describe(
+          "An evening at a second park or a venue after an early close",
+        ),
+      arrival: z.enum(["free", "park"]).optional(),
+      departure: z.enum(["free", "park"]).optional(),
+      moveBuffer: moveBufferInput,
+      search: z
+        .object({
+          from: isoDay.describe("The range to search, its first day"),
+          to: isoDay.describe("Its last day"),
+          days: z.number().int().min(WHEN_MIN_DAYS).max(WHEN_MAX_DAYS),
+          within: z
+            .string()
+            .regex(/^[A-Z]{2}-[A-Za-z]{1,10}$/)
+            .optional()
+            .describe(
+              "Only in the school breaks of this region, as find_trip_dates",
+            ),
+        })
+        .optional()
+        .describe("Look for the best dates instead of planning given ones"),
+      bases: basesInput.or(z.literal("")),
+      startBase: baseInput
+        .or(z.literal(""))
+        .describe(
+          "A region with bases: where they land; empty, the plan picks",
+        ),
+      endBase: baseInput
+        .or(z.literal(""))
+        .describe(
+          "A region with bases: where they fly home from; empty, the plan picks",
+        ),
+      landAt: gatewayInput.describe(
+        "The airport or station they arrive at (HND, CDG, XED)",
+      ),
+      leaveFrom: gatewayInput.describe(
+        "The airport or station they leave from",
+      ),
+      applyStaySuggestion: z
+        .literal(true)
+        .optional()
+        .describe(
+          "Take the plan's staySuggestion: its nights become the fixed stays",
+        ),
+    }),
+    run: async (input, ctx) => {
+      const trips = ctx.trips ?? [];
+      const current = pickTrip(trips, input.region);
+      if (!current && !input.dates && !input.parks && !input.search) {
+        visitorTrip(ctx, input.region);
+      }
+      if (input.dates && input.search) {
+        throw new McpToolError("Give dates or a search, not both");
+      }
+      const slug =
+        current?.region.slug ?? input.region ?? pickTrip(trips)?.region.slug;
+      const trip = await tripRegion(ctx, slug);
+      const { region, parks } = trip;
+      ctx.notePark?.(region.timezone);
+      const elsewhere = `change_trip changes the ${region.name} trip only`;
+      const change: TripChange = {
+        ...(input.dates && { dates: input.dates }),
+        ...(input.unpin && { unpin: input.unpin }),
+        ...(input.swap && { swap: input.swap }),
+        ...(input.rest !== undefined && { rest: input.rest }),
+        ...(input.tickets !== undefined && { tickets: input.tickets }),
+        ...(input.hotel !== undefined && { hotel: input.hotel }),
+        ...(input.area !== undefined && { area: input.area }),
+        ...(input.hopper !== undefined && { hopper: input.hopper }),
+        ...(input.fireworks !== undefined && { fireworks: input.fireworks }),
+        ...(input.evenings !== undefined && { evenings: input.evenings }),
+        ...(input.arrival !== undefined && { arrival: input.arrival }),
+        ...(input.departure !== undefined && { departure: input.departure }),
+        ...(input.moveBuffer !== undefined && { moveBuffer: input.moveBuffer }),
+        ...(input.search && { search: input.search }),
+        ...(input.bases !== undefined && { bases: input.bases }),
+        ...(input.startBase !== undefined && { startBase: input.startBase }),
+        ...(input.endBase !== undefined && { endBase: input.endBase }),
+      };
+      const routeAsked =
+        input.bases !== undefined ||
+        input.startBase !== undefined ||
+        input.endBase !== undefined ||
+        input.landAt !== undefined ||
+        input.leaveFrom !== undefined ||
+        input.applyStaySuggestion !== undefined ||
+        input.moveBuffer !== undefined;
+      if (routeAsked && !region.bases?.length) {
+        throw new McpToolError(
+          `${region.name} has one base for the whole trip: the route, the stays and the hotel-change buffer are for a region with bases; hotel and area set where they stay`,
+        );
+      }
+      if (input.landAt) change.startBase = gatewayBase(region, input.landAt);
+      if (input.leaveFrom)
+        change.endBase = gatewayBase(region, input.leaveFrom);
+      if (input.parks) {
+        change.parks = [];
+        for (const { park: reference, visits } of input.parks) {
+          const found = await regionPark(ctx, reference, parks, elsewhere);
+          if ("ambiguous" in found) return found;
+          change.parks.push({ slug: found.slug, visits });
+        }
+      }
+      if (input.pin) {
+        change.pin = [];
+        for (const { park: reference, date } of input.pin) {
+          if (reference.trim().toLowerCase() === "rest") {
+            change.pin.push({ target: "rest", date });
+            continue;
+          }
+          const found = await regionPark(ctx, reference, parks, elsewhere);
+          if ("ambiguous" in found) return found;
+          change.pin.push({ target: found.slug, date });
+        }
+      }
+      const before = current ? planQueryOf(current.params) : null;
+      // A swap reads what is on each day, and the comparison needs the plan before: one plan,
+      // and the planner on screen asked for the same a moment ago.
+      const was = before
+        ? await itineraryOf(ctx, trip, before).catch(() => null)
+        : null;
+      if (input.applyStaySuggestion) {
+        const nights = before
+          ? await staySuggestionOf(ctx, region.slug, before)
+          : null;
+        if (!nights) {
+          throw new McpToolError(
+            "The plan has no stay suggestion: it shows one only where they fixed nights and another split saves time",
+          );
+        }
+        change.stayNights = nights;
+      }
+      let edited: ReturnType<typeof changeTripParams>;
+      try {
+        edited = changeTripParams(
+          current?.params ?? new URLSearchParams(),
+          change,
+          {
+            // A trip started here takes the parks named; a trip's own list starts from the defaults.
+            headliners: current
+              ? region.parks.filter((p) => p.headliner).map((p) => p.slug)
+              : [],
+            moveBufferDefault: stayRulesOf(region).moveOverheadMinutes,
+            days: was?.days.map((day) => ({
+              date: day.date,
+              kind: day.kind,
+              parks: (day.parks ?? []).map((p) => ({
+                slug:
+                  parks.find((park) => park.name === p.park)?.slug ??
+                  String(p.park),
+              })),
+            })),
+          },
+        );
+      } catch (error) {
+        throw new McpToolError((error as Error).message);
+      }
+      const after = planQueryOf(edited.params);
+      // The plan route checks the new trip; a refusal sends nothing to the planner. Too many
+      // visits for the days is the planner's own problem state, which it shows with its way out,
+      // so the change still lands: an interview sets the dates before the parks.
+      let plan: Awaited<ReturnType<typeof itineraryOf>> | null = null;
+      let problem: string | null = null;
+      if (after) {
+        try {
+          plan = await itineraryOf(ctx, trip, after);
+        } catch (error) {
+          if (
+            !(error instanceof McpToolError) ||
+            !PLANNER_PROBLEM.test(error.message)
+          ) {
+            throw error;
+          }
+          problem = error.message;
+        }
+      }
+      return new ActionOutcome(
+        {
+          type: "trip_set",
+          region: region.slug,
+          query: writeTripQuery(edited.params),
+          change: edited.kinds,
+        },
+        {
+          changed: edited.kinds,
+          shownIn: current?.onScreen
+            ? "the planner on screen, which re-plans"
+            : "the hub, which opens with it",
+          ...(plan
+            ? tripPlanChange(was, plan)
+            : problem
+              ? {
+                  notPlannedYet: `${problem}; the planner says the same with its way out, so the parks or the days come next`,
+                }
+              : { plan: "no dates yet, so nothing is planned" }),
+        },
       );
-      return vacationItinerary({
-        plan,
-        calendar,
-        query: normalized,
-        region,
-        names,
-        ids: new Map(parks.map((p) => [p.slug, p.id])),
-      });
+    },
+  }),
+  tool({
+    name: "trip_undo",
+    status: "planner",
+    description:
+      "Undo your last change to the user's trip. The planner refuses it when the user changed " +
+      "the trip since.",
+    input: z.object({ region: regionInput }),
+    run: (input, ctx) => {
+      const trip = visitorTrip(ctx, input.region);
+      return Promise.resolve(
+        new ActionOutcome(
+          { type: "trip_undo", region: trip.region.slug },
+          { undoing: trip.region.name },
+        ),
+      );
+    },
+  }),
+  // A region's own facts, its days at a glance, and how sure its forecast is.
+  tool({
+    name: "get_trip_region",
+    status: "forecast",
+    description:
+      "A live trip region's facts, for questions the plan tools do not answer: its resorts and " +
+      "parks (headliners marked), whose hotels give which perks, its hotel areas, in a region " +
+      "with bases the cities with their airports and stations and the hotel-change buffers, " +
+      "its ticket ids by resort, its storm season and its hub. Use its ids in plan_vacation " +
+      "and change_trip (tickets, hotel, area, bases, landAt).",
+    input: z.object({ region: regionInput }),
+    run: async ({ region: slug }, ctx) => {
+      const { region, names } = await tripRegion(ctx, slug);
+      const parkName = (p: string) => names.get(p) ?? p;
+      const groupName = (key: string) =>
+        region.groups.find((g) => g.key === key)?.name ?? key;
+      const baseOfArea = new Map(
+        (region.bases ?? []).flatMap((b) =>
+          b.hotelAreas.map((area) => [area, b.key] as const),
+        ),
+      );
+      const rules = stayRulesOf(region);
+      const storm = region.weather.storm;
+      return {
+        name: region.name,
+        hubUrl: `${getFrontendUrl()}${hubPathOf(region)}`,
+        resorts: region.groups.map((g) => ({
+          key: g.key,
+          name: g.name,
+          ...(g.kind === "day_trip" && { dayTrip: true }),
+          parks: region.parks
+            .filter((p) => p.group === g.key)
+            .map(
+              (p) => `${parkName(p.slug)}${p.headliner ? " (headliner)" : ""}`,
+            ),
+        })),
+        hotels: Object.entries(region.hotelNames).map(([kind, name]) => ({
+          kind,
+          whose: name,
+          perks: [
+            ...new Set(
+              (region.perks[kind] ?? []).map(
+                (rule) =>
+                  `${region.perkNames[rule.perk] ?? rule.perk} at ${rule.parks.map(parkName).join(", ")}`,
+              ),
+            ),
+          ],
+        })),
+        hotelAreas: region.hotelAreas.map((a) => ({
+          key: a.key,
+          name: a.name,
+          hotel: a.hotel,
+          ...(baseOfArea.has(a.key) && { base: baseOfArea.get(a.key) }),
+        })),
+        ...(region.bases?.length && {
+          bases: region.bases.map((b) => ({
+            key: b.key,
+            name: b.name,
+            ...(b.gateways?.length && {
+              gateways: b.gateways.map((g) => `${g.code} ${g.name}`),
+            }),
+            reaches: b.parks.map(
+              (p) => `${parkName(p.slug)} ${p.minutes} min by ${p.mode}`,
+            ),
+            ...(b.stayNote && { stay: b.stayNote }),
+          })),
+          moveBuffer: {
+            options: [...MOVE_BUFFER_OPTIONS],
+            default: rules.moveOverheadMinutes,
+          },
+          ...(luggagePhrase(region) && { luggage: luggagePhrase(region) }),
+          routeMeans:
+            "bases: city[:nights][@hotel area], :0 a day trip from elsewhere; a gateway listed under one city starts or ends the trip there (landAt, leaveFrom); moveBuffer: minutes for each hotel change on top of the train",
+        }),
+        tickets: (region.tickets ?? [])
+          .filter((t) => !t.archived)
+          .map(
+            (t) =>
+              `${t.id}: ${t.name} (${groupName(t.resort)}${t.days === "unlimited" ? ", unlimited days" : t.days.min === t.days.max ? `, ${t.days.min} days` : `, ${t.days.min}-${t.days.max} days`}${t.hopping !== "none" ? ", hopping" : ""})`,
+          ),
+        ...(storm && {
+          stormSeason: `${storm.kind} season, its peak ${storm.peak.from} to ${storm.peak.to} (month-day): the planner ranks windows there lower`,
+        }),
+      };
+    },
+  }),
+  tool({
+    name: "get_trip_days",
+    status: "forecast",
+    description:
+      "A live trip region's days at a glance, as its hub's calendar shows them: for each day " +
+      "of a span (default the next 31 days, at most 92), each resort's park to pick that day " +
+      "(the big rides' wait at their busiest, crowd level, why), and per resort its quietest " +
+      'and busiest days of the span. For "which days in March are best for Disney" or ' +
+      '"the quietest week"; resort narrows to one resort.',
+    input: z.object({
+      region: regionInput,
+      from: isoDay.optional(),
+      to: isoDay.optional(),
+      resort: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe("A resort key (get_trip_region), e.g. walt-disney-world"),
+    }),
+    run: async ({ region: slug, from, to, resort }, ctx) => {
+      const { regions, region, names } = await tripRegion(ctx, slug);
+      ctx.notePark?.(region.timezone);
+      const resorts = region.groups.filter(
+        (g) => g.kind === "resort" && (!resort || g.key === resort),
+      );
+      if (resorts.length === 0) {
+        throw new McpToolError(
+          `No resort ${resort} in ${region.name}: ${region.groups
+            .filter((g) => g.kind === "resort")
+            .map((g) => g.key)
+            .join(", ")}`,
+        );
+      }
+      const calendar = await tripCall(() =>
+        regions.calendar(region.slug, from, to),
+      );
+      const picks = resorts.map((g) => ({
+        key: g.key,
+        name: g.name,
+        days: calendar.days.flatMap((day) => {
+          const best = (day as { best?: Record<string, string> }).best?.[g.key];
+          const cell = best ? day.parks[best] : undefined;
+          if (!best || !cell || cell.headlinerWait == null) return [];
+          const why = (day as { bestWhy?: Record<string, string> }).bestWhy?.[
+            g.key
+          ];
+          return [
+            {
+              date: day.date,
+              park: names.get(best) ?? best,
+              wait: cell.headlinerWait,
+              crowd: cell.crowdLevel,
+              basis: cell.basis,
+              why,
+            },
+          ];
+        }),
+      }));
+      const line = (p: (typeof picks)[number]["days"][number]) =>
+        `${p.date} (${weekdayOf(p.date)}): ${p.park} ${p.wait} min, ${p.crowd}${p.why === "closes_early_elsewhere" ? ", the others close early" : ""}${p.basis === "long_range" ? ", long-range" : ""}`;
+      return {
+        region: region.name,
+        range: { from: calendar.meta.from, to: calendar.meta.to },
+        means:
+          "per resort the park to pick each day: the big rides' wait at their busiest in minutes (lower is quieter) and the crowd level; days with no forecast yet are left out",
+        resorts: picks.map((p) => {
+          const ranked = [...p.days].sort((a, b) => a.wait - b.wait);
+          return {
+            resort: p.name,
+            ...(ranked.length > 0
+              ? {
+                  quietest: ranked.slice(0, 3).map(line),
+                  busiest: ranked.slice(-3).reverse().map(line),
+                  days: p.days.map(line),
+                }
+              : {
+                  days: "no forecast in this span yet: get_park_events or find_trip_dates read further out",
+                }),
+          };
+        }),
+        holidays: calendar.days
+          .filter((d) => d.holidays?.length || d.isSchoolVacation)
+          .map(
+            (d) =>
+              `${d.date}: ${[...(d.holidays ?? []), ...(d.isSchoolVacation ? ["school break"] : [])].join(", ")}`,
+          ),
+      };
+    },
+  }),
+  tool({
+    name: "get_forecast_accuracy",
+    status: "forecast",
+    description:
+      "How accurate a live trip region's forecast was: the big rides' peak wait as forecast a " +
+      "week ahead against what each day did, the mean miss in minutes over the last 30 " +
+      'measured days. For "how sure are you", "how good is your forecast"; a plan\'s ' +
+      "totals.expectedError is the same measurement at its own lead times.",
+    input: z.object({ region: regionInput }),
+    run: async ({ region: slug }, ctx) => {
+      const { region } = await tripRegion(ctx, slug);
+      const { forecastAccuracy: a } = await tripCall(() =>
+        ctx.get(TripAccuracyService).accuracy(region.slug),
+      );
+      if (!a) {
+        return {
+          region: region.name,
+          accuracy: null,
+          why: "too few measured days yet for a fair figure; the Fancast page has the forecasts' track record",
+        };
+      }
+      return {
+        region: region.name,
+        accuracy: `a week ahead, the big rides' peak wait was off by ${a.maeMinutes} minutes on average, over ${a.parks} parks and the ${a.days} days ${a.from} to ${a.to}`,
+        leadDays: a.leadDays,
+        maeMinutes: a.maeMinutes,
+        means:
+          "the typical miss, not the largest; it grows with how far ahead the day is, and a day further out than about two months is estimated from last year, not forecast",
+        fancast: "open_page page fancast has the full track record",
+      };
     },
   }),
   // find_trip_dates: when to go, for a trip whose parks and length are known
@@ -3071,13 +3880,15 @@ export const ASSISTANT_TOOLS = [
     name: "find_trip_dates",
     status: "forecast",
     description:
-      "When to go to Orlando: ranks every trip window of the given length in a range (a year, " +
-      "or from/to; at most a year ahead) by the plan it would get, and returns the best windows " +
-      "with headlinerWait against the range's average, why, what to watch, events, lastYear " +
-      "where the figures are last year's, and hubUrl; plus the months. within: a school-holiday " +
-      "region code (DE-NW, NL-GR for the Dutch north, GB-ENG, BE-NL, BE-FR, FR-ZA/ZB/ZC, AT-WI, " +
-      "…) keeps the windows inside its breaks. Parks default to the 7 big Disney and Universal parks.",
+      "When to go to a trip region (Orlando by default): ranks every trip window of the given " +
+      "length in a range (a year, or from/to; at most a year ahead) by the plan it would get, and " +
+      "returns the best windows with headlinerWait against the range's average, why, what to " +
+      "watch, events, lastYear where the figures are last year's, and hubUrl; plus the months. " +
+      "within: a school-holiday region code (DE-NW, NL-GR for the Dutch north, GB-ENG, BE-NL, " +
+      "BE-FR, FR-ZA/ZB/ZC, AT-WI, ES-MD, IT-LO, …) keeps the windows inside its breaks. Parks " +
+      "default to the region's headliners.",
     input: z.object({
+      region: regionInput,
       year: z
         .number()
         .int()
@@ -3111,8 +3922,8 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "The visitor's school-holiday region, when they travel in school breaks",
         ),
-      hotel: z.enum(HOTEL_KINDS).optional(),
-      area: z.enum(ORLANDO_AREAS).optional(),
+      hotel: hotelInput,
+      area: areaInput,
       blocks: z.boolean().optional(),
       fireworks: z.enum(["want", "any"]).optional(),
       split: z.enum(["auto", "fixed"]).optional(),
@@ -3121,6 +3932,20 @@ export const ASSISTANT_TOOLS = [
         .regex(/^(auto|none|max:[1-9])$/)
         .optional(),
       hop: z.boolean().optional(),
+      bases: basesInput,
+      startBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe(
+          "A region with bases: where they land (the base of the airport)",
+        ),
+      endBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe("A region with bases: where they fly home from"),
+      moveBuffer: moveBufferInput,
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       limit: z.number().int().min(1).max(WHEN_MAX_LIMIT).optional(),
@@ -3137,7 +3962,10 @@ export const ASSISTANT_TOOLS = [
         .describe("Name the tickets each window's plan needs"),
     }),
     run: async (input, ctx) => {
-      const { regions, region, parks } = await orlando(ctx);
+      const { regions, region, parks, names } = await tripRegion(
+        ctx,
+        input.region,
+      );
       ctx.notePark?.(region.timezone);
       const today = regions.today(region);
       let from = input.from;
@@ -3156,11 +3984,11 @@ export const ASSISTANT_TOOLS = [
       if (input.parks) {
         const listed: string[] = [];
         for (const { park: reference, visits } of input.parks) {
-          const found = await orlandoPark(
+          const found = await regionPark(
             ctx,
             reference,
             parks,
-            "find_trip_dates covers the Orlando parks only",
+            `find_trip_dates covers the ${region.name} parks only`,
           );
           if ("ambiguous" in found) return found;
           listed.push(visits ? `${found.slug}:${visits}` : found.slug);
@@ -3184,12 +4012,18 @@ export const ASSISTANT_TOOLS = [
         hop: flag(input.hop),
         arrival: input.arrival,
         departure: input.departure,
+        bases: input.bases,
+        startBase: input.startBase,
+        endBase: input.endBase,
+        moveBuffer: input.moveBuffer,
         limit: input.limit,
         tickets: input.tickets,
         suggest: flag(input.suggest),
       };
       const result = await tripCall(() =>
-        ctx.get(TripWhenService).when(region.slug, query),
+        parkyTripCall(ctx, "when", region.slug, () =>
+          ctx.get(TripWhenService).when(region.slug, query),
+        ),
       );
       const normalized = await tripCall(() =>
         normalizeWhenQuery(
@@ -3199,7 +4033,12 @@ export const ASSISTANT_TOOLS = [
           today,
         ),
       );
-      return tripDatesSummary({ result, plan: normalized.plan, region });
+      return tripDatesSummary({
+        result,
+        plan: normalized.plan,
+        region,
+        names,
+      });
     },
   }),
   tool({
@@ -3207,17 +4046,19 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "The named seasons and events (food festivals, Christmas or Halloween party nights, " +
-      "Horror Nights, a closure) of one park, or of all Orlando parks without park, each " +
-      "confirmed, announced or expected (last year's pattern). For Orlando also the days with " +
-      "Early Entry, Early Park Admission, Extended Evening Hours and party nights, and when day " +
-      "guests leave. The next 31 days by default, up to 92.",
+      "Horror Nights, a closure) of one park, or of all parks of a trip region without park " +
+      "(Orlando by default), each confirmed, announced or expected (last year's pattern). For a " +
+      "trip region's parks also the days with an early slot (Orlando: Early Entry, Early Park " +
+      "Admission), Extended Evening Hours and party nights, and when day guests leave. The next " +
+      "31 days by default, up to 92.",
     input: z.object({
+      region: regionInput,
       park: z.string().min(2).max(120).optional(),
       from: isoDay.optional(),
       to: isoDay.optional(),
     }),
-    run: async ({ park: reference, from, to }, ctx) => {
-      const { regions, region, parks, names } = await orlando(ctx);
+    run: async ({ region: regionSlug, park: reference, from, to }, ctx) => {
+      let { regions, region, parks, names } = await tripRegion(ctx, regionSlug);
       let slug: string | null = null;
       let elsewhere: Park | null = null;
       if (reference) {
@@ -3229,8 +4070,17 @@ export const ASSISTANT_TOOLS = [
           const found = await resolvePark(mcp(ctx), reference);
           if (isAmbiguous(found)) return found;
           const inRegion = parks.find((p) => p.id === found.id);
+          const other = inRegion ? null : regionOfPark(found);
           if (inRegion) slug = inRegion.slug;
-          else elsewhere = found;
+          else if (other) {
+            // A park of another trip region reads that region's calendar.
+            ({ regions, region, parks, names } = await tripRegion(
+              ctx,
+              other.slug,
+            ));
+            slug = parks.find((p) => p.id === found.id)?.slug ?? null;
+            if (!slug) elsewhere = found;
+          } else elsewhere = found;
         }
       }
       if (elsewhere) {
@@ -3261,8 +4111,7 @@ export const ASSISTANT_TOOLS = [
             first,
             last,
           ),
-          slots:
-            "early and evening hours per day are known for the Orlando parks only; get_days has this park's days",
+          slots: `early and evening hours per day are known for the ${tripRegionNames()} parks only; get_days has this park's days`,
         };
       }
       ctx.notePark?.(region.timezone);
@@ -3288,6 +4137,7 @@ export const ASSISTANT_TOOLS = [
           slug ? [slug] : calendar.parks,
           names,
           region.timezone,
+          region,
         ),
         slotsWhy:
           "slots come with the published opening hours; a day past them lists none yet",
@@ -3298,34 +4148,41 @@ export const ASSISTANT_TOOLS = [
     name: "get_travel_time",
     status: "parks",
     description:
-      "Between two Orlando parks, or from a hotel area to a park: km and minutes of a drive " +
-      "without traffic, where it parks (Magic Kingdom: the TTC), and the resort's own " +
-      "transport (monorail, Skyliner, boat, bus, Hogwarts Express, walking). Orlando only.",
+      "Between two parks of a trip region (Orlando by default), or from a hotel area to a park: " +
+      "km and minutes of a drive without traffic, or the train where the region travels by " +
+      "rail, where a drive parks (Magic Kingdom: the TTC), and the resort's own transport " +
+      "(monorail, Skyliner, boat, bus, Hogwarts Express, walking). Trip regions only.",
     input: z.object({
+      region: regionInput,
       from: z.string().min(2).max(120).optional(),
-      area: z.enum(ORLANDO_AREAS).optional().describe("Instead of from"),
+      area: z
+        .string()
+        .regex(/^[a-z0-9_-]+$/)
+        .optional()
+        .describe(
+          `Instead of from, a hotel area of the region. Orlando: ${ORLANDO.hotelAreas.map((a) => a.key).join(", ")}`,
+        ),
       to: z.string().min(2).max(120),
     }),
-    run: async ({ from, area, to }, ctx) => {
+    run: async ({ region: regionSlug, from, area, to }, ctx) => {
       if (!from === !area) {
         throw new McpToolError("Give either from (a park) or area");
       }
-      const { region, parks } = await orlando(ctx);
-      const orlandoOnly =
-        "park.fan has travel times between the Orlando parks and from Orlando hotel areas only, none for this park";
-      const target = await orlandoPark(ctx, to, parks, orlandoOnly);
+      const { region, parks } = await tripRegion(ctx, regionSlug);
+      const orlandoOnly = `park.fan has travel times between the ${region.name} parks and from ${region.name} hotel areas only, none for this park`;
+      const target = await regionPark(ctx, to, parks, orlandoOnly);
       if ("ambiguous" in target) return target;
       let start: { point: string; name: string };
       if (area) {
         const hotelArea = region.hotelAreas.find((a) => a.key === area);
-        start = { point: hotelPoint(area), name: hotelArea?.name ?? area };
+        if (!hotelArea) {
+          throw new McpToolError(
+            `${area} is not a hotel area of ${region.name}: ${region.hotelAreas.map((a) => a.key).join(", ")}`,
+          );
+        }
+        start = { point: hotelPoint(area), name: hotelArea.name };
       } else {
-        const found = await orlandoPark(
-          ctx,
-          from as string,
-          parks,
-          orlandoOnly,
-        );
+        const found = await regionPark(ctx, from as string, parks, orlandoOnly);
         if ("ambiguous" in found) return found;
         start = { point: found.slug, name: found.name };
       }
@@ -3335,12 +4192,7 @@ export const ASSISTANT_TOOLS = [
       const leg = findLeg(buildLegs(region), start.point, target.slug);
       if (!leg)
         throw new McpToolError("park.fan has no travel time for this pair");
-      return travelSummary(
-        leg,
-        start.name,
-        target.name,
-        regionMatrix(region).attribution,
-      );
+      return travelSummary(leg, start.name, target.name, region);
     },
   }),
   tool({
@@ -4008,13 +4860,13 @@ export const ASSISTANT_TOOLS = [
       "Take the user to a park.fan page in their browser. Give exactly one target: a park (id or " +
       "slug; with section its wait-time calendar, its average waits or its page for a visit " +
       "with kids where it has one, else the error says why), a ride (rideId), a post or glossary " +
-      "term (its url from search_posts or look_up_glossary), the Orlando hub with a plan (url: " +
+      "term (its url from search_posts or look_up_glossary), a region's hub with a plan (url: " +
       "plan_vacation's hubUrl), 2 to 4 parks side by side (compare), or one of the site's pages " +
       "(page: alerts, the user's push alerts; best_time, the best time to visit across parks; " +
-      "favorites; trip_planner; how_it_works, how park.fan gets its waits and forecasts; " +
-      "fancast, how accurate the forecasts were; orlando, the Orlando hub with its crowd " +
-      "calendar and vacation planner). The page address is built from the park.fan data, never " +
-      "typed by you.",
+      "favorites; day_planner, the day planner for one park day; how_it_works, how park.fan gets " +
+      "its waits and forecasts; fancast, how accurate the forecasts were; trip_hub with region, a " +
+      "live region's hub with its crowd calendar and trip planner). The page address is built " +
+      "from the park.fan data, never typed by you.",
     input: z.object({
       park: parkRef.optional(),
       section: z
@@ -4042,8 +4894,11 @@ export const ASSISTANT_TOOLS = [
         .optional()
         .describe("Park ids or slugs for the park comparison"),
       page: z.enum(SITE_PAGES).optional(),
+      region: regionInput.describe(
+        "With page trip_hub: the region; default orlando",
+      ),
     }),
-    run: async ({ park, section, rideId, url, compare, page }, ctx) => {
+    run: async ({ park, section, rideId, url, compare, page, region }, ctx) => {
       const targets = [park, rideId, url, compare, page].filter(
         (target) => target !== undefined,
       );
@@ -4081,6 +4936,9 @@ export const ASSISTANT_TOOLS = [
         // address is guessed.
         path =
           candidate && CONTENT_PATH.test(candidate) ? candidate : hubPath(url);
+        const hubRegion = path && HUB_REGION.exec(path)?.[1];
+        if (hubRegion && !regionLive(ctx, hubRegion))
+          throw comingRegion(hubRegion);
       } else if (compare) {
         const found = await Promise.all(
           compare.map((reference) => resolvePark(mcp(ctx), reference)),
@@ -4094,6 +4952,10 @@ export const ASSISTANT_TOOLS = [
         path = refs.every(Boolean)
           ? `/compare?parks=${[...new Set(refs)].join(",")}`
           : null;
+      } else if (page === "trip_hub") {
+        const slug = region ?? ORLANDO.slug;
+        if (!regionLive(ctx, slug)) throw comingRegion(slug);
+        path = hubPathOf({ slug });
       } else if (page) {
         path = SITE_PAGE_PATHS[page];
       }
@@ -4294,26 +5156,57 @@ export const ASSISTANT_TOOLS = [
     name: "plan_move",
     status: "planner",
     description:
-      "Move one entry of a planned day to another place in its order, toIndex counting from 0.",
+      "Move one entry of a planned day: to another place in its order (toIndex, from 0) or to a " +
+      "time (start, HH:MM on the park's clock; a show only to one of its times that day).",
     input: z.object({
       park: parkRef,
       date: planDate,
       entryId: plannerEntryId,
-      toIndex: z.number().int().min(0).max(39),
+      toIndex: z.number().int().min(0).max(39).optional(),
+      start: plannerClock.optional(),
     }),
-    run: async ({ park: reference, date, entryId, toIndex }, ctx) => {
+    run: async ({ park: reference, date, entryId, toIndex, start }, ctx) => {
+      if ((toIndex === undefined) === (start === undefined)) {
+        throw new McpToolError("Give toIndex or start, one of them");
+      }
       const found = await plannedDay(ctx, reference, date);
       if ("ambiguous" in found) return found;
       const { park, day } = found;
       const [entry] = plannedEntries(day, [entryId]);
-      if (toIndex >= day.entries.length) {
+      if (toIndex !== undefined && toIndex >= day.entries.length) {
         throw new McpToolError(
           `The day has ${day.entries.length} entries; toIndex is at most ${day.entries.length - 1}`,
         );
       }
+      if (start !== undefined && entry.kind === "show") {
+        if (!entry.showSlug) {
+          throw new McpToolError(
+            `${entry.name} is a show; remove it and add it again with plan_add_show at the new time`,
+          );
+        }
+        const show = await showPerformance(
+          ctx,
+          reference,
+          date,
+          entry.showSlug,
+          start,
+        );
+        if ("ambiguous" in show) return show;
+      }
       return new ActionOutcome(
-        { type: "planner_move", park, date, entryId, toIndex },
-        { moved: entry.name, toIndex, park: park.name, date },
+        {
+          type: "planner_move",
+          park,
+          date,
+          entryId,
+          ...(toIndex !== undefined ? { toIndex } : { start }),
+        },
+        {
+          moved: entry.name,
+          ...(toIndex !== undefined ? { toIndex } : { start }),
+          park: park.name,
+          date,
+        },
       );
     },
   }),
@@ -4678,7 +5571,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Reserve days in the trip planner at once, empty days the user fills later: several days " +
-      "at one park, or a trip across parks (days, as plan_vacation's reserve).",
+      "at one park, or a trip across parks (days, as plan_vacation's or get_trip_plan's reserve). " +
+      "riderHeightCm: the party's smallest rider, written to every day.",
     input: z.object({
       park: parkRef.optional(),
       dates: z.array(planDate).min(1).max(6).optional(),
@@ -4688,8 +5582,11 @@ export const ASSISTANT_TOOLS = [
         .max(MAX_PARK_DAYS)
         .optional()
         .describe("Instead of park and dates"),
+      riderHeightCm: riderHeight.optional(),
     }),
-    run: async ({ park: reference, dates, days }, ctx) => {
+    run: async ({ park: reference, dates, days, riderHeightCm }, ctx) => {
+      const prefs =
+        riderHeightCm !== undefined ? { prefs: { riderHeightCm } } : {};
       if (days) {
         if (reference || dates) {
           throw new McpToolError("Give either park and dates, or days");
@@ -4719,7 +5616,7 @@ export const ASSISTANT_TOOLS = [
               a.park.slug.localeCompare(b.park.slug),
           );
         return new ActionOutcome(
-          { type: "planner_reserve_trip", days: trip },
+          { type: "planner_reserve_trip", days: trip, ...prefs },
           {
             reserved: trip.map(({ park, date }) => ({ park: park.name, date })),
           },
@@ -4732,7 +5629,7 @@ export const ASSISTANT_TOOLS = [
       if ("ambiguous" in park) return park;
       const unique = [...new Set(dates)].sort();
       return new ActionOutcome(
-        { type: "planner_reserve_days", park, dates: unique },
+        { type: "planner_reserve_days", park, dates: unique, ...prefs },
         { reserved: unique, park: park.name },
       );
     },
@@ -4765,6 +5662,369 @@ export const ASSISTANT_TOOLS = [
         throw new McpToolError("The user has nothing planned to share yet");
       }
       return new ActionOutcome({ type: "planner_share" }, { sharing: true });
+    },
+  }),
+  tool({
+    name: "review_plan_day",
+    status: "planner",
+    description:
+      "One day of the user's plan as they hold it, priced: each entry with its start and, for " +
+      "a ride, the forecast wait when its queue is joined then; the day's total queueing, idle " +
+      "time, when it ends against closing, rides joined after closing, clashes; rides a " +
+      "maintenance window shuts that day, rides the party's smallest rider is too short for, a " +
+      'show at a time it does not play; sortingSaves, what plan_optimize would save. For "how ' +
+      'long do I wait in total", "does my day work", and the hint worth giving about a day.',
+    input: z.object({ park: parkRef, date: planDate }),
+    run: async ({ park: reference, date }, ctx) => {
+      const found = await plannedDay(ctx, reference, date);
+      if ("ambiguous" in found) return found;
+      const { park: planned, day } = found;
+      const entries = day.entries.flatMap((entry) => {
+        const sent = optimizerEntry(entry);
+        return sent ? [sent] : [];
+      });
+      if (entries.length === 0) {
+        throw new McpToolError(
+          `Nothing is planned on ${date} at ${planned.name} yet`,
+        );
+      }
+      const park = await ctx
+        .get(ParksService)
+        .findByGeographicPath(
+          planned.geo.continent,
+          planned.geo.country,
+          planned.geo.city,
+          planned.slug,
+        );
+      if (!park) throw new McpToolError(`No park ${reference}`);
+      ctx.notePark?.(park.timezone);
+      const planDays = ctx.get(PlanDayService);
+      const redis = ctx.get(REDIS_CLIENT as unknown as Type<Redis>);
+      const [plan, works, priced] = await Promise.all([
+        cachedPlanDay(redis, planDays, park, date),
+        planDays.ridesInWorks(park, date).catch(() => []),
+        ctx
+          .get(PlanOptimizeService)
+          .optimize({ ...planned.geo, parkSlug: planned.slug }, {
+            date,
+            mode: "day",
+            entries,
+            ...(day.prefs && { prefs: day.prefs }),
+            preview: true,
+          } as PlanOptimizeRequestDto)
+          .catch(() => null),
+      ]);
+      const party = day.prefs?.riderHeightCm;
+      const rides = new Map(plan.rides.map((r) => [r.attractionSlug, r]));
+      const inWorks = new Map(works.map((w) => [w.attractionSlug, w]));
+      const shows = new Map(plan.shows.map((show) => [show.showSlug, show]));
+      const clockMinute = (time: string) => {
+        const [h, m] = time.split(":").map(Number);
+        return (h * 60 + m) % 1440;
+      };
+      const before = priced?.before ?? null;
+      const after = priced?.status === "optimized" ? priced.after : null;
+      const closeHour = plan.context.closeHour;
+      return {
+        park: planned.name,
+        date,
+        ...(party !== undefined && { partyRiderHeightCm: party }),
+        entries: day.entries.map((entry) => {
+          const minute = entryMinute(entry);
+          const ride = entry.rideSlug ? rides.get(entry.rideSlug) : undefined;
+          const works = entry.rideSlug
+            ? inWorks.get(entry.rideSlug)
+            : undefined;
+          const show = entry.showSlug ? shows.get(entry.showSlug) : undefined;
+          const wait =
+            ride && minute !== null && !entry.done
+              ? waitAt(ride, minute)
+              : null;
+          return {
+            id: entry.id,
+            kind: entry.kind,
+            name: entry.name,
+            ...(minute !== null && { at: clockOfMinute(minute) }),
+            ...(entry.done && { done: true }),
+            ...(wait !== null && { waitMinutes: wait }),
+            ...(works && { inMaintenance: works.worksPeriod }),
+            ...(ride &&
+              partyTooShort(ride.minimumHeight, party) && {
+                tooShortForParty: { minimumHeightCm: ride.minimumHeight },
+              }),
+            ...(show &&
+              minute !== null &&
+              !show.times.some((t) => clockMinute(t) === minute % 1440) && {
+                notAShowTime: { showTimes: show.times },
+              }),
+          };
+        }),
+        ...(before
+          ? {
+              totalWaitMinutes: Math.round(before.totalWaitMinutes),
+              idleMinutes: Math.round(before.idleMinutes),
+              endsAt: clockOfMinute(before.endMinute),
+              ...(closeHour !== null && {
+                closes: clockOfMinute(
+                  unfoldedCloseHour(plan.context.openHour ?? 0, closeHour) * 60,
+                ),
+              }),
+              ...(before.overflow > 0 && {
+                ridesJoinedAfterClosing: before.overflow,
+              }),
+              ...(before.clashes > 0 && { clashes: before.clashes }),
+              sortingSaves: after
+                ? `plan_optimize would save about ${Math.max(0, Math.round(before.totalWaitMinutes - after.totalWaitMinutes))} min of queueing`
+                : "the order is as good as it gets",
+            }
+          : {
+              totals: priced?.refusal
+                ? `not priced: ${priced.refusal}`
+                : "the day could not be priced right now",
+            }),
+        means:
+          "waitMinutes: the forecast standby wait when that ride's queue is joined at its start; totalWaitMinutes: every queue of the day as planned",
+      };
+    },
+  }),
+  tool({
+    name: "suggest_replies",
+    description:
+      "Two to four short replies the user can tap under your answer, each sent as their " +
+      "message: written as they would say it, in their language, under 40 characters, the " +
+      "likeliest first. Call it last, alone, after your answer's text (# Replies).",
+    input: z.object({
+      replies: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
+    }),
+    run: ({ replies }, ctx) => {
+      claimOnce(ctx, "suggest_replies");
+      const seen = new Set<string>();
+      const kept = replies
+        .map((reply) => reply.replace(/\s+/g, " ").replace(/[*_`#>[\]]/g, ""))
+        .filter((reply) => {
+          const key = reply.toLowerCase();
+          if (!reply || seen.has(key) || /https?:|www\./i.test(reply))
+            return false;
+          if (junkReason(reply)) return false;
+          seen.add(key);
+          return true;
+        });
+      if (kept.length === 0) {
+        throw new McpToolError("None of these replies can be shown");
+      }
+      return Promise.resolve(
+        new ActionOutcome(
+          { type: "replies", replies: kept },
+          { shown: kept.length },
+        ),
+      );
+    },
+  }),
+  tool({
+    name: "interview",
+    status: "planner",
+    description:
+      "Parky's interview, which plans a trip or a park day from simple to detailed (# Interview): " +
+      "start one (kind, and region, park or date where known); answered or skip for the step the " +
+      "user just answered or passed (any step, also one they answered early; party for a trip's " +
+      "party, mustDoRides for its rides); ask to take up a refinement they picked once the plan " +
+      "stands; end when they have enough (outcome done) or want to stop (left). The result names " +
+      "the next step: what to ask, which tool takes the answer, ideas for the replies.",
+    input: z.object({
+      op: z.enum(["start", "answered", "skip", "ask", "end"]),
+      kind: z.enum(["trip", "day"]).optional().describe("start only"),
+      region: regionInput,
+      park: parkRef.optional().describe("A park day's park, start only"),
+      date: planDate.optional().describe("A park day's date, start only"),
+      step: z
+        .enum([
+          ...new Set([
+            ...TRIP_INTERVIEW_CORE,
+            ...TRIP_INTERVIEW_REFINE,
+            ...DAY_INTERVIEW_CORE,
+            ...DAY_INTERVIEW_REFINE,
+          ]),
+        ] as [string, ...string[]])
+        .optional()
+        .describe(
+          "answered, skip: the step, default the one being asked; ask: the refinement",
+        ),
+      also: z
+        .array(
+          z.enum([
+            ...new Set([
+              ...TRIP_INTERVIEW_CORE,
+              ...TRIP_INTERVIEW_REFINE,
+              ...DAY_INTERVIEW_CORE,
+              ...DAY_INTERVIEW_REFINE,
+            ]),
+          ] as [string, ...string[]]),
+        )
+        .max(8)
+        .optional()
+        .describe("answered: other steps this message answered too"),
+      outcome: z.enum(["done", "left"]).optional().describe("end only"),
+      party: z
+        .object({
+          size: z.number().int().min(1).max(30).optional(),
+          heightsCm: z
+            .array(z.number().int().min(50).max(250))
+            .max(10)
+            .optional()
+            .describe("The children's heights; adults need none"),
+        })
+        .optional(),
+      mustDoRides: z
+        .array(
+          z.object({
+            park: z.string().min(2).max(120),
+            rideIds: z.array(z.uuid()).min(1).max(12),
+          }),
+        )
+        .max(8)
+        .optional()
+        .describe("A trip's must-do rides by park, for the filing"),
+    }),
+    run: async (input, ctx) => {
+      claimOnce(ctx, "interview");
+      if (input.region && !regionLive(ctx, input.region)) {
+        throw comingRegion(input.region);
+      }
+      const running = ctx.interview ?? null;
+      if (input.op === "end") {
+        if (!running) throw new McpToolError("No interview is running");
+        const outcome = input.outcome ?? "left";
+        return new ActionOutcome(
+          { type: "interview_state", interview: null, outcome },
+          {
+            ended: outcome,
+            say:
+              outcome === "done"
+                ? "one warm line on the plan they have; no question"
+                : "one short line: everything answered so far stays in the planner, and they can pick it up any time",
+          },
+        );
+      }
+      let state: InterviewSnapshot;
+      if (input.op === "start") {
+        if (!input.kind) throw new McpToolError("start needs kind");
+        let park: string | undefined;
+        if (input.park) {
+          const found = await planPark(mcp(ctx), input.park);
+          if ("ambiguous" in found) return found;
+          park = found.slug;
+        }
+        const region =
+          input.region ??
+          (input.kind === "trip"
+            ? pickTrip(ctx.trips ?? [])?.region.slug
+            : undefined);
+        state = {
+          kind: input.kind,
+          ...(region && { region }),
+          ...(park && { park }),
+          ...(input.date && { date: input.date }),
+          step: interviewCore(input.kind)[0],
+          answered: [],
+          skipped: [],
+          mustDoRides: [],
+          source: running?.source ?? "chat",
+        };
+      } else {
+        if (!running) {
+          throw new McpToolError("No interview is running; start one first");
+        }
+        state = {
+          ...running,
+          // The region step's answer: the interview names its region from here on.
+          ...(running.kind === "trip" &&
+            input.region && { region: input.region }),
+          answered: [...running.answered],
+          skipped: [...running.skipped],
+          mustDoRides: [...running.mustDoRides],
+        };
+        if (input.op === "ask") {
+          const open = openRefinements(state);
+          if (!input.step || !open.includes(input.step as InterviewStep)) {
+            throw new McpToolError(
+              `ask takes a refinement still open: ${open.join(", ") || "none left"}`,
+            );
+          }
+        } else {
+          const step = (input.step ?? running.step) as InterviewStep;
+          if (step === INTERVIEW_REFINE) {
+            throw new McpToolError(
+              "Name the step that was answered, or use ask for a refinement they picked",
+            );
+          }
+          const list = input.op === "answered" ? "answered" : "skipped";
+          const also =
+            input.op === "answered" ? (input.also ?? []) : ([] as string[]);
+          state[list] = [
+            ...new Set([...state[list], step, ...(also as InterviewStep[])]),
+          ];
+        }
+        for (const { park: reference, rideIds } of input.mustDoRides ?? []) {
+          const found = await planPark(mcp(ctx), reference);
+          if ("ambiguous" in found) return found;
+          const kept = state.mustDoRides.filter((m) => m.park !== found.slug);
+          const had =
+            state.mustDoRides.find((m) => m.park === found.slug)?.rides ?? [];
+          state.mustDoRides = [
+            ...kept,
+            {
+              park: found.slug,
+              rides: [...new Set([...had, ...rideIds])].slice(0, 12),
+            },
+          ].slice(0, 8);
+        }
+      }
+      const next =
+        input.op === "ask"
+          ? (input.step as InterviewStep)
+          : nextInterviewStep(state);
+      const party =
+        input.party && state.kind === "trip"
+          ? { size: input.party.size, heightsCm: input.party.heightsCm ?? [] }
+          : undefined;
+      const region = state.region ?? pickTrip(ctx.trips ?? [])?.region.slug;
+      const extras = {
+        ...(party && { party }),
+        ...(party && region && { region }),
+      };
+      if (!next) {
+        return new ActionOutcome(
+          {
+            type: "interview_state",
+            interview: null,
+            outcome: "done",
+            ...extras,
+          },
+          {
+            done: true,
+            say: "the plan is in the planner and every refinement is in: two sentences on what stands out, then suggest_replies for changes (swap two days, why this order, add a rest day)",
+          },
+        );
+      }
+      state.step = next;
+      const trip = pickTrip(ctx.trips ?? [], state.region) ?? null;
+      return new ActionOutcome(
+        { type: "interview_state", interview: state, ...extras },
+        {
+          next: interviewGuide(
+            state,
+            next,
+            next === INTERVIEW_REFINE
+              ? null
+              : interviewHolds(state, next, trip, ctx.planner),
+            trip?.region ?? (state.region ? findRegion(state.region) : null),
+          ),
+          ...(state.mustDoRides.length > 0 && {
+            mustDoRides: state.mustDoRides,
+          }),
+          then: "one short question or the plan in your voice, and end with suggest_replies",
+        },
+      );
     },
   }),
   tool({
@@ -4968,21 +6228,77 @@ export function storedToolInput(input: unknown): unknown {
  * input, or a failing tool, becomes an error result the model can read; the
  * message of an unexpected error stays in the log.
  */
+/** A key or path segment as the record keeps it: an identifier, never a value. */
+const RECORDED_KEY = /^[A-Za-z0-9_]{1,40}$/;
+/** Keys and paths one call records at most. */
+const MAX_RECORDED_KEYS = 10;
+
+/** The paths of a schema's refusal, keys and indices only (`dates.from`, `parks.0`). */
+function issuePaths(error: z.ZodError): string[] {
+  const paths = error.issues.flatMap((issue) => {
+    const base = issue.path.map(String);
+    // An unknown key of a strict object is named in the issue, not in its path.
+    const keys =
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => [...base, key])
+        : [base];
+    return keys
+      .filter((path) => path.every((part) => RECORDED_KEY.test(part)))
+      .map((path) => path.join(".") || "(input)");
+  });
+  return [...new Set(paths)].slice(0, MAX_RECORDED_KEYS);
+}
+
+/** The keys of the model's input the schema dropped: it strips what it does not know. */
+function droppedKeys(raw: unknown, parsed: unknown): string[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const kept = new Set(
+    parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
+  );
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(
+      ([key, value]) =>
+        value !== undefined && !kept.has(key) && RECORDED_KEY.test(key),
+    )
+    .map(([key]) => key)
+    .slice(0, MAX_RECORDED_KEYS);
+}
+
+/** A tool's answer to the model, and what the chat's record keeps of the call. */
+export interface AssistantToolRun {
+  content: string;
+  isError: boolean;
+  action?: ClientAction;
+  errorKind?: AssistantToolErrorKind;
+  issues?: string[];
+  ignoredKeys?: string[];
+}
+
 export async function runAssistantTool(
   name: string,
   rawInput: unknown,
   ctx: AssistantToolContext,
   onError: (error: unknown) => void,
-): Promise<{ content: string; isError: boolean; action?: ClientAction }> {
+): Promise<AssistantToolRun> {
   const definition = BY_NAME.get(name);
-  if (!definition) return { content: `Unknown tool ${name}`, isError: true };
+  if (!definition) {
+    return {
+      content: `Unknown tool ${name}`,
+      isError: true,
+      errorKind: "unknown_tool",
+    };
+  }
   const input = definition.input.safeParse(rawInput);
   if (!input.success) {
     return {
       content: `Invalid input: ${z.prettifyError(input.error)}`,
       isError: true,
+      errorKind: "invalid_input",
+      issues: issuePaths(input.error),
     };
   }
+  const ignored = droppedKeys(rawInput, input.data);
+  const recorded = ignored.length > 0 ? { ignoredKeys: ignored } : {};
   try {
     // The parks this call is about, so its times come in their clock, not the visitor's.
     const zones = new Set<string>();
@@ -5022,14 +6338,22 @@ export async function runAssistantTool(
           : result,
       isError: false,
       ...(action && { action }),
+      ...recorded,
     };
   } catch (error) {
     if (error instanceof McpToolError)
-      return { content: error.message, isError: true };
+      return {
+        content: error.message,
+        isError: true,
+        errorKind: "refused",
+        ...recorded,
+      };
     onError(error);
     return {
       content: "The lookup failed; say you could not check it.",
       isError: true,
+      errorKind: "failed",
+      ...recorded,
     };
   }
 }

@@ -14,6 +14,12 @@
  * subdivisions, so the middle and south codes lack Christmas, May and some
  * spring and autumn breaks (measured 2026-11-12). Offering them would turn a
  * gap in our data into "no school break".
+ *
+ * The markets are the same for every trip region: visitors from the site's
+ * six locales plan trips to all of them. Spain and Italy are listed by name
+ * but drop out of the default list while their data ends within
+ * {@link MIN_COVERAGE_DAYS}: OpenHolidays held no Spanish or Italian break
+ * after the 2025–26 school year (measured 2026-11-13).
  */
 import { BadRequestException } from "@nestjs/common";
 import { addIsoDays } from "../common/utils/date.util";
@@ -90,6 +96,60 @@ export const SCHOOL_BREAK_REGIONS: Record<
     { code: "AT-TI", name: "Tirol" },
     { code: "AT-VA", name: "Vorarlberg" },
     { code: "AT-WI", name: "Wien" },
+  ],
+  // OpenHolidays stores Andalusia by province and every other community
+  // whole; the codes are the ones its 2025–26 calendar carries.
+  ES: [
+    { code: "ES-AN-AL", name: "Andalucía (Almería)" },
+    { code: "ES-AN-CA", name: "Andalucía (Cádiz)" },
+    { code: "ES-AN-CO", name: "Andalucía (Córdoba)" },
+    { code: "ES-AN-GR", name: "Andalucía (Granada)" },
+    { code: "ES-AN-HL", name: "Andalucía (Huelva)" },
+    { code: "ES-AN-JA", name: "Andalucía (Jaén)" },
+    { code: "ES-AN-MA", name: "Andalucía (Málaga)" },
+    { code: "ES-AN-SE", name: "Andalucía (Sevilla)" },
+    { code: "ES-AR", name: "Aragón" },
+    { code: "ES-AS", name: "Asturias" },
+    { code: "ES-CN", name: "Canarias" },
+    { code: "ES-CB", name: "Cantabria" },
+    { code: "ES-CL", name: "Castilla y León" },
+    { code: "ES-CM", name: "Castilla-La Mancha" },
+    { code: "ES-CT", name: "Catalunya" },
+    { code: "ES-CE", name: "Ceuta" },
+    { code: "ES-EX", name: "Extremadura" },
+    { code: "ES-GA", name: "Galicia" },
+    { code: "ES-IB", name: "Illes Balears" },
+    { code: "ES-RI", name: "La Rioja" },
+    { code: "ES-MD", name: "Madrid" },
+    { code: "ES-ML", name: "Melilla" },
+    { code: "ES-MC", name: "Murcia" },
+    { code: "ES-NC", name: "Navarra" },
+    { code: "ES-PV", name: "País Vasco" },
+    { code: "ES-VC", name: "Comunitat Valenciana" },
+  ],
+  // Trentino-Alto Adige's two provinces keep their own calendars.
+  IT: [
+    { code: "IT-AB", name: "Abruzzo" },
+    { code: "IT-TR-BZ", name: "Alto Adige" },
+    { code: "IT-BA", name: "Basilicata" },
+    { code: "IT-CL", name: "Calabria" },
+    { code: "IT-CM", name: "Campania" },
+    { code: "IT-ER", name: "Emilia-Romagna" },
+    { code: "IT-FV", name: "Friuli-Venezia Giulia" },
+    { code: "IT-LA", name: "Lazio" },
+    { code: "IT-LI", name: "Liguria" },
+    { code: "IT-LO", name: "Lombardia" },
+    { code: "IT-MA", name: "Marche" },
+    { code: "IT-MO", name: "Molise" },
+    { code: "IT-PI", name: "Piemonte" },
+    { code: "IT-PU", name: "Puglia" },
+    { code: "IT-SA", name: "Sardegna" },
+    { code: "IT-SI", name: "Sicilia" },
+    { code: "IT-TO", name: "Toscana" },
+    { code: "IT-TR-TN", name: "Trentino" },
+    { code: "IT-UM", name: "Umbria" },
+    { code: "IT-VA", name: "Valle d'Aosta" },
+    { code: "IT-VE", name: "Veneto" },
   ],
 };
 

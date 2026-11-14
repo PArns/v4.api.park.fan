@@ -79,10 +79,11 @@ export class TripTicketLinkDto {
   sponsored: boolean;
   @ApiPropertyOptional({
     type: [String],
-    enum: ["us", "uk", "intl"],
-    description: "Whom the link is for; absent: everyone.",
+    example: ["uk"],
+    description:
+      "Whom the link is for, codes of the region's `ticketMarkets`; absent: everyone.",
   })
-  markets?: Array<"us" | "uk" | "intl">;
+  markets?: string[];
   @ApiPropertyOptional({
     type: [String],
     enum: ["en", "de", "nl", "fr", "es", "it"],
@@ -110,11 +111,11 @@ export class TripTicketProductDto {
   resort: string;
   @ApiProperty({
     type: [String],
-    enum: ["us", "uk", "intl"],
+    example: ["us", "intl"],
     description:
-      "us: sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only.",
+      "Codes of the region's `ticketMarkets`; its `home` is sold to anyone. Orlando: us sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only.",
   })
-  markets: Array<"us" | "uk" | "intl">;
+  markets: string[];
   @ApiProperty({ type: [String], description: "Parks a ticket day covers." })
   parks: string[];
   @ApiProperty({
@@ -171,6 +172,19 @@ export class TripTicketProductDto {
     description: "The operator's page with the blockout calendar.",
   })
   blockoutUrl?: string;
+  @ApiPropertyOptional({
+    example: "15:00",
+    description:
+      "An evening ticket: it admits from this park-local time only (Tokyo Disney Resort's Early Evening and Weeknight Passports).",
+  })
+  entryFrom?: string;
+  @ApiPropertyOptional({
+    type: [String],
+    enum: ["weekday", "weekend", "holiday"],
+    description:
+      "The kinds of day it may be used on; absent: every day. weekday: Monday to Friday that is no public holiday.",
+  })
+  validDays?: string[];
   @ApiPropertyOptional({
     description: "Where passholders reserve their park (Disney).",
   })
