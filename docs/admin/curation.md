@@ -291,7 +291,12 @@ message names the field, and a field the DTO does not list is refused too:
 - `priceFrom`: at least 0, stored with two decimals, and then `priceCurrency` is required: three
   letters, stored upper case;
 - `opensAt`, `closesAt`: `HH:MM` from 00:00 to 23:59, a midnight close is 00:00;
-- `attractionIds`: rides of this park, none of another;
+- `attractionIds`: rides of this park, none of another. On a binding kind (`halloween`,
+  `christmas`, `winter`, `summer_nights`, `special_event`) the rides run only on the season's days
+  ([seasonality](../architecture/attraction-status/seasonality.md)). From the ride's side, the admin
+  edits the list of each season it picks with this PATCH, and the MCP tool `bind_ride_seasons`
+  adds or removes one ride in several seasons the same way
+  ([binding a ride](mcp.md#binding-a-ride-to-seasons));
 - `url`, `sourceUrl`: full http(s) addresses, at most 2,000;
 - `confirmedAt`: an ISO 8601 timestamp;
 - `note`: at most 4,000.

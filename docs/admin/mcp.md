@@ -117,7 +117,7 @@ against these rules.
 | `get_park`                   | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), in maintenance (with the curated window), maintenance ahead, not run today; the seasons of the year ahead (`seasonView`) | `ParkIntegrationService`, `ParkSeasonService` |
 | `park_forecast`              | days ahead as the calendar shows them: hours, crowd level, expected peak wait, weather, holidays, rides in maintenance (`PlanDayService`), the seasons running each day (`seasonsOn`: kind, name, status where not confirmed, separate ticket; on a closed day only listed dates and a closure); today's hourly curve and headliners; models  | `CalendarService`, `MlOverviewService`, `ParkSeasonService` |
 | `find_attractions`           | rides by name, optionally in one park, with status and wait                                                                                                                             | `SearchService`                                  |
-| `get_attraction`             | one ride: queues, crowd level, outage, curated facts, ride profile, typical waits, downtime, retirement, optional history                                                               | `AttractionIntegrationService`                   |
+| `get_attraction`             | one ride: queues, crowd level, outage, curated facts with every season that binds it, ride profile, typical waits, downtime, retirement, optional history                              | `AttractionIntegrationService`                   |
 | `page_views`                 | reads per kind, language and page                                                                                                                                                       | `PageViewsService.adminOverview`                 |
 | `system_health`              | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half, whose PCN boards bring their day rows only with `boardRows` (14 days of them run past the answer limit) | `SystemHealthService`                            |
 | `queue_status`               | Bull counts per queue, recent failures of one                                                                                                                                           | `AdminQueueStatusService`                        |
@@ -351,6 +351,7 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
 | `update_trip_season`     | changes the fields given, `null` clears an optional one                                | `AdminSeasonService.update`                 |
 | `delete_trip_season`     | deletes one season, with `confirm: true`                                               | `AdminSeasonService.remove`                 |
 | `import_trip_seasons`    | the rows of `scripts/trip-regions/seasons/*.json`, a dry run unless `dryRun: false`    | `AdminSeasonService.import`                 |
+| `bind_ride_seasons`      | binds one ride to seasons or unbinds it, from the ride's side, a dry run unless `dryRun: false` ([below](#binding-a-ride-to-seasons)) | `AdminSeasonService.findOne`, `.update` |
 | `list_ticket_products`   | reads a region's catalog, archived products too, or one product whole (any token)      | `AdminTicketService.list`, `.get`           |
 | `upsert_ticket_product`  | patches a slug the region has or creates a new one, a dry run unless `dryRun: false`   | `AdminTicketService.validate`, `.create`, `.update` |
 | `archive_ticket_product` | the catalog's delete: archives a product, with `confirm: true`                         | `AdminTicketService.archive`                |
@@ -378,11 +379,35 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
   `<tool> for <email> in N ms` does, at `log` level for a write. Seasons publish through
   `AdminCurationService.publish`, an import once for all its parks (`publishParks`); tickets through
   `AdminTicketService.publish` ([publish outside-in](../rules/publish-outside-in.md)).
-- **Dry runs and confirms.** `import_trip_seasons`, `upsert_ticket_product` and the deletes of the
-  other admin pages write nothing unless `dryRun: false`. `delete_trip_season`,
+- **Dry runs and confirms.** `import_trip_seasons`, `bind_ride_seasons`, `upsert_ticket_product` and
+  the deletes of the other admin pages write nothing unless `dryRun: false`. `delete_trip_season`,
   `archive_ticket_product` and `remove_redirect` need `confirm: true`. A deleted
   season stays whole in its audit row; an archived product comes back with `active: true`. There is
   no hard delete of a ticket product: plans and shared links may name it.
+
+### Binding a ride to seasons
+
+`bind_ride_seasons` (`src/mcp/tools/bind-ride-seasons.tool.ts`) binds a ride from its own side, where
+`update_trip_season` needs the whole `attractionIds` list read and written back. Input:
+`attraction` (the ride's uuid), `bind` and `unbind` (up to 20 season ids each, none in both) and
+`dryRun` (default true). Editor, `writes: change`.
+
+- **Checks**, per season: of the ride's park, of a kind in `PARK_SEASON_BINDING_KINDS` (`halloween`,
+  `christmas`, `winter`, `summer_nights`, `special_event`), and not cancelled to bind; a ride may
+  leave a cancelled season. A season the ride is already in, or not in, is left alone.
+- **The dry run** answers `changes` (each season, `bind` or `unbind`, whether its list changes),
+  `bindingsBefore` and `bindingsAfter`, and `warnings` when the ride's curated season months or a
+  curated `isSeasonal: false` take precedence, so a binding would have no effect
+  ([seasonality](../architecture/attraction-status/seasonality.md)).
+- **The write** is one `AdminSeasonService.update` per season that changes, with the ride added to
+  or taken out of its `attractionIds`: the route's checks, a `park.season.update` audit row each,
+  and the publishing of the park and of the rides the season bound before and after, this ride
+  among them. `written` lists the seasons written.
+
+`get_attraction` lists the seasons that bind a ride in `facts.seasonBindings`: `seasons`, every
+season of a binding kind, not cancelled, that lists the ride (the row's own `seasonBindings`,
+`attractionSeasonBindingsSql`), and `decides`, false where the ride's curated season takes
+precedence over them. `boundSeason` stays the one a reader is shown today.
 
 ### The admin's other pages
 

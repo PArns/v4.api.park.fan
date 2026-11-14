@@ -17,12 +17,13 @@ const attraction = {
   },
 };
 
-function ctxWith(dto: object, headliners: Promise<Set<string>>) {
+function ctxWith(
+  dto: object,
+  headliners: Promise<Set<string>>,
+  row: object = attraction,
+) {
   const providers = new Map<unknown, unknown>([
-    [
-      DataSource,
-      { getRepository: () => ({ findOne: async () => attraction }) },
-    ],
+    [DataSource, { getRepository: () => ({ findOne: async () => row }) }],
     [
       AttractionIntegrationService,
       { buildIntegratedResponse: async () => dto },
@@ -87,6 +88,52 @@ describe("get_attraction", () => {
       betterLateInTheDay: false,
     });
     expect(result.bestVisitTimesToday).toHaveLength(1);
+  });
+
+  it("lists every season that binds the ride, and whether the binding decides", async () => {
+    const fright = {
+      id: "s1",
+      kind: "halloween",
+      name: "Fright Nights",
+      status: "confirmed",
+      startDate: "2026-10-02",
+      endDate: "2026-10-31",
+      dates: null,
+    };
+    const winter = {
+      ...fright,
+      id: "s2",
+      kind: "winter",
+      name: "Wintertraum",
+      startDate: "2026-11-20",
+      endDate: "2027-01-10",
+    };
+    const call = (row: object) =>
+      getAttractionTool.handler(
+        { attractionId: ID, historyDays: 0 },
+        ctxWith({ id: ID, name: "Maze" }, Promise.resolve(new Set()), {
+          ...attraction,
+          ...row,
+        }),
+      ) as Promise<Record<string, any>>;
+    const bound = await call({ seasonBindings: [fright, winter] });
+    expect(bound.facts.seasonBindings).toEqual({
+      decides: true,
+      seasons: [fright, winter],
+    });
+    // Curated months take precedence: the seasons still list it, and say so.
+    const overridden = await call({
+      seasonBindings: [fright],
+      curatedSeasonMonths: [10],
+    });
+    expect(overridden.facts.seasonBindings).toEqual({
+      decides: false,
+      seasons: [fright],
+    });
+    expect((await call({})).facts.seasonBindings).toEqual({
+      decides: false,
+      seasons: [],
+    });
   });
 
   it("says nothing it does not know: no rope drop, headliners unreadable", async () => {
