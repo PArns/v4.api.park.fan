@@ -505,7 +505,12 @@ forecast"), the rainy season once per trip in `season`, whose school breaks a `/
 month count ("no Japanese school break"), the climate park the months read, the hub at
 `/<region slug>`, and a leg's source (OSRM's drive, or curated from timetables). `hotel`, `area`
 and `hopper` are the region's own values, checked by the plan route, whose refusal names them;
-the tool descriptions list Orlando's. They turn
+the tool descriptions list Orlando's. In a region with bases (Japan) `plan_vacation` and
+`find_trip_dates` take `bases` (`tokyo:4@maihama,fujikawaguchiko:0`), `startBase` and `endBase`
+as the routes do; the itinerary says the stays (`stays`, "chosen by the plan" where it picked
+them), where each night is spent (`sleepsIn`), each move in one phrase with its typical times and
+whether it comes before or after the day's park, the nights suggestion (`staySuggestion`), and
+`long_day_trip` and `move_day` in `watch`; the hub URL carries the stays. They turn
 every code those routes send into a short English phrase the model translates
 (`tools/assistant-trip.ts`), so nothing is left for it to decode. A park is named as the model
 likes it: a region park's slug, id, name or curated abbreviation, else the one region park whose
