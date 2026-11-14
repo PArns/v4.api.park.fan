@@ -38,6 +38,7 @@ import { AssistantMaintenanceProcessor } from "./processors/assistant-maintenanc
 import { SiteAnalyticsProcessor } from "./processors/site-analytics.processor";
 import { SearchConsoleProcessor } from "./processors/search-console.processor";
 import { AdminAuditMaintenanceProcessor } from "./processors/admin-audit-maintenance.processor";
+import { TripMetricsMaintenanceProcessor } from "./processors/trip-metrics-maintenance.processor";
 import {
   ForecastArchiveProcessor,
   ForecastArchiveScoreProcessor,
@@ -92,6 +93,7 @@ import { TripsModule } from "../trips/trips.module";
 import { AssistantModule } from "../assistant/assistant.module";
 import { SiteAnalyticsModule } from "../site-analytics/site-analytics.module";
 import { SearchConsoleModule } from "../search-console/search-console.module";
+import { TripMetricsModule } from "../trip-regions/metrics/trip-metrics.module";
 import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
 import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
@@ -165,6 +167,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     AssistantModule, // Parky's chats, for their retention
     SiteAnalyticsModule, // The site statistic's visitor snapshot and prune
     SearchConsoleModule, // The Search Console import and its retention
+    TripMetricsModule, // The trip-region routes' metric rows, for their retention
     RideAlertsModule, // Wait-time alerts — checked from WaitTimesProcessor
     ShowFollowsModule, // Followed shows — the push-notifications job's other half
     RedisModule, // For cache warmup service
@@ -208,6 +211,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     SiteAnalyticsProcessor, // Site statistic: visitors snapshot, retention
     SearchConsoleProcessor, // Search Console: nightly import, retention
     AdminAuditMaintenanceProcessor, // Audit log: nightly address retention
+    TripMetricsMaintenanceProcessor, // Trip-region metric rows: nightly retention
     ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
     ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue
     ShowPatternProcessor, // Nightly per-weekday showtime patterns

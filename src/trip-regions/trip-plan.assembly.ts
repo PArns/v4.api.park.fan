@@ -28,6 +28,7 @@ import {
   type PlanLock,
   type PlannedDay,
   type RestOption,
+  type UnplacedReason,
 } from "./trip-optimizer";
 import {
   buildLegs,
@@ -146,6 +147,55 @@ const daysBetween = (from: string, to: string): number =>
   );
 
 /**
+ * The visits a query pins: the counts of two or more it writes. A park
+ * without a count, or with one, may be left out where the trip has no day
+ * for it ({@link parksLeftOut}); pinned visits that exceed the trip's days
+ * are a 400.
+ */
+export function pinnedVisits(
+  parks: ReadonlyArray<{ visits: number; explicit: boolean }>,
+): number {
+  return parks
+    .filter((p) => p.explicit && p.visits > 1)
+    .reduce((sum, p) => sum + p.visits, 0);
+}
+
+/** A chosen park the plan has no visit of, and why. */
+export interface ParkLeftOut {
+  park: string;
+  reason: UnplacedReason;
+}
+
+/**
+ * The chosen parks a plan has no visit of, in the region's order, each with
+ * the reason its visit found no day (`unplaced`): `no_day_left` where the
+ * trip's park days went to the others. A dropped second visit is not one:
+ * its park is in the plan. The same field on `/plan` and on each `/when`
+ * window, so a client can say "EPCOT and Epic Universe don't fit into 5
+ * park days".
+ */
+export function parksLeftOut(
+  region: Pick<RegionConfig, "parks">,
+  chosen: readonly string[],
+  plan: Pick<OptimizedPlan, "days" | "unplaced">,
+): ParkLeftOut[] {
+  const planned = new Set(plan.days.flatMap((d) => d.parks.map((v) => v.slug)));
+  const order = new Map(region.parks.map((p, i) => [p.slug, i]));
+  return [...new Set(chosen)]
+    .filter((slug) => !planned.has(slug))
+    .sort(
+      (a, b) =>
+        (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) ||
+        a.localeCompare(b),
+    )
+    .map((park) => ({
+      park,
+      reason:
+        plan.unplaced.find((u) => u.slug === park)?.reason ?? "no_day_left",
+    }));
+}
+
+/**
  * Validates the query against the region and today; 400 with the reason
  * otherwise. `known` are the region parks the database has.
  */
@@ -220,7 +270,10 @@ export function normalizePlanQuery(
       `A plan takes at most ${MAX_PARK_DAYS} park visits`,
     );
   }
-  if (parkDays > tripDays * (hop ? 2 : 1)) {
+  // Only visits the visitor pinned (a count of two or three) can make a trip
+  // impossible; a park without a count, or with one, is planned where it
+  // fits and named in `parksLeftOut` where it does not.
+  if (pinnedVisits(parks) > tripDays * (hop ? 2 : 1)) {
     throw new BadRequestException(
       hop
         ? "More park visits than two a day"
@@ -1133,6 +1186,11 @@ export function planResponse(
       }),
     },
     unplaced: plan.unplaced,
+    parksLeftOut: parksLeftOut(
+      region,
+      q.parks.map((p) => p.slug),
+      plan,
+    ),
     ...(plan.ignoredLocks.length > 0 && { ignoredLocks: plan.ignoredLocks }),
   };
 }

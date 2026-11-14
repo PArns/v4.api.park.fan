@@ -25,6 +25,8 @@ import {
   type TripSchoolBreaks,
 } from "./trip-school-breaks";
 import type { TripWhenQueryDto } from "./dto/trip-when.dto";
+import { whenShapeOf } from "./metrics/trip-request-facts";
+import { noteTripCache, noteTripShape } from "./metrics/trip-request-trace";
 
 /**
  * `GET /v1/trip-regions/:region/when` and `/school-breaks`: reads the region
@@ -64,11 +66,17 @@ export class TripWhenService {
       today,
       within,
     );
+    noteTripShape(whenShapeOf(region, q, Boolean(query.parks)));
 
     const key = CacheKeys.tripRegionWhen(region.slug, whenCacheQuery(q));
     const cached = safeJsonParse<TripWhen>(await this.redis.get(key));
-    if (cached) return cached;
+    if (cached) {
+      noteTripCache("cache", "hit");
+      return cached;
+    }
+    noteTripCache("cache", "joined");
     return this.flight.run(key, async () => {
+      noteTripCache("cache", "miss");
       const calendar = await this.regions.internalCalendar(region, from, to);
       const climatePark = climateParkOf(region);
       const reference = resolved.find((p) => p.config.slug === climatePark);

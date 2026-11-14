@@ -207,6 +207,13 @@ export class TripGatewayDto {
   @ApiProperty({ enum: ["airport", "station"] }) kind: string;
   @ApiPropertyOptional({ description: "Typical minutes to the base." })
   minutes?: number;
+  @ApiProperty({
+    type: [String],
+    example: ["disneyland-paris", "parc-asterix", "paris"],
+    description:
+      "Every base that lists this gateway. Map it to startBase or endBase only where this is one base; otherwise send neither and the plan picks.",
+  })
+  bases: string[];
 }
 
 export class TripBaseReachDto {
@@ -485,6 +492,19 @@ export class TripPlanDto {
   totals: Record<string, unknown>;
   @ApiProperty({ type: "array", items: { type: "object" } })
   unplaced: Array<Record<string, unknown>>;
+  @ApiProperty({
+    type: "array",
+    items: { type: "object" },
+    description:
+      "The chosen parks the plan has no visit of, in the region's order: { park, reason } with " +
+      "reason no_day_left (the trip's park days went to the other parks), no_open_day, " +
+      "no_ticket_day or no_base. Empty when every chosen park has a day.",
+    example: [
+      { park: "epcot", reason: "no_day_left" },
+      { park: "universal-epic-universe", reason: "no_day_left" },
+    ],
+  })
+  parksLeftOut: Array<{ park: string; reason: string }>;
   @ApiPropertyOptional({ type: "array", items: { type: "object" } })
   ignoredLocks?: Array<Record<string, unknown>>;
 }

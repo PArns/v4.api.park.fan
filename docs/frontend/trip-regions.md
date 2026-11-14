@@ -50,6 +50,10 @@ the calendar and the best days, `trip-tickets:<slug>` on the ticket catalog, whi
 revalidates on every catalog edit of that region ([editing](#editing-the-catalog)). The list route
 changes only with a deploy.
 
+**Metrics.** Every answer of `/plan`, `/when` and `/best-days` leaves a row of operational facts
+for the planner's operators: no date, name, text, address or visitor id, and nothing a client sees
+([what the server records](#what-the-server-records)).
+
 ## The list (`GET /v1/trip-regions`)
 
 Open, no key; an hour in the browser, a day at the edge, like the region route. For the site's
@@ -153,7 +157,8 @@ or a `hurricane` penalty.
   order. Gateways: Marne-la-Vallée–Chessy (`XED`, a station: the TGV, and the Eurostar with a change
   at Lille) and CDG for Disneyland Paris, CDG for Parc Astérix, CDG and ORY for Paris. Base legs:
   60 minutes by car between the resorts, 50 by RER A from Paris to Disneyland Paris, 45 by car from
-  Paris to Parc Astérix. `hotel` and `area` are a 400 here: a stay's area goes with its base
+  Paris to Parc Astérix. CDG serves all three bases, so it pins no `startBase` or `endBase`.
+  `hotel` and `area` are a 400 here: a stay's area goes with its base
   (`bases=disneyland-paris:3@disney_lake`), and only then do its hotel's perks count.
 - **Travel.** Both Disney parks share the guest car park, 15 minutes' walk from the gates
   (`via: "walk"`). Curated: the 5-minute walk between the gates (their hop pair), the walks from the
@@ -670,7 +675,13 @@ calendar does not.
 | `bases`, `startBase`, `endBase` | `tokyo:4@maihama`, `tokyo`, `osaka` | a region with bases only, in place of `area` and `hotel`: the stays the visitor fixes and the trip's ends ([bases](#bases-a-trip-across-several-cities)) |
 | `moveBuffer` | `30` | a region with bases only: the visitor's own minutes for a hotel change on top of the train, one of `stayRules.moveBufferOptions` (30, 60, 90, 120); default the region's `moveOverheadMinutes` |
 
-More visits than trip days is a 400 without `hop` (with it, more than two a day). `hop=1` without
+**Which answer comes when.** A park listed without a count, or with `:1`, never makes the trip
+impossible: the plan gives the chosen parks the park days the trip has and names the ones it could
+not place in **`parksLeftOut`** (below), a 200. Orlando's seven default parks in a 7-day trip with
+a free arrival and departure day plan on its 5 park days, two parks out. **Only pinned visits can
+make a 400:** the counts of two or three a query writes (`magic-kingdom-park:2`) adding up to more
+than the trip's days (more than two a day with `hop`), "More park visits than trip days"; and more
+than 16 visits in all. That 400 is the one a client words as "too many visits". `hop=1` without
 a hopper (neither `ticket=hopper` nor an owned ticket with hopping) is ignored: the plan keeps one
 park a day and `meta.warnings` says `hop_needs_hopper`. A lock on a park
 not in `parks` or outside the trip is a 400; a lock the plan cannot keep (the park is closed that
@@ -785,8 +796,25 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   "unplaced": [
     { "slug": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
   ],
+  "parksLeftOut": [
+    // the chosen parks with no visit in the plan, in the region's order; [] when every one has a day
+    { "park": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
+  ],
 }
 ```
+
+- **`parksLeftOut`** lists each chosen park the plan has no visit of, `{ park, reason }`, always
+  present, `[]` when every chosen park has a day. `reason` is its visit's `unplaced` reason:
+  `no_day_left` (the trip's park days went to the other parks: "EPCOT and Epic Universe don't fit
+  into 5 park days", the 5 being `totals.parkDays`), `no_open_day`, `no_ticket_day` or `no_base`.
+  A dropped second visit is not in it, since its park is in the plan; `unplaced` lists every visit
+  left out. Each `/when` window's `plan` carries the same field for its dates, absent when empty:
+  both are this optimizer on the same days, so the plan for a window's dates leaves out the same
+  parks, unless days without published hours, which `/when` prices as if open
+  ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
+  the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
+  `/when`.
 
 **The objective.** Minimize the sum over planned visits of their [day cost](#how-a-day-is-priced).
 A hotel perk takes a fixed share off the day it applies: `early_entry` and `early_park_admission`
@@ -937,8 +965,9 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
       "hotelAreas": ["maihama", "disneysea_hotels", "bayside", "shin_urayasu", "tokyo_station", "shinjuku"],
       "defaultArea": "maihama",
       "gateways": [
-        { "code": "HND", "name": "Haneda Airport", "kind": "airport" },
-        { "code": "NRT", "name": "Narita Airport", "kind": "airport" },
+        // bases: every base that lists it; one base only, so the client may send it as startBase
+        { "code": "HND", "name": "Haneda Airport", "kind": "airport", "bases": ["tokyo"] },
+        { "code": "NRT", "name": "Narita Airport", "kind": "airport", "bases": ["tokyo"] },
       ],
       "stayNote": "Maihama for both Disney parks; Shinjuku for the buses to Fuji-Q",
       "parks": [
@@ -978,9 +1007,20 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
   region keeps the defaults.
 - **`gateways`** are where a trip arrives or leaves: an airport, or a station a long-distance
   train reaches (Marne-la-Vallée–Chessy for the TGV and the Eurostar, `kind: "station"`). The
-  client offers them as "you land in" and "you fly home from" and sends the base as `startBase`
-  and `endBase`; the API is the one place that knows which airport belongs to which base.
+  client offers them as "you land in" and "you fly home from"; the API is the one place that
+  knows which airport belongs to which base. A gateway's **`bases`** are every base that lists
+  it, in the region's order. **A gateway maps to `startBase` or `endBase` only where exactly one
+  base lists it**; where several do, the client sends no `startBase` (or `endBase`) for it and the
+  plan picks the stays. Paris lists CDG under all three of its bases (`bases:
+  ["disneyland-paris", "parc-asterix", "paris"]`), Marne-la-Vallée–Chessy under Disneyland Paris
+  only and Orly under central Paris only, so landing at Orly starts the trip in Paris and landing
+  at CDG pins nothing.
 - **Each hotel area belongs to one base**, and a stay's hotel kind (its perks) is its area's.
+  **`defaultArea`** is where a stay without an area is reckoned from for its travel (the base's
+  `parks` minutes are that area's); it carries no perk. The visitor may sleep in any of the base's
+  areas (at Disneyland Paris, Val d'Europe as well as a Disney hotel), so a perk counts only for
+  the area they name in `bases=<base>@<area>`, as `hotel` without an area is `offsite` in a region
+  without bases.
 - **A base's `parks`** are the parks a day from it reaches. A stay whose area has a curated leg to
   the park (`hotel:<area>` in `travel.legs`) uses that leg's minutes instead.
 - **`parkDay`** is the leg's own call where it has one (Fujikawaguchiko to Nagoya by bus and
@@ -1108,7 +1148,15 @@ base legs connect. Each base is stayed in at most once.
 reaches the chosen parks, in every order the route allows, with every split of the nights. Each
 plan's quick bound (every visit on its cheapest allowed day, days shared, plus the moves) ranks
 them; the 400 cheapest are solved, branch and bound as before, and a plan left out whose bound
-could beat the result makes `meta.exact` false. `split=auto` keeps the days that can only be a
+could beat the result makes `meta.exact` false (proven for the cheapest). **A tie:** a plan with
+the same number of moves as the cheapest that costs less than 3 minutes per park day more (the
+plan's "any order will do", `ORDER_MATTERS_MINUTES`) ties it, and the tie goes to the plan whose
+bases lie closer to the trip's parks (each park's reach from the closest of the plan's bases,
+summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix pays 5
+minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
+the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
+tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
+bases has no stays and keeps its cheapest plan. `split=auto` keeps the days that can only be a
 move out of the room it gives second visits. On the test region (four cities, five parks, ten
 days) a plan takes 5–40 ms.
 
@@ -1647,7 +1695,7 @@ ticket does not allow, and the catalog's `confidence` and `notes` say so:
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v1:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v1:*`, `trip-regions:plan:v2:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
@@ -1669,3 +1717,67 @@ in the ordinary window) as week-long snapshots (`trip-regions:last-year:v1:{park
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:
 [caching](../architecture/caching-strategy.md#cache-warmup).
+
+## What the server records
+
+Every answer of `/plan`, `/when` and `/best-days` leaves one row in `trip_request_metrics`, so the
+planner can be tuned from data: the MCP tool `trip_planner_ops` reads them
+([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
+frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
+answer. Code: `src/trip-regions/metrics/`.
+
+**Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
+the services (400, 404), a failure (5xx). Not recorded: a request the data-key guard turns away
+(401, 403, 429: it never reaches the route), an answer Cloudflare serves from its cache, and
+Parky's `plan_vacation` and `find_trip_dates`, which call the services without the route.
+
+| Column                                                 | What                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
+| `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
+| `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
+| `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
+| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
+| `calendar_cache`                                       | the region calendar a built answer read, the same three states                                                                                             |
+| `exact`                                                | `meta.exact` (`/plan`) or `meta.search.exact` (`/when`): the search was proven, not stopped by its time budget                                            |
+| `relaxed`                                              | the codes of `meta.relaxed`, sorted; `/when`: `ticket_window_relaxed` when a window answered carries that warning                                         |
+| `unplaced_reasons`                                     | one entry per `unplaced[]`, its reason; `/when` names none, so one `unknown` per park its best window left out                                            |
+| `trip_days`, `parks`, `parks_named`, `visits`, `locks` | the normalized query in counts: trip length with arrival and departure, parks (named or the headliners), visits with second ones, pinned days             |
+| `ticket_kinds`                                         | one entry per owned ticket: `pass`, `evening`, `reserved_day`, `one_day`, `multi_day`, `unknown` (a product the catalog no longer has)                     |
+| `hopper`                                               | plan first's hopper resorts, or an owned ticket with the hopper                                                                                            |
+| `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; `/when`: the best window's stays (a window names no moves); null in the other regions        |
+| `range_days`, `windows`, `windows_planned`, `within`   | `/when`: the search range in days, the windows answered, those planned (`meta.search.planned`), a school-break filter. `/best-days`: `range_days`          |
+
+The shape is read from the normalized query, so a request refused while its query is read has
+only its route, region, status, code and latency.
+
+**Error codes.** A 404 is `unknown_region`; a 400 of the query's own validation (a malformed date,
+`days` out of range, an unknown parameter) is `invalid_query`; a 400 the services raise is told by
+its message, which names the parameter at fault: `bad_date`, `window_in_past`, `window_reversed`,
+`window_past_horizon`, `window_too_long`, `range_shorter_than_trip`, `unknown_park`,
+`park_listed_twice`, `visits_per_park`, `too_many_visits`, `visits_exceed_days`, `bad_hopper`,
+`unknown_area`, `bad_hotel`, `bad_lock`, `bad_tickets`, `bad_within`; in a region with bases
+`bad_bases` (`bases`, `startBase`, `endBase`), `stay_nights_exceed_trip` and `area_needs_base`, and
+`no_bases_in_region` for those parameters elsewhere; and `bad_request` for a message the list does
+not know yet (`TRIP_ERROR_CODES` in `trip-request-facts.ts`, pinned by its
+spec against the messages the code throws). 503 is `unavailable`, any other failure `internal`.
+Only the code is kept: the messages carry the visitor's own values.
+
+**What a row never holds**: a date (the trip's, the range's, a lock's), a park, hotel, area or
+ticket name, a message, free text, an address, a User-Agent or a visitor id. Every string is the
+API's own vocabulary, a region only when `regions.ts` has it.
+
+**How it is written.** The routes wear `@MeasureTripRequest`, an interceptor that opens a trace
+(`AsyncLocalStorage`) around the route; the services note into it the caches that served and the
+trip's shape, and outside a measured request (Parky's tools) a note does nothing. Each API process
+keeps the rows in memory and writes them once a minute, 500 per `INSERT`, and on shutdown; a failed
+write keeps its rows for the next one, and past 5,000 rows waiting a row is dropped and counted
+(the ops tool's `writer`). Recording never touches the answer.
+
+**Retention and schema.** Rows are kept 90 days (`TRIP_METRICS_RETENTION_DAYS`, as long as the
+site statistic's hourly rows) and deleted nightly at 01:25 UTC by `trip-metrics` / `prune`, in
+batches of 10,000 ([job queues](../architecture/job-queues.md)). The table came with the entity
+(`synchronize`, [the entities are the schema](../rules/the-entities-are-the-schema.md)): additive,
+a plain table with an index on `bucket`, its array columns without a default because every insert
+names them. A column added later is nullable or has a default.

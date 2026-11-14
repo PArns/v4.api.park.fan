@@ -271,7 +271,12 @@ export function describeRegion(
         ...(b.order !== undefined && { order: b.order }),
         hotelAreas: [...b.hotelAreas],
         ...(b.defaultArea && { defaultArea: b.defaultArea }),
-        ...(b.gateways && { gateways: b.gateways.map((g) => ({ ...g })) }),
+        ...(b.gateways && {
+          gateways: b.gateways.map((g) => ({
+            ...g,
+            bases: basesOfGateway(region, g.code),
+          })),
+        }),
         ...(b.stayNote && { stayNote: b.stayNote }),
         parks: b.parks.filter((p) => slugs.has(p.slug)).map((p) => ({ ...p })),
       })),
@@ -283,6 +288,21 @@ export function describeRegion(
     }),
     tickets: publicTicketCatalog(region),
   };
+}
+
+/**
+ * Every base that lists a gateway, in the region's order. A client maps the
+ * gateway to `startBase` or `endBase` only where this is one base; where
+ * several list it (CDG serves all three of Paris'), it sends neither and the
+ * plan picks.
+ */
+export function basesOfGateway(
+  region: Pick<RegionConfig, "bases">,
+  code: string,
+): string[] {
+  return (region.bases ?? [])
+    .filter((b) => (b.gateways ?? []).some((g) => g.code === code))
+    .map((b) => b.key);
 }
 
 /** Days in a month of a common year; a storm season never ends in February. */

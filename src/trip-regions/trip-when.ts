@@ -38,9 +38,11 @@ import {
 import {
   autoSplit,
   optimizePlan,
+  parksLeftOut,
   planTickets,
   type NormalizedPlanQuery,
   type OptimizedTrip,
+  type ParkLeftOut,
 } from "./trip-plan.assembly";
 import { buildLegs } from "./travel";
 import { planEvenings } from "./trip-evening";
@@ -101,6 +103,12 @@ export const MILD_TEMP_MAX = { min: 20, max: 29 } as const;
 export const MILD_MAX_DAILY_RAIN_MM = 3;
 /** `after_holidays`: a school break ended within this many days before the start. */
 export const AFTER_HOLIDAYS_DAYS = 7;
+/**
+ * `after_holidays`: the break that ended ran at least this many days. A long
+ * weekend is no holidays: Martin Luther King Jr. Day's (Orlando, 16–18
+ * January 2027) made a trip from 23 January read "right after the holidays".
+ */
+export const AFTER_HOLIDAYS_MIN_BREAK_DAYS = 5;
 /** `before_spring_break`: the next school break starts within this many days after the end. */
 export const BEFORE_BREAK_DAYS = 14;
 /** The months a school break that starts then counts as spring break. */
@@ -203,6 +211,8 @@ export interface TripWhenWindow {
       base?: string;
     }>;
     unplaced?: string[];
+    /** The chosen parks the window's plan has no visit of, as `/plan`'s `parksLeftOut`. */
+    parksLeftOut?: ParkLeftOut[];
     /** A region with bases: the window's stays, as on `/plan`. */
     stays?: OptimizedPlan["stays"];
   };
@@ -960,6 +970,26 @@ function normalsOf(
     .filter((n): n is NonNullable<typeof n> => !!n);
 }
 
+/**
+ * Whether school holidays ended within {@link AFTER_HOLIDAYS_DAYS} before the
+ * day at `index`: the last school-break day in that span ends a run of at
+ * least {@link AFTER_HOLIDAYS_MIN_BREAK_DAYS} days. A run that reaches the
+ * range's first day counts, since it began before what the range shows (a
+ * search from 1 January starts inside the winter break).
+ */
+export function holidaysEndedBefore(
+  days: ReadonlyArray<{ isSchoolVacation: boolean }>,
+  index: number,
+): boolean {
+  for (let i = index - 1; i >= Math.max(0, index - AFTER_HOLIDAYS_DAYS); i--) {
+    if (!days[i].isSchoolVacation) continue;
+    let start = i;
+    while (start > 0 && days[start - 1].isSchoolVacation) start--;
+    return start === 0 || i - start + 1 >= AFTER_HOLIDAYS_MIN_BREAK_DAYS;
+  }
+  return false;
+}
+
 function describeWindow(
   input: WhenInput,
   e: Evaluated,
@@ -983,11 +1013,7 @@ function describeWindow(
   const unknownSchool = window.some((d) => d.schoolVacationUnknown);
   if (schoolDays.length === 0 && !unknownSchool) {
     reasons.push("no_school_break");
-    const before = days.slice(
-      Math.max(0, e.index - AFTER_HOLIDAYS_DAYS),
-      e.index,
-    );
-    if (before.some((d) => d.isSchoolVacation)) reasons.push("after_holidays");
+    if (holidaysEndedBefore(days, e.index)) reasons.push("after_holidays");
     const after = days.slice(
       e.index + query.days,
       e.index + query.days + BEFORE_BREAK_DAYS,
@@ -1091,6 +1117,7 @@ function describeWindow(
   }
 
   const unplaced = e.plan.unplaced.map((u) => u.slug);
+  const leftOut = parksLeftOut(region, slugs, e.plan);
   return {
     rank,
     from,
@@ -1113,6 +1140,7 @@ function describeWindow(
         ...(d.base && { base: d.base }),
       })),
       ...(unplaced.length > 0 && { unplaced }),
+      ...(leftOut.length > 0 && { parksLeftOut: leftOut }),
       ...(e.plan.stays && { stays: e.plan.stays }),
     },
   };

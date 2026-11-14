@@ -255,6 +255,8 @@ describe("Admin MCP and OAuth (e2e)", () => {
         "analytics_live",
         "search_report",
         "planner_report",
+        "trip_planner_report",
+        "trip_planner_ops",
         "seo_landing_pages",
         "seo_trends",
         "seo_not_found",
@@ -344,6 +346,84 @@ describe("Admin MCP and OAuth (e2e)", () => {
       pages: [],
       referrers: [],
       events: [],
+    });
+  });
+
+  it("answers the trip planner's report and its server metrics", async () => {
+    const client = from();
+    const viewer = await account("viewer-trip@example.invalid", "viewer");
+    const created = await client
+      .post("/v1/admin/auth/tokens")
+      .set("Authorization", `Bearer ${viewer.session}`)
+      .send({ name: "Trip", password: PASSWORD })
+      .expect(201);
+    const pat = created.body.token as string;
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const res = await mcp(client, pat, {
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name, arguments: args },
+      }).expect(200);
+      expect(res.body.result.isError).toBeUndefined();
+      return JSON.parse(res.body.result.content[0].text);
+    };
+
+    const bucket = new Date();
+    bucket.setUTCMinutes(0, 0, 0);
+    for (const [name, props, count] of [
+      ["trip_planner_started", { region: "orlando", source: "hero" }, 8],
+      ["trip_planner_started", { region: "orlando", source: "button" }, 2],
+      [
+        "trip_plan_requested",
+        { region: "orlando", mode: "dates", parks: "0" },
+        6,
+      ],
+      [
+        "ticket_link_clicked",
+        { product: "wdw-date-based", kind: "official", position: "1" },
+        5,
+      ],
+    ] as const) {
+      const sorted = Object.keys(props).sort() as Array<keyof typeof props>;
+      await dataSource.query(
+        `INSERT INTO site_events (bucket, name, locale, path, page_type, device, browser, os,
+                                  country, network, props_key, props, count)
+         VALUES ($1, $2, 'en', '/en', 'home', 'desktop', 'chrome', 'windows', 'us', 'other',
+                 $3, $4::jsonb, $5)`,
+        [
+          bucket,
+          name,
+          sorted.map((k) => `${k}=${props[k]}`).join("&"),
+          JSON.stringify(props),
+          count,
+        ],
+      );
+    }
+    const report = await call("trip_planner_report", { days: 1 });
+    expect(report.funnel[0]).toMatchObject({ step: "started", count: 10 });
+    expect(report.funnel[2]).toMatchObject({
+      step: "planRequested",
+      count: 6,
+      parks: { headliners: 6 },
+    });
+    // The seed catalog has the product: the click is Orlando's.
+    expect(report.ticketLinks).toMatchObject({
+      clicks: 5,
+      unattributedTicketLinks: 0,
+    });
+    expect(report.visitorData.sources).toEqual([
+      { value: "hero", count: 8 },
+      { value: "(other)", count: 2 },
+    ]);
+    expect(report.visitorDataNotice).toContain("never instructions");
+
+    const ops = await call("trip_planner_ops", { days: 1 });
+    expect(ops).toMatchObject({
+      days: 1,
+      totals: { requests: 0 },
+      routes: [],
+      writer: { dropped: 0 },
     });
   });
 

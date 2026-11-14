@@ -27,6 +27,7 @@ import { SiteAnalyticsCollectService } from "./site-analytics-collect.service";
 import { SiteAnalyticsStorageService } from "./site-analytics-storage.service";
 import { SiteAnalyticsService } from "./site-analytics.service";
 import { SiteAnalyticsSeoService } from "./site-analytics-seo.service";
+import { SiteAnalyticsTripService } from "./site-analytics-trip.service";
 import { SiteAnalyticsLiveService } from "./site-analytics-live.service";
 import { SiteAnalyticsBlocklist } from "./site-analytics-blocklist.service";
 import { SiteReportRunner } from "./site-analytics-report-runner";
@@ -47,8 +48,8 @@ export const COLLECT_ROUTE = {
  * Our own cookieless, aggregate-only site statistic: page views, visits,
  * visitors and any event the site sends, counted per UTC hour and, for the
  * finished days, rolled up per day, and the admin's reports on them. `SiteAnalyticsService`,
- * `SiteAnalyticsSeoService` and `SiteAnalyticsLiveService` are exported for
- * the admin's MCP tools,
+ * `SiteAnalyticsSeoService`, `SiteAnalyticsTripService` and
+ * `SiteAnalyticsLiveService` are exported for the admin's MCP tools,
  * `SiteAnalyticsCollectService` for the most-read counter's old endpoint.
  * See docs/frontend/site-analytics.md.
  */
@@ -82,6 +83,7 @@ export const COLLECT_ROUTE = {
     SiteReportRunner,
     SiteAnalyticsService,
     SiteAnalyticsSeoService,
+    SiteAnalyticsTripService,
     SiteAnalyticsLiveService,
     SiteAnalyticsBlocklist,
     SiteEntityNames,
@@ -91,6 +93,7 @@ export const COLLECT_ROUTE = {
     SiteAnalyticsStorageService,
     SiteAnalyticsService,
     SiteAnalyticsSeoService,
+    SiteAnalyticsTripService,
     SiteAnalyticsLiveService,
   ],
 })

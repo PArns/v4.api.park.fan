@@ -356,8 +356,36 @@ function answers() {
 
 interface Answers {
   plans: unknown[];
-  when: Array<{ months: Array<Record<string, unknown>> }>;
+  when: Array<{
+    months: Array<Record<string, unknown>>;
+    windows: Array<{ plan: Record<string, unknown> }>;
+  }>;
   bestDays: unknown[];
+}
+
+/**
+ * `parksLeftOut` (PAR-1309) is a new view of what Orlando already sent: the
+ * chosen parks with no visit, each of them in `unplaced` with its reason.
+ * Checked so, then left out of the comparison.
+ */
+function withoutParksLeftOut(answer: Record<string, unknown>): void {
+  const leftOut = (answer.parksLeftOut ?? []) as Array<{
+    park: string;
+    reason: string;
+  }>;
+  const unplaced = (answer.unplaced ?? []) as Array<
+    { slug: string; reason: string } | string
+  >;
+  for (const p of leftOut) {
+    expect(
+      unplaced.some((u) =>
+        typeof u === "string"
+          ? u === p.park
+          : u.slug === p.park && u.reason === p.reason,
+      ),
+    ).toBe(true);
+  }
+  delete answer.parksLeftOut;
 }
 
 /**
@@ -367,6 +395,12 @@ interface Answers {
  * Checked equal, then left out of the comparison.
  */
 function withoutAliases(answers: Answers): Answers {
+  for (const plan of answers.plans) {
+    withoutParksLeftOut(plan as Record<string, unknown>);
+  }
+  for (const when of answers.when) {
+    for (const window of when.windows) withoutParksLeftOut(window.plan);
+  }
   for (const when of answers.when) {
     for (const month of when.months) {
       expect(month.localSchoolBreakDays).toEqual(month.usSchoolBreakDays);

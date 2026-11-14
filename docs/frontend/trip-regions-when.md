@@ -98,8 +98,9 @@ by the key guard). It answers 400 for:
             "parks": ["disneys-animal-kingdom-theme-park"],
           },
         ],
-        "unplaced": ["…"],
-      }, // only when a visit found no day
+        "unplaced": ["…"], // only when a visit found no day
+        "parksLeftOut": [{ "park": "epcot", "reason": "no_day_left" }], // only when a chosen park has no visit
+      },
     },
   ],
   "weeks": [
@@ -145,6 +146,10 @@ by the key guard). It answers 400 for:
   And `headlinerWait` leaves the `fireworks=want` penalty out (it ranks the window; it is no number
   of minutes) and says `fireworks_missed` instead. `headlinerWait` is the plan's mean over its park
   days (a hop day counts once, half of each park plus the move).
+- **`plan.parksLeftOut`**: the chosen parks the window's plan has no visit of, `{ park, reason }`
+  in the region's order, as on `/plan` ([parks left out](./trip-regions.md#the-plan-get-v1trip-regionsorlandoplan)),
+  absent when every chosen park has a day. Seven parks in a 7-day window with a free arrival and
+  departure day plan five and name two, so each suggestion can say which do not fit.
 - **The ranking** is the plan's sum over its park days, plus 1000 for each visit the window cannot
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
   it. It includes extreme heat and the hurricane season
@@ -202,7 +207,9 @@ by the key guard). It answers 400 for:
 - **Reasons** (the client translates the codes and shows nothing for an unknown one):
   - `no_school_break`: no day of the window is a school break of the region's own calendar (the
     US's in Orlando) and none is unknown;
-  - `after_holidays`: and a school break ended within 7 days before it;
+  - `after_holidays`: and a school break of at least 5 days ended within 7 days before it
+    (`AFTER_HOLIDAYS_MIN_BREAK_DAYS`; a long weekend such as Martin Luther King Jr. Day's is no
+    holidays). A break the search range starts inside counts, since it began before the range;
   - `before_spring_break`: and the next school break starts within 14 days after it, in February
     to April;
   - `festival` (with `seasons`): a chosen park's `special_event`, `halloween`, `christmas` or
@@ -312,7 +319,7 @@ for the mixing comparison ([tickets](./trip-regions.md#tickets)).
 two-week reference span: one read per park and month from the month caches, the last-year
 snapshots past the forecast, no ML call. The warmup keeps a region park's months to +13 so a
 year's range is all cache hits ([trip regions](./trip-regions.md#caching-and-cost)). An answer is
-kept six hours in Redis (`trip-regions:when:v1:{region}:{query}`) by its normalized query.
+kept six hours in Redis (`trip-regions:when:v2:{region}:{query}`) by its normalized query.
 
 ## School breaks (`GET /v1/trip-regions/:region/school-breaks`)
 
