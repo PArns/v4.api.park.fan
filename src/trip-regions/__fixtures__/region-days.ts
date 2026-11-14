@@ -95,7 +95,12 @@ export function daysBetween(from: string, to: string): number {
 export interface PlanAnswer {
   meta: Record<string, unknown> & {
     stays?: Array<Record<string, unknown>>;
-    ticketSuggestion?: Array<{ resort: string; product: string }>;
+    ticketSuggestion?: Array<{
+      resort: string;
+      product: string;
+      days?: number;
+      extraDays?: number;
+    }>;
   };
   days: Array<
     Record<string, unknown> & {

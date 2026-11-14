@@ -56,6 +56,7 @@ import {
   ownedHopSets,
   ownedVerdict,
   parseTickets,
+  planFirstTicketCost,
   planTicketsOf,
   productOf,
   suggestTickets,
@@ -609,6 +610,9 @@ export function planInput(
       })),
     }),
     cells,
+    // The spread may not make plan first's suggestion dearer.
+    planFirstTickets: (resort, visits) =>
+      planFirstTicketCost(region, resort, visits),
     options: {
       arrival: q.arrival,
       departure: q.departure,

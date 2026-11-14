@@ -928,7 +928,15 @@ without a park, no park days bunched together, a park's visits a few days apart.
 when it costs less than 3 minutes per park day more than the cheapest (`ORDER_MATTERS_MINUTES`,
 the band stay plans tie in, [bases](#bases-a-trip-across-several-cities)) and puts no visit on a day more than 5
 minutes dearer than the cheapest plan's day for it (a park's visits compared cheapest with
-cheapest; 5 minutes is `runner_up_close`): a clearly better day is never given up. The spread
+cheapest; 5 minutes is `runner_up_close`): a clearly better day is never given up. Nor is a
+ticket day. An owned ticket's window is a rule of the search, so no visit leaves it. Plan first's
+tickets ([`meta.ticketSuggestion`](#plan-first-metaticketsuggestion)) are priced for each move: a
+resort's suggestion may get no more tickets, ticket days or uncovered visits than the cheapest
+plan's (and keeps its products where none drops), and fewer ticket days, then fewer tickets, rank
+before the spread. So Disneyland Paris's consecutive days stay together (spread apart on a flat
+week, two days needed the 4-day ticket), a rest day inside a consecutive ticket closes where a day
+within 5 minutes allows, and Walt Disney World's four days stay inside the 4-day ticket's week;
+Japan's dated 1-day passports leave the spread as it was. The spread
 is the sum of the squares of each run of park days and of each run of days without one (rest,
 travel, the arrival and departure day) over the whole trip, plus, for two visits of a park fewer
 than three days apart, the square of the days missing. Starting from the cheapest, the best move of
