@@ -44,11 +44,50 @@ import { gscQueriesTool } from "./gsc-queries.tool";
 import { gscPagesTool } from "./gsc-pages.tool";
 import { gscSeriesTool } from "./gsc-series.tool";
 import { gscInspectUrlTool } from "./gsc-inspect-url.tool";
+import {
+  addRedirectTool,
+  correctParkLocationTool,
+  curateAttractionTool,
+  curateParkAttractionsTool,
+  curateParkTool,
+  curationFieldsTool,
+  deleteRideProfileTool,
+  refreshParkTool,
+  removeRedirectTool,
+  undoCurationTool,
+  verifyParkTool,
+  writeRideProfileTool,
+} from "./curation.tools";
+import {
+  retireAttractionsTool,
+  retiredAttractionsTool,
+  retireParkTool,
+  reviewMarkTool,
+  setRetiredHiddenTool,
+  unretireAttractionTool,
+} from "./retirement.tools";
+import { mergeAttractionsTool, mergeParksTool } from "./merge.tools";
+import { runJobTool, runMaintenanceTool } from "./jobs.tools";
+import {
+  apiKeysTool,
+  createApiKeyTool,
+  deleteApiKeyTool,
+  revokeApiKeyTool,
+  rotateApiKeyTool,
+  updateApiKeyTool,
+} from "./api-keys.tools";
+import {
+  adminUsersTool,
+  blockEventTool,
+  deleteAssistantConversationTool,
+  setFeedbackStatusTool,
+} from "./site-admin.tools";
 
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
  * A new tool is a file next to this one and a line here; nothing else
- * registers it. All of v1 is read-only.
+ * registers it. A tool that writes runs its admin route's handler
+ * (`../admin-route.ts`) and carries `writes` and the route's `minRole`.
  */
 export const MCP_TOOLS: readonly AnyMcpTool[] = [
   whoamiTool,
@@ -94,4 +133,37 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   gscPagesTool,
   gscSeriesTool,
   gscInspectUrlTool,
+  // The admin's pages: curation, merges, retirement, jobs, the site, keys, accounts.
+  curationFieldsTool,
+  curateParkTool,
+  curateAttractionTool,
+  curateParkAttractionsTool,
+  verifyParkTool,
+  undoCurationTool,
+  writeRideProfileTool,
+  deleteRideProfileTool,
+  correctParkLocationTool,
+  refreshParkTool,
+  addRedirectTool,
+  removeRedirectTool,
+  mergeAttractionsTool,
+  mergeParksTool,
+  retiredAttractionsTool,
+  retireAttractionsTool,
+  unretireAttractionTool,
+  setRetiredHiddenTool,
+  retireParkTool,
+  reviewMarkTool,
+  runJobTool,
+  runMaintenanceTool,
+  setFeedbackStatusTool,
+  deleteAssistantConversationTool,
+  blockEventTool,
+  apiKeysTool,
+  createApiKeyTool,
+  updateApiKeyTool,
+  rotateApiKeyTool,
+  revokeApiKeyTool,
+  deleteApiKeyTool,
+  adminUsersTool,
 ];

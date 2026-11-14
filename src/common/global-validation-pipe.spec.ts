@@ -1,6 +1,7 @@
 import { ValidationPipe, ArgumentMetadata } from "@nestjs/common";
 import { TripWriteDto } from "../trips/dto/trip.dto";
 import { PushSubscribeDto, PushUnsubscribeDto } from "../push/dto/push.dto";
+import { GLOBAL_VALIDATION_PIPE_OPTIONS } from "./pipes/global-validation-pipe.options";
 
 /**
  * Every request body has to survive the pipe that production actually mounts.
@@ -18,14 +19,18 @@ import { PushSubscribeDto, PushUnsubscribeDto } from "../push/dto/push.dto";
  * belongs in the table below on the day it is written.
  */
 describe("the global ValidationPipe vs. every request body", () => {
-  // Copied from `main.ts` on purpose rather than imported: the point is to
-  // notice when the two drift, and a shared constant would hide that. Keep in
-  // step with `app.useGlobalPipes(...)`.
-  const pipe = new ValidationPipe({
+  // Written out here rather than imported: the point is to notice when the
+  // options `main.ts` mounts drift, and the first test compares the two.
+  const options = {
     whitelist: true,
     forbidNonWhitelisted: true,
     transform: true,
     transformOptions: { enableImplicitConversion: true },
+  };
+  const pipe = new ValidationPipe(options);
+
+  it("uses the options main.ts mounts", () => {
+    expect(GLOBAL_VALIDATION_PIPE_OPTIONS).toEqual(options);
   });
 
   const asBody = (

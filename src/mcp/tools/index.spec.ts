@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MCP_TOOLS } from "./index";
+import { roleAtLeast } from "../../admin/auth/entities/admin-user.entity";
 
 /**
  * The registry is what a model reads to choose a tool, so its shape is a
@@ -33,8 +34,23 @@ describe("MCP_TOOLS", () => {
     },
   );
 
-  it("is read-only in v1: every tool is open to a viewer", () => {
-    for (const tool of MCP_TOOLS)
-      expect(tool.minRole ?? "viewer").toBe("viewer");
+  it("asks editor or above of every tool that writes", () => {
+    const below = MCP_TOOLS.filter(
+      (tool) => tool.writes && !roleAtLeast(tool.minRole ?? "viewer", "editor"),
+    ).map((tool) => tool.name);
+    expect(below).toEqual([]);
+  });
+
+  it("shows a delete before it runs it, or has it confirmed", () => {
+    const unguarded = MCP_TOOLS.filter((tool) => tool.writes === "delete")
+      .filter((tool) => {
+        const dryRun = tool.input.dryRun;
+        return (
+          !(dryRun && dryRun.safeParse(undefined).data === true) &&
+          !tool.input.confirm
+        );
+      })
+      .map((tool) => tool.name);
+    expect(unguarded).toEqual([]);
   });
 });

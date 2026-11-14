@@ -10,6 +10,7 @@ import { enableGracefulShutdown } from "./common/utils/graceful-shutdown";
 import { watchShutdownWork } from "./common/utils/shutdown-work";
 import { installCrashHandlers } from "./common/utils/crash-handlers";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
+import { GLOBAL_VALIDATION_PIPE_OPTIONS } from "./common/pipes/global-validation-pipe.options";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
@@ -87,16 +88,7 @@ async function bootstrap(): Promise<void> {
   });
 
   // Global validation pipe for DTOs
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true, // Strip unknown properties
-      forbidNonWhitelisted: true, // Throw error on unknown properties
-      transform: true, // Auto-transform payloads to DTO instances
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+  app.useGlobalPipes(new ValidationPipe(GLOBAL_VALIDATION_PIPE_OPTIONS));
 
   // Global exception filter
   app.useGlobalFilters(new HttpExceptionFilter());

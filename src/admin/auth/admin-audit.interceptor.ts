@@ -7,8 +7,8 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { Observable, tap } from "rxjs";
-import { AdminAuditService } from "./admin-audit.service";
-import type { RequestWithAdmin } from "./admin-principal";
+import { AdminAuditService, type AuditWrite } from "./admin-audit.service";
+import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
 
 export const ADMIN_SELF_AUDITED_KEY = "adminSelfAudited";
 
@@ -66,17 +66,34 @@ export class AdminAuditInterceptor implements NestInterceptor {
       tap(() => {
         const admin = request.admin;
         if (!admin) return;
-        void this.audit.record({
-          actor: admin,
-          action: `job.${routeAction(request)}`,
-          entityType: "system",
-          entityId: null,
-          entityLabel: `${method} ${routeAction(request)}`,
-          after: redact(request.body),
-        });
+        void this.audit.record(
+          routeAuditEntry(admin, method, routeAction(request), request.body),
+        );
       }),
     );
   }
+}
+
+/**
+ * The row this interceptor writes for one successful admin write: `action`
+ * is the route without its `/v1/admin/` prefix, as `routeAction` cuts it.
+ * Exported for the admin MCP server, whose write tools run a route's handler
+ * without this interceptor and record the same row (`src/mcp/admin-route.ts`).
+ */
+export function routeAuditEntry(
+  actor: AdminPrincipal,
+  method: string,
+  action: string,
+  body: unknown,
+): AuditWrite {
+  return {
+    actor,
+    action: `job.${action}`,
+    entityType: "system",
+    entityId: null,
+    entityLabel: `${method} ${action}`,
+    after: redact(body),
+  };
 }
 
 /**

@@ -6,6 +6,7 @@ import * as packageJson from "../../package.json";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import { roleAtLeast } from "../admin/auth/entities/admin-user.entity";
 import { McpToolError, type AnyMcpTool, type McpToolContext } from "./mcp-tool";
+import { toolAnnotations } from "./admin-route";
 import { MCP_TOOLS } from "./tools";
 
 /** A tool answer longer than this is cut; the model is told to narrow the call. */
@@ -48,13 +49,7 @@ export class McpServerFactory {
           title: tool.title,
           description: tool.description,
           inputSchema: tool.input,
-          annotations: {
-            title: tool.title,
-            readOnlyHint: true,
-            destructiveHint: false,
-            idempotentHint: true,
-            openWorldHint: false,
-          },
+          annotations: toolAnnotations(tool),
         },
         ((input: Record<string, unknown>) =>
           this.call(tool, input, admin)) as never,
