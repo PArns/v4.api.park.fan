@@ -1,4 +1,5 @@
 {
+  "workerIdleMemoryLimit": "1GB",
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": "src",
   "testRegex": ".*\\.spec\\.ts$",
