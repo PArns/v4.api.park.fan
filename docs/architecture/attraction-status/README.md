@@ -8,7 +8,7 @@ page for the question you have; the rule all of them apply is
 | Page | Covers |
 | --- | --- |
 | [Status regimes](status-regimes.md) | Real feed, free-flow `open_with_park`, `UNKNOWN` when no source reports a ride, the optimistic fallback, a whole park gone silent |
-| [Seasonality](seasonality.md) | `is_seasonal` vs `season_months`, `MIN_OBSERVED_DAYS`, `detect-seasonal`, curating a free-flow area and its months |
+| [Seasonality](seasonality.md) | `is_seasonal` vs `season_months`, a ride bound to a park season and the precedence of the three writers, `MIN_OBSERVED_DAYS`, `detect-seasonal`, curating a free-flow area and its months |
 | [The `MAZE` rule](maze-rule.md) | The one `attraction_kind` verdict a job may write, and the scare-zone rubric |
 | [Identity](identity.md) | `externalId` vs slug, the name grouping in the park payload, which row of a name group the payload and sitemap keep |
 | [Review marks](review-marks.md) | `attraction_review_marks`, and how to triage retirement candidates before researching them |

@@ -1,4 +1,8 @@
 import { ApiProperty } from "@nestjs/swagger";
+import {
+  BOUND_SEASON_PROPERTY,
+  BoundSeasonDto,
+} from "../../attractions/dto/bound-season.dto";
 import { Park } from "../entities/park.entity";
 import { WeatherItemDto } from "./weather-item.dto";
 import { WeatherWarningDto } from "./weather-warning.dto";
@@ -24,6 +28,7 @@ import {
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
 import {
   isCurrentlyInSeason,
+  boundSeasonOf,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
@@ -224,6 +229,9 @@ export class ParkAttractionDto {
     nullable: true,
   })
   isCurrentlyInSeason?: boolean | null;
+
+  @ApiProperty(BOUND_SEASON_PROPERTY)
+  boundSeason?: BoundSeasonDto;
 
   @ApiProperty({
     description: "Minimum rider height in cm. Null if unrestricted or unknown.",
@@ -1050,6 +1058,7 @@ export class ParkWithAttractionsDto {
               // Seasonal but unknown when → null, deliberately: it must not
               // collapse into "not running", which would hide the ride.
               isCurrentlyInSeason: isCurrentlyInSeason(curated, park.timezone),
+              ...boundSeasonOf(curated, park.timezone),
               minimumHeight: curated.minimumHeight,
               minimumHeightUnit: curated.minimumHeightUnit,
               maximumHeight: curated.maximumHeight,

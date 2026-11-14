@@ -113,6 +113,8 @@ export const getAttractionTool = defineMcpTool({
         isSeasonal: dto.isSeasonal ?? null,
         seasonMonths: dto.seasonMonths ?? null,
         isCurrentlyInSeason: dto.isCurrentlyInSeason ?? null,
+        // The park season the ride runs in, when one binds it: its days are the window.
+        boundSeason: dto.boundSeason ?? null,
         land: dto.land ?? null,
         // Absent is "nobody checked or none sold", never "no fast pass".
         fastPass: dto.fastPass ?? null,

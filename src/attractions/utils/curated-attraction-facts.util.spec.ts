@@ -1,8 +1,11 @@
 import {
+  boundSeasonOf,
   isCurrentlyInSeason,
+  nextSeasonBindingDay,
   resolveCuratedFacts,
   type ResolvedCuratedFacts,
 } from "./curated-attraction-facts.util";
+import type { SeasonBinding } from "../../common/types/season-binding.type";
 
 describe("resolveCuratedFacts", () => {
   describe("name", () => {
@@ -291,6 +294,75 @@ describe("resolveCuratedFacts", () => {
           july,
         ),
       ).toBe(true);
+    });
+  });
+
+  describe("a ride bound to a park season", () => {
+    const wintertraum: SeasonBinding = {
+      id: "s1",
+      kind: "winter",
+      name: "Wintertraum",
+      status: "expected",
+      startDate: "2026-11-20",
+      endDate: "2027-01-18",
+      dates: null,
+    };
+    const tz = "Europe/Berlin";
+    const on = (day: string) => new Date(`${day}T12:00:00Z`);
+
+    it("is seasonal, in season only on the season's days", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: false,
+        seasonBindings: [wintertraum],
+      });
+      expect(facts.isSeasonal).toBe(true);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-11-14"))).toBe(false);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-12-24"))).toBe(true);
+      expect(boundSeasonOf(facts, tz, on("2026-11-14"))).toEqual({
+        boundSeason: wintertraum,
+      });
+    });
+
+    it("outranks the detector's months and its out-of-season note", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [11],
+        seasonOutSince: "2026-03-01",
+        seasonBindings: [wintertraum],
+      });
+      expect(facts.seasonMonths).toBeNull();
+      expect(facts.seasonOutSince).toBeNull();
+      expect(isCurrentlyInSeason(facts, tz, on("2026-11-14"))).toBe(false);
+    });
+
+    it("gives way to curated months and to a curated false", () => {
+      const months = resolveCuratedFacts({
+        curatedSeasonMonths: [11],
+        seasonBindings: [wintertraum],
+      });
+      expect(months.seasonBindings).toEqual([]);
+      expect(isCurrentlyInSeason(months, tz, on("2026-11-14"))).toBe(true);
+      const notSeasonal = resolveCuratedFacts({
+        curatedIsSeasonal: false,
+        seasonBindings: [wintertraum],
+      });
+      expect(notSeasonal.isSeasonal).toBe(false);
+      expect(boundSeasonOf(notSeasonal, tz)).toEqual({});
+    });
+
+    it("reads a season's list of days, and names the next one", () => {
+      const nights = {
+        ...wintertraum,
+        kind: "halloween" as const,
+        startDate: "2026-10-03",
+        endDate: "2026-10-31",
+        dates: ["2026-10-03", "2026-10-10"],
+      };
+      const facts = resolveCuratedFacts({ seasonBindings: [nights] });
+      expect(isCurrentlyInSeason(facts, tz, on("2026-10-03"))).toBe(true);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-10-06"))).toBe(false);
+      expect(nextSeasonBindingDay(nights, "2026-10-06")).toBe("2026-10-10");
+      expect(nextSeasonBindingDay(nights, "2026-10-10")).toBeNull();
     });
   });
 });

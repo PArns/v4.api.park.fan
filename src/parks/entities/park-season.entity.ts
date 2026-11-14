@@ -44,6 +44,26 @@ export const PARK_SEASON_KINDS = [
 export type ParkSeasonKind = (typeof PARK_SEASON_KINDS)[number];
 
 /**
+ * The kinds whose `attractionIds` bind a ride to the season: a ride one of
+ * them names exists only on the season's days (Phantasialand's ice rink and
+ * skate hire during Wintertraum, a maze during Fright Nights), and outside
+ * them it is out of season rather than closed.
+ *
+ * `opening`, `closure` and `maintenance` are left out on purpose. A
+ * maintenance window's rides are down *inside* it, the opposite statement,
+ * and the other two describe the whole park, not a ride. A `cancelled`
+ * season binds nothing. The resolver and its precedence:
+ * `docs/architecture/attraction-status/seasonality.md#a-ride-bound-to-a-park-season`.
+ */
+export const PARK_SEASON_BINDING_KINDS = [
+  "halloween",
+  "christmas",
+  "winter",
+  "summer_nights",
+  "special_event",
+] as const satisfies readonly ParkSeasonKind[];
+
+/**
  * How settled this is.
  *
  * Not decoration. A visitor planning October needs to know the difference
@@ -189,12 +209,14 @@ export class ParkSeason {
   closesAt: string | null;
 
   /**
-   * Which attractions this season is about, as attraction UUIDs.
+   * Which attractions this season is about, as lowercase attraction UUIDs.
    *
-   * Used by `maintenance` (this ride is down) and by overlay seasons that
-   * re-theme specific rides. Deliberately a plain array rather than a join
-   * table: it is read whole, written whole, never queried from the other side,
-   * and a join table would be three files for a list of ids.
+   * What naming a ride means depends on the kind. On `maintenance` the ride is
+   * down for the season. On a kind in `PARK_SEASON_BINDING_KINDS` the ride runs
+   * only on the season's days: it is seasonal, and out of season outside them
+   * (`Attraction.seasonBindings`). Deliberately a plain array rather than a
+   * join table: it is written whole, and its one reverse lookup is the
+   * containment test in `seasonBindsAttraction` over a park's few seasons.
    */
   @Column({ name: "attraction_ids", type: "jsonb", nullable: true })
   attractionIds: string[] | null;

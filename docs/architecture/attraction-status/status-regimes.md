@@ -27,7 +27,7 @@ only when all hold:
 | the flag is set | it is what marks a free-flow attraction |
 | the park is `OPERATING` | a playground in a closed park is behind a gate |
 | wait times are readable | nothing below an unreadable park (Hansa-Park) may claim to run |
-| today, park-local, is in `season_months` (null or empty = all year) | seasonal free-flow areas can carry the flag ([seasonality](seasonality.md)) |
+| today, park-local, is in `season_months` (null or empty = all year), or one of a bound park season's days | seasonal free-flow areas can carry the flag ([seasonality](seasonality.md#a-ride-bound-to-a-park-season)) |
 
 Free-flow outranks the source-absence rule below: the flag, not the feed, makes it open. In
 `favorites` that ordering needs an explicit guard, because the absence check reads the raw rows.
