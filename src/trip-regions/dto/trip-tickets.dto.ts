@@ -58,6 +58,20 @@ export class TripTicketAllowanceDto {
 }
 
 /** Where a ticket is bought. */
+/** The country store a link leads to, for a seller with one store per country. */
+export class TripTicketStoreDto {
+  @ApiProperty({
+    example: "IE",
+    description: "ISO 3166-1 alpha-2, upper case: GB, IE, NL, DE, US.",
+  })
+  country: string;
+  @ApiProperty({
+    example: "EUR",
+    description: "ISO 4217: the currency the store sells in.",
+  })
+  currency: string;
+}
+
 export class TripTicketLinkDto {
   @ApiProperty({
     example: "Walt Disney World",
@@ -87,9 +101,16 @@ export class TripTicketLinkDto {
   @ApiPropertyOptional({
     type: [String],
     enum: ["en", "de", "nl", "fr", "es", "it"],
-    description: "The site languages it is for; absent: every one.",
+    description:
+      "The site languages it is for; absent: every one. Orders the links, labels nothing.",
   })
   locales?: string[];
+  @ApiPropertyOptional({
+    type: () => TripTicketStoreDto,
+    description:
+      "The seller's country store it leads to, with the currency it sells in (Attraction Tickets has one per country, each with its own prices): the client names the link by it. Absent: a seller with one shop.",
+  })
+  store?: TripTicketStoreDto;
 }
 
 export class TripTicketOnSaleDto {
