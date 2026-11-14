@@ -292,7 +292,9 @@ describe("system prompt", () => {
     expect(favourites.every((at) => at > 0)).toBe(true);
     expect([...favourites].sort((a, b) => a - b)).toEqual(favourites);
     expect(SYSTEM_PROMPT).toContain("They rank coasters, never parks");
-    expect(SYSTEM_PROMPT).toContain("At heart you are a host.");
+    expect(SYSTEM_PROMPT).toContain(
+      "At heart you are the friend who comes along.",
+    );
     // The guides are his own, not a source he cites.
     expect(SYSTEM_PROMPT).not.toContain("park.fan's guides and news");
     expect(SYSTEM_PROMPT).not.toContain("written by park.fan's editors");

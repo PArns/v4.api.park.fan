@@ -177,6 +177,74 @@ const INTERVIEW_AT = (step: string, answered: string[]): InterviewSnapshot => ({
   source: "planner",
 });
 
+/** Efteling planned for Thursday, five days from the eval's Saturday. */
+const EFTELING_THURSDAY: PlannerSnapshot = {
+  days: [
+    {
+      park: { slug: "efteling", name: "Efteling" },
+      date: "2026-11-12",
+      entries: [
+        {
+          id: "baron-1898-1",
+          kind: "ride",
+          name: "Baron 1898",
+          rideSlug: "baron-1898",
+          start: "10:30",
+        },
+      ],
+    },
+  ],
+};
+
+/** Parky as the user's park buddy: their plan is theirs, said in passing, and no false memory. */
+const BUDDY_CASES: EvalCase[] = [
+  {
+    id: "buddy-plan-thursday-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    planner: EFTELING_THURSDAY,
+    message: "Wie voll wird's?",
+    want: [
+      {
+        tool: ["get_days", "get_park_day", "get_hours", "review_plan_day"],
+        input: { park: "*" },
+      },
+    ],
+    forbid: ["plan_vacation"],
+    answer: [
+      { must: "Donnerstag" },
+      { must: "^(?![\\s\\S]*(deine Daten|Snapshot|Browser geschickt))" },
+    ],
+  },
+  {
+    id: "buddy-how-do-you-know-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    planner: EFTELING_THURSDAY,
+    history: [
+      ["user", "Wie voll wird's?"],
+      [
+        "assistant",
+        "Für deinen Donnerstag in der Efteling sieht es ruhig aus: niedrige Auslastung, Baron 1898 um 10:30 passt gut.",
+      ],
+    ],
+    message: "Woher weißt du, dass ich Donnerstag in die Efteling will?",
+    forbid: "any",
+    answer: [{ must: "Browser|Planer|Tagesplan" }],
+  },
+  {
+    id: "buddy-no-false-memory-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Weißt du noch, was ich dich gestern gefragt hab?",
+    forbid: "any",
+    answer: [{ must: "nicht|kein|neu|frisch" }],
+  },
+];
+
 /** The visitor's own plans: read them, change them, reply chips and the interview (prompt 53). */
 const PLAN_CASES: EvalCase[] = [
   {
@@ -1219,4 +1287,5 @@ export const EVAL_CASES: EvalCase[] = [
     ],
   },
   ...PLAN_CASES,
+  ...BUDDY_CASES,
 ];

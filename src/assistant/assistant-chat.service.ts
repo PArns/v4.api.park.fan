@@ -248,6 +248,8 @@ export class AssistantChatService {
           planner: request.planner,
           trips,
           tripDigest: digest,
+          // Only the first question of a chat answers the greeting.
+          opener: chat.history.length === 0 ? (request.opener ?? null) : null,
           interview: request.interview ?? null,
           alerts: request.alerts,
           favorites: request.favorites,

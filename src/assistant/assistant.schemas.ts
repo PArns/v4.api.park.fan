@@ -325,6 +325,17 @@ export const chatRequestSchema = z.strictObject({
     }))
     .optional(),
   planner: lenient(plannerSnapshotSchema),
+  /**
+   * The line the chat opened with, sent with a chat's first question only: a greeting can name the
+   * user's next planned day, and "yes" may answer it. One line, at most 300 characters; data.
+   */
+  opener: lenient(
+    z
+      .string()
+      .max(2000)
+      .transform((value) => value.replace(/\s+/g, " ").trim().slice(0, 300))
+      .pipe(z.string().min(1)),
+  ),
   trips: tripsSnapshotSchema.optional(),
   interview: lenient(interviewSnapshotSchema),
   alerts: lenient(alertsSnapshotSchema),

@@ -1,6 +1,6 @@
 # Assistant: Parky's chat and the site feedback
 
-`/v1/assistant/*` serves Parky, the chat assistant at the bottom right of park.fan, and the feedback
+`/v1/assistant/*` serves Parky, park.fan's AI chat buddy at the bottom right of park.fan, and the feedback
 form beside it. `/v1/admin/assistant/*` serves the admin pages. Open this page before changing the
 prompt, the tools, the limits, the challenge or the stored key. The widget is described in
 park.fan's `docs/features/assistant.md`.
@@ -41,7 +41,10 @@ each with its name and id (`lookedUpIds` reads the ids off the stored tool input
 `parkId`, `parks`, `rideId`, `rideIds`, failed calls and slugs skipped — and two primary-key reads
 name them). Parky reuses the id instead of calling `search_parks` again on every turn.
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
-two decimals here; it is never stored or logged.
+two decimals here; it is never stored or logged. `opener` is the greeting the window opened with,
+sent with a chat's first question only: a greeting can name the visitor's next planned day or ask
+how yesterday's went, and a bare „ja" may answer it. One line, at most 300 characters, quoted in
+"This chat" as the page's line (data, not instructions), and only while the chat has no history.
 
 The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, `wait-times`,
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
@@ -209,7 +212,13 @@ the smallest rider is too short for, a quieter day nearby, a ticket that misses 
 season; once per chat each), and changes a trip with `change_trip`, never a new `plan_vacation`;
 "# Replies" ends an answer the visitor will likely answer with `suggest_replies`; "# Interview"
 leads a trip or a park day from simple to detailed: a short core, the plan, then refinements on
-offer, and what a visitor says early is taken at once. The prompt grew by 2,696 characters (34,236 to
+offer, and what a visitor says early is taken at once. With it Parky becomes the user's park buddy
+rather than a help desk (the first line, "At heart you are the friend who comes along", what he
+remembers): "# What you know about them" has him use the planned days, trips, alerts, favourites
+and ridden rides the browser sends like a friend who planned with them, for their day when a
+question is about it ("your Thursday at Efteling"), and without such a question at most one of
+them per chat, never read back as data and never "your data"; asked how he knows, he says park.fan
+keeps the plan in their browser. Three eval cases cover it. The prompt grew by 2,696 characters (34,236 to
 36,932) and the tool list by 7,934 (50,870 to 58,804, the six new tools 7,649 of them), about 2,600
 tokens of the cached prefix.
 
@@ -221,7 +230,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 80 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 83 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints

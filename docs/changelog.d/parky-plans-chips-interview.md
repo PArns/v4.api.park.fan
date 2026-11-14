@@ -15,5 +15,5 @@ a planned day with the day optimizer ("how long do I wait in total"); `suggest_r
 four tappable replies under an answer and ends it without another round; `interview` leads a trip
 or a park day from simple to detailed, a plan after the first few answers and the rest offered as replies, each answer applied at once, and asks in Japan how a hotel
 change should go, with the luggage courier. `plan_move` moves an entry to a time, `plan_trip`
-files the party's smallest rider with the days. Prompt version 53; 15 eval cases
+files the party's smallest rider with the days. Prompt version 53, which also makes Parky the user's park buddy (what he knows of them, said in passing, never read back) and reads the greeting the chat opened with (`opener`); 18 eval cases
 ([assistant](frontend/assistant.md#the-visitors-plans)).
