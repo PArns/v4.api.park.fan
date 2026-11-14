@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import Anthropic from "@anthropic-ai/sdk";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
 import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import { visitorTrips } from "./tools/assistant-plans";
 import { ASSISTANT_TOOL_PARAMS } from "./tools/assistant-tools";
 import { EVAL_CASES, type EvalCase } from "./assistant-eval.fixtures";
 
@@ -128,6 +129,9 @@ async function run(
         pagePath: testCase.pagePath,
         pageSubject: testCase.pageSubject,
         planner: testCase.planner,
+        trips: visitorTrips(testCase.trips),
+        tripDigest: testCase.tripDigest,
+        interview: testCase.interview,
         alerts: testCase.alerts,
         favorites: testCase.favorites,
       }),

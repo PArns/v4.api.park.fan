@@ -1,7 +1,9 @@
 import type {
   AlertsSnapshot,
   FavoritesSnapshot,
+  InterviewSnapshot,
   PlannerSnapshot,
+  TripSnapshot,
 } from "./assistant.schemas";
 import type { AssistantLocale } from "./system-prompt";
 
@@ -13,6 +15,10 @@ export interface EvalCase {
   pageSubject?: string;
   now?: string;
   planner?: PlannerSnapshot;
+  /** The trips the browser sends, and the on-screen one's plan as "This chat" lists it. */
+  trips?: TripSnapshot[];
+  tripDigest?: string[];
+  interview?: InterviewSnapshot;
   alerts?: AlertsSnapshot;
   favorites?: FavoritesSnapshot;
   /** Earlier turns, oldest first. */
@@ -139,6 +145,196 @@ const ORLANDO_HOPPER_RESULT = {
     "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&ticket=hopper#planner",
   reserve: [{ park: "disneys-animal-kingdom-theme-park", date: "2027-03-08" }],
 };
+
+/** The visitor's Orlando trip on screen in the hub's planner, and its plan as "This chat" lists it. */
+const OCT_TRIP: TripSnapshot = {
+  region: "orlando",
+  query:
+    "from=2027-10-14&to=2027-10-21&parks=magic-kingdom-park,epcot,universal-studios-florida,universal-islands-of-adventure,universal-epic-universe",
+  onScreen: true,
+};
+const OCT_DIGEST = [
+  "Thu 2027-10-14: arrival",
+  "Fri 2027-10-15: EPCOT (33 min); why: a weekday",
+  "Sat 2027-10-16: Universal Studios Florida (41 min)",
+  "Sun 2027-10-17: Islands of Adventure (39 min)",
+  "Mon 2027-10-18: Magic Kingdom Park (31 min); why: its quietest day of the trip",
+  "Tue 2027-10-19: Epic Universe (45 min)",
+  "Wed 2027-10-20: rest day; why: rest after a run of park days",
+  "Thu 2027-10-21: departure",
+  "Season: peak of the hurricane season (August to October), a fact about the season, not a forecast",
+];
+const OCT_HUB = "/de/orlando";
+const OCT_HUB_EN = "/en/orlando";
+
+const INTERVIEW_AT = (step: string, answered: string[]): InterviewSnapshot => ({
+  kind: "trip",
+  region: "orlando",
+  step,
+  answered,
+  skipped: [],
+  mustDoRides: [],
+  source: "planner",
+});
+
+/** The visitor's own plans: read them, change them, reply chips and the interview (prompt 53). */
+const PLAN_CASES: EvalCase[] = [
+  {
+    id: "trip-why-monday-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Warum ist Magic Kingdom am Montag?",
+    forbid: ["plan_vacation", "change_trip", "plan_trip"],
+    answer: [{ must: "ruhig|wenigsten|31" }],
+  },
+  {
+    id: "trip-swap-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Tausch Montag und Dienstag",
+    want: [
+      {
+        tool: "change_trip",
+        input: { swap: { a: "*", b: "*" } },
+      },
+    ],
+  },
+  {
+    id: "trip-pin-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Put Magic Kingdom on the Friday instead",
+    want: [
+      {
+        tool: "change_trip",
+        input: { pin: [{ park: "*", date: "2027-10-15" }] },
+      },
+    ],
+  },
+  {
+    id: "trip-rest-day-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "Can we have a rest day on Sunday?",
+    want: [
+      {
+        tool: "change_trip",
+        input: { pin: [{ park: "rest", date: "2027-10-17" }] },
+      },
+    ],
+  },
+  {
+    id: "trip-remembered-read-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    trips: [{ ...OCT_TRIP, onScreen: undefined }],
+    message: "Which day is Epic Universe on my Orlando trip?",
+    want: [{ tool: "get_trip_plan" }],
+    forbid: ["plan_vacation"],
+  },
+  {
+    id: "day-total-wait-de",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    planner: PLAN,
+    message: "Wie lange stehe ich am Samstag insgesamt an?",
+    want: [{ tool: "review_plan_day", input: { date: "2026-11-07" } }],
+  },
+  {
+    id: "day-move-to-time-en",
+    locale: "en",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    planner: PLAN,
+    message: "Move Taron to 14:00 on Saturday",
+    want: [
+      {
+        tool: "plan_move",
+        input: { entryId: "e1-taron", start: "14:00" },
+      },
+    ],
+  },
+  {
+    id: "replies-after-question-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Wir wollen nächstes Jahr mit den Kindern nach Orlando",
+    want: [{ tool: "suggest_replies" }],
+    forbid: "actions",
+  },
+  {
+    id: "interview-start-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    message:
+      "Can you interview me for my Orlando trip, one question at a time?",
+    want: [{ tool: "interview", input: { op: "start", kind: "trip" } }],
+  },
+  {
+    id: "interview-dates-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [{ region: "orlando", query: "", onScreen: true }],
+    interview: INTERVIEW_AT("dates", ["region"]),
+    history: [
+      ["user", "Plan meine Reise mit mir, Frage für Frage."],
+      ["assistant", "Machen wir. Orlando, richtig?"],
+      ["user", "Ja"],
+      ["assistant", "Super. Wann geht's los?"],
+    ],
+    message: "14. bis 21. Oktober 2027",
+    want: [
+      {
+        tool: "change_trip",
+        input: { dates: { from: "2027-10-14", to: "2027-10-21" } },
+      },
+    ],
+  },
+  {
+    id: "interview-party-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("party", ["region", "dates"]),
+    message: "2 adults and 2 kids, they're 105 and 132 cm",
+    want: [
+      {
+        tool: "interview",
+        input: { op: "answered", party: { heightsCm: [105, 132] } },
+      },
+    ],
+  },
+  {
+    id: "interview-leave-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    interview: INTERVIEW_AT("tickets", ["region", "dates", "party", "mustdo"]),
+    message: "Lass uns später weitermachen",
+    want: [{ tool: "interview", input: { op: "end" } }],
+  },
+];
 
 export const EVAL_CASES: EvalCase[] = [
   {
@@ -970,4 +1166,5 @@ export const EVAL_CASES: EvalCase[] = [
       },
     ],
   },
+  ...PLAN_CASES,
 ];
