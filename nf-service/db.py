@@ -217,7 +217,7 @@ def fetch_schedule(park_ids: list[str]) -> pd.DataFrame:
                min(se."openingTime" AT TIME ZONE p.timezone) FILTER (WHERE {op}) AS open_local,
                max(se."closingTime" AT TIME ZONE p.timezone) FILTER (WHERE {op}) AS close_local,
                COALESCE(max(se."updatedAt") FILTER (WHERE {op})
-                        < GREATEST(se.date::timestamp AT TIME ZONE p.timezone, now()),
+                        < LEAST(se.date::timestamp AT TIME ZONE p.timezone, now()),
                         false)::int AS sched_asof
         FROM schedule_entries se
         JOIN parks p ON p.id = se."parkId"
