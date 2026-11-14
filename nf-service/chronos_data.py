@@ -32,6 +32,9 @@ logger = logging.getLogger("nf.chronos.data")
 
 #: Older cached days are dropped: the compressed context reaches ~343 days.
 CACHE_MAX_DAYS = 400
+#: Raise when the truth rule changes: a cache written under another version is
+#: read as cold and refilled. 2 = without heartbeat rows (PAR-1329).
+TRUTH_VERSION = 2
 _park_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
@@ -103,6 +106,7 @@ def fetch_readings(ride_ids: list[str], t0: pd.Timestamp, t1: pd.Timestamp) -> p
              FROM queue_data
             WHERE "attractionId" = ANY(CAST(:ids AS uuid[]))
               AND "queueType" = 'STANDBY'
+              AND NOT COALESCE(is_heartbeat, false)
               AND timestamp >= :t0 AND timestamp <= :t1""",
         {"ids": ride_ids, "t0": t0.to_pydatetime(), "t1": t1.to_pydatetime()},
     )
@@ -149,6 +153,8 @@ class TruthCache:
         try:
             with open(meta) as f:
                 m = json.load(f)
+            if m.get("truth") != TRUTH_VERSION:
+                raise ValueError("cache written under another truth rule")
             df = pd.read_parquet(data)
             df["date"] = pd.to_datetime(df["date"]).dt.date
             df["slot_utc"] = pd.to_datetime(df["slot_utc"], utc=True)
@@ -163,7 +169,7 @@ class TruthCache:
         df.to_parquet(tmp, index=False)
         os.replace(tmp, data)
         with open(m + ".tmp", "w") as f:
-            json.dump(meta, f)
+            json.dump({**meta, "truth": TRUTH_VERSION}, f)
         os.replace(m + ".tmp", m)
 
 
