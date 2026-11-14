@@ -207,6 +207,13 @@ export class TripGatewayDto {
   @ApiProperty({ enum: ["airport", "station"] }) kind: string;
   @ApiPropertyOptional({ description: "Typical minutes to the base." })
   minutes?: number;
+  @ApiProperty({
+    type: [String],
+    example: ["disneyland-paris", "parc-asterix", "paris"],
+    description:
+      "Every base that lists this gateway. Map it to startBase or endBase only where this is one base; otherwise send neither and the plan picks.",
+  })
+  bases: string[];
 }
 
 export class TripBaseReachDto {

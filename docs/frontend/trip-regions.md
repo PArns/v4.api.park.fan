@@ -153,7 +153,8 @@ or a `hurricane` penalty.
   order. Gateways: Marne-la-Vallée–Chessy (`XED`, a station: the TGV, and the Eurostar with a change
   at Lille) and CDG for Disneyland Paris, CDG for Parc Astérix, CDG and ORY for Paris. Base legs:
   60 minutes by car between the resorts, 50 by RER A from Paris to Disneyland Paris, 45 by car from
-  Paris to Parc Astérix. `hotel` and `area` are a 400 here: a stay's area goes with its base
+  Paris to Parc Astérix. CDG serves all three bases, so it pins no `startBase` or `endBase`.
+  `hotel` and `area` are a 400 here: a stay's area goes with its base
   (`bases=disneyland-paris:3@disney_lake`), and only then do its hotel's perks count.
 - **Travel.** Both Disney parks share the guest car park, 15 minutes' walk from the gates
   (`via: "walk"`). Curated: the 5-minute walk between the gates (their hop pair), the walks from the
@@ -937,8 +938,9 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
       "hotelAreas": ["maihama", "disneysea_hotels", "bayside", "shin_urayasu", "tokyo_station", "shinjuku"],
       "defaultArea": "maihama",
       "gateways": [
-        { "code": "HND", "name": "Haneda Airport", "kind": "airport" },
-        { "code": "NRT", "name": "Narita Airport", "kind": "airport" },
+        // bases: every base that lists it; one base only, so the client may send it as startBase
+        { "code": "HND", "name": "Haneda Airport", "kind": "airport", "bases": ["tokyo"] },
+        { "code": "NRT", "name": "Narita Airport", "kind": "airport", "bases": ["tokyo"] },
       ],
       "stayNote": "Maihama for both Disney parks; Shinjuku for the buses to Fuji-Q",
       "parks": [
@@ -978,8 +980,14 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
   region keeps the defaults.
 - **`gateways`** are where a trip arrives or leaves: an airport, or a station a long-distance
   train reaches (Marne-la-Vallée–Chessy for the TGV and the Eurostar, `kind: "station"`). The
-  client offers them as "you land in" and "you fly home from" and sends the base as `startBase`
-  and `endBase`; the API is the one place that knows which airport belongs to which base.
+  client offers them as "you land in" and "you fly home from"; the API is the one place that
+  knows which airport belongs to which base. A gateway's **`bases`** are every base that lists
+  it, in the region's order. **A gateway maps to `startBase` or `endBase` only where exactly one
+  base lists it**; where several do, the client sends no `startBase` (or `endBase`) for it and the
+  plan picks the stays. Paris lists CDG under all three of its bases (`bases:
+  ["disneyland-paris", "parc-asterix", "paris"]`), Marne-la-Vallée–Chessy under Disneyland Paris
+  only and Orly under central Paris only, so landing at Orly starts the trip in Paris and landing
+  at CDG pins nothing.
 - **Each hotel area belongs to one base**, and a stay's hotel kind (its perks) is its area's.
   **`defaultArea`** is where a stay without an area is reckoned from for its travel (the base's
   `parks` minutes are that area's); it carries no perk. The visitor may sleep in any of the base's

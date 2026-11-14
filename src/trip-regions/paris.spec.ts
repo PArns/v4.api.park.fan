@@ -64,6 +64,20 @@ describe("Paris", () => {
     ]);
   });
 
+  it("names every base a gateway serves, so a client pins a start only where there is one", () => {
+    const region = describeRegion(REGION, regionRecords(REGION));
+    const gateways = new Map(
+      (region.bases ?? []).flatMap((b) =>
+        (b.gateways ?? []).map((g) => [g.code, g.bases] as const),
+      ),
+    );
+    expect(Object.fromEntries(gateways)).toEqual({
+      XED: ["disneyland-paris"],
+      CDG: ["disneyland-paris", "parc-asterix", "paris"],
+      ORY: ["paris"],
+    });
+  });
+
   it("walks between the Disney gates, takes RER A from Paris, and hops only at Disney", () => {
     const legs = buildLegs(REGION);
     expect(findLeg(legs, DLP, DAW)).toMatchObject({
