@@ -24,7 +24,7 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
   orlando: {
     region: "orlando",
     source: "osrm",
-    computedOn: "2026-11-12",
+    computedOn: "2026-11-14",
     attribution: "© OpenStreetMap contributors",
     basis: "free_flow",
     legs: [
@@ -128,6 +128,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "magic-kingdom-park",
+        to: "hotel:disney_springs",
+        km: 9.2,
+        minutes: 13,
+      },
+      {
+        from: "magic-kingdom-park",
         to: "hotel:lake_buena_vista",
         km: 9.2,
         minutes: 13,
@@ -193,6 +199,7 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       { from: "epcot", to: "hotel:disney", km: 4.9, minutes: 8 },
       { from: "epcot", to: "hotel:universal", km: 21.6, minutes: 24 },
       { from: "epcot", to: "hotel:international_drive", km: 20, minutes: 23 },
+      { from: "epcot", to: "hotel:disney_springs", km: 7.6, minutes: 14 },
       { from: "epcot", to: "hotel:lake_buena_vista", km: 7.6, minutes: 14 },
       { from: "epcot", to: "hotel:kissimmee", km: 11.4, minutes: 15 },
       { from: "epcot", to: "venue:disney-springs", km: 7.9, minutes: 14 },
@@ -293,6 +300,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
         to: "hotel:international_drive",
         km: 19.4,
         minutes: 23,
+      },
+      {
+        from: "disneys-hollywood-studios",
+        to: "hotel:disney_springs",
+        km: 9.6,
+        minutes: 18,
       },
       {
         from: "disneys-hollywood-studios",
@@ -416,6 +429,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "disneys-animal-kingdom-theme-park",
+        to: "hotel:disney_springs",
+        km: 12.6,
+        minutes: 20,
+      },
+      {
+        from: "disneys-animal-kingdom-theme-park",
         to: "hotel:lake_buena_vista",
         km: 12.6,
         minutes: 20,
@@ -530,6 +549,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "disneys-typhoon-lagoon-water-park",
+        to: "hotel:disney_springs",
+        km: 3.6,
+        minutes: 8,
+      },
+      {
+        from: "disneys-typhoon-lagoon-water-park",
         to: "hotel:lake_buena_vista",
         km: 3.6,
         minutes: 8,
@@ -638,6 +663,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "disneys-blizzard-beach-water-park",
+        to: "hotel:disney_springs",
+        km: 9,
+        minutes: 16,
+      },
+      {
+        from: "disneys-blizzard-beach-water-park",
         to: "hotel:lake_buena_vista",
         km: 9,
         minutes: 16,
@@ -740,6 +771,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "universal-studios-florida",
+        to: "hotel:disney_springs",
+        km: 16.9,
+        minutes: 20,
+      },
+      {
+        from: "universal-studios-florida",
         to: "hotel:lake_buena_vista",
         km: 16.9,
         minutes: 20,
@@ -824,6 +861,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "universal-islands-of-adventure",
+        to: "hotel:disney_springs",
+        km: 16.9,
+        minutes: 20,
+      },
+      {
+        from: "universal-islands-of-adventure",
         to: "hotel:lake_buena_vista",
         km: 16.9,
         minutes: 20,
@@ -902,6 +945,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "universal-epic-universe",
+        to: "hotel:disney_springs",
+        km: 19.7,
+        minutes: 24,
+      },
+      {
+        from: "universal-epic-universe",
         to: "hotel:lake_buena_vista",
         km: 19.7,
         minutes: 24,
@@ -974,6 +1023,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "universal-volcano-bay",
+        to: "hotel:disney_springs",
+        km: 16.9,
+        minutes: 20,
+      },
+      {
+        from: "universal-volcano-bay",
         to: "hotel:lake_buena_vista",
         km: 16.9,
         minutes: 20,
@@ -1025,6 +1080,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "seaworld-orlando",
+        to: "hotel:disney_springs",
+        km: 11.5,
+        minutes: 15,
+      },
+      {
+        from: "seaworld-orlando",
         to: "hotel:lake_buena_vista",
         km: 11.5,
         minutes: 15,
@@ -1067,6 +1128,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
         to: "hotel:international_drive",
         km: 5.2,
         minutes: 9,
+      },
+      {
+        from: "aquatica-orlando",
+        to: "hotel:disney_springs",
+        km: 12,
+        minutes: 18,
       },
       {
         from: "aquatica-orlando",
@@ -1119,6 +1186,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "discovery-cove-orlando",
+        to: "hotel:disney_springs",
+        km: 10.5,
+        minutes: 16,
+      },
+      {
+        from: "discovery-cove-orlando",
         to: "hotel:lake_buena_vista",
         km: 10.5,
         minutes: 16,
@@ -1162,6 +1235,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "legoland-florida",
+        to: "hotel:disney_springs",
+        km: 60.8,
+        minutes: 56,
+      },
+      {
+        from: "legoland-florida",
         to: "hotel:lake_buena_vista",
         km: 60.8,
         minutes: 56,
@@ -1198,6 +1277,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
       },
       {
         from: "busch-gardens-tampa",
+        to: "hotel:disney_springs",
+        km: 112.8,
+        minutes: 88,
+      },
+      {
+        from: "busch-gardens-tampa",
         to: "hotel:lake_buena_vista",
         km: 112.8,
         minutes: 88,
@@ -1225,6 +1310,12 @@ export const TRAVEL_MATRICES: Record<string, GeneratedTravelMatrix> = {
         to: "hotel:international_drive",
         km: 121.4,
         minutes: 93,
+      },
+      {
+        from: "adventure-island-tampa",
+        to: "hotel:disney_springs",
+        km: 113.6,
+        minutes: 88,
       },
       {
         from: "adventure-island-tampa",

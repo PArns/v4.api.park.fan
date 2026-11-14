@@ -1,5 +1,6 @@
 import {
   buildParkDay,
+  forecastLeadFactor,
   readDaySlots,
   seasonCovers,
   seasonEvening,
@@ -223,7 +224,9 @@ describe("buildParkDay", () => {
         closesAt: "2026-12-02T00:00:00-05:00",
       },
       crowdLevel: "moderate",
-      headlinerWait: 45,
+      // 47 forecast 19 days out × 1.21 = 56.9, on the measured scale.
+      headlinerWait: 55,
+      forecastWait: 45,
       basis: "forecast",
     });
     // The hours factor reads the OPERATING close, not the party's.
@@ -335,11 +338,71 @@ describe("buildParkDay", () => {
     expect(stated).toMatchObject({ status: "CLOSED", hoursPublished: true });
   });
 
-  it("labels a forecast past the TFT horizon long_range", () => {
+  it("ranks a forecast within TFT's reach on the measured scale, last year beside it", () => {
     const out = buildParkDay(
-      input({ date: "2027-02-20", day: day({ date: "2027-02-20" }) }),
+      input({
+        day: day({ headlinerForecast: { avgWait: 47, exactWait: 46.6 } }),
+        lastYear: { c: "high", w: 60, x: 61.3 },
+      }),
     );
-    expect(out.basis).toBe("long_range");
+    expect(out).toMatchObject({
+      basis: "forecast",
+      crowdLevel: "moderate",
+      waitExact: 56.4,
+      headlinerWait: 55,
+      forecastWait: 45,
+      forecastExact: 46.6,
+      lastYearWait: 60,
+      lastYearExact: 61.3,
+    });
+    const pub = toPublicParkDay(out);
+    expect(pub).not.toHaveProperty("forecastExact");
+    expect(pub).not.toHaveProperty("lastYearExact");
+    expect(pub).toMatchObject({ forecastWait: 45, lastYearWait: 60 });
+  });
+
+  it("reads the same weekday a year back past the TFT horizon, the forecast beside it", () => {
+    const out = buildParkDay(
+      input({
+        date: "2027-02-20",
+        day: day({
+          date: "2027-02-20",
+          status: "UNKNOWN",
+          crowdLevel: "low",
+          headlinerForecast: { avgWait: 36, exactWait: 36.2 },
+        }),
+        rows: [],
+        lastYear: { c: "high", w: 60, x: 61.3 },
+      }),
+    );
+    expect(out).toMatchObject({
+      basis: "last_year",
+      crowdLevel: "high",
+      headlinerWait: 60,
+      waitExact: 61.3,
+      forecastWait: 35,
+      forecastExact: 36.2,
+      lastYearWait: 60,
+    });
+  });
+
+  it("keeps the long-range forecast, unscaled, where nothing was measured a year back", () => {
+    for (const lastYear of [undefined, { c: "closed" }]) {
+      const out = buildParkDay(
+        input({
+          date: "2027-02-20",
+          day: day({ date: "2027-02-20", crowdLevel: "low" }),
+          lastYear,
+        }),
+      );
+      expect(out).toMatchObject({
+        basis: "long_range",
+        crowdLevel: "low",
+        headlinerWait: 45,
+        forecastWait: 45,
+      });
+      expect(out.lastYearWait).toBeUndefined();
+    }
   });
 
   it("falls back to the same weekday a year back past the forecast, as an estimate", () => {
@@ -379,6 +442,16 @@ describe("buildParkDay", () => {
     );
     expect(nothing).toMatchObject({ crowdLevel: "unknown", basis: "none" });
     expect(nothing.headlinerWait).toBeUndefined();
+  });
+});
+
+describe("forecastLeadFactor", () => {
+  it("puts TFT on the measured scale by lead, today as lead 1", () => {
+    expect(
+      [0, 1, 2, 3, 4, 7, 8, 14, 15, 30, 31, 60].map(forecastLeadFactor),
+    ).toEqual([
+      1.1, 1.1, 1.11, 1.11, 1.12, 1.12, 1.16, 1.16, 1.21, 1.21, 1.29, 1.29,
+    ]);
   });
 });
 

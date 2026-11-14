@@ -292,6 +292,49 @@ export class TripRegionSummaryDto {
   groups: TripRegionGroupDto[];
 }
 
+export class TripForecastAccuracyDto {
+  @ApiProperty({ example: 30, description: "The window's length in days." })
+  days: number;
+  @ApiProperty({ example: "2026-10-14", description: "Park-local, inclusive." })
+  from: string;
+  @ApiProperty({
+    example: "2026-11-12",
+    description: "The region's last measured day, park-local.",
+  })
+  to: string;
+  @ApiProperty({
+    example: 7,
+    description: "How many days ahead the scored forecasts were made.",
+  })
+  leadDays: number;
+  @ApiProperty({
+    example: 16.4,
+    description:
+      "The day's peak wait at the headliners: forecast against the day's P90, the mean " +
+      "absolute error in minutes, averaged over the counted parks, one decimal.",
+  })
+  maeMinutes: number;
+  @ApiProperty({ example: 14, description: "Parks counted." })
+  parks: number;
+  @ApiProperty({
+    example: 28,
+    description: "Days of the window with a scored forecast.",
+  })
+  sampleDays: number;
+}
+
+export class TripAccuracyDto {
+  @ApiProperty({ example: "orlando" }) region: string;
+  @ApiProperty({
+    type: () => TripForecastAccuracyDto,
+    nullable: true,
+    description:
+      "Null where too little is measured: under 100 scored rows, under 14 measured days, " +
+      "or no park with 20.",
+  })
+  forecastAccuracy: TripForecastAccuracyDto | null;
+}
+
 export class TripRegionListDto {
   @ApiProperty({ type: () => [TripRegionSummaryDto] })
   regions: TripRegionSummaryDto[];
@@ -376,11 +419,21 @@ export class TripParkDayDto {
   @ApiProperty({ example: "low" }) crowdLevel: string;
   @ApiPropertyOptional({
     description:
-      "Mean expected standby of the park's headliners, rounded to 5.",
+      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the same weekday a year back as measured. What every trip surface ranks by.",
   })
   headlinerWait?: number;
   @ApiProperty({ enum: ["forecast", "long_range", "last_year", "none"] })
   basis: string;
+  @ApiPropertyOptional({
+    description:
+      "The served forecast, unscaled and rounded to 5, as the park calendar shows it; shown, never ranked.",
+  })
+  forecastWait?: number;
+  @ApiPropertyOptional({
+    description:
+      "The same weekday a year back as measured, rounded to 5, from today on.",
+  })
+  lastYearWait?: number;
   @ApiPropertyOptional({ type: [String] }) seasons?: string[];
   @ApiPropertyOptional({
     description: "The curated closure season behind a CLOSED day.",

@@ -27,6 +27,7 @@ import {
   penaltiesOf,
   PlanCostModel,
   stormWeight,
+  touchesStormPeak,
   type StormWarning,
   type DayCostContext,
   type DayCostParts,
@@ -454,14 +455,6 @@ function priceOf(
   };
 }
 
-/** A window's basis, best first: the tie-break between equal windows. */
-const BASIS_RANK: Record<WhenBasis, number> = {
-  forecast: 0,
-  mixed: 1,
-  last_year: 2,
-  none: 3,
-};
-
 /** forecast | last_year | mixed over the cells a figure read; none without one. */
 function basisOf(bases: Array<string | undefined>): WhenBasis {
   const known = bases
@@ -504,7 +497,6 @@ interface Evaluated {
   /** The score per visit: windows within {@link WHEN_TIE_MINUTES} of it are equal. */
   perVisit: number;
   basis: WhenBasis;
-  basisRank: number;
   /** Heat and storm minutes per park day: comfort, between equal windows. */
   penaltyTotal: number;
   /** The plan's mean over its park days, without its penalties. */
@@ -553,16 +545,17 @@ interface Rankable {
   index: number;
   score: number;
   perVisit?: number;
-  basisRank?: number;
   penaltyTotal?: number;
 }
 
 /**
  * The ranking's tiers. From the cheapest window left (by cost per visit), it
  * and every window within {@link WHEN_TIE_MINUTES} of it count as equal and
- * form a tier, ordered by comfort: forecast before mixed before last year,
- * then the lower heat and storm penalty, then the exact cost and the
- * earlier start. Then the next tier from the cheapest window left.
+ * form a tier, ordered by comfort: the lower heat and storm penalty, then the
+ * exact cost and the earlier start. Then the next tier from the cheapest
+ * window left. The basis orders nothing: every figure is on the measured
+ * scale, and a tie-break that put forecast windows first rewarded the basis
+ * that read about 40 % low (PAR-1319).
  */
 function tiersOf<T extends Rankable>(
   evaluated: readonly T[],
@@ -577,7 +570,6 @@ function tiersOf<T extends Rankable>(
     const items = left.filter((e) => cost(e) <= start + WHEN_TIE_MINUTES);
     items.sort(
       (a, b) =>
-        (a.basisRank ?? 0) - (b.basisRank ?? 0) ||
         (a.penaltyTotal ?? 0) - (b.penaltyTotal ?? 0) ||
         a.score - b.score ||
         a.index - b.index,
@@ -663,8 +655,18 @@ export function findTripDates(input: WhenInput): TripWhen {
       1,
       [...visitsAt(i).values()].reduce((s, v) => s + v, 0),
     );
+  // A window that touches the storm peak on any day pays this per visit, in
+  // its bound and its score alike, so the search stays exact.
+  const peakWindowMinutes = region.weather.storm?.peakWindowMinutes ?? 0;
+  const peakTermAt = (i: number): number =>
+    peakWindowMinutes > 0 &&
+    touchesStormPeak(region.weather.storm, dates[i], dates[i + length - 1])
+      ? peakWindowMinutes
+      : 0;
 
-  const lowerBound = (i: number): number => {
+  const lowerBound = (i: number): number =>
+    planBound(i) + peakTermAt(i) * visitCount(i);
+  const planBound = (i: number): number => {
     const pricing = pricingAt(i);
     const visits = visitsAt(i);
     const open: number[] = [];
@@ -754,6 +756,9 @@ export function findTripDates(input: WhenInput): TripWhen {
     score += UNPLACED_VISIT_COST * (plan.unplaced.length + outside);
     // A region with bases: what the stays add (travel hours, the moves).
     score += plan.stayPenalty ?? 0;
+    const peakTerm = peakTermAt(i);
+    score += peakTerm * visitCount(i);
+    storm += peakTerm * parkDays;
     const basis = basisOf(bases);
     const penalties = penaltiesOf(
       heat,
@@ -766,7 +771,6 @@ export function findTripDates(input: WhenInput): TripWhen {
       score,
       perVisit: score / visitCount(i),
       basis,
-      basisRank: BASIS_RANK[basis],
       penaltyTotal:
         (penalties?.heat ?? 0) +
         (penalties?.hurricane ?? 0) +

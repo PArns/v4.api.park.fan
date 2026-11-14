@@ -9,8 +9,8 @@ import { shiftMonth } from "../../trip-regions/last-year-snapshot";
 /**
  * The calendar warmup's trip-region branch: a region park's months reach +13
  * instead of +3, the last forecast day is recorded from what the calendar
- * returned, and the past months the `last_year` days read are written once
- * and then left alone.
+ * returned, and the past months the days read last year from (−12 … −1) are
+ * written once and then left alone.
  */
 describe("CacheWarmupService › trip-region parks", () => {
   const TZ = "America/New_York";
@@ -110,18 +110,20 @@ describe("CacheWarmupService › trip-region parks", () => {
     await warm(service, p);
     expect(built.slice(0, 15)).toEqual(months(-1, 13));
     expect(store.get(CacheKeys.tripForecastUntil(p.id))).toBe(forecastEnd);
-    for (const ym of months(-6, -2)) {
+    // Every day from today on reads the same weekday a year back (PAR-1319):
+    // a year's search reaches back twelve months.
+    for (const ym of months(-12, -1)) {
       const snapshot = JSON.parse(
         store.get(CacheKeys.tripLastYearMonth(p.id, ym)) ?? "null",
       );
       expect(snapshot[`${ym}-01`]).toEqual({ c: "moderate", w: 40 });
     }
-    expect(built.slice(15)).toEqual(months(-6, -2));
+    expect(built.slice(15)).toEqual(months(-12, -1));
   });
 
   it("leaves a past month that is already kept alone", async () => {
     const p = park("winter-haven", "legoland-florida");
-    const kept = months(-6, -2).map((ym) =>
+    const kept = months(-12, -1).map((ym) =>
       CacheKeys.tripLastYearMonth(p.id, ym),
     );
     const { service, built } = setup(kept);
