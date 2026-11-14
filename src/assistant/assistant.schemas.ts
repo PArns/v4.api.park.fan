@@ -27,6 +27,9 @@ const plannerName = z
  * version or a hand-edited value fills with anything. A bad entry is dropped and a long list cut,
  * so a stale cookie costs Parky one entry, never the whole chat.
  */
+/** The most live trip regions a request names. */
+export const LIVE_REGIONS_MAX = 20;
+
 function lenientList<T extends z.ZodType>(item: T, max: number) {
   // Optional first, so a missing list reaches the transform and comes out empty.
   return z
@@ -337,6 +340,17 @@ export const chatRequestSchema = z.strictObject({
       .pipe(z.string().min(1)),
   ),
   trips: tripsSnapshotSchema.optional(),
+  /**
+   * The trip regions live on park.fan, as the site's region registry marks them: the one switch a
+   * region flips at go-live, which also opens its hub. Parky plans, changes and links these only.
+   * Absent (a widget from before 2.21.0): every region, as before.
+   */
+  liveRegions: lenient(
+    z
+      .array(z.string().regex(/^[a-z0-9-]{1,40}$/))
+      .max(LIVE_REGIONS_MAX)
+      .transform((slugs) => [...new Set(slugs)]),
+  ),
   interview: lenient(interviewSnapshotSchema),
   alerts: lenient(alertsSnapshotSchema),
   favorites: lenient(favoritesSnapshotSchema),

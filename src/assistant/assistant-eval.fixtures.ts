@@ -21,6 +21,8 @@ export interface EvalCase {
   interview?: InterviewSnapshot;
   alerts?: AlertsSnapshot;
   favorites?: FavoritesSnapshot;
+  /** The trip regions live on the site, as the widget sends them; absent: every region. */
+  liveRegions?: string[];
   /** Earlier turns, oldest first. */
   history?: Array<["user" | "assistant", string]>;
   message: string;
@@ -453,6 +455,132 @@ const PLAN_CASES: EvalCase[] = [
     interview: INTERVIEW_AT("refine", ["region", "dates", "parks", "party"]),
     message: "Lass uns später weitermachen",
     want: [{ tool: "interview", input: { op: "end" } }],
+  },
+];
+
+/** Only Orlando live, as at the 2.21.0 release. */
+const ORLANDO_ONLY = ["orlando"];
+
+/** A Japan trip on screen, for the cases from the day Japan goes live. */
+const JAPAN_TRIP: TripSnapshot = {
+  region: "japan",
+  query:
+    "from=2027-04-01&to=2027-04-10&parks=tokyo-disneyland,tokyo-disneysea,universal-studios-japan&bases=tokyo:5,osaka:4",
+  onScreen: true,
+};
+
+/**
+ * 2.21.0: regions not live yet, the route in a region with bases, the parks a plan leaves out,
+ * figures estimated from last year, the storm peak and how sure the forecast is.
+ */
+const REGION_CASES: EvalCase[] = [
+  {
+    id: "region-coming-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message: "Plan uns 8 Tage Japan im April, mit Tokyo Disney und der USJ.",
+    forbid: ["plan_vacation", "change_trip", "find_trip_dates", "open_page"],
+    answer: [{ must: "noch nicht|später|bald|kommt" }],
+  },
+  {
+    id: "route-land-haneda-en",
+    locale: "en",
+    pagePath: "/en/japan",
+    pageSubject: "the trip planner hub of Japan",
+    trips: [JAPAN_TRIP],
+    message: "We land at Haneda and fly home from Kansai.",
+    want: [{ tool: "change_trip", input: { landAt: "*" } }],
+  },
+  {
+    id: "route-two-nights-osaka-de",
+    locale: "de",
+    pagePath: "/de/japan",
+    pageSubject: "the trip planner hub of Japan",
+    trips: [JAPAN_TRIP],
+    message: "Lieber nur zwei Nächte in Osaka, dafür mehr in Tokio.",
+    want: [{ tool: "change_trip", input: { bases: "*" } }],
+  },
+  {
+    id: "left-out-fixes-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    trips: [OCT_TRIP],
+    tripDigest: [
+      ...OCT_DIGEST.slice(0, -1),
+      "Parks left out: Hollywood Studios (no day left for it); fixes: the arrival or departure day as a park day: change_trip arrival park or departure park; fewer parks: change_trip parks with visits 0 for one they can do without; a longer trip: change_trip dates, 1 more day",
+    ],
+    message: "Wo ist Hollywood Studios?",
+    forbid: ["plan_vacation"],
+    answer: [{ must: "anreise|abreise|tag mehr|länger|weniger" }],
+  },
+  {
+    id: "last-year-figures-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message: "How busy will Magic Kingdom be on 14 May next year?",
+    allowBefore: ["get_trip_days", "find_trip_dates", "get_best_days"],
+    want: [{ tool: ["get_days", "get_park_day", "compare_parks"] }],
+    results: {
+      get_days: {
+        park: { name: "Magic Kingdom Park" },
+        days: [
+          {
+            date: "2027-05-14",
+            weekday: "Friday",
+            status: "OPERATING",
+            crowdLevel: "moderate",
+            expectedPeakWaitMinutes: 55,
+            basis:
+              "estimated from last year: the same weekday a year back as measured, not a forecast",
+          },
+        ],
+      },
+    },
+    answer: [{ must: "last year" }],
+  },
+  {
+    id: "storm-peak-not-quiet-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    message:
+      "Ist Ende August nicht die leerste Zeit für Orlando? Da sind doch alle wieder in der Schule.",
+    allowBefore: ["get_trip_days", "get_trip_region"],
+    want: [{ tool: ["find_trip_dates", "get_trip_days"] }],
+    answer: [{ must: "hurrikan|sturm" }],
+  },
+  {
+    id: "forecast-accuracy-en",
+    locale: "en",
+    pagePath: OCT_HUB_EN,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    trips: [OCT_TRIP],
+    tripDigest: OCT_DIGEST,
+    message: "How sure are you about those waits?",
+    want: [{ tool: "get_forecast_accuracy" }],
+  },
+  {
+    id: "resort-days-de",
+    locale: "de",
+    pagePath: OCT_HUB,
+    pageSubject: HUB_SUBJECT,
+    liveRegions: ORLANDO_ONLY,
+    now: "2027-02-20 10:15",
+    message: "An welchen Tagen im März ist bei Disney am wenigsten los?",
+    want: [
+      {
+        tool: "get_trip_days",
+        input: { resort: "walt-disney-world" },
+      },
+    ],
   },
 ];
 
@@ -1288,4 +1416,5 @@ export const EVAL_CASES: EvalCase[] = [
   },
   ...PLAN_CASES,
   ...BUDDY_CASES,
+  ...REGION_CASES,
 ];

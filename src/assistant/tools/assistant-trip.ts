@@ -187,6 +187,21 @@ const REASONS: Record<PlanDayReason, string> = {
   locked: "pinned by the user",
 };
 
+/**
+ * A figure past the forecast's reach: from about two months ahead every trip surface reads the
+ * same weekday a year back as measured (PAR-1319), so Parky says "estimated from last year".
+ */
+export const LAST_YEAR_PHRASE =
+  "estimated from last year: the same weekday a year back as measured, not a forecast";
+
+/** A planned day's figure, by where it comes from, short: the prompt says what each means. */
+const DAY_BASIS: Record<string, string> = {
+  forecast: "forecast",
+  long_range: "long-range forecast",
+  last_year: "estimated from last year",
+  none: "no figure",
+};
+
 /** A plan day's warnings in words, the region's seasons included. */
 function warningPhrases(region: RegionConfig): Record<string, string> {
   return {
@@ -194,7 +209,7 @@ function warningPhrases(region: RegionConfig): Record<string, string> {
     fireworks_missed:
       "party night: day guests miss the evening show; no other day fitted",
     hours_not_published: "hours not published yet",
-    estimate_last_year: "estimate from last year, not a forecast",
+    estimate_last_year: LAST_YEAR_PHRASE,
     long_range: "long-range forecast, less sure",
     no_forecast: "no figure yet",
     adjacent_repeat: "second visit the day after the first",
@@ -529,7 +544,52 @@ export interface TripPlanLike {
   days: Array<Record<string, unknown>>;
   totals: Record<string, unknown>;
   unplaced: Array<Record<string, unknown>>;
+  /** The chosen parks with no visit in the plan (PAR-1309); every one has its `unplaced` row. */
+  parksLeftOut?: Array<{ park: string; reason: string }>;
   ignoredLocks?: Array<Record<string, unknown>>;
+}
+
+/**
+ * The planner's ways to fit parks a plan left out, in the order it offers them, as `change_trip`
+ * makes them: the arrival or departure day as a park day where it is free, fewer parks, a longer
+ * trip. A park closed all trip, out of the ticket's days or out of reach of every stay has its own.
+ */
+export function leftOutFixes(
+  leftOut: ReadonlyArray<{ reason: string }>,
+  query: Pick<NormalizedPlanQuery, "arrival" | "departure">,
+): string[] {
+  const reasons = new Set(leftOut.map((l) => l.reason));
+  const fixes: string[] = [];
+  if (reasons.has("no_day_left")) {
+    const free = [
+      query.arrival !== "park" && "arrival",
+      query.departure !== "park" && "departure",
+    ].filter(Boolean);
+    if (free.length > 0) {
+      fixes.push(
+        `the ${free.join(" or ")} day as a park day: change_trip ${free.map((f) => `${f} park`).join(" or ")}`,
+      );
+    }
+    fixes.push(
+      "fewer parks: change_trip parks with visits 0 for one they can do without",
+    );
+    const missing = leftOut.filter((l) => l.reason === "no_day_left").length;
+    fixes.push(
+      `a longer trip: change_trip dates, ${missing} more day${missing === 1 ? "" : "s"}`,
+    );
+  }
+  if (reasons.has("no_open_day")) {
+    fixes.push("other dates, when the park is open: change_trip dates");
+  }
+  if (reasons.has("no_ticket_day")) {
+    fixes.push(
+      "a ticket with more days or that park: change_trip tickets, or no tickets for a suggestion",
+    );
+  }
+  if (reasons.has("no_base")) {
+    fixes.push("a city that reaches it: change_trip bases");
+  }
+  return fixes;
 }
 
 type PlanDayWithTravel = PlannedDay & {
@@ -612,7 +672,7 @@ function plannedPark(
     ...(visit.part === "evening" && { part: "evening, on an evening ticket" }),
     ...(visit.headlinerWait != null && { headlinerWait: visit.headlinerWait }),
     ...(visit.crowdLevel && { crowdLevel: visit.crowdLevel }),
-    ...(visit.basis && { basis: visit.basis }),
+    ...(visit.basis && { basis: DAY_BASIS[visit.basis] ?? visit.basis }),
     ...(cell?.opensAt &&
       cell.closesAt && {
         hours: clockRange(cell.opensAt, cell.closesAt, timezone),
@@ -755,6 +815,12 @@ export function vacationItinerary(input: {
   });
   const area = region.hotelAreas.find((a) => a.key === query.area);
   const totals = plan.totals as unknown as PlanTotals;
+  // A park left out is the planner's sentence with its fixes; a second visit dropped, a lesser note.
+  const leftOut = plan.parksLeftOut ?? [];
+  const leftOutParks = new Set(leftOut.map((l) => l.park));
+  const visitsDropped = plan.unplaced.filter(
+    (u) => !leftOutParks.has(String(u.slug)),
+  );
   const relaxed = (plan.meta.relaxed as string[] | undefined) ?? [];
   return {
     region: region.name,
@@ -786,10 +852,18 @@ export function vacationItinerary(input: {
     days,
     totals: {
       ...totals,
-      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; penalties: minutes a park day that ${penaltiesMean(region)} added to the plan's cost, not to the waits`,
+      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; expectedError: the forecast's typical miss per headliner ride at these days' distance ahead, measured (get_forecast_accuracy has the region's), absent where the days are estimated from last year; penalties: minutes a park day that ${penaltiesMean(region)} added to the plan's cost, not to the waits`,
     },
-    ...(plan.unplaced.length > 0 && {
-      notPlaced: plan.unplaced.map((u) => ({
+    ...(leftOut.length > 0 && {
+      parksLeftOut: leftOut.map((l) => ({
+        park: names.get(l.park) ?? l.park,
+        why: UNPLACED[l.reason] ?? l.reason,
+      })),
+      ...(totals.parkDays != null && { parkDays: totals.parkDays }),
+      leftOutFixes: leftOutFixes(leftOut, query),
+    }),
+    ...(visitsDropped.length > 0 && {
+      visitsDropped: visitsDropped.map((u) => ({
         park: names.get(String(u.slug)) ?? u.slug,
         why: UNPLACED[String(u.reason)] ?? u.reason,
       })),
@@ -1221,7 +1295,7 @@ function whenWarnings(region: RegionConfig): Record<string, string> {
     party_nights: "party nights close a park early for day guests",
     fireworks_missed: "a planned night loses the evening show to a party",
     hours_not_published: "opening hours not published yet",
-    estimate_last_year: "figures from last year, not a forecast",
+    estimate_last_year: LAST_YEAR_PHRASE,
     water_park_closed: "a chosen water park is closed for its season",
     ticket_window_relaxed:
       "a visit lies outside its ticket's valid dates: no day inside them fitted",
@@ -1230,8 +1304,8 @@ function whenWarnings(region: RegionConfig): Record<string, string> {
 
 const WHEN_BASIS: Record<string, string> = {
   forecast: "forecast",
-  mixed: "partly forecast, partly last year",
-  last_year: "last year's figures, not a forecast",
+  mixed: "partly forecast, partly estimated from last year",
+  last_year: LAST_YEAR_PHRASE,
   none: "no figure",
 };
 
@@ -1309,6 +1383,12 @@ export function tripDatesSummary(input: {
               `${storm} season, ${w.penalties[storm]} min a park day`,
             w.penalties.heat && `heat, ${w.penalties.heat} min a park day`,
           ].filter(Boolean),
+        }),
+        ...(w.plan.parksLeftOut?.length && {
+          parksLeftOut: w.plan.parksLeftOut.map(
+            (l) =>
+              `${input.names?.get(l.park) ?? l.park} (${UNPLACED[l.reason] ?? l.reason})`,
+          ),
         }),
         ...(w.tickets && { tickets: w.tickets.map(whenTicketPhrase) }),
         ...(w.ticketSuggestion && {

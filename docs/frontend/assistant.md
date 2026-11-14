@@ -220,7 +220,15 @@ question is about it ("your Thursday at Efteling"), and without such a question 
 them per chat, never read back as data and never "your data"; asked how he knows, he says park.fan
 keeps the plan in their browser. Three eval cases cover it. The prompt grew by 2,696 characters (34,236 to
 36,932) and the tool list by 7,934 (50,870 to 58,804, the six new tools 7,649 of them), about 2,600
-tokens of the cached prefix.
+tokens of the cached prefix. Version 54 is the 2.21.0 regions ([live regions](#live-regions)): Parky
+plans, changes, opens and links only the regions "This chat" names as live, and says a coming
+region's planner opens later; `change_trip` sets a bases region's route (cities and nights, the
+airport, the buffer, the stay suggestion) and the planner's date search; a plan's `parksLeftOut`
+comes with the planner's three fixes, which he offers in their order; figures further ahead than
+about two months are "estimated from last year" (PAR-1319); in a hurricane or typhoon region the
+storm peak is never the quietest time; `get_trip_region`, `get_trip_days` and
+`get_forecast_accuracy` answer a region's facts, its days at a glance and how sure the forecast is.
+Eight eval cases cover it.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -230,8 +238,8 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 83 short chats (`assistant-eval.fixtures.ts`: page, planner,
-trips and their plan, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+`src/assistant/assistant-eval.ts` sends 91 short chats (`assistant-eval.fixtures.ts`: page, planner,
+trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
 the prompt's tokens alone and with the tools, then a pass/fail table:
@@ -464,10 +472,11 @@ glossary term, a park's `section` (`calendar`, `averages`, `kids`) by its Englis
 the widget respells in the reader's language, the last two only where the park has that page
 (`missingSection`: the park statistic's `displayable` over the page's two years, and the frontend's
 `KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
-park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`, `how_it_works`
-(`/how-park-fan-works`), `fancast`, `orlando` (the hub); a `plan_vacation` `hubUrl` as `url` opens
+park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `day_planner` (the day planner,
+`/trip-planner`), `how_it_works` (`/how-park-fan-works`), `fancast`, `trip_hub` with a `region` (a
+live region's hub, `/trip-regions/<slug>`); a `plan_vacation` `hubUrl` as `url` opens
 the hub with that plan, `/trip-regions/orlando?from=…#planner`, rebuilt from the plan parameters it holds
-(`hubPath`), so nothing else rides along), `request_location` (the share
+(`hubPath`), so nothing else rides along; a hub of a region not live is refused), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
 for with reason `too_short` and its minimum unless `despiteHeight` is set, and with none left no
@@ -562,8 +571,16 @@ stay; the first edit of an untouched trip starts from the region's headliners, a
 `pin` (`{ park | "rest", date }`, one pin a date), `unpin` (dates), `swap` (`{ a, b }`: each day
 pinned to what the other holds, the planner's own `swapLocks`; a travel or two-park day is refused),
 `rest`, `tickets` (`""` clears), `hotel`, `area`, `hopper`, `fireworks`, `evenings`, `arrival`,
-`departure` and, in a region with bases, `moveBuffer` (30, 60, 90 or 120 minutes for each hotel
-change on top of the train; the region's own, Japan's 30, stays out of the query). `changeTripParams` edits the visitor's query name by name, so everything the change
+`departure`, `search` (`{ from, to, days, within? }`: the planner's date finder, `when=`; the dates
+and pins go) and, in a region with bases, the route: `bases` (the stays they fix,
+`city[:nights][@area]`, the whole list; `""` clears it, and `area` and `hotel` go, which a bases
+region refuses), `startBase` and `endBase` (`""`: the plan picks), `landAt` and `leaveFrom` (an
+airport or station code: the one base that lists it, else none, as the planner maps "you land in",
+`gatewayBase`; an unknown code is refused with the region's codes), `applyStaySuggestion` (the
+plan's `staySuggestion.nights` on the stays, each keeping its area) and `moveBuffer` (30, 60, 90 or
+120 minutes for each hotel change on top of the train; the region's own, Japan's 30, stays out of
+the query). A route in a region with one base is refused. The kinds are `route` and `buffer`.
+`changeTripParams` edits the visitor's query name by name, so everything the change
 does not touch stays as written (`blocks`, the stays' `bases`), and the planner's defaults stay out
 of it, as the page writes them. New dates leave a date search and drop pins outside them; a removed
 park takes its pins along. The plan route then checks the result: a refusal (an unknown park, hotel
@@ -573,7 +590,17 @@ that sets the dates before the parks gets a plan at once. Pinned visits beyond t
 the planner's own problem state with its way out (`PLANNER_PROBLEM`), so that change still goes, with
 `notPlannedYet`. Otherwise the result says
 `daysChanged` (date, weekday, `now`, `was`) and `bigRidesWait` before and after (`tripPlanChange`),
-plus pins not kept and parks not placed. Without a trip, `dates` start one. `query` is written in
+plus pins not kept, `parksLeftOut` with `leftOutFixes`, `visitsDropped`, `staysChanged` (the stays
+before and now) and the new `staySuggestion`. Without a trip, `dates`, `parks` or `search` start one;
+a trip started with `parks` holds those parks only, not the region's headliners.
+
+**Parks left out** (PAR-1309). The plan route answers `parksLeftOut`, the chosen parks with no visit,
+and every itinerary and `/when` window passes them on by name with why. A plan adds `parkDays` and
+`leftOutFixes`, the planner's ways in, in its order, as `change_trip` makes them (`leftOutFixes`):
+for `no_day_left` the arrival or departure day as a park day where it is free, fewer parks, and a
+longer trip by as many days as parks are out; for `no_open_day` other dates; for `no_ticket_day` a
+ticket with the days; for `no_base` a city that reaches the park. A second visit the plan dropped is
+`visitsDropped`, apart, since its park is in the plan. The digest says both in a line. `query` is written in
 the planner's own order and spelling (`writeTripQuery`); the widget applies it through the planner's
 state, or opens the hub with it.
 
@@ -620,13 +647,50 @@ answer and reply ideas in English (`interviewGuide`). A trip's `party` (how many
 heights) has no field in either planner: the widget keeps it with the region's remembered trip, it
 comes back in `trips`, and `file` writes the smallest height into the day planner's prefs.
 
-In a region with bases (Japan) the hotel step asks how a hotel change should go instead of whose
-hotel and where (`basesHotelGuide`): Parky says how the bags travel, in the region's own phrase
-(`luggagePhrase` in `tools/assistant-trip.ts`; Japan's: the courier, takkyubin, booked at the hotel
-front desk or a convenience store, at the next hotel the same or the next day, never a price), asks
-whether they send the bags ahead, carry them or want more time, and sets `moveBuffer` with
-`change_trip` (PAR-1304). `plan_vacation` and `find_trip_dates` take `moveBuffer` too, and a plan
+In a region with bases (Japan, Paris) the hotel step asks what the visitor has fixed of the route
+instead of whose hotel and where (`basesHotelGuide`), and applies it with `change_trip`'s route:
+`bases` for a city's nights or hotel area, `landAt` or `leaveFrom` for the airport, never `hotel`
+or `area`, which a bases region refuses. Where bags can travel ahead, Parky says how, in the
+region's own phrase (`luggagePhrase` in `tools/assistant-trip.ts`; Japan's: the courier, takkyubin,
+booked at the hotel front desk or a convenience store, at the next hotel the same or the next day,
+never a price), asks whether they send the bags ahead, carry them or want more time, and sets
+`moveBuffer` (PAR-1304). The interview keeps the region its region step was answered with. `plan_vacation` and `find_trip_dates` take `moveBuffer` too, and a plan
 with stays carries `hotelChange` (the minutes, the visitor's or the region's) and `luggage`.
+
+### Live regions
+
+Which trip regions are live is the site's to say: the region registry's `live` flag on the
+frontend opens a region's hub, and the widget sends the same list with every question as
+`liveRegions` (`string[]`, at most 20). That flag is the one switch at go-live; the API keeps none.
+`regionLive` reads it, and absent (a widget from before 2.21.0) every region counts, as before.
+`tripRegion` refuses a region not live, so `plan_vacation`, `get_trip_plan`, `change_trip`,
+`find_trip_dates`, `get_park_events`, `get_travel_time`, `get_trip_region`, `get_trip_days` and
+`get_forecast_accuracy` answer "Japan's trip planner is not on park.fan yet; it opens later. Do not
+plan, offer or link a Japan trip"; so do `open_page` for its hub (`trip_hub`, or a `hubUrl`),
+`interview` with its region, and a park of that region. A trip the browser sends for a region not
+live is dropped before "This chat", which names the live regions and the coming ones in a line
+(`regionsLine`: "Trip regions with a hub and trip planner on park.fan: Orlando. Coming later, not on
+park.fan yet: Southern California, Japan and Paris."). The widget also refuses a `trip_set` for a
+region it has not live.
+
+### A region's facts, its days, and how sure the forecast is
+
+| Tool                                                  | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_trip_region` (`region`)                          | its name and hub; its resorts with their parks, headliners marked; each hotel kind with whose it is and its perks at which parks; its hotel areas (with their base); in a region with bases the bases with their gateways (`HND Haneda Airport`), the parks each reaches and how, the stay note, the move-buffer options and default, the luggage phrase and `routeMeans`; the active ticket ids by resort with days and hopping; the storm season with its peak |
+| `get_trip_days` (`region`, `from?`, `to?`, `resort?`) | the region calendar (`TripRegionService.calendar`, default today to +30, at most 92 days, validated as the route): per resort the park of each day (`best`, the hub's pick by `dayCost`), its big rides' wait, crowd level and why, as one line a day; its quietest and busiest three; the holidays and school breaks. Days without a forecast pick (a `last_year` day is no pick) are left out                                                                  |
+| `get_forecast_accuracy` (`region`)                    | the region's [forecast accuracy](trip-regions.md) (`TripAccuracyService.accuracy`): a week ahead, the mean miss of the big rides' peak wait over the last 30 measured days, in a sentence, with the lead, the minutes and `means`; null with why where too little is measured                                                                                                                                                                                    |
+
+A plan's `totals.means` says what `expectedError` is: the forecast's typical miss per headliner ride at
+the plan days' distance ahead, the same measurement, absent for days estimated from last year.
+
+**Estimated from last year** (PAR-1319). Further ahead than the forecast's reach (about two months)
+every trip surface reads the same weekday a year back as measured. Parky says so: a plan day's
+`basis` is `estimated from last year`, a window's and a month's `basis` and the warning
+`estimate_last_year` read "estimated from last year: the same weekday a year back as measured, not a
+forecast" (`LAST_YEAR_PHRASE`), and the prompt has him say "estimated from last year", never
+forecast. In a hurricane or typhoon region the prompt keeps him from calling the storm peak the
+quietest time to go, whatever its queues: the date tools rank it lower (`rankedLowerBy`).
 
 ### The trip regions: the vacation planner in the chat
 

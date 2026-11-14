@@ -134,6 +134,7 @@ async function run(
         interview: testCase.interview,
         alerts: testCase.alerts,
         favorites: testCase.favorites,
+        liveRegions: testCase.liveRegions ?? null,
       }),
     },
   ];
