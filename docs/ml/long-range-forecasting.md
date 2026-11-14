@@ -170,9 +170,13 @@ Resort, against the same dates of 2026 (the full tables, code references and SQL
   is biased low too, growing with lead: about −10 % at a week and −22 % at 31–60 days (§2).
 
 **What 2.21.0 does about it.** No ranking surface reads the long-range level any more: from day 61
-`/when`, the best-time pages, `/best-days` and the plan's day costs rank on the last-year measured
-day, TFT is scaled by its measured lead factor within 60 days, and the tie-break that favoured the
-forecast is gone (PAR-1319, [trip regions](../frontend/trip-regions.md)).
+`/when`, the best-time pages, `/best-days`, the calendar's best park of a day and the plan's day
+costs rank on the last-year measured day (the long-range level stands in only where nothing was
+measured a year back), TFT is scaled by its measured lead factor within 60 days (the pooled factors
+of §2, 1.10 at a day to 1.29 at 31–60 days, `TFT_LEAD_FACTORS`, until the lead snapshots give
+factors per region), and the tie-break that favoured the forecast is gone (PAR-1319,
+[trip regions](../frontend/trip-regions.md)). The trip caches moved to new keys
+(`trip-regions:calendar:v2`, `trip-regions:plan:v3`, `trip-regions:when:v3`).
 
 **What still shows it.** The crowd levels of every park calendar beyond day 60 still come from
 this level, so they read too quiet and too even (PAR-1320).

@@ -152,17 +152,35 @@ by the key guard). It answers 400 for:
   departure day plan five and name two, so each suggestion can say which do not fit.
 - **The ranking** is the plan's sum over its park days, plus 1000 for each visit the window cannot
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
-  it. It includes extreme heat and the hurricane season
-  ([how a day is priced](./trip-regions.md#how-a-day-is-priced)): a peak-season window ranks
-  behind an equal one outside the season. Windows are compared by that sum per visit, and
-  **windows within 3 minutes of each other count as equal** (`WHEN_TIE_MINUTES`; a forecast's
-  error is about 17 minutes per ride, so a smaller lead says nothing): from the cheapest window
-  left, it and every window within 3 minutes of it form a tier, ordered by comfort, `forecast`
-  before `mixed` before `last_year`, then the lower `penalties` (heat plus hurricane), then the
-  exact sum and the earlier window; then the next tier from the cheapest window left. So a
-  February window on a forecast at 36 ranks above a late-August one at 34 from last year, in the
-  heat and the hurricane peak. Days without published hours are ranked on their figures like any
-  other (priced as open, above).
+  it. **Every day is on the measured scale**
+  ([the day's figure](./trip-regions.md#the-days-get-v1trip-regionsorlandocalendarfromto)):
+  within 60 days the forecast times its lead factor, past them the same weekday a year back as
+  measured, never the long-range forecast, which read 42 % low and almost flat against 2026
+  (PAR-1319). It includes extreme heat and the storm season
+  ([how a day is priced](./trip-regions.md#how-a-day-is-priced)), and the storm peak's window term
+  ([below](#how-the-storm-peak-ranks)). Windows are compared by that sum per visit, and **windows
+  within 3 minutes of each other count as equal** (`WHEN_TIE_MINUTES`; a forecast's error is about
+  17 minutes per ride, so a smaller lead says nothing): from the cheapest window left, it and every
+  window within 3 minutes of it form a tier, ordered by comfort, the lower `penalties` (heat plus
+  storm), then the exact sum and the earlier window; then the next tier from the cheapest window
+  left. **The basis orders nothing.** Until PAR-1319 a tier put `forecast` before `mixed` before
+  `last_year`, which, with the forecast reading low, ranked a flat February forecast first.
+  Days without published hours are ranked on their figures like any other (priced as open, above).
+- <a id="how-the-storm-peak-ranks"></a>**How the storm peak ranks.** A window that touches the storm
+  peak on any day, travel days included (`touchesStormPeak`, the window that warns `hurricane_peak`
+  or `typhoon_peak`), adds `weather.storm.peakWindowMinutes` per visit to its score and its bound:
+  **10** in Orlando and in Japan. On measured days late August is Orlando's quietest stretch: a
+  ten-day trip from 23 August plans at 34 minutes a park day, against 42–43 for the best ones
+  outside the peak (26 October, 12 April), and the season's own term (8 × the date's weight) left
+  it first. The value is set by one rule: ranked on 2026's measured days, no window touching the
+  peak stays in the top three of a region's best-time searches (Orlando: the region's, Disney's and
+  Universal's headliners; Japan: the region's, Tokyo Disney's and USJ's; 7, 10 and 14 days, the
+  page's gap). That held from 7 minutes on in Orlando and 8 in Japan; 10 keeps a margin for next
+  year's measurements. The peak dates are the region config's sources (NHC: 15 August to
+  15 October; JMA: 1 September to 15 October, whose second half is curated from monthly data), and
+  the warnings stay as they were. The term is in `penalties` (per park day), never in
+  `headlinerWait`, `weeks` or `months`, and no plan carries it: a trip whose dates are chosen is
+  planned as before.
 - **`penalties`** (`{ heat?, hurricane? }`, `{ heat?, typhoon? }` in Japan): what heat and the
   region's storm season added to the ranking, in minutes per park day, one decimal, absent when both
   are zero. `headlinerWait` never
@@ -174,7 +192,8 @@ by the key guard). It answers 400 for:
   It ignores `within`.
 - **`basis`**: `forecast` when every planned park day is forecast (`long_range` counts), `last_year`
   when every one is last year's measured day, `mixed` otherwise, `none` without a figure. A
-  `last_year` window is a statement about last year and the client labels it so.
+  `last_year` window is a statement about last year and the client labels it so. Past 60 days
+  every window is `last_year`, so for a year's search most are.
 - **`weeks`** is the year strip: per ISO week in the range (a week cut by the range keeps only its
   days in it), each chosen park on its cheapest day of the week, the week priced as a window of its
   own, meaned over the parks open that week. It is an overview, not a plan.
@@ -317,9 +336,10 @@ for the mixing comparison ([tickets](./trip-regions.md#tickets)).
 
 **Reads.** The days come from the same calendar read as `/calendar`, over the whole range plus its
 two-week reference span: one read per park and month from the month caches, the last-year
-snapshots past the forecast, no ML call. The warmup keeps a region park's months to +13 so a
-year's range is all cache hits ([trip regions](./trip-regions.md#caching-and-cost)). An answer is
-kept six hours in Redis (`trip-regions:when:v2:{region}:{query}`) by its normalized query.
+snapshots for every day (−12 … 0 for a year's range), no ML call. The warmup keeps a region park's
+months to +13 and the snapshots −12 … −1 so a year's range is all cache hits
+([trip regions](./trip-regions.md#caching-and-cost)). An answer is kept six hours in Redis
+(`trip-regions:when:v3:{region}:{query}`) by its normalized query.
 
 ## School breaks (`GET /v1/trip-regions/:region/school-breaks`)
 
