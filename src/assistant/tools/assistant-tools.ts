@@ -112,6 +112,7 @@ import {
   TripRegionService,
 } from "../../trip-regions/trip-region.service";
 import { TripPlanService } from "../../trip-regions/trip-plan.service";
+import type { PlanIdea } from "../../trip-regions/trip-plan-ideas";
 import { TripAccuracyService } from "../../trip-regions/trip-accuracy.service";
 import { TripRequestMetricsService } from "../../trip-regions/metrics/trip-request-metrics.service";
 import type { TripMetricRoute } from "../../trip-regions/metrics/trip-request-facts";
@@ -395,6 +396,11 @@ export interface AssistantToolContext {
 export interface AnswerState {
   round: number;
   done: Set<string>;
+  /**
+   * The ideas the last trip tool of this answer listed for the trip on screen, by their order:
+   * `show_card` kind idea shows one of them by its `n`.
+   */
+  tripIdeas?: { region: string; ideas: PlanIdea[] };
 }
 
 /**
@@ -2011,6 +2017,60 @@ export async function visitorTripItinerary(
   );
 }
 
+/**
+ * The idea card: one of the ideas the last trip tool of this answer listed, whole, for the
+ * planner on screen to apply. A refusal the model reads where there is none by that `n`.
+ */
+function ideaCard(ctx: AssistantToolContext, n: number | undefined) {
+  const held = ctx.answer?.tripIdeas;
+  const idea = n !== undefined ? held?.ideas[n - 1] : undefined;
+  if (!held || !idea) {
+    throw new McpToolError(
+      "kind idea shows one of the ideas get_trip_plan or change_trip listed in this answer, by its n; call one of them first",
+    );
+  }
+  const card: AssistantCard = { kind: "idea", region: held.region, idea };
+  return new ActionOutcome(
+    { type: "card", card },
+    { shown: `idea ${n}: ${idea.kind}`, savedMinutes: idea.savedMinutes },
+  );
+}
+
+/** At most this many of a plan's ideas reach the model; `/plan/ideas` answers no more. */
+const MAX_TRIP_IDEAS = 3;
+
+/**
+ * The plan's ideas for the trip on screen (`/plan/ideas` on the query the tool planned with), as
+ * the model reads them, numbered: what each changes, the minutes it saves over the visits both
+ * plans place and the parks it places. Kept on the answer for `show_card` kind idea. Never fails
+ * the tool: without them the plan stands alone.
+ */
+async function tripIdeasOf(
+  ctx: AssistantToolContext,
+  trip: Pick<Awaited<ReturnType<typeof tripRegion>>, "region" | "names">,
+  query: TripPlanQueryDto,
+) {
+  const { region, names } = trip;
+  const answer = await parkyTripCall(ctx, "plan_ideas", region.slug, () =>
+    ctx.get(TripPlanService).ideas(region.slug, query),
+  ).catch(() => null);
+  const ideas = (answer?.ideas ?? []).slice(0, MAX_TRIP_IDEAS);
+  if (ctx.answer) ctx.answer.tripIdeas = { region: region.slug, ideas };
+  const name = (slug: string | undefined) =>
+    slug ? (names.get(slug) ?? slug) : undefined;
+  return ideas.map((idea, index) => ({
+    n: index + 1,
+    kind: idea.kind,
+    ...(idea.park && { park: name(idea.park) }),
+    ...(idea.from && { from: idea.from }),
+    ...(idea.to && { to: idea.to }),
+    ...(idea.with && { with: name(idea.with) }),
+    savedMinutes: idea.savedMinutes,
+    ...(idea.places?.length && { places: idea.places.map((p) => name(p)) }),
+    bigRidesWait: idea.totals,
+  }));
+}
+
 /** The visitor's trip a trip tool means, or a refusal that says what is missing. */
 function visitorTrip(ctx: AssistantToolContext, region?: string): VisitorTrip {
   const trips = ctx.trips ?? [];
@@ -3379,17 +3439,19 @@ export const ASSISTANT_TOOLS = [
         );
       }
       ctx.notePark?.(trip.region.timezone);
-      const plan = await itineraryOf(
-        ctx,
-        await tripRegion(ctx, trip.region.slug),
-        query,
-      );
+      const regional = await tripRegion(ctx, trip.region.slug);
+      const plan = await itineraryOf(ctx, regional, query);
+      // Ideas only for the trip on screen: its planner is what applies one.
+      const ideas = trip.onScreen
+        ? await tripIdeasOf(ctx, regional, query)
+        : [];
       return {
         ...(trip.onScreen
           ? { shown: "on screen in the hub's planner now" }
           : { shown: "remembered by this browser; the hub opens it" }),
         ...(trip.party && { party: trip.party }),
         ...plan,
+        ...(ideas.length > 0 && { ideas }),
       };
     },
   }),
@@ -3619,9 +3681,11 @@ export const ASSISTANT_TOOLS = [
       // so the change still lands: an interview sets the dates before the parks.
       let plan: Awaited<ReturnType<typeof itineraryOf>> | null = null;
       let problem: string | null = null;
+      let ideas: Awaited<ReturnType<typeof tripIdeasOf>> = [];
       if (after) {
         try {
           plan = await itineraryOf(ctx, trip, after);
+          if (current?.onScreen) ideas = await tripIdeasOf(ctx, trip, after);
         } catch (error) {
           if (
             !(error instanceof McpToolError) ||
@@ -3651,6 +3715,7 @@ export const ASSISTANT_TOOLS = [
                   notPlannedYet: `${problem}; the planner says the same with its way out, so the parks or the days come next`,
                 }
               : { plan: "no dates yet, so nothing is planned" }),
+          ...(ideas.length > 0 && { ideas }),
         },
       );
     },
@@ -4354,7 +4419,9 @@ export const ASSISTANT_TOOLS = [
       "stands, optionally matching query (kind restaurants), park.fan's own guides and news " +
       "with cover and teaser (kind posts: query, or the slugs of posts you already have; with " +
       "question the result also holds the first post's text, as search_posts does), or " +
-      "glossary terms with their definition (kind glossary, query the word). Whenever the " +
+      "glossary terms with their definition (kind glossary, query the word), or one of the " +
+      "ideas get_trip_plan or change_trip listed in this answer for the trip on screen (kind " +
+      "idea, idea its n; the card's button applies it in the planner, with an undo). Whenever the " +
       "answer lists rides with waits, parks, shows or places to eat, or rests on a post or a " +
       "glossary term, show the matching kind instead of writing the list or the link as text; " +
       "then name your pick in a sentence without repeating the card's numbers. " +
@@ -4372,7 +4439,17 @@ export const ASSISTANT_TOOLS = [
         "restaurants",
         "posts",
         "glossary",
+        "idea",
       ]),
+      idea: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_TRIP_IDEAS)
+        .optional()
+        .describe(
+          "For kind idea: the n of an idea get_trip_plan or change_trip listed in this answer",
+        ),
       query: z
         .string()
         .trim()
@@ -4486,12 +4563,14 @@ export const ASSISTANT_TOOLS = [
         postKind,
         slugs,
         question,
+        idea,
       },
       ctx,
     ) => {
       if (kind === "posts") {
         return postsCard(ctx, { query, postKind, slugs, question, limit });
       }
+      if (kind === "idea") return ideaCard(ctx, idea);
       if (kind === "glossary") {
         if (!query)
           throw new McpToolError("kind glossary needs query, the word");

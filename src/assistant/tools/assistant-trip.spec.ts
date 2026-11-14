@@ -358,7 +358,7 @@ function setup(
         : (JSON.parse(result.content) as Record<string, any>),
     };
   };
-  return { call, internalCalendar, seasons };
+  return { call, internalCalendar, seasons, plans };
 }
 
 describe("eveningPhrase", () => {
@@ -546,6 +546,77 @@ describe("the visitor's own trip", () => {
     expect(searching.content).toMatch(
       /searching 7 days .* find_trip_dates answers that/,
     );
+  });
+
+  it("lists the ideas for the trip on screen, and shows one as a card by its n", async () => {
+    const { call, plans } = setup();
+    const idea = {
+      kind: "add" as const,
+      query: "arrival=park",
+      park: "disneys-hollywood-studios",
+      to: day(10),
+      headlinerWait: { after: 50 },
+      totals: { before: 41, after: 43 },
+      savedMinutes: 0,
+      places: ["disneys-hollywood-studios"],
+    };
+    const ideas = jest.spyOn(plans, "ideas").mockResolvedValue({
+      meta: {
+        region: "orlando",
+        from: day(10),
+        to: day(14),
+        computedAt: "t",
+        plans: 1,
+      },
+      ideas: [idea],
+    });
+    const context = onScreen(planned);
+    const read = await call("get_trip_plan", {}, "de", context);
+    // The same query the plan was made with.
+    expect(ideas).toHaveBeenCalledWith(
+      "orlando",
+      expect.objectContaining({ from: day(10), to: day(14) }),
+    );
+    expect(read.json?.ideas).toEqual([
+      {
+        n: 1,
+        kind: "add",
+        park: "Disney's Hollywood Studios",
+        to: day(10),
+        savedMinutes: 0,
+        places: ["Disney's Hollywood Studios"],
+        bigRidesWait: { before: 41, after: 43 },
+      },
+    ]);
+    const shown = await call(
+      "show_card",
+      { kind: "idea", idea: 1 },
+      "de",
+      context,
+    );
+    expect(shown.action).toEqual({
+      type: "card",
+      card: { kind: "idea", region: "orlando", idea },
+    });
+    // No idea by that n in this answer: a refusal, no card.
+    const missing = await call(
+      "show_card",
+      { kind: "idea", idea: 2 },
+      "de",
+      context,
+    );
+    expect(missing.isError).toBe(true);
+    expect(missing.action).toBeUndefined();
+    // A remembered trip has no planner on screen to apply an idea: none are listed.
+    ideas.mockClear();
+    const remembered = await call("get_trip_plan", {}, "de", {
+      trips: visitorTrips([
+        { region: "orlando", query: planned, onScreen: false },
+      ]),
+      answer: { round: 0, done: new Set<string>() },
+    });
+    expect(remembered.json?.ideas).toBeUndefined();
+    expect(ideas).not.toHaveBeenCalled();
   });
 
   it("pins a park through the planner's own query and says which days moved", async () => {

@@ -20,6 +20,7 @@ import { ASSISTANT_LOCALES, type AssistantLocale } from "../assistant-locales";
 import { hubPathOf } from "./assistant-trip";
 import { TRIP_REGIONS } from "../../trip-regions/regions";
 import type { InterviewSnapshot } from "../assistant.schemas";
+import type { PlanIdea } from "../../trip-regions/trip-plan-ideas";
 import type { TripChangeKind } from "./assistant-plans";
 
 /**
@@ -170,6 +171,13 @@ export type AssistantCard =
         tempMax: number | null;
         climateNormal: boolean;
       } | null;
+    }
+  | {
+      kind: "idea";
+      /** The trip region whose planner on screen the idea is for. */
+      region: string;
+      /** One of the trip's ideas (`/plan/ideas`), whole: the widget applies it. */
+      idea: PlanIdea;
     };
 
 export interface CalendarCardDay {
