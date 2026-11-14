@@ -1081,6 +1081,7 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
           useValue: {
             getNamesByIds: jest.fn().mockResolvedValue(new Map()),
             getMaintenanceWindows: jest.fn().mockResolvedValue([]),
+            getSeasonFacts: jest.fn().mockResolvedValue([]),
           },
         },
         {
@@ -1582,6 +1583,47 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     it("still builds the day when the windows cannot be read", async () => {
       const built = await buildDay(new Error("db down"));
       expect(built.headlinerForecast?.avgWait).toBe(60);
+    });
+
+    describe("a headliner out of season on the day (PAR-1326)", () => {
+      // The day's own month decides; any other month puts h1 out of season.
+      const month = Number(day.slice(5, 7));
+      const seasonal = {
+        id: "h1",
+        isSeasonal: true,
+        seasonMonths: [(month % 12) + 1],
+      };
+      const seasonFacts = () =>
+        (service as any).attractionsService.getSeasonFacts as jest.Mock;
+      afterEach(() => {
+        delete process.env.CALENDAR_SEASON_FILTER;
+      });
+
+      it("leaves it out of the average when the filter is on", async () => {
+        process.env.CALENDAR_SEASON_FILTER = "true";
+        seasonFacts().mockResolvedValue([seasonal]);
+        const built = await buildDay([]);
+        expect(built.crowdLevel).toBe("moderate");
+        expect(built.headlinerForecast?.avgWait).toBe(30);
+        expect(built.headlinerForecast?.rides.map((r) => r.name)).toEqual([
+          "Python",
+        ]);
+      });
+
+      it("keeps it in its own month", async () => {
+        process.env.CALENDAR_SEASON_FILTER = "true";
+        seasonFacts().mockResolvedValue([
+          { ...seasonal, seasonMonths: [month] },
+        ]);
+        expect((await buildDay([])).headlinerForecast?.avgWait).toBe(60);
+      });
+
+      it("reads no season while the filter is off", async () => {
+        seasonFacts().mockClear();
+        seasonFacts().mockResolvedValue([seasonal]);
+        expect((await buildDay([])).headlinerForecast?.avgWait).toBe(60);
+        expect(seasonFacts()).not.toHaveBeenCalled();
+      });
     });
   });
 

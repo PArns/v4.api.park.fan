@@ -55,6 +55,8 @@ import {
   withoutRidesInMaintenance,
   type RideWorksPeriods,
 } from "../../attractions/utils/curated-out-of-service.util";
+import { withoutRidesOutOfSeason } from "../../attractions/utils/curated-attraction-facts.util";
+import { Attraction } from "../../attractions/entities/attraction.entity";
 import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -295,6 +297,17 @@ export class CalendarService {
           );
           return [] as RideWorksPeriods[];
         }),
+      // Off unless `CALENDAR_SEASON_FILTER=true`, read per call (PAR-1326).
+      process.env.CALENDAR_SEASON_FILTER === "true"
+        ? this.attractionsService
+            .getSeasonFacts(park.id)
+            .catch((err: Error) => {
+              this.logger.warn(
+                `Ride seasons unavailable for ${park.slug}: ${err.message}`,
+              );
+              return [] as Attraction[];
+            })
+        : Promise.resolve([] as Attraction[]),
     ]);
 
     const schedules = results[0] as ScheduleEntry[];
@@ -312,16 +325,26 @@ export class CalendarService {
     // A ride in maintenance leaves the day's forecast before anything is
     // aggregated from it; the day still names it, under the window.
     const maintenance = results[8] as RideWorksPeriods[];
+    // So does a ride whose season rules the day out (PAR-1326).
+    const seasonFacts = results[9] as Attraction[];
     const mlPredictions = {
-      predictions: withoutRidesInMaintenance(
-        (results[2] as { predictions: PredictionDto[] }).predictions,
-        maintenance,
+      predictions: withoutRidesOutOfSeason(
+        withoutRidesInMaintenance(
+          (results[2] as { predictions: PredictionDto[] }).predictions,
+          maintenance,
+          (p) => p.predictedTime.split("T")[0],
+        ),
+        seasonFacts,
         (p) => p.predictedTime.split("T")[0],
       ),
     };
-    const hourlyPredictionsList = withoutRidesInMaintenance(
-      results[5] as PredictionDto[],
-      maintenance,
+    const hourlyPredictionsList = withoutRidesOutOfSeason(
+      withoutRidesInMaintenance(
+        results[5] as PredictionDto[],
+        maintenance,
+        (p) => predictionLocalDate(p.predictedTime, park.timezone),
+      ),
+      seasonFacts,
       (p) => predictionLocalDate(p.predictedTime, park.timezone),
     );
 
