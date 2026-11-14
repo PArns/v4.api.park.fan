@@ -39,7 +39,8 @@ type MaintenanceRides = ReadonlyArray<{
  * One calendar day for a tool. With `maintenance`, the rides a window shuts
  * that day, by name; a closed day lists none, since nothing runs anyway. With
  * `seasons`, the curated seasons running that day (`seasonsOn`): a cancelled
- * one never, one with single `dates` only on those.
+ * one never, one with single `dates` only on those, one without them not on a
+ * closed day unless it is the closure.
  */
 export function compactDay(
   day: CalendarDay,
@@ -54,7 +55,16 @@ export function compactDay(
       : maintenance
           .filter((ride) => worksPeriodCovering(ride.windows, day.date))
           .map((ride) => ride.name);
-  const daySeasons = seasonsOn(seasons, day.date).map(seasonDayView);
+  // A range is the season's outer bounds and says nothing about a day the
+  // park is shut; listed dates stand, and so does a closure, which says why.
+  const daySeasons = seasonsOn(seasons, day.date)
+    .filter(
+      (season) =>
+        day.status !== "CLOSED" ||
+        (season.dates?.length ?? 0) > 0 ||
+        season.kind === "closure",
+    )
+    .map(seasonDayView);
   return {
     date: day.date,
     status: day.status,

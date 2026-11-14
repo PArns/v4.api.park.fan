@@ -5,7 +5,7 @@ import { CalendarService } from "../../parks/services/calendar.service";
 import { MlOverviewService } from "../../admin/ml-overview.service";
 import { ForecastErrorBreakdownService } from "../../ml/services/forecast-error-breakdown.service";
 import { DataSource } from "typeorm";
-import { parkForecastTool } from "./park-forecast.tool";
+import { compactDay, parkForecastTool } from "./park-forecast.tool";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import { mlAccuracyTool } from "./ml-accuracy.tool";
@@ -233,6 +233,25 @@ describe("park_forecast", () => {
     expect(out.days[1].seasons).toEqual([
       { kind: "halloween", name: "Fright Nights", separateTicket: true },
       wintertraum,
+    ]);
+
+    // A closed day keeps listed dates and a closure, not a range's other seasons.
+    const closed = compactDay(
+      day("2026-10-30", { status: "CLOSED" }) as never,
+      park.timezone,
+      [],
+      [
+        ...(await seasons.forParkInRange()),
+        season({
+          kind: "closure",
+          startDate: "2026-10-30",
+          endDate: "2026-10-30",
+        }),
+      ] as never,
+    );
+    expect(closed.seasons?.map((s) => s.kind)).toEqual([
+      "halloween",
+      "closure",
     ]);
   });
 
