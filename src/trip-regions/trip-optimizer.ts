@@ -523,10 +523,7 @@ export interface PlannedTicket {
 }
 
 export type UnplacedReason =
-  | "no_open_day"
-  | "no_day_left"
-  | "no_ticket_day"
-  | "no_base";
+  "no_open_day" | "no_day_left" | "no_ticket_day" | "no_base";
 
 export interface OptimizedPlan {
   exact: boolean;
@@ -1129,7 +1126,7 @@ class TripOptimizer {
    * (both ways) taken off its hours. A move day: a park the base reached
    * reaches within the free time after a morning move (the hours until the
    * guest gets in lost), or a park the base left reaches before an evening
-   * move that still arrives by midnight (nothing lost), the cheaper; never on
+   * move that still arrives by the region's last arrival (nothing lost), the cheaper; never on
    * a leg too long for a park, never a hop. An airport's move day takes no park.
    */
   stayCell(plan: StayPlan, row: Row, day: number): StayCell {
@@ -1204,7 +1201,10 @@ class TripOptimizer {
         const close =
           cell.closesMinute ??
           open + (cell.dayHours ?? cell.usualHours ?? DEFAULT_DAY_HOURS) * 60;
-        if (close + fromA.minutes + leg.minutes <= 24 * 60) {
+        if (
+          close + fromA.minutes + leg.minutes <=
+          opt.rules.lastArrivalMinute
+        ) {
           options.push({
             cost: this.stayCost(slug, day, entry, 0, morning),
             when: "evening",
@@ -1283,11 +1283,7 @@ class TripOptimizer {
       }
     }
     this.stayPlans = options.stays
-      ? stayPlans(
-          options.stays,
-          n,
-          [...new Set(units.map((u) => u.slug))],
-        )
+      ? stayPlans(options.stays, n, [...new Set(units.map((u) => u.slug))])
       : [];
 
     // Locks first: they take their day before anything is searched.
@@ -1955,13 +1951,7 @@ class TripOptimizer {
     > = [];
     for (const s of structures) {
       if (!this.budgetLeft()) break;
-      const matrix = this.matrix(
-        s.rows,
-        available,
-        s.mask,
-        s.penalty,
-        s.stay,
-      );
+      const matrix = this.matrix(s.rows, available, s.mask, s.penalty, s.stay);
       const result = this.solve(matrix);
       if (result.feasible) {
         bounded.push({
@@ -3034,17 +3024,24 @@ class TripOptimizer {
   }
 
   /**
-   * What the stays added to the plan's cost: each placed visit's cost under
-   * them less its plain cost (the hours travel takes, the stay hotel's perks),
-   * and the moves' own cost.
+   * What the stays added to the plan's cost: the hours travel takes off each
+   * placed visit (its cost under the stays less the same day without the
+   * travel) and the moves' own cost. Never below 0, so `/when`'s bound holds.
    */
   private stayPenalty(stay: StayPlan, rowOnDay: Map<number, Row>): number {
     let total = stay.fixedCost;
     for (const [day, row] of rowOnDay) {
+      if (row.units.length > 1) continue;
       const under = this.stayCell(stay, row, day).cost;
-      const plain = this.rowCost(row, day);
-      if (Number.isFinite(under) && Number.isFinite(plain)) {
-        total += under - plain;
+      const still = this.stayCost(
+        row.units[0].slug,
+        day,
+        this.entryOf(row.units[0]),
+        0,
+        stay.morning[day],
+      );
+      if (Number.isFinite(under) && Number.isFinite(still)) {
+        total += Math.max(0, under - still);
       }
     }
     return total;

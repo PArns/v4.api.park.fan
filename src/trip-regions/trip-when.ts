@@ -195,8 +195,16 @@ export interface TripWhenWindow {
   seasons: string[];
   closesEarlyDays: number;
   plan: {
-    days: Array<{ date: string; kind: PlannedDay["kind"]; parks: string[] }>;
+    days: Array<{
+      date: string;
+      kind: PlannedDay["kind"];
+      parks: string[];
+      /** A region with bases: where the night is spent. */
+      base?: string;
+    }>;
     unplaced?: string[];
+    /** A region with bases: the window's stays, as on `/plan`. */
+    stays?: OptimizedPlan["stays"];
   };
   /** The owned tickets as the window's plan used them, in short. */
   tickets?: WhenTicket[];
@@ -588,7 +596,14 @@ function tierStartOf<T extends Rankable>(
 export function findTripDates(input: WhenInput): TripWhen {
   const { region, calendar, query } = input;
   const q = query.plan;
-  const rules = region.perks[q.hotel] ?? [];
+  // A region with bases: every stay's hotel perks may count, so the bound
+  // takes them all.
+  const rules = q.stays
+    ? q.stays.bases.flatMap((b) => {
+        const hotel = region.hotelAreas.find((h) => h.key === b.area)?.hotel;
+        return hotel ? (region.perks[hotel] ?? []) : [];
+      })
+    : (region.perks[q.hotel] ?? []);
   const days = calendar.days;
   const dates = days.map((d) => d.date);
   const length = query.days;
@@ -727,6 +742,8 @@ export function findTripDates(input: WhenInput): TripWhen {
       d.warnings.includes("outside_ticket_window"),
     ).length;
     score += UNPLACED_VISIT_COST * (plan.unplaced.length + outside);
+    // A region with bases: what the stays add (travel hours, the moves).
+    score += plan.stayPenalty ?? 0;
     const basis = basisOf(bases);
     const penalties = penaltiesOf(
       heat,
@@ -1093,8 +1110,10 @@ function describeWindow(
         date: d.date,
         kind: d.kind,
         parks: d.parks.map((v) => v.slug),
+        ...(d.base && { base: d.base }),
       })),
       ...(unplaced.length > 0 && { unplaced }),
+      ...(e.plan.stays && { stays: e.plan.stays }),
     },
   };
 }

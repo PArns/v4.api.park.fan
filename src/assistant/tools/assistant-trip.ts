@@ -198,6 +198,8 @@ function warningPhrases(region: RegionConfig): Record<string, string> {
     extreme_heat: HEAT_PHRASE,
     outside_ticket_window:
       "outside the ticket's valid dates: no day inside them fitted",
+    long_day_trip: "a long day trip: the travel takes hours of the park's day",
+    move_day: "a move to the next city first: the park day starts later",
     ...seasonPhrases(region),
   };
 }
@@ -213,6 +215,7 @@ const UNPLACED: Record<string, string> = {
   no_day_left: "no day left for it",
   no_ticket_day:
     "its ticket has no day left for it (days or per-park limit used up)",
+  no_base: "no city of the trip reaches it",
 };
 
 const IGNORED_LOCKS: Record<string, string> = {
@@ -220,6 +223,7 @@ const IGNORED_LOCKS: Record<string, string> = {
   closed: "the park is closed that day",
   day_taken: "that day is pinned already",
   no_visit_left: "more pins than visits",
+  base_unreachable: "the trip's city that day cannot reach the park",
 };
 
 const RELAXED: Record<string, string> = {
@@ -351,6 +355,9 @@ const HUB_PARAMS = [
   "lock",
   "tickets",
   "hopper",
+  "bases",
+  "startBase",
+  "endBase",
 ] as const;
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
@@ -371,6 +378,10 @@ const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   lock: /^[a-z0-9-]+@\d{4}-\d{2}-\d{2}(,[a-z0-9-]+@\d{4}-\d{2}-\d{2})*$/,
   tickets: TICKETS_PATTERN,
   hopper: /^[a-z0-9-]+(,[a-z0-9-]+)*$/,
+  bases:
+    /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?)*$/,
+  startBase: /^[a-z0-9-]+$/,
+  endBase: /^[a-z0-9-]+$/,
 };
 
 /**
@@ -408,6 +419,17 @@ function hubQuery(q: NormalizedPlanQuery): string {
     ...(q.tickets.length > 0 && { tickets: canonicalTickets(q.tickets) }),
     ...(q.ticket !== "hopper" &&
       q.hopperResorts.length > 0 && { hopper: q.hopperResorts.join(",") }),
+    ...(q.stays &&
+      q.stays.bases.length > 0 && {
+        bases: q.stays.bases
+          .map(
+            (b) =>
+              `${b.base}${b.nights !== undefined ? `:${b.nights}` : ""}${b.area ? `@${b.area}` : ""}`,
+          )
+          .join(","),
+      }),
+    ...(q.stays?.startBase && { startBase: q.stays.startBase }),
+    ...(q.stays?.endBase && { endBase: q.stays.endBase }),
   };
   const params = new URLSearchParams();
   for (const name of HUB_PARAMS) {
@@ -685,10 +707,13 @@ export function vacationItinerary(input: {
     const why = day.reasons
       .filter((r): r is PlanDayReason => r in REASONS)
       .map((r) => REASONS[r]);
+    const move = (day as unknown as { move?: DayMove }).move;
     return {
       date: day.date,
       weekday: weekdayOf(day.date),
       kind: day.kind,
+      ...(day.base && { sleepsIn: baseName(region, day.base) }),
+      ...(move && { move: movePhrase(region, move) }),
       ...(parks.length > 0 && { parks }),
       ...(calendarDay?.holidays?.length && { holidays: calendarDay.holidays }),
       ...(travel && { travel }),
@@ -711,6 +736,19 @@ export function vacationItinerary(input: {
     headlinerWaitMeans:
       "the big rides' wait at their busiest, in minutes, meaned over the park's headliners; not the wait at every hour",
     ...(area && { travelFrom: `the hotel area ${area.name}` }),
+    ...(plan.meta.stays !== undefined && {
+      stays: (plan.meta.stays as Array<Record<string, unknown>>).map(
+        (st) =>
+          `${baseName(region, String(st.base))}: ${st.nights} night${st.nights === 1 ? "" : "s"}, ${st.from}..${st.to}${st.auto ? " (chosen by the plan)" : ""}`,
+      ),
+    }),
+    ...(plan.meta.staySuggestion !== undefined && {
+      staySuggestion: staySuggestionPhrase(
+        region,
+        plan.meta.staySuggestion as StaySuggestionLike,
+        names,
+      ),
+    }),
     ...(tripSeason(region, planned) && {
       season: tripSeason(region, planned),
     }),
@@ -774,6 +812,59 @@ export function vacationItinerary(input: {
       })),
     ),
   };
+}
+
+/** A plan day's move as the route serves it. */
+interface DayMove {
+  from: string;
+  to: string;
+  minutes: number;
+  mode: string;
+  name?: string;
+  when: "morning" | "evening" | "day";
+  departAt: string;
+  arriveAt: string;
+}
+
+interface StaySuggestionLike {
+  nights: Record<string, number>;
+  savedMinutesPerRide: number;
+  park?: string;
+  date?: string;
+}
+
+/** A base's name, else its key. */
+function baseName(region: RegionConfig, key: string): string {
+  return region.bases?.find((b) => b.key === key)?.name ?? key;
+}
+
+/** A move in one phrase: where, how, when, and what it does to the day. */
+function movePhrase(region: RegionConfig, m: DayMove): string {
+  const how = `${m.name ?? m.mode.replace(/_/g, " ")}, ${clock(m.departAt, region.timezone)}–${clock(m.arriveAt, region.timezone)}`;
+  const route = `${baseName(region, m.from)} to ${baseName(region, m.to)}`;
+  const when =
+    m.when === "morning"
+      ? "in the morning, the park after it"
+      : m.when === "evening"
+        ? "in the evening, after the park"
+        : "the day's plan";
+  return `${route} by ${how} (typical times), ${when}`;
+}
+
+/** The nights suggestion in one phrase. */
+function staySuggestionPhrase(
+  region: RegionConfig,
+  s: StaySuggestionLike,
+  names: ReadonlyMap<string, string>,
+): string {
+  const nights = Object.entries(s.nights)
+    .map(
+      ([base, n]) =>
+        `${n} night${n === 1 ? "" : "s"} in ${baseName(region, base)}`,
+    )
+    .join(", ");
+  const park = s.park ? (names.get(s.park) ?? s.park) : undefined;
+  return `${nights} instead${park && s.date ? ` puts ${park} on ${s.date} (${weekdayOf(s.date)})` : ""}: about ${s.savedMinutesPerRide} min a ride less`;
 }
 
 /** An owned ticket's part of a plan day: "t1 day 2 of 14", or its allowance. */

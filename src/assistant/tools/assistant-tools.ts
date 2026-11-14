@@ -3009,6 +3009,27 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "Two parks of a resort a day, for more visits than days; needs a hopper",
         ),
+      bases: z
+        .string()
+        .regex(
+          /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?){0,9}$/,
+        )
+        .optional()
+        .describe(
+          "A region with bases (Japan): the stays they fixed, base[:nights][@hotel area], comma-separated; :0 means no night there (its park a day trip). The plan picks the rest",
+        ),
+      startBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe(
+          "A region with bases: where they land (the base of the airport)",
+        ),
+      endBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe("A region with bases: where they fly home from"),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       locks: z
@@ -3072,6 +3093,9 @@ export const ASSISTANT_TOOLS = [
         area: input.area,
         arrival: input.arrival,
         departure: input.departure,
+        bases: input.bases,
+        startBase: input.startBase,
+        endBase: input.endBase,
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
         rest: input.rest,
@@ -3160,6 +3184,27 @@ export const ASSISTANT_TOOLS = [
         .regex(/^(auto|none|max:[1-9])$/)
         .optional(),
       hop: z.boolean().optional(),
+      bases: z
+        .string()
+        .regex(
+          /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?){0,9}$/,
+        )
+        .optional()
+        .describe(
+          "A region with bases (Japan): the stays they fixed, base[:nights][@hotel area], comma-separated; :0 means no night there (its park a day trip). The plan picks the rest",
+        ),
+      startBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe(
+          "A region with bases: where they land (the base of the airport)",
+        ),
+      endBase: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional()
+        .describe("A region with bases: where they fly home from"),
       arrival: z.enum(["free", "park"]).optional(),
       departure: z.enum(["free", "park"]).optional(),
       limit: z.number().int().min(1).max(WHEN_MAX_LIMIT).optional(),
@@ -3226,6 +3271,9 @@ export const ASSISTANT_TOOLS = [
         hop: flag(input.hop),
         arrival: input.arrival,
         departure: input.departure,
+        bases: input.bases,
+        startBase: input.startBase,
+        endBase: input.endBase,
         limit: input.limit,
         tickets: input.tickets,
         suggest: flag(input.suggest),

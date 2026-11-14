@@ -6,7 +6,9 @@
  * docs/frontend/trip-regions.md#bases-a-trip-across-several-cities.
  *
  * The stays follow the region's route line (`RegionBaseConfig.order`) one way
- * or the other and never double back; each base is stayed in at most once.
+ * or the other and never double back, or, in a region whose bases lie on no
+ * line (Paris), come in any order the base legs connect; each base is stayed
+ * in at most once.
  * The visitor may pin the first and last base (`startBase`, `endBase`, the
  * cities the flights land in and leave from) and any base's nights (0: no
  * stay there); the rest is searched. Where the trip ends somewhere other than
@@ -18,13 +20,14 @@ import type { PerkRule, TransportMode } from "./regions";
 /** How a base reaches a park for a day: door to door, one way. */
 export interface StayReach {
   minutes: number;
-  mode: TransportMode;
+  mode: "drive" | TransportMode;
 }
 
 /** A base as the search reads it, with the stay's own area applied. */
 export interface StayBase {
   key: string;
-  order: number;
+  /** Its place on the route line; absent: the region's bases lie on none. */
+  order?: number;
   /** Park slug → its reach from the stay's area (else the base's usual one). */
   reach: Map<string, StayReach>;
   /** The perks of the stay's hotel (its area's kind); none without an area. */
@@ -37,7 +40,7 @@ export interface StayLeg {
   from: string;
   to: string;
   minutes: number;
-  mode: TransportMode;
+  mode: "drive" | TransportMode;
   name?: string;
   /** A park fits the day of this move (before or after it). */
   parkDay: boolean;
@@ -59,6 +62,8 @@ export interface StaysOption {
     moveCost: number;
     /** When a morning move leaves, in minutes after midnight. */
     moveStartMinute: number;
+    /** An evening move must arrive by this, in minutes after midnight. */
+    lastArrivalMinute: number;
   };
 }
 
@@ -135,6 +140,17 @@ function nightSplits(
   return out;
 }
 
+/** Every order of a list (a region's bases are few). */
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) return [[...items]];
+  return items.flatMap((item, i) =>
+    permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [
+      item,
+      ...rest,
+    ]),
+  );
+}
+
 /** Every subset of a list. */
 function subsets<T>(items: readonly T[]): T[][] {
   const out: T[][] = [[]];
@@ -179,9 +195,7 @@ export function stayPlans(
       ? opt.endBase
       : undefined;
   const pinned = new Set<string>(
-    [...opt.fixed]
-      .filter(([, n]) => n === undefined || n > 0)
-      .map(([k]) => k),
+    [...opt.fixed].filter(([, n]) => n === undefined || n > 0).map(([k]) => k),
   );
   if (startStay) pinned.add(startStay);
   if (endStay) pinned.add(endStay);
@@ -201,17 +215,19 @@ export function stayPlans(
     if (set.length === 0) continue;
     if (!coverable.every((p) => set.some((b) => b.reach.has(p)))) continue;
     if (set.length > Math.max(1, nights)) continue;
-    const ascending = [...set].sort((a, b) => a.order - b.order);
-    for (const seq of [ascending, [...ascending].reverse()]) {
+    const onLine = set.every((b) => b.order !== undefined);
+    const ascending = [...set].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const orders = onLine
+      ? [ascending, [...ascending].reverse()]
+      : permutations(set);
+    for (const seq of orders) {
       const keys = seq.map((b) => b.key);
       const signature = keys.join(">");
       if (seen.has(signature)) continue;
       seen.add(signature);
       if (startStay && keys[0] !== startStay) continue;
       if (endStay && keys[keys.length - 1] !== endStay) continue;
-      if (
-        keys.some((k, i) => i > 0 && !stayLeg(opt.legs, keys[i - 1], k))
-      ) {
+      if (keys.some((k, i) => i > 0 && !stayLeg(opt.legs, keys[i - 1], k))) {
         continue;
       }
       const arrivalFrom =
@@ -309,7 +325,5 @@ function planOf(
 
 /** The fewest days any stay plan of the trip spends only moving: what `split=auto` keeps free for them. */
 export function fewestTravelDays(plans: readonly StayPlan[]): number {
-  return plans.length === 0
-    ? 0
-    : Math.min(...plans.map((p) => p.travelMoves));
+  return plans.length === 0 ? 0 : Math.min(...plans.map((p) => p.travelMoves));
 }

@@ -88,8 +88,8 @@ export class TripPlanQueryDto {
     example: "disney",
   })
   @IsOptional()
-  @MaxLength(200)
-  @Matches(/^[a-z0-9_-]+(,[a-z0-9_-]+)*$/, {
+  @MaxLength(60)
+  @Matches(/^[a-z0-9_-]+$/, {
     message: "hotel must be a hotel kind of the region",
   })
   hotel?: string;
@@ -102,6 +102,52 @@ export class TripPlanQueryDto {
   @IsOptional()
   @Matches(/^[a-z_]+$/, { message: "area must be a hotel area key" })
   area?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A region with bases: the stays the visitor fixes, comma-separated, `<base>[:<nights>][@<hotel area>]`. " +
+      "`:n` fixes the nights (0: no stay there, its parks as day trips), `@area` the hotel area (its hotel kind's perks count); " +
+      "a base listed without nights is a stay whose nights the plan picks. The order follows the region's route, not the list. " +
+      "Replaces `area` and `hotel` there.",
+    example: "tokyo:4@maihama,osaka@universal_city,fujikawaguchiko:0",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  @Matches(
+    /^[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?(,[a-z0-9-]+(:\d{1,2})?(@[a-z0-9_-]+)?){0,9}$/,
+    { message: "bases must be base[:nights][@area], comma-separated" },
+  )
+  bases?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A region with bases: the base the trip starts in (where the flight or train arrives); the first stay unless it is ruled out with `:0`.",
+    example: "tokyo",
+  })
+  @IsOptional()
+  @Matches(/^[a-z0-9-]+$/, { message: "startBase must be a base key" })
+  startBase?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A region with bases: the base the trip ends in (where the flight or train leaves); the last stay, or the departure day moves there.",
+    example: "osaka",
+  })
+  @IsOptional()
+  @Matches(/^[a-z0-9-]+$/, { message: "endBase must be a base key" })
+  endBase?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A region with bases: the minutes a hotel change costs on top of the train (check-out, luggage, check-in). " +
+      "30 fits bags sent ahead by courier; more is a slower pace. Defaults to the region's `stayRules.moveOverheadMinutes`.",
+    enum: [30, 60, 90, 120],
+  })
+  @IsOptional()
+  @IsInt()
+  @IsIn([30, 60, 90, 120])
+  moveBuffer?: number;
 
   @ApiPropertyOptional({ enum: ["free", "park"], default: "free" })
   @IsOptional()
