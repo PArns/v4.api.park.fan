@@ -450,7 +450,12 @@ describe("the trip's digest and what a change did", () => {
     const before = itinerary([day("2027-10-20", "rest", [], { spare: true })]);
     const after = itinerary([day("2027-10-20", "rest")]);
     expect(tripPlanChange(before, after).daysChanged).toEqual([
-      { date: "2027-10-20", weekday: "Friday", now: "rest day", was: "free day" },
+      {
+        date: "2027-10-20",
+        weekday: "Friday",
+        now: "rest day",
+        was: "free day",
+      },
     ]);
   });
 

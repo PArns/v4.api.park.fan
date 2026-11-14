@@ -13,7 +13,9 @@
  * says so in `notes`. Products that differ only in price are one entry. The
  * contract and how the plan reads each field: docs/frontend/trip-regions.md#tickets.
  */
+import { CLOCK_PATTERN } from "../common/utils/date.util";
 import { TICKET_SEED_LINKS, type SeedLinkEntry } from "./ticket-seed-links";
+import { isPlainWeekday } from "./trip-calendar.util";
 import { JAPAN_TICKETS } from "./tickets.japan";
 import { PARIS_TICKETS } from "./tickets.paris";
 import { SOUTHERN_CALIFORNIA_TICKETS } from "./tickets.southern-california";
@@ -1118,8 +1120,9 @@ export function everyDay(
 
 /** `HH:MM` as minutes after midnight; undefined for anything else. */
 export function minuteOfClock(value: string | undefined): number | undefined {
-  const m = value ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value) : null;
-  return m ? Number(m[1]) * 60 + Number(m[2]) : undefined;
+  if (!value || !CLOCK_PATTERN.test(value)) return undefined;
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours * 60 + minutes;
 }
 
 /**
@@ -1131,10 +1134,9 @@ export function dayKindsOf(day: {
   isHoliday: boolean;
 }): TicketDayKind[] {
   const kinds: TicketDayKind[] = [];
-  const weekend = day.weekday === 0 || day.weekday === 6;
-  if (weekend) kinds.push("weekend");
+  if (day.weekday === 0 || day.weekday === 6) kinds.push("weekend");
   if (day.isHoliday) kinds.push("holiday");
-  if (!weekend && !day.isHoliday) kinds.push("weekday");
+  if (isPlainWeekday(day.weekday, day.isHoliday)) kinds.push("weekday");
   return kinds;
 }
 

@@ -17,6 +17,7 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import { PLANNER_BLOCK_ICONS } from "../day-optimizer/types";
 
 /**
@@ -215,7 +216,7 @@ export class FitChoiceDto {
 export class PlanOptimizeRequestDto {
   @ApiProperty({ example: "2026-11-14", description: "Park-local date." })
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  @Matches(ISO_DATE_PATTERN)
   date: string;
 
   @ApiProperty({

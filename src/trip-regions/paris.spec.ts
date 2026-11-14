@@ -378,9 +378,7 @@ describe("Paris", () => {
         delete cell.closesAt;
       },
     );
-    expect(answer.meta.split).toEqual([
-      { slug: DLP, visits: 2, auto: true },
-    ]);
+    expect(answer.meta.split).toEqual([{ slug: DLP, visits: 2, auto: true }]);
     expect(answer.days.map((d) => d.parks.map((p) => p.slug))).toEqual([
       [DLP],
       [DAW],
