@@ -67,7 +67,9 @@ The tropics keep the northern months (their seasonality is in the school-holiday
 
 Static covariates (`NF_USE_STATIC`, on): country and region as integer codes. The static frame
 must be passed to `nf.predict` as well as `fit`, or the run fails with "static exogenous
-variables not found". No past-only covariates in the served model.
+variables not found". NeuralForecast pairs static rows with series by position, never by id, so
+the frame handed to `fit` holds exactly the series of the fit frame (`forecast.fit_static`,
+PAR-1327). No past-only covariates in the served model.
 
 Trap: series ids are text on both sides of every join (`attractionId::text`, `parkId::text`). A
 UUID on one side once made the covariate join miss — "calendar covariates done: 0 parks" — and
