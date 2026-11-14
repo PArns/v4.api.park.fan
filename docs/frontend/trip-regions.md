@@ -901,6 +901,9 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
 }
 ```
 
+- **`stayRules`** override the defaults above per region. Japan moves at 07:30 with a 30-minute
+  overhead, because most travellers there send their bags ahead by courier (takkyubin); every other
+  region keeps the defaults.
 - **`gateways`** are where a trip arrives or leaves: an airport, or a station a long-distance
   train reaches (Marne-la-Vallée–Chessy for the TGV and the Eurostar, `kind: "station"`). The
   client offers them as "you land in" and "you fly home from" and sends the base as `startBase`
