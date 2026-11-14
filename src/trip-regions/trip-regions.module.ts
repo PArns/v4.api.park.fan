@@ -10,6 +10,7 @@ import { TripRegionsController } from "./trip-regions.controller";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import { TripWhenService } from "./trip-when.service";
+import { TripAccuracyService } from "./trip-accuracy.service";
 import { TripMetricsModule } from "./metrics/trip-metrics.module";
 
 /**
@@ -33,6 +34,7 @@ import { TripMetricsModule } from "./metrics/trip-metrics.module";
     TripRegionService,
     TripPlanService,
     TripWhenService,
+    TripAccuracyService,
     TicketCatalogService,
   ],
   exports: [TripRegionService, TicketCatalogService],

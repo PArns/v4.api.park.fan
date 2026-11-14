@@ -5,6 +5,7 @@ import { TripRegionsController } from "./trip-regions.controller";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
 import { TripWhenService } from "./trip-when.service";
+import { TripAccuracyService } from "./trip-accuracy.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { WeatherService } from "../parks/weather.service";
 import { ParksService } from "../parks/parks.service";
@@ -40,6 +41,7 @@ describe("TripRegionsController", () => {
   const store = new Map<string, string>();
   /** The metric rows the routes handed to the writer. */
   const recorded: TripRequestMetricRow[] = [];
+  const parkDayErrors = jest.fn();
   const redis = {
     get: jest.fn(async (k: string) => store.get(k) ?? null),
     set: jest.fn(async (k: string, v: string) => {
@@ -158,12 +160,26 @@ describe("TripRegionsController", () => {
       ];
     });
 
+    // Every Orlando park measured on the 30 days before yesterday, four
+    // headliner rows a day, each off by its park's index plus ten minutes.
+    parkDayErrors.mockImplementation(async (ids: string[]) =>
+      ids.flatMap((id, i) =>
+        Array.from({ length: 30 }, (_, k) => ({
+          parkId: id,
+          targetDate: day(-2 - k),
+          scored: 4,
+          errorSum: 4 * (10 + i),
+        })),
+      ),
+    );
+
     const moduleRef = await Test.createTestingModule({
       controllers: [TripRegionsController],
       providers: [
         TripRegionService,
         TripPlanService,
         TripWhenService,
+        TripAccuracyService,
         {
           provide: HolidaysService,
           useValue: {
@@ -203,7 +219,7 @@ describe("TripRegionsController", () => {
         { provide: REDIS_CLIENT, useValue: redis },
         {
           provide: PredictionLeadSnapshotService,
-          useValue: { getLeadTimeMae: jest.fn(async () => 14) },
+          useValue: { getLeadTimeMae: jest.fn(async () => 14), parkDayErrors },
         },
         {
           provide: PlanDayService,
@@ -602,6 +618,59 @@ describe("TripRegionsController", () => {
         .expect(400);
     });
   });
+  describe("GET /v1/trip-regions/:region/accuracy", () => {
+    it("answers without a key with the region's 30 measured days, a day at the edge", async () => {
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/accuracy")
+        .expect(200);
+      expect(res.headers["cache-control"]).toContain("s-maxage=86400");
+      const parks = ORLANDO.parks.length;
+      expect(res.body).toEqual({
+        region: "orlando",
+        forecastAccuracy: {
+          days: 30,
+          from: day(-31),
+          to: day(-2),
+          leadDays: 7,
+          // The mean of the parks' own errors, 10 … 10 + parks − 1.
+          maeMinutes: Math.round((10 + (parks - 1) / 2) * 10) / 10,
+          parks,
+          sampleDays: 30,
+        },
+      });
+      expect(parkDayErrors).toHaveBeenCalledWith(
+        expect.any(Array),
+        7,
+        day(-45),
+        day(-1),
+      );
+      // Read once a day: the second answer is Redis'.
+      const calls = parkDayErrors.mock.calls.length;
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/orlando/accuracy")
+        .expect(200);
+      expect(parkDayErrors.mock.calls.length).toBe(calls);
+    });
+
+    it("answers null where too little is measured, and 404 for an unknown region", async () => {
+      parkDayErrors.mockImplementationOnce(async (ids: string[]) =>
+        ids.slice(0, 1).map((id) => ({
+          parkId: id,
+          targetDate: day(-2),
+          scored: 4,
+          errorSum: 40,
+        })),
+      );
+      const res = await request(app.getHttpServer())
+        .get("/v1/trip-regions/paris/accuracy")
+        .expect(200);
+      expect(res.body).toEqual({ region: "paris", forecastAccuracy: null });
+      await request(app.getHttpServer())
+        .get("/v1/trip-regions/atlantis/accuracy")
+        .expect(404);
+    });
+  });
+
   describe("GET /v1/trip-regions/:region/when", () => {
     const parks = "parks=epcot,magic-kingdom-park";
 
