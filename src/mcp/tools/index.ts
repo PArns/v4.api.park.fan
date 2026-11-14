@@ -21,6 +21,8 @@ import { auditLogTool } from "./audit-log.tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
 import { siteFeedbackTool } from "./site-feedback.tool";
+import { assistantToolsReportTool } from "./assistant-tools-report.tool";
+import { assistantReportTool } from "./assistant-report.tool";
 import { downtimeTool } from "./downtime.tool";
 import { analyticsOverviewTool } from "./analytics-overview.tool";
 import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
@@ -69,6 +71,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   assistantConversationsTool,
   assistantConversationTool,
   siteFeedbackTool,
+  assistantToolsReportTool,
+  assistantReportTool,
   downtimeTool,
   analyticsOverviewTool,
   analyticsLiveTool,

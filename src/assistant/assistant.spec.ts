@@ -841,6 +841,7 @@ describe("assistant tools", () => {
     ).toEqual({
       content: "Unknown tool analytics_overview",
       isError: true,
+      errorKind: "unknown_tool",
     });
     const bad = await runAssistantTool(
       "get_post",
@@ -850,6 +851,60 @@ describe("assistant tools", () => {
     );
     expect(bad.isError).toBe(true);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("names why a call failed with a closed code, the refused paths and the dropped keys", async () => {
+    const onError = jest.fn();
+    const invalid = await runAssistantTool(
+      "search_parks",
+      { query: 5, limit: "many" },
+      ctx,
+      onError,
+    );
+    expect(invalid).toMatchObject({
+      isError: true,
+      errorKind: "invalid_input",
+      issues: expect.arrayContaining(["query"]),
+    });
+    // Paths only: the value the model sent is in no field of the record.
+    expect(JSON.stringify(invalid.issues)).not.toContain("many");
+
+    const refused = await runAssistantTool(
+      "open_page",
+      { url: "https://evil.example/x" },
+      ctx,
+      onError,
+    );
+    expect(refused).toMatchObject({ isError: true, errorKind: "refused" });
+
+    const failed = await runAssistantTool(
+      "search_parks",
+      { query: "efteling" },
+      {
+        ...ctx,
+        get: () => {
+          throw new Error("connection terminated");
+        },
+      },
+      onError,
+    );
+    expect(failed).toMatchObject({ isError: true, errorKind: "failed" });
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // A key the tool does not take is dropped by its schema; the record says which.
+    const asked = await runAssistantTool(
+      "request_location",
+      { precise: true, "a key with spaces": 1 },
+      ctx,
+      onError,
+    );
+    expect(asked).toMatchObject({
+      isError: false,
+      ignoredKeys: ["precise"],
+    });
+    expect(asked).not.toHaveProperty("errorKind");
+    const plain = await runAssistantTool("request_location", {}, ctx, onError);
+    expect(plain).not.toHaveProperty("ignoredKeys");
   });
 
   it("switches the site to another of its six languages, once, first in an answer", async () => {

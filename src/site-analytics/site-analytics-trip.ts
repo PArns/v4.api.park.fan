@@ -1,12 +1,22 @@
 import { OVERFLOW_VALUE } from "./site-analytics.constants";
 import { byCountDesc } from "./site-analytics.query";
+import {
+  NO_VALUE,
+  matchesSpec as matches,
+  tallyKey,
+  tallyRows,
+  type EventListSpec as ListSpec,
+} from "./site-analytics-event-props";
 
 /**
  * The trip planner's events, as the frontend sends them (`trackTripEvent` in
- * its `lib/orlando/plan-analytics.ts`, the list in its
+ * its `lib/trip-regions/plan-analytics.ts`, the list in its
  * docs/features/orlando-planner.md#analytics): every one carries `region`.
  * `ticket_link_clicked` has the eight properties the statistic allows and so
- * no region: its product's slug belongs to one region's catalog.
+ * no region: its product's slug belongs to one region's catalog. The 2.21.0
+ * planner (PAR-1309, dates first) adds the edits, options, ticket openings,
+ * parks left out, the finder, the date grid's mode, the accuracy note, the
+ * stay suggestion and the park pages' tile (PAR-1317).
  */
 export const TRIP_EVENTS = {
   started: "trip_planner_started",
@@ -31,32 +41,295 @@ export const TRIP_EVENTS = {
   linkCopied: "trip_link_copied",
   eveningLinkClicked: "trip_evening_link_clicked",
   outsideTicketAction: "trip_outside_ticket_action",
+  editOpened: "trip_edit_opened",
+  optionChanged: "trip_option_changed",
+  ticketsOpened: "trip_tickets_opened",
+  leftOutFix: "trip_left_out_fix",
+  findToggled: "trip_find_toggled",
+  findPeriod: "trip_find_period",
+  calendarMode: "trip_calendar_mode",
+  accuracyOpened: "trip_accuracy_opened",
+  staySuggestion: "trip_stay_suggestion",
+
+  tileClicked: "trip_tile_clicked",
 } as const;
+
+const E = TRIP_EVENTS;
 
 /** A purchase link of the planner's ticket catalog followed. */
 export const TICKET_LINK_EVENT = "ticket_link_clicked";
 
-/** The funnel's steps, in the order a visitor meets them. */
+/**
+ * The planner tile on a region park's pages came on screen (PAR-1317): a
+ * `section_seen` of its own section, which names no region; the park in its
+ * path does.
+ */
+export const TILE_SEEN = {
+  name: "section_seen",
+  section: "trip_tile",
+} as const;
+
+/** The day planner opened: a source `<region>-trip-day`, `-trip-first` or `-hub` is the trip planner's. */
+export const DAY_PLANNER_OPENED = "planner_opened";
+
+/** How the trip planner hands over to the day planner, by the source's suffix. */
+const DAY_PLANNER_FROM: Record<string, "tripDay" | "tripFirst" | "hub"> = {
+  "trip-day": "tripDay",
+  "trip-first": "tripFirst",
+  hub: "hub",
+};
+
+/**
+ * The events only the dates-first planner sends: the first UTC day any of
+ * them was counted is the day its funnel starts (`newFunnelFrom`).
+ */
+export const NEW_FUNNEL_EVENTS: readonly string[] = [
+  E.editOpened,
+  E.optionChanged,
+  E.ticketsOpened,
+];
+
+/**
+ * The funnel's steps, in the order a visitor of the dates-first planner meets
+ * them (the frontend's docs/features/orlando-planner.md#the-funnel).
+ */
 export const TRIP_FUNNEL = [
   "started",
-  "ticketsAnswered",
-  "planRequested",
-  "planShown",
-  "viewChanged",
-  "dayOpened",
+  "requested",
+  "shown",
+  "changed",
+  "tickets",
   "kept",
 ] as const;
 export type TripFunnelStep = (typeof TRIP_FUNNEL)[number];
 
-/** The label of an empty property value. */
-const NONE = "(none)";
+/**
+ * What each step is rated against. `changed` and `tickets` are optional (a
+ * plan that suits needs neither), so they are shares of `shown`, not a
+ * drop-off, and `kept` follows `shown` too.
+ */
+export const TRIP_FUNNEL_BASE: Record<
+  TripFunnelStep,
+  { step: TripFunnelStep; share: boolean } | null
+> = {
+  started: null,
+  requested: { step: "started", share: false },
+  shown: { step: "requested", share: false },
+  changed: { step: "shown", share: true },
+  tickets: { step: "shown", share: true },
+  kept: { step: "shown", share: false },
+};
 
-/** One event's count for one combination of its properties. */
+/** The days before the dates-first planner's first event, and the days from it on. */
+export type TripFunnelEra = "before" | "since";
+
+const KEPT = [E.daysSaved, E.icsExported, E.linkCopied];
+
+/**
+ * What each step counts in each era; null where the era has no such event.
+ * Before the dates-first planner, a ticket answer of `yes` was the way into
+ * the tickets (`trip_tickets_answered`, no longer sent); it sent nothing when
+ * a plan was changed.
+ */
+export const TRIP_FUNNEL_EVENTS: Record<
+  TripFunnelStep,
+  Record<TripFunnelEra, readonly string[] | null>
+> = {
+  started: { before: [E.started], since: [E.started] },
+  requested: { before: [E.planRequested], since: [E.planRequested] },
+  shown: { before: [E.planShown], since: [E.planShown] },
+  changed: { before: null, since: [E.editOpened, E.optionChanged] },
+  tickets: { before: [E.ticketsAnswered], since: [E.ticketsOpened] },
+  kept: { before: KEPT, since: KEPT },
+};
+
+/** Whether a row counts for a step in an era, its properties included. */
+function countsFor(
+  step: TripFunnelStep,
+  era: TripFunnelEra,
+  row: TripEventRow,
+): boolean {
+  const events = TRIP_FUNNEL_EVENTS[step][era];
+  if (!events?.includes(row.name)) return false;
+  // Parky's changes are his; the funnel follows the visitor's own.
+  if (row.name === E.optionChanged) return row.props.by !== "parky";
+  if (row.name === E.ticketsAnswered) return row.props.answer === "yes";
+  return true;
+}
+
+/** One event's count for one combination of its properties, on a UTC day and page type. */
 export interface TripEventRow {
   name: string;
   props: Record<string, string>;
   count: number;
+  /** The row's UTC day; absent: before every cut-over. */
+  day?: string;
+  pageType?: string;
+  /** The page, for a tile's view: its park names the region. */
+  path?: string;
 }
+
+export const TRIP_LISTS = {
+  sources: { events: [E.started], props: ["source"] },
+  startedVia: { events: [E.started], props: ["via"], where: { via: "*" } },
+  ticketAnswers: { events: [E.ticketsAnswered], props: ["answer"] },
+  requestMode: { events: [E.planRequested], props: ["mode"] },
+  requestDays: { events: [E.planRequested], props: ["days"] },
+  requestParks: { events: [E.planRequested], props: ["parks"] },
+  requestTickets: { events: [E.planRequested], props: ["tickets"] },
+  requestHopper: { events: [E.planRequested], props: ["hopper"] },
+  requestBlocks: { events: [E.planRequested], props: ["blocks"] },
+  requestRest: { events: [E.planRequested], props: ["rest"] },
+  shown: { events: [E.planShown], props: ["mode", "outcome"] },
+  relaxed: {
+    events: [E.planShown],
+    props: ["relaxed"],
+    where: { outcome: "relaxed" },
+  },
+  unplaced: {
+    events: [E.planShown],
+    props: ["unplaced"],
+    where: { mode: "dates" },
+    not: { outcome: "error" },
+  },
+  leftOut: {
+    events: [E.planShown],
+    props: ["left_out"],
+    where: { mode: "dates", left_out: "*" },
+    not: { outcome: "error" },
+  },
+  stays: {
+    events: [E.planShown],
+    props: ["stays"],
+    where: { stays: "*" },
+    not: { outcome: "error" },
+  },
+  errors: {
+    events: [E.planShown],
+    props: ["mode", "status"],
+    where: { outcome: "error" },
+  },
+  leftOutFixes: { events: [E.leftOutFix], props: ["fix", "left_out"] },
+  windowsFound: {
+    events: [E.planShown],
+    props: ["windows"],
+    where: { mode: "when" },
+    not: { outcome: "error" },
+  },
+  windowRanks: { events: [E.windowPlanned], props: ["rank"] },
+  findToggled: { events: [E.findToggled], props: ["to"] },
+  findPeriods: { events: [E.findPeriod], props: ["period", "school_breaks"] },
+  edits: { events: [E.editOpened], props: ["panel", "from"] },
+  options: { events: [E.optionChanged], props: ["option", "value", "by"] },
+  staySuggestion: { events: [E.staySuggestion], props: ["action"] },
+  ticketsOpened: { events: [E.ticketsOpened], props: ["from", "first"] },
+  ticketsAdded: { events: [E.ticketAdded], props: ["via", "entry"] },
+  ticketStarts: { events: [E.ticketStart], props: ["start"] },
+  ticketDetails: { events: [E.ticketDetailsOpened], props: ["surface"] },
+  outsideTicket: { events: [E.outsideTicketAction], props: ["action"] },
+  hopperToggled: { events: [E.hopperToggled], props: ["on"] },
+  calendarMode: { events: [E.calendarMode], props: ["mode", "from_default"] },
+  viewsChanged: { events: [E.viewChanged], props: ["view"] },
+
+  dayOpened: { events: [E.dayOpened], props: ["kind", "view"] },
+  dayOpenedByView: { events: [E.dayOpened], props: ["view"] },
+  dayPinned: { events: [E.dayPinned], props: ["pinned"] },
+
+  tileClicks: { events: [E.tileClicked], props: ["link"] },
+  accuracyOpened: { events: [E.accuracyOpened], props: ["surface"] },
+  savedDays: { events: [E.daysSaved], props: ["days"] },
+  icsDays: { events: [E.icsExported], props: ["days"] },
+  linksByKindAndPosition: {
+    events: [TICKET_LINK_EVENT],
+    props: ["kind", "position"],
+  },
+  linksBySurface: { events: [TICKET_LINK_EVENT], props: ["surface"] },
+  linksByMode: { events: [TICKET_LINK_EVENT], props: ["ticket_mode"] },
+  linksByLocaleMatch: { events: [TICKET_LINK_EVENT], props: ["locale_match"] },
+  linksBySeller: {
+    events: [TICKET_LINK_EVENT],
+    props: ["seller", "host", "kind"],
+  },
+  linksByProduct: { events: [TICKET_LINK_EVENT], props: ["product"] },
+} as const satisfies Record<string, ListSpec>;
+export type TripListKey = keyof typeof TRIP_LISTS;
+
+/** The counts outside the lists, and what each counts. */
+export const TRIP_TOTALS = {
+  planRequested: { events: [E.planRequested], props: [] },
+  datesKnown: {
+    events: [E.planRequested],
+    props: [],
+    where: { mode: "dates" },
+  },
+  datesSearched: {
+    events: [E.planRequested],
+    props: [],
+    where: { mode: "when" },
+  },
+  parksHeadliners: {
+    events: [E.planRequested],
+    props: [],
+    where: { parks: "0" },
+  },
+  shownOk: { events: [E.planShown], props: [], where: { outcome: "ok" } },
+  shownRelaxed: {
+    events: [E.planShown],
+    props: [],
+    where: { outcome: "relaxed" },
+  },
+  shownError: { events: [E.planShown], props: [], where: { outcome: "error" } },
+  findDatesShown: {
+    events: [E.planShown],
+    props: [],
+    where: { mode: "when" },
+  },
+  windowsPlanned: { events: [E.windowPlanned], props: [] },
+  editOpened: { events: [E.editOpened], props: [] },
+  optionChanged: {
+    events: [E.optionChanged],
+    props: [],
+    not: { by: "parky" },
+  },
+  optionChangedByParky: {
+    events: [E.optionChanged],
+    props: [],
+    where: { by: "parky" },
+  },
+  ticketsOpened: { events: [E.ticketsOpened], props: [] },
+  ticketsAnsweredYes: {
+    events: [E.ticketsAnswered],
+    props: [],
+    where: { answer: "yes" },
+  },
+  ticketRemoved: { events: [E.ticketRemoved], props: [] },
+  ticketsAdopted: { events: [E.ticketsAdopted], props: [] },
+  longStayUsed: { events: [E.longStayUsed], props: [] },
+  viewChanged: { events: [E.viewChanged], props: [] },
+  dayOpened: { events: [E.dayOpened], props: [] },
+  daySwapped: { events: [E.daySwapped], props: [] },
+  daySent: { events: [E.daySent], props: [] },
+  eveningLinkClicked: { events: [E.eveningLinkClicked], props: [] },
+  daysSaved: { events: [E.daysSaved], props: [] },
+  icsExported: { events: [E.icsExported], props: [] },
+  linkCopied: { events: [E.linkCopied], props: [] },
+  ticketLinks: { events: [TICKET_LINK_EVENT], props: [] },
+  tileClicked: { events: [E.tileClicked], props: [] },
+  tilePlan: { events: [E.tileClicked], props: [], where: { link: "plan" } },
+  tileCalendar: {
+    events: [E.tileClicked],
+    props: [],
+    where: { link: "calendar" },
+  },
+} as const satisfies Record<string, ListSpec>;
+export type TripTotalKey =
+  | keyof typeof TRIP_TOTALS
+  | "unattributedTicketLinks"
+  | "tileShown"
+  | "dayPlannerTripDay"
+  | "dayPlannerTripFirst"
+  | "dayPlannerHub";
+export type TripTotals = Record<TripTotalKey, number>;
 
 export interface ValueCount {
   value: string;
@@ -71,135 +344,79 @@ export interface TripFigureOptions {
   knownRegions: readonly string[];
   /** Each catalog product's region, for the purchase links, which name none. */
   productRegions: ReadonlyMap<string, string>;
+  /**
+   * Each region park's region by its page (`continent/country/city/slug`,
+   * {@link parkKeyOf}), for the tile's views, which name none.
+   */
+  parkRegions?: ReadonlyMap<string, string>;
 }
 
-/** The counts outside the lists: what a narrowed answer hides when small. */
-export interface TripTotals {
-  started: number;
-  ticketsAnswered: number;
-  planRequested: number;
-  planShown: number;
-  viewChanged: number;
-  dayOpened: number;
-  kept: number;
-  datesKnown: number;
-  datesSearched: number;
-  parksNamed: number;
-  parksHeadliners: number;
-  shownOk: number;
-  shownRelaxed: number;
-  shownError: number;
-  daysSaved: number;
-  icsExported: number;
-  linkCopied: number;
-  findDatesRequested: number;
-  findDatesShown: number;
-  windowsPlanned: number;
-  ticketRemoved: number;
-  ticketsAdopted: number;
-  longStayUsed: number;
-  daySwapped: number;
-  daySent: number;
-  eveningLinkClicked: number;
-  ticketLinks: number;
-  /** Ticket link clicks on a product no region's catalog has. */
-  unattributedTicketLinks: number;
+/** The park a page belongs to, as `continent/country/city/slug`; null for a page of no park. */
+export function parkKeyOf(path: string | undefined): string | null {
+  const [, , parks, continent, country, city, slug] = (path ?? "").split("/");
+  return parks === "parks" && continent && country && city && slug
+    ? `${continent}/${country}/${city}/${slug}`
+    : null;
+}
+
+/** One funnel step's counts per era; null where the window has none of that era's days or the era no such event. */
+export interface TripFunnelCounts {
+  step: TripFunnelStep;
+  before: number | null;
+  since: number | null;
 }
 
 export interface TripPlannerFigures {
   region: string | null;
+  /** The first UTC day the dates-first planner's events were counted; null: none yet. */
+  newFunnelFrom: string | null;
+  funnel: TripFunnelCounts[];
   totals: TripTotals;
   regions: Array<{
     region: string;
     started: number;
-    planRequested: number;
-    planShown: number;
+    requested: number;
+    shown: number;
     errors: number;
     kept: number;
     ticketLinks: number;
   }>;
-  sources: ValueCount[];
-  ticketAnswers: ValueCount[];
-  requests: Record<
-    "mode" | "days" | "parks" | "tickets" | "hopper" | "blocks" | "rest",
-    ValueCount[]
-  >;
-  shown: Array<{ mode: string; outcome: string; count: number }>;
-  relaxed: ValueCount[];
-  unplaced: ValueCount[];
-  errors: Array<{ mode: string; status: string; count: number }>;
-  windowsFound: ValueCount[];
-  windowRanks: ValueCount[];
-  ticketsAdded: Array<{ via: string; entry: string; count: number }>;
-  ticketStarts: ValueCount[];
-  ticketDetails: ValueCount[];
-  outsideTicket: ValueCount[];
-  hopperToggled: ValueCount[];
-  viewsChanged: ValueCount[];
-  dayOpened: Array<{ kind: string; view: string; count: number }>;
-  dayOpenedByView: ValueCount[];
-  dayPinned: ValueCount[];
-  savedDays: ValueCount[];
-  icsDays: ValueCount[];
-  ticketLinksByKindAndPosition: Array<{
-    kind: string;
-    position: string;
-    count: number;
+  /** The tile on the region parks' pages as a way in: views and clicks per region and link. */
+  tile: Array<{
+    region: string;
+    shown: number;
+    clicked: number;
+    plan: number;
+    calendar: number;
   }>;
-  ticketLinksBySurface: ValueCount[];
-  ticketLinksByMode: ValueCount[];
-  ticketLinksByLocaleMatch: ValueCount[];
-  ticketLinksBySeller: Array<{
-    seller: string;
-    host: string;
-    kind: string;
-    count: number;
+  /** Where the planner is used: its starts, requests and answers by the page they came from. */
+  pageTypes: Array<{
+    pageType: string;
+    started: number;
+    requested: number;
+    shown: number;
   }>;
-  ticketLinksByProduct: ValueCount[];
+  lists: Record<TripListKey, Array<Record<string, string> & { count: number }>>;
 }
-
-/** Counts by a key, then listed most first. */
-class Tally<K extends string> {
-  private readonly counts = new Map<string, number>();
-
-  add(key: string, count: number): void {
-    this.counts.set(key, (this.counts.get(key) ?? 0) + count);
-  }
-
-  values(): ValueCount[] {
-    return byCountDesc(
-      [...this.counts].map(([value, count]) => ({ value, count })),
-      (item) => item.count,
-      (item) => item.value,
-    );
-  }
-
-  /** The keys split back into the named fields they were joined from. */
-  rows(fields: readonly K[]): Array<Record<K, string> & { count: number }> {
-    return this.values().map(({ value, count }) => {
-      const parts = JSON.parse(value) as string[];
-      const row = Object.fromEntries(
-        fields.map((field, i) => [field, parts[i]]),
-      ) as Record<K, string>;
-      return { ...row, count };
-    });
-  }
-}
-
-const key = (...parts: string[]) => JSON.stringify(parts);
 
 /**
  * The trip planner report's figures from the events' property counts: the
- * funnel, its steps' details, find dates, tickets and hopper, views, what
- * was kept, the purchase links (attributed to a region by their product) and
- * the regions side by side. A value of `region` park.fan does not have is
+ * funnel per era (`newFunnelFrom` splits the window), the counts outside the
+ * lists, every breakdown of {@link TRIP_LISTS}, the purchase links attributed
+ * to a region by their product, the regions side by side and the page types
+ * the planner was used from. A value of `region` park.fan does not have is
  * `(other)`; an empty property value is `(none)`.
  */
 export function tripPlannerFigures(
   rows: readonly TripEventRow[],
-  options: TripFigureOptions,
+  options: TripFigureOptions & {
+    window?: { from: string; to: string };
+    newFunnelFrom?: string | null;
+  },
 ): TripPlannerFigures {
   const known = new Set(options.knownRegions);
+  const cutover = options.newFunnelFrom ?? null;
+  const window = options.window;
   const regionOf = (row: TripEventRow): string | null => {
     if (row.name === TICKET_LINK_EVENT) {
       return options.productRegions.get(row.props.product ?? "") ?? null;
@@ -207,288 +424,175 @@ export function tripPlannerFigures(
     const value = row.props.region ?? "";
     return known.has(value) ? value : OVERFLOW_VALUE;
   };
-  const prop = (row: TripEventRow, name: string) => row.props[name] || NONE;
+  const eraOf = (row: TripEventRow): TripFunnelEra =>
+    cutover !== null && row.day !== undefined && row.day >= cutover
+      ? "since"
+      : "before";
+  // An era the window has days of: before the cut-over, and from it on.
+  const hasEra: Record<TripFunnelEra, boolean> = {
+    before: cutover === null || !window || window.from < cutover,
+    since: cutover !== null && (!window || window.to >= cutover),
+  };
 
-  const byRegion = new Map<string, TripPlannerFigures["regions"][number]>();
-  const regionRow = (region: string) => {
-    let row = byRegion.get(region);
-    if (!row) {
-      row = {
-        region,
-        started: 0,
-        planRequested: 0,
-        planShown: 0,
-        errors: 0,
-        kept: 0,
-        ticketLinks: 0,
-      };
-      byRegion.set(region, row);
-    }
+  const totals = Object.fromEntries(
+    [
+      ...Object.keys(TRIP_TOTALS),
+      "unattributedTicketLinks",
+      "tileShown",
+      "dayPlannerTripDay",
+      "dayPlannerTripFirst",
+      "dayPlannerHub",
+    ].map((k) => [k, 0]),
+  ) as TripTotals;
+  const byTile = new Map<string, TripPlannerFigures["tile"][number]>();
+  const tileOf = (region: string) => {
+    const row = byTile.get(region) ?? {
+      region,
+      shown: 0,
+      clicked: 0,
+      plan: 0,
+      calendar: 0,
+    };
+    byTile.set(region, row);
     return row;
   };
+  const funnel = new Map<string, number>();
+  const lists = new Map<TripListKey, Map<string, number>>();
+  const byRegion = new Map<string, TripPlannerFigures["regions"][number]>();
+  const byPage = new Map<string, TripPlannerFigures["pageTypes"][number]>();
 
-  const totals: TripTotals = {
-    started: 0,
-    ticketsAnswered: 0,
-    planRequested: 0,
-    planShown: 0,
-    viewChanged: 0,
-    dayOpened: 0,
-    kept: 0,
-    datesKnown: 0,
-    datesSearched: 0,
-    parksNamed: 0,
-    parksHeadliners: 0,
-    shownOk: 0,
-    shownRelaxed: 0,
-    shownError: 0,
-    daysSaved: 0,
-    icsExported: 0,
-    linkCopied: 0,
-    findDatesRequested: 0,
-    findDatesShown: 0,
-    windowsPlanned: 0,
-    ticketRemoved: 0,
-    ticketsAdopted: 0,
-    longStayUsed: 0,
-    daySwapped: 0,
-    daySent: 0,
-    eveningLinkClicked: 0,
-    ticketLinks: 0,
-    unattributedTicketLinks: 0,
-  };
-  const t = {
-    sources: new Tally(),
-    ticketAnswers: new Tally(),
-    mode: new Tally(),
-    days: new Tally(),
-    parks: new Tally(),
-    tickets: new Tally(),
-    hopper: new Tally(),
-    blocks: new Tally(),
-    rest: new Tally(),
-    shown: new Tally<"mode" | "outcome">(),
-    relaxed: new Tally(),
-    unplaced: new Tally(),
-    errors: new Tally<"mode" | "status">(),
-    windowsFound: new Tally(),
-    windowRanks: new Tally(),
-    ticketsAdded: new Tally<"via" | "entry">(),
-    ticketStarts: new Tally(),
-    ticketDetails: new Tally(),
-    outsideTicket: new Tally(),
-    hopperToggled: new Tally(),
-    viewsChanged: new Tally(),
-    dayOpened: new Tally<"kind" | "view">(),
-    dayOpenedByView: new Tally(),
-    dayPinned: new Tally(),
-    savedDays: new Tally(),
-    icsDays: new Tally(),
-    linkKindPosition: new Tally<"kind" | "position">(),
-    linkSurface: new Tally(),
-    linkMode: new Tally(),
-    linkLocale: new Tally(),
-    linkSeller: new Tally<"seller" | "host" | "kind">(),
-    linkProduct: new Tally(),
-  };
-
-  const E = TRIP_EVENTS;
   for (const row of rows) {
-    const region = regionOf(row);
     const n = row.count;
+    // The tile's views carry no region and are no planner event: their park names the region.
+    if (row.name === TILE_SEEN.name) {
+      if (row.props.section !== TILE_SEEN.section) continue;
+      const key = parkKeyOf(row.path);
+      const tileRegion =
+        (key && options.parkRegions?.get(key)) || OVERFLOW_VALUE;
+      if (options.region !== null && tileRegion !== options.region) continue;
+      tileOf(tileRegion).shown += n;
+      totals.tileShown += n;
+      continue;
+    }
+    // The day planner opened from the trip planner names its region in the source's prefix.
+    if (row.name === DAY_PLANNER_OPENED) {
+      const source = row.props.source ?? "";
+      const at = source.indexOf("-");
+      const from = DAY_PLANNER_FROM[source.slice(at + 1)];
+      const opened = source.slice(0, at);
+      if (at <= 0 || !from || !known.has(opened)) continue;
+      if (options.region !== null && opened !== options.region) continue;
+      if (from === "tripDay") totals.dayPlannerTripDay += n;
+      if (from === "tripFirst") totals.dayPlannerTripFirst += n;
+      if (from === "hub") totals.dayPlannerHub += n;
+      continue;
+    }
+    const region = regionOf(row);
+    if (row.name === E.tileClicked && region !== null) {
+      if (options.region === null || region === options.region) {
+        const tile = tileOf(region);
+        tile.clicked += n;
+        if (row.props.link === "plan") tile.plan += n;
+        if (row.props.link === "calendar") tile.calendar += n;
+      }
+    }
     if (row.name === TICKET_LINK_EVENT && region === null) {
       // Attributed to no region: counted, and listed only with every region.
       totals.unattributedTicketLinks += n;
       if (options.region !== null) continue;
     } else if (region !== null) {
-      const side = regionRow(region);
+      let side = byRegion.get(region);
+      if (!side) {
+        side = {
+          region,
+          started: 0,
+          requested: 0,
+          shown: 0,
+          errors: 0,
+          kept: 0,
+          ticketLinks: 0,
+        };
+        byRegion.set(region, side);
+      }
       if (row.name === E.started) side.started += n;
-      if (row.name === E.planRequested) side.planRequested += n;
+      if (row.name === E.planRequested) side.requested += n;
       if (row.name === E.planShown) {
-        side.planShown += n;
+        side.shown += n;
         if (row.props.outcome === "error") side.errors += n;
       }
-      if (
-        row.name === E.daysSaved ||
-        row.name === E.icsExported ||
-        row.name === E.linkCopied
-      ) {
-        side.kept += n;
-      }
+      if (KEPT.includes(row.name as (typeof KEPT)[number])) side.kept += n;
       if (row.name === TICKET_LINK_EVENT) side.ticketLinks += n;
       if (options.region !== null && region !== options.region) continue;
     }
 
-    switch (row.name) {
-      case E.started:
-        totals.started += n;
-        t.sources.add(prop(row, "source"), n);
-        break;
-      case E.ticketsAnswered:
-        totals.ticketsAnswered += n;
-        t.ticketAnswers.add(prop(row, "answer"), n);
-        break;
-      case E.planRequested: {
-        totals.planRequested += n;
-        const mode = prop(row, "mode");
-        if (mode === "dates") totals.datesKnown += n;
-        if (mode === "when") {
-          totals.datesSearched += n;
-          totals.findDatesRequested += n;
-        }
-        if (row.props.parks === "0") totals.parksHeadliners += n;
-        else if (row.props.parks) totals.parksNamed += n;
-        t.mode.add(mode, n);
-        t.days.add(prop(row, "days"), n);
-        t.parks.add(prop(row, "parks"), n);
-        t.tickets.add(prop(row, "tickets"), n);
-        t.hopper.add(prop(row, "hopper"), n);
-        t.blocks.add(prop(row, "blocks"), n);
-        t.rest.add(prop(row, "rest"), n);
-        break;
+    const era = eraOf(row);
+    for (const step of TRIP_FUNNEL) {
+      if (countsFor(step, era, row)) {
+        const k = `${step}|${era}`;
+        funnel.set(k, (funnel.get(k) ?? 0) + n);
       }
-      case E.planShown: {
-        totals.planShown += n;
-        const mode = prop(row, "mode");
-        const outcome = prop(row, "outcome");
-        if (outcome === "ok") totals.shownOk += n;
-        if (outcome === "relaxed") totals.shownRelaxed += n;
-        if (outcome === "error") totals.shownError += n;
-        if (mode === "when") totals.findDatesShown += n;
-        t.shown.add(key(mode, outcome), n);
-        if (outcome === "relaxed") t.relaxed.add(prop(row, "relaxed"), n);
-        if (outcome === "error")
-          t.errors.add(key(mode, prop(row, "status")), n);
-        if (mode === "dates" && outcome !== "error") {
-          t.unplaced.add(prop(row, "unplaced"), n);
-        }
-        if (mode === "when" && outcome !== "error") {
-          t.windowsFound.add(prop(row, "windows"), n);
-        }
-        break;
-      }
-      case E.windowPlanned:
-        totals.windowsPlanned += n;
-        t.windowRanks.add(prop(row, "rank"), n);
-        break;
-      case E.ticketAdded:
-        t.ticketsAdded.add(key(prop(row, "via"), prop(row, "entry")), n);
-        break;
-      case E.ticketRemoved:
-        totals.ticketRemoved += n;
-        break;
-      case E.ticketStart:
-        t.ticketStarts.add(prop(row, "start"), n);
-        break;
-      case E.ticketDetailsOpened:
-        t.ticketDetails.add(prop(row, "surface"), n);
-        break;
-      case E.ticketsAdopted:
-        totals.ticketsAdopted += n;
-        break;
-      case E.longStayUsed:
-        totals.longStayUsed += n;
-        break;
-      case E.outsideTicketAction:
-        t.outsideTicket.add(prop(row, "action"), n);
-        break;
-      case E.hopperToggled:
-        t.hopperToggled.add(prop(row, "on"), n);
-        break;
-      case E.viewChanged:
-        totals.viewChanged += n;
-        t.viewsChanged.add(prop(row, "view"), n);
-        break;
-      case E.dayOpened:
-        totals.dayOpened += n;
-        t.dayOpened.add(key(prop(row, "kind"), prop(row, "view")), n);
-        t.dayOpenedByView.add(prop(row, "view"), n);
-        break;
-      case E.dayPinned:
-        t.dayPinned.add(prop(row, "pinned"), n);
-        break;
-      case E.daySwapped:
-        totals.daySwapped += n;
-        break;
-      case E.daySent:
-        totals.daySent += n;
-        break;
-      case E.daysSaved:
-        totals.daysSaved += n;
-        totals.kept += n;
-        t.savedDays.add(prop(row, "days"), n);
-        break;
-      case E.icsExported:
-        totals.icsExported += n;
-        totals.kept += n;
-        t.icsDays.add(prop(row, "days"), n);
-        break;
-      case E.linkCopied:
-        totals.linkCopied += n;
-        totals.kept += n;
-        break;
-      case E.eveningLinkClicked:
-        totals.eveningLinkClicked += n;
-        break;
-      case TICKET_LINK_EVENT:
-        totals.ticketLinks += n;
-        t.linkKindPosition.add(
-          key(prop(row, "kind"), prop(row, "position")),
-          n,
-        );
-        t.linkSurface.add(prop(row, "surface"), n);
-        t.linkMode.add(prop(row, "ticket_mode"), n);
-        t.linkLocale.add(prop(row, "locale_match"), n);
-        t.linkSeller.add(
-          key(prop(row, "seller"), prop(row, "host"), prop(row, "kind")),
-          n,
-        );
-        t.linkProduct.add(prop(row, "product"), n);
-        break;
+    }
+    for (const [key, spec] of Object.entries(TRIP_TOTALS)) {
+      if (matches(spec, row)) totals[key as keyof typeof TRIP_TOTALS] += n;
+    }
+    for (const [key, spec] of Object.entries(TRIP_LISTS) as Array<
+      [TripListKey, ListSpec]
+    >) {
+      if (!matches(spec, row)) continue;
+      const k = tallyKey(row, spec.props);
+      const tally = lists.get(key) ?? new Map<string, number>();
+      tally.set(k, (tally.get(k) ?? 0) + n);
+      lists.set(key, tally);
+    }
+    if (
+      row.pageType !== undefined &&
+      (row.name === E.started ||
+        row.name === E.planRequested ||
+        row.name === E.planShown)
+    ) {
+      const page = byPage.get(row.pageType) ?? {
+        pageType: row.pageType || NO_VALUE,
+        started: 0,
+        requested: 0,
+        shown: 0,
+      };
+      if (row.name === E.started) page.started += n;
+      if (row.name === E.planRequested) page.requested += n;
+      if (row.name === E.planShown) page.shown += n;
+      byPage.set(row.pageType, page);
     }
   }
 
   return {
     region: options.region,
+    newFunnelFrom: cutover,
+    funnel: TRIP_FUNNEL.map((step) => {
+      const count = (era: TripFunnelEra) =>
+        hasEra[era] && TRIP_FUNNEL_EVENTS[step][era] !== null
+          ? (funnel.get(`${step}|${era}`) ?? 0)
+          : null;
+      return { step, before: count("before"), since: count("since") };
+    }),
     totals,
+    tile: byCountDesc(
+      [...byTile.values()],
+      (row) => row.shown,
+      (row) => row.region,
+    ),
     regions: byCountDesc(
       [...byRegion.values()],
       (row) => row.started,
       (row) => row.region,
     ),
-    sources: t.sources.values(),
-    ticketAnswers: t.ticketAnswers.values(),
-    requests: {
-      mode: t.mode.values(),
-      days: t.days.values(),
-      parks: t.parks.values(),
-      tickets: t.tickets.values(),
-      hopper: t.hopper.values(),
-      blocks: t.blocks.values(),
-      rest: t.rest.values(),
-    },
-    shown: t.shown.rows(["mode", "outcome"]),
-    relaxed: t.relaxed.values(),
-    unplaced: t.unplaced.values(),
-    errors: t.errors.rows(["mode", "status"]),
-    windowsFound: t.windowsFound.values(),
-    windowRanks: t.windowRanks.values(),
-    ticketsAdded: t.ticketsAdded.rows(["via", "entry"]),
-    ticketStarts: t.ticketStarts.values(),
-    ticketDetails: t.ticketDetails.values(),
-    outsideTicket: t.outsideTicket.values(),
-    hopperToggled: t.hopperToggled.values(),
-    viewsChanged: t.viewsChanged.values(),
-    dayOpened: t.dayOpened.rows(["kind", "view"]),
-    dayOpenedByView: t.dayOpenedByView.values(),
-    dayPinned: t.dayPinned.values(),
-    savedDays: t.savedDays.values(),
-    icsDays: t.icsDays.values(),
-    ticketLinksByKindAndPosition: t.linkKindPosition.rows(["kind", "position"]),
-    ticketLinksBySurface: t.linkSurface.values(),
-    ticketLinksByMode: t.linkMode.values(),
-    ticketLinksByLocaleMatch: t.linkLocale.values(),
-    ticketLinksBySeller: t.linkSeller.rows(["seller", "host", "kind"]),
-    ticketLinksByProduct: t.linkProduct.values(),
+    pageTypes: byCountDesc(
+      [...byPage.values()],
+      (row) => row.started + row.requested,
+      (row) => row.pageType,
+    ),
+    lists: Object.fromEntries(
+      (Object.entries(TRIP_LISTS) as Array<[TripListKey, ListSpec]>).map(
+        ([key, spec]) => [key, tallyRows(lists.get(key), spec.props)],
+      ),
+    ) as TripPlannerFigures["lists"],
   };
 }

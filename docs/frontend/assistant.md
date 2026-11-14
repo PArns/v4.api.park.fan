@@ -1062,8 +1062,20 @@ nothing more. They are deleted after 7 days (`CONVERSATION_RETENTION_DAYS`), end
 by the nightly `assistant` queue job (`prune-conversations`, 04:50), in batches of 2,000. Each
 batch first adds what it deletes to `assistant_day_stats`: per UTC day only counts of chats,
 messages, tokens, cost and thumbs up and down, no text and no visitor key, so `GET
-/v1/admin/assistant/stats` still covers 30 days (live rows plus those sums). The daily token budget
-lives in Redis and reads no chat row. Feedback (`site_feedback`) is kept until it is deleted by hand,
+/v1/admin/assistant/stats` still covers 30 days (live rows plus those sums). The same transaction
+adds the batch's tool calls to `assistant_tool_day_stats`: per UTC day, prompt version, tool,
+outcome and the trip region an input named, only the number of calls, so the MCP's
+`assistant_tools_report` reads beyond the 7 days ([Parky's tools](../admin/mcp.md#parkys-tools)).
+The daily token budget lives in Redis and reads no chat row.
+
+**A tool call's record.** Each answer's `toolCalls` holds the tool's name, its input as given (minus
+the party's heights, `storedToolInput`) and `error` when it failed. Since release 2.21.0 a failure
+also says why as a closed code, `errorKind` (`ASSISTANT_TOOL_ERROR_KINDS`): `unknown_tool`,
+`invalid_input` (the schema refused the input; `issues` lists the refused paths, keys only, such as
+`dates.from`), `refused` (the tool said no: no such park, the plan route's 400) or `failed` (an
+error of ours). `ignoredKeys` lists the keys of an input the tool does not take, which its schema
+drops without a word (a `bases` sent to `change_trip`), on a call that worked too. Keys only, never
+a value; the column is jsonb, so no schema change. Feedback (`site_feedback`) is kept until it is deleted by hand,
 e-mail included; its link to a chat leads nowhere once the chat is pruned. `source` says whether
 the visitor sent it from the form (`form`, every row from before the column) or Parky filed it from
 the chat (`chat`, with `kind`). The admin, park.fan's pages and the admin MCP show every text of a

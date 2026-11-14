@@ -920,6 +920,7 @@ describe("compare_rides across a country", () => {
       expect(result).toEqual({
         content: "Give either park or country",
         isError: true,
+        errorKind: "refused",
       });
     }
   });

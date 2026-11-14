@@ -355,7 +355,12 @@ export class AssistantChatService {
             toolCalls.push({
               name: call.name,
               input: storedToolInput(call.input),
-              ...(result.isError && { error: true }),
+              ...(result.isError && {
+                error: true,
+                errorKind: result.errorKind,
+              }),
+              ...(result.issues && { issues: result.issues }),
+              ...(result.ignoredKeys && { ignoredKeys: result.ignoredKeys }),
             });
             return {
               type: "tool_result" as const,

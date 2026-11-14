@@ -2,7 +2,7 @@
 
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
-site statistic and its SEO reports, the trip planner's usage and its server metrics, Google Search Console, system and ML health, job queues, data-quality findings,
+site statistic and its SEO reports, the trip planner's usage and its server metrics, Parky's tool calls and his site events, Google Search Console, system and ML health, job queues, data-quality findings,
 duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. Read-only in v1. A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
@@ -128,6 +128,8 @@ against these rules.
 | `assistant_conversations`    | Parky's chats, newest first: language, messages, tokens, cost, rating, prompt version, start page and first question; filter by rating, prompt version or a word                        | `AssistantRecordsService.listConversations`      |
 | `assistant_conversation`     | one chat in full: questions, answers, the tools Parky called with their input, tokens, cost, prompt version, ratings, its feedback                                                      | `AssistantRecordsService.conversation`           |
 | `site_feedback`              | feedback from the form or filed by Parky from a chat (`source`, `kind`), newest first, by status; whether the visitor wants a reply, never the address                                  | `AssistantRecordsService.listFeedback`           |
+| `assistant_tools_report`     | Parky's tool calls across chats: per tool, region and prompt version the calls and errors by closed code; from the kept chats the refused paths, dropped keys, `change_trip`'s keys, the interview's ops and completion | `AssistantRecordsService.toolStats`, `.toolInputStats` |
+| `assistant_report`           | Parky from the site statistic: openings by source, questions by kind, reply chips shown, drawn and pressed, the interview per kind with its completion, plan changes, undos, ratings | `SiteAnalyticsAssistantService.report`           |
 | `downtime`                   | outage events per park and ride over a window                                                                                                                                           | `DowntimeMeasurementService.measure`             |
 | `analytics_overview`         | page views, visits, visitors, events, views per visit, bounce, average visit and time on page; the window before and the change; realtime; optional series with every figure per period | `SiteAnalyticsService.overview`                  |
 | `analytics_live`             | the last half hour minute by minute: active visitors, pages, countries, channels, referrers, devices, events                                                                            | `SiteAnalyticsLiveService.live`                  |
@@ -138,8 +140,8 @@ against these rules.
 | `analytics_crosstab`         | one event by two sides, as a `counts[row][col]` matrix, small values folded                                                                                                             | `SiteAnalyticsService.crosstab`                  |
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
-| `trip_planner_report`        | the multi-day trip planner per region: funnel with drop-off (dates and parks read off the requests), find dates, ticket answers and modes, hopper, views, what was kept, purchase links by seller kind and position, errors shown | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
-| `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days`: latency percentiles (all and built), caches, exact share, relaxation, unplaced and error codes, owned tickets by kind, the slowest shapes | `TripRequestMetricsService.ops`                  |
+| `trip_planner_report`        | the multi-day trip planner per region: the dates-first funnel (started → requested → shown → changed → tickets → kept), the optional steps as shares of the plans shown, split at the new planner's first day, find dates, edits and options, parks left out, tickets, hopper, views, purchase links by seller kind and position, errors shown, the page types it was used from | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
+| `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
@@ -154,9 +156,12 @@ The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
 (`hour`, `day`, `week`, `month`), `locale`, and `filters` as `[{ dim, value }]`, which become the
 reports' `filter=<dim>:<value>`, and `datacenter` (`exclude` by default, `include`, `only`;
-[data centres](../frontend/site-analytics.md#data-centres)). The tools over events (`analytics_events`,
-`analytics_event`, `analytics_crosstab`, `search_report`, `planner_report`, `trip_planner_report`)
-take only the event's dimensions (`eventWindowInput`), and
+[data centres](../frontend/site-analytics.md#data-centres)). The filter's and the breakdown's help
+lists every page type the frontend sends (`SITE_PAGE_TYPES`), among them a trip region's hub,
+month and best-time pages, `trip_hub`, `trip_month` and `trip_best_time` since release 2.21.0
+(they were `other` before), so `page_type:trip_hub` reads the hub's numbers. The tools over events (`analytics_events`,
+`analytics_event`, `analytics_crosstab`, `search_report`, `planner_report`, `trip_planner_report`,
+`assistant_report`) take only the event's dimensions (`eventWindowInput`), and
 `seo_not_found` only the page view's (`pageWindowInput`, with `browser_language`): their rows carry
 no visit dimension, so the schema does not offer one rather than the report refusing it. Their
 descriptions carry what a model must know to read the numbers: rows are UTC hours, visitors are
@@ -199,10 +204,13 @@ the count that decides, and the measures that add up.
   items, the parks and rides opened most, an id no table knows left out and counted in
   `unresolvedEntities`), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
   device, the parks and rides planned most, an id no table knows any more left out and counted in
-  `unresolvedEntities`), `trip_planner_report` (the regions side by side, ways in, ticket answers,
-  what the requests asked, answers by mode and outcome, loosened rules, parks left out, errors by
-  status, find dates' windows and ranks, tickets added, hopper, views, days opened, what was kept,
-  and the purchase links by kind and position, surface, mode, seller and product),
+  `unresolvedEntities`), `trip_planner_report` (the regions side by side, the page types, ways in and the tile,
+  what the requests asked, answers by mode and outcome, loosened rules, parks left out and their
+  fixes, errors by status, find dates, edits and options, tickets, hopper, views, days opened, what
+  was kept, and the purchase links by kind and position, surface, mode, seller and product),
+  `assistant_report` (openings, questions, chips by position and context, the interview's starts,
+  steps and ends, plan changes, undos, answers, ratings), `assistant_tools_report` (tools, regions,
+  prompt versions, refused paths, dropped keys, `change_trip`'s keys),
   `seo_landing_pages` (pages, and the sources of each), `seo_trends`, `seo_not_found` (paths, and the
   referrers of each) and `page_views` (the top parks, rides, posts and news, and each page's reads per
   language). `seo_uncovered` lists our own parks and rides that had no search visit at all, so there is no
@@ -229,33 +237,100 @@ The answer also carries `hourlyFrom`, the day from which a figure that needed th
 Two tools look at the multi-day trip planner (the region hubs, [trip regions](../frontend/trip-regions.md)),
 one from each side; `planner_report` is the day planner's.
 
-- **`trip_planner_report`** reads the frontend's 22 `trip_*` events and `ticket_link_clicked`
+- **`trip_planner_report`** reads the frontend's `trip_*` events and `ticket_link_clicked`
   (the list: the frontend's `docs/features/orlando-planner.md#analytics`) through
-  `SiteAnalyticsTripService` (`site-analytics-trip.ts` holds the figures, pure). Every `trip_*`
-  event carries `region`; a value `regions.ts` does not have is `(other)`. A purchase link carries
-  no region (its eight properties are the statistic's limit), so the tool reads every region's
-  ticket catalog, archived products included, and attributes a click to the region whose catalog
-  has its product; a product no catalog has is counted in `unattributedTicketLinks` and listed only
-  with every region. The funnel is `started → ticketsAnswered → planRequested → planShown →
-  viewChanged → dayOpened → kept` (`trip_days_saved`, `trip_ics_exported`, `trip_link_copied`),
-  each step with `ofStarted`, `fromPrevious` and `dropOff`. Its counts are events, not visitors: a
-  request fires once per distinct query, so `planRequested` can exceed `started`, and `dropOff` is
-  null where a step outnumbers the one before. The wizard's dates and parks steps send no event of
-  their own; the tool reads them off `trip_plan_requested` (`mode` dates or when, `parks` 0 for the
-  headliners). The small-value and `visitorData` rules are the other event tools': lists fold, a
-  region narrows like a filter, so one region's totals from 1 to 4 are null and so is every rate
-  computed from one.
+  `SiteAnalyticsTripService` (`site-analytics-trip.ts` holds the figures, pure; `TRIP_EVENTS` names
+  every event it reads, and a new `trip_*` event goes there too). Every `trip_*` event carries
+  `region`; a value `regions.ts` does not have is `(other)`. A purchase link carries no region (its
+  eight properties are the statistic's limit), so the tool reads every region's ticket catalog,
+  archived products included, and attributes a click to the region whose catalog has its product;
+  a product no catalog has is counted in `unattributedTicketLinks` and listed only with every
+  region.
+- **The funnel** is the dates-first planner's (release 2.21.0, PAR-1309; the frontend's
+  `docs/features/orlando-planner.md#the-funnel`): `started` (`trip_planner_started`, source `hero`,
+  `button`, `link` or `dates`) → `requested` (`trip_plan_requested`) → `shown` (`trip_plan_shown`)
+  → `changed` (`trip_edit_opened` and the visitor's `trip_option_changed`; Parky's are counted
+  beside it) → `tickets` (`trip_tickets_opened`) → `kept` (`trip_days_saved`, `trip_ics_exported`,
+  `trip_link_copied`). Every step has `ofStarted`. `requested` and `shown` have `fromPrevious` and
+  `dropOff`. `changed` and `tickets` are optional, a plan that suits needs neither, so they come as
+  `ofShown`, a share of the plans shown, and never as a drop-off; `kept` follows `shown`, with
+  `fromPrevious` and `dropOff` against it, and lists the day planner opened from the trip planner
+  (`planner_opened` with the source `<region>-trip-day`, `<region>-trip-first` or `<region>-hub`;
+  the prefix names the region).
+- **A window across the deploy.** `newFunnelFrom` is the first UTC day any of the new planner's own
+  events (`trip_edit_opened`, `trip_option_changed`, `trip_tickets_opened`) was counted
+  (`firstDayOf`, the hourly rows and the daily roll-up of names). Each step counts its days before
+  it (`before`) by the old planner's events, a yes of `trip_tickets_answered` for `tickets` (no
+  longer sent, so it counts only there) and nothing for `changed`, which the old planner did not
+  send, and its days from it on (`since`) by the new ones. A rate is taken over the days both steps
+  count, so `changed` is a share of the answers of the new planner's days only. Until the frontend
+  sends the new events, every day is `before`.
+- **Counts are events, not visitors.** An answer fires once per distinct request, so a step can
+  outnumber the one before it; `dropOff` is then null.
+- **The tile as a way in.** The planner tile on a region park's pages (PAR-1317) is read beside
+  the ways in (`source`, `via`): `tile.shown` counts its `section_seen` of section `trip_tile`,
+  which names no region, so the park in the page's path does (`parkKeyOf`, the region parks of
+  `regions.ts`; a page of another park is `(other)`), and `tile.clicked` its `trip_tile_clicked`
+  by link (`plan` or `calendar`), with `clickRate`, all of it per region under `visitorData`.
+  The views need the page, which only the hourly rows keep, so a window past them says so in
+  `hourlyFrom`.
+- **Beside the funnel:** the requests (mode, length
+  bucket, parks with 0 for the headliners, tickets, hopper, blocks, rest), answers by mode and
+  outcome with the loosened rule, the error's status and the parks left out with the fix chosen,
+  the cities of a route, find dates (toggles, periods, windows found and planned), edits by panel and
+  where they were opened, options changed by option, value and who, the stay suggestion, ticket
+  openings and entries, hopper, the views switched to, the date grid's resort mode, days opened,
+  pins, the accuracy note, what was kept, the purchase links, the regions side by side and
+  `pageTypes`: the starts, requests and answers by the page they came from (`trip_hub`,
+  `trip_month` and `trip_best_time` from the deploy that sends them on, `other` before it and on
+  every other page). An event the frontend does not send yet lists
+  nothing. The small-value and `visitorData` rules are the other event tools': lists fold, a region
+  narrows like a filter, so one region's counts from 1 to 4 are null, per era too, and so is every
+  rate computed from one.
 - **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/when` and `/best-days`
+  and per plan of Parky's trip tools
   ([what the server records](../frontend/trip-regions.md#what-the-server-records)) through
-  `TripRequestMetricsService.ops`: per region and route the requests, errors, latency p50/p90/p99
-  and max over every 200 and over the built ones, the cache and the calendar's, the exact share,
-  the shares that loosened a rule, left a visit out, used a hopper or owned tickets; the relaxation
-  codes, unplaced reasons, error codes and ticket kinds; the built answers' latency by shape
-  (`slowest`, by trip days × parks × bases, and `byLength`, `byParks`, `byBases`); a series per UTC
-  day on request. UTC days, `days` up to 90 (the retention), 7 by default. Its lists are not
+  `TripRequestMetricsService.ops`: per region, route and caller (`site`, `parky`) the requests,
+  errors, latency p50/p90/p99 and max over every 200 and over the built ones, the cache and the
+  calendar's, the exact share, the shares that loosened a rule, left a visit out, left a chosen park
+  out, used a hopper or owned tickets, and in a region with bases the share that suggested other
+  stays; the relaxation codes, unplaced reasons, error codes and ticket kinds; the move buffers and
+  fixed ends of the routes (`stays`); the built answers' latency by shape (`slowest`, by trip days
+  × parks × bases, and `byLength`, `byParks`, `byBases`); a series per UTC day on request. UTC
+  days, `days` up to 90 (the retention), 7 by default, `caller` to read one side. Its lists are not
   folded and it has no `visitorData`: every value is the server's own measurement or code, no row
   stands for a reader, and the rare long trip is exactly the shape the optimizer has to be tuned
   for. The rows reach the table once a minute per process, so the last minute is missing.
+
+### Parky's tools
+
+Two tools look at Parky, park.fan's chat assistant ([assistant](../frontend/assistant.md)), beside
+`assistant_conversations` and `assistant_conversation`, which read the chats one by one.
+
+- **`assistant_tools_report`** sums his tool calls across chats over a window of UTC days (up to
+  90, 7 by default; `tool` and `promptVersion` narrow it): per tool, per trip region an input named
+  (one `regions.ts` has) and per prompt version the calls, errors, error rate and the calls per
+  outcome. A failed call records why as a closed code (`errorKind`, `ASSISTANT_TOOL_ERROR_KINDS`):
+  `unknown_tool`, `invalid_input` (the schema refused the input), `refused` (the tool said no: no
+  such park, the plan route's 400) or `failed` (an error of ours); a failure stored before the
+  codes is `error`. The chats are kept 7 days; the nightly prune adds each batch's calls to
+  `assistant_tool_day_stats` in the transaction that deletes it (per day, prompt version, tool,
+  outcome and region, only the number of calls), and the report sums those with the kept chats', so
+  it reads the same before and after a prune. What only the kept chats can say comes under `kept`
+  (from `keptFrom`): answers, those with tool calls, calls per answer; the interview's ops (start,
+  answered, skip, ask, end with done or left) with `completion` = ended done / started; and under
+  `visitorData` with the chat notice the paths a schema refused (`issues`), the keys it dropped
+  without a word (`ignoredKeys`: a parameter the tool does not have, such as `bases` on
+  `change_trip`) and which keys `change_trip` was given. Keys and paths only, never a value; a key
+  that is not an identifier is left out. Lists fold calls counted fewer than 5 times.
+- **`assistant_report`** reads his events in the site statistic (`SiteAnalyticsAssistantService`,
+  the figures in `site-analytics-assistant.ts`): openings by source, questions by kind, the reply
+  chips (`shown`: times chips were drawn under an answer, `drawn`: how many, `pressed`: questions
+  of kind chip, `pressRate`), the interview per kind (trip or day) from its start to its end (done
+  or left) with `completion` and `leftRate`, steps by step, plan changes by planner and kind, undos,
+  answers and ratings. A chip's position and context, the interview's region, a step's outcome
+  (answered or skipped) and the end's `plan` (the tracking audit's T22 and T23) are listed as soon as
+  the frontend sends them. The small-value and `visitorData` rules are the other event tools'.
 
 ## Endpoints
 
@@ -340,9 +415,10 @@ What was checked when this was built, and where it is enforced:
   say so.
 - **Prompt injection through Parky's chats and the feedback:** the `assistant_*` and `site_feedback`
   tools return what visitors typed, and Parky's answers with it, since a visitor can steer those,
-  under `visitorData` with the chat notice (`CHAT_DATA_NOTICE`). The feedback's email address and
-  the hashes of visitor and session stay out: a model gets `wantsReply`, a person the address in
-  the admin through `adminUrl`.
+  under `visitorData` with the chat notice (`CHAT_DATA_NOTICE`). `assistant_tools_report` hands
+  the keys and paths of the model's inputs the same way, identifiers only, since the model wrote
+  them. The feedback's email address and the hashes of visitor and session stay out: a model gets
+  `wantsReply`, a person the address in the admin through `adminUrl`.
 - **Amplification:** JSON-RPC batches are refused (one tool call per request, which the throttler
   counts), and one token runs at most 10 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and

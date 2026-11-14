@@ -121,6 +121,37 @@ export type Channel = (typeof CHANNELS)[number];
 /** `pageType` of the not-found page, which the SEO report lists. */
 export const NOT_FOUND_PAGE_TYPE = "not_found";
 
+/**
+ * The page types the frontend sends (`SitePageType` in its
+ * `lib/analytics/site-analytics.ts`, derived from the path by
+ * `sitePageTypeOf`), for the tools' descriptions. Not a guard: the collector
+ * takes any value of `PAGE_TYPE_PATTERN`, and a report filters by any. A trip
+ * region's hub, its month pages and its best-time pages have their own since
+ * release 2.21.0 (the tracking audit's T1); before, they were `other`.
+ */
+export const SITE_PAGE_TYPES = [
+  "home",
+  "park",
+  "park_calendar",
+  "park_chapter",
+  "attraction",
+  "geo",
+  "guide",
+  "guide_index",
+  "news",
+  "news_index",
+  "glossary",
+  "glossary_index",
+  "search",
+  "planner",
+  "favorites",
+  "trip_hub",
+  "trip_month",
+  "trip_best_time",
+  NOT_FOUND_PAGE_TYPE,
+  "other",
+] as const;
+
 /** The page type a hit is stored under past the day's page-type guard. */
 export const OVERFLOW_PAGE_TYPE = "other";
 

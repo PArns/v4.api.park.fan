@@ -109,6 +109,29 @@ describe("site statistic tools", () => {
     expect(schema.safeParse({ interval: "year" }).success).toBe(false);
   });
 
+  it("lists a trip region's page types and filters by them", () => {
+    for (const tool of [
+      analyticsOverviewTool,
+      analyticsBreakdownTool,
+      analyticsEventsTool,
+      seoNotFoundTool,
+    ]) {
+      const help = JSON.stringify(z.toJSONSchema(z.object(tool.input)));
+      for (const type of ["trip_hub", "trip_month", "trip_best_time"]) {
+        expect(help).toContain(type);
+      }
+    }
+    const filters = [{ dim: "page_type", value: "trip_hub" }];
+    for (const tool of [analyticsBreakdownTool, analyticsEventTool]) {
+      expect(
+        z.object(tool.input).partial().safeParse({ filters }).success,
+      ).toBe(true);
+    }
+    expect(siteQuery({ filters } as never).filter).toEqual([
+      "page_type:trip_hub",
+    ]);
+  });
+
   it("labels visitor-supplied strings in every tool that returns some", () => {
     for (const tool of [
       analyticsBreakdownTool,

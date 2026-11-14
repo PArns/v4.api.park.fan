@@ -18,8 +18,8 @@ import { SMALL_CELLS_DESCRIPTION } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, VISITOR_DATA_NOTICE } from "./visitor-data";
 
 const WINDOW = {
-  from: "2026-10-16",
-  to: "2026-11-14",
+  from: "2026-11-01",
+  to: "2026-11-30",
   days: 30,
   interval: "day",
   locale: null,
@@ -42,13 +42,29 @@ async function run(
   return (await tool.handler(input as never, ctx)) as Record<string, any>;
 }
 
-const orlando = (name: string, props: Record<string, string>, count: number) =>
-  ({ name, props: { region: "orlando", ...props }, count }) as TripEventRow;
+const OLD = "2026-11-12";
+const NEW = "2026-11-20";
+const orlando = (
+  name: string,
+  props: Record<string, string>,
+  count: number,
+  day = NEW,
+) =>
+  ({
+    name,
+    props: { region: "orlando", ...props },
+    count,
+    day,
+  }) as TripEventRow;
 
+/** The old planner to the 17th, the dates-first planner from the 18th. */
 const ROWS: TripEventRow[] = [
-  orlando(TRIP_EVENTS.started, { source: "hero" }, 40),
+  orlando(TRIP_EVENTS.started, { source: "hero" }, 20, OLD),
+  orlando(TRIP_EVENTS.planShown, { mode: "dates", outcome: "ok" }, 18, OLD),
+  orlando(TRIP_EVENTS.ticketsAnswered, { answer: "yes" }, 6, OLD),
+  orlando(TRIP_EVENTS.daysSaved, { days: "5" }, 1, OLD),
+  orlando(TRIP_EVENTS.started, { source: "dates" }, 40),
   orlando(TRIP_EVENTS.started, { source: "link" }, 2),
-  orlando(TRIP_EVENTS.ticketsAnswered, { answer: "not_yet" }, 30),
   orlando(TRIP_EVENTS.planRequested, { mode: "dates", parks: "0" }, 50),
   orlando(TRIP_EVENTS.planRequested, { mode: "when", parks: "4" }, 6),
   orlando(TRIP_EVENTS.planShown, { mode: "dates", outcome: "ok" }, 45),
@@ -57,8 +73,13 @@ const ROWS: TripEventRow[] = [
     { mode: "dates", outcome: "error", status: "0" },
     3,
   ),
-  orlando(TRIP_EVENTS.viewChanged, { view: "week" }, 12),
-  orlando(TRIP_EVENTS.dayOpened, { kind: "park", view: "list" }, 20),
+  orlando(TRIP_EVENTS.editOpened, { panel: "parks", from: "answer" }, 12),
+  orlando(
+    TRIP_EVENTS.optionChanged,
+    { option: "rest", value: "none", by: "visitor" },
+    8,
+  ),
+  orlando(TRIP_EVENTS.ticketsOpened, { from: "card", first: "true" }, 9),
   orlando(TRIP_EVENTS.daysSaved, { days: "5" }, 3),
   orlando(TRIP_EVENTS.linkCopied, {}, 4),
   {
@@ -70,6 +91,7 @@ const ROWS: TripEventRow[] = [
       seller: "Disney",
     },
     count: 9,
+    day: NEW,
   },
   {
     name: "ticket_link_clicked",
@@ -80,19 +102,37 @@ const ROWS: TripEventRow[] = [
       seller: "Some Shop",
     },
     count: 2,
+    day: NEW,
   },
 ];
 
 /** A report service that answers the figures of `rows` for the options it gets. */
-function services(rows: TripEventRow[] = ROWS) {
+function services(
+  rows: TripEventRow[] = ROWS,
+  newFunnelFrom: string | null = "2026-11-18",
+) {
   const trip = {
     report: jest.fn(async (_query: unknown, options: any) => ({
       ...WINDOW,
-      ...tripPlannerFigures(rows, options),
+      ...tripPlannerFigures(rows, {
+        ...options,
+        window: { from: WINDOW.from, to: WINDOW.to },
+        newFunnelFrom,
+      }),
       ...(options.series && {
         series: [
-          { day: "2026-11-13", started: 30, planRequested: 2, planShown: 0 },
-          { day: "2026-11-14", started: 12, planRequested: 54, planShown: 48 },
+          {
+            day: "2026-11-13",
+            started: 30,
+            requested: 2,
+            shown: 0,
+          },
+          {
+            day: "2026-11-14",
+            started: 12,
+            requested: 54,
+            shown: 48,
+          },
         ],
       }),
     })),
@@ -119,14 +159,17 @@ function services(rows: TripEventRow[] = ROWS) {
 
 describe("trip_planner_report", () => {
   it("says what it answers, where the visitor strings are and how small values fold", () => {
-    expect(tripPlannerReportTool.description).toContain(
-      VISITOR_DATA_DESCRIPTION,
-    );
-    expect(tripPlannerReportTool.description).toContain(
-      SMALL_CELLS_DESCRIPTION,
-    );
-    expect(tripPlannerReportTool.description).toContain("planner_report");
-    expect(tripPlannerReportTool.description).toContain("trip_planner_ops");
+    const text = tripPlannerReportTool.description;
+    expect(text).toContain(VISITOR_DATA_DESCRIPTION);
+    expect(text).toContain(SMALL_CELLS_DESCRIPTION);
+    expect(text).toContain("planner_report");
+    expect(text).toContain("trip_planner_ops");
+    expect(text).toContain("started (trip_planner_started");
+    expect(text).toContain("ofShown");
+    expect(text).toContain("newFunnelFrom");
+    // The old planner's wizard steps are gone from the funnel and its description.
+    expect(text).not.toContain("not_yet, yes, skipped");
+    expect(text).not.toContain("wizard");
     const schema = z.object(tripPlannerReportTool.input);
     expect(schema.safeParse({ region: "atlantis" }).success).toBe(false);
     expect(
@@ -135,7 +178,7 @@ describe("trip_planner_report", () => {
     ).toBe(false);
   });
 
-  it("walks the funnel with its rates, reads dates and parks off the requests, and folds small lists", async () => {
+  it("walks the dates-first funnel, each era by its own events, and rates over the days both steps count", async () => {
     const { trip, catalog, map } = services();
     const answer = await run(tripPlannerReportTool, { limit: 5 }, map);
 
@@ -146,51 +189,83 @@ describe("trip_planner_report", () => {
     const options = trip.report.mock.calls[0][1];
     expect(options).toMatchObject({ region: null, series: false });
     expect(options.productRegions.get("wdw-date-based")).toBe("orlando");
-    expect(options.productRegions.get("archived-product")).toBe("orlando");
     expect(options.productRegions.get("japan-1-day")).toBe("japan");
 
     const step = (name: string) =>
       answer.funnel.find((s: { step: string }) => s.step === name);
+    expect(answer.newFunnelFrom).toBe("2026-11-18");
     expect(answer.funnel.map((s: { step: string }) => s.step)).toEqual([
       "started",
-      "ticketsAnswered",
-      "planRequested",
-      "planShown",
-      "viewChanged",
-      "dayOpened",
+      "requested",
+      "shown",
+      "changed",
+      "tickets",
       "kept",
     ]);
     expect(step("started")).toMatchObject({
-      count: 42,
+      count: 62,
+      before: 20,
+      since: 42,
       ofStarted: null,
       fromPrevious: null,
-    });
-    expect(step("ticketsAnswered")).toMatchObject({
-      count: 30,
-      ofStarted: 0.714,
-      fromPrevious: 0.714,
-      dropOff: 0.286,
-    });
-    // Requests outnumber the answers before them: no drop-off to speak of.
-    expect(step("planRequested")).toMatchObject({
-      count: 56,
-      fromPrevious: 1.867,
       dropOff: null,
-      dates: { known: 50, searched: 6 },
-      parks: { named: 6, headliners: 50 },
     });
-    expect(step("planShown")).toMatchObject({
-      ok: 45,
+    expect(step("requested")).toMatchObject({
+      count: 56,
+      before: 0,
+      since: 56,
+      fromPrevious: 0.903,
+      dropOff: 0.097,
+    });
+    // More answers than requests in the old planner's days: no drop-off to speak of.
+    expect(step("shown")).toMatchObject({
+      count: 66,
+      before: 18,
+      since: 48,
+      fromPrevious: 1.179,
+      dropOff: null,
+      ok: 63,
       error: 3,
-      errorRate: 0.063,
+      errorRate: 0.045,
     });
+    // Optional steps are shares of the answers shown, never a drop-off; changes were
+    // counted only since the cut-over, so against those days' answers alone.
+    expect(step("changed")).toMatchObject({
+      count: 20,
+      before: null,
+      since: 20,
+      ofShown: 0.417,
+      ofStarted: 0.476,
+      events: {
+        before: null,
+        since: ["trip_edit_opened", "trip_option_changed"],
+      },
+    });
+    expect(step("changed")).not.toHaveProperty("dropOff");
+    expect(step("tickets")).toMatchObject({
+      count: 15,
+      before: 6,
+      since: 9,
+      ticketsOpened: 9,
+      ticketsAnsweredYes: 6,
+      ofShown: 0.227,
+    });
+    expect(step("tickets")).not.toHaveProperty("fromPrevious");
+    // Kept follows the answers shown, past the optional steps.
     expect(step("kept")).toMatchObject({
-      count: 7,
-      events: ["trip_days_saved", "trip_ics_exported", "trip_link_copied"],
-      daysSaved: 3,
+      count: 8,
+      fromPrevious: 0.121,
+      dropOff: 0.879,
+      daysSaved: 4,
       linkCopied: 4,
+      dayPlannerOpened: { tripDay: 0, tripFirst: 0, hub: 0 },
     });
-    expect(answer.findDates).toMatchObject({ requested: 6 });
+    expect(answer.requests).toMatchObject({
+      planRequested: 56,
+      datesKnown: 50,
+      datesSearched: 6,
+      parksHeadliners: 50,
+    });
     expect(answer.ticketLinks).toMatchObject({
       clicks: 11,
       unattributedTicketLinks: 0,
@@ -201,51 +276,52 @@ describe("trip_planner_report", () => {
     expect(answer.visitorDataNotice).toBe(VISITOR_DATA_NOTICE);
     const data = answer.visitorData;
     // A way in used twice is folded: too few to tell anyone apart.
-    expect(data.sources).toEqual([
-      { value: "hero", count: 40 },
-      { value: "(other)", count: 2 },
+    expect(data.started.sources).toEqual([
+      { source: "dates", count: 40 },
+      { source: "hero", count: 20 },
+      { source: "(other)", count: 2 },
     ]);
     expect(data.ticketLinks.byKindAndPosition).toEqual([
       { kind: "official", position: "1", count: 9 },
       { kind: "(other)", position: "(other)", count: 2 },
     ]);
-    expect(data.errors).toEqual([
+    expect(data.answers.errors).toEqual([
       { mode: "(other)", status: "(other)", count: 3 },
+    ]);
+    expect(data.changes.options).toEqual([
+      { option: "rest", value: "none", by: "visitor", count: 8 },
     ]);
     expect(data.regions).toEqual([
       expect.objectContaining({
         region: "orlando",
-        started: 42,
+        started: 62,
         ticketLinks: 11,
       }),
     ]);
     expect(data).not.toHaveProperty("series");
   });
 
-  it("hides one region's small totals and every rate worked out from them", async () => {
+  it("hides one region's small counts, per era too, and every rate worked out from them", async () => {
     const { trip, map } = services([
-      orlando(TRIP_EVENTS.started, { source: "hero" }, 20),
-      orlando(TRIP_EVENTS.ticketsAnswered, { answer: "yes" }, 3),
-      orlando(TRIP_EVENTS.planRequested, { mode: "dates", parks: "2" }, 12),
+      orlando(TRIP_EVENTS.started, { source: "hero" }, 3, OLD),
+      orlando(TRIP_EVENTS.started, { source: "dates" }, 20),
+      orlando(TRIP_EVENTS.planShown, { mode: "dates", outcome: "ok" }, 12),
+      orlando(TRIP_EVENTS.editOpened, { panel: "parks", from: "answer" }, 2),
       orlando(TRIP_EVENTS.daysSaved, { days: "4" }, 1),
     ]);
     const answer = await run(tripPlannerReportTool, { region: "orlando" }, map);
     expect(trip.report.mock.calls[0][1]).toMatchObject({ region: "orlando" });
     const step = (name: string) =>
       answer.funnel.find((s: { step: string }) => s.step === name);
-    expect(step("started").count).toBe(20);
-    expect(step("ticketsAnswered")).toMatchObject({
+    // Three starts before the cut-over: the step's whole count would give them away.
+    expect(step("started")).toMatchObject({
       count: null,
-      ofStarted: null,
-      fromPrevious: null,
-      dropOff: null,
+      before: null,
+      since: 20,
     });
-    // Its own rate needs the hidden step before it.
-    expect(step("planRequested")).toMatchObject({
-      count: 12,
-      ofStarted: 0.6,
-      fromPrevious: null,
-    });
+    expect(step("requested")).toMatchObject({ count: 0, fromPrevious: null });
+    expect(step("shown")).toMatchObject({ count: 12, ofStarted: null });
+    expect(step("changed")).toMatchObject({ count: null, ofShown: null });
     expect(step("kept")).toMatchObject({ count: null, daysSaved: null });
     expect(answer).toMatchObject({
       region: "orlando",
@@ -253,12 +329,66 @@ describe("trip_planner_report", () => {
     });
   });
 
+  it("reads the old planner's events alone until the new ones are counted", async () => {
+    const { map } = services(ROWS, null);
+    const answer = await run(tripPlannerReportTool, {}, map);
+    const step = (name: string) =>
+      answer.funnel.find((s: { step: string }) => s.step === name);
+    expect(answer.newFunnelFrom).toBeNull();
+    expect(step("changed")).toMatchObject({ count: null, since: null });
+    expect(step("tickets")).toMatchObject({ count: 6, before: 6 });
+  });
+
+  it("reads the tile as a way in beside the sources: shown, clicked by link, per region", async () => {
+    const page =
+      "/de/parks/north-america/united-states/orlando/magic-kingdom-park";
+    const { trip, map } = services([
+      ...ROWS,
+      {
+        name: "section_seen",
+        props: { section: "trip_tile" },
+        count: 40,
+        path: page,
+      },
+      orlando(TRIP_EVENTS.tileClicked, { link: "plan" }, 8),
+      orlando(TRIP_EVENTS.tileClicked, { link: "calendar" }, 2),
+    ]);
+    const answer = await run(tripPlannerReportTool, {}, map);
+    // The region parks' pages, from regions.ts.
+    expect(
+      trip.report.mock.calls[0][1].parkRegions.get(
+        "north-america/united-states/orlando/magic-kingdom-park",
+      ),
+    ).toBe("orlando");
+    expect(answer.tile).toEqual({
+      shown: 40,
+      clicked: 10,
+      plan: 8,
+      calendar: 2,
+      clickRate: 0.25,
+    });
+    expect(answer.visitorData.started.tile).toEqual([
+      {
+        region: "orlando",
+        shown: 40,
+        clicked: 10,
+        plan: 8,
+        calendar: 2,
+        clickRate: 0.25,
+      },
+    ]);
+    expect(answer.visitorData.started.tileClicks).toEqual([
+      { link: "plan", count: 8 },
+      { link: "(other)", count: 2 },
+    ]);
+  });
+
   it("draws the series on request, its small values hidden", async () => {
     const { map } = services();
     const answer = await run(tripPlannerReportTool, { series: true }, map);
     expect(answer.visitorData.series).toEqual([
-      { day: "2026-11-13", started: 30, planRequested: null, planShown: 0 },
-      { day: "2026-11-14", started: 12, planRequested: 54, planShown: 48 },
+      { day: "2026-11-13", started: 30, requested: null, shown: 0 },
+      { day: "2026-11-14", started: 12, requested: 54, shown: 48 },
     ]);
     expect(answer.smallValuesHidden).toBe(true);
   });

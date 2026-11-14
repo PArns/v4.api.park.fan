@@ -3,23 +3,15 @@ import {
   CallHandler,
   ExecutionContext,
   Injectable,
-  Logger,
   NestInterceptor,
   SetMetadata,
   UseInterceptors,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { Observable, tap } from "rxjs";
-import type { TripPlanDto } from "../dto/trip-region-response.dto";
-import type { TripWhen } from "../trip-when";
 import {
+  answerFactsOf,
   errorOf,
-  metricRowOf,
-  planAnswerFacts,
-  regionOf,
-  whenAnswerFacts,
-  type TripAnswerFacts,
-  type TripErrorCode,
   type TripMetricRoute,
 } from "./trip-request-facts";
 import { withTripTrace, type TripRequestTrace } from "./trip-request-trace";
@@ -39,16 +31,6 @@ export function MeasureTripRequest(route: TripMetricRoute) {
   );
 }
 
-/** What each route's answer adds to its row. */
-const FACTS: Record<
-  TripMetricRoute,
-  (body: unknown) => TripAnswerFacts | undefined
-> = {
-  plan: (body) => planAnswerFacts(body as TripPlanDto),
-  when: (body) => whenAnswerFacts(body as TripWhen),
-  best_days: () => undefined,
-};
-
 /**
  * Opens a request trace around the route (the services note their caches and
  * the trip's shape into it), times the answer and hands its row to
@@ -58,8 +40,6 @@ const FACTS: Record<
  */
 @Injectable()
 export class TripRequestMetricsInterceptor implements NestInterceptor {
-  private readonly logger = new Logger(TripRequestMetricsInterceptor.name);
-
   constructor(
     private readonly reflector: Reflector,
     private readonly metrics: TripRequestMetricsService,
@@ -74,50 +54,28 @@ export class TripRequestMetricsInterceptor implements NestInterceptor {
     const request = context
       .switchToHttp()
       .getRequest<{ params?: Record<string, unknown> }>();
-    const region = regionOf(request.params?.region);
-    const trace: TripRequestTrace = {};
-    const started = performance.now();
-    const record = (
-      status: number,
-      facts?: TripAnswerFacts,
-      errorCode?: TripErrorCode,
-    ) => {
-      try {
-        this.metrics.record(
-          metricRowOf({
-            route,
-            region,
-            at: new Date(),
-            latencyMs: performance.now() - started,
-            trace,
-            status,
-            errorCode,
-            facts,
-          }),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `Trip request metric for ${route} not recorded: ${message}`,
-        );
-      }
+    const measure = {
+      route,
+      region: request.params?.region,
+      caller: "site" as const,
     };
+    const trace: TripRequestTrace = {};
+    const startedAt = performance.now();
     // `handle()` binds the route's async context when it is called, so the
     // trace has to be open then for the services to see it.
     return withTripTrace(trace, () => next.handle()).pipe(
       tap({
-        next: (body) => {
-          let facts: TripAnswerFacts | undefined;
-          try {
-            facts = FACTS[route](body);
-          } catch {
-            facts = undefined;
-          }
-          record(200, facts);
-        },
+        next: (body) =>
+          this.metrics.recordAnswer(measure, trace, startedAt, {
+            status: 200,
+            facts: answerFactsOf(route, body),
+          }),
         error: (error: unknown) => {
           const { status, code } = errorOf(error);
-          record(status, undefined, code);
+          this.metrics.recordAnswer(measure, trace, startedAt, {
+            status,
+            errorCode: code,
+          });
         },
       }),
     );

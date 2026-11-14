@@ -11,8 +11,8 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
  * docs/frontend/trip-regions.md#what-the-server-records.
  *
  * The array columns have no default: the table was new when they were, and
- * every insert names them. A column added later is nullable or has a default
- * (docs/rules/the-entities-are-the-schema.md).
+ * every insert names them. Every column added since is nullable or has a
+ * default (docs/rules/the-entities-are-the-schema.md).
  */
 @Entity("trip_request_metrics")
 @Index("idx_trip_request_metrics_bucket", ["bucket"])
@@ -31,6 +31,14 @@ export class TripRequestMetric {
   /** `plan`, `when` or `best_days` (`TRIP_METRIC_ROUTES`). */
   @Column({ type: "varchar", length: 16 })
   route: string;
+
+  /**
+   * Who asked: `site`, the route itself, or `parky`, his trip tools calling
+   * the route's service (`TRIP_METRIC_CALLERS`). Added to a table with rows,
+   * so it has a default.
+   */
+  @Column({ type: "varchar", length: 8, default: "site" })
+  caller: string;
 
   /** The HTTP status the answer left with. */
   @Column({ type: "smallint" })
@@ -120,4 +128,20 @@ export class TripRequestMetric {
   /** `/when`: kept inside a school-holiday region's breaks. */
   @Column({ type: "boolean", nullable: true })
   within: boolean | null;
+
+  /** The chosen parks the plan has no visit of (`parksLeftOut`); `/when`: its best window's. */
+  @Column({ name: "left_out", type: "smallint", nullable: true })
+  leftOut: number | null;
+
+  /** A region with bases: the visitor's minutes for a hotel change (`moveBuffer`), null without. */
+  @Column({ name: "move_buffer", type: "smallint", nullable: true })
+  moveBuffer: number | null;
+
+  /** A region with bases: which ends the visitor fixed, `none`, `start`, `end` or `both`. */
+  @Column({ type: "varchar", length: 8, nullable: true })
+  gateways: string | null;
+
+  /** A region with bases: the answer suggested a change of stays (`meta.staySuggestion`). */
+  @Column({ name: "stay_suggested", type: "boolean", nullable: true })
+  staySuggested: boolean | null;
 }

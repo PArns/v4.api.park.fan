@@ -1,4 +1,4 @@
-import { Logger } from "@nestjs/common";
+import { BadRequestException, Logger } from "@nestjs/common";
 import type { Repository } from "typeorm";
 import {
   TRIP_METRICS_MAX_BUFFERED,
@@ -6,6 +6,7 @@ import {
 } from "./trip-request-metrics.service";
 import type { TripRequestMetric } from "./trip-request-metric.entity";
 import { metricRowOf, type TripRequestMetricRow } from "./trip-request-facts";
+import { noteTripCache, noteTripShape } from "./trip-request-trace";
 
 const row = (latencyMs = 10): TripRequestMetricRow =>
   metricRowOf({
@@ -96,6 +97,60 @@ describe("TripRequestMetricsService", () => {
     expect(await metrics.prune(new Date("2026-11-14T01:25:00Z"))).toBe(10_037);
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls[0][1]).toEqual(["2026-08-16T00:00:00.000Z"]);
+  });
+
+  it("measures a call of Parky's like the route's own, and passes its answer and error on", async () => {
+    const metrics = make({ insert: jest.fn() });
+    const record = jest.spyOn(metrics, "record");
+    const body = {
+      meta: { exact: false, relaxed: ["streak_relaxed"] },
+      days: [],
+      parks: [],
+      totals: {},
+      unplaced: [],
+      parksLeftOut: [{ park: "epcot", reason: "no_day_left" }],
+    };
+    await expect(
+      metrics.measure(
+        { route: "plan", region: "orlando", caller: "parky" },
+        async () => {
+          // What the services note during the call lands on its row.
+          noteTripCache("cache", "miss");
+          noteTripShape({ tripDays: 6, parks: 3 });
+          return body;
+        },
+      ),
+    ).resolves.toBe(body);
+    expect(record.mock.calls[0][0]).toMatchObject({
+      route: "plan",
+      region: "orlando",
+      caller: "parky",
+      status: 200,
+      cache: "miss",
+      tripDays: 6,
+      exact: false,
+      relaxed: ["streak_relaxed"],
+      leftOut: 1,
+    });
+
+    const refusal = new BadRequestException(
+      "europa-park is not a park of Orlando",
+    );
+    await expect(
+      metrics.measure(
+        { route: "when", region: "atlantis", caller: "parky" },
+        async () => {
+          throw refusal;
+        },
+      ),
+    ).rejects.toBe(refusal);
+    expect(record.mock.calls[1][0]).toMatchObject({
+      route: "when",
+      region: "(unknown)",
+      caller: "parky",
+      status: 400,
+      errorCode: "unknown_park",
+    });
   });
 
   it("writes what is left when the module stops", async () => {
@@ -234,6 +289,7 @@ describe("TripRequestMetricsService", () => {
       to: "2026-11-14",
       region: "orlando",
       route: "plan",
+      caller: "parky",
       limit: 1,
       series: false,
     });
@@ -242,7 +298,9 @@ describe("TripRequestMetricsService", () => {
       "2026-11-15T00:00:00.000Z",
       "orlando",
       "plan",
+      "parky",
     ]);
+    expect(query.mock.calls[0][0]).toContain("caller = $5");
     expect(query.mock.calls[0][0]).toContain("region = $3");
     expect(query.mock.calls[0][0]).toContain("route = $4");
     expect(report).toMatchObject({
