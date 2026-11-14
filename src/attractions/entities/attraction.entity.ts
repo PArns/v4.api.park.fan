@@ -18,7 +18,10 @@ import { generateSlug } from "../../common/utils/slug.util";
 import type { AttractionKind } from "../../common/types/attraction-kind.type";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
 import type { SeasonBinding } from "../../common/types/season-binding.type";
-import { attractionSeasonBindingsSql } from "../../common/utils/season-window.sql";
+import {
+  attractionSeasonBindingsSql,
+  attractionSeasonPausesSql,
+} from "../../common/utils/season-window.sql";
 import {
   normalizeWorksPeriod,
   type WorksPeriod,
@@ -523,6 +526,15 @@ export class Attraction {
    */
   @VirtualColumn({ type: "jsonb", query: attractionSeasonBindingsSql })
   seasonBindings?: SeasonBinding[];
+
+  /**
+   * The park seasons that pause this ride (`paused_attraction_ids`): it does
+   * not run on their days and runs on every other. Read like
+   * `seasonBindings`, with the same rule for an explicit `select`
+   * (`seasonPauses: true`).
+   */
+  @VirtualColumn({ type: "jsonb", query: attractionSeasonPausesSql })
+  seasonPauses?: SeasonBinding[];
 
   // When true: attraction is shown as OPERATING whenever the park is OPERATING,
   // regardless of queue data status. Use for free-flow attractions (playgrounds,

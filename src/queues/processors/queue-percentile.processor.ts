@@ -12,7 +12,10 @@ import {
   selectMazeRows,
 } from "../../attractions/utils/maze-rule";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
-import { attractionSeasonBindingsSql } from "../../common/utils/season-window.sql";
+import {
+  attractionSeasonBindingsSql,
+  attractionSeasonPausesSql,
+} from "../../common/utils/season-window.sql";
 import { MEASURED_OPERATION_MAX_FEED_AGE_MINUTES } from "../../parks/utils/measured-operation.gate";
 import { SOURCE_SILENT_DAYS } from "../../common/utils/source-absent-status.util";
 import {
@@ -780,9 +783,10 @@ export class QueuePercentileProcessor {
               -- Cast to text so the rule reads a park-local 'YYYY-MM-DD'
               -- whatever the driver would have made of a date column.
               a.season_out_since::text AS "seasonOutSince",
-              -- The park seasons binding the row, as the entity loads them:
-              -- a bound ride is seasonal on its season's days.
-              (${attractionSeasonBindingsSql("a")}) AS "seasonBindings"
+              -- The park seasons binding and pausing the row, as the entity
+              -- loads them: a bound ride is seasonal on its season's days.
+              (${attractionSeasonBindingsSql("a")}) AS "seasonBindings",
+              (${attractionSeasonPausesSql("a")}) AS "seasonPauses"
          FROM attractions a
         WHERE a.attraction_kind IS NULL`,
     );

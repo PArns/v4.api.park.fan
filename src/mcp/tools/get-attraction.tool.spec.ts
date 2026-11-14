@@ -134,6 +134,11 @@ describe("get_attraction", () => {
       decides: false,
       seasons: [],
     });
+    const paused = await call({ seasonPauses: [winter] });
+    expect(paused.facts.seasonPauses).toEqual({
+      decides: true,
+      seasons: [winter],
+    });
   });
 
   it("says nothing it does not know: no rope drop, headliners unreadable", async () => {

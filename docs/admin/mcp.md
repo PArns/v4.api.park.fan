@@ -388,26 +388,30 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
 ### Binding a ride to seasons
 
 `bind_ride_seasons` (`src/mcp/tools/bind-ride-seasons.tool.ts`) binds a ride from its own side, where
-`update_trip_season` needs the whole `attractionIds` list read and written back. Input:
-`attraction` (the ride's uuid), `bind` and `unbind` (up to 20 season ids each, none in both) and
-`dryRun` (default true). Editor, `writes: change`.
+`update_trip_season` needs a season's whole list read and written back. Input:
+`attraction` (the ride's uuid), `bind` and `unbind` (up to 20 season ids each, none in both),
+`mode` (`only_during`, the default, edits `attractionIds`: the ride runs only during the season;
+`not_during` edits `pausedAttractionIds`: it does not run during it) and `dryRun` (default true).
+Editor, `writes: change`.
 
 - **Checks**, per season: of the ride's park, of a kind in `PARK_SEASON_BINDING_KINDS` (`halloween`,
   `christmas`, `winter`, `summer_nights`, `special_event`), and not cancelled to bind; a ride may
-  leave a cancelled season. A season the ride is already in, or not in, is left alone.
-- **The dry run** answers `changes` (each season, `bind` or `unbind`, whether its list changes),
-  `bindingsBefore` and `bindingsAfter`, and `warnings` when the ride's curated season months or a
-  curated `isSeasonal: false` take precedence, so a binding would have no effect
-  ([seasonality](../architecture/attraction-status/seasonality.md)).
+  leave a cancelled season. A season that lists the ride the other way is refused until the ride
+  leaves that list (the other `mode`). A season the ride is already in, or not in, is left alone.
+- **The dry run** answers `mode`, `changes` (each season, `bind` or `unbind`, whether its list
+  changes), `seasonsBefore` and `seasonsAfter` (the mode's seasons), and `warnings` when the
+  ride's curated season months or a curated `isSeasonal: false` take precedence, so a binding
+  would have no effect ([seasonality](../architecture/attraction-status/seasonality.md)).
 - **The write** is one `AdminSeasonService.update` per season that changes, with the ride added to
-  or taken out of its `attractionIds`: the route's checks, a `park.season.update` audit row each,
-  and the publishing of the park and of the rides the season bound before and after, this ride
-  among them. `written` lists the seasons written.
+  or taken out of the mode's list: the route's checks, a `park.season.update` audit row each, and
+  the publishing of the park and of the rides the season named before and after in either list,
+  this ride among them. `written` lists the seasons written.
 
-`get_attraction` lists the seasons that bind a ride in `facts.seasonBindings`: `seasons`, every
-season of a binding kind, not cancelled, that lists the ride (the row's own `seasonBindings`,
-`attractionSeasonBindingsSql`), and `decides`, false where the ride's curated season takes
-precedence over them. `boundSeason` stays the one a reader is shown today.
+`get_attraction` lists them in `facts.seasonBindings` and `facts.seasonPauses`: each `seasons`,
+every season of a binding kind, not cancelled, that lists the ride that way (the row's own
+`seasonBindings` and `seasonPauses`, `season-window.sql.ts`), and `decides`, false where the
+ride's curated season takes precedence over them. `boundSeason` and `pausedBySeason` stay the
+ones a reader is shown today.
 
 ### The admin's other pages
 

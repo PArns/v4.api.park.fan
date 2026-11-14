@@ -43,6 +43,10 @@ export interface SeasonImportRow {
   url?: string | null;
   sourceUrl?: string | null;
   notes?: string | null;
+  /** Rides of the park that run only during the season, by id. */
+  attractionIds?: string[] | null;
+  /** Rides of the park that do not run during the season, by id. */
+  pausedAttractionIds?: string[] | null;
 }
 
 /** A region park a row may mean, with the region that lists it. */
@@ -154,6 +158,10 @@ export function seasonRowInput(row: SeasonImportRow): SeasonInput {
     url: row.url ?? null,
     sourceUrl: row.sourceUrl ?? null,
     note: row.notes ?? null,
+    attractionIds: row.attractionIds?.length ? row.attractionIds : null,
+    pausedAttractionIds: row.pausedAttractionIds?.length
+      ? row.pausedAttractionIds
+      : null,
   };
 }
 

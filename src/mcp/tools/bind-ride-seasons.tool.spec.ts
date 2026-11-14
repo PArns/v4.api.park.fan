@@ -177,7 +177,7 @@ describe("bind_ride_seasons", () => {
       [FRIGHT, true],
       [WINTER, false],
     ]);
-    expect(body.bindingsAfter.map((s: { id: string }) => s.id)).toEqual([
+    expect(body.seasonsAfter.map((s: { id: string }) => s.id)).toEqual([
       FRIGHT,
       WINTER,
     ]);
@@ -210,7 +210,7 @@ describe("bind_ride_seasons", () => {
       RIDE,
     ]);
     expect(h.curation.publish).toHaveBeenCalledWith(PARK, [RIDE]);
-    expect(body.bindingsAfter.map((s: { id: string }) => s.id)).toEqual([
+    expect(body.seasonsAfter.map((s: { id: string }) => s.id)).toEqual([
       FRIGHT,
     ]);
   });
@@ -234,6 +234,37 @@ describe("bind_ride_seasons", () => {
       (await h.call({ attraction: RIDE, bind: [FRIGHT], unbind: [FRIGHT] }))
         .text,
     ).toMatch(/bound and unbound at once/);
+  });
+
+  it("pauses a ride during a season with mode not_during, never in both lists", async () => {
+    const h = harness();
+    const dry = await h.call({
+      attraction: RIDE,
+      bind: [FRIGHT],
+      mode: "not_during",
+    });
+    expect(dry.body.mode).toBe("not_during");
+    expect(dry.body.seasonsBefore).toEqual([]);
+    expect(dry.body.seasonsAfter.map((s: { id: string }) => s.id)).toEqual([
+      FRIGHT,
+    ]);
+    const { body } = await h.call({
+      attraction: RIDE,
+      bind: [FRIGHT],
+      mode: "not_during",
+      dryRun: false,
+    });
+    expect(body.written).toEqual([FRIGHT]);
+    expect(h.rows.get(FRIGHT)?.pausedAttractionIds).toEqual([RIDE]);
+    // Its only-during list is left as it was.
+    expect(h.rows.get(FRIGHT)?.attractionIds).toEqual([
+      "66666666-6666-4666-8666-666666666666",
+    ]);
+    // Wintertraum lists the ride as only_during: pausing it there is refused.
+    expect(
+      (await h.call({ attraction: RIDE, bind: [WINTER], mode: "not_during" }))
+        .text,
+    ).toMatch(/already lists the ride as only_during/);
   });
 
   it("warns where the ride's own curated season takes precedence", async () => {

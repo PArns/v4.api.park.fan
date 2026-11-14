@@ -335,6 +335,7 @@ export function isSeasonalRow(
     | "curatedIsSeasonal"
     | "curatedSeasonMonths"
     | "seasonBindings"
+    | "seasonPauses"
   >,
 ): boolean {
   return resolveCuratedFacts(row).isSeasonal;
@@ -1890,6 +1891,7 @@ export class ChildrenMetadataProcessor {
         curatedIsSeasonal: true,
         curatedSeasonMonths: true,
         seasonBindings: true,
+        seasonPauses: true,
       },
     });
 

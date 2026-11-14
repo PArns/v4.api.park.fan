@@ -1,6 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 import {
   BOUND_SEASON_PROPERTY,
+  PAUSED_BY_SEASON_PROPERTY,
   BoundSeasonDto,
 } from "../../attractions/dto/bound-season.dto";
 import { Park } from "../entities/park.entity";
@@ -232,6 +233,9 @@ export class ParkAttractionDto {
 
   @ApiProperty(BOUND_SEASON_PROPERTY)
   boundSeason?: BoundSeasonDto;
+
+  @ApiProperty(PAUSED_BY_SEASON_PROPERTY)
+  pausedBySeason?: BoundSeasonDto;
 
   @ApiProperty({
     description: "Minimum rider height in cm. Null if unrestricted or unknown.",

@@ -79,3 +79,15 @@ export const BOUND_SEASON_PROPERTY = {
   required: false,
   type: BoundSeasonDto,
 } as const;
+
+/** The Swagger block of `pausedBySeason` on every attraction payload. */
+export const PAUSED_BY_SEASON_PROPERTY = {
+  description:
+    "The park season this ride does not run in, when a season pauses it " +
+    "(„Pausiert während Wintertraum“): on its days `isCurrentlyInSeason` is " +
+    "false, on every other the ride reads as it otherwise would. The one " +
+    "running today, else the next to start, else the last to end. Absent " +
+    "when no season pauses the ride.",
+  required: false,
+  type: BoundSeasonDto,
+} as const;

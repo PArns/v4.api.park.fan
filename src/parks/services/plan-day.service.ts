@@ -2662,6 +2662,7 @@ export class PlanDayService {
         curatedIsSeasonal: true,
         curatedSeasonMonths: true,
         seasonBindings: true,
+        seasonPauses: true,
         curatedOutOfServiceFrom: true,
         curatedOutOfServiceTo: true,
         curatedOutOfServiceToUncertain: true,

@@ -43,6 +43,30 @@ the binding.
 How it resolves and who reads it:
 [seasonality](../architecture/attraction-status/seasonality.md#a-ride-bound-to-a-park-season).
 
+## A ride a park season pauses
+
+```jsonc
+{ "isSeasonal": true, "isCurrentlyInSeason": false,
+  "pausedBySeason": { "id": "…", "kind": "winter", "name": "Wintertraum", "status": "confirmed",
+                      "startDate": "2026-11-20", "endDate": "2027-01-18" } }
+```
+
+The inverse binding: a ride a season of the same five kinds lists in its `pausedAttractionIds`
+does **not** run on that season's days and runs the rest of the year (Phantasialand's River Quest
+and Phenies during Wintertraum). The same rules hold: a `cancelled` season pauses nothing, an
+`expected` one pauses, and the ride's own curated months or a curated `false` override it.
+
+- `isSeasonal` is `true`, `isCurrentlyInSeason` is `false` on the season's days (its `dates`, or
+  every day between its bounds) and `true` on every other, and `seasonMonths` is absent.
+- `pausedBySeason` (park payload attractions and the ride detail) is the pausing season whose bounds
+  hold the park's today, else the next to start, else the last to end, in the shape of
+  `boundSeason`. Absent on every ride no season pauses.
+- A client says "paused during <name>" („Pausiert während Wintertraum") with the season's dates and
+  treats the ride on those days as it treats any `false`: out of season, never closed or down.
+  Outside them the ride reads as it otherwise would.
+- A ride a season binds and another pauses is out of season on the pausing days whatever the
+  binding says; one season never lists a ride both ways.
+
 ## `isCurrentlyInSeason` has three values
 
 | value   | means                                                                                                   | a client does                          |

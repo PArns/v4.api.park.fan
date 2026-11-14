@@ -38,6 +38,7 @@ import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 import {
   isCurrentlyInSeason,
+  dayAfterSeasonPause,
   nextSeasonBindingDay,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
@@ -1271,6 +1272,7 @@ interface RideClosure {
     seasonMonths?: number[] | null;
     isCurrentlyInSeason?: boolean | null;
     boundSeason?: SeasonBinding | null;
+    pausedBySeason?: SeasonBinding | null;
   };
   downtime?: { kind: string; medianMinutes?: number } | null;
 }
@@ -1278,8 +1280,8 @@ interface RideClosure {
 /**
  * Why a ride is not running and what is known about its return, so "when does it reopen" is
  * answered from data: a breakdown (since when, how such outages ended before), a works period
- * (its last closed day, when the park named one), out of season (the park season the ride is
- * bound to, else the next season month), or
+ * (its last closed day, when the park named one), out of season (the park season that pauses
+ * the ride or the one it is bound to, else the next season month), or
  * `unknown`. Null while the ride runs.
  */
 export function reopeningOf(ride: RideClosure, month: number) {
@@ -1293,7 +1295,10 @@ export function reopeningOf(ride: RideClosure, month: number) {
     };
   }
   if (ride.facts?.isCurrentlyInSeason === false) {
-    // A park season the ride is bound to says when better than months do.
+    // A park season that pauses the ride, or one it is bound to, says when
+    // better than months do.
+    const paused = ride.facts.pausedBySeason;
+    if (paused) return { reason: "season" as const, pausedBy: paused };
     const bound = ride.facts.boundSeason;
     if (bound) {
       return { reason: "season" as const, season: bound };
@@ -1339,6 +1344,9 @@ export function reopenSearchFrom(
 ): string | null {
   if (reopening?.reason === "works" && reopening.closedUntil) {
     return addIsoDays(reopening.closedUntil, 1);
+  }
+  if (reopening?.reason === "season" && reopening.pausedBy) {
+    return dayAfterSeasonPause(reopening.pausedBy, today);
   }
   if (reopening?.reason === "season" && reopening.season) {
     return nextSeasonBindingDay(reopening.season, today);

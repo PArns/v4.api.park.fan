@@ -192,6 +192,11 @@ on the page, and leaves no audit row.
   returns 500 if the audit write fails. History entries carry `kind: "change" | "verification"`; the
   dashboard's curation count (`action LIKE '%.curate'`) leaves verifications out. Attractions have no
   verify action yet.
+- **The park's ride list** (`GET /v1/admin/content/parks/:id/attractions`) carries each ride's
+  resolved season beside the raw columns: `isSeasonal`, `seasonMonths`, `seasonalityCurated`, and
+  `boundSeason` and `pausedBySeason` where a park season binds or pauses the ride, in the public
+  `SeasonBinding` shape (`id`, `kind`, `name`, `status`, `startDate`, `endDate`, `dates`) and picked
+  on the park's today by `boundSeasonOf`, as the public payload picks them.
 - **A whole park's list at once:** `PATCH /v1/admin/content/parks/:id/attractions` (the fast-pass table —
   forty single PATCHes would each fire a revalidation). Each ride keeps its own diff and audit row; the
   publish happens once. Every entry is validated before any is written, so a ride from another park or an
@@ -297,6 +302,12 @@ message names the field, and a field the DTO does not list is refused too:
   edits the list of each season it picks with this PATCH, and the MCP tool `bind_ride_seasons`
   adds or removes one ride in several seasons the same way
   ([binding a ride](mcp.md#binding-a-ride-to-seasons));
+- `pausedAttractionIds`: the inverse, rides of this park that do **not** run during the season and
+  run the rest of the year (River Quest and Phenies during Wintertraum); on the same five kinds
+  they are out of season on its days ([paused rides](../architecture/attraction-status/seasonality.md#a-ride-a-park-season-pauses)).
+  Lowercase, once each, an empty list stored as `null`; a ride in both lists of one season is a
+  400. The PATCH replaces the whole list, as it does `attractionIds`, and a write publishes the
+  rides of both lists before and after;
 - `url`, `sourceUrl`: full http(s) addresses, at most 2,000;
 - `confirmedAt`: an ISO 8601 timestamp;
 - `note`: at most 4,000.

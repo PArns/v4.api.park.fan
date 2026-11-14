@@ -20,6 +20,9 @@ import { PARK_SEASON_BINDING_KINDS } from "../../parks/entities/park-season.enti
  * A park season that binds the ride (`seasonBindsAttraction`) sits between the
  * two: below a curated `false` or curated months, above everything the detector
  * wrote. Bound, the ride is seasonal and in season exactly on the season's days.
+ * A season that pauses it (`seasonPausesAttraction`, its `paused_attraction_ids`)
+ * sits at the same place with the opposite window: out of season on the
+ * season's days, in season on every other.
  *
  * Then three answers, and only the first two close a ride:
  *
@@ -52,20 +55,39 @@ import { PARK_SEASON_BINDING_KINDS } from "../../parks/entities/park-season.enti
  * @param alias - Alias of the `attractions` row.
  */
 export function seasonBindsAttraction(season: string, alias: string): string {
+  return seasonListsAttraction(season, alias, "attraction_ids");
+}
+
+/**
+ * Whether a `park_seasons` row pauses an `attractions` row: the same test on
+ * `paused_attraction_ids`, the rides that do not run during the season. The
+ * one definition `Attraction.seasonPauses` and the predicates below read.
+ *
+ * @param season - Alias of the `park_seasons` row.
+ * @param alias - Alias of the `attractions` row.
+ */
+export function seasonPausesAttraction(season: string, alias: string): string {
+  return seasonListsAttraction(season, alias, "paused_attraction_ids");
+}
+
+/** Same park, the ride in `column`, a binding kind, not cancelled. */
+function seasonListsAttraction(
+  season: string,
+  alias: string,
+  column: "attraction_ids" | "paused_attraction_ids",
+): string {
   const kinds = PARK_SEASON_BINDING_KINDS.map((kind) => `'${kind}'`).join(", ");
   return `(${season}.park_id = ${alias}."parkId"
-           AND ${season}.attraction_ids @> jsonb_build_array(${alias}.id)
+           AND ${season}.${column} @> jsonb_build_array(${alias}.id)
            AND ${season}.kind IN (${kinds})
            AND ${season}.status <> 'cancelled')`;
 }
 
-/**
- * The seasons binding an attraction, as the jsonb list `SeasonBinding[]`
- * reads, ordered by start. `Attraction.seasonBindings` is this subquery.
- *
- * @param alias - Alias of the `attractions` row.
- */
-export function attractionSeasonBindingsSql(alias: string): string {
+/** The seasons a predicate picks for an attraction, as the jsonb list `SeasonBinding[]`, by start. */
+function seasonListSql(
+  alias: string,
+  picks: (season: string, alias: string) => string,
+): string {
   return `SELECT COALESCE(jsonb_agg(jsonb_build_object(
              'id', bound_season.id,
              'kind', bound_season.kind,
@@ -76,7 +98,27 @@ export function attractionSeasonBindingsSql(alias: string): string {
              'dates', bound_season.dates
            ) ORDER BY bound_season.start_date), '[]'::jsonb)
            FROM park_seasons bound_season
-          WHERE ${seasonBindsAttraction("bound_season", alias)}`;
+          WHERE ${picks("bound_season", alias)}`;
+}
+
+/**
+ * The seasons binding an attraction, as the jsonb list `SeasonBinding[]`
+ * reads, ordered by start. `Attraction.seasonBindings` is this subquery.
+ *
+ * @param alias - Alias of the `attractions` row.
+ */
+export function attractionSeasonBindingsSql(alias: string): string {
+  return seasonListSql(alias, seasonBindsAttraction);
+}
+
+/**
+ * The seasons pausing an attraction, in the same shape and order.
+ * `Attraction.seasonPauses` is this subquery.
+ *
+ * @param alias - Alias of the `attractions` row.
+ */
+export function attractionSeasonPausesSql(alias: string): string {
+  return seasonListSql(alias, seasonPausesAttraction);
 }
 
 /** The SQL pieces of the precedence, shared by the predicates below. */
@@ -85,12 +127,16 @@ function seasonParts(alias: string) {
   const hasCuratedMonths = `jsonb_array_length(${curatedMonths}) > 0`;
   // A curated statement exists as soon as EITHER half is filled in.
   const curated = `(${alias}.curated_is_seasonal IS NOT NULL OR ${hasCuratedMonths})`;
-  // The bound season decides unless the ride's own curation overrides it: a
-  // curated `false` or curated months. A curated `true` alone does not, it
-  // agrees and leaves the window to the season.
-  const bound = `(NOT (${alias}.curated_is_seasonal IS FALSE OR ${hasCuratedMonths})
+  // The bound or pausing season decides unless the ride's own curation
+  // overrides it: a curated `false` or curated months. A curated `true` alone
+  // does not, it agrees and leaves the window to the season.
+  const overridden = `(${alias}.curated_is_seasonal IS FALSE OR ${hasCuratedMonths})`;
+  const bound = `(NOT ${overridden}
            AND EXISTS (SELECT 1 FROM park_seasons bound_season
                         WHERE ${seasonBindsAttraction("bound_season", alias)}))`;
+  const paused = `(NOT ${overridden}
+           AND EXISTS (SELECT 1 FROM park_seasons bound_season
+                        WHERE ${seasonPausesAttraction("bound_season", alias)}))`;
   // The flag as it resolved before bindings existed, for the branch where no
   // season binds the ride.
   const unboundIsSeasonal = `CASE
@@ -98,33 +144,34 @@ function seasonParts(alias: string) {
                THEN COALESCE(${alias}.curated_is_seasonal, ${hasCuratedMonths})
              ELSE COALESCE(${alias}.is_seasonal, FALSE)
            END`;
-  return { hasCuratedMonths, curated, bound, unboundIsSeasonal };
+  return { hasCuratedMonths, curated, bound, paused, unboundIsSeasonal };
 }
 
 /**
  * The resolved `isSeasonal` of `resolveCuratedFacts`: curated first, then a
- * bound season, then the detector.
+ * season that binds or pauses the ride, then the detector.
  *
  * @param alias - Alias of the `attractions` row.
  */
 export function attractionIsSeasonal(alias: string): string {
-  const { curated, bound, unboundIsSeasonal } = seasonParts(alias);
-  // A curated statement answers first; past it, a binding makes the ride
-  // seasonal whatever the detector wrote.
+  const { curated, bound, paused, unboundIsSeasonal } = seasonParts(alias);
+  // A curated statement answers first; past it, a binding or a pause makes
+  // the ride seasonal whatever the detector wrote.
   return `(CASE
-             WHEN NOT ${curated} AND ${bound} THEN TRUE
+             WHEN NOT ${curated} AND (${bound} OR ${paused}) THEN TRUE
              ELSE ${unboundIsSeasonal}
            END)`;
 }
 
 /**
- * Whether a bound park season decides this ride's season, i.e. the resolved
- * `seasonBindings` is not empty.
+ * Whether a park season decides this ride's season, binding or pausing it:
+ * the resolved `seasonBindings` or `seasonPauses` is not empty.
  *
  * @param alias - Alias of the `attractions` row.
  */
 export function attractionIsSeasonBound(alias: string): string {
-  return seasonParts(alias).bound;
+  const { bound, paused } = seasonParts(alias);
+  return `(${bound} OR ${paused})`;
 }
 
 /**
@@ -136,7 +183,7 @@ export function attractionIsSeasonBound(alias: string): string {
  * @param alias - Table alias the `attractions` row carries in the caller's SQL.
  */
 export function attractionIsOutOfSeason(alias: string): string {
-  const { hasCuratedMonths, curated, bound, unboundIsSeasonal } =
+  const { hasCuratedMonths, curated, bound, paused, unboundIsSeasonal } =
     seasonParts(alias);
 
   // Curated months win where they exist; otherwise the detector's, which a
@@ -156,17 +203,23 @@ export function attractionIsOutOfSeason(alias: string): string {
   const parkMonth = `EXTRACT(MONTH FROM ${parkNow})::int`;
   const parkToday = `(${parkNow})::date`;
 
-  // One of the bound seasons runs today: inside its bounds, and on its list of
-  // days when it has one.
-  const boundToday = `EXISTS (SELECT 1 FROM park_seasons bound_season
-                        WHERE ${seasonBindsAttraction("bound_season", alias)}
+  // One of the seasons the predicate picks runs today: inside its bounds, and
+  // on its list of days when it has one.
+  const runsToday = (picks: (season: string, alias: string) => string) =>
+    `EXISTS (SELECT 1 FROM park_seasons bound_season
+                        WHERE ${picks("bound_season", alias)}
                           AND bound_season.start_date <= ${parkToday}
                           AND bound_season.end_date >= ${parkToday}
                           AND (bound_season.dates IS NULL
                                OR bound_season.dates @> to_jsonb((${parkToday})::text)))`;
+  const boundToday = runsToday(seasonBindsAttraction);
+  const pausedToday = runsToday(seasonPausesAttraction);
 
+  // Bound: out of season off the bound days. Paused: out of season on the
+  // pausing days, whatever a binding says.
   return `(CASE
-           WHEN ${bound} THEN NOT ${boundToday}
+           WHEN ${bound} OR ${paused}
+             THEN (${bound} AND NOT ${boundToday}) OR (${paused} AND ${pausedToday})
            ELSE (${unboundIsSeasonal})
              AND CASE
                    WHEN jsonb_array_length(${months}) > 0

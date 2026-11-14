@@ -94,6 +94,17 @@ export const seasonPatchFields = {
         "status or the ride's own curated season says otherwise. Never list an all-year ride " +
         "the season only re-themes",
     ),
+  pausedAttractionIds: z
+    .array(uuidInput())
+    .max(100)
+    .nullable()
+    .optional()
+    .describe(
+      "Rides of this park that do NOT run during the season and run the rest of the year " +
+        "(River Quest and Phenies during Wintertraum). On halloween, christmas, winter, " +
+        "summer_nights and special_event they read out of season on the season's days. Never " +
+        "a ride also in attractionIds; null or [] clears the list",
+    ),
   url: z
     .string()
     .max(SEASON_LIMITS.url)
@@ -149,6 +160,11 @@ export function seasonInputOf(input: PatchInput): Partial<SeasonInput> {
   if (input.attractionIds) {
     out.attractionIds = input.attractionIds.map((id) => id.toLowerCase());
   }
+  if (input.pausedAttractionIds) {
+    out.pausedAttractionIds = input.pausedAttractionIds.map((id) =>
+      id.toLowerCase(),
+    );
+  }
   return out;
 }
 
@@ -172,6 +188,7 @@ export function seasonView(
     opensAt: season.opensAt,
     closesAt: season.closesAt,
     attractionIds: season.attractionIds,
+    pausedAttractionIds: season.pausedAttractionIds,
     url: season.url,
     sourceUrl: season.sourceUrl,
     confirmedAt: season.confirmedAt,

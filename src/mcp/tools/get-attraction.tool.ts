@@ -28,7 +28,7 @@ export const getAttractionTool = defineMcpTool({
     "rider, virtual queue …) with its wait, live crowd level and trend against its baseline, a " +
     "running outage, whether it has run today, works periods, the curated facts (minimum height, " +
     "gets you wet, single rider, indoor/outdoor, season months, every park season that binds it " +
-    "(seasonBindings), land, the paid fast pass, headliner), the rope-drop recommendation and today's best visit times where computed, " +
+    "(seasonBindings) or pauses it (seasonPauses), land, the paid fast pass, headliner), the rope-drop recommendation and today's best visit times where computed, " +
     "the ride profile where one is " +
     "curated (type, track figures in order, launches, inversions, manufacturer, model, opening " +
     "year, top speed, height, length, duration), typical waits, downtime reliability and, if " +
@@ -123,6 +123,12 @@ export const getAttractionTool = defineMcpTool({
         seasonBindings: {
           decides: resolveCuratedFacts(attraction).seasonBindings.length > 0,
           seasons: (attraction.seasonBindings ?? []).map(bindingView),
+        },
+        // The seasons it does not run during (`pausedAttractionIds`), the same way.
+        pausedBySeason: dto.pausedBySeason ?? null,
+        seasonPauses: {
+          decides: resolveCuratedFacts(attraction).seasonPauses.length > 0,
+          seasons: (attraction.seasonPauses ?? []).map(bindingView),
         },
         land: dto.land ?? null,
         // Absent is "nobody checked or none sold", never "no fast pass".
