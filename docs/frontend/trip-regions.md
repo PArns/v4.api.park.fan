@@ -1720,22 +1720,27 @@ day, which is pointless for a month that has passed. What it adds:
 
 ## What the server records
 
-Every answer of `/plan`, `/when` and `/best-days` leaves one row in `trip_request_metrics`, so the
-planner can be tuned from data: the MCP tool `trip_planner_ops` reads them
+Every answer of `/plan`, `/when` and `/best-days`, and every plan Parky's trip tools make through
+the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
+the MCP tool `trip_planner_ops` reads them
 ([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
 frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
 answer. Code: `src/trip-regions/metrics/`.
 
 **Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
-the services (400, 404), a failure (5xx). Not recorded: a request the data-key guard turns away
-(401, 403, 429: it never reaches the route), an answer Cloudflare serves from its cache, and
-Parky's `plan_vacation` and `find_trip_dates`, which call the services without the route.
+the services (400, 404), a failure (5xx). Parky's `plan_vacation`, `change_trip`, `get_trip_plan`
+and `find_trip_dates` call the services without the route; their plans are recorded the same way,
+with `caller` `parky` (`TripRequestMetricsService.measure`). Not recorded: a request the data-key
+guard turns away (401, 403, 429: it never reaches the route), an answer Cloudflare serves from its
+cache, and the plan of the trip on screen Parky reads for every question (`visitorTripItinerary`),
+which would count one trip once per question.
 
 | Column                                                 | What                                                                                                                                                       |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
 | `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
 | `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
 | `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
 | `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
 | `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
@@ -1748,6 +1753,8 @@ Parky's `plan_vacation` and `find_trip_dates`, which call the services without t
 | `hopper`                                               | plan first's hopper resorts, or an owned ticket with the hopper                                                                                            |
 | `bases`, `moves`                                       | a region with bases: `meta.stays`' count and `totals.moves`; `/when`: the best window's stays (a window names no moves); null in the other regions        |
 | `range_days`, `windows`, `windows_planned`, `within`   | `/when`: the search range in days, the windows answered, those planned (`meta.search.planned`), a school-break filter. `/best-days`: `range_days`          |
+| `left_out`                                             | the chosen parks the plan has no visit of (`parksLeftOut`); `/when`: those of its best window                                                              |
+| `move_buffer`, `gateways`, `stay_suggested`            | a region with bases: the visitor's `moveBuffer` (null: the region's own), which ends they fixed (`none`, `start`, `end`, `both`), and whether the answer carried `meta.staySuggestion` |
 
 The shape is read from the normalized query, so a request refused while its query is read has
 only its route, region, status, code and latency.
@@ -1780,4 +1787,5 @@ site statistic's hourly rows) and deleted nightly at 01:25 UTC by `trip-metrics`
 batches of 10,000 ([job queues](../architecture/job-queues.md)). The table came with the entity
 (`synchronize`, [the entities are the schema](../rules/the-entities-are-the-schema.md)): additive,
 a plain table with an index on `bucket`, its array columns without a default because every insert
-names them. A column added later is nullable or has a default.
+names them. Every column added since is nullable or has a default: `caller` came with the default
+`site`, `left_out`, `move_buffer`, `gateways` and `stay_suggested` nullable (release 2.21.0).
