@@ -18,6 +18,7 @@ import {
   type TicketLink,
   type TicketMarket,
   type TicketProduct,
+  type TicketStore,
 } from "./tickets";
 import type { InternalRegionCalendar } from "./trip-region.assembly";
 import {
@@ -57,7 +58,11 @@ const LINK_KEYS = new Set([
   "sponsored",
   "markets",
   "locales",
+  "store",
 ]);
+const STORE_KEYS = new Set(["country", "currency"]);
+const COUNTRY = /^[A-Z]{2}$/;
+const CURRENCY = /^[A-Z]{3}$/;
 const SOURCE_KEYS = new Set(["url", "title", "accessed", "note"]);
 
 class Problems {
@@ -566,7 +571,7 @@ function validateLinks(
     if (!isObject(link)) {
       p.add(
         path,
-        "must be { seller, url, sponsored, official?, markets?, locales? }",
+        "must be { seller, url, sponsored, official?, markets?, locales?, store? }",
       );
       return;
     }
@@ -596,6 +601,10 @@ function validateLinks(
       link.locales == null
         ? undefined
         : list<string>(p, `${path}.locales`, link.locales, TICKET_LOCALES);
+    const store =
+      link.store == null
+        ? undefined
+        : validateStore(p, `${path}.store`, link.store);
     out.push({
       seller: seller ?? "",
       url: link.url as string,
@@ -603,12 +612,40 @@ function validateLinks(
       sponsored: link.sponsored === true,
       ...(markets && markets.length > 0 && { markets }),
       ...(locales && locales.length > 0 && { locales }),
+      ...(store && { store }),
     });
   });
   if (official !== 1) {
     p.add("links", "needs exactly one official link, the operator's own shop");
   }
   return out;
+}
+
+/** A link's country store: an ISO country code and the ISO currency it sells in, in capitals. */
+function validateStore(
+  p: Problems,
+  path: string,
+  value: unknown,
+): TicketStore | undefined {
+  if (!isObject(value)) {
+    p.add(path, "must be { country, currency }");
+    return undefined;
+  }
+  for (const key of Object.keys(value)) {
+    if (!STORE_KEYS.has(key)) p.add(`${path}.${key}`, "is not a store field");
+  }
+  const { country, currency } = value;
+  const countryOk = typeof country === "string" && COUNTRY.test(country);
+  const currencyOk = typeof currency === "string" && CURRENCY.test(currency);
+  if (!countryOk) {
+    p.add(`${path}.country`, "must be an ISO country code in capitals (GB)");
+  }
+  if (!currencyOk) {
+    p.add(`${path}.currency`, "must be an ISO currency code in capitals (GBP)");
+  }
+  return countryOk && currencyOk
+    ? { country: country as string, currency: currency as string }
+    : undefined;
 }
 
 function validateSources(p: Problems, value: unknown): TicketSource[] {

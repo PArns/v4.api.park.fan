@@ -1358,10 +1358,11 @@ A product:
     },
     {
       "seller": "Attraction Tickets",
-      "url": "https://www.attractiontickets.com/…",
+      "url": "https://www.attractiontickets.com/en-ie/…",
       "sponsored": true, // an affiliate link: show it as such, rel="sponsored"
       "markets": ["uk"], // the market its seller sells in; absent: every one
       "locales": ["en"], // absent: every locale
+      "store": { "country": "IE", "currency": "EUR" }, // the seller's country store; absent: one shop
     },
   ],
   "shopUrl": "https://www.universalorlando.com/web/en/us/tickets-packages/park-tickets", // the official link's url
@@ -1373,10 +1374,16 @@ A product:
   also `shopUrl`. `sponsored: true` marks an affiliate or paid link: the client labels it and links
   it `rel="sponsored noopener"`. `markets` and `locales` say where a link sells and in which
   language (a UK shop `uk`, a German page `de`); a link without them suits everyone. The client
-  shows a link's market beside it as a label, and every link to every visitor. **The array order
-  is the display order:** among the links that suit the reader equally (those for their locale or
-  market first, then those for everyone), the client shows them in the order given, so the admin
-  decides which link comes first. Every url is `https`. Purchase links show the sellers that the
+  shows a link's market beside it as a label, and every link to every visitor. **`store`** names
+  the country store of a seller that has one per country, each with its own prices: Attraction
+  Tickets sells from a UK (`/en/`, GBP), an Irish (`/en-ie/`, EUR), a Dutch (`/en-nl/`, EUR), a
+  German (`/de/`, EUR) and a US store (`/us/`, USD). `country` is ISO 3166-1 alpha-2 and
+  `currency` ISO 4217, both in capitals, so the client names the link by its store
+  ("Attraction Tickets · UK (£)") without reading the url, and a store's link needs no market
+  label. `locales` only orders the links; it names no store. **The array order is the display
+  order:** among the links that suit the reader equally (the store of the visitor's own country
+  first, then those for their locale or market, then those for everyone), the client shows them in
+  the order given, so the admin decides which link comes first. Every url is `https`. Purchase links show the sellers that the
   visitor comes from park.fan: the client renders them with `referrerPolicy="origin"` and never
   with `noreferrer`.
 - **`description`**: an optional sentence about the product, in English, as the admin wrote it.
@@ -1730,7 +1737,7 @@ from the official link) and the stamps.
   the stored one, and the merged product is checked whole. `null` clears an optional field:
   `description`, `notes`, `blockoutUrl`, `reservationUrl`, `until`, `suggestRank` (never suggested),
   `pass`, `blockouts`, `windowDays`, `allowance`, `onSale`, `hopSets`, `caps`, `reservedDayParks`,
-  `entryFrom`, `validDays` and `sources`, and inside them a link's `markets`, `locales` and `official`, a source's `title`,
+  `entryFrom`, `validDays` and `sources`, and inside them a link's `markets`, `locales`, `store` and `official`, a source's `title`,
   `accessed` and `note`, an `onSale` range's `from` or `to`, a set's or cap's `ticketDays`. A
   required field sent as `null` is refused at its path (`name`: "is required"); `active` takes only
   `true` or `false`; `sortOrder: null` keeps the product where it is.
@@ -1761,7 +1768,8 @@ message, problems: [{ path: "windowTable[2].window", message }] }`), and `…/va
   among `parks`;
 - `onSale` real dates, `from` ≤ `to`; `until` a real date;
 - `links` 1–10, exactly one `official`; `seller` 1–80 characters; `markets` and `locales` from their
-  lists (`en`, `de`, `nl`, `fr`, `es`, `it`); every url (links, `blockoutUrl`, `reservationUrl`,
+  lists (`en`, `de`, `nl`, `fr`, `es`, `it`); `store` exactly `{ country, currency }`, two and three
+  capital letters (`GB`, `GBP`); every url (links, `blockoutUrl`, `reservationUrl`,
   `sources`) an absolute `https` url of at most 500 characters, without user or password;
 - `suggestRank` an integer 0–1000 or `null`; `confidence` `high`, `medium` or `low`.
 
@@ -1781,8 +1789,10 @@ again after `CDN_SETTLE_MS`. Every write leaves an audit row (`ticket_product.cr
 `tickets.ts`, once (a second instance booting at the same time inserts nothing twice), and the log
 says so. Each seeded product gets plain links from `ticket-seed-links.ts`, in this order: the
 cheapest authorized seller the research found, then Attraction Tickets' pages for the product
-(`locales` set where a page is for one site language), then the official link; a link that repeats
-one before it is left out. The research's bundles are not seeded as products. A seeded link is never `sponsored` and carries no affiliate or
+(`locales` set where a page is for one site language; `store` from the page's first path segment,
+`ATTRACTION_TICKETS_STORES` in `tickets.ts`), then the official link; a link that repeats one
+before it is left out. The pages are those Attraction Tickets lists as the same product in its
+other stores (the page's `hreflang` alternates), each answering 200 itself. The research's bundles are not seeded as products. A seeded link is never `sponsored` and carries no affiliate or
 tracking parameter. The seed runs only on an empty table: a region that has rows is never touched
 again, and every later change, links included, is made in the admin.
 

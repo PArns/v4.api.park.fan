@@ -197,6 +197,7 @@ describe("validateTicketProduct", () => {
       sponsored: true,
       markets: ["uk"],
       locales: ["en"],
+      store: { country: "GB", currency: "GBP" },
     };
     expect(problemsOf({ ...draft, links: [affiliate, official] })).toEqual([]);
     expect(
@@ -236,6 +237,20 @@ describe("validateTicketProduct", () => {
     expect(
       paths({ ...draft, links: [{ ...affiliate, tracking: "x" }, official] }),
     ).toContain("links[0].tracking");
+    expect(
+      paths({
+        ...draft,
+        links: [
+          { ...affiliate, store: { country: "uk", currency: "£" } },
+          official,
+        ],
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "links[0].store.country",
+        "links[0].store.currency",
+      ]),
+    );
     expect(paths({ ...draft, blockoutUrl: "ftp://x.example/" })).toContain(
       "blockoutUrl",
     );
