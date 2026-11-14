@@ -17,8 +17,13 @@ import type { TripRequestMetric } from "./trip-request-metric.entity";
  * docs/frontend/trip-regions.md#what-the-server-records.
  */
 
-/** The routes a metric names. */
-export const TRIP_METRIC_ROUTES = ["plan", "when", "best_days"] as const;
+/** The routes a metric names; `plan_ideas` is `/plan/ideas`. */
+export const TRIP_METRIC_ROUTES = [
+  "plan",
+  "plan_ideas",
+  "when",
+  "best_days",
+] as const;
 export type TripMetricRoute = (typeof TRIP_METRIC_ROUTES)[number];
 
 /** Who asked: the route itself, or Parky's trip tools calling its service. */
@@ -267,7 +272,10 @@ export function whenAnswerFacts(body: TripWhen): TripAnswerFacts {
   };
 }
 
-/** What a route's answer adds to its row; `/best-days` adds nothing. */
+/**
+ * What a route's answer adds to its row; `/best-days` and `/plan/ideas` add
+ * nothing: their rows carry the trip's shape, the caches and the latency.
+ */
 export function answerFactsOf(
   route: TripMetricRoute,
   body: unknown,

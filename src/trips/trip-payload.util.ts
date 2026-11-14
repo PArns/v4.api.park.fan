@@ -14,6 +14,8 @@
  * payload rather than through a controller.
  */
 
+import { ISO_DATE_PATTERN } from "../common/utils/date.util";
+
 /**
  * The cap, in bytes of UTF-8.
  *
@@ -115,10 +117,7 @@ export function checkTripPayload(payload: unknown): TripPayloadVerdict {
         return { ok: false, reason: `day ${key} is not an object` };
       }
       const day = rawDay as Record<string, unknown>;
-      if (
-        typeof day.date !== "string" ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(day.date)
-      ) {
+      if (typeof day.date !== "string" || !ISO_DATE_PATTERN.test(day.date)) {
         return { ok: false, reason: `day ${key} has no date` };
       }
       const entries = day.entries;

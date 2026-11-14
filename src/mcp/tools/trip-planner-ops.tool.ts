@@ -30,7 +30,8 @@ export const tripPlannerOpsTool = defineMcpTool({
   title: "Trip planner server metrics",
   description:
     "How the trip planner's API routes perform, from the server's own record of every answer of " +
-    "/v1/trip-regions/:region/plan, /when (find dates) and /best-days, and of Parky's trip tools " +
+    "/v1/trip-regions/:region/plan, /plan/ideas (route plan_ideas), /when (find dates) and " +
+    "/best-days, and of Parky's trip tools " +
     "calling the same services (caller: site or parky): per region, route and caller the " +
     "requests, errors and error rate; latency percentiles in ms (latencyMs over every 200, " +
     "builtLatencyMs over the 200s that were built rather than served from the answer's Redis " +
@@ -64,7 +65,9 @@ export const tripPlannerOpsTool = defineMcpTool({
     route: z
       .enum(TRIP_METRIC_ROUTES)
       .optional()
-      .describe("Only this route: plan, when (find dates) or best_days"),
+      .describe(
+        "Only this route: plan, plan_ideas (the plan's ideas), when (find dates) or best_days",
+      ),
     caller: z
       .enum(TRIP_METRIC_CALLERS)
       .optional()

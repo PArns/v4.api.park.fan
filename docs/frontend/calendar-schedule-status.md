@@ -25,6 +25,10 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=
   status.
 - **`isEstimated: true`** only on past days whose status and hours were
   reconstructed from ride activity.
+- **`closedBy`** names the curated `closure` season ([park seasons](park-seasons.md))
+  that makes a day `CLOSED`, a confirmed or announced one running that day. It is a
+  statement, so it holds past `scheduleCoverage.to` too; a day the feed calls
+  `OPERATING` never carries it. The region calendar's days carry the same field.
 - **`crowdLevel: "unknown"` is a real value** — "no forecast", never "moderate". A
   day reads it when there is nothing to rate it by (PAR-1028); the same holds for
   `peakLoad` and for `/predictions/yearly`.
@@ -62,7 +66,8 @@ nothing in `days[]` tells that apart from a real closure. So:
 
 - **stop at `to`** when paginating months, building a month index or emitting
   sitemap URLs;
-- **do not render `CLOSED` past `to` as "closed"** — treat it like `UNKNOWN`;
+- **do not render `CLOSED` past `to` as "closed"** — treat it like `UNKNOWN`,
+  unless the day carries `closedBy`;
 - expect `to` to move forward by itself as parks publish (it is derived from rows);
 - read it as optional (`scheduleCoverage?.to`) and treat absence like `null`:
   coverage unknown.

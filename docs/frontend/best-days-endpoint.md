@@ -57,7 +57,7 @@ date is a 400. Days outside the stored window are simply not returned.
 
 ## How it stays fast
 
-Served from a materialized Redis snapshot (`best-days:<parkId>`), never computed per
+Served from a materialized Redis snapshot (`best-days:v2:<parkId>`), never computed per
 request from ML:
 
 - The calendar warmup (`warmup-calendar-daily`, [twice a day](../architecture/job-queues.md#schedule-utc))

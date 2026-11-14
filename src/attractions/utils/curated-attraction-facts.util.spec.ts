@@ -1,5 +1,6 @@
 import {
   boundSeasonOf,
+  dayAfterSeasonPause,
   isCurrentlyInSeason,
   nextSeasonBindingDay,
   resolveCuratedFacts,
@@ -363,6 +364,92 @@ describe("resolveCuratedFacts", () => {
       expect(isCurrentlyInSeason(facts, tz, on("2026-10-06"))).toBe(false);
       expect(nextSeasonBindingDay(nights, "2026-10-06")).toBe("2026-10-10");
       expect(nextSeasonBindingDay(nights, "2026-10-10")).toBeNull();
+    });
+  });
+
+  /** River Quest and the Phenies during Wintertraum: shut on its days, running the rest of the year. */
+  describe("a ride a park season pauses", () => {
+    const wintertraum: SeasonBinding = {
+      id: "s1",
+      kind: "winter",
+      name: "Wintertraum",
+      status: "confirmed",
+      startDate: "2026-11-20",
+      endDate: "2027-01-18",
+      dates: null,
+    };
+    const tz = "Europe/Berlin";
+    const on = (day: string) => new Date(`${day}T12:00:00Z`);
+
+    it("is out of season on the season's days and in season on every other", () => {
+      const facts = resolveCuratedFacts({
+        isSeasonal: false,
+        seasonPauses: [wintertraum],
+      });
+      expect(facts.isSeasonal).toBe(true);
+      expect(facts.seasonBindings).toEqual([]);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-11-14"))).toBe(true);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-12-24"))).toBe(false);
+      expect(isCurrentlyInSeason(facts, tz, on("2027-01-19"))).toBe(true);
+      expect(boundSeasonOf(facts, tz, on("2026-12-24"))).toEqual({
+        pausedBySeason: wintertraum,
+      });
+    });
+
+    it("outranks the detector, as a binding does, and gives way to curated months and false", () => {
+      const detected = resolveCuratedFacts({
+        isSeasonal: true,
+        seasonMonths: [4, 5, 6, 7, 8, 9, 10],
+        seasonOutSince: "2026-11-01",
+        seasonPauses: [wintertraum],
+      });
+      expect(detected.seasonMonths).toBeNull();
+      expect(detected.seasonOutSince).toBeNull();
+      expect(isCurrentlyInSeason(detected, tz, on("2026-11-14"))).toBe(true);
+      const months = resolveCuratedFacts({
+        curatedSeasonMonths: [12],
+        seasonPauses: [wintertraum],
+      });
+      expect(months.seasonPauses).toEqual([]);
+      expect(isCurrentlyInSeason(months, tz, on("2026-12-24"))).toBe(true);
+      const notSeasonal = resolveCuratedFacts({
+        curatedIsSeasonal: false,
+        seasonPauses: [wintertraum],
+      });
+      expect(notSeasonal.isSeasonal).toBe(false);
+      expect(boundSeasonOf(notSeasonal, tz)).toEqual({});
+    });
+
+    it("shuts a bound ride on a pausing season's days too", () => {
+      const summer: SeasonBinding = {
+        ...wintertraum,
+        id: "s2",
+        kind: "special_event",
+        name: "Summer",
+        startDate: "2026-11-01",
+        endDate: "2027-03-31",
+      };
+      const facts = resolveCuratedFacts({
+        seasonBindings: [summer],
+        seasonPauses: [wintertraum],
+      });
+      expect(isCurrentlyInSeason(facts, tz, on("2026-11-14"))).toBe(true);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-12-24"))).toBe(false);
+      expect(isCurrentlyInSeason(facts, tz, on("2027-04-01"))).toBe(false);
+    });
+
+    it("reads a pause's list of days, and the day after it", () => {
+      const nights = {
+        ...wintertraum,
+        startDate: "2026-12-01",
+        endDate: "2026-12-31",
+        dates: ["2026-12-05", "2026-12-06", "2026-12-12"],
+      };
+      const facts = resolveCuratedFacts({ seasonPauses: [nights] });
+      expect(isCurrentlyInSeason(facts, tz, on("2026-12-05"))).toBe(false);
+      expect(isCurrentlyInSeason(facts, tz, on("2026-12-07"))).toBe(true);
+      expect(dayAfterSeasonPause(nights, "2026-12-05")).toBe("2026-12-07");
+      expect(dayAfterSeasonPause(wintertraum, "2026-12-24")).toBe("2027-01-19");
     });
   });
 });

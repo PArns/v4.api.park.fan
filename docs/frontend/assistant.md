@@ -1041,9 +1041,24 @@ known; its absence never means "no" ([absent facts](../rules/absent-facts.md)).
       climateNormal: boolean;     // the long-run average, not a forecast
     } | null;
   }
+| {
+    kind: "idea";                // show_card { kind: "idea", idea: 1..3 }
+    region: string;              // the trip region whose planner on screen applies it
+    idea: PlanIdea;              // one of `/plan/ideas`' ideas, whole (trip-regions.md#ideas-get-v1trip-regionsorlandoplanideas)
+  }
 ```
 
 `from` starts no earlier than the park's today and the days end within `park_forecast`'s 60.
+
+**An idea card.** `get_trip_plan` and `change_trip` call `TripPlanService.ideas` with the query they
+planned with (a `plan_ideas` metric row, `caller: parky`) for the trip on screen, and only for it:
+its planner is what applies an idea. The result lists at most three as `ideas` (`n`, `kind`, the
+park, its days, `savedMinutes`, the parks it places by name, `bigRidesWait`); the answer keeps them
+(`AnswerState.tripIdeas`), and `show_card` kind `idea` sends the one by its `n` whole, so the model
+never retypes an idea. Without an idea by that `n` in this answer the call is refused. The prompt
+lets Parky offer one only when it saves at least 5 minutes or places a park the plan leaves out,
+one card an answer, never one the visitor turned down or one already offered. The widget draws it
+with the card „Im Chat“ draws and applies it through the planner, with an undo.
 A day past `scheduleCoverage.to` reads `UNKNOWN` without hours, whatever the calendar's gap-fill
 says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` summary only.
 

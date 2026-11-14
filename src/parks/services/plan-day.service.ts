@@ -35,7 +35,13 @@ import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { H5ProfileService } from "./h5-profile.service";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
-import { formatInParkTimezone } from "../../common/utils/date.util";
+import {
+  addIsoDays,
+  formatInParkTimezone,
+  isoDateWeekday,
+  isoDaysBetween,
+  isWeekendDate,
+} from "../../common/utils/date.util";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import {
@@ -389,7 +395,7 @@ export class PlanDayService {
     shadow: PlanDayShadowCurve[] | null,
   ): Promise<PlanDayDto> {
     const today = formatInParkTimezone(new Date(), park.timezone);
-    const leadDays = this.daysBetween(today, dateStr);
+    const leadDays = isoDaysBetween(today, dateStr);
     const isFuture = leadDays >= 0;
 
     // The day's own facts: opening hours, crowd level, weather, holiday flags.
@@ -460,7 +466,7 @@ export class PlanDayService {
       ...(theDay?.schoolVacationUnknown ? { schoolVacationUnknown: true } : {}),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
-      isWeekend: this.isWeekend(dateStr),
+      isWeekend: isWeekendDate(dateStr),
       neighborHolidays: (theDay?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,
@@ -839,7 +845,7 @@ export class PlanDayService {
 
     // Postgres' EXTRACT(DOW) and JavaScript's getUTCDay() agree (0 = Sunday);
     // the pattern column is written by the former and read here by the latter.
-    const weekday = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+    const weekday = isoDateWeekday(dateStr);
 
     const [scheduled, patterns] = await Promise.all([
       this.showsService
@@ -874,7 +880,7 @@ export class PlanDayService {
       // about is far away. Measuring against the target would reject every
       // date more than four weeks out — which is most of what a planner asks.
       if (
-        this.daysBetween(pattern.lastObservedOn, this.today(park)) >
+        isoDaysBetween(pattern.lastObservedOn, this.today(park)) >
         PlanDayService.MAX_PATTERN_AGE_DAYS
       ) {
         continue;
@@ -1185,7 +1191,7 @@ export class PlanDayService {
     // The plain profile per ride, for the shadow archive only.
     const h5Plain = new Map<string, Map<number, number>>();
     if (h5Profiles) {
-      const weekend = this.isWeekend(dateStr);
+      const weekend = isWeekendDate(dateStr);
       for (const attraction of plannable) {
         const level = dayLevels.get(attraction.id);
         const profileOfRide: H5RideProfile | undefined = h5Profiles.get(
@@ -1681,7 +1687,7 @@ export class PlanDayService {
     const quarters = new Map<string, Map<number, number>>();
     const bands = new Map<string, number>();
 
-    const nextDate = PlanDayService.plusDays(dateStr, 1);
+    const nextDate = addIsoDays(dateStr, 1);
 
     for (const p of stored.predictions) {
       if (p.predictionType !== "hourly") continue;
@@ -1773,7 +1779,7 @@ export class PlanDayService {
     return (minute: number) => {
       const hit = memo.get(minute);
       if (hit) return hit;
-      const day = PlanDayService.plusDays(dateStr, Math.floor(minute / 1440));
+      const day = addIsoDays(dateStr, Math.floor(minute / 1440));
       const within = ((minute % 1440) + 1440) % 1440;
       const hh = String(Math.floor(within / 60)).padStart(2, "0");
       const mm = String(within % 60).padStart(2, "0");
@@ -1821,11 +1827,7 @@ export class PlanDayService {
     const candidates = PlanDayService.climatologyCandidates(dateStr);
     const wraps = closeHour > 23;
     const asked = wraps
-      ? [
-          ...new Set(
-            candidates.flatMap((d) => [d, PlanDayService.plusDays(d, 1)]),
-          ),
-        ]
+      ? [...new Set(candidates.flatMap((d) => [d, addIsoDays(d, 1)]))]
       : candidates;
     const history = await this.analyticsService
       .getParkHourlyHistoryOnDates(park.id, asked)
@@ -1859,7 +1861,7 @@ export class PlanDayService {
     for (const d of referenceDates) {
       const day = PlanDayService.measuredDay(
         history.get(d) ?? empty,
-        wraps ? (history.get(PlanDayService.plusDays(d, 1)) ?? empty) : empty,
+        wraps ? (history.get(addIsoDays(d, 1)) ?? empty) : empty,
         byId,
         openHour,
         closeHour,
@@ -1945,7 +1947,7 @@ export class PlanDayService {
     const span = PlanDayService.CLIMATOLOGY_WEEKS_EITHER_SIDE;
     for (let y = 1; y <= PlanDayService.CLIMATOLOGY_YEARS_BACK; y++) {
       for (let w = -span; w <= span; w++) {
-        out.push(PlanDayService.plusDays(dateStr, -364 * y + 7 * w));
+        out.push(addIsoDays(dateStr, -364 * y + 7 * w));
       }
     }
     return out;
@@ -1993,7 +1995,7 @@ export class PlanDayService {
       // A gap of more than the window's own width starts the next year's read.
       if (
         last &&
-        this.daysBetween(last[1], d) <=
+        isoDaysBetween(last[1], d) <=
           7 * 2 * PlanDayService.CLIMATOLOGY_WEEKS_EITHER_SIDE
       ) {
         last[1] = d;
@@ -2139,7 +2141,7 @@ export class PlanDayService {
     const [ownRows, afterMidnightRows] = await Promise.all([
       this.hourlyHistory(park, dateStr),
       closeHour > 23
-        ? this.hourlyHistory(park, PlanDayService.plusDays(dateStr, 1))
+        ? this.hourlyHistory(park, addIsoDays(dateStr, 1))
         : Promise.resolve(new Map<string, AttractionHourlyHistory>()),
     ]);
     const unavailable = ownRows === null || afterMidnightRows === null;
@@ -2660,6 +2662,7 @@ export class PlanDayService {
         curatedIsSeasonal: true,
         curatedSeasonMonths: true,
         seasonBindings: true,
+        seasonPauses: true,
         curatedOutOfServiceFrom: true,
         curatedOutOfServiceTo: true,
         curatedOutOfServiceToUncertain: true,
@@ -2925,32 +2928,5 @@ export class PlanDayService {
     const at = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(at.getTime())) return null;
     return Number(formatInTimeZone(at, timezone, "HH"));
-  }
-
-  /**
-   * A `YYYY-MM-DD` shifted by whole days.
-   *
-   * UTC arithmetic on a date-only string, which is right precisely because it
-   * is not a timestamp: the park-local calendar day after 2026-10-31 is
-   * 2026-11-01 whatever the offset does that night, and converting through the
-   * park's timezone to find that out is how a DST boundary turns into an
-   * off-by-one.
-   */
-  private static plusDays(dateStr: string, days: number): string {
-    return new Date(Date.parse(`${dateStr}T00:00:00Z`) + days * 86_400_000)
-      .toISOString()
-      .slice(0, 10);
-  }
-
-  /** Whole days between two YYYY-MM-DD strings. */
-  private daysBetween(from: string, to: string): number {
-    const a = Date.parse(`${from}T00:00:00Z`);
-    const b = Date.parse(`${to}T00:00:00Z`);
-    return Math.round((b - a) / 86_400_000);
-  }
-
-  private isWeekend(dateStr: string): boolean {
-    const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-    return day === 0 || day === 6;
   }
 }

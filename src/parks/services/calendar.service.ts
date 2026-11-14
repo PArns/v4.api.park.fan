@@ -62,6 +62,13 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { ParkStatus } from "../../common/types/status.type";
 import { DbJobBudget, mapWithDbBudget } from "../../common/utils/db-job-budget";
+import { ParkSeasonService } from "./park-season.service";
+import {
+  curatedClosureOn,
+  round1,
+  round5,
+  type SeasonLike,
+} from "../../trip-regions/trip-calendar.util";
 
 const SCHEDULE_REFRESH_GAP_DAYS = 5; // Trigger refresh if schedule ends < 5 days from requested date
 
@@ -75,11 +82,6 @@ const NEIGHBOR_SAME_COUNTRY_MAX = 3;
 const NEIGHBOR_HOLIDAYS_MAX = 8;
 // Max headliner rides listed per day in the forecast hint.
 const HEADLINER_FORECAST_TOP_N = 5;
-
-// Round wait minutes to the nearest 5 — user-facing figures read cleaner in 5-min steps.
-const round5 = (min: number): number => Math.round(min / 5) * 5;
-// The unrounded mean, kept for ranking days (`HeadlinerForecast.exactWait`).
-const round1 = (min: number): number => Math.round(min * 10) / 10;
 
 /**
  * Calendar Service
@@ -114,6 +116,7 @@ export class CalendarService {
     private readonly analyticsService: AnalyticsService,
     private readonly holidaysService: HolidaysService,
     private readonly attractionsService: AttractionsService,
+    private readonly parkSeasonService: ParkSeasonService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectQueue("park-metadata") private readonly parkMetadataQueue: Queue,
   ) {}
@@ -138,7 +141,7 @@ export class CalendarService {
     const toStr = formatInParkTimezone(toDate, park.timezone);
     const today = getCurrentDateInTimezone(park.timezone);
 
-    // Try per-month cache: assemble from calendar:month:{parkId}:YYYY-MM:{includeHourly}
+    // Try per-month cache: assemble from calendar:month:v2:{parkId}:YYYY-MM:{includeHourly}
     const monthsInRange = this.getMonthsInRange(
       fromDate,
       toDate,
@@ -295,6 +298,15 @@ export class CalendarService {
           );
           return [] as RideWorksPeriods[];
         }),
+      // The curated closures; without them a day reads as the feed has it.
+      this.parkSeasonService
+        .forParkInRange(park.id, fromStr, toStr)
+        .catch((err: Error) => {
+          this.logger.warn(
+            `Seasons unavailable for ${park.slug}: ${err.message}`,
+          );
+          return [] as SeasonLike[];
+        }),
     ]);
 
     const schedules = results[0] as ScheduleEntry[];
@@ -312,6 +324,7 @@ export class CalendarService {
     // A ride in maintenance leaves the day's forecast before anything is
     // aggregated from it; the day still names it, under the window.
     const maintenance = results[8] as RideWorksPeriods[];
+    const seasons = results[9] as SeasonLike[];
     const mlPredictions = {
       predictions: withoutRidesInMaintenance(
         (results[2] as { predictions: PredictionDto[] }).predictions,
@@ -540,6 +553,7 @@ export class CalendarService {
           : headlinerForecastByDate.get(dateStr),
         climateNormals,
         measuredOperationDays.has(dateStr),
+        curatedClosureOn(seasons, dateStr)?.id,
       );
     });
 
@@ -875,6 +889,8 @@ export class CalendarService {
      * overrules.
      */
     measuredOperation: boolean = false,
+    /** The curated closure running this day (`curatedClosureOn`), by its id. */
+    closure?: string,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find the row that states this day's status. An event row can sit beside
@@ -1023,6 +1039,16 @@ export class CalendarService {
       status = "CLOSED";
     }
 
+    // A curated closure closes the day, as on the region calendar
+    // (`buildParkDay`): a stated fact, so a day the feed is silent about or
+    // the gap-fill guessed shut is now closed by statement. It never overrides
+    // an OPERATING day: the operator's newer word wins over a curated range.
+    const closedBy = status !== "OPERATING" ? closure : undefined;
+    if (closedBy) {
+      status = "CLOSED";
+      isEstimated = false;
+    }
+
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)
     let inferredCrowdLevel: CrowdLevel | "closed";
     let peakLoad: CrowdLevel | "closed" | undefined;
@@ -1112,6 +1138,7 @@ export class CalendarService {
     const day: CalendarDay = {
       date: dateStr,
       status,
+      ...(closedBy && { closedBy }),
       hours,
       crowdLevel,
       // The ML forward prediction for this day (independent of the live override applied to

@@ -132,6 +132,8 @@ export interface PublicParkSeason {
   opensAt: string | null;
   closesAt: string | null;
   attractionIds: string[] | null;
+  /** Rides that do not run during the season and run the rest of the year. */
+  pausedAttractionIds: string[] | null;
   url: string | null;
   sourceUrl: string | null;
   /** When this was last checked against the source, so a page can say "as of". */
@@ -153,6 +155,7 @@ export function toPublicSeason(season: ParkSeason): PublicParkSeason {
     opensAt: season.opensAt,
     closesAt: season.closesAt,
     attractionIds: season.attractionIds,
+    pausedAttractionIds: season.pausedAttractionIds,
     url: season.url,
     sourceUrl: season.sourceUrl,
     confirmedAt: season.confirmedAt ? season.confirmedAt.toISOString() : null,

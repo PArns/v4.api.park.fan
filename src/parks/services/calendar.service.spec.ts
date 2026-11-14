@@ -9,6 +9,7 @@ import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
+import { ParkSeasonService } from "./park-season.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 
@@ -73,6 +74,7 @@ describe("CalendarService › buildPredictedCrowdLevels (private)", () => {
         },
         { provide: HolidaysService, useValue: {} },
         { provide: AttractionsService, useValue: {} },
+        { provide: ParkSeasonService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
         {
           provide: getQueueToken("park-metadata"),
@@ -221,6 +223,7 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
         { provide: AnalyticsService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: AttractionsService, useValue: {} },
+        { provide: ParkSeasonService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
         {
           provide: getQueueToken("park-metadata"),
@@ -646,6 +649,7 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
         { provide: AnalyticsService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: AttractionsService, useValue: {} },
+        { provide: ParkSeasonService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
         {
           provide: getQueueToken("park-metadata"),
@@ -843,6 +847,7 @@ describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", 
         { provide: AnalyticsService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: AttractionsService, useValue: {} },
+        { provide: ParkSeasonService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
         {
           provide: getQueueToken("park-metadata"),
@@ -955,6 +960,7 @@ describe("CalendarService › buildDaysBounded (private)", () => {
         { provide: AnalyticsService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: AttractionsService, useValue: {} },
+        { provide: ParkSeasonService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: noopRedis },
         {
           provide: getQueueToken("park-metadata"),
@@ -1082,6 +1088,10 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
             getNamesByIds: jest.fn().mockResolvedValue(new Map()),
             getMaintenanceWindows: jest.fn().mockResolvedValue([]),
           },
+        },
+        {
+          provide: ParkSeasonService,
+          useValue: { forParkInRange: jest.fn().mockResolvedValue([]) },
         },
         {
           provide: REDIS_CLIENT,
@@ -1372,6 +1382,81 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
       );
 
       expect((await buildDay(day)).status).toBe("CLOSED");
+    });
+  });
+
+  describe("a curated closure", () => {
+    const futureDay = () => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + 20);
+      return d.toISOString().slice(0, 10);
+    };
+    const closure = (day: string, status = "confirmed") => ({
+      id: "season-1",
+      kind: "closure",
+      startDate: day,
+      endDate: day,
+      dates: null,
+      status,
+      separateTicket: false,
+      opensAt: null,
+      closesAt: null,
+    });
+    const buildDay = async (day: string) => {
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+      return response.days[0];
+    };
+
+    it("closes a day the feed is silent about, naming the season", async () => {
+      const day = futureDay();
+      (service as any).parkSeasonService.forParkInRange.mockResolvedValue([
+        closure(day),
+      ]);
+      const built = await buildDay(day);
+      expect(built.status).toBe("CLOSED");
+      expect(built.closedBy).toBe("season-1");
+      expect(built.crowdLevel).toBe("closed");
+    });
+
+    it("never closes an OPERATING day, and an expected closure closes nothing", async () => {
+      const day = futureDay();
+      (service as any).parksService.getSchedule.mockResolvedValue([
+        {
+          date: day,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(`${day}T09:00:00Z`),
+          closingTime: new Date(`${day}T18:00:00Z`),
+        },
+      ]);
+      (service as any).parkSeasonService.forParkInRange.mockResolvedValue([
+        closure(day),
+      ]);
+      const open = await buildDay(day);
+      expect(open.status).toBe("OPERATING");
+      expect(open.closedBy).toBeUndefined();
+
+      (service as any).parksService.getSchedule.mockResolvedValue([]);
+      (service as any).parkSeasonService.forParkInRange.mockResolvedValue([
+        closure(day, "expected"),
+      ]);
+      const expected = await buildDay(day);
+      expect(expected.status).toBe("UNKNOWN");
+      expect(expected.closedBy).toBeUndefined();
     });
   });
 

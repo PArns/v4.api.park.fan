@@ -1,3 +1,4 @@
+import type { SeasonBinding } from "../../common/types/season-binding.type";
 import {
   type CuratedFactsSource,
   type ResolvedCuratedFacts,
@@ -222,17 +223,51 @@ export function mazeNameLabel(name: string): "MAZE" | "SCARE_ZONE" | null {
 }
 
 /**
+ * The months the bound seasons run in: each one's listed days, else every
+ * month its range touches.
+ */
+function bindingMonths(bindings: readonly SeasonBinding[]): number[] {
+  const months = new Set<number>();
+  for (const season of bindings) {
+    if (season.dates && season.dates.length > 0) {
+      for (const day of season.dates) months.add(Number(day.slice(5, 7)));
+      continue;
+    }
+    let [year, month] = season.startDate.split("-").map(Number);
+    const [endYear, endMonth] = season.endDate.split("-").map(Number);
+    while (
+      months.size < 12 &&
+      (year < endYear || (year === endYear && month <= endMonth))
+    ) {
+      months.add(month);
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+  }
+  return [...months]
+    .filter((m) => Number.isInteger(m) && m >= 1 && m <= 12)
+    .sort((a, b) => a - b);
+}
+
+/**
  * Which months this attraction's season is known to touch, or null.
  *
- * Two sources, in this order, because only 18 of 1,098 seasonal rows in
+ * Three sources, in this order, because only 18 of 1,098 seasonal rows in
  * production carry a month list at all:
  *
- * 1. the resolved month list, curated before detected;
- * 2. failing that, the month of `seasonOutSince` — the last park-local day the
+ * 1. the park seasons that bind the ride, where a binding decides its season
+ *    (`seasonBindings` of the resolved facts): the months their days fall in.
+ *    A maze its park lists under Halloween runs only then, which is the
+ *    statement the other two sources guess at;
+ * 2. the resolved month list, curated before detected;
+ * 3. failing that, the month of `seasonOutSince` — the last park-local day the
  *    detector saw the ride running, which is the only thing a flagged ride
  *    with no months can say about itself.
  *
- * Null when neither exists. 633 seasonal rows are in that state, and the rule
+ * Null when none exists. 633 seasonal rows are in that state, and the rule
  * refuses them: "seasonal, and we do not know when" is not evidence of
  * Halloween, and guessing here would file every winter-closed water slide as a
  * maze.
@@ -241,9 +276,14 @@ export function mazeSeasonEvidenceMonths(
   facts: Pick<
     ResolvedCuratedFacts,
     "isSeasonal" | "seasonMonths" | "seasonOutSince"
-  >,
+  > &
+    Partial<Pick<ResolvedCuratedFacts, "seasonBindings">>,
 ): number[] | null {
   if (!facts.isSeasonal) return null;
+  if (facts.seasonBindings && facts.seasonBindings.length > 0) {
+    const months = bindingMonths(facts.seasonBindings);
+    return months.length > 0 ? months : null;
+  }
   if (facts.seasonMonths && facts.seasonMonths.length > 0) {
     return [...facts.seasonMonths];
   }
@@ -279,7 +319,8 @@ export function isMazeByRule(
   facts: Pick<
     ResolvedCuratedFacts,
     "name" | "isSeasonal" | "seasonMonths" | "seasonOutSince"
-  >,
+  > &
+    Partial<Pick<ResolvedCuratedFacts, "seasonBindings">>,
   halloweenMonths: readonly number[] = [],
 ): boolean {
   const label = mazeNameLabel(facts.name);
@@ -292,7 +333,12 @@ export function isMazeByRule(
   return evidence.some((month) => window.has(month));
 }
 
-/** A row as the rule's query loads it, before the curated facts are resolved. */
+/**
+ * A row as the rule's query loads it, before the curated facts are resolved.
+ * `seasonBindings` is the subquery `Attraction.seasonBindings` reads
+ * (`attractionSeasonBindingsSql`), so the row resolves as the entity does:
+ * the precedence of `attractionIsSeasonal` and `attractionIsSeasonBound`.
+ */
 export interface MazeRuleRow extends CuratedFactsSource {
   id: string;
   parkId: string;

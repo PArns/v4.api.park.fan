@@ -67,10 +67,10 @@ export const CacheKeys = {
   /**
    * One cached calendar month (ym = YYYY-MM). Written/read by the calendar
    * service; evicted by the 12h calendar warmup (includeHourly variant the
-   * frontend reads is "none").
+   * frontend reads is "none"). `v2`: a curated closure closes a day.
    */
   calendarMonth: (parkId: string, ym: string, includeHourly: string): string =>
-    `calendar:month:${parkId}:${ym}:${includeHourly}`,
+    `calendar:month:v2:${parkId}:${ym}:${includeHourly}`,
 
   /**
    * Precomputed best-days snapshot (rolling today → +90d projection of the
@@ -78,8 +78,9 @@ export const CacheKeys = {
    * serves it with a single GET and never triggers a lazy ML rebuild. TTL is
    * set > the warmup cadence so the snapshot survives between refreshes (and
    * across deploys, since Redis persists). Written by BestDaysService.
+   * `v2`: the calendar's, a curated closure closes a day.
    */
-  bestDays: (parkId: string): string => `best-days:${parkId}`,
+  bestDays: (parkId: string): string => `best-days:v2:${parkId}`,
 
   /**
    * Whole route answers kept in Redis because a keyed forecast leaves the API
@@ -87,6 +88,7 @@ export const CacheKeys = {
    * Each has a `resp:vN` segment of its own: `plan-day:h5:v2:*` already lives
    * under `plan-day:`, and a pattern for these must not take it along.
    * `plan-day:resp:v2`: a ride a park season binds leaves the days outside it.
+   * `calendar:resp:v2`: a curated closure closes a day.
    */
   calendarResponse: (
     parkId: string,
@@ -95,9 +97,9 @@ export const CacheKeys = {
     includeHourly: string,
     withHolidays: boolean,
   ): string =>
-    `calendar:resp:v1:${parkId}:${from}:${to}:${includeHourly}:${withHolidays ? "h" : "-"}`,
+    `calendar:resp:v2:${parkId}:${from}:${to}:${includeHourly}:${withHolidays ? "h" : "-"}`,
   calendarResponsePattern: (parkId: string): string =>
-    `calendar:resp:v1:${parkId}:*`,
+    `calendar:resp:v2:${parkId}:*`,
   planDayResponse: (parkId: string, date: string): string =>
     `plan-day:resp:v2:${parkId}:${date}`,
   planDayResponsePattern: (parkId: string): string =>
@@ -149,7 +151,7 @@ export const CacheKeys = {
 
   /** Glob matching the calendar month cache of a park. */
   calendarMonthPattern: (parkId: string): string =>
-    `calendar:month:${parkId}:*`,
+    `calendar:month:v2:${parkId}:*`,
 
   // ---------------------------------------------------------------------------
   // Park-scoped analytics/derived caches. These mirror keys still built inline

@@ -342,6 +342,9 @@ describe("Paris", () => {
     ]);
     expect(answer.parksLeftOut.map((p) => p.park)).toEqual([DLP, DAW]);
     expect(answer.meta.warnings).toEqual(["resort_left_out"]);
+    // The stays tie on the one park the plan keeps: the Disney hotels' reach
+    // to the two parks it left out no longer wins them the weekend.
+    expect(answer.meta.stays?.map((s) => s.base)).toEqual([ASTERIX]);
     // With the arrival day a park day, Disney has its day and the code goes.
     const withArrival = regionPlan(
       REGION,
@@ -353,5 +356,33 @@ describe("Paris", () => {
       },
     );
     expect(withArrival.meta.warnings).toBeUndefined();
+  });
+
+  it("gives Disneyland Park a second day when Parc Astérix is closed the whole trip", () => {
+    // 12–14 March 2027, a park on arrival and departure: three park days and
+    // two parks open. A park closed on every day takes none of them.
+    const answer = regionPlan(
+      REGION,
+      {
+        from: "2027-03-12",
+        to: "2027-03-14",
+        arrival: "park",
+        departure: "park",
+      },
+      TODAY,
+      (slug, _date, cell) => {
+        if (slug !== ASTERIX) return;
+        cell.status = "CLOSED";
+        cell.crowdLevel = "closed";
+        delete cell.opensAt;
+        delete cell.closesAt;
+      },
+    );
+    expect(answer.meta.split).toEqual([{ slug: DLP, visits: 2, auto: true }]);
+    expect(answer.days.map((d) => d.parks.map((p) => p.slug))).toEqual([
+      [DLP],
+      [DAW],
+      [DLP],
+    ]);
   });
 });

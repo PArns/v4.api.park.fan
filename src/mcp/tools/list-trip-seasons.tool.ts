@@ -18,7 +18,7 @@ export const listTripSeasonsTool = defineMcpTool({
     "maintenance windows, newest start first. Each with its id, park, kind, name, range, the " +
     "single dates when not every day, status, whether it needs its own ticket, price, hours, " +
     "links, source and note. Filter by year (seasons overlapping it), kind, status, park id or " +
-    "trip region. The ids are what update_trip_season and delete_trip_season take.",
+    "trip region. The ids are what update_trip_season, delete_trip_season and bind_ride_seasons take.",
   input: {
     year: z
       .number()

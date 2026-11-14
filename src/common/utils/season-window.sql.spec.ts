@@ -1,4 +1,9 @@
-import { attractionIsOutOfSeason } from "./season-window.sql";
+import {
+  attractionIsOutOfSeason,
+  attractionIsSeasonal,
+  attractionIsSeasonBound,
+  attractionSeasonPausesSql,
+} from "./season-window.sql";
 import { SOURCE_SILENT_DAYS } from "./source-absent-status.util";
 import { LIVE_STATS_SQL } from "../../discovery/discovery.service";
 
@@ -52,6 +57,48 @@ describe("attractionIsOutOfSeason", () => {
     expect(other).toContain("whatever.season_months");
     expect(other).toContain("whatever.curated_is_seasonal");
     expect(other).not.toContain(" a.");
+  });
+});
+
+/**
+ * The inverse binding, `paused_attraction_ids`: the twin of `seasonPauses` in
+ * `resolveCuratedFacts` and `isCurrentlyInSeason`. Pinned on its decisions,
+ * as the binding is above.
+ */
+describe("a season that pauses a ride", () => {
+  const out = flat(attractionIsOutOfSeason("a"));
+
+  it("lists the pausing seasons by the paused list, the binding kinds and not cancelled", () => {
+    const pauses = flat(attractionSeasonPausesSql("a"));
+    expect(pauses).toContain(
+      "bound_season.paused_attraction_ids @> jsonb_build_array(a.id)",
+    );
+    expect(pauses).toContain(
+      "bound_season.kind IN ('halloween', 'christmas', 'winter', 'summer_nights', 'special_event')",
+    );
+    expect(pauses).toContain("bound_season.status <> 'cancelled'");
+    expect(pauses).not.toContain("bound_season.attraction_ids @>");
+  });
+
+  it("gives way to curated months and a curated false, as the binding does", () => {
+    expect(out).toContain(
+      "(NOT (a.curated_is_seasonal IS FALSE OR jsonb_array_length(COALESCE(a.curated_season_months, '[]'::jsonb)) > 0) AND EXISTS (SELECT 1 FROM park_seasons bound_season WHERE (bound_season.park_id = a.\"parkId\" AND bound_season.paused_attraction_ids @>",
+    );
+  });
+
+  it("closes a ride on the pausing days, whatever a binding says", () => {
+    expect(out).toMatch(
+      /WHEN \(NOT .*attraction_ids @>.*\) OR \(NOT .*paused_attraction_ids @>.*\) THEN \(\(NOT .*\) AND NOT EXISTS .*\) OR \(\(NOT .*paused_attraction_ids @>.*\) AND EXISTS \(SELECT 1 FROM park_seasons bound_season WHERE .*paused_attraction_ids @>.* AND bound_season.start_date <= .*\)\)/,
+    );
+  });
+
+  it("makes a paused ride seasonal and counts it as decided by a season", () => {
+    expect(flat(attractionIsSeasonal("a"))).toMatch(
+      /WHEN NOT .* AND \(.*attraction_ids @>.* OR .*paused_attraction_ids @>.*\) THEN TRUE/,
+    );
+    expect(flat(attractionIsSeasonBound("a"))).toContain(
+      "paused_attraction_ids @>",
+    );
   });
 });
 

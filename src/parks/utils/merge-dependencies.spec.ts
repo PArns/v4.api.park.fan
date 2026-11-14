@@ -1828,8 +1828,14 @@ describe("migrateScheduleEntries", () => {
       await remapSeasonAttractionIds(manager, WINNER, LOSER);
 
       const update = manager.query.mock.calls[2];
-      expect(update[0]).toMatch(/^UPDATE park_seasons SET attraction_ids/);
-      expect(update[1]).toEqual([JSON.stringify([WINNER, LOSER_2]), "s1"]);
+      expect(update[0]).toMatch(
+        /^UPDATE park_seasons\s+SET attraction_ids = \$1::jsonb, paused_attraction_ids = \$2::jsonb/,
+      );
+      expect(update[1]).toEqual([
+        JSON.stringify([WINNER, LOSER_2]),
+        null,
+        "s1",
+      ]);
     });
 
     it("stores NULL, not [], when nothing is left", async () => {
@@ -1838,7 +1844,28 @@ describe("migrateScheduleEntries", () => {
         .mockResolvedValueOnce([]);
       // The winner is missing from the live set (mock), so the id is dropped.
       await remapSeasonAttractionIds(manager, WINNER, LOSER);
-      expect(manager.query.mock.calls[2][1]).toEqual([null, "s1"]);
+      expect(manager.query.mock.calls[2][1]).toEqual([null, null, "s1"]);
+    });
+
+    it("rewrites the paused list too, and leaves no ride in both lists", async () => {
+      manager.query
+        .mockResolvedValueOnce([
+          {
+            id: "s1",
+            attraction_ids: [WINNER],
+            paused_attraction_ids: [LOSER, OTHER],
+          },
+        ])
+        .mockResolvedValueOnce([{ id: WINNER }, { id: OTHER }]);
+      await remapSeasonAttractionIds(manager, WINNER, LOSER);
+      expect(manager.query.mock.calls[0][0]).toContain(
+        "jsonb_exists(paused_attraction_ids, $1)",
+      );
+      expect(manager.query.mock.calls[2][1]).toEqual([
+        JSON.stringify([WINNER]),
+        JSON.stringify([OTHER]),
+        "s1",
+      ]);
     });
 
     it("leaves a season that ParkSeasonService accepts on the next edit", async () => {

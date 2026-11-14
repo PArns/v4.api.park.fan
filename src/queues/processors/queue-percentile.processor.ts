@@ -12,6 +12,10 @@ import {
   selectMazeRows,
 } from "../../attractions/utils/maze-rule";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+import {
+  attractionSeasonBindingsSql,
+  attractionSeasonPausesSql,
+} from "../../common/utils/season-window.sql";
 import { MEASURED_OPERATION_MAX_FEED_AGE_MINUTES } from "../../parks/utils/measured-operation.gate";
 import { SOURCE_SILENT_DAYS } from "../../common/utils/source-absent-status.util";
 import {
@@ -749,7 +753,10 @@ export class QueuePercentileProcessor {
    * one — the trap `resolveCuratedFacts` exists to close. The whole unjudged
    * catalogue is 7,531 rows of ten columns (2026-10-06), which is nothing
    * beside the hypertable scans above, and narrowing it in SQL would mean
-   * resolving seasonality a second time in a second language.
+   * resolving seasonality a second time in a second language. The one thing
+   * read in SQL is which park seasons bind a row (`attractionSeasonBindingsSql`,
+   * the entity's own `seasonBindings`); `resolveCuratedFacts` weighs them as
+   * `attractionIsSeasonal` and `attractionIsSeasonBound` do.
    *
    * `attraction_kind IS NULL` is in the SELECT, in the filter and in the
    * UPDATE. The nightly job is not the only writer here — an editor can be in
@@ -775,7 +782,11 @@ export class QueuePercentileProcessor {
               a.curated_season_months  AS "curatedSeasonMonths",
               -- Cast to text so the rule reads a park-local 'YYYY-MM-DD'
               -- whatever the driver would have made of a date column.
-              a.season_out_since::text AS "seasonOutSince"
+              a.season_out_since::text AS "seasonOutSince",
+              -- The park seasons binding and pausing the row, as the entity
+              -- loads them: a bound ride is seasonal on its season's days.
+              (${attractionSeasonBindingsSql("a")}) AS "seasonBindings",
+              (${attractionSeasonPausesSql("a")}) AS "seasonPauses"
          FROM attractions a
         WHERE a.attraction_kind IS NULL`,
     );

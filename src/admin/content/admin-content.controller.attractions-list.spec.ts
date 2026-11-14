@@ -12,7 +12,7 @@ function aRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function build(rows: unknown[]) {
+function build(rows: unknown[], parks: object = {}) {
   const qb: Record<string, jest.Mock> = {};
   for (const method of ["where", "andWhere", "orderBy"]) {
     qb[method] = jest.fn(() => qb);
@@ -23,7 +23,7 @@ function build(rows: unknown[]) {
     findIdsWithProfile: jest.fn(async () => new Set<string>()),
   };
   const controller = new AdminContentController(
-    {} as never,
+    parks as never,
     attractions as never,
     {} as never,
     rideProfiles as never,
@@ -53,6 +53,40 @@ describe("AdminContentController.listAttractions", () => {
       indoorOutdoor: "covered_queue",
       attractionKind: "TRANSPORT",
     });
+  });
+
+  it("names the season that binds a ride and the one that pauses it, on the park's today", async () => {
+    const PARK = "11111111-1111-4111-8111-111111111111";
+    const season = {
+      id: "s1",
+      kind: "winter",
+      name: "Wintertraum",
+      status: "confirmed",
+      startDate: "2026-11-20",
+      endDate: "2027-01-18",
+      dates: null,
+    };
+    const parks = {
+      findOne: jest.fn(async () => ({ id: PARK, timezone: "Europe/Berlin" })),
+    };
+    const controller = build(
+      [
+        aRow({ id: "rink", seasonBindings: [season] }),
+        aRow({ id: "river-quest", seasonPauses: [season] }),
+        aRow({ id: "taron" }),
+      ],
+      parks,
+    );
+
+    const { attractions } = await controller.listAttractions(PARK);
+
+    expect(parks.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: PARK } }),
+    );
+    expect(attractions[0].boundSeason).toEqual(season);
+    expect(attractions[1].pausedBySeason).toEqual(season);
+    expect(attractions[2]).not.toHaveProperty("boundSeason");
+    expect(attractions[2]).not.toHaveProperty("pausedBySeason");
   });
 
   it("reports null for a ride nobody has checked, not false", async () => {

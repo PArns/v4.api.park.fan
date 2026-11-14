@@ -25,7 +25,11 @@ import { Brackets, Repository } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../../parks/entities/park.entity";
 import { ParkSeason } from "../../parks/entities/park-season.entity";
-import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import {
+  boundSeasonOf,
+  resolveCuratedFacts,
+} from "../../attractions/utils/curated-attraction-facts.util";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import {
   CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
@@ -502,9 +506,16 @@ export class AdminContentController {
     }
 
     const rows = await qb.getMany();
-    const withProfile = await this.rideProfiles.findIdsWithProfile(
-      rows.map((row) => row.id),
-    );
+    const [withProfile, park] = await Promise.all([
+      this.rideProfiles.findIdsWithProfile(rows.map((row) => row.id)),
+      // The park's today decides which bound or pausing season a row shows.
+      isCanonicalUuid(parkId)
+        ? this.parks.findOne({
+            where: { id: parkId },
+            select: { id: true, timezone: true },
+          })
+        : null,
+    ]);
 
     return {
       total: rows.length,
@@ -522,6 +533,8 @@ export class AdminContentController {
           isSeasonal: resolved.isSeasonal,
           seasonMonths: resolved.seasonMonths,
           seasonalityCurated: resolved.seasonalityCurated,
+          // As the public payload has them: `boundSeason`, `pausedBySeason`.
+          ...boundSeasonOf(resolved, park?.timezone),
           retiredAt: attraction.retiredAt,
           // Raw, not resolved: the fast-pass table edits these columns, and a
           // resolved name would show the park's brand in every row and write

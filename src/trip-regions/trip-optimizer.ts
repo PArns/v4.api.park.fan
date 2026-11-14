@@ -24,6 +24,7 @@ import { dayKindsOf, type TicketDayKind } from "./tickets";
 import { endsHolidays, isPlainWeekday } from "./trip-calendar.util";
 import {
   fewestTravelDays,
+  keptReachMinutes,
   permutations,
   stayPlans,
   unreachableParks,
@@ -739,13 +740,23 @@ function tiesWith(
   );
 }
 
+/** The reach of the parks a structure places, from its stay plan's bases ({@link keptReachMinutes}). */
+function rowsReach(stay: StayPlan, rows: readonly Row[]): number {
+  return keptReachMinutes(
+    stay,
+    rows.flatMap((row) => row.units.map((u) => u.slug)),
+  );
+}
+
 /**
  * The result kept from the solved structures: the cheapest, or among the
- * stay plans that tie it ({@link tiesWith}) the one closer to the trip's
- * parks ({@link StayPlan.reachMinutes}), the cheaper of two as close. So a
+ * stay plans that tie it ({@link tiesWith}) the one closer to the parks it
+ * places ({@link keptReachMinutes}), the cheaper of two as close. So a
  * Disneyland Park and Parc Astérix trip whose day-trip minutes land on one
- * park or the other stays at the Disney hotels, not in central Paris. A
- * region without bases keeps its cheapest, the first of equals, as always.
+ * park or the other stays at the Disney hotels, not in central Paris, and a
+ * weekend that keeps only Parc Astérix is not slept at the Disney hotels for
+ * the parks it left out. A region without bases keeps its cheapest, the first
+ * of equals, as always.
  */
 function keptResult(
   cheapest: SearchResult,
@@ -756,13 +767,9 @@ function keptResult(
     if (r === kept || !tiesWith(r.stay, r.solution.objective, cheapest)) {
       continue;
     }
-    const a = r.stay as StayPlan;
-    const b = kept.stay as StayPlan;
-    if (
-      a.reachMinutes < b.reachMinutes ||
-      (a.reachMinutes === b.reachMinutes &&
-        r.solution.objective < kept.solution.objective)
-    ) {
+    const a = rowsReach(r.stay as StayPlan, r.rows);
+    const b = rowsReach(kept.stay as StayPlan, kept.rows);
+    if (a < b || (a === b && r.solution.objective < kept.solution.objective)) {
       kept = r;
     }
   }
@@ -2188,10 +2195,11 @@ class TripOptimizer {
         ) {
           break;
         }
-        const kept = keptResult(best, solved).stay as StayPlan;
+        const kept = keptResult(best, solved);
         if (
-          s.stay.moves !== kept.moves ||
-          s.stay.reachMinutes >= kept.reachMinutes
+          s.stay.moves !== (kept.stay as StayPlan).moves ||
+          rowsReach(s.stay, s.rows) >=
+            rowsReach(kept.stay as StayPlan, kept.rows)
         ) {
           continue;
         }
@@ -3693,13 +3701,15 @@ export const LONG_TRIP_DAYS = 8;
  * How many more visits a trip has room for once the rest days the rest rule
  * keeps are set aside: the days a park can go on (not a free arrival or
  * departure day, not a pinned rest day), less the visits, less the rest days.
+ * A park closed on every one of those days takes none, so its visits are not
+ * counted (Parc Astérix in March leaves Disneyland Park its second day).
  * `rest=auto` keeps a run of park days to four and, on a trip of eight days or
  * more, one rest day per five days (pinned rest days count); `rest=max:n` keeps
  * the runs to n; `rest=none` keeps none. `split=auto` gives this room to
  * second visits (`trip-plan.assembly.ts`).
  */
 export function extraVisitRoom(input: PlanInput): number {
-  const { days, options, parks } = input;
+  const { days, options, cells } = input;
   const n = days.length;
   const lockedDates = new Set(
     options.locks.filter((l) => l.target !== "rest").map((l) => l.date),
@@ -3715,6 +3725,13 @@ export function extraVisitRoom(input: PlanInput): number {
     return !free || lockedDates.has(d.date);
   });
   const available = open.filter(Boolean).length;
+  // The optimizer's `no_open_day`: a park closed on every day a park can go
+  // on. A missing cell reads as UNKNOWN, as everywhere in the plan.
+  const openParks = input.parks.filter((p) =>
+    days.some(
+      (d, i) => open[i] && cells[p.slug]?.[d.date]?.status !== "CLOSED",
+    ),
+  );
   const limit =
     options.rest.mode === "auto"
       ? DEFAULT_MAX_STREAK
@@ -3736,14 +3753,15 @@ export function extraVisitRoom(input: PlanInput): number {
     options.rest.mode === "auto" && n >= LONG_TRIP_DAYS
       ? Math.max(0, Math.floor(n / 5) - restDates.size)
       : 0;
-  const visits = parks.reduce((sum, p) => sum + p.visits, 0);
-  // A region with bases: the days that can only be a move take no visit.
+  const visits = openParks.reduce((sum, p) => sum + p.visits, 0);
+  // A region with bases: the days that can only be a move take no visit. The
+  // stays are the optimizer's, which reach every chosen park, open or not.
   const travel = options.stays
     ? fewestTravelDays(
         stayPlans(
           options.stays,
           n,
-          parks.map((p) => p.slug),
+          input.parks.map((p) => p.slug),
         ),
       )
     : 0;
