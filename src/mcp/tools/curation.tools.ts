@@ -5,10 +5,11 @@ import { z } from "zod";
 import { defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
 import {
   asToolRefusal,
+  confirmInput,
   dryRunInput,
   routeBody,
-  runAdminRoute,
-} from "../admin-route";
+} from "../mcp-write";
+import { runAdminRoute } from "../admin-route";
 import { AdminController } from "../../admin/admin.controller";
 import { AdminAuditService } from "../../admin/auth/admin-audit.service";
 import { AdminContentController } from "../../admin/content/admin-content.controller";
@@ -601,11 +602,7 @@ export const removeRedirectTool = defineMcpTool({
   writes: "delete",
   input: {
     fromPath: FROM_PATH,
-    confirm: z
-      .literal(true)
-      .describe(
-        "Must be true: the redirect is removed. Send it only when the person asked",
-      ),
+    confirm: confirmInput("the redirect is removed and the path is dead again"),
   },
   async handler({ fromPath }, ctx) {
     await runAdminRoute(

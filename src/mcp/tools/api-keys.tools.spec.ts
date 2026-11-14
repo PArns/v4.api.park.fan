@@ -1,6 +1,5 @@
 import { NotFoundException } from "@nestjs/common";
 import { AdminApiKeysController } from "../../api-keys/admin-api-keys.controller";
-import { CreateApiKeyDto } from "../../api-keys/dto/create-api-key.dto";
 import { McpToolError } from "../mcp-tool";
 import {
   apiKeysTool,
@@ -88,7 +87,10 @@ describe("API key tools", () => {
     );
     expect(keys.create).toHaveBeenCalledWith(
       ctx.admin,
-      expect.any(CreateApiKeyDto),
+      expect.objectContaining({
+        name: "Coaster club",
+        usage: "non-commercial",
+      }),
     );
     expect(answer).toMatchObject({ key: "pfk_secret" });
     // The controller writes `api-key.create` itself.

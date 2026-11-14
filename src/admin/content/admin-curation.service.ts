@@ -931,6 +931,25 @@ export class AdminCurationService {
    * instead of immediately, which is a delay, not a lie.
    */
   async publish(parkId: string, attractionIds: string[]): Promise<void> {
+    await this.evictPark(parkId, attractionIds);
+    await this.revalidateParks();
+  }
+
+  /**
+   * {@link publish} for a write across several parks, such as a season
+   * import: every park leaves Redis first, then the frontend is told once
+   * rather than once per park.
+   */
+  async publishParks(parkIds: string[]): Promise<void> {
+    if (parkIds.length === 0) return;
+    for (const parkId of new Set(parkIds)) await this.evictPark(parkId, []);
+    await this.revalidateParks();
+  }
+
+  private async evictPark(
+    parkId: string,
+    attractionIds: string[],
+  ): Promise<void> {
     try {
       await invalidateParkCaches(this.redis, parkId, attractionIds);
     } catch (error) {
@@ -942,7 +961,9 @@ export class AdminCurationService {
         }`,
       );
     }
+  }
 
+  private async revalidateParks(): Promise<void> {
     await this.revalidation.revalidateTags(["parks", "attractions"]);
 
     try {

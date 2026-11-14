@@ -265,9 +265,36 @@ SELECT p.slug, a.slug, a.rcdb_id
 ### Seasons
 
 `park_seasons` is curated only, because nothing derives a season: a Halloween night and a late Saturday
-produce the same schedule row. Editors write it through `POST /v1/admin/content/parks/:id/seasons` and
-`PATCH` / `DELETE …/content/seasons/:id`; an empty `dates` list is stored as `null` (every day between
-the bounds). The fields and what a client reads: [park seasons](../frontend/park-seasons.md).
+produce the same schedule row. The admin's routes and the MCP server's season tools
+([writing](mcp.md#writing)) both write through `AdminSeasonService`, so every write is audited and
+published the same way whoever made it. What a client reads: [park seasons](../frontend/park-seasons.md).
+
+| Method | Path under `/v1/admin/content/`                                         | Role   | Takes → answers                                                                                                                                                                                                                                         |
+| ------ | ----------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `seasons?kind=&status=&year=&current=&parkId=&region=&limit=&offset=`   | viewer | `{ total, seasons }`, each a season with `park: { id, name, slug }`, newest start first; `year`: overlapping it; `current=true`: running today; `parkId` a uuid (400 otherwise); `region` a trip region's parks (404 for an unknown one); `limit` 100, at most 500 |
+| GET    | `seasons/:id`                                                           | viewer | one season with its park; 404                                                                                                                                                                                                                           |
+| POST   | `parks/:id/seasons`                                                     | editor | the body below → 201, the season; audited `park.season.create`                                                                                                                                                                                         |
+| PATCH  | `seasons/:id`                                                           | editor | any of its fields, `null` clears an optional one → the season; the merged row is checked whole; audited `park.season.update` (range, status and dates before and after)                                                                                |
+| DELETE | `seasons/:id`                                                           | editor | 204; audited `park.season.delete` with the whole row, since no undo covers it                                                                                                                                                                           |
+
+The body (`SeasonWriteDto`, `SeasonPatchDto`, then `ParkSeasonService`); every refusal is a 400 whose
+message names the field, and a field the DTO does not list is refused too:
+
+- `kind`, required on create: `halloween`, `christmas`, `summer_nights`, `special_event`, `opening`,
+  `closure`, `maintenance`;
+- `startDate`, `endDate`, required on create: real `YYYY-MM-DD` dates, the end not before the start;
+- `name`: at most 200, trimmed; null shows the frontend's label for the kind;
+- `dates`: at most 366 `YYYY-MM-DD` dates inside the range, stored sorted and once each; an empty
+  list is stored as `null`, every day between the bounds;
+- `status`: `confirmed`, `announced` (the default), `expected`, `cancelled`;
+- `separateTicket`: a boolean, false by default;
+- `priceFrom`: at least 0, stored with two decimals, and then `priceCurrency` is required: three
+  letters, stored upper case;
+- `opensAt`, `closesAt`: `HH:MM` from 00:00 to 23:59, a midnight close is 00:00;
+- `attractionIds`: rides of this park, none of another;
+- `url`, `sourceUrl`: full http(s) addresses, at most 2,000;
+- `confirmedAt`: an ISO 8601 timestamp;
+- `note`: at most 4,000.
 
 ## Names are display names
 

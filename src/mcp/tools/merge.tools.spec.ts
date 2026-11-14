@@ -3,7 +3,7 @@ import { AdminController } from "../../admin/admin.controller";
 import { AdminCurationService } from "../../admin/content/admin-curation.service";
 import { McpToolError } from "../mcp-tool";
 import { mergeAttractionsTool, mergeParksTool } from "./merge.tools";
-import { adminContext, callAs } from "./__fixtures__/admin-context";
+import { adminContext, callAs, resultText } from "./__fixtures__/admin-context";
 
 const WINNER = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const LOSER = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
@@ -125,9 +125,11 @@ describe("merge tools", () => {
     });
   });
 
-  it("is refused to an editor", async () => {
+  it("is refused to an editor's write token, which no scope lifts to owner", async () => {
     for (const tool of [mergeAttractionsTool, mergeParksTool]) {
-      expect((await callAs(tool, "editor", {})).isError).toBe(true);
+      const result = await callAs(tool, "editor", {});
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toMatch(/no token scope reaches/);
     }
   });
 });

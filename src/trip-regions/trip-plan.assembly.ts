@@ -557,8 +557,10 @@ export function planInput(
   const configs = new Map(region.parks.map((p) => [p.slug, p]));
   const legs = buildLegs(region);
   const slugs = q.parks.map((p) => p.slug);
+  // The parks left unchosen are priced only on the plan's spare days.
+  const candidates = region.parks.filter((p) => !slugs.includes(p.slug));
   const cells: PlanInput["cells"] = {};
-  for (const s of slugs) {
+  for (const s of [...slugs, ...candidates.map((p) => p.slug)]) {
     cells[s] = {};
     for (const day of calendar.days) {
       const c = day.parks[s];
@@ -597,6 +599,14 @@ export function planInput(
         group: config?.group ?? "",
         type: config?.type ?? "theme_park",
       };
+    }),
+    ...(candidates.length > 0 && {
+      candidates: candidates.map((p) => ({
+        slug: p.slug,
+        visits: 1,
+        group: p.group,
+        type: p.type,
+      })),
     }),
     cells,
     options: {
@@ -1179,6 +1189,7 @@ export function planResponse(
       orderMatters: plan.totals.orderMatters,
       parkDays: plan.totals.parkDays,
       restDays: plan.totals.restDays,
+      spareDays: plan.totals.spareDays,
       visits: plan.totals.visits,
       ...(plan.totals.moves !== undefined && {
         moves: plan.totals.moves,
@@ -1192,5 +1203,6 @@ export function planResponse(
       plan,
     ),
     ...(plan.ignoredLocks.length > 0 && { ignoredLocks: plan.ignoredLocks }),
+    ...(plan.spareDayParks && { spareDayParks: plan.spareDayParks }),
   };
 }

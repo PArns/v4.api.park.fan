@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
-import { dryRunInput, runAdminRoute } from "../admin-route";
+import { dryRunInput } from "../mcp-write";
+import { runAdminRoute } from "../admin-route";
 import { AdminAssistantController } from "../../assistant/admin-assistant.controller";
 import { AssistantRecordsService } from "../../assistant/assistant-records.service";
 import { FEEDBACK_STATUSES } from "../../assistant/entities/site-feedback.entity";

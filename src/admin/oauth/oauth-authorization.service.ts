@@ -21,7 +21,8 @@ import { AdminAuthService } from "../auth/admin-auth.service";
 import { AdminAuditService } from "../auth/admin-audit.service";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import {
-  DEFAULT_ADMIN_TOKEN_SCOPE,
+  grantableScope,
+  requestedScope,
   type AdminTokenScope,
 } from "../auth/admin-api-token.constants";
 import { generateToken, hashToken } from "../auth/token-hash.util";
@@ -251,7 +252,8 @@ export class OAuthAuthorizationService {
         `Tokens are issued for ${getMcpResourceUrl()} only`,
       );
     }
-    if (single(params, "scope") === null) {
+    const scope = single(params, "scope");
+    if (scope === null) {
       return fail("invalid_scope", "scope was given more than once");
     }
 
@@ -277,9 +279,8 @@ export class OAuthAuthorizationService {
       redirectUriGiven: Boolean(requested),
       codeChallenge: challenge,
       state,
-      // v1 has one scope. Whatever else was asked for is not granted, which
-      // RFC 6749 §3.3 allows; the token response names what was.
-      scope: DEFAULT_ADMIN_TOKEN_SCOPE,
+      // What the consent page shows; the admin may grant another one.
+      scope: requestedScope(scope),
       createdAt: now,
       expiresAt: now + PENDING_REQUEST_TTL_SECONDS * 1000,
       startedFrom,
@@ -319,10 +320,15 @@ export class OAuthAuthorizationService {
     };
   }
 
-  /** The admin said yes: a single-use code, bound to the account, for the client. */
+  /**
+   * The admin said yes: a single-use code, bound to the account, for the
+   * client. `scope` is the admin's choice on the consent page (absent: what
+   * the client asked for), narrowed to what the account may hand out.
+   */
   async approve(
     id: string,
     admin: AdminPrincipal,
+    chosen?: AdminTokenScope,
   ): Promise<{ redirectTo: string }> {
     if (!admin.userId) throw new NotFoundException("No such pending request");
     const pending = await this.readPending(id, true);
@@ -330,6 +336,7 @@ export class OAuthAuthorizationService {
     if (!client)
       throw new NotFoundException("The client is no longer registered");
 
+    const scope = grantableScope(chosen ?? pending.scope, admin.role);
     const code = generateToken();
     const stored: StoredCode = {
       approvedAt: Date.now(),
@@ -338,7 +345,7 @@ export class OAuthAuthorizationService {
       redirectUriGiven: pending.redirectUriGiven,
       codeChallenge: pending.codeChallenge,
       userId: admin.userId,
-      scope: pending.scope,
+      scope,
     };
     await this.redis.set(
       CODE_PREFIX + hashToken(code),
@@ -356,7 +363,7 @@ export class OAuthAuthorizationService {
       entityLabel: client.clientName,
       after: {
         redirectHost: new URL(pending.redirectUri).host,
-        scope: pending.scope,
+        scope,
         startedFrom: pending.startedFrom ?? null,
       },
     });

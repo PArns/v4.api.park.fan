@@ -266,7 +266,7 @@ describe("plan first: the suggestion", () => {
       product: "uor-date-based",
       days: 3,
     });
-    // A 14-day trip: the UK tickets as alternatives, UK and Ireland only.
+    // A 14-day trip: the 14-day tickets as alternatives, with where they are sold.
     expect(disney.alternatives).toContainEqual({
       product: "wdw-uk-14-day-magic",
       days: 14,
@@ -306,6 +306,39 @@ describe("plan first: the suggestion", () => {
     } as unknown as OptimizedPlan).suggestions[0];
     expect(epic).toMatchObject({ product: "uor-epic-1-day", days: 1 });
     expect(epic.hopper).toBeUndefined();
+  });
+
+  it("suggests a ticket sold abroad where it fits the visits best", () => {
+    const run = (slug: string, count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        parkDay(addIsoDays(FROM, i), i % 2 ? slug : DISNEY[i % 4]),
+      );
+    // Eleven Disney days: no date-based ticket has them, the UK 14-day one does.
+    const disney = suggest({
+      days: run("epcot", 11),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(disney.map((s) => [s.product, s.days])).toEqual([
+      ["wdw-uk-14-day-magic", 14],
+    ]);
+    // Seven Universal days: one UK 14-day ticket instead of two date-based ones.
+    const universal = suggest({
+      days: Array.from({ length: 7 }, (_, i) =>
+        parkDay(addIsoDays(FROM, i), i % 2 ? USF : IOA),
+      ),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(universal.map((s) => s.product)).toEqual([
+      "uor-uk-three-park-adventure",
+    ]);
+    // Where both fit as well, the operator's own ticket comes first.
+    const week = suggest({
+      days: run("epcot", 7),
+      unplaced: [],
+    } as unknown as OptimizedPlan).suggestions;
+    expect(week.map((s) => [s.product, s.days])).toEqual([
+      ["wdw-date-based", 7],
+    ]);
   });
 
   it("covers a Disney water park with the Plus option's allowance", () => {

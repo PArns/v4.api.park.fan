@@ -534,6 +534,7 @@ export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
     shopUrl: "https://seaworld.com/san-diego/tickets/",
     notes:
       "Attraction Tickets' version: open-dated within the calendar year chosen; the second visit within 7 days of the first; expires in full 7 days after first use.",
+    suggest: 40,
   },
   {
     id: "seaworld-sesame-two-park",

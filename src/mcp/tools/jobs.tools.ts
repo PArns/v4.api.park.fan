@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
-import { dryRunInput, runAdminRoute } from "../admin-route";
+import { dryRunInput } from "../mcp-write";
+import { runAdminRoute } from "../admin-route";
 import { AdminController } from "../../admin/admin.controller";
 import { AdminSearchConsoleController } from "../../search-console/search-console.controller";
 import type { McpToolContext } from "../mcp-tool";

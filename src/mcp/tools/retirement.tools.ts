@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { capped, defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
-import { asToolRefusal, dryRunInput, runAdminRoute } from "../admin-route";
+import { asToolRefusal, dryRunInput } from "../mcp-write";
+import { runAdminRoute } from "../admin-route";
 import { AdminController } from "../../admin/admin.controller";
 import { AdminCurationService } from "../../admin/content/admin-curation.service";
 import {

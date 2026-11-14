@@ -294,9 +294,9 @@ export type RegionTravelConfig =
 
 /**
  * The markets a region's tickets are sold in (`TicketProduct.markets`, a
- * link's `markets`). `home` is sold to anyone at the operator's own shop: what
- * plan first suggests from. Orlando: `us` home, `uk` (UK and Ireland residents
- * only), `intl` (sellers abroad).
+ * link's `markets`), labels that never filter. `home` is the operators' own
+ * shops. Orlando: `us` home, `uk` (shops in the UK and Ireland), `intl`
+ * (sellers elsewhere).
  */
 export interface TicketMarketsConfig {
   home: string;

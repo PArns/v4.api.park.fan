@@ -228,7 +228,8 @@ comes with the planner's three fixes, which he offers in their order; figures fu
 about two months are "estimated from last year" (PAR-1319); in a hurricane or typhoon region the
 storm peak is never the quietest time; `get_trip_region`, `get_trip_days` and
 `get_forecast_accuracy` answer a region's facts, its days at a glance and how sure the forecast is.
-Eight eval cases cover it.
+Eight eval cases cover it. Version 55 calls the UK 14-Day Magic Ticket "sold by UK shops" instead
+of "for UK and Ireland residents": a ticket's market is where it is sold, not who may buy it.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -742,7 +743,8 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   valid dates, the days used, why some go unused, a `.h?` ticket's hopper verdict as "worth
   adding: an evening at EPCOT on …" or "not needed", what to watch), `resortsMixed`, and
   `ticketsToBuy` (plan first's suggestion per resort by name: days, valid dates, extra days, the
-  hopper verdict, the UK alternatives marked "UK/Ireland only", each shop once). Then `totals`
+  hopper verdict, a ticket and an alternative the operators' own shops do not sell marked "sold by
+  UK shops" or "sold by shops abroad", each shop once). Then `totals`
   with what each number means, `notPlaced`, `pinsNotKept`, `loosened`,
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season

@@ -4,16 +4,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as packageJson from "../../package.json";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import { roleAtLeast } from "../admin/auth/entities/admin-user.entity";
 import { McpToolError, type AnyMcpTool, type McpToolContext } from "./mcp-tool";
-import { toolAnnotations } from "./admin-route";
+import { toolAnnotations, toolRefusal } from "./mcp-write";
 import { MCP_TOOLS } from "./tools";
 
 /** A tool answer longer than this is cut; the model is told to narrow the call. */
 export const MAX_TOOL_RESULT_CHARS = 100_000;
 
 const INSTRUCTIONS =
-  "Read-only view of park.fan's admin data: parks and rides with live status, waits and " +
+  "park.fan's admin data: parks and rides with live status, waits and " +
   "outages, page-view popularity, the site statistic and its SEO reports (analytics_*, " +
   "search_report, planner_report for the day planner, trip_planner_report for the trip " +
   "planner, seo_*), the trip planner's server metrics (trip_planner_ops), system and ML " +
@@ -21,7 +20,16 @@ const INSTRUCTIONS =
   "duplicate and retirement candidates, outage statistics, the admin audit log, and Parky's " +
   "chats and the visitors' feedback (assistant_*, site_feedback). Ids are " +
   "UUIDs; find_parks and find_attractions turn names into ids. Timestamps are ISO 8601 and " +
-  "park-local times carry their offset. Nothing here changes data.";
+  "park-local times carry their offset.";
+
+/** Appended for a caller that may only read. */
+const READ_ONLY = " Nothing here changes data.";
+
+/** Appended for a caller whose token may write. */
+const WRITES =
+  " With this token, the tools not marked read-only also write, as an editor does in the " +
+  "admin, through the same checks. Every write is in the audit log under this account. Write " +
+  "only what the person asked for; run a bulk write with dryRun first, and a delete needs confirm.";
 
 /**
  * Builds the MCP server for one request. Stateless: a fresh server per POST,
@@ -38,11 +46,16 @@ export class McpServerFactory {
     admin: AdminPrincipal,
     tools: readonly AnyMcpTool[] = MCP_TOOLS,
   ): McpServer {
+    const visible = this.visibleTools(admin, tools);
     const server = new McpServer(
       { name: "park.fan admin", version: packageJson.version },
-      { instructions: INSTRUCTIONS },
+      {
+        instructions:
+          INSTRUCTIONS +
+          (visible.some((tool) => tool.writes) ? WRITES : READ_ONLY),
+      },
     );
-    for (const tool of this.visibleTools(admin, tools)) {
+    for (const tool of visible) {
       server.registerTool(
         tool.name,
         {
@@ -62,9 +75,7 @@ export class McpServerFactory {
     admin: AdminPrincipal,
     tools: readonly AnyMcpTool[] = MCP_TOOLS,
   ): AnyMcpTool[] {
-    return tools.filter((tool) =>
-      roleAtLeast(admin.role, tool.minRole ?? "viewer"),
-    );
+    return tools.filter((tool) => toolRefusal(tool, admin) === null);
   }
 
   /** Runs one tool call and turns its value or failure into an MCP result. */
@@ -73,9 +84,8 @@ export class McpServerFactory {
     input: Record<string, unknown>,
     admin: AdminPrincipal,
   ): Promise<CallToolResult> {
-    if (!roleAtLeast(admin.role, tool.minRole ?? "viewer")) {
-      return failure(`${tool.name} needs the ${tool.minRole} role`);
-    }
+    const refusal = toolRefusal(tool, admin);
+    if (refusal) return failure(refusal);
     const context: McpToolContext = {
       admin,
       get: (token) => this.moduleRef.get(token, { strict: false }),
@@ -83,9 +93,10 @@ export class McpServerFactory {
     const started = Date.now();
     try {
       const value = await tool.handler(input as never, context);
-      this.logger.debug(
-        `${tool.name} for ${admin.email} in ${Date.now() - started} ms`,
-      );
+      const line = `${tool.name} for ${admin.email} in ${Date.now() - started} ms`;
+      // A write's audit row does not say it came through MCP; this line does.
+      if (tool.writes) this.logger.log(line);
+      else this.logger.debug(line);
       return { content: [{ type: "text", text: serialize(value) }] };
     } catch (error) {
       if (error instanceof McpToolError) return failure(error.message);

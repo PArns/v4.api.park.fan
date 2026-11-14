@@ -42,6 +42,7 @@ import type { AdminPrincipal } from "../auth/admin-principal";
 import { AdminCurationService } from "./admin-curation.service";
 import { AdminRideProfileService } from "./admin-ride-profile.service";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { AdminSeasonService } from "./admin-season.service";
 import {
   attractionFieldViews,
   parkFieldViews,
@@ -90,6 +91,7 @@ export class AdminContentController {
     private readonly rideProfiles: AdminRideProfileService,
     private readonly seasons: ParkSeasonService,
     private readonly audit: AdminAuditService,
+    private readonly seasonAdmin: AdminSeasonService,
   ) {}
 
   // ── field descriptors ─────────────────────────────────────────────────────
@@ -806,36 +808,46 @@ export class AdminContentController {
     summary: "Seasons across every park",
     description:
       "The view that answers 'what is on file for Halloween 2026' — which was " +
-      "previously only answerable by reading the blog post.",
+      "previously only answerable by reading the blog post. Filters: kind, " +
+      "status, year (overlapping it), current, parkId, region (a trip region's " +
+      "parks; 404 for an unknown one).",
   })
   async listSeasons(
     @Query("kind") kind?: string,
     @Query("status") status?: string,
     @Query("year") year?: string,
     @Query("current") current?: string,
+    @Query("parkId") parkId?: string,
+    @Query("region") region?: string,
     @Query("limit") limit?: string,
     @Query("offset") offset?: string,
   ) {
-    const result = await this.seasons.list({
+    return this.seasonAdmin.list({
       kind: kind as never,
       status: status as never,
       year: year ? Number(year) : undefined,
       current: current === "true",
+      parkId: parkId || undefined,
+      region: region || undefined,
       limit: Number(limit) || undefined,
       offset: Number(offset) || undefined,
     });
+  }
+
+  @Get("seasons/:id")
+  @ApiOperation({ summary: "One season, with its park" })
+  @ApiResponse({ status: 404, description: "No such season" })
+  async getSeason(@Param("id") id: string) {
+    const season = await this.seasonAdmin.findOne(id);
     return {
-      total: result.total,
-      seasons: result.seasons.map((season) => ({
-        ...season,
-        park: season.park
-          ? {
-              id: season.park.id,
-              name: resolveCuratedPark(season.park).name,
-              slug: season.park.slug,
-            }
-          : null,
-      })),
+      ...season,
+      park: season.park
+        ? {
+            id: season.park.id,
+            name: resolveCuratedPark(season.park).name,
+            slug: season.park.slug,
+          }
+        : null,
     };
   }
 
@@ -844,67 +856,24 @@ export class AdminContentController {
   @SelfAudited()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Add a season to a park" })
-  async createSeason(
+  createSeason(
     @Param("id") parkId: string,
     @Body() body: SeasonWriteDto,
     @CurrentAdmin() admin: AdminPrincipal,
   ): Promise<ParkSeason> {
-    const season = await this.seasons.create(parkId, body, admin.userId);
-    await this.audit.record({
-      actor: admin,
-      action: "park.season.create",
-      entityType: "park_season",
-      entityId: season.id,
-      entityLabel: `${season.kind} ${season.startDate}`,
-      after: {
-        kind: season.kind,
-        startDate: season.startDate,
-        endDate: season.endDate,
-      },
-      sourceUrl: season.sourceUrl,
-      reason: season.note,
-    });
-    // A season changes the park page, not the ride cards, so only the park's
-    // own caches need dropping.
-    await this.curation.publish(parkId, []);
-    return season;
+    return this.seasonAdmin.create(parkId, body, admin);
   }
 
   @Patch("seasons/:id")
   @AdminMinRole("editor")
   @SelfAudited()
   @ApiOperation({ summary: "Edit a season" })
-  async patchSeason(
+  patchSeason(
     @Param("id") id: string,
     @Body() body: SeasonPatchDto,
     @CurrentAdmin() admin: AdminPrincipal,
   ): Promise<ParkSeason> {
-    const before = await this.seasons.findOne(id);
-    const season = await this.seasons.update(id, body, admin.userId);
-    await this.audit.record({
-      actor: admin,
-      action: "park.season.update",
-      entityType: "park_season",
-      entityId: id,
-      entityLabel: `${season.kind} ${season.startDate}`,
-      before: {
-        kind: before.kind,
-        startDate: before.startDate,
-        endDate: before.endDate,
-        status: before.status,
-        dates: before.dates,
-      },
-      after: {
-        kind: season.kind,
-        startDate: season.startDate,
-        endDate: season.endDate,
-        status: season.status,
-        dates: season.dates,
-      },
-      sourceUrl: season.sourceUrl,
-    });
-    await this.curation.publish(season.parkId, []);
-    return season;
+    return this.seasonAdmin.update(id, body, admin);
   }
 
   @Delete("seasons/:id")
@@ -916,39 +885,7 @@ export class AdminContentController {
     @Param("id") id: string,
     @CurrentAdmin() admin: AdminPrincipal,
   ): Promise<void> {
-    const season = await this.seasons.remove(id);
-    await this.audit.record({
-      actor: admin,
-      action: "park.season.delete",
-      entityType: "park_season",
-      entityId: id,
-      entityLabel: `${season.kind} ${season.startDate}`,
-      // The whole row, not a summary. A season is hand-researched — an outer
-      // range plus, for a Walibi-style Halloween, twenty-odd individually
-      // picked dates and the source they were read from — and the delete is a
-      // hard one that no undo covers. Three fields in the audit row is a
-      // record of the fact that something was destroyed; this is a record of
-      // what, and enough to type it back in.
-      before: {
-        parkId: season.parkId,
-        kind: season.kind,
-        name: season.name,
-        startDate: season.startDate,
-        endDate: season.endDate,
-        dates: season.dates,
-        status: season.status,
-        separateTicket: season.separateTicket,
-        priceFrom: season.priceFrom,
-        priceCurrency: season.priceCurrency,
-        opensAt: season.opensAt,
-        closesAt: season.closesAt,
-        attractionIds: season.attractionIds,
-        url: season.url,
-        sourceUrl: season.sourceUrl,
-        note: season.note,
-      },
-    });
-    await this.curation.publish(season.parkId, []);
+    await this.seasonAdmin.remove(id, admin);
   }
 
   // ── audit ─────────────────────────────────────────────────────────────────

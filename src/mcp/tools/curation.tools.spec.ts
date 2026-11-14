@@ -5,7 +5,6 @@ import { AdminContentController } from "../../admin/content/admin-content.contro
 import { AdminCurationService } from "../../admin/content/admin-curation.service";
 import { AdminRideProfileService } from "../../admin/content/admin-ride-profile.service";
 import { AdminController } from "../../admin/admin.controller";
-import { CurationPatchDto } from "../../admin/content/dto/curation.dto";
 import { McpToolError } from "../mcp-tool";
 import {
   correctParkLocationTool,
@@ -64,7 +63,7 @@ describe("curation tools", () => {
     );
     expect(patchPark).toHaveBeenCalledWith(
       park,
-      expect.any(CurationPatchDto),
+      { fields: { curatedName: "Taron" }, reason: "The operator's page" },
       ctx.admin,
     );
     // The handler writes its own audit row; the tool adds none.

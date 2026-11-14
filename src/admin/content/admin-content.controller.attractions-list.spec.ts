@@ -29,6 +29,7 @@ function build(rows: unknown[]) {
     rideProfiles as never,
     {} as never,
     {} as never,
+    {} as never,
   );
   return controller;
 }

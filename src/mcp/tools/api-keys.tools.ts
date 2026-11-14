@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { capped, defineMcpTool, McpToolError, uuidInput } from "../mcp-tool";
 import type { McpToolContext } from "../mcp-tool";
-import { dryRunInput, routeBody, runAdminRoute } from "../admin-route";
+import { dryRunInput, routeBody } from "../mcp-write";
+import { runAdminRoute } from "../admin-route";
 import { AdminApiKeysController } from "../../api-keys/admin-api-keys.controller";
 import type { ApiKeyItem } from "../../api-keys/api-key.service";
 import {

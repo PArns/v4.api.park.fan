@@ -93,7 +93,7 @@ region route serves the parts a client needs:
 | `weather.heat`, `.storm`, `.notes`     | `weather`                        | heat thresholds, the storm season and the seasons the answers name but do not price ([how a day is priced](#how-a-day-is-priced))                           |
 | `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
-| `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name; `home` is sold to anyone, what plan first suggests from ([tickets](#tickets))                                  |
+| `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name, where each is sold; `home` is the operators' own shops ([tickets](#tickets))                                   |
 | `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
 | a park's `code`                        | `parks[].code`                   | a short curated code for tight views (Tokyo Disneyland `DL`, Tokyo DisneySea `DS`, where initials would give both `TD`); absent: the client derives one  |
 
@@ -842,6 +842,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "parkDays": 7,
     "visits": 8,
     "restDays": 1,
+    "spareDays": 0, // of restDays, those with `spare` (none here: the rule needs 2 December)
   },
   "unplaced": [
     { "slug": "disneys-typhoon-lagoon-water-park", "reason": "no_open_day" },
@@ -862,6 +863,29 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   both are this optimizer on the same days, so the plan for a window's dates leaves out the same
   parks, unless days without published hours, which `/when` prices as if open
   ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **`spare: true`** marks a rest day the visitor did not ask for: not pinned (`rest@date`), and a
+  park on it would still keep the rest rule (with `rest=auto`, no run past four park days; with
+  `rest=none` every rest day is spare). The chosen visits have no use for it. `kind` stays `rest`
+  for the clients that read it; a client words such a day as a free one ("freier Tag") rather than
+  as rest, and may offer it something: a park from `spareDayParks`, the city. `totals.spareDays`
+  counts them among `restDays`. Japan, 14–30 January 2027, Tokyo Disneyland, DisneySea and
+  Universal Studios Japan twice each: 6 park days, 8 rest days, all 8 spare.
+- **`spareDayParks`** lists the region's parks the visitor did not choose that are open on one of
+  the spare days, in the region's order, absent when there is none. Each is `{ park, days }`, `days`
+  its three cheapest spare days at most, cheapest first, `{ date, headlinerWait?, crowdLevel? }`
+  as in `parks[].alternatives`. A day counts only where the plan could put the park: in a region
+  with bases, reached from that day's base and priced with its travel (Fuji-Q from Tokyo is a long
+  day trip); a day the park is `CLOSED` or has no published hours never does. It is a suggestion:
+  the client adds a park by asking for the plan again with it in `parks`, which places it where it
+  fits best.
+
+  ```jsonc
+  "spareDayParks": [
+    { "park": "fuji-q-highland", "days": [{ "date": "2027-01-25", "headlinerWait": 50, "crowdLevel": "moderate" }] },
+    { "park": "legoland-japan", "days": [{ "date": "2027-01-16", "headlinerWait": 25, "crowdLevel": "high" }] },
+  ]
+  ```
+
 - **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
   the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
   `/when`.
@@ -882,8 +906,9 @@ changes. `meta.split` lists `{ slug, visits, auto: true }` for each park that go
 
 **Repeat visits.** A park takes up to three visits, never two on one day, and at least a day apart:
 the search keeps the gap as a rule (branch and bound on the assignment) and breaks it only where no
-placement can, with `adjacent_repeat` on the second day. When the trip has too few days for its visits, a repeat visit is
-dropped before a park loses its only one (`unplaced`, `no_day_left`).
+placement can, with `adjacent_repeat` on the second day. Among placements that tie (below), a park's
+visits go at least three days apart where they can. When the trip has too few days for its visits,
+a repeat visit is dropped before a park loses its only one (`unplaced`, `no_day_left`).
 
 **Rest days.** Every available day the visits do not need is a rest day, and the optimizer puts the
 visits on the quietest days, so the rest days fall on the busiest (`busiest_day_spared`). With
@@ -895,7 +920,25 @@ little as possible, `meta.relaxed` says `streak_relaxed` and each day past the f
 carries `long_streak`; the plan never drops a visit to make a rest day. `rest=max:n` holds n the
 same way. `rest=none` keeps no rule and gives the spare days no reasons. `rest@date` pins a rest
 day; a free arrival or departure day stays `arrival`/`departure`, also when `arrival=park` left it
-empty.
+empty. Which rest days are the visitor's and which are only spare: `spare` (above).
+
+**Spread among ties.** Where several placements tie the cheapest, the plan takes the one that
+spreads the park days best over the trip, and so over each of its stays: no long run of days
+without a park, no park days bunched together, a park's visits a few days apart. A placement ties
+when it costs less than 3 minutes per park day more than the cheapest (`ORDER_MATTERS_MINUTES`,
+the band stay plans tie in, [bases](#bases-a-trip-across-several-cities)) and puts no visit on a day more than 5
+minutes dearer than the cheapest plan's day for it (a park's visits compared cheapest with
+cheapest; 5 minutes is `runner_up_close`): a clearly better day is never given up. The spread
+is the sum of the squares of each run of park days and of each run of days without one (rest,
+travel, the arrival and departure day) over the whole trip, plus, for two visits of a park fewer
+than three days apart, the square of the days missing. Starting from the cheapest, the best move of
+a visit to a free day or swap of two visits is taken while it lowers that sum. It matters most on
+last year's measured days, rounded to 5 minutes and so often equal: Japan's 17-day trip of
+14–30 January 2027 (three parks twice) had Tokyo Disneyland and DisneySea on the 19th and 20th,
+rest from the 21st to the 25th, Disneyland on the 26th and rest again; on the same days it now has
+DisneySea on the 19th, Disneyland on the 22nd and 26th and DisneySea on the 29th, at the same
+waits. `meta.exact` is still the cheapest's proof, and `/when` ranks each window by the plan it
+shows.
 
 **Hop days.** With `ticket=hopper`, `hop=1` and more visits than days, two theme parks one hopper
 ticket covers (Disney's four; Universal Studios and Islands of Adventure, never Epic Universe) whose
@@ -1206,7 +1249,9 @@ summed), never to the base listed first. A Paris trip to Disneyland Park and Par
 minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
 the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
 tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
-bases has no stays and keeps its cheapest plan. `split=auto` keeps the days that can only be a
+bases has no stays and keeps its cheapest plan. Inside the stays kept, the visits take the
+placement that spreads them best among those that tie ([spread among ties](#the-plan-get-v1trip-regionsorlandoplan)),
+over the whole trip and so within each stay. `split=auto` keeps the days that can only be a
 move out of the room it gives second visits. On the test region (four cities, five parks, ten
 days) a plan takes 5–40 ms.
 
@@ -1256,7 +1301,7 @@ A product:
   "id": "uor-date-based", // stable, the contract's key
   "name": "Universal Orlando date-based ticket", // the operator's product name, not translated
   "resort": "universal-orlando", // the group whose operator sells it
-  "markets": ["us", "intl"], // the region's ticketMarkets codes; in Orlando us: sold to anyone; intl: by sellers abroad; uk: UK and Ireland residents only
+  "markets": ["us", "intl"], // where it is sold (ticketMarkets codes); Orlando us: the operators' shops; uk: UK and Irish shops; intl: elsewhere
   "parks": [
     "universal-studios-florida",
     "universal-islands-of-adventure",
@@ -1307,7 +1352,7 @@ A product:
       "seller": "Attraction Tickets",
       "url": "https://www.attractiontickets.com/…",
       "sponsored": true, // an affiliate link: show it as such, rel="sponsored"
-      "markets": ["uk"], // absent: everyone
+      "markets": ["uk"], // the market its seller sells in; absent: every one
       "locales": ["en"], // absent: every locale
     },
   ],
@@ -1318,13 +1363,14 @@ A product:
 
 - **`links`**: where to buy. Exactly one is the operator's own shop (`official: true`), whose url is
   also `shopUrl`. `sponsored: true` marks an affiliate or paid link: the client labels it and links
-  it `rel="sponsored noopener"`. `markets` and `locales` say whom a link is for (a UK seller for
-  `uk`, a German page for `de`); a link without them is for everyone. **The array order is the
-  display order:** among the links that suit the reader equally (those for their locale or market
-  first, then those for everyone), the client shows them in the order given, so the admin decides
-  which link comes first. Every url is `https`. Purchase links show the sellers that the visitor
-  comes from park.fan: the client renders them with `referrerPolicy="origin"` and never with
-  `noreferrer`.
+  it `rel="sponsored noopener"`. `markets` and `locales` say where a link sells and in which
+  language (a UK shop `uk`, a German page `de`); a link without them suits everyone. The client
+  shows a link's market beside it as a label, and every link to every visitor. **The array order
+  is the display order:** among the links that suit the reader equally (those for their locale or
+  market first, then those for everyone), the client shows them in the order given, so the admin
+  decides which link comes first. Every url is `https`. Purchase links show the sellers that the
+  visitor comes from park.fan: the client renders them with `referrerPolicy="origin"` and never
+  with `noreferrer`.
 - **`description`**: an optional sentence about the product, in English, as the admin wrote it.
 
 - **`windowTable`** lists, for each length on sale, the calendar days the ticket may be used in,
@@ -1346,8 +1392,12 @@ A product:
   `blockouts_unchecked`. **`blockoutUrl`**: the operator's page with the blockout calendar (Disney's
   passholder page, which links each pass's calendar). **`reservationUrl`**: where passholders reserve
   their park (Disney's pass).
-- **`markets`** (and a link's) are codes of the region's `ticketMarkets`, whose `home` is sold to
-  anyone at the operator's own shop: `us` in Orlando, the region's own elsewhere.
+- **`markets`** (and a link's) are codes of the region's `ticketMarkets`, whose `home` is the
+  operators' own shops: `us` in Orlando, the region's own elsewhere. **A market says where a ticket
+  is sold, never who may buy it, and filters nothing**: anyone may buy a UK 14-day ticket from a UK
+  shop, plan first suggests from every market, and the client shows the market as a label beside
+  the product or the link ("UK shop"). The catalog has no field for a buyer's condition (a UK
+  address), so no client claims one.
 - **An evening ticket**: **`entryFrom`** (`"15:00"`, park-local) admits only from that time, and
   **`validDays`** (`weekday`, `weekend`, `holiday`; absent: every day) names the kinds of day it is
   used on: Tokyo Disney Resort's Early Evening Passport (from 15:00, weekends and holidays) and
@@ -1457,14 +1507,20 @@ pass, so an Epic visit with a pass is planned plan first and gets an Epic day ti
 
 For each resort with park days on plan first, the plan as made (blocks as today) gets a ticket:
 
-- **`product`**: the shortest product sold to everyone (`markets` has the region's home market,
-  `us` in Orlando), no evening ticket, and on sale at the
-  start that covers the resort's planned days: Disney date-based (with the Plus option where a
-  Disney water park is planned); Universal date-based without Epic Universe for one or two days,
+- **`product`**: among the products with a suggestion rank (`suggest`, the admin's
+  `suggestRank`), whatever their `markets`, the one that covers the most of the resort's next
+  planned days without more than doubling its park days, then the fewest extra days, then the
+  rank; no evening ticket, and on sale at the start: Disney date-based (with the Plus option where
+  a Disney water park is planned); Universal date-based without Epic Universe for one or two days,
   the 1-Day + 1-Day Epic for two days with Epic, date-based from three days; the Epic Universe or
   Volcano Bay 1-day ticket alone; SeaWorld's single day, Two Park, Three-Day Three Park or Four
   Parks for its parks with Busch Gardens and Adventure Island; Discovery Cove (with its sister parks
-  where they are planned); LEGOLAND's 1- or 2-day ticket. Only researched products are suggested:
+  where they are planned); LEGOLAND's 1- or 2-day ticket; and the tickets UK shops sell where they
+  fit better: the 7-Day Magic Ticket for Disney days spread wider than a date-based ticket reaches
+  (7 days in 15), the 14-Day Magic Ticket from 11 Disney days, Universal's 14-day ticket from 7
+  Universal days (one ticket instead of two). A tie goes to the lower rank, which the seed gives
+  the operators' own tickets; a catalog saved before the UK tickets had a rank suggests them once
+  the admin gives them one. Only researched products are suggested:
   Aquatica or Adventure Island alone get the smallest multi-park ticket that covers them, with
   its `extraDays`, because their single-day tickets were not researched.
 - **`days`** are the resort's park days (a hop day is one, an allowance visit none), **`start`** its
@@ -1492,10 +1548,11 @@ For each resort with park days on plan first, the plan as made (blocks as today)
   With the hopper already on for that resort (`ticket=hopper`, or the resort in `hopper=`) the
   comparison is against the plan without it.
 
-- **`alternatives`**: on a trip of 10 days or more, the UK 14-day tickets (`reason: "long_stay"`,
-  `markets: ["uk"]`: UK and Ireland residents only), on a resort's first suggestion; a promotion
-  (the 4-Park Magic Ticket, Universal's 2-Day Park-to-Park + 1 Day Epic) where its dates and caps
-  fit the same visits without extra days (`reason: "promotion"`).
+- **`alternatives`**: on a trip of 10 days or more, the resort's 14-day tickets other than the
+  suggested one (`reason: "long_stay"`, with their `markets`: the UK ones are sold by UK shops), on
+  a resort's first suggestion; a promotion (the 4-Park Magic Ticket, Universal's 2-Day
+  Park-to-Park + 1 Day Epic) where its dates and caps fit the same visits without extra days
+  (`reason: "promotion"`).
 - **`id`**: `suggested:<resort>`, a second ticket for the resort `suggested:<resort>:2`.
 - **`notCoveredBy`**: the ids of the owned tickets of that resort that do not cover these parks
   (Epic Universe with a pass or a 1- or 2-day Universal ticket); absent when there are none.
@@ -1637,7 +1694,8 @@ For each resort with park days on plan first, the plan as made (blocks as today)
 
 The products live in `ticket_products`, one row per product and region, edited under
 `/v1/admin/content/regions/:region/tickets` ([admin endpoints](../admin/endpoints.md)). Reads need any
-admin role, writes `editor`.
+admin role, writes `editor`. The admin MCP server's `list_ticket_products`, `upsert_ticket_product`
+and `archive_ticket_product` call the same `AdminTicketService` ([writing](../admin/mcp.md#writing)).
 
 | Method | Path                      | What                                                              |
 | ------ | ------------------------- | ----------------------------------------------------------------- |
@@ -1791,7 +1849,7 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v3:*`), the plan by its normalized
+hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`), the plan by its normalized
 query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).

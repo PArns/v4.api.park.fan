@@ -3,9 +3,8 @@ import {
   InternalServerErrorException,
 } from "@nestjs/common";
 import { McpToolError } from "./mcp-tool";
-import { routeBody, runAdminRoute, toolAnnotations } from "./admin-route";
+import { runAdminRoute } from "./admin-route";
 import { adminContext } from "./tools/__fixtures__/admin-context";
-import { CurationPatchDto } from "../admin/content/dto/curation.dto";
 
 describe("runAdminRoute", () => {
   it("records the interceptor's row after the handler succeeds", async () => {
@@ -53,45 +52,5 @@ describe("runAdminRoute", () => {
       Promise.reject(new InternalServerErrorException("db at 10.0.0.5")),
     );
     await expect(failure).rejects.toBeInstanceOf(InternalServerErrorException);
-  });
-});
-
-describe("routeBody", () => {
-  it("refuses what the global pipe refuses", async () => {
-    await expect(
-      routeBody(CurationPatchDto, { fields: {}, extra: 1 }),
-    ).rejects.toBeInstanceOf(McpToolError);
-  });
-
-  it("turns a valid body into the DTO", async () => {
-    const body = await routeBody(CurationPatchDto, {
-      fields: { curatedName: "TARON" },
-      reason: "operator page",
-    });
-    expect(body).toBeInstanceOf(CurationPatchDto);
-  });
-});
-
-describe("toolAnnotations", () => {
-  const base = {
-    name: "x",
-    title: "X",
-    description: "",
-    input: {},
-    handler: async () => null,
-  };
-  it("marks a read read-only and a delete destructive", () => {
-    expect(toolAnnotations(base)).toMatchObject({
-      readOnlyHint: true,
-      destructiveHint: false,
-    });
-    expect(toolAnnotations({ ...base, writes: "delete" })).toMatchObject({
-      readOnlyHint: false,
-      destructiveHint: true,
-    });
-    expect(toolAnnotations({ ...base, writes: "add" })).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: false,
-    });
   });
 });

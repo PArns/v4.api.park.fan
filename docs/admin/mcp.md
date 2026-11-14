@@ -3,7 +3,7 @@
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
 site statistic and its SEO reports, the trip planner's usage and its server metrics, Parky's tool calls and his site events, Google Search Console, system and ML health, job queues, data-quality findings,
-duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. Its write tools do what the admin's pages do, through the admin's own routes ([the admin's actions](#the-admins-actions)). A client signs in through an OAuth 2.1 flow whose
+duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. A token with the `admin:write` scope also writes, as an editor does in the admin: park seasons, the trip regions' ticket products and the editor's actions of the other admin pages ([writing](#writing)). A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
 `/.well-known/oauth-*`. The admin login itself: [authentication](authentication.md).
@@ -65,8 +65,11 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
 (what the account page lists and revokes), `admin_api_token_secrets` the SHA-256 of each secret
 (a PAT's one, a grant's access and refresh tokens). Every bearer lookup joins `admin_users`, so:
 
-- **Role = the lesser of the account's role and the token's cap.** v1 has one scope, `admin:read`,
-  capped at `viewer`; an owner's token is a viewer.
+- **Role = the lesser of the account's role and the token's cap.** Two scopes: `admin:read`, capped
+  at `viewer` (an owner's read token is a viewer), and `admin:write`, which reads too and is capped at
+  `editor` (an owner's write token is an editor; a viewer's is a viewer). A token carries one of
+  them; the cap is stored on its row (`role_cap`), so a later change of the scopes' caps does not
+  widen a token issued before it.
 - **A deactivated account is refused at its next request**, revoked or not.
 - **Whatever ends an account's sessions ends its tokens:** deactivation, a password change or reset,
   a second-factor reset, _sign out everywhere_ (`AdminAuthService.signOutEverywhere`). It first sets
@@ -75,7 +78,8 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
   Tokens are issued under a lock on the account's row, so issuing and signing out never interleave.
 - **Tokens reach `/v1/mcp` and nothing else.** `AdminAuthGuard` accepts them only on an endpoint
   marked `@AdminTokenOnly()`, and such an endpoint accepts neither a session nor the shared pass.
-  So a token cannot list, mint or extend tokens, approve a consent or call an admin REST route.
+  So a token cannot list, mint or extend tokens, approve a consent or call an admin REST route; a
+  write token writes only through the tools below.
 
 |            | PAT `pfa_…`                                                          | OAuth access `pfo_…`         | OAuth refresh `pfr_…`              |
 | ---------- | -------------------------------------------------------------------- | ---------------------------- | ---------------------------------- |
@@ -92,9 +96,9 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
 - **Limits:** 25 active PATs per account, counted under the account's row lock; a new grant beyond
   20 active ones revokes the oldest.
 - `last_used_at` is written at most once a minute per token.
-- **Audit rows:** `auth.token.create`, `auth.token.revoke`, `auth.oauth.grant` (at the approval,
-  with the redirect host, the scope and the request's `startedFrom`). A reuse or code replay revokes
-  and logs a warning; it has no actor.
+- **Audit rows:** `auth.token.create` (with the scope), `auth.token.revoke`, `auth.oauth.grant` (at
+  the approval, with the redirect host, the scope granted and the request's `startedFrom`). A reuse
+  or code replay revokes and logs a warning; it has no actor.
 
 ## Tools
 
@@ -175,8 +179,8 @@ the `limit` each takes, series only on request. Strings the collector took from 
 back under `visitorData` with a `visitorDataNotice` (`tools/visitor-data.ts`), parks and rides by
 the name park.fan's tables give them ([security](#security)).
 
-Reads made through the tools do not count as popularity hits (`countHit = false`). A tool that
-writes sets `minRole` and `writes`: [the admin's actions](#the-admins-actions).
+Reads made through the tools do not count as popularity hits (`countHit = false`). The tools that
+write are in [writing](#writing).
 
 ### Small values
 
@@ -332,39 +336,73 @@ Two tools look at Parky, park.fan's chat assistant ([assistant](../frontend/assi
   (answered or skipped) and the end's `plan` (the tracking audit's T22 and T23) are listed as soon as
   the frontend sends them. The small-value and `visitorData` rules are the other event tools'.
 
-## The admin's actions
+## Writing
 
-The write tools do what the admin's pages do, through the admin's own routes. A write tool runs the
-route's handler, taken from the controller Nest already holds (`ctx.get(AdminController)`), rather
-than a second copy of it, so the checks, the write, the cache eviction and the frontend
-revalidation are the route's ([publish outside-in](../rules/publish-outside-in.md)).
-`src/mcp/admin-route.ts` adds what the HTTP layer would have added around the handler:
+A token with `admin:write` sees the tools that write beside the read tools. Each one calls the
+service its admin route calls, so a write through MCP is checked, audited and published as the
+same write in the admin is: [curation](curation.md#seasons) for seasons,
+[editing the catalog](../frontend/trip-regions.md#editing-the-catalog) for ticket products. The
+gate and the shared inputs are in `src/mcp/mcp-write.ts`.
 
-- **The body** goes through a `ValidationPipe` with the global options
-  (`GLOBAL_VALIDATION_PIPE_OPTIONS`, which `main.ts` mounts), so a tool cannot send what the route
-  refuses. The zod input is stricter where a model needs a bound: a reason on every curation and
-  retirement, uuids for ids.
-- **The audit row** is the route's own where its handler writes one (curation, ride profiles,
-  redirects, API keys), and otherwise the row `AdminAuditInterceptor` writes for that route
-  (`routeAuditEntry`: `job.<path>`, the body with credentials redacted), recorded after the handler
-  succeeds. Either way the actor is the token's account and its network, as for a session.
-- **A refusal** (a 4xx: bad input, no such row, a conflict) reaches the model as the route's
-  message; anything else stays the generic failure. Where a service refuses with a plain `Error`
-  (a merge of rides in two parks, an unknown park in the location fix), the tool checks first
-  through `AdminCurationService` and says so itself.
+| Tool                     | Does                                                                                   | Wraps                                       |
+| ------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `list_trip_seasons`      | reads the seasons on file, by year, kind, status, park or trip region (any token)      | `AdminSeasonService.list`                   |
+| `create_trip_season`     | adds one season to a park                                                              | `AdminSeasonService.create`                 |
+| `update_trip_season`     | changes the fields given, `null` clears an optional one                                | `AdminSeasonService.update`                 |
+| `delete_trip_season`     | deletes one season, with `confirm: true`                                               | `AdminSeasonService.remove`                 |
+| `import_trip_seasons`    | the rows of `scripts/trip-regions/seasons/*.json`, a dry run unless `dryRun: false`    | `AdminSeasonService.import`                 |
+| `list_ticket_products`   | reads a region's catalog, archived products too, or one product whole (any token)      | `AdminTicketService.list`, `.get`           |
+| `upsert_ticket_product`  | patches a slug the region has or creates a new one, a dry run unless `dryRun: false`   | `AdminTicketService.validate`, `.create`, `.update` |
+| `archive_ticket_product` | the catalog's delete: archives a product, with `confirm: true`                         | `AdminTicketService.archive`                |
 
-**Gating.** Every write tool carries the route's `minRole` and `writes` (`add`, `change` or
-`delete`, which set the client's read-only and destructive hints). A token's role is the lesser of
-its account's and its scope's cap ([credentials](#credentials)), so a tool is listed only to a
-token whose cap reaches its role; an owner-only tool needs a scope that reaches `owner`. Every
-`delete` tool defaults to `dryRun: true`, which shows what would go and writes nothing, or, where
-there is nothing to show, needs `confirm: true` (`remove_redirect`); `index.spec.ts` checks both
-rules for every tool. `retire_attractions`' dry run counts the rides, those already retired and
-those whose season is known (a seasonal ride missing from the feed is out of season, not gone), and
-warns above 10 rides that a mass write is read by name before it runs
+- **Who.** A write tool has the `minRole` of its admin route, `editor` or `owner`, and says what it
+  does in `writes` (`add`, `change` or `delete`). A token's role is the lesser of its account's and
+  its scope's cap, so only an `admin:write` token of an editor or owner reaches an editor's tool. A
+  read token is not shown them, and a call made anyway is refused with the scope it needs; an
+  account below editor is told its role (`toolRefusal`). No scope reaches `owner`, so the owner's
+  tools ([the admin's other pages](#the-admins-other-pages)) are listed to no token yet, and a call
+  is told so. `index.spec.ts` checks that every write tool is `editor` or `owner`, every read
+  `viewer` or `owner`, and every delete has a `confirm` or a dry run on by default.
+- **What the client sees.** `readOnlyHint: false` on a write, `destructiveHint` on a change or a
+  delete, so a client can ask the person first. The server's instructions say that nothing changes
+  data for a read token; for a write token, to write only what the person asked for, dry-run a bulk
+  write and confirm a delete.
+- **The same checks.** A season or ticket body is first checked against the route's DTO with the
+  global `ValidationPipe`'s settings, an unknown field refused (`routeBody`), then by the service:
+  `ParkSeasonService`'s rules, `validateTicketProduct` and the sample plan. A 4xx a service throws
+  reaches the model as its message, a ticket's problems by path (`asToolRefusal`); anything else
+  stays the generic failure.
+- **Audit and publishing.** Every write is an audit row under the token's account with the action
+  the admin writes (`park.season.create`, `.update`, `.delete`; `ticket_product.create`, `.update`,
+  `.archive`). The row does not say the write came through MCP; the log line
+  `<tool> for <email> in N ms` does, at `log` level for a write. Seasons publish through
+  `AdminCurationService.publish`, an import once for all its parks (`publishParks`); tickets through
+  `AdminTicketService.publish` ([publish outside-in](../rules/publish-outside-in.md)).
+- **Dry runs and confirms.** `import_trip_seasons`, `upsert_ticket_product` and the deletes of the
+  other admin pages write nothing unless `dryRun: false`. `delete_trip_season`,
+  `archive_ticket_product` and `remove_redirect` need `confirm: true`. A deleted
+  season stays whole in its audit row; an archived product comes back with `active: true`. There is
+  no hard delete of a ticket product: plans and shared links may name it.
+
+### The admin's other pages
+
+Curation, merges, retirement, the job triggers, the feedback, the event block list, the data API
+keys and the accounts list. These handlers hold more than a service call (a merge's preview, a
+job's queue options, an API key's audit row), so a tool runs the route's handler itself, from the
+controller Nest already holds (`ctx.get(AdminController)`), with `runAdminRoute`
+(`src/mcp/admin-route.ts`). The body goes through `routeBody` first. The audit row is the
+handler's own where it writes one (curation, ride profiles, redirects, API keys) and otherwise the
+row `AdminAuditInterceptor` writes for that route (`routeAuditEntry`: `job.<path>`, the body with
+credentials redacted), recorded once the handler succeeds. Where a service refuses with a plain
+`Error` (a merge of rides in two parks, an unknown park in the location fix), the tool checks first
+through `AdminCurationService` and says so itself.
+
+`retire_attractions`' dry run counts the rides, those already retired and those whose season is
+known (a seasonal ride missing from the feed is out of season, not gone), and warns above 10 rides
+that a mass write is read by name before it runs
 ([automated retirement](../rules/automated-retirement-and-identity.md#2-a-destructive-jobs-first-run-is-a-mass-write--count-it-before-merging)).
-The merges default to the preview too, `merge_parks` included, whose route merges a manual pair
-unless told otherwise.
+The merges default to the preview, `merge_parks` included, whose route merges a manual pair unless
+told otherwise.
 
 | Tool                            | Role   | Writes          | Runs (below `/v1/admin/`)                                                                                                         |
 | ------------------------------- | ------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -418,6 +456,42 @@ What has no tool, and why:
 - **The merges' automatic mode** (`merge-duplicate-attractions` without a pair, `autoDetect`): the
   admin's pages merge one proven pair at a time, and so do the tools.
 
+### The season import
+
+`AdminSeasonService.import`, with the rules of a row in `src/admin/content/season-import.ts`; the
+script `scripts/trip-regions/import-seasons.mjs` only sends a file to the tool and prints the answer.
+
+- **Per row, in order:** the file's own checks (a known kind, `YYYY-MM-DD` dates, no end date means
+  the row waits, `HH:MM` times with midnight as 00:00, single dates inside the range); the park, by
+  the trip region's geographic path where a region lists the slug, else the one park carrying it (a
+  slug two regions list, `disneyland-park`, needs `region`, per row or for the call); then the
+  service's own checks, as a create runs them; then the seasons on file for those parks over the
+  rows' span. A season of the same park, kind and name (case and outer spaces aside) whose dates
+  overlap is `exists`, and so is a row repeating an earlier row of the same call.
+- **The answer:** `{ dryRun, counts: { create, exists, invalid, failed }, rows: [{ row, label,
+  outcome, parkId?, seasonId?, reason? }] }`, outcomes `create` (a dry run), `created`, `exists`,
+  `invalid` and `failed`.
+- **Limits:** 1 to 100 rows a call (the largest file has 56), 20 imports an hour per account, dry
+  runs included, and one writing import at a time: a 5-minute Redis lock, and a second writing
+  import answers 409. Both are open when Redis is down.
+
+### Giving a client write access
+
+Read stays the default. The 401 challenge names `scope="admin:read"`, and a grant or a personal
+access token is `admin:read` unless somebody chose `admin:write`. Only an editor or owner can.
+
+- **OAuth** (claude.ai's connector, Claude Code's `/mcp`). The discovery documents list both
+  scopes, and a registration answers both. A request whose `scope` names `admin:write` is parked
+  with it; whatever was asked, the approve body's `scope` (`admin:read` or `admin:write`) is what is
+  granted, the consent page's choice. `admin:write` goes only to an editor or owner; anyone else's
+  grant is `admin:read`. A grant keeps its scope through every refresh, so an existing read grant
+  never becomes a write one: disconnect the connector, connect again and allow writing on the
+  consent page.
+- **A personal access token:** `POST /v1/admin/auth/tokens` with `scope: "admin:write"`, from an
+  editor's or owner's session (403 for anyone else, before the password is checked). Claude Code
+  takes it as `--header "Authorization: Bearer pfa_…"`, the import script as `PARKFAN_API_TOKEN`.
+- `whoami` answers the scope and the role it reached.
+
 ## Endpoints
 
 | Method      | Path                                             | Who                                      | Does                                                                                                                                                  |
@@ -431,10 +505,10 @@ What has no tool, and why:
 | POST        | `/v1/oauth/token`                                | public client                            | `authorization_code` (PKCE S256), `refresh_token`                                                                                                     |
 | POST        | `/v1/oauth/revoke`                               | public client                            | RFC 7009; revokes the whole grant                                                                                                                     |
 | GET         | `/v1/admin/oauth/requests/:id`                   | session, any role                        | what the consent page shows: client, redirect host, scope, `createdAt` (its age; a request lives 10 minutes), `expiresAt`, `startedFrom` and `viewer` |
-| POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode? }` | `{ redirectTo }` with the code; 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending          |
+| POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode?, scope? }` | `{ redirectTo }` with the code; `scope` is the grant's ([write access](#giving-a-client-write-access)); 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending |
 | POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                                 |
 | GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                                |
-| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once                                                                                                               |
+| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once; `scope: "admin:write"` for an editor or owner                                                               |
 | DELETE      | `/v1/admin/auth/tokens/:id`                      | session; others' owner only              | revokes a PAT or a grant                                                                                                                              |
 
 The shared pass is refused on every row. The response shapes the frontend reads are in
@@ -509,7 +583,14 @@ What was checked when this was built, and where it is enforced:
   counts), and one token runs at most 10 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
   consent endpoints above; the tools a role may not use are not even listed, and are refused again
-  at call time.
+  at call time. A write token stops at `editor`: no merge, retirement, cache reset or account
+  change is reachable through MCP.
+- **Writes and prompt injection:** the read tools hand the model text visitors wrote, and with a
+  write token an instruction hidden in it could reach a write. Writing is opt-in per token, chosen
+  by an editor or owner when the grant or the token is made; a bulk write is a dry run unless the
+  call says otherwise, a delete needs `confirm`; the write tools carry `destructiveHint`, so a client
+  can ask the person; and every write is an audit row under the account, a deleted season kept
+  whole in it ([writing](#writing)).
 - **The shared pass:** refused on the MCP endpoint, the token endpoints and the consent endpoints.
 - **Timing:** secrets are looked up by hash, never compared in JS; the PKCE comparison is
   constant-time. A client id is not a secret.
@@ -549,8 +630,8 @@ What was checked when this was built, and where it is enforced:
   that started on claude.ai carries no cookie; the consent page has to read the session from the
   browser, not from that first request.
 - A PAT is created with the password (and the two-factor code), but a stolen session plus the
-  password can still mint a read-only token that outlives the session, until the account signs out
-  everywhere.
+  password can still mint a token that outlives the session (a write token, on an editor's or
+  owner's account), until the account signs out everywhere.
 
 ### `ml_accuracy` reads `prediction_accuracy` only
 

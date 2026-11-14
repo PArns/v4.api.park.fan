@@ -44,6 +44,14 @@ import { gscQueriesTool } from "./gsc-queries.tool";
 import { gscPagesTool } from "./gsc-pages.tool";
 import { gscSeriesTool } from "./gsc-series.tool";
 import { gscInspectUrlTool } from "./gsc-inspect-url.tool";
+import { listTripSeasonsTool } from "./list-trip-seasons.tool";
+import { createTripSeasonTool } from "./create-trip-season.tool";
+import { updateTripSeasonTool } from "./update-trip-season.tool";
+import { deleteTripSeasonTool } from "./delete-trip-season.tool";
+import { importTripSeasonsTool } from "./import-trip-seasons.tool";
+import { listTicketProductsTool } from "./list-ticket-products.tool";
+import { upsertTicketProductTool } from "./upsert-ticket-product.tool";
+import { archiveTicketProductTool } from "./archive-ticket-product.tool";
 import {
   addRedirectTool,
   correctParkLocationTool,
@@ -86,8 +94,9 @@ import {
 /**
  * Every tool the admin MCP server offers, in the order clients list them.
  * A new tool is a file next to this one and a line here; nothing else
- * registers it. A tool that writes runs its admin route's handler
- * (`../admin-route.ts`) and carries `writes` and the route's `minRole`.
+ * registers it. A tool that writes carries `writes` and its admin route's
+ * `minRole` and goes through the gate in `../mcp-write.ts`; those of the
+ * admin's other pages run the route's own handler (`../admin-route.ts`).
  */
 export const MCP_TOOLS: readonly AnyMcpTool[] = [
   whoamiTool,
@@ -133,7 +142,15 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   gscPagesTool,
   gscSeriesTool,
   gscInspectUrlTool,
-  // The admin's pages: curation, merges, retirement, jobs, the site, keys, accounts.
+  listTripSeasonsTool,
+  createTripSeasonTool,
+  updateTripSeasonTool,
+  deleteTripSeasonTool,
+  importTripSeasonsTool,
+  listTicketProductsTool,
+  upsertTicketProductTool,
+  archiveTicketProductTool,
+  // The admin's other pages: curation, merges, retirement, jobs, the site, keys, accounts.
   curationFieldsTool,
   curateParkTool,
   curateAttractionTool,
