@@ -2249,11 +2249,12 @@ const PARTNER_SHUTTLE: TransportAlternative = {
 /**
  * RER A from Châtelet–Les Halles: "a 40-minute journey" to Marne-la-Vallée–
  * Chessy, "just a 2-minute walk from the entrance" (Disney's press, September
- * 2026); 45 with the wait for the train.
+ * 2026); 50 door to door with the walk down to the platforms and the wait for
+ * a train (every 10 to 15 minutes).
  */
 const RER_A_FROM_PARIS: TransportAlternative = {
   mode: "rail",
-  minutes: 45,
+  minutes: 50,
   name: "RER A",
   via: "chatelet_les_halles",
 };
@@ -2477,7 +2478,7 @@ export const PARIS: RegionConfig = {
       alternatives: [PARTNER_SHUTTLE],
     }),
     ...bothDisneyParks("hotel:paris_center", {
-      primary: { ...RER_A_FROM_PARIS, minutes: 45 },
+      primary: { ...RER_A_FROM_PARIS, minutes: 50 },
       alternatives: [
         RER_A_FROM_PARIS,
         { mode: "highway_bus", name: "Disneyland Paris Express" },
@@ -2599,8 +2600,8 @@ export const PARIS: RegionConfig = {
       stayNote:
         "Châtelet–Les Halles is on RER A to Disneyland Paris and on RER B to the Parc Astérix shuttle at the airport.",
       parks: [
-        { slug: "disneyland-park", minutes: 45, mode: "rail" },
-        { slug: "disney-adventure-world", minutes: 45, mode: "rail" },
+        { slug: "disneyland-park", minutes: 50, mode: "rail" },
+        { slug: "disney-adventure-world", minutes: 50, mode: "rail" },
         // Free flow; RER B and the park's shuttle take about 75.
         { slug: "parc-asterix", minutes: 45, mode: "drive" },
       ],
@@ -2618,7 +2619,7 @@ export const PARIS: RegionConfig = {
     {
       from: "paris",
       to: "disneyland-paris",
-      minutes: 45,
+      minutes: 50,
       mode: "rail",
       name: "RER A",
       changes: 0,

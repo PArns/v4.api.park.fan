@@ -152,13 +152,13 @@ or a `hurricane` penalty.
   (the park's three hotels) and `paris` (central Paris), with no `order`: the stays come in any
   order. Gateways: Marne-la-Vallée–Chessy (`XED`, a station: the TGV, and the Eurostar with a change
   at Lille) and CDG for Disneyland Paris, CDG for Parc Astérix, CDG and ORY for Paris. Base legs:
-  60 minutes by car between the resorts, 45 by RER A from Paris to Disneyland Paris, 45 by car from
+  60 minutes by car between the resorts, 50 by RER A from Paris to Disneyland Paris, 45 by car from
   Paris to Parc Astérix. `hotel` and `area` are a 400 here: a stay's area goes with its base
   (`bases=disneyland-paris:3@disney_lake`), and only then do its hotel's perks count.
 - **Travel.** Both Disney parks share the guest car park, 15 minutes' walk from the gates
   (`via: "walk"`). Curated: the 5-minute walk between the gates (their hop pair), the walks from the
   lake hotels (15) and Cheyenne and Santa Fe (20, or the Disney Hotels shuttle), RER A from central
-  Paris (45) and Val d'Europe (15); to Parc Astérix, RER B and the park's shuttle from Roissypôle
+  Paris (50, the 40-minute ride with the walk and the wait) and Val d'Europe (15); to Parc Astérix, RER B and the park's shuttle from Roissypôle
   (75), the Paris City Vision coach, and from the Disney parks the TGV to Aéroport CDG 2 and the
   shuttle; the walk from the park's hotels (15).
 - **Evenings.** Disney Village; night shows Disney Tales of Magic (Disneyland Park) and Disney

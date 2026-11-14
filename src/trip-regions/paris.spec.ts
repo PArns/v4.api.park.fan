@@ -74,7 +74,7 @@ describe("Paris", () => {
     expect(findLeg(legs, "hotel:paris_center", DLP)).toMatchObject({
       mode: "rail",
       name: "RER A",
-      minutes: 45,
+      minutes: 50,
       source: "curated",
     });
     expect(findLeg(legs, DLP, ASTERIX)).toMatchObject({
