@@ -103,6 +103,9 @@ function planQueryOf(
     ticket: query.ticket,
     hopper: query.hopper,
     tickets: query.tickets,
+    bases: query.bases,
+    startBase: query.startBase,
+    endBase: query.endBase,
   };
 }
 

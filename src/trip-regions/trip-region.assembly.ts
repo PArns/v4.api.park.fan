@@ -11,6 +11,7 @@ import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import type { PublicParkSeason } from "../parks/park-seasons.controller";
 import {
   hotelKinds,
+  stayRulesOf,
   venuePoint,
   type RegionConfig,
   type RegionParkConfig,
@@ -199,6 +200,7 @@ export function describeRegion(
   ]);
   const source = travelSource(region);
   const slugs = new Set(parks.map((p) => p.config.slug));
+  const stayRules = stayRulesOf(region);
   return {
     slug: region.slug,
     name: region.name,
@@ -208,6 +210,7 @@ export function describeRegion(
       id: p.id,
       slug: p.slug,
       name: p.name,
+      ...(p.config.code && { code: p.config.code }),
       path: p.path,
       group: p.config.group,
       type: p.config.type,
@@ -264,10 +267,18 @@ export function describeRegion(
       bases: region.bases.map((b) => ({
         key: b.key,
         name: b.name,
+        ...(b.order !== undefined && { order: b.order }),
         hotelAreas: [...b.hotelAreas],
+        ...(b.defaultArea && { defaultArea: b.defaultArea }),
+        ...(b.gateways && { gateways: b.gateways.map((g) => ({ ...g })) }),
+        ...(b.stayNote && { stayNote: b.stayNote }),
         parks: b.parks.filter((p) => slugs.has(p.slug)).map((p) => ({ ...p })),
       })),
-      baseLegs: (region.baseLegs ?? []).map((l) => ({ ...l })),
+      baseLegs: (region.baseLegs ?? []).map((l) => ({
+        ...l,
+        parkDay: l.parkDay ?? l.minutes <= stayRules.parkDayMaxLegMinutes,
+      })),
+      stayRules,
     }),
     tickets: publicTicketCatalog(region),
   };

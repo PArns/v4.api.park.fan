@@ -16,6 +16,12 @@ export class TripRegionParkDto {
   @ApiProperty() id: string;
   @ApiProperty({ example: "magic-kingdom-park" }) slug: string;
   @ApiProperty({ example: "Magic Kingdom Park" }) name: string;
+  @ApiPropertyOptional({
+    example: "DL",
+    description:
+      "A short curated code for tight views, unique in the region (Tokyo Disneyland DL, Tokyo DisneySea DS); absent: derive one.",
+  })
+  code?: string;
   @ApiProperty({
     example: "/parks/north-america/united-states/orlando/magic-kingdom-park",
   })
@@ -194,6 +200,67 @@ export class TripRegionWeatherDto {
   climatePark: string;
 }
 
+export class TripGatewayDto {
+  @ApiProperty({ example: "HND", description: "IATA code where there is one." })
+  code: string;
+  @ApiProperty({ example: "Haneda" }) name: string;
+  @ApiProperty({ enum: ["airport", "station"] }) kind: string;
+  @ApiPropertyOptional({ description: "Typical minutes to the base." })
+  minutes?: number;
+}
+
+export class TripBaseReachDto {
+  @ApiProperty({ example: "tokyo-disneyland" }) slug: string;
+  @ApiProperty({ example: 20, description: "Door to door, one way, curated." })
+  minutes: number;
+  @ApiProperty({ example: "rail" }) mode: string;
+}
+
+export class TripBaseDto {
+  @ApiProperty({ example: "tokyo" }) key: string;
+  @ApiProperty({ example: "Tokyo" }) name: string;
+  @ApiPropertyOptional({
+    description:
+      "Its place on the route line; stays follow it one way or the other. Absent: any order.",
+  })
+  order?: number;
+  @ApiProperty({ type: [String] }) hotelAreas: string[];
+  @ApiPropertyOptional() defaultArea?: string;
+  @ApiPropertyOptional({ type: () => [TripGatewayDto] })
+  gateways?: TripGatewayDto[];
+  @ApiPropertyOptional({ description: "Where to stay, curated, English." })
+  stayNote?: string;
+  @ApiProperty({ type: () => [TripBaseReachDto] }) parks: TripBaseReachDto[];
+}
+
+export class TripBaseLegDto {
+  @ApiProperty({ example: "tokyo" }) from: string;
+  @ApiProperty({ example: "nagoya" }) to: string;
+  @ApiProperty({ example: 150, description: "Door to door, curated." })
+  minutes: number;
+  @ApiProperty({ example: "shinkansen" }) mode: string;
+  @ApiPropertyOptional({ example: "Tokaido Shinkansen" }) name?: string;
+  @ApiProperty({ description: "A park fits the day of this move." })
+  parkDay: boolean;
+  @ApiPropertyOptional() changes?: number;
+  @ApiPropertyOptional({ example: "Shinjuku" }) fromStop?: string;
+  @ApiPropertyOptional({ example: "Kawaguchiko" }) toStop?: string;
+  @ApiPropertyOptional({
+    type: [String],
+    enum: ["jr_pass", "reserve_seat", "forward_luggage"],
+  })
+  notes?: string[];
+}
+
+export class TripStayRulesDto {
+  @ApiProperty({ example: 45 }) dayTripFreeMinutes: number;
+  @ApiProperty({ example: 60 }) moveOverheadMinutes: number;
+  @ApiProperty({ example: 150 }) parkDayMaxLegMinutes: number;
+  @ApiProperty({ example: 20 }) moveCost: number;
+  @ApiProperty({ example: "08:00" }) moveStartsAt: string;
+  @ApiProperty({ example: "23:00" }) lastArrivalAt: string;
+}
+
 export class TripRegionSummaryDto {
   @ApiProperty({ example: "orlando" }) slug: string;
   @ApiProperty({ example: "Orlando" }) name: string;
@@ -246,6 +313,16 @@ export class TripRegionDto {
     description: "What the weather does to the region's days.",
   })
   weather: TripRegionWeatherDto;
+  @ApiPropertyOptional({
+    type: () => [TripBaseDto],
+    description:
+      "A region whose parks lie in several cities: the bases a trip stays in.",
+  })
+  bases?: TripBaseDto[];
+  @ApiPropertyOptional({ type: () => [TripBaseLegDto] })
+  baseLegs?: TripBaseLegDto[];
+  @ApiPropertyOptional({ type: () => TripStayRulesDto })
+  stayRules?: TripStayRulesDto;
   @ApiProperty({
     type: () => [TripTicketProductDto],
     description:
