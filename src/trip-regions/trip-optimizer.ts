@@ -609,6 +609,39 @@ interface SearchResult {
 /** Stay plans solved per pairing and ticket structure, cheapest quick bound first. */
 const STAY_PLAN_LIMIT = 400;
 
+/**
+ * Two stay plans whose objectives differ by no more than this cost the same:
+ * the sums differ by rounding only.
+ */
+const STAY_TIE_MINUTES = 1e-6;
+
+/** Whether a stay plan lies closer to the trip's parks than another ({@link StayPlan.reachMinutes}). */
+function closerStay(a: StayPlan | undefined, b: StayPlan | undefined): boolean {
+  return !!a && !!b && a.reachMinutes < b.reachMinutes;
+}
+
+/**
+ * Whether a solved structure beats the best so far: the lower objective, and
+ * between two stay plans that cost the same the one closer to the parks, so
+ * a tie never goes to the base listed first (central Paris for a Disney
+ * trip). Without stays, the first of equals stays, as always.
+ */
+function betterResult(
+  objective: number,
+  stay: StayPlan | undefined,
+  best: SearchResult,
+): boolean {
+  const bestObjective = best.solution.objective;
+  if (
+    stay &&
+    best.stay &&
+    Math.abs(objective - bestObjective) <= STAY_TIE_MINUTES
+  ) {
+    return closerStay(stay, best.stay);
+  }
+  return objective < bestObjective;
+}
+
 /** How a row is priced on a day of a stay plan, and why. */
 interface StayCell {
   cost: number;
@@ -2025,7 +2058,14 @@ class TripOptimizer {
     let best: SearchResult | null = null;
     const unproven: number[] = [];
     for (const s of bounded) {
-      if (best && s.bound >= best.solution.objective) break;
+      if (best && s.bound >= best.solution.objective) {
+        // Past the best, only a stay plan that may tie it and lies closer to
+        // the parks is still worth solving.
+        if (!s.stay || s.bound > best.solution.objective + STAY_TIE_MINUTES) {
+          break;
+        }
+        if (!closerStay(s.stay, best.stay)) continue;
+      }
       if (!this.budgetLeft()) break;
       this.activePenalty = s.penalty ?? null;
       this.activeStay = s.stay ?? null;
@@ -2040,7 +2080,7 @@ class TripOptimizer {
       );
       if (!outcome.solution) continue;
       if (!outcome.provable) unproven.push(s.bound);
-      if (!best || outcome.solution.objective < best.solution.objective) {
+      if (!best || betterResult(outcome.solution.objective, s.stay, best)) {
         best = {
           rows: s.rows,
           solution: outcome.solution,

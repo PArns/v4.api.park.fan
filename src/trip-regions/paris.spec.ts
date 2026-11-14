@@ -4,7 +4,7 @@ import {
   regionRecords,
   type CellTweak,
 } from "./__fixtures__/region-days";
-import { PARIS } from "./regions";
+import { PARIS, type RegionConfig } from "./regions";
 import { seedTickets } from "./tickets";
 import { buildLegs, findLeg, hopPairs } from "./travel";
 import { dayCostParts, heatOf } from "./trip-optimizer";
@@ -161,6 +161,69 @@ describe("Paris", () => {
       d.parks.some((p) => p.slug === ASTERIX),
     );
     expect(asterix?.perks ?? []).toEqual([]);
+  });
+
+  it("counts a stay's hotel perks only where the visitor names its area, never by the base's default area", () => {
+    const query = {
+      from: "2027-05-10",
+      to: "2027-05-13",
+      parks: `${DLP},${DAW}`,
+      split: "fixed",
+    };
+    const unnamed = regionPlan(
+      REGION,
+      { ...query, bases: "disneyland-paris:3" },
+      TODAY,
+      extraMagicTime,
+    );
+    const named = regionPlan(
+      REGION,
+      { ...query, bases: "disneyland-paris:3@disney_lake" },
+      TODAY,
+      extraMagicTime,
+    );
+    const disneyDays = (answer: typeof named) =>
+      answer.days.filter((d) => d.kind === "park");
+    expect(disneyDays(unnamed).length).toBe(2);
+    // The base's default area is a Disney hotel's, but the guest may sleep
+    // in Val d'Europe: no perk is claimed for a hotel nobody named.
+    for (const day of disneyDays(unnamed)) expect(day.perks ?? []).toEqual([]);
+    for (const day of disneyDays(named)) {
+      expect(day.perks).toEqual(["extra_magic_time"]);
+    }
+  });
+
+  it("gives a tie between bases to the one closer to the trip's parks, never the one listed first", () => {
+    // Central Paris within the free day-trip time of Disneyland Park, and
+    // listed first: both bases then cost a Disney trip the same.
+    const paris = REGION.bases?.find((b) => b.key === "paris");
+    const tied: RegionConfig = {
+      ...REGION,
+      bases: [
+        {
+          ...paris!,
+          parks: paris!.parks.map((p) =>
+            p.slug === DLP || p.slug === DAW ? { ...p, minutes: 45 } : p,
+          ),
+        },
+        ...(REGION.bases ?? []).filter((b) => b.key !== "paris"),
+      ],
+    };
+    const query = {
+      from: "2027-05-10",
+      to: "2027-05-13",
+      parks: `${DLP},${DAW}`,
+      split: "fixed",
+    };
+    const answer = regionPlan(tied, query, TODAY);
+    expect(answer.meta.stays?.map((s) => s.base)).toEqual(["disneyland-paris"]);
+    // A trip to Parc Astérix alone ties its own hotels with central Paris.
+    const asterix = regionPlan(tied, { ...query, parks: ASTERIX }, TODAY);
+    expect(asterix.meta.stays?.map((s) => s.base)).toEqual(["parc-asterix"]);
+    // The real region: a Disney trip never lands in central Paris.
+    expect(
+      regionPlan(REGION, query, TODAY).meta.stays?.map((s) => s.base),
+    ).toEqual(["disneyland-paris"]);
   });
 
   it("takes a stay's area with its base, never hotel= or area=", () => {

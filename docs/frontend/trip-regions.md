@@ -981,6 +981,11 @@ section and plans exactly as before; `bases`, `startBase` and `endBase` there ar
   client offers them as "you land in" and "you fly home from" and sends the base as `startBase`
   and `endBase`; the API is the one place that knows which airport belongs to which base.
 - **Each hotel area belongs to one base**, and a stay's hotel kind (its perks) is its area's.
+  **`defaultArea`** is where a stay without an area is reckoned from for its travel (the base's
+  `parks` minutes are that area's); it carries no perk. The visitor may sleep in any of the base's
+  areas (at Disneyland Paris, Val d'Europe as well as a Disney hotel), so a perk counts only for
+  the area they name in `bases=<base>@<area>`, as `hotel` without an area is `offsite` in a region
+  without bases.
 - **A base's `parks`** are the parks a day from it reaches. A stay whose area has a curated leg to
   the park (`hotel:<area>` in `travel.legs`) uses that leg's minutes instead.
 - **`parkDay`** is the leg's own call where it has one (Fujikawaguchiko to Nagoya by bus and
@@ -1108,7 +1113,10 @@ base legs connect. Each base is stayed in at most once.
 reaches the chosen parks, in every order the route allows, with every split of the nights. Each
 plan's quick bound (every visit on its cheapest allowed day, days shared, plus the moves) ranks
 them; the 400 cheapest are solved, branch and bound as before, and a plan left out whose bound
-could beat the result makes `meta.exact` false. `split=auto` keeps the days that can only be a
+could beat the result makes `meta.exact` false. **A tie** between two plans that cost the same goes
+to the one whose bases lie closer to the trip's parks (each park's reach from the closest of the
+plan's bases, summed), never to the base listed first: a Paris trip to Parc Astérix alone ties the
+park's hotels with central Paris (both within the free day-trip time) and stays at the park. `split=auto` keeps the days that can only be a
 move out of the room it gives second visits. On the test region (four cities, five parks, ten
 days) a plan takes 5–40 ms.
 
