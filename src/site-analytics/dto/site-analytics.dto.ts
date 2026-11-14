@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { TRIP_REGION_SLUGS } from "../../trip-regions/regions";
 import { Transform, Type } from "class-transformer";
 import {
   ArrayMaxSize,
@@ -210,6 +211,33 @@ export class SiteAnalyticsBreakdownQueryDto extends SiteAnalyticsQueryDto {
   @Min(1)
   @Max(200)
   limit: number = 50;
+}
+
+/** `GET admin/analytics/trip-planner`: the window, and the region, list length and series. */
+export class SiteTripPlannerQueryDto extends SiteAnalyticsQueryDto {
+  @ApiPropertyOptional({
+    enum: TRIP_REGION_SLUGS,
+    description: "Only this region's events; every region's when absent",
+  })
+  @IsOptional()
+  @IsIn(TRIP_REGION_SLUGS)
+  region?: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit: number = 20;
+
+  @ApiPropertyOptional({
+    default: false,
+    description: "Starts, plan requests and plans shown per period",
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === "true")
+  series: boolean = false;
 }
 
 export class SiteCrosstabQueryDto extends SiteAnalyticsQueryDto {

@@ -111,32 +111,36 @@ function services(
   rows: TripEventRow[] = ROWS,
   newFunnelFrom: string | null = "2026-11-18",
 ) {
-  const trip = {
-    report: jest.fn(async (_query: unknown, options: any) => ({
-      ...WINDOW,
-      ...tripPlannerFigures(rows, {
-        ...options,
-        window: { from: WINDOW.from, to: WINDOW.to },
-        newFunnelFrom,
-      }),
-      ...(options.series && {
-        series: [
-          {
-            day: "2026-11-13",
-            started: 30,
-            requested: 2,
-            shown: 0,
-          },
-          {
-            day: "2026-11-14",
-            started: 12,
-            requested: 54,
-            shown: 48,
-          },
-        ],
-      }),
-    })),
-  };
+  // The real service, so the tool runs its shaping; its read and the catalog are stubbed.
+  const trip = Object.assign(
+    Object.create(SiteAnalyticsTripService.prototype),
+    {
+      report: jest.fn(async (_query: unknown, options: any) => ({
+        ...WINDOW,
+        ...tripPlannerFigures(rows, {
+          ...options,
+          window: { from: WINDOW.from, to: WINDOW.to },
+          newFunnelFrom,
+        }),
+        ...(options.series && {
+          series: [
+            {
+              day: "2026-11-13",
+              started: 30,
+              requested: 2,
+              shown: 0,
+            },
+            {
+              day: "2026-11-14",
+              started: 12,
+              requested: 54,
+              shown: 48,
+            },
+          ],
+        }),
+      })),
+    },
+  );
   const catalog = {
     catalog: jest.fn(async (region: { slug: string }) => ({
       region: region.slug,
@@ -147,6 +151,7 @@ function services(
           : [{ id: `${region.slug}-1-day` }],
     })),
   };
+  trip.moduleRef = { get: () => catalog };
   return {
     trip,
     catalog,
