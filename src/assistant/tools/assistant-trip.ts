@@ -799,6 +799,8 @@ export function vacationItinerary(input: {
       date: day.date,
       weekday: weekdayOf(day.date),
       kind: day.kind,
+      // A rest day nobody asked for and the rest rule did not need: a free day.
+      ...(day.kind === "rest" && day.spare && { spare: true as const }),
       ...(day.base && { sleepsIn: baseName(region, day.base) }),
       ...(move && { move: movePhrase(region, move) }),
       ...(parks.length > 0 && { parks }),

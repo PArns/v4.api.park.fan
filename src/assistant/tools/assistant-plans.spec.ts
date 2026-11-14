@@ -427,6 +427,7 @@ describe("the trip's digest and what a change did", () => {
             { watch: ["party night: day guests leave at the early close"] },
           ),
           day("2027-10-20", "rest"),
+          day("2027-10-21", "rest", [], { spare: true }),
         ],
         {
           season:
@@ -438,8 +439,18 @@ describe("the trip's digest and what a change did", () => {
       "Fri 2027-10-15: EPCOT (33 min); why: its quietest day of the trip",
       "Fri 2027-10-18: Magic Kingdom (31 min, party night 19:00–24:00); watch: party night: day guests leave at the early close",
       "Fri 2027-10-20: rest day",
+      // A day the rest rule did not set is free, not a rest day.
+      "Fri 2027-10-21: free day",
       "Big rides on the planned days about 38 min, an average day of the trip 45 min",
       "Season: peak of the hurricane season (August to October), a fact about the season, not a forecast",
+    ]);
+  });
+
+  it("tells a free day from a rest day when a change turns one into the other", () => {
+    const before = itinerary([day("2027-10-20", "rest", [], { spare: true })]);
+    const after = itinerary([day("2027-10-20", "rest")]);
+    expect(tripPlanChange(before, after).daysChanged).toEqual([
+      { date: "2027-10-20", weekday: "Friday", now: "rest day", was: "free day" },
     ]);
   });
 
