@@ -723,6 +723,39 @@ function waitsByPark(
 }
 
 /**
+ * What one plan saves over another on the visits both place: each park's
+ * visits paired in date order, the headliner minutes of the pairs summed
+ * (`saved`, negative where `after` waits longer) and counted (`common`), and
+ * the parks of the visits only `after` places, a park once per visit. The
+ * hopper verdict and the plan's ideas read the same comparison.
+ */
+export function savedOnCommonVisits(
+  after: OptimizedPlan,
+  before: OptimizedPlan,
+  parks: Set<string>,
+): { saved: number; common: number; fitsOnly: string[] } {
+  const a = waitsByPark(after, parks);
+  const b = waitsByPark(before, parks);
+  const fitsOnly: string[] = [];
+  let saved = 0;
+  let common = 0;
+  for (const slug of [...parks].sort()) {
+    const withList = a.get(slug) ?? [];
+    const withoutList = b.get(slug) ?? [];
+    for (let i = withoutList.length; i < withList.length; i++) {
+      fitsOnly.push(slug);
+    }
+    const n = Math.min(withList.length, withoutList.length);
+    for (let i = 0; i < n; i++) {
+      if (Number.isNaN(withList[i]) || Number.isNaN(withoutList[i])) continue;
+      saved += withoutList[i] - withList[i];
+      common++;
+    }
+  }
+  return { saved, common, fitsOnly };
+}
+
+/**
  * The verdict from the plan with the hopper and the plan without it, over
  * the given parks and dates, with the evening hops the hopper opens.
  */
@@ -735,24 +768,11 @@ export function hopperVerdict(
   const hopDayList = withHopper.days
     .filter((d) => d.kind === "hop" && d.parks.every((p) => parks.has(p.slug)))
     .map((d) => ({ date: d.date, parks: parksOfDay(d) }));
-  const a = waitsByPark(withHopper, parks);
-  const b = waitsByPark(without, parks);
-  const fitsOnlyWithHopper: string[] = [];
-  let saved = 0;
-  let common = 0;
-  for (const slug of [...parks].sort()) {
-    const withList = a.get(slug) ?? [];
-    const withoutList = b.get(slug) ?? [];
-    for (let i = withoutList.length; i < withList.length; i++) {
-      fitsOnlyWithHopper.push(slug);
-    }
-    const n = Math.min(withList.length, withoutList.length);
-    for (let i = 0; i < n; i++) {
-      if (Number.isNaN(withList[i]) || Number.isNaN(withoutList[i])) continue;
-      saved += withoutList[i] - withList[i];
-      common++;
-    }
-  }
+  const {
+    saved,
+    common,
+    fitsOnly: fitsOnlyWithHopper,
+  } = savedOnCommonVisits(withHopper, without, parks);
   const savedMinutes = Math.max(0, Math.round(saved));
   const savedMinutesPerRide =
     common > 0 ? Math.max(0, Math.round(saved / common)) : 0;

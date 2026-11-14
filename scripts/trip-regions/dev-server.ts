@@ -96,6 +96,7 @@ import {
 } from "../../src/trip-regions/last-year-snapshot";
 import type { ScheduleRowLike } from "../../src/trip-regions/trip-calendar.util";
 import * as plan from "../../src/trip-regions/trip-plan.assembly";
+import { planIdeas } from "../../src/trip-regions/trip-plan-ideas";
 import {
   eveningShowsWanted,
   eveningTriggers,
@@ -570,7 +571,7 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
     };
   }
   const trip =
-    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|when|school-breaks|tickets))?\/?$/.exec(
+    /^\/v1\/trip-regions\/([^/]+)(?:\/(calendar|best-days|plan|plan\/ideas|when|school-breaks|tickets))?\/?$/.exec(
       url.pathname,
     );
   if (trip && req.method === "GET") {
@@ -640,6 +641,23 @@ async function route(req: IncomingMessage, url: URL): Promise<unknown | null> {
           to,
           today,
         );
+      }
+      case "plan/ideas": {
+        const q = await query(TripPlanQueryDto, url);
+        const known = (await regionParks(region)).map((p) => p.config.slug);
+        const normalized = plan.normalizePlanQuery(region, known, q, today);
+        return planIdeas({
+          region,
+          known,
+          query: q,
+          today,
+          calendar: await regionCalendar(
+            region,
+            normalized.from,
+            normalized.to,
+          ),
+          computedAt: new Date().toISOString(),
+        });
       }
       case "plan": {
         const q = await query(TripPlanQueryDto, url);
