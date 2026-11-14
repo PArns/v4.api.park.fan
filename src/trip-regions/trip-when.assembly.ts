@@ -106,6 +106,7 @@ function planQueryOf(
     bases: query.bases,
     startBase: query.startBase,
     endBase: query.endBase,
+    moveBuffer: query.moveBuffer,
   };
 }
 

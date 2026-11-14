@@ -1,10 +1,12 @@
 import { addIsoDays } from "../common/utils/date.util";
 import { TEST_JAPAN, TEST_PARIS } from "./__fixtures__/test-regions";
-import { ORLANDO, type RegionConfig } from "./regions";
+import { ORLANDO, stayRulesOf, type RegionConfig } from "./regions";
 import {
   normalizePlanQuery,
   optimizePlan,
+  planCacheQuery,
   planResponse,
+  staysOption,
 } from "./trip-plan.assembly";
 import {
   describeRegion,
@@ -336,6 +338,46 @@ describe("the stays of a trip across cities", () => {
     expect(free.meta).not.toHaveProperty("staySuggestion");
   });
 
+  it("takes the visitor's own buffer for a hotel change, and names it", () => {
+    const base = {
+      ...TRIP,
+      parks: ALL,
+      startBase: "tokyo",
+      endBase: "osaka",
+    };
+    const normalize = (moveBuffer?: number) =>
+      normalizePlanQuery(
+        TEST_JAPAN,
+        known(TEST_JAPAN),
+        { ...base, ...(moveBuffer !== undefined && { moveBuffer }) } as never,
+        TODAY,
+      );
+    expect(plan(base).meta.moveBuffer).toBe(
+      stayRulesOf(TEST_JAPAN).moveOverheadMinutes,
+    );
+    expect(plan({ ...base, moveBuffer: 120 } as never).meta.moveBuffer).toBe(
+      120,
+    );
+    const slow = normalize(120);
+    expect(
+      staysOption(TEST_JAPAN, slow.stays!, []).rules.moveOverheadMinutes,
+    ).toBe(120);
+    expect(planCacheQuery(normalize(30))).not.toBe(planCacheQuery(slow));
+    expect(() =>
+      normalizePlanQuery(
+        ORLANDO,
+        ["epcot"],
+        {
+          from: "2027-04-10",
+          to: "2027-04-19",
+          parks: "epcot",
+          moveBuffer: 30,
+        } as never,
+        TODAY,
+      ),
+    ).toThrow("Orlando has no bases");
+  });
+
   it("refuses stays where they do not belong, and bad ones", () => {
     const refuse =
       (region: RegionConfig, query: Record<string, string>) => () =>
@@ -567,6 +609,7 @@ describe("the region route of a region with bases", () => {
       moveCost: 20,
       moveStartsAt: "08:00",
       lastArrivalAt: "23:00",
+      moveBufferOptions: [30, 60, 90, 120],
     });
   });
 });
