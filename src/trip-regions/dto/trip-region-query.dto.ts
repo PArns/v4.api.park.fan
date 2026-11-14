@@ -84,7 +84,7 @@ export class TripPlanQueryDto {
 
   @ApiPropertyOptional({
     description:
-      "Which hotel perks count: one of the region's hotel kinds (the region route's `hotels`; Orlando: disney, disney_deluxe, universal, universal_premier, offsite). Defaults to the hotel the `area` usually means, else `offsite`.",
+      "Which hotel perks count: one of the region's hotel kinds (the region route's `hotels`; Orlando: disney, disney_deluxe, disney_springs, universal, universal_premier, offsite). Defaults to the hotel the `area` usually means, else `offsite`.",
     example: "disney",
   })
   @IsOptional()

@@ -287,6 +287,7 @@ or a `hurricane` penalty.
   "hotels": [
     { "key": "disney", "perks": ["early_entry"] },
     { "key": "disney_deluxe", "perks": ["early_entry", "extended_evening"] },
+    { "key": "disney_springs", "perks": ["early_entry"] },
     { "key": "universal", "perks": ["early_park_admission"] },
     {
       "key": "universal_premier",
@@ -360,9 +361,19 @@ or a `hurricane` penalty.
   for the buses, whose waits vary too much to name one.
 - **Hotel areas** stand for where a visitor sleeps: `disney` (Caribbean Beach, the Skyliner hub in
   the middle of the resort), `universal` (by the Royal Pacific and Sapphire Falls hotels),
-  `international_drive`, `lake_buena_vista` (Hotel Plaza Boulevard by Disney Springs) and
-  `kissimmee` (US-192). An area's `perks` are those of the hotel a stay there usually means;
-  the plan's `hotel` parameter decides which count.
+  `international_drive`, `disney_springs`, `lake_buena_vista` and `kissimmee` (US-192). An area's
+  `perks` are those of the hotel a stay there usually means; the plan's `hotel` parameter decides
+  which count.
+- **The Disney Springs Resort Area** (`disney_springs`, hotel kind `disney_springs`) is the hotels on
+  Hotel Plaza Boulevard that Disney lists among the "other select hotels" with Early Entry: the
+  Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree
+  Suites, Holiday Inn Orlando, Wyndham Lake Buena Vista and Wyndham Garden. Their guests get Early
+  Entry at the four Disney theme parks and no Extended Evening Hours, which Disney's list keeps for
+  its Deluxe and Deluxe Villa hotels, the Swan, Dolphin, Swan Reserve and Shades of Green
+  ([Early Entry](https://disneyworld.disney.go.com/guest-services/early-entry/),
+  [Extended Evening Hours](https://disneyworld.disney.go.com/guest-services/extended-evening/)).
+  `lake_buena_vista` stays `offsite`: the B Resort on the same boulevard, on neither list, and the
+  hotels along SR 535. Both areas drive from the same point on Hotel Plaza Boulevard.
 - **Venues** are where an evening goes outside the parks, curated in `regions.ts` with the
   operator's page as `url`: Disney Springs (`district`), Disney's BoardWalk (`resort_area`, a view
   of EPCOT's fireworks), the Polynesian beach (`viewpoint` across the lagoon from Magic Kingdom, on
@@ -660,7 +671,7 @@ calendar does not.
 | ------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `from`, `to` | `2026-11-28`, `2026-12-06`                           | the trip, arrival and departure day included; at most 21 days, from today to a year ahead                                               |
 | `parks`      | `magic-kingdom-park:2,epcot,universal-epic-universe` | the parks and how many visits each (default 1, at most 3); default: the headliner parks; at most 16 visits                              |
-| `hotel`      | `disney`                                             | a hotel kind of the region (its `hotels`; Orlando: `disney`, `disney_deluxe`, `universal`, `universal_premier`, `offsite`): which perks count; default: the area's hotel, else `offsite` |
+| `hotel`      | `disney`                                             | a hotel kind of the region (its `hotels`; Orlando: `disney`, `disney_deluxe`, `disney_springs`, `universal`, `universal_premier`, `offsite`): which perks count; default: the area's hotel, else `offsite` |
 | `area`       | `disney`                                             | a `hotelAreas` key: each day's travel is read from there; without it the days carry no travel                                           |
 | `arrival`    | `free`                                               | `free` (no park on the arrival day, default) or `park`                                                                                  |
 | `departure`  | `free`                                               | the same for the last day                                                                                                               |

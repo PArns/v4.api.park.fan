@@ -162,7 +162,7 @@ describe("a region's own vocabulary", () => {
         TODAY,
       ),
     ).toThrow(
-      "hotel must be one of disney, disney_deluxe, universal, universal_premier, offsite",
+      "hotel must be one of disney, disney_deluxe, disney_springs, universal, universal_premier, offsite",
     );
     // An area's hotel is the default.
     const q = normalizePlanQuery(
@@ -223,6 +223,7 @@ describe("a region's own vocabulary", () => {
     expect(orlando.hotels.map((h) => h.key)).toEqual([
       "disney",
       "disney_deluxe",
+      "disney_springs",
       "universal",
       "universal_premier",
       "offsite",
