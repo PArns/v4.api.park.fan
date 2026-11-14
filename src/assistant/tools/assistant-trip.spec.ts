@@ -748,7 +748,7 @@ describe("get_park_events", () => {
         status: "announced",
       }),
     ]);
-    expect(json?.slots).toMatch(/Orlando parks only/);
+    expect(json?.slots).toMatch(/known for the Orlando.* parks only/);
   });
 
   it("refuses a window over 92 days", async () => {

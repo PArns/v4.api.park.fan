@@ -1,7 +1,7 @@
 /**
  * The purchase links the ticket catalog is seeded with, one entry per seed
  * product of every region (`TICKET_CATALOGS`; Orlando's here, each other
- * region's in its own `tickets-<region>.ts`, so a product id is unique across
+ * region's in its own `tickets.<region>.ts`, so a product id is unique across
  * regions): the operator's own shop (`official`), where research found
  * them the cheapest authorized seller (`cheapest`) and Attraction Tickets'
  * pages (`attractionTickets`, each for one park.fan locale or for all). The
@@ -16,8 +16,8 @@
  * a region's `ticket_products` table is empty; once seeded, links are edited
  * in the admin (docs/frontend/trip-regions.md#editing-the-catalog).
  */
-import { PARIS_SEED_LINKS } from "./tickets-paris";
-import { SOUTHERN_CALIFORNIA_SEED_LINKS } from "./tickets-southern-california";
+import { PARIS_SEED_LINKS } from "./tickets.paris";
+import { SOUTHERN_CALIFORNIA_SEED_LINKS } from "./tickets.southern-california";
 
 export interface SeedLink {
   seller: string;

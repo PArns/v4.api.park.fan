@@ -14,11 +14,21 @@ const TRACKING =
 /** Every region's seed products, in one list: their ids are unique across regions. */
 const SEED_PRODUCTS = Object.values(TICKET_CATALOGS).flat();
 
+/**
+ * The regions whose research came with purchase links. Japan's did not:
+ * Attraction Tickets sells nothing there and no seller was shown cheaper, so
+ * its products link their `shopUrl` alone.
+ */
+const LINKED_REGIONS = ["orlando", "southern-california", "paris"];
+
 describe("the catalog's seed links", () => {
-  it("has one entry for every seed product of every region and none for others", () => {
-    const ids = SEED_PRODUCTS.map((p) => p.id).sort();
+  it("has one entry for every product of the regions researched with links, and none for others", () => {
+    const ids = SEED_PRODUCTS.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(TICKET_SEED_LINKS.map((e) => e.productId).sort()).toEqual(ids);
+    const linked = LINKED_REGIONS.flatMap((slug) =>
+      TICKET_CATALOGS[slug].map((p) => p.id),
+    ).sort();
+    expect(TICKET_SEED_LINKS.map((e) => e.productId).sort()).toEqual(linked);
   });
 
   it("holds plain https links only: no affiliate or tracking parameters", () => {

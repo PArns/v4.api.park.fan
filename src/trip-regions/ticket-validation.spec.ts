@@ -71,16 +71,15 @@ describe("validateTicketProduct", () => {
       .filter((r) => r.slug !== ORLANDO.slug)
       .map((r) => [r.slug, r] as const),
   )(
-    "passes every %s seed product, and the dry run plans each of them",
+    "passes %s's seed products, and the dry run plans each",
     (_slug, region) => {
       const products = seedTickets(region);
       expect(products.length).toBeGreaterThan(0);
-      const slugs = products.map((p) => p.id);
       for (const product of products) {
         const { problems, valid } = validateTicketProduct(
           region,
           draftOf(product),
-          { creating: false, slugs },
+          { creating: false, slugs: products.map((p) => p.id) },
         );
         expect({ id: product.id, problems }).toEqual({
           id: product.id,

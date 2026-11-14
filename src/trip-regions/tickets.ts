@@ -14,8 +14,9 @@
  * contract and how the plan reads each field: docs/frontend/trip-regions.md#tickets.
  */
 import { TICKET_SEED_LINKS, type SeedLinkEntry } from "./ticket-seed-links";
-import { PARIS_TICKETS } from "./tickets-paris";
-import { SOUTHERN_CALIFORNIA_TICKETS } from "./tickets-southern-california";
+import { JAPAN_TICKETS } from "./tickets.japan";
+import { PARIS_TICKETS } from "./tickets.paris";
+import { SOUTHERN_CALIFORNIA_TICKETS } from "./tickets.southern-california";
 
 /**
  * Whom a product or a link is sold to: a code of the region's
@@ -865,6 +866,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
 export const TICKET_CATALOGS: Record<string, TicketProduct[]> = {
   orlando: ORLANDO_TICKETS,
   "southern-california": SOUTHERN_CALIFORNIA_TICKETS,
+  japan: JAPAN_TICKETS,
   paris: PARIS_TICKETS,
 };
 
