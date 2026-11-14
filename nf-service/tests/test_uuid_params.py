@@ -88,3 +88,15 @@ def test_weather_casts_the_parameter(monkeypatch):
     sql, params = calls[0]
     assert '"parkId" = ANY(CAST(:pids AS uuid[]))' in sql
     assert params == {"pids": [P]}
+
+
+def test_sched_asof_bound_is_the_earlier_of_day_start_and_now(monkeypatch):
+    # PAR-1328: GREATEST(day start, now()) is never before `updatedAt`, so the
+    # flag was 1 on every day. Pins the text; no Postgres runs in this suite.
+    frame = pd.DataFrame({"ds": [], "open_local": [], "close_local": []})
+    calls = _capture(monkeypatch, frame)
+    db.fetch_schedule([P])
+    sql, _ = calls[0]
+    bound = sql.split('max(se."updatedAt")', 1)[1].split("AS sched_asof", 1)[0]
+    assert "LEAST(" in bound
+    assert "GREATEST(" not in bound
