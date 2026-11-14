@@ -2,8 +2,13 @@ import {
   TEST_PARIS,
   TEST_TOKYO,
 } from "../../trip-regions/__fixtures__/test-regions";
-import { ORLANDO } from "../../trip-regions/regions";
-import { heatAndStormWatch, hubPathOf, seasonPhrases } from "./assistant-trip";
+import { JAPAN, ORLANDO, PARIS } from "../../trip-regions/regions";
+import {
+  heatAndStormWatch,
+  hubPathOf,
+  seasonPhrases,
+  slotName,
+} from "./assistant-trip";
 
 /** Parky's region-dependent words: each region's storm and rainy seasons, its hub. */
 describe("Parky's words per trip region", () => {
@@ -34,8 +39,29 @@ describe("Parky's words per trip region", () => {
     ).toEqual(["extreme heat: hotter than a usual summer day"]);
   });
 
-  it("puts each region's hub at its slug", () => {
-    expect(hubPathOf(ORLANDO)).toBe("/orlando");
-    expect(hubPathOf(TEST_TOKYO)).toBe("/test-tokyo");
+  it("links each region's hub through the site's route folder, which redirects to its segment", () => {
+    expect(hubPathOf(ORLANDO)).toBe("/trip-regions/orlando");
+    expect(hubPathOf(TEST_TOKYO)).toBe("/trip-regions/test-tokyo");
+  });
+});
+
+describe("the early and evening slots", () => {
+  it("names a slot from the region: its perk and the hotels that grant it", () => {
+    expect(slotName(ORLANDO, "early_park_admission")).toBe(
+      "Early Park Admission (guests of a Universal Orlando hotel or a Universal Premier hotel (Royal Pacific, Hard Rock, Portofino Bay))",
+    );
+    // Paris' Early Entry is Parc Astérix's hotel perk, Tokyo's slot Happy Entry: never Disney's words.
+    expect(slotName(PARIS, "early_entry")).toBe(
+      "Early Entry (guests of a Parc Astérix hotel (Les Trois Hiboux, La Cité Suspendue, Les Quais de Lutèce))",
+    );
+    expect(slotName(JAPAN, "happy_entry")).toMatch(
+      /^Happy Entry \(guests of a Disney Hotel/,
+    );
+    expect(slotName(ORLANDO, "ticketed_event")).toMatch(/separate ticket/);
+    // No hotel grants it: the perk's own name; no name either: its code.
+    expect(slotName({ ...ORLANDO, perks: {} }, "early_entry")).toBe(
+      "Early Entry",
+    );
+    expect(slotName(ORLANDO, "moonlight_magic")).toBe("moonlight_magic");
   });
 });

@@ -376,7 +376,7 @@ the park's `pageUrl`. A food stop goes into the plan with `plan_add_block`.
 Park and ride page URLs reach the model in the chat's language: `localizePageUrls`
 (`tools/assistant-actions.ts`), run on every result in `runAssistantTool`, turns
 `https://park.fan/parks/…` into `https://park.fan/<locale>/parks/…`, and the Orlando hub's
-`https://park.fan/orlando…` into `https://park.fan/<locale>/orlando…`. It touches nothing else, so a
+`https://park.fan/trip-regions/<slug>…` into `https://park.fan/<locale>/trip-regions/<slug>…`. It touches nothing else, so a
 localized subpage (the calendar's `calendrier-temps-attente`) is never built by guessing. Cards carry
 site-only paths without a locale, which the widget localizes.
 
@@ -457,7 +457,7 @@ the widget respells in the reader's language, the last two only where the park h
 `KIDS_PAGE_GATE` over the park's rides), else the refusal says why, 2 to 4 parks for `/compare?parks=` by their full geo path, which no other
 park shares, or a site `page`: `alerts`, `best_time`, `favorites`, `trip_planner`, `how_it_works`
 (`/how-park-fan-works`), `fancast`, `orlando` (the hub); a `plan_vacation` `hubUrl` as `url` opens
-the hub with that plan, `/orlando?from=…#planner`, rebuilt from the plan parameters it holds
+the hub with that plan, `/trip-regions/orlando?from=…#planner`, rebuilt from the plan parameters it holds
 (`hubPath`), so nothing else rides along), `request_location` (the share
 buttons), `plan_day`, `plan_add_rides` (rides of that park only; a ride a maintenance window shuts
 that day is not added and comes back in `notAdded` with its window, a ride the party is too short
@@ -627,7 +627,11 @@ the region: a hotel perk by its `perkNames` (Happy Entry, Extra Magic Time), the
 its kind and months ("typhoon season (August to October), a fact about the season, not a
 forecast"), the rainy season once per trip in `season`, whose school breaks a `/when` window and
 month count ("no Japanese school break"), the climate park the months read, the hub at
-`/<region slug>`, and a leg's source (OSRM's drive, or curated from timetables). `hotel`, `area`
+`/trip-regions/<slug>` (the site's route folder, which redirects to the region's segment in the
+reader's language, `/de/kalifornien`; the widget resolves it from its registry without the hop,
+and an older answer's `/<slug>` still reads as that hub), the before-opening and evening slots by
+the region's own perk name and the hotels whose stay grants it (`slotName`: Paris' Early Entry is
+Parc Astérix's hotel perk, Tokyo's slot Happy Entry), and a leg's source (OSRM's drive, or curated from timetables). `hotel`, `area`
 and `hopper` are the region's own values, checked by the plan route, whose refusal names them;
 the tool descriptions list Orlando's. In a region with bases (Japan) `plan_vacation` and
 `find_trip_dates` take `bases` (`tokyo:4@maihama,fujikawaguchiko:0`), `startBase` and `endBase`
@@ -671,7 +675,7 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
 date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
   characters, its tickets to buy included (`assistant-trip.spec.ts`); a result is cut at 12,000.
-- **`hubUrl`** is `https://park.fan/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
+- **`hubUrl`** is `https://park.fan/trip-regions/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
 - **`find_trip_dates`** (status `forecast`): when to go

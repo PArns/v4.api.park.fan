@@ -436,18 +436,25 @@ describe("the hub's address", () => {
   it("takes a hubUrl with or without a locale and keeps only the plan's parameters", () => {
     expect(
       hubPath(
-        "https://park.fan/de/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
+        "https://park.fan/de/trip-regions/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
       ),
     ).toBe(
-      "/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
+      "/trip-regions/orlando?from=2027-03-03&to=2027-03-10&parks=epcot:1,magic-kingdom-park:2&hop=0#planner",
     );
-    expect(hubPath("https://park.fan/orlando")).toBe("/orlando");
+    expect(hubPath("https://park.fan/trip-regions/orlando")).toBe(
+      "/trip-regions/orlando",
+    );
+    // An older answer's link at the region's slug lands on the route folder.
+    expect(hubPath("https://park.fan/de/orlando?from=2027-03-03")).toBe(
+      "/trip-regions/orlando?from=2027-03-03#planner",
+    );
   });
 
   it("refuses another host, another page, an unknown parameter or value and another anchor", () => {
     for (const url of [
       "https://evil.example/orlando?from=2027-03-03",
       "https://park.fan/de/orlando/2027/3?from=2027-03-03",
+      "https://park.fan/trip-regions/atlantis?from=2027-03-03",
       "https://park.fan/orlando?from=2027-03-03&next=https://evil.example",
       "https://park.fan/orlando?parks=<script>",
       "https://park.fan/orlando?from=2027-03-03#top",
@@ -460,14 +467,16 @@ describe("the hub's address", () => {
     expect(
       localizePageUrls(
         {
-          hubUrl: "https://park.fan/orlando?from=2027-03-03#planner",
-          other: "https://park.fan/orlandox",
+          hubUrl:
+            "https://park.fan/trip-regions/orlando?from=2027-03-03#planner",
+          other: "https://park.fan/trip-regions/orlandox",
         },
         "nl",
       ),
     ).toEqual({
-      hubUrl: "https://park.fan/nl/orlando?from=2027-03-03#planner",
-      other: "https://park.fan/orlandox",
+      hubUrl:
+        "https://park.fan/nl/trip-regions/orlando?from=2027-03-03#planner",
+      other: "https://park.fan/trip-regions/orlandox",
     });
   });
 });
@@ -647,7 +656,7 @@ describe("plan_vacation", () => {
       "EPCOT International Food & Wine Festival (expected)",
     ]);
     expect(json?.hubUrl).toBe(
-      `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=1&fireworks=any&split=auto&rest=auto&hop=0&arrival=free&departure=free#planner`,
+      `https://park.fan/de/trip-regions/orlando?from=${day(10)}&to=${day(14)}&parks=epcot:1,magic-kingdom-park:1,universal-epic-universe:1&hotel=offsite&blocks=1&fireworks=any&split=auto&rest=auto&hop=0&arrival=free&departure=free#planner`,
     );
     expect(json?.reserve).toHaveLength(3);
     expect(json?.reserve).toContainEqual({
@@ -864,7 +873,7 @@ describe("get_park_events", () => {
     expect(json?.statusMeans.expected).toMatch(/last year's pattern/);
     expect(json?.slots).toContainEqual({
       park: "Magic Kingdom Park",
-      slot: "Early Entry (Disney resort hotel guests)",
+      slot: "Early Entry (guests of a Walt Disney World resort hotel or a Disney Deluxe or Deluxe Villa resort hotel)",
       minutesBeforeOpening: 30,
       days: [`${day(10)}..${day(14)}`],
     });
@@ -974,17 +983,17 @@ describe("the trip in the planner and the hub", () => {
     const { call } = setup();
     expect((await call("open_page", { page: "orlando" })).action).toEqual({
       type: "navigate",
-      path: "/orlando",
+      path: "/trip-regions/orlando",
     });
     expect(
       (
         await call("open_page", {
-          url: `https://park.fan/de/orlando?from=${day(10)}&to=${day(14)}#planner`,
+          url: `https://park.fan/de/trip-regions/orlando?from=${day(10)}&to=${day(14)}#planner`,
         })
       ).action,
     ).toEqual({
       type: "navigate",
-      path: `/orlando?from=${day(10)}&to=${day(14)}#planner`,
+      path: `/trip-regions/orlando?from=${day(10)}&to=${day(14)}#planner`,
     });
     expect(
       (await call("open_page", { url: "https://park.fan/orlando?x=1" }))
