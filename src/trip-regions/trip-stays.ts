@@ -95,12 +95,27 @@ export interface StayPlan {
   /** Moves that leave no room for a park that day (a long leg, or an airport's). */
   travelMoves: number;
   /**
-   * The trip's parks' reach, summed, each park from the closest of the plan's
-   * bases: what decides between two plans that cost the same, so a tie goes
-   * to the bases by the parks (Disneyland Paris' hotels for a Disney trip),
-   * never to the one listed first.
+   * Each of the trip's parks' reach from the closest of the plan's bases, in
+   * minutes: what decides between two plans that cost the same, summed over
+   * the parks a plan keeps ({@link keptReachMinutes}).
    */
-  reachMinutes: number;
+  reachByPark: ReadonlyMap<string, number>;
+}
+
+/**
+ * The reach of the parks a plan keeps, summed, each from the closest of the
+ * stay plan's bases: a tie goes to the bases by those parks (Disneyland
+ * Paris' hotels for a Disney trip), never to the one listed first, and never
+ * to the bases by a park the plan left out (a weekend whose one park day is
+ * Parc Astérix does not sleep at the Disney hotels for the parks it dropped).
+ */
+export function keptReachMinutes(
+  stay: StayPlan,
+  parks: Iterable<string>,
+): number {
+  let sum = 0;
+  for (const slug of new Set(parks)) sum += stay.reachByPark.get(slug) ?? 0;
+  return sum;
 }
 
 /** The leg between two bases, either way round. */
@@ -260,11 +275,11 @@ export function stayPlans(
             ? [[0]]
             : []
           : nightSplits(nights, fixedNights);
-      const reachMinutes = coverable.reduce(
-        (sum, p) =>
-          sum +
+      const reachByPark = new Map(
+        coverable.map((p) => [
+          p,
           Math.min(...seq.map((b) => b.reach.get(p)?.minutes ?? Infinity)),
-        0,
+        ]),
       );
       for (const split of splits) {
         plans.push({
@@ -277,7 +292,7 @@ export function stayPlans(
             arrivalFrom,
             departureTo,
           ),
-          reachMinutes,
+          reachByPark,
         });
       }
     }
@@ -293,7 +308,7 @@ function planOf(
   fixedNights: Array<number | undefined>,
   arrivalFrom: string | undefined,
   departureTo: string | undefined,
-): Omit<StayPlan, "reachMinutes"> {
+): Omit<StayPlan, "reachByPark"> {
   const nightBase: string[] = [];
   keys.forEach((k, i) => {
     for (let j = 0; j < split[i]; j++) nightBase.push(k);

@@ -912,8 +912,10 @@ nothing else fits, with `fireworks_missed`; with `any` it carries `party_night_s
 **Second visits (`split=auto`).** Parks listed without a count, and the default headliners, get a
 second visit in the curated order (`secondVisitRank`: Magic Kingdom, EPCOT, Epic Universe, Islands
 of Adventure, Hollywood Studios, Universal Studios, Animal Kingdom) while the trip has park days
-left after the rest days `rest` keeps and the park has two open days. A written `slug:n` never
-changes. `meta.split` lists `{ slug, visits, auto: true }` for each park that got one.
+left after the rest days `rest` keeps and the park has two open days. A chosen park closed on every
+day a park can go on takes none of those days (Parc Astérix in March leaves Disneyland Park its
+second day on 12–14 March 2027). A written `slug:n` never changes. `meta.split` lists
+`{ slug, visits, auto: true }` for each park that got one.
 
 **Repeat visits.** A park takes up to three visits, never two on one day, and at least a day apart:
 the search keeps the gap as a rule (branch and bound on the assignment) and breaks it only where no
@@ -1356,10 +1358,12 @@ them; the 400 cheapest are solved, branch and bound as before, and a plan left o
 could beat the result makes `meta.exact` false (proven for the cheapest). **A tie:** a plan with
 the same number of moves as the cheapest that costs less than 3 minutes per park day more (the
 plan's "any order will do", `ORDER_MATTERS_MINUTES`) ties it, and the tie goes to the plan whose
-bases lie closer to the trip's parks (each park's reach from the closest of the plan's bases,
-summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix pays 5
-minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
-the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
+bases lie closer to the parks it keeps (each placed park's reach from the closest of the plan's
+bases, summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix
+pays 5 minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix
+from the Disney hotels) and stays at the Disney hotels. A park the plan leaves out does not count:
+the weekend of 14–16 May 2027 whose one park day is Parc Astérix sleeps at Parc Astérix, not at
+the Disney hotels for the two Disney parks it dropped. Plans with a different number of moves never
 tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
 bases has no stays and keeps its cheapest plan. Inside the stays kept, the visits take the
 placement that spreads them best among those that tie ([spread among ties](#the-plan-get-v1trip-regionsorlandoplan)),
