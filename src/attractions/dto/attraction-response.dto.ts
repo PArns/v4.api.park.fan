@@ -1,8 +1,5 @@
 import { ApiExtraModels, ApiProperty, OmitType } from "@nestjs/swagger";
-import {
-  BOUND_SEASON_PROPERTY,
-  BoundSeasonDto,
-} from "./bound-season.dto";
+import { BOUND_SEASON_PROPERTY, BoundSeasonDto } from "./bound-season.dto";
 import {
   ParkSummaryDto,
   mapParkSummary,

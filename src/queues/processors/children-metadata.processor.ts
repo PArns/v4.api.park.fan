@@ -331,7 +331,10 @@ export function coordinateChanged(
 export function isSeasonalRow(
   row: Pick<
     CuratedFactsSource,
-    "isSeasonal" | "curatedIsSeasonal" | "curatedSeasonMonths" | "seasonBindings"
+    | "isSeasonal"
+    | "curatedIsSeasonal"
+    | "curatedSeasonMonths"
+    | "seasonBindings"
   >,
 ): boolean {
   return resolveCuratedFacts(row).isSeasonal;

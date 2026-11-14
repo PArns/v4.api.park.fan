@@ -1,7 +1,4 @@
-import {
-  addIsoDays,
-  formatInParkTimezone,
-} from "../../common/utils/date.util";
+import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import type { SeasonBinding } from "../../common/types/season-binding.type";
 
 /**

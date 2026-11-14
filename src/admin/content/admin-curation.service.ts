@@ -938,12 +938,19 @@ export class AdminCurationService {
 
   /**
    * {@link publish} for a write across several parks, such as a season
-   * import: every park leaves Redis first, then the frontend is told once
-   * rather than once per park.
+   * import: every park leaves Redis first, with the attractions the write
+   * touched in it, then the frontend is told once rather than once per park.
+   *
+   * @param attractionIds - Per park id, the attractions whose own caches go too.
    */
-  async publishParks(parkIds: string[]): Promise<void> {
+  async publishParks(
+    parkIds: string[],
+    attractionIds: ReadonlyMap<string, readonly string[]> = new Map(),
+  ): Promise<void> {
     if (parkIds.length === 0) return;
-    for (const parkId of new Set(parkIds)) await this.evictPark(parkId, []);
+    for (const parkId of new Set(parkIds)) {
+      await this.evictPark(parkId, [...(attractionIds.get(parkId) ?? [])]);
+    }
     await this.revalidateParks();
   }
 

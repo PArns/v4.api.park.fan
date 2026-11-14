@@ -84,8 +84,9 @@ export const CacheKeys = {
   /**
    * Whole route answers kept in Redis because a keyed forecast leaves the API
    * private, so Cloudflare no longer absorbs its repeats (docs/frontend/api-keys.md).
-   * Each has a `resp:v1` segment of its own: `plan-day:h5:v2:*` already lives
+   * Each has a `resp:vN` segment of its own: `plan-day:h5:v2:*` already lives
    * under `plan-day:`, and a pattern for these must not take it along.
+   * `plan-day:resp:v2`: a ride a park season binds leaves the days outside it.
    */
   calendarResponse: (
     parkId: string,
@@ -98,16 +99,16 @@ export const CacheKeys = {
   calendarResponsePattern: (parkId: string): string =>
     `calendar:resp:v1:${parkId}:*`,
   planDayResponse: (parkId: string, date: string): string =>
-    `plan-day:resp:v1:${parkId}:${date}`,
+    `plan-day:resp:v2:${parkId}:${date}`,
   planDayResponsePattern: (parkId: string): string =>
-    `plan-day:resp:v1:${parkId}:*`,
+    `plan-day:resp:v2:${parkId}:*`,
   /**
    * The rides a works window shuts on a planned day, beside the plan the
    * optimizer reads. Under the response's own prefix, so whatever evicts the
    * plan (`planDayResponsePattern`) evicts this with it.
    */
   planDayRidesInWorks: (parkId: string, date: string): string =>
-    `plan-day:resp:v1:${parkId}:${date}:works`,
+    `plan-day:resp:v2:${parkId}:${date}:works`,
   rideDayCurve: (parkId: string, attraction: string): string =>
     `ride-day-curve:v1:${parkId}:${attraction}`,
   rideDayCurvePattern: (parkId: string): string =>
