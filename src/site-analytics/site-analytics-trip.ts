@@ -16,7 +16,8 @@ import {
  * no region: its product's slug belongs to one region's catalog. The 2.21.0
  * planner (PAR-1309, dates first) adds the edits, options, ticket openings,
  * parks left out, the finder, the date grid's mode, the accuracy note, the
- * stay suggestion and the park pages' tile (PAR-1317).
+ * stay suggestion, the park pages' tile (PAR-1317) and the hub's two buttons
+ * and resort chips (PAR-1312).
  */
 export const TRIP_EVENTS = {
   started: "trip_planner_started",
@@ -52,6 +53,8 @@ export const TRIP_EVENTS = {
   staySuggestion: "trip_stay_suggestion",
 
   tileClicked: "trip_tile_clicked",
+  hubAction: "trip_hub_action",
+  hubFilter: "trip_hub_filter",
 } as const;
 
 const E = TRIP_EVENTS;
@@ -236,6 +239,8 @@ export const TRIP_LISTS = {
   dayPinned: { events: [E.dayPinned], props: ["pinned"] },
 
   tileClicks: { events: [E.tileClicked], props: ["link"] },
+  hubActions: { events: [E.hubAction], props: ["action", "page"] },
+  hubFilters: { events: [E.hubFilter], props: ["resort"] },
   accuracyOpened: { events: [E.accuracyOpened], props: ["surface"] },
   savedDays: { events: [E.daysSaved], props: ["days"] },
   icsDays: { events: [E.icsExported], props: ["days"] },
