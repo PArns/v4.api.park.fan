@@ -147,8 +147,8 @@ function nightSplits(
   return out;
 }
 
-/** Every order of a list (a region's bases are few). */
-function permutations<T>(items: readonly T[]): T[][] {
+/** Every order of a list, for the few a trip permutes: a region's bases, its resorts' blocks. */
+export function permutations<T>(items: readonly T[]): T[][] {
   if (items.length <= 1) return [[...items]];
   return items.flatMap((item, i) =>
     permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [

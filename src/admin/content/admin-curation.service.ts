@@ -37,6 +37,7 @@ import {
   TRANSLATE_FUN_FACTS_JOB,
 } from "./fun-fact-translation.constants";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import {
   AdminAuditService,
   PARK_VERIFY_ACTION,
@@ -1005,7 +1006,7 @@ function parseParkLocalDate(label: string, raw: unknown): string | null {
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+  if (!ISO_DATE_PATTERN.test(trimmed)) {
     throw new BadRequestException(`${label} must be a date in YYYY-MM-DD form`);
   }
   // Rejects 2026-02-30 and 2026-13-01, which the pattern lets through.

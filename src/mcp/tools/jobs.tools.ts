@@ -5,6 +5,7 @@ import { runAdminRoute } from "../admin-route";
 import { AdminController } from "../../admin/admin.controller";
 import { AdminSearchConsoleController } from "../../search-console/search-console.controller";
 import type { McpToolContext } from "../mcp-tool";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 
 /**
  * The triggers on the admin's actions page: each queues the job its admin
@@ -256,7 +257,7 @@ const MAINTENANCE_NAMES = Object.keys(MAINTENANCE) as [
   ...MaintenanceName[],
 ];
 
-const DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
+const DAY = z.string().regex(ISO_DATE_PATTERN, "YYYY-MM-DD");
 
 export const runMaintenanceTool = defineMcpTool({
   name: "run_maintenance",

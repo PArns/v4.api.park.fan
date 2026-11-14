@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineMcpTool } from "../mcp-tool";
 import { asToolRefusal } from "../mcp-write";
 import { AdminTicketService } from "../../admin/content/admin-ticket.service";
-import { TRIP_REGION_SLUGS } from "./trip-season.inputs";
+import { TRIP_REGION_SLUGS } from "../../trip-regions/regions";
 
 export const listTicketProductsTool = defineMcpTool({
   name: "list_ticket_products",

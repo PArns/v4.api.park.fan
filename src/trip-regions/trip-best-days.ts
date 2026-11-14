@@ -10,9 +10,14 @@
  * day guests must leave early. A night the day guests lose to a party ranks
  * behind every full day whatever its waits.
  */
-import { addIsoDays } from "../common/utils/date.util";
+import { addIsoDays, isoDateWeekday } from "../common/utils/date.util";
 import type { EarlyKind, RegionConfig } from "./regions";
-import type { TripBasis, TripParkDayInternal } from "./trip-calendar.util";
+import {
+  endsHolidays,
+  isPlainWeekday,
+  type TripBasis,
+  type TripParkDayInternal,
+} from "./trip-calendar.util";
 import {
   planCellOf,
   rankWait,
@@ -87,9 +92,6 @@ const BASIS_ORDER: TripBasis[] = [
   "last_year",
   "none",
 ];
-
-const weekdayOf = (date: string): number =>
-  new Date(`${date}T12:00:00Z`).getUTCDay();
 
 interface Candidate {
   date: string;
@@ -222,15 +224,10 @@ function reasonsFor(
 ): BestDayReason[] {
   const reasons: BestDayReason[] = [];
   const info = dayByDate.get(c.date);
-  const weekday = weekdayOf(c.date);
-  if (weekday >= 1 && weekday <= 5 && !info?.isHoliday) reasons.push("weekday");
-  const previous = dayByDate.get(addIsoDays(c.date, -1));
-  if (
-    previous &&
-    (previous.isHoliday || previous.isSchoolVacation) &&
-    !info?.isHoliday &&
-    !info?.isSchoolVacation
-  ) {
+  if (isPlainWeekday(isoDateWeekday(c.date), info?.isHoliday)) {
+    reasons.push("weekday");
+  }
+  if (endsHolidays(dayByDate.get(addIsoDays(c.date, -1)), info)) {
     reasons.push("holiday_ends");
   }
   if (info?.isSchoolVacation) reasons.push("school_break");

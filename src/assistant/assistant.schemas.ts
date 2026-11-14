@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLOCK_PATTERN } from "../common/utils/date.util";
 import { ASSISTANT_LOCALES } from "./assistant-locales";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
@@ -66,7 +67,7 @@ export const plannerEntryId = z
   .regex(/^[A-Za-z0-9_-]+$/);
 
 /** HH:MM on the park's clock, as the planner stores it. */
-export const plannerClock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+export const plannerClock = z.string().regex(CLOCK_PATTERN);
 
 /** What the planner knows about the party, per day. */
 export const plannerPrefs = z.object({

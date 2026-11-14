@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, LessThanOrEqual, MoreThanOrEqual, Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import {
   PARK_SEASON_KINDS,
   PARK_SEASON_STATUSES,
@@ -17,7 +17,9 @@ import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import {
+  CLOCK_PATTERN,
   getCurrentDateInTimezone,
+  ISO_DATE_PATTERN,
   isRealIsoDate,
 } from "../../common/utils/date.util";
 
@@ -52,11 +54,6 @@ export interface SeasonQuery {
   limit?: number;
   offset?: number;
 }
-
-/** A season's day, park-local. */
-export const SEASON_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-/** A season's opening or closing time, 00:00–23:59; a midnight close is 00:00. */
-export const SEASON_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 @Injectable()
 export class ParkSeasonService {
@@ -234,38 +231,19 @@ export class ParkSeasonService {
   }
 
   /**
-   * Seasons overlapping a date, for the public read endpoint.
+   * A park's seasons overlapping a range, for the public read endpoint.
    *
    * Deliberately its own query rather than a field on the park payload: the
    * park response is fetched on every park page and re-polled every five
    * minutes, and seasons are day-stable. Putting them in it would pay for them
    * on every poll of every park, including the ~80 % with none on file.
    */
-  async forParkOnDate(parkId: string, date: string): Promise<ParkSeason[]> {
-    return this.seasons.find({
-      where: {
-        parkId,
-        startDate: LessThanOrEqual(date),
-        endDate: MoreThanOrEqual(date),
-      },
-      order: { startDate: "ASC" },
-    });
-  }
-
   async forParkInRange(
     parkId: string,
     from: string,
     to: string,
   ): Promise<ParkSeason[]> {
-    return this.seasons
-      .createQueryBuilder("season")
-      .where("season.parkId = :parkId", { parkId })
-      .andWhere("season.startDate <= :to AND season.endDate >= :from", {
-        from,
-        to,
-      })
-      .orderBy("season.startDate", "ASC")
-      .getMany();
+    return this.forParksInRange([parkId], from, to);
   }
 
   /** The seasons of several parks overlapping a range, in one query. */
@@ -335,10 +313,10 @@ export class ParkSeasonService {
       }
     }
 
-    if (input.opensAt && !SEASON_TIME_RE.test(input.opensAt)) {
+    if (input.opensAt && !CLOCK_PATTERN.test(input.opensAt)) {
       throw new BadRequestException("opensAt must be HH:MM");
     }
-    if (input.closesAt && !SEASON_TIME_RE.test(input.closesAt)) {
+    if (input.closesAt && !CLOCK_PATTERN.test(input.closesAt)) {
       throw new BadRequestException("closesAt must be HH:MM");
     }
 
@@ -445,7 +423,7 @@ export class ParkSeasonService {
   }
 
   private requireDate(value: string, field: string): string {
-    if (typeof value !== "string" || !SEASON_DATE_RE.test(value)) {
+    if (typeof value !== "string" || !ISO_DATE_PATTERN.test(value)) {
       throw new BadRequestException(`${field} must be a YYYY-MM-DD date`);
     }
     if (!isRealIsoDate(value)) {

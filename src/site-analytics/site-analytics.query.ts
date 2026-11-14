@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays } from "../common/utils/date.util";
+import { addIsoDays, ISO_DATE_PATTERN } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
   BUCKET_SECONDS,
@@ -41,7 +41,7 @@ export interface SiteFilter {
 }
 
 /** `YYYY-MM-DD`. */
-export const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+export const DAY_PATTERN = ISO_DATE_PATTERN;
 
 /**
  * What every report takes: a window of UTC days, either the last `days` or

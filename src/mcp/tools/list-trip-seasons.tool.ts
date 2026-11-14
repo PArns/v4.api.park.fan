@@ -6,7 +6,8 @@ import {
   PARK_SEASON_STATUSES,
 } from "../../parks/entities/park-season.entity";
 import { AdminSeasonService } from "../../admin/content/admin-season.service";
-import { seasonView, TRIP_REGION_SLUGS } from "./trip-season.inputs";
+import { TRIP_REGION_SLUGS } from "../../trip-regions/regions";
+import { seasonView } from "./trip-season.inputs";
 
 export const listTripSeasonsTool = defineMcpTool({
   name: "list_trip_seasons",

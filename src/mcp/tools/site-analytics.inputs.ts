@@ -245,6 +245,16 @@ export function round3(value: number | null | undefined): number | null {
   return typeof value === "number" ? Math.round(value * 1000) / 1000 : null;
 }
 
+/** A ratio to three places, null without both counts or a base. */
+export function ratio(
+  count: number | null,
+  base: number | null,
+): number | null {
+  return count === null || base === null || base === 0
+    ? null
+    : round3(count / base);
+}
+
 /**
  * `count` against `previous` as a ratio (0.25 = +25 %), null without a base:
  * no previous window, or nothing in it.

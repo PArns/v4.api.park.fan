@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { addIsoDays } from "../../common/utils/date.util";
+import { addIsoDays, isoDaysBetween } from "../../common/utils/date.util";
 import { utcDay } from "../../common/utils/reader-hash.util";
 import { TripRequestMetric } from "./trip-request-metric.entity";
 import {
@@ -585,12 +585,7 @@ export class TripRequestMetricsService
     return {
       from: query.from,
       to: query.to,
-      days:
-        Math.round(
-          (Date.parse(`${query.to}T00:00:00Z`) -
-            Date.parse(`${query.from}T00:00:00Z`)) /
-            86_400_000,
-        ) + 1,
+      days: isoDaysBetween(query.from, query.to) + 1,
       region: query.region ?? null,
       route: query.route ?? null,
       caller: query.caller ?? null,

@@ -5,10 +5,10 @@ import {
   ModelComparisonService,
 } from "../../parks/services/model-comparison.service";
 import type { ModelComparisonOriginId } from "../../ml/dto/model-comparison.dto";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
 
 const REGIONS = ["ALL", "EU", "NA", "ASIA", "OTHER"] as const;
 const GROUPS = ["live", "today", "planner", "calendar"] as const;
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const modelComparisonTool = defineMcpTool({
   name: "model_comparison",
@@ -82,7 +82,7 @@ export const modelComparisonDayTool = defineMcpTool({
   input: {
     date: z
       .string()
-      .regex(DATE, "must be YYYY-MM-DD")
+      .regex(ISO_DATE_PATTERN, "must be YYYY-MM-DD")
       .optional()
       .describe("Park-local day, YYYY-MM-DD"),
     park: uuidInput().optional().describe("Park id"),

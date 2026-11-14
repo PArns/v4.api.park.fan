@@ -4,7 +4,7 @@ import { defineMcpTool, McpToolError } from "../mcp-tool";
 import { asToolRefusal, dryRunInput, routeBody } from "../mcp-write";
 import { AdminTicketService } from "../../admin/content/admin-ticket.service";
 import { TicketProductWriteDto } from "../../admin/content/dto/ticket-product.dto";
-import { TRIP_REGION_SLUGS } from "./trip-season.inputs";
+import { TRIP_REGION_SLUGS } from "../../trip-regions/regions";
 
 /** A product body this long is no edit a person asked for. */
 const MAX_PRODUCT_CHARS = 50_000;

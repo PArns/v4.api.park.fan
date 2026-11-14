@@ -1,4 +1,5 @@
 import { HttpException } from "@nestjs/common";
+import { isoDaysBetween } from "../../common/utils/date.util";
 import { findRegion, type RegionConfig } from "../regions";
 import type { TicketProduct } from "../tickets";
 import { productOf, type OwnedTicket } from "../trip-tickets";
@@ -147,12 +148,6 @@ export function ticketKindOf(
   return owned.days === 1 ? "one_day" : "multi_day";
 }
 
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
 /** The shape of a valid `/plan` query. `parksNamed` comes from the raw query. */
 export function planShapeOf(
   region: RegionConfig,
@@ -160,7 +155,7 @@ export function planShapeOf(
   parksNamed: boolean,
 ): TripRequestShape {
   return {
-    tripDays: daysBetween(q.from, q.to) + 1,
+    tripDays: isoDaysBetween(q.from, q.to) + 1,
     parks: q.parks.length,
     parksNamed,
     visits: q.parks.reduce((sum, p) => sum + p.visits, 0),
@@ -194,7 +189,7 @@ export function whenShapeOf(
     ...planShapeOf(region, q.plan, parksNamed),
     tripDays: q.days,
     locks: 0,
-    rangeDays: daysBetween(q.from, q.to) + 1,
+    rangeDays: isoDaysBetween(q.from, q.to) + 1,
     within: Boolean(q.within),
   };
 }

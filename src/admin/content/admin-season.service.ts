@@ -58,6 +58,20 @@ export type AdminSeasonView = Omit<ParkSeason, "park"> & {
   park: { id: string; name: string; slug: string } | null;
 };
 
+/** A season loaded with its park, as the admin's list and its season route answer it. */
+export function adminSeasonView(season: ParkSeason): AdminSeasonView {
+  return {
+    ...season,
+    park: season.park
+      ? {
+          id: season.park.id,
+          name: resolveCuratedPark(season.park).name,
+          slug: season.park.slug,
+        }
+      : null,
+  };
+}
+
 export interface SeasonImportRowResult {
   /** 1-based, as the file is read. */
   row: number;
@@ -121,16 +135,7 @@ export class AdminSeasonService {
     const result = await this.seasons.list({ ...rest, parkIds });
     return {
       total: result.total,
-      seasons: result.seasons.map((season) => ({
-        ...season,
-        park: season.park
-          ? {
-              id: season.park.id,
-              name: resolveCuratedPark(season.park).name,
-              slug: season.park.slug,
-            }
-          : null,
-      })),
+      seasons: result.seasons.map(adminSeasonView),
     };
   }
 

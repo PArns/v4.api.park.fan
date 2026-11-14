@@ -50,6 +50,9 @@
  * speaks. It differs from elapsed time only across a DST switch inside the open
  * window (02:00–03:00), where no park we track is open.
  */
+import { addIsoDays, isWeekendDate } from "./date.util";
+
+export { isWeekendDate };
 
 /** Days of history the profile is built from, before today. */
 export const H5_WINDOW_DAYS = 56;
@@ -204,7 +207,7 @@ export function historyDaysOf(
     const own = rows.get(date) ?? [];
     const readings = [...own];
     if (window.closeMin > 1440) {
-      for (const r of rows.get(nextDate(date)) ?? []) {
+      for (const r of rows.get(addIsoDays(date, 1)) ?? []) {
         readings.push({ minute: r.minute + 1440, wait: r.wait });
       }
     }
@@ -217,18 +220,6 @@ export function historyDaysOf(
     });
   }
   return out;
-}
-
-/** Saturday or Sunday, from the date string itself (no timezone involved). */
-export function isWeekendDate(date: string): boolean {
-  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
-  return day === 0 || day === 6;
-}
-
-function nextDate(date: string): string {
-  return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000)
-    .toISOString()
-    .slice(0, 10);
 }
 
 /** Builds one ride's profile from its window days. Null with no usable day. */

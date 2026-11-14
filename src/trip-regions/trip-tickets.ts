@@ -6,7 +6,12 @@
  * docs/frontend/trip-regions.md#tickets.
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  eachIsoDate,
+  isoDaysBetween,
+  isRealIsoDate,
+} from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
 import {
   allowanceOf,
@@ -60,19 +65,6 @@ export interface OwnedTicket {
 }
 
 const ITEM = /^([a-z0-9-]+)(?:\.(\d{1,2}))?(\.h\??)?(?:@(\d{4}-\d{2}-\d{2}))?$/;
-
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
-/** Every date from `from` to `to`, both included. */
-function datesFrom(from: string, to: string): string[] {
-  const out: string[] = [];
-  for (let d = from; d <= to; d = addIsoDays(d, 1)) out.push(d);
-  return out;
-}
 
 /** The catalog's product, or undefined. */
 /** What reads a catalog: a region, with the catalog loaded on it or not (the seed). */
@@ -158,7 +150,7 @@ export function parseTickets(
     if (start !== undefined) {
       validateStart(product, item, start, days, trip, starts);
     } else if (product.onSale) {
-      const anyOnSale = datesFrom(trip.from, trip.to).some((d) =>
+      const anyOnSale = eachIsoDate(trip.from, trip.to).some((d) =>
         onSaleAt(product, d),
       );
       if (!anyOnSale) {
@@ -288,7 +280,7 @@ export function planTicketsOf(
     if (product.until && product.until < last) {
       // A pass or Fun Card that ends inside the trip: its days end there.
       start = first;
-      window = Math.max(0, daysBetween(first, product.until) + 1);
+      window = Math.max(0, isoDaysBetween(first, product.until) + 1);
     }
     const allowance = allowanceOf(product, o.days);
     return [
@@ -413,7 +405,7 @@ function fitOf(product: TicketProduct, visits: Visit[]): Fit | null {
   const first = visits[0].date;
   const last = visits[visits.length - 1].date;
   if (!onSaleAt(product, first)) return null;
-  const span = daysBetween(first, last) + 1;
+  const span = isoDaysBetween(first, last) + 1;
   const lengths: Array<number | "unlimited"> =
     product.days === "unlimited"
       ? ["unlimited"]
@@ -605,7 +597,7 @@ export function suggestTickets(input: SuggestionInput): {
   }
   const suggestions: TicketSuggestion[] = [];
   const days = new Map<string, DayTicket>();
-  const tripDays = daysBetween(trip.from, trip.to) + 1;
+  const tripDays = isoDaysBetween(trip.from, trip.to) + 1;
   for (const group of region.groups) {
     const visits = byResort.get(group.key);
     if (!visits) continue;
@@ -629,7 +621,7 @@ export function suggestTickets(input: SuggestionInput): {
           n++;
           days.set(v.date, {
             ticket: id,
-            ticketDay: windowDay ? daysBetween(start, v.date) + 1 : n,
+            ticketDay: windowDay ? isoDaysBetween(start, v.date) + 1 : n,
           });
         }
       }

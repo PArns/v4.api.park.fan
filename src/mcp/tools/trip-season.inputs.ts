@@ -5,13 +5,9 @@ import {
   PARK_SEASON_STATUSES,
   type ParkSeason,
 } from "../../parks/entities/park-season.entity";
-import {
-  SEASON_DATE_RE,
-  SEASON_TIME_RE,
-  type SeasonInput,
-} from "../../parks/services/park-season.service";
+import type { SeasonInput } from "../../parks/services/park-season.service";
+import { CLOCK_PATTERN, ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import { SEASON_LIMITS } from "../../admin/content/dto/curation.dto";
-import { TRIP_REGIONS } from "../../trip-regions/regions";
 import type { AdminSeasonView } from "../../admin/content/admin-season.service";
 
 /**
@@ -21,12 +17,6 @@ import type { AdminSeasonView } from "../../admin/content/admin-season.service";
  * currency, http(s) links, attractions of the park).
  */
 
-/** Every trip region's slug, for a `region` input. */
-export const TRIP_REGION_SLUGS = Object.keys(TRIP_REGIONS) as [
-  string,
-  ...string[],
-];
-
 const KIND =
   "halloween, christmas, summer_nights (late summer openings), special_event (anything else " +
   "with a name), opening (the park's own operating season), closure (the park shut), " +
@@ -35,9 +25,9 @@ const STATUS =
   "confirmed (the park published it), announced, expected (it ran last year, nothing published " +
   "yet), cancelled";
 
-const date = () => z.string().regex(SEASON_DATE_RE, "must be YYYY-MM-DD");
+const date = () => z.string().regex(ISO_DATE_PATTERN, "must be YYYY-MM-DD");
 const time = () =>
-  z.string().regex(SEASON_TIME_RE, "must be HH:MM, 00:00–23:59");
+  z.string().regex(CLOCK_PATTERN, "must be HH:MM, 00:00–23:59");
 
 /** The fields of a season, each optional; `null` clears one. update_trip_season takes these. */
 export const seasonPatchFields = {

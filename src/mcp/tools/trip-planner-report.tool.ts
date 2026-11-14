@@ -11,11 +11,12 @@ import {
   type TripListKey,
   type TripTotalKey,
 } from "../../site-analytics/site-analytics-trip";
-import { TRIP_REGIONS } from "../../trip-regions/regions";
+import { TRIP_REGION_SLUGS, TRIP_REGIONS } from "../../trip-regions/regions";
 import { TicketCatalogService } from "../../trip-regions/ticket-catalog.service";
 import {
   HOURLY_FROM_DESCRIPTION,
   eventWindowInput,
+  ratio,
   round3,
   siteQuery,
   windowOf,
@@ -28,8 +29,6 @@ import {
   isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
-
-const REGIONS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
 
 /** Each region park's region by its page (`continent/country/city/slug`), for the tile's views. */
 const PARK_REGIONS = new Map(
@@ -44,10 +43,6 @@ const PARK_REGIONS = new Map(
   ),
 );
 const ERAS: readonly TripFunnelEra[] = ["before", "since"];
-
-/** A ratio to three places, null without both counts or a base. */
-const ratio = (count: number | null, base: number | null): number | null =>
-  count === null || base === null || base === 0 ? null : round3(count / base);
 
 export const tripPlannerReportTool = defineMcpTool({
   name: "trip_planner_report",
@@ -100,7 +95,7 @@ export const tripPlannerReportTool = defineMcpTool({
   input: {
     ...eventWindowInput,
     region: z
-      .enum(REGIONS)
+      .enum(TRIP_REGION_SLUGS)
       .optional()
       .describe("Only this region's events; every region's when absent"),
     limit: z
@@ -128,7 +123,7 @@ export const tripPlannerReportTool = defineMcpTool({
       .get(SiteAnalyticsTripService)
       .report(siteQuery(input), {
         region: region ?? null,
-        knownRegions: REGIONS,
+        knownRegions: TRIP_REGION_SLUGS,
         productRegions,
         parkRegions: PARK_REGIONS,
         series,

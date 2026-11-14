@@ -518,6 +518,11 @@ export function hotelKinds(region: Pick<RegionConfig, "perks">): string[] {
   return Object.keys(region.perks);
 }
 
+/** The keys of a region's resorts (`hopper=`, the plan's blocks), in its order. */
+export function resortKeys(region: Pick<RegionConfig, "groups">): string[] {
+  return region.groups.filter((g) => g.kind === "resort").map((g) => g.key);
+}
+
 const US = { continent: "north-america", country: "united-states" } as const;
 
 const DISNEY_THEME_PARKS = [
@@ -2680,6 +2685,12 @@ export const TRIP_REGIONS: Record<string, RegionConfig> = {
   [JAPAN.slug]: JAPAN,
   [PARIS.slug]: PARIS,
 };
+
+/** Every region's slug, in that order; a non-empty tuple, as `z.enum` takes it. */
+export const TRIP_REGION_SLUGS = Object.keys(TRIP_REGIONS) as [
+  string,
+  ...string[],
+];
 
 /** The region a slug names, or null. */
 export function findRegion(slug: string): RegionConfig | null {

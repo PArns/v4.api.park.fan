@@ -5,8 +5,10 @@
  * docs/frontend/trip-regions.md.
  */
 import { BadRequestException } from "@nestjs/common";
+import { isoDateWeekday, isoDaysBetween } from "../common/utils/date.util";
 import {
   hotelKinds,
+  resortKeys,
   stayRulesOf,
   type HotelKind,
   type RegionConfig,
@@ -141,12 +143,6 @@ export type PlanOverrides = ReplanChange;
 const flag = (value: string | undefined, fallback: boolean): boolean =>
   value === undefined ? fallback : value === "1" || value === "true";
 
-const daysBetween = (from: string, to: string): number =>
-  Math.round(
-    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
-      86_400_000,
-  );
-
 /**
  * The visits a query pins: the counts of two or more it writes. A park
  * without a count, or with one, may be left out where the trip has no day
@@ -208,7 +204,7 @@ export function normalizePlanQuery(
   ticketScope?: { from: string; to: string; starts: boolean },
 ): NormalizedPlanQuery {
   validateWindow(query.from, query.to, MAX_TRIP_DAYS, today);
-  const tripDays = daysBetween(query.from, query.to) + 1;
+  const tripDays = isoDaysBetween(query.from, query.to) + 1;
   const knownSet = new Set(known);
 
   const parks: NormalizedPlanQuery["parks"] = [];
@@ -241,9 +237,7 @@ export function normalizePlanQuery(
   parks.sort((a, b) => a.slug.localeCompare(b.slug));
 
   const ticket: TicketKind = query.ticket === "hopper" ? "hopper" : "base";
-  const resorts = region.groups
-    .filter((g) => g.kind === "resort")
-    .map((g) => g.key);
+  const resorts = resortKeys(region);
   const hopperResorts =
     ticket === "hopper"
       ? resorts
@@ -588,7 +582,7 @@ export function planInput(
   return {
     days: calendar.days.map((d) => ({
       date: d.date,
-      weekday: new Date(`${d.date}T12:00:00Z`).getUTCDay(),
+      weekday: isoDateWeekday(d.date),
       isHoliday: d.isHoliday,
       isSchoolVacation: d.isSchoolVacation,
     })),
@@ -617,9 +611,7 @@ export function planInput(
       arrival: q.arrival,
       departure: q.departure,
       blocks: q.blocks,
-      blockGroups: region.groups
-        .filter((g) => g.kind === "resort")
-        .map((g) => g.key),
+      blockGroups: resortKeys(region),
       blockOwned,
       fireworks: q.fireworks,
       rest: q.rest,
@@ -815,7 +807,7 @@ export function plannedLeads(trip: OptimizedTrip, today: string): number[] {
   for (const day of trip.plan.days) {
     for (const visit of visitsOf(day)) {
       if (visit.basis === "forecast" || visit.basis === "long_range") {
-        leads.add(daysBetween(today, day.date));
+        leads.add(isoDaysBetween(today, day.date));
       }
     }
   }
@@ -1011,7 +1003,7 @@ function windowDayOf(
 ): Partial<PlannedDay> {
   const t = summaries.find((s) => s.id === day.ticket);
   if (!t?.windowDays || !t.start || day.ticketDay === undefined) return {};
-  return { ticketDay: daysBetween(t.start, day.date) + 1 };
+  return { ticketDay: isoDaysBetween(t.start, day.date) + 1 };
 }
 
 /** A one-night change to the visitor's fixed stays that saves waiting (`meta.staySuggestion`). */
@@ -1061,7 +1053,7 @@ export function staySuggestionOf(
       if (
         variant.stays &&
         variant.stays.bases.reduce((sum, b) => sum + (b.nights ?? 0), 0) >
-          daysBetween(q.from, q.to)
+          isoDaysBetween(q.from, q.to)
       ) {
         continue;
       }
@@ -1134,7 +1126,7 @@ export function planResponse(
   const errors = plan.days.flatMap((day) =>
     visitsOf(day).flatMap((visit) => {
       if (visit.basis !== "forecast" && visit.basis !== "long_range") return [];
-      const mae = ctx.leadMae.get(daysBetween(ctx.today, day.date));
+      const mae = ctx.leadMae.get(isoDaysBetween(ctx.today, day.date));
       return mae != null ? [mae] : [];
     }),
   );

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, Matches, Max, Min } from "class-validator";
-import { TripPlanQueryDto } from "./trip-region-query.dto";
+import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
+import { DATE_MESSAGE, TripPlanQueryDto } from "./trip-region-query.dto";
 import {
   WHEN_DEFAULT_DAYS,
   WHEN_DEFAULT_GAP,
@@ -10,8 +11,6 @@ import {
   WHEN_MIN_DAYS,
 } from "../trip-when";
 
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const DATE_MESSAGE = "must be a YYYY-MM-DD date";
 /** A holiday-region code as the holiday table stores it: `DE-NW`, `AT-KÄ`, `GB-ENG`. */
 const REGION_CODE = /^[A-Za-z]{2}(-[\p{L}\p{N}]{1,12}){1,2}$/u;
 
@@ -30,7 +29,7 @@ export class TripWhenQueryDto extends OmitType(TripPlanQueryDto, [
     example: "2027-01-01",
   })
   @IsOptional()
-  @Matches(DATE, { message: `from ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `from ${DATE_MESSAGE}` })
   from?: string;
 
   @ApiPropertyOptional({
@@ -39,7 +38,7 @@ export class TripWhenQueryDto extends OmitType(TripPlanQueryDto, [
     example: "2027-12-31",
   })
   @IsOptional()
-  @Matches(DATE, { message: `to ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `to ${DATE_MESSAGE}` })
   to?: string;
 
   @ApiPropertyOptional({
@@ -110,7 +109,7 @@ export class TripSchoolBreaksQueryDto {
     example: "2027-01-01",
   })
   @IsOptional()
-  @Matches(DATE, { message: `from ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `from ${DATE_MESSAGE}` })
   from?: string;
 
   @ApiPropertyOptional({
@@ -119,7 +118,7 @@ export class TripSchoolBreaksQueryDto {
     example: "2027-12-31",
   })
   @IsOptional()
-  @Matches(DATE, { message: `to ${DATE_MESSAGE}` })
+  @Matches(ISO_DATE_PATTERN, { message: `to ${DATE_MESSAGE}` })
   to?: string;
 
   @ApiPropertyOptional({

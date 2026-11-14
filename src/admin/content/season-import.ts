@@ -4,11 +4,8 @@ import {
   type ParkSeasonKind,
   type ParkSeasonStatus,
 } from "../../parks/entities/park-season.entity";
-import {
-  SEASON_DATE_RE,
-  SEASON_TIME_RE,
-  type SeasonInput,
-} from "../../parks/services/park-season.service";
+import { CLOCK_PATTERN, ISO_DATE_PATTERN } from "../../common/utils/date.util";
+import type { SeasonInput } from "../../parks/services/park-season.service";
 import {
   findRegion,
   TRIP_REGIONS,
@@ -77,13 +74,13 @@ export function seasonRowProblem(row: SeasonImportRow): string | null {
   if (!(PARK_SEASON_KINDS as readonly string[]).includes(row.kind)) {
     return `kind "${row.kind}" is not one of ${PARK_SEASON_KINDS.join(", ")}`;
   }
-  if (!row.startDate || !SEASON_DATE_RE.test(row.startDate)) {
+  if (!row.startDate || !ISO_DATE_PATTERN.test(row.startDate)) {
     return "startDate is not YYYY-MM-DD";
   }
   if (row.endDate == null) {
     return "no endDate: the end is not announced, so the row waits";
   }
-  if (!SEASON_DATE_RE.test(row.endDate)) return "endDate is not YYYY-MM-DD";
+  if (!ISO_DATE_PATTERN.test(row.endDate)) return "endDate is not YYYY-MM-DD";
   if (row.endDate < row.startDate) return "endDate is before startDate";
   if (
     row.status &&
@@ -94,13 +91,13 @@ export function seasonRowProblem(row: SeasonImportRow): string | null {
   for (const field of ["opensAt", "closesAt"] as const) {
     const value = row[field];
     if (value === "24:00") return `${field} is 24:00: write midnight as 00:00`;
-    if (value != null && !SEASON_TIME_RE.test(value)) {
+    if (value != null && !CLOCK_PATTERN.test(value)) {
       return `${field} is not HH:MM`;
     }
   }
   for (const date of row.dates ?? []) {
     if (
-      !SEASON_DATE_RE.test(date) ||
+      !ISO_DATE_PATTERN.test(date) ||
       date < row.startDate ||
       date > row.endDate
     ) {

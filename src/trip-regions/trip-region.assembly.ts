@@ -6,11 +6,16 @@
  * docs/frontend/trip-regions.md.
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  eachIsoDate,
+  isRealIsoDate,
+} from "../common/utils/date.util";
 import { SERVING_TFT_DAYS } from "../ml/serving-horizons.constants";
 import type { PublicParkSeason } from "../parks/park-seasons.controller";
 import {
   hotelKinds,
+  hotelPoint,
   stayRulesOf,
   MOVE_BUFFER_OPTIONS,
   venuePoint,
@@ -196,7 +201,7 @@ export function describeRegion(
   const venues = region.venues.filter((v) => groups.has(v.group));
   const points = new Set([
     ...parks.map((p) => p.config.slug),
-    ...region.hotelAreas.map((h) => `hotel:${h.key}`),
+    ...region.hotelAreas.map((h) => hotelPoint(h.key)),
     ...venues.map((v) => venuePoint(v.key)),
   ]);
   const source = travelSource(region);
@@ -570,15 +575,11 @@ export function assembleRegionCalendar(
   const earlyKindOf = new Map(
     region.groups.map((g) => [g.key, g.earlyKind] as const),
   );
-  const dates: string[] = [];
-  for (let d = from; d <= to; d = addIsoDays(d, 1)) dates.push(d);
+  const dates = eachIsoDate(from, to);
   // The reference span the sources were read for (`referenceRange`); a day
   // outside the wanted window is built only to price the wanted ones.
   const reference = referenceRange(from, to);
-  const span: string[] = [];
-  for (let d = reference.from; d <= reference.to; d = addIsoDays(d, 1)) {
-    span.push(d);
-  }
+  const span = eachIsoDate(reference.from, reference.to);
 
   const cells = new Map<string, Map<string, TripParkDayInternal>>();
   const coverage: Record<string, string | null> = {};

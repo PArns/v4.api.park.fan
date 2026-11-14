@@ -10,7 +10,10 @@ import {
   retiredKindOf,
 } from "../../attractions/services/attraction-retirement.service";
 import { isSeasonalRow } from "../../queues/processors/children-metadata.processor";
-import { formatInParkTimezone } from "../../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  ISO_DATE_PATTERN,
+} from "../../common/utils/date.util";
 
 /**
  * Retirement as the admin does it, one ride or park at a time with a date and
@@ -21,7 +24,7 @@ import { formatInParkTimezone } from "../../common/utils/date.util";
 
 const DAY = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD")
+  .regex(ISO_DATE_PATTERN, "YYYY-MM-DD")
   .describe("The last operating day the source states, YYYY-MM-DD");
 
 const RETIRE_REASON = z
@@ -299,7 +302,7 @@ export const reviewMarkTool = defineMcpTool({
       .describe("Why it is not a case; the next person asked reads it"),
     recheckAfter: z
       .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD")
+      .regex(ISO_DATE_PATTERN, "YYYY-MM-DD")
       .optional()
       .describe("Ask again from this day; absent makes the mark permanent"),
   },

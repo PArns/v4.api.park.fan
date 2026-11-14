@@ -17,11 +17,14 @@
  * past that. A plan is reported `exact` only when nothing on the way was cut
  * short; the contract (docs/frontend/trip-regions.md) says how to read it.
  */
-import { addIsoDays } from "../common/utils/date.util";
+import { addIsoDays, isoDaysBetween } from "../common/utils/date.util";
+import { mean, median } from "../common/utils/stats.util";
 import { solveAssignment } from "./hungarian";
 import { dayKindsOf, type TicketDayKind } from "./tickets";
+import { endsHolidays, isPlainWeekday } from "./trip-calendar.util";
 import {
   fewestTravelDays,
+  permutations,
   stayPlans,
   unreachableParks,
   type StayLeg,
@@ -779,20 +782,8 @@ interface StructureResult {
 }
 
 /** The wait a cell is costed and compared by: unrounded where known. */
-const waitOf = (c: PlanCell): number | undefined =>
+export const waitOf = (c: PlanCell): number | undefined =>
   c.exactWait ?? c.headlinerWait;
-
-const median = (values: number[]): number | undefined => {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-};
-
-const mean = (values: number[]): number | undefined =>
-  values.length === 0
-    ? undefined
-    : values.reduce((s, v) => s + v, 0) / values.length;
 
 /** Weather codes (WMO) of rain, showers and storms. */
 const WET_CODES = new Set([
@@ -1011,17 +1002,6 @@ function longestRun(flags: boolean[]): number {
     if (run > best) best = run;
   }
   return best;
-}
-
-/** Every k-permutation would be overkill: groups are at most three. */
-function permutations<T>(items: T[]): T[][] {
-  if (items.length <= 1) return [items];
-  const out: T[][] = [];
-  items.forEach((item, i) => {
-    const rest = [...items.slice(0, i), ...items.slice(i + 1)];
-    for (const tail of permutations(rest)) out.push([item, ...tail]);
-  });
-  return out;
 }
 
 /** Every split of [0, n) into k non-empty consecutive segments, as start indices. */
@@ -1764,11 +1744,7 @@ class TripOptimizer {
 
   /** Days from the trip's first day to a date, negative before it. */
   private offsetOf(date: string): number {
-    return Math.round(
-      (Date.parse(`${date}T00:00:00Z`) -
-        Date.parse(`${this.dates[0]}T00:00:00Z`)) /
-        86_400_000,
-    );
+    return isoDaysBetween(this.dates[0], date);
   }
 
   /**
@@ -3233,16 +3209,8 @@ class TripOptimizer {
       if (options.rest.mode !== "none" && run > defaultLimit)
         warnings.add("long_streak");
       const info = dayInfo[i];
-      if (info.weekday >= 1 && info.weekday <= 5 && !info.isHoliday) {
-        reasons.add("weekday");
-      }
-      const prev = i > 0 ? dayInfo[i - 1] : undefined;
-      if (
-        prev &&
-        (prev.isHoliday || prev.isSchoolVacation) &&
-        !info.isHoliday &&
-        !info.isSchoolVacation
-      ) {
+      if (isPlainWeekday(info.weekday, info.isHoliday)) reasons.add("weekday");
+      if (endsHolidays(i > 0 ? dayInfo[i - 1] : undefined, info)) {
         reasons.add("holiday_ends");
       }
 

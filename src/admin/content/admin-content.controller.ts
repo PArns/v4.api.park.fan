@@ -42,7 +42,11 @@ import type { AdminPrincipal } from "../auth/admin-principal";
 import { AdminCurationService } from "./admin-curation.service";
 import { AdminRideProfileService } from "./admin-ride-profile.service";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
-import { AdminSeasonService } from "./admin-season.service";
+import {
+  adminSeasonView,
+  AdminSeasonService,
+  type AdminSeasonView,
+} from "./admin-season.service";
 import {
   attractionFieldViews,
   parkFieldViews,
@@ -837,18 +841,8 @@ export class AdminContentController {
   @Get("seasons/:id")
   @ApiOperation({ summary: "One season, with its park" })
   @ApiResponse({ status: 404, description: "No such season" })
-  async getSeason(@Param("id") id: string) {
-    const season = await this.seasonAdmin.findOne(id);
-    return {
-      ...season,
-      park: season.park
-        ? {
-            id: season.park.id,
-            name: resolveCuratedPark(season.park).name,
-            slug: season.park.slug,
-          }
-        : null,
-    };
+  async getSeason(@Param("id") id: string): Promise<AdminSeasonView> {
+    return adminSeasonView(await this.seasonAdmin.findOne(id));
   }
 
   @Post("parks/:id/seasons")

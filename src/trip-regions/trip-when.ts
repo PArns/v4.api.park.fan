@@ -16,6 +16,8 @@
  * exact for the ranking the contract defines: every window left unplanned has
  * a bound, and so a score, behind the last one returned.
  */
+import { isoDaysBetween, isoWeekStart } from "../common/utils/date.util";
+import { mean, median } from "../common/utils/stats.util";
 import type { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { CLIMATE_NORMAL_PERIOD } from "../external-apis/weather/climate-normals";
 import type { RegionConfig, PerkRule } from "./regions";
@@ -35,6 +37,7 @@ import {
   type PlanPenalties,
   type PlanCell,
   type PlannedDay,
+  waitOf,
 } from "./trip-optimizer";
 import {
   autoSplit,
@@ -50,18 +53,19 @@ import { planEvenings } from "./trip-evening";
 import { everyDay, windowOf } from "./tickets";
 import { productOf, type TicketSuggestion } from "./trip-tickets";
 import {
+  MAX_DAYS_AHEAD,
   planCellOf,
   type InternalCalendarDay,
   type InternalRegionCalendar,
 } from "./trip-region.assembly";
-import type { TripParkDayInternal } from "./trip-calendar.util";
+import { round1, type TripParkDayInternal } from "./trip-calendar.util";
 import { solveAssignment } from "./hungarian";
 
 /** The shortest and longest trip `/when` ranks. */
 export const WHEN_MIN_DAYS = 3;
 export const WHEN_MAX_DAYS = 21;
-/** A search range covers at most this many days. */
-export const WHEN_MAX_RANGE_DAYS = 366;
+/** A search range covers at most this many days: today to the calendar's last day. */
+export const WHEN_MAX_RANGE_DAYS = MAX_DAYS_AHEAD + 1;
 export const WHEN_DEFAULT_DAYS = 10;
 export const WHEN_DEFAULT_LIMIT = 5;
 export const WHEN_MAX_LIMIT = 10;
@@ -327,23 +331,6 @@ function windowVisits(
 
 // ── pricing helpers ─────────────────────────────────────────────────────────
 
-const mean = (values: number[]): number | undefined =>
-  values.length === 0
-    ? undefined
-    : values.reduce((s, v) => s + v, 0) / values.length;
-
-const median = (values: number[]): number | undefined => {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-};
-
-const round1 = (v: number): number => Math.round(v * 10) / 10;
-
-const waitOf = (c: PlanCell): number | undefined =>
-  c.exactWait ?? c.headlinerWait;
-
 /**
  * The hotel's perk factor for a park on a day, as the plan applies it. A
  * perk after the first night counts on every day: across windows the check-in
@@ -474,20 +461,7 @@ function basisOf(bases: Array<string | undefined>): WhenBasis {
   return "mixed";
 }
 
-/** Monday of a date's ISO week. */
-export function isoWeekStart(date: string): string {
-  const d = new Date(`${date}T12:00:00Z`);
-  const back = (d.getUTCDay() + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - back);
-  return d.toISOString().slice(0, 10);
-}
-
 const monthNumber = (date: string): number => Number(date.slice(5, 7));
-
-const daysApart = (a: string, b: string): number =>
-  Math.round(
-    (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000,
-  );
 
 // ── the search ──────────────────────────────────────────────────────────────
 
@@ -729,7 +703,7 @@ export function findTripDates(input: WhenInput): TripWhen {
     const bases: Array<string | undefined> = [];
     for (const day of plan.days) {
       if (day.parks.length === 0) continue;
-      const calendarDay = days[i + daysApart(dates[i], day.date)];
+      const calendarDay = days[i + isoDaysBetween(dates[i], day.date)];
       const prices = day.parks.map((v) => {
         bases.push(calendarDay.parks[v.slug]?.basis);
         return priceOf(

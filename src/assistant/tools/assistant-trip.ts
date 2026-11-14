@@ -1,7 +1,7 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { getFrontendUrl } from "../../config/oauth.config";
 import { nameKey } from "../../mcp/tools/park-ref";
-import { addIsoDays } from "../../common/utils/date.util";
+import { addIsoDays, ISO_DATE_PATTERN } from "../../common/utils/date.util";
 import type { NormalizedPlanQuery } from "../../trip-regions/trip-plan.service";
 import type {
   InternalCalendarDay,
@@ -397,8 +397,8 @@ const HUB_PARAMS = [
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
 export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
-  from: /^\d{4}-\d{2}-\d{2}$/,
-  to: /^\d{4}-\d{2}-\d{2}$/,
+  from: ISO_DATE_PATTERN,
+  to: ISO_DATE_PATTERN,
   parks: /^[a-z0-9-]+(:[1-9])?(,[a-z0-9-]+(:[1-9])?)*$/,
   hotel: /^[a-z_]+$/,
   area: /^[a-z_]+$/,
