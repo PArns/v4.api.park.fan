@@ -361,7 +361,7 @@ const HUB_PARAMS = [
 ] as const;
 
 /** What each hub parameter may hold; anything else keeps a URL off the page. */
-const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
+export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   from: /^\d{4}-\d{2}-\d{2}$/,
   to: /^\d{4}-\d{2}-\d{2}$/,
   parks: /^[a-z0-9-]+(:[1-9])?(,[a-z0-9-]+(:[1-9])?)*$/,

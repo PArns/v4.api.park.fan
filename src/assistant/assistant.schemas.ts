@@ -72,10 +72,18 @@ export const plannerPrefs = z.object({
   earlyEntry: z.boolean().optional(),
 });
 
+/** The planned days a question carries in full: the active one and the nearest. */
+export const PLANNER_DETAILED_DAYS = 8;
+/** Entries per detailed day. */
+export const PLANNER_DAY_ENTRIES = 40;
+/** The other planned days a question names by park and date only. */
+export const PLANNER_INDEX_DAYS = 60;
+
 /**
- * The visitor's trip planner as the browser holds it, sent with every question so Parky can read
- * and change it. Unknown keys are dropped, a bad day or entry too (see {@link lenientList}); at
- * most 6 days of 40 entries.
+ * The visitor's day planner as the browser holds it, sent with every question so Parky can read
+ * and change it. Unknown keys are dropped, a bad day or entry too (see {@link lenientList}): at
+ * most {@link PLANNER_DETAILED_DAYS} days of {@link PLANNER_DAY_ENTRIES} entries in full, and the
+ * rest of the planned days from today on in `more`, by park and date.
  */
 export const plannerSnapshotSchema = z.object({
   active: lenient(z.object({ park: slug, date: z.iso.date() })),
@@ -90,18 +98,109 @@ export const plannerSnapshotSchema = z.object({
           kind: z.enum(["ride", "show", "block"]),
           name: plannerName,
           rideSlug: lenient(slug),
+          showSlug: lenient(slug),
           start: lenient(plannerClock),
+          /** Park-local minutes since midnight, past 1440 on a day that runs past midnight. */
+          startMinute: lenient(z.number().int().min(0).max(2880)),
           durationMinutes: lenient(z.number().int().min(1).max(720)),
           done: lenient(z.boolean()),
         }),
-        40,
+        PLANNER_DAY_ENTRIES,
       ),
     }),
-    6,
+    PLANNER_DETAILED_DAYS,
+  ),
+  more: lenientList(
+    z.object({
+      park: z.object({ slug, name: plannerName }),
+      date: z.iso.date(),
+      entries: z.number().int().min(0).max(500),
+      done: lenient(z.number().int().min(0).max(500)),
+      reserved: lenient(z.boolean()),
+      riderHeightCm: lenient(plannerPrefs.shape.riderHeightCm),
+    }),
+    PLANNER_INDEX_DAYS,
   ),
 });
 export type PlannerSnapshot = z.infer<typeof plannerSnapshotSchema>;
 export type PlannerDay = PlannerSnapshot["days"][number];
+
+/** The longest trip query a question carries: a 21-day trip with pins and six tickets fits. */
+export const TRIP_QUERY_MAX = 1200;
+
+/** What the browser remembers of the party for a trip: how many, and the children's heights. */
+export const tripPartySchema = z.object({
+  size: lenient(z.number().int().min(1).max(30)),
+  heightsCm: lenientList(z.number().int().min(50).max(250), 10),
+});
+export type TripParty = z.infer<typeof tripPartySchema>;
+
+/**
+ * The visitor's trips, one per region: the hub planner's own query (its whole state, in the plan
+ * route's names) and whether that planner is on screen now. The query is checked here only for
+ * its characters; the tools read it through the plan route's own normalization.
+ */
+export const tripsSnapshotSchema = lenientList(
+  z.object({
+    region: slug,
+    query: z
+      .string()
+      .max(TRIP_QUERY_MAX)
+      .regex(/^[A-Za-z0-9=&:,@._%+?-]*$/),
+    onScreen: lenient(z.boolean()),
+    party: lenient(tripPartySchema),
+  }),
+  4,
+);
+export type TripSnapshot = z.infer<typeof tripsSnapshotSchema>[number];
+
+/** The trip interview's steps, in the order Parky asks them. */
+export const TRIP_INTERVIEW_STEPS = [
+  "region",
+  "dates",
+  "party",
+  "mustdo",
+  "tickets",
+  "hotel",
+  "pace",
+  "file",
+] as const;
+/** The park-day interview's steps, in the order Parky asks them. */
+export const DAY_INTERVIEW_STEPS = [
+  "day",
+  "arrival",
+  "mustdo",
+  "heights",
+  "shows",
+  "sort",
+] as const;
+const interviewStep = z.enum([
+  ...new Set([...TRIP_INTERVIEW_STEPS, ...DAY_INTERVIEW_STEPS]),
+] as [string, ...string[]]);
+export type InterviewStep =
+  | (typeof TRIP_INTERVIEW_STEPS)[number]
+  | (typeof DAY_INTERVIEW_STEPS)[number];
+
+/**
+ * Parky's interview as the browser holds it beside the chat: which kind, the step being asked,
+ * the steps answered or skipped, and the must-do rides of a trip, which wait for its filing into
+ * the day planner. Everything else the visitor answered is in the planners already.
+ */
+export const interviewSnapshotSchema = z.object({
+  kind: z.enum(["trip", "day"]),
+  region: lenient(slug),
+  park: lenient(slug),
+  date: lenient(z.iso.date()),
+  step: interviewStep,
+  answered: lenientList(interviewStep, 12),
+  skipped: lenientList(interviewStep, 12),
+  mustDoRides: lenientList(
+    z.object({ park: slug, rides: lenientList(z.uuid(), 12) }),
+    8,
+  ),
+  source: z.enum(["planner", "chat"]).catch("chat"),
+});
+export type InterviewSnapshot = z.infer<typeof interviewSnapshotSchema>;
 
 /**
  * The browser's push state and the alerts it holds, sent with every question. Lenient like the
@@ -213,6 +312,8 @@ export const chatRequestSchema = z.strictObject({
     }))
     .optional(),
   planner: lenient(plannerSnapshotSchema),
+  trips: tripsSnapshotSchema.optional(),
+  interview: lenient(interviewSnapshotSchema),
   alerts: lenient(alertsSnapshotSchema),
   favorites: lenient(favoritesSnapshotSchema),
   ridden: riddenSnapshotSchema.optional(),
