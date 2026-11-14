@@ -49,6 +49,13 @@ export const MAX_PARK_DAYS = 16;
 export const MAX_VISITS_PER_PARK = 3;
 /** `rest=auto`: at most this many park days in a row before a rest day. */
 export const DEFAULT_MAX_STREAK = 4;
+/**
+ * A trip this long or shorter needs no rest day under `rest=auto`, so a day
+ * left without a park goes before or after the park days, never between two:
+ * a 3-day trip with a park on arrival and departure plans two park days in a
+ * row and keeps one end free, not park, rest, park.
+ */
+export const SHORT_TRIP_DAYS = DEFAULT_MAX_STREAK;
 
 /** Rest patterns up to this count are searched exhaustively. */
 export const REST_EXACT_LIMIT = 5000;
@@ -94,6 +101,13 @@ export const PlanCostModel = {
   coolWetFactor: 1.25,
   /** `runner_up_close`: another day within this many minutes. */
   runnerUpMinutes: 5,
+  /**
+   * A short trip ({@link SHORT_TRIP_DAYS}): each day without a park between
+   * two park days. More than any day's waits differ, less than what means
+   * "only when nothing else fits" (a party night with `fireworks=want`, a day
+   * without hours, a repeat on the next day), so those still win.
+   */
+  shortTripGapPenalty: 400,
 } as const;
 
 /**
@@ -1045,6 +1059,8 @@ class TripOptimizer {
   private stayPlans: StayPlan[] = [];
   /** The stay plan of the structure being solved, which every objective prices by. */
   private activeStay: StayPlan | null = null;
+  /** A short trip's days that may take a park: a gap among them costs ({@link gaps}). */
+  private gapDays: Set<number> | null = null;
 
   constructor(private readonly input: PlanInput) {
     this.weather = input.options.weather ?? ORLANDO_WEATHER;
@@ -1464,6 +1480,7 @@ class TripOptimizer {
       if (isFree(i) && !lockedDays.has(i)) continue;
       available.push(i);
     }
+    this.gapDays = n <= SHORT_TRIP_DAYS ? new Set(available) : null;
 
     // A park with no open day left in the trip cannot be placed at all, and a
     // park with fewer open days than visits loses the visits that do not fit.
@@ -1565,13 +1582,27 @@ class TripOptimizer {
 
   // ── owned tickets ─────────────────────────────────────────────────────────
 
-  /** The order visits leave a plan in: repeats first, then the park whose best day is dearest. */
+  /**
+   * The order visits leave a plan in: repeats first, then the park whose best
+   * day is dearest. A day is read by its waits, without the penalty for hours
+   * not yet published: that penalty says which day of a park to use last, not
+   * which park is worth a day, and Disneyland Paris publishes its hours months
+   * after Parc Astérix does (a May weekend lost both Disney parks to it).
+   */
   private dropOrder(units: Unit[], available: number[]): Unit[] {
     const best = new Map<string, number>();
     const bestCost = (slug: string): number => {
       let v = best.get(slug);
       if (v === undefined) {
-        v = Math.min(...available.map((d) => this.cost(slug, d)));
+        v = Math.min(
+          ...available.map(
+            (d) =>
+              this.cost(slug, d) -
+              (this.cell(slug, this.dates[d]).status === "UNKNOWN"
+                ? PlanCostModel.unknownDayPenalty
+                : 0),
+          ),
+        );
         best.set(slug, v);
       }
       return v;
@@ -2443,8 +2474,25 @@ class TripOptimizer {
       base,
       objective:
         base +
-        PlanCostModel.adjacentRepeatPenalty * this.adjacency(rows, dayOf),
+        PlanCostModel.adjacentRepeatPenalty * this.adjacency(rows, dayOf) +
+        PlanCostModel.shortTripGapPenalty * this.gaps(dayOf),
     };
+  }
+
+  /**
+   * On a short trip ({@link SHORT_TRIP_DAYS}): the days that could take a park
+   * and have none between the first and the last park day. 0 on a longer trip.
+   */
+  private gaps(dayOf: number[]): number {
+    if (!this.gapDays || dayOf.length === 0) return 0;
+    const parkDays = new Set(dayOf);
+    const first = Math.min(...dayOf);
+    const last = Math.max(...dayOf);
+    let count = 0;
+    for (const d of this.gapDays) {
+      if (d > first && d < last && !parkDays.has(d)) count++;
+    }
+    return count;
   }
 
   /** Which trip days are park days under a placement. */
@@ -2471,13 +2519,21 @@ class TripOptimizer {
     const keepsRule = (dayOf: number[]) =>
       longestRun(this.parkDayFlags(dayOf)) <= limit;
 
-    if (keepsRule(plain) && this.adjacency(rows, plain) === 0) {
+    if (
+      keepsRule(plain) &&
+      this.adjacency(rows, plain) === 0 &&
+      this.gaps(plain) === 0
+    ) {
       return { solution: this.objective(rows, plain), provable: true };
     }
     if (keepsRule(plain)) {
       // Only repeats sit back to back: keep them apart over every day first.
       const apart = this.assignApart(rows, available, matrix);
-      if (apart.dayOf && keepsRule(apart.dayOf)) {
+      if (
+        apart.dayOf &&
+        keepsRule(apart.dayOf) &&
+        this.gaps(apart.dayOf) === 0
+      ) {
         return {
           solution: this.objective(rows, apart.dayOf),
           provable: !apart.cutShort,
@@ -2500,7 +2556,7 @@ class TripOptimizer {
     if (!found.dayOf) return { solution: null, provable };
 
     let solution = this.objective(rows, found.dayOf);
-    if (solution.objective > solution.base) {
+    if (this.adjacency(rows, found.dayOf) > 0) {
       // No placement keeps every repeat apart: spread them as far as moves can.
       solution = this.spreadRepeats(rows, available, matrix, solution, limit);
       provable = false;
@@ -2975,7 +3031,8 @@ class TripOptimizer {
       if (!ties(base)) return null;
       const objective =
         base +
-        PlanCostModel.adjacentRepeatPenalty * this.adjacency(rows, dayOf);
+        PlanCostModel.adjacentRepeatPenalty * this.adjacency(rows, dayOf) +
+        PlanCostModel.shortTripGapPenalty * this.gaps(dayOf);
       if (!ties(objective)) return null;
       for (const { members, cap } of caps) {
         const costs = sortedCosts(members, dayOf);

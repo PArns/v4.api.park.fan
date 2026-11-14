@@ -1,5 +1,6 @@
 import {
   DEFAULT_MAX_STREAK,
+  SHORT_TRIP_DAYS,
   optimizeTrip,
   ORDER_MATTERS_MINUTES,
   PlanCostModel,
@@ -277,7 +278,15 @@ describe("optimizeTrip", () => {
               ),
             0,
           ) +
-          PlanCostModel.adjacentRepeatPenalty * adjacentRepeats(plan);
+          PlanCostModel.adjacentRepeatPenalty * adjacentRepeats(plan) +
+          PlanCostModel.shortTripGapPenalty *
+            shortTripGaps(
+              n,
+              plan.parks.flatMap((p) =>
+                p.dates.map((d) => dates(n).indexOf(d)),
+              ),
+              arrival === "free",
+            );
         // The spread may take a placement that ties the cheapest: never
         // below it, less than ORDER_MATTERS_MINUTES per park day above.
         expect(got).toBeGreaterThanOrEqual(expected - 1e-6);
@@ -1106,11 +1115,66 @@ describe("optimizeTrip", () => {
     });
   });
 
+  describe("short trips", () => {
+    it("keeps a 3-day trip's park days together, the busy middle day included", () => {
+      // Arrival and departure are park days; the Saturday in the middle is busiest.
+      const plan = optimizeTrip(
+        input(3, [park("disneyland-park"), park("disney-adventure-world")], {
+          "disneyland-park": [35, 55, 50],
+          "disney-adventure-world": [50, 70, 60],
+        }),
+      );
+      expect(SHORT_TRIP_DAYS).toBe(4);
+      expect(plan.days.map((d) => d.kind)).toEqual([
+        "park",
+        "park",
+        "departure",
+      ]);
+      expect(plan.exact).toBe(true);
+    });
+
+    it("still keeps a park's two visits apart rather than together", () => {
+      const plan = optimizeTrip(
+        input(3, [park("disneyland-park", 2)], {
+          "disneyland-park": [35, 55, 50],
+        }),
+      );
+      expect(placement(plan)["disneyland-park"]).toEqual([
+        "2026-11-30",
+        "2026-12-02",
+      ]);
+    });
+
+    it("leaves a park by its waits, not by hours not yet published", () => {
+      // One park day: Disneyland Park's hours are not out, its waits are lower.
+      const plan = optimizeTrip(
+        input(
+          3,
+          [park("disneyland-park"), park("parc-asterix")],
+          {
+            "disneyland-park": (i) => ({
+              status: "UNKNOWN",
+              basis: "last_year",
+              headlinerWait: i === 1 ? 35 : 50,
+              exactWait: i === 1 ? 35 : 50,
+            }),
+            "parc-asterix": [40, 40, 40],
+          },
+          { arrival: "free", departure: "free" },
+        ),
+      );
+      expect(placement(plan)["disneyland-park"]).toEqual(["2026-12-01"]);
+      expect(plan.unplaced).toEqual([
+        { slug: "parc-asterix", reason: "no_day_left" },
+      ]);
+    });
+  });
+
   describe("water parks and reservation parks", () => {
     it("go on the warm dry day the theme parks leave", () => {
       const plan = optimizeTrip(
         input(3, [park("epcot"), park("disneys-blizzard-beach-water-park")], {
-          epcot: [20, 50, 50],
+          epcot: [50, 20, 50],
           "disneys-blizzard-beach-water-park": (i) => ({
             status: "OPERATING",
             basis: "none",
@@ -1122,7 +1186,7 @@ describe("optimizeTrip", () => {
         }),
       );
       expect(placement(plan)).toEqual({
-        epcot: ["2026-11-30"],
+        epcot: ["2026-12-01"],
         "disneys-blizzard-beach-water-park": ["2026-12-02"],
       });
       expect(plan.days[2].reasons).toContain("water_park_weather");
@@ -1183,6 +1247,22 @@ describe("optimizeTrip", () => {
  * The best full objective (waits plus the repeat penalty) over every placement
  * of the visits on open days, with the streak rule; null when none exists.
  */
+/** A short trip's days that could take a park and have none between two park days. */
+function shortTripGaps(
+  n: number,
+  parkDays: number[],
+  arrivalFree: boolean,
+): number {
+  if (n > SHORT_TRIP_DAYS || parkDays.length === 0) return 0;
+  const first = Math.min(...parkDays);
+  const last = Math.max(...parkDays);
+  let gaps = 0;
+  for (let d = first + 1; d < last; d++) {
+    if (!(arrivalFree && d === 0) && !parkDays.includes(d)) gaps++;
+  }
+  return gaps;
+}
+
 function bruteForce(
   n: number,
   parks: PlanPark[],
@@ -1207,7 +1287,10 @@ function bruteForce(
       for (const [d, slug] of used) if (used.get(d + 1) === slug) adjacent++;
       best = Math.min(
         best,
-        sum + PlanCostModel.adjacentRepeatPenalty * adjacent,
+        sum +
+          PlanCostModel.adjacentRepeatPenalty * adjacent +
+          PlanCostModel.shortTripGapPenalty *
+            shortTripGaps(n, [...used.keys()], arrivalFree),
       );
       return;
     }
