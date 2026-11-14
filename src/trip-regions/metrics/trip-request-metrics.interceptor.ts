@@ -52,8 +52,9 @@ const FACTS: Record<
 /**
  * Opens a request trace around the route (the services note their caches and
  * the trip's shape into it), times the answer and hands its row to
- * {@link TripRequestMetricsService}. Recording never touches the answer: a
- * fact that cannot be read is logged and the row left out.
+ * {@link TripRequestMetricsService}. Recording never touches the answer: an
+ * answer whose facts cannot be read is recorded without them, and a row that
+ * cannot be built is logged and left out.
  */
 @Injectable()
 export class TripRequestMetricsInterceptor implements NestInterceptor {

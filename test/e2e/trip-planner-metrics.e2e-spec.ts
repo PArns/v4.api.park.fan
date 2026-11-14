@@ -223,7 +223,7 @@ describe("Trip planner metrics (e2e)", () => {
         unplacedReasons: ["unknown"],
       }),
     });
-    // Outside the window: yesterday's, eight days back.
+    // Outside the window: eight days back.
     answer({
       latencyMs: 99999,
       daysAgo: 8,
