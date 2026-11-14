@@ -94,6 +94,13 @@ export interface StayPlan {
   moves: number;
   /** Moves that leave no room for a park that day (a long leg, or an airport's). */
   travelMoves: number;
+  /**
+   * The trip's parks' reach, summed, each park from the closest of the plan's
+   * bases: what decides between two plans that cost the same, so a tie goes
+   * to the bases by the parks (Disneyland Paris' hotels for a Disney trip),
+   * never to the one listed first.
+   */
+  reachMinutes: number;
 }
 
 /** The leg between two bases, either way round. */
@@ -253,10 +260,25 @@ export function stayPlans(
             ? [[0]]
             : []
           : nightSplits(nights, fixedNights);
+      const reachMinutes = coverable.reduce(
+        (sum, p) =>
+          sum +
+          Math.min(...seq.map((b) => b.reach.get(p)?.minutes ?? Infinity)),
+        0,
+      );
       for (const split of splits) {
-        plans.push(
-          planOf(opt, days, keys, split, fixedNights, arrivalFrom, departureTo),
-        );
+        plans.push({
+          ...planOf(
+            opt,
+            days,
+            keys,
+            split,
+            fixedNights,
+            arrivalFrom,
+            departureTo,
+          ),
+          reachMinutes,
+        });
       }
     }
   }
@@ -271,7 +293,7 @@ function planOf(
   fixedNights: Array<number | undefined>,
   arrivalFrom: string | undefined,
   departureTo: string | undefined,
-): StayPlan {
+): Omit<StayPlan, "reachMinutes"> {
   const nightBase: string[] = [];
   keys.forEach((k, i) => {
     for (let j = 0; j < split[i]; j++) nightBase.push(k);

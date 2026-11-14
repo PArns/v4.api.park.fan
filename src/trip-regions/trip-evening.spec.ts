@@ -307,8 +307,14 @@ describe("the hopper ticket in the plan query", () => {
   };
 
   it("ignores hop=1 without ticket=hopper, with a warning and no pairing", () => {
+    // Pinned visits that only hop days could hold: without a hopper, a 400.
     expect(() =>
-      normalizePlanQuery(ORLANDO, [MK, EPCOT, HS], query, "2026-11-12"),
+      normalizePlanQuery(
+        ORLANDO,
+        [MK, EPCOT, HS],
+        { ...query, parks: `${MK}:2,${EPCOT}:2` },
+        "2026-11-12",
+      ),
     ).toThrow("More park visits than trip days");
     const q = normalizePlanQuery(
       ORLANDO,
