@@ -430,12 +430,12 @@ describe("OAuthAuthorizationService", () => {
       });
     });
 
-    it("grants admin:write when the client asks or the admin chooses it, and only to an editor or owner", async () => {
+    it("grants admin:write to an editor or owner and admin:owner to an owner, asked or chosen", async () => {
       const { service, tokens } = build();
       const granted = async (
         asked: string,
         role: AdminPrincipal["role"],
-        chosen?: "admin:read" | "admin:write",
+        chosen?: "admin:read" | "admin:write" | "admin:owner",
       ) => {
         tokens.issueOAuthGrant.mockClear();
         const outcome = await service.authorize(
@@ -446,7 +446,9 @@ describe("OAuthAuthorizationService", () => {
           (outcome as { location: string }).location,
         ).searchParams.get("request")!;
         expect((await service.describe(id)).scope).toBe(
-          asked.includes("admin:write") ? "admin:write" : "admin:read",
+          ["admin:owner", "admin:write"].find((scope) =>
+            asked.split(" ").includes(scope),
+          ) ?? "admin:read",
         );
         const { redirectTo } = await service.approve(
           id,
@@ -470,6 +472,17 @@ describe("OAuthAuthorizationService", () => {
         await granted("admin:read admin:write", "owner", "admin:read"),
       ).toBe("admin:read");
       expect(await granted("admin:write", "viewer")).toBe("admin:read");
+      expect(await granted("admin:read admin:owner", "owner")).toBe(
+        "admin:owner",
+      );
+      expect(await granted("admin:read", "owner", "admin:owner")).toBe(
+        "admin:owner",
+      );
+      expect(await granted("admin:owner", "editor")).toBe("admin:write");
+      expect(await granted("admin:read", "editor", "admin:owner")).toBe(
+        "admin:write",
+      );
+      expect(await granted("admin:owner", "viewer")).toBe("admin:read");
     });
 
     it("burns the code on a wrong verifier", async () => {

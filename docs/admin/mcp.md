@@ -3,7 +3,7 @@
 An MCP server at `https://api.park.fan/v1/mcp` that lets Claude (Claude Code, claude.ai, any MCP
 client) read the admin's data directly: parks and rides with their live state, popularity, the
 site statistic and its SEO reports, the trip planner's usage and its server metrics, Parky's tool calls and his site events, Google Search Console, system and ML health, job queues, data-quality findings,
-duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. A token with the `admin:write` scope also writes, as an editor does in the admin: park seasons, the trip regions' ticket products and the editor's actions of the other admin pages ([writing](#writing)). A client signs in through an OAuth 2.1 flow whose
+duplicate and retirement candidates, outage statistics, the audit log, and Parky's chats and the feedback visitors send. A token with the `admin:write` scope also writes, as an editor does in the admin: park seasons, the trip regions' ticket products and the editor's actions of the other admin pages; one with `admin:owner`, which only an owner gets, also does what only an owner may ([writing](#writing)). A client signs in through an OAuth 2.1 flow whose
 login and consent happen in park.fan's own admin, or presents a personal access token. Open this
 page to connect a client, add a tool, or change anything on `/v1/mcp`, `/v1/oauth/*` or
 `/.well-known/oauth-*`. The admin login itself: [authentication](authentication.md).
@@ -65,10 +65,10 @@ Both kinds live in Postgres, never in clear: `admin_api_tokens` holds one row pe
 (what the account page lists and revokes), `admin_api_token_secrets` the SHA-256 of each secret
 (a PAT's one, a grant's access and refresh tokens). Every bearer lookup joins `admin_users`, so:
 
-- **Role = the lesser of the account's role and the token's cap.** Two scopes: `admin:read`, capped
-  at `viewer` (an owner's read token is a viewer), and `admin:write`, which reads too and is capped at
-  `editor` (an owner's write token is an editor; a viewer's is a viewer). A token carries one of
-  them; the cap is stored on its row (`role_cap`), so a later change of the scopes' caps does not
+- **Role = the lesser of the account's role and the token's cap.** Three scopes: `admin:read`,
+  capped at `viewer` (an owner's read token is a viewer); `admin:write`, which reads too and is
+  capped at `editor` (an owner's write token is an editor); and `admin:owner`, capped at `owner`,
+  granted to an owner only. A token carries one of them; the cap is stored on its row (`role_cap`), so a later change of the scopes' caps does not
   widen a token issued before it.
 - **A deactivated account is refused at its next request**, revoked or not.
 - **Whatever ends an account's sessions ends its tokens:** deactivation, a password change or reset,
@@ -357,11 +357,11 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
 
 - **Who.** A write tool has the `minRole` of its admin route, `editor` or `owner`, and says what it
   does in `writes` (`add`, `change` or `delete`). A token's role is the lesser of its account's and
-  its scope's cap, so only an `admin:write` token of an editor or owner reaches an editor's tool. A
-  read token is not shown them, and a call made anyway is refused with the scope it needs; an
-  account below editor is told its role (`toolRefusal`). No scope reaches `owner`, so the owner's
-  tools ([the admin's other pages](#the-admins-other-pages)) are listed to no token yet, and a call
-  is told so. `index.spec.ts` checks that every write tool is `editor` or `owner`, every read
+  its scope's cap, so an editor's tool needs an `admin:write` or `admin:owner` token of an editor or
+  owner, and an owner's tool ([the admin's other pages](#the-admins-other-pages)) an `admin:owner`
+  token, which only an owner gets. A token whose scope stops below a tool is not shown it, and a
+  call made anyway is refused with the scope it needs (`scopeForRole`); an account below the role is
+  told its role (`toolRefusal`). `index.spec.ts` checks that every write tool is `editor` or `owner`, every read
   `viewer` or `owner`, and every delete has a `confirm` or a dry run on by default.
 - **What the client sees.** `readOnlyHint: false` on a write, `destructiveHint` on a change or a
   delete, so a client can ask the person first. The server's instructions say that nothing changes
@@ -478,17 +478,20 @@ script `scripts/trip-regions/import-seasons.mjs` only sends a file to the tool a
 ### Giving a client write access
 
 Read stays the default. The 401 challenge names `scope="admin:read"`, and a grant or a personal
-access token is `admin:read` unless somebody chose `admin:write`. Only an editor or owner can.
+access token is `admin:read` unless somebody chose `admin:write` (an editor or owner can) or
+`admin:owner` (an owner only).
 
-- **OAuth** (claude.ai's connector, Claude Code's `/mcp`). The discovery documents list both
-  scopes, and a registration answers both. A request whose `scope` names `admin:write` is parked
-  with it; whatever was asked, the approve body's `scope` (`admin:read` or `admin:write`) is what is
-  granted, the consent page's choice. `admin:write` goes only to an editor or owner; anyone else's
-  grant is `admin:read`. A grant keeps its scope through every refresh, so an existing read grant
-  never becomes a write one: disconnect the connector, connect again and allow writing on the
-  consent page.
-- **A personal access token:** `POST /v1/admin/auth/tokens` with `scope: "admin:write"`, from an
-  editor's or owner's session (403 for anyone else, before the password is checked). Claude Code
+- **OAuth** (claude.ai's connector, Claude Code's `/mcp`). The discovery documents list the three
+  scopes, and a registration answers them. A request is parked with the widest scope its `scope`
+  names; whatever was asked, the approve body's `scope` (`admin:read`, `admin:write` or
+  `admin:owner`) is what is granted, the consent page's choice, narrowed to the widest one the
+  account reaches (`grantableScope`): an editor choosing `admin:owner` gets `admin:write`, a viewer
+  or author `admin:read`. A grant keeps its scope through every refresh, so an existing grant is
+  never widened: disconnect the connector, connect again and choose the wider scope on the consent
+  page.
+- **A personal access token:** `POST /v1/admin/auth/tokens` with `scope: "admin:write"` from an
+  editor's or owner's session, or `scope: "admin:owner"` from an owner's (403 for anyone else, before
+  the password is checked). Claude Code
   takes it as `--header "Authorization: Bearer pfa_…"`, the import script as `PARKFAN_API_TOKEN`.
 - `whoami` answers the scope and the role it reached.
 
@@ -508,7 +511,7 @@ access token is `admin:read` unless somebody chose `admin:write`. Only an editor
 | POST        | `/v1/admin/oauth/requests/:id/approve`           | session + body `{ password, totpCode?, scope? }` | `{ redirectTo }` with the code; `scope` is the grant's ([write access](#giving-a-client-write-access)); 401 `invalid-password`, `totp-required`, `invalid-totp` or 429 `rate-limited`, and the request stays pending |
 | POST        | `/v1/admin/oauth/requests/:id/deny`              | session, any role                        | `{ redirectTo }` with `access_denied`                                                                                                                 |
 | GET         | `/v1/admin/auth/tokens[?userId=]`                | session; `userId` owner only             | active PATs and grants                                                                                                                                |
-| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once; `scope: "admin:write"` for an editor or owner                                                               |
+| POST        | `/v1/admin/auth/tokens`                          | session + password (+ `totpCode`)        | `{ token, item }`, the token shown once; `scope: "admin:write"` for an editor or owner, `"admin:owner"` for an owner                                  |
 | DELETE      | `/v1/admin/auth/tokens/:id`                      | session; others' owner only              | revokes a PAT or a grant                                                                                                                              |
 
 The shared pass is refused on every row. The response shapes the frontend reads are in
@@ -583,12 +586,13 @@ What was checked when this was built, and where it is enforced:
   counts), and one token runs at most 10 requests at once per API instance.
 - **Role escalation:** the token cap, the token-only endpoint, and the session-only token and
   consent endpoints above; the tools a role may not use are not even listed, and are refused again
-  at call time. A write token stops at `editor`: no merge, retirement, cache reset or account
-  change is reachable through MCP.
+  at call time. A write token stops at `editor`; merges, retirement, maintenance and API keys need
+  an `admin:owner` token, which only an owner gets. No tool changes an account or a role.
 - **Writes and prompt injection:** the read tools hand the model text visitors wrote, and with a
   write token an instruction hidden in it could reach a write. Writing is opt-in per token, chosen
-  by an editor or owner when the grant or the token is made; a bulk write is a dry run unless the
-  call says otherwise, a delete needs `confirm`; the write tools carry `destructiveHint`, so a client
+  by an editor or owner when the grant or the token is made, the owner's actions by an owner only; a
+  bulk write is a dry run unless the call says otherwise, a delete needs `confirm` or is a dry run
+  unless told otherwise; the write tools carry `destructiveHint`, so a client
   can ask the person; and every write is an audit row under the account, a deleted season kept
   whole in it ([writing](#writing)).
 - **The shared pass:** refused on the MCP endpoint, the token endpoints and the consent endpoints.
@@ -630,8 +634,8 @@ What was checked when this was built, and where it is enforced:
   that started on claude.ai carries no cookie; the consent page has to read the session from the
   browser, not from that first request.
 - A PAT is created with the password (and the two-factor code), but a stolen session plus the
-  password can still mint a token that outlives the session (a write token, on an editor's or
-  owner's account), until the account signs out everywhere.
+  password can still mint a token that outlives the session (a write token on an editor's account,
+  an owner token on an owner's), until the account signs out everywhere.
 
 ### `ml_accuracy` reads `prediction_accuracy` only
 

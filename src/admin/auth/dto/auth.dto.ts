@@ -175,8 +175,10 @@ export class AdminCreateApiTokenDto {
   @ApiPropertyOptional({
     description:
       "`admin:read` (absent: the default) reads through the MCP server; " +
-      "`admin:write` also writes what an editor writes (seasons, ticket " +
-      "products) and needs an account of editor or above (403 otherwise).",
+      "`admin:write` also writes what an editor writes and needs an account " +
+      "of editor or above; `admin:owner` also does what only an owner may " +
+      "(merges, retirement, maintenance, API keys) and needs an owner " +
+      "account (403 otherwise).",
     enum: ADMIN_TOKEN_SCOPE_NAMES,
     default: "admin:read",
   })
@@ -216,9 +218,10 @@ export class AdminOAuthApproveDto extends PickType(AdminCreateApiTokenDto, [
 ] as const) {
   @ApiPropertyOptional({
     description:
-      "The scope to grant, whatever the client asked for: `admin:read` or " +
-      "`admin:write`. Absent: the one the request asked for. `admin:write` " +
-      "is granted to an editor or owner only; anyone else gets `admin:read`.",
+      "The scope to grant, whatever the client asked for: `admin:read`, " +
+      "`admin:write` or `admin:owner`. Absent: the one the request asked " +
+      "for. `admin:write` is granted to an editor or owner, `admin:owner` " +
+      "to an owner; anyone else gets the widest one their role reaches.",
     enum: ADMIN_TOKEN_SCOPE_NAMES,
   })
   @IsOptional()

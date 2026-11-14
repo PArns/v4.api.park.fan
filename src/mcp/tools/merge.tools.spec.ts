@@ -125,11 +125,13 @@ describe("merge tools", () => {
     });
   });
 
-  it("is refused to an editor's write token, which no scope lifts to owner", async () => {
+  it("is refused to an editor's write token, and names admin:owner", async () => {
     for (const tool of [mergeAttractionsTool, mergeParksTool]) {
       const result = await callAs(tool, "editor", {});
       expect(result.isError).toBe(true);
-      expect(resultText(result)).toMatch(/no token scope reaches/);
+      expect(resultText(result)).toMatch(
+        /needs a token with the admin:owner scope; this one has admin:write/,
+      );
     }
   });
 });

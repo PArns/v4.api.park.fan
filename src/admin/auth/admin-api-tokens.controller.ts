@@ -94,8 +94,9 @@ export class AdminApiTokensController {
   @ApiOperation({
     summary: "Create a personal access token",
     description:
-      "For the MCP server at /v1/mcp: `admin:read` (the default) or " +
-      "`admin:write` (`scope`, editor or above). Asks for the " +
+      "For the MCP server at /v1/mcp: `admin:read` (the default), " +
+      "`admin:write` (`scope`, editor or above) or `admin:owner` (owner " +
+      "only). Asks for the " +
       "account password again, and for a current two-factor code when the " +
       "account has two-factor on: a stolen session must not mint a credential " +
       "that outlives it. The token is in this response and nowhere else; only " +
@@ -104,7 +105,8 @@ export class AdminApiTokensController {
   @ApiResponse({ status: 201, description: "`{ token, item }`" })
   @ApiResponse({
     status: 403,
-    description: "`admin:write` asked for by an account below editor",
+    description:
+      "`admin:write` asked for by an account below editor, or `admin:owner` by one below owner",
   })
   @ApiResponse({
     status: 401,

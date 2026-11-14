@@ -199,8 +199,8 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
 - **Checked at request time.** Every lookup joins `admin_users`: an inactive account is refused at
   its next request, and `mustChangePassword` / the `ADMIN_REQUIRE_TOTP` debt refuse it as they do a
   session. The role is the lesser of the account's and the token's cap: `viewer` for `admin:read`,
-  `editor` for `admin:write`, which only an editor or owner can be given
-  ([writing](mcp.md#writing)).
+  `editor` for `admin:write`, which only an editor or owner can be given, `owner` for
+  `admin:owner`, which only an owner can be given ([writing](mcp.md#writing)).
 - **One audience.** Only `@AdminTokenOnly()` endpoints resolve them, and those accept no session and
   no shared pass, so a token never reaches an admin REST route, the token endpoints or the consent.
 - **Ended with the sessions.** `AdminAuthService.signOutEverywhere` revokes them wherever the
