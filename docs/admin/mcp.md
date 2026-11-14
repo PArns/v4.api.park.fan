@@ -204,7 +204,7 @@ the count that decides, and the measures that add up.
   items, the parks and rides opened most, an id no table knows left out and counted in
   `unresolvedEntities`), `planner_report` (ways in, wizard steps, blocks, tools, outcomes, openings by page type and
   device, the parks and rides planned most, an id no table knows any more left out and counted in
-  `unresolvedEntities`), `trip_planner_report` (the regions side by side, the page types, ways in,
+  `unresolvedEntities`), `trip_planner_report` (the regions side by side, the page types, ways in and the tile,
   what the requests asked, answers by mode and outcome, loosened rules, parks left out and their
   fixes, errors by status, find dates, edits and options, tickets, hopper, views, days opened, what
   was kept, and the purchase links by kind and position, surface, mode, seller and product),
@@ -262,7 +262,15 @@ one from each side; `planner_report` is the day planner's.
   `changed` is rated against the answers of the new planner's days only. Until the frontend sends
   the new events, every day is `before`.
 - **Counts are events, not visitors.** An answer fires once per distinct request, so a step can
-  outnumber the one before it; `dropOff` is then null. Beside the funnel: the requests (mode, length
+  outnumber the one before it; `dropOff` is then null.
+- **The tile as a way in.** The planner tile on a region park's pages (PAR-1317) is read beside
+  the ways in (`source`, `via`): `tile.shown` counts its `section_seen` of section `trip_tile`,
+  which names no region, so the park in the page's path does (`parkKeyOf`, the region parks of
+  `regions.ts`; a page of another park is `(other)`), and `tile.clicked` its `trip_tile_clicked`
+  by link (`plan` or `calendar`), with `clickRate`, all of it per region under `visitorData`.
+  The views need the page, which only the hourly rows keep, so a window past them says so in
+  `hourlyFrom`.
+- **Beside the funnel:** the requests (mode, length
   bucket, parks with 0 for the headliners, tickets, hopper, blocks, rest), answers by mode and
   outcome with the loosened rule, the error's status and the parks left out with the fix chosen,
   the cities of a route, find dates (toggles, periods, windows found and planned), edits by panel and

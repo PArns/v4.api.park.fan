@@ -421,6 +421,7 @@ describe("Trip planner metrics (e2e)", () => {
       count: number;
       daysAgo?: number;
       pageType?: string;
+      path?: string;
     }>,
   ) => {
     for (const e of events) {
@@ -430,7 +431,7 @@ describe("Trip planner metrics (e2e)", () => {
       await dataSource.query(
         `INSERT INTO site_events (bucket, name, locale, path, page_type, device, browser, os,
                                   country, network, props_key, props, count)
-         VALUES ($1, $2, 'en', '/en/orlando', $3, 'desktop', 'chrome', 'windows', 'us', 'other',
+         VALUES ($1, $2, 'en', $7, $3, 'desktop', 'chrome', 'windows', 'us', 'other',
                  $4, $5::jsonb, $6)`,
         [
           bucket,
@@ -442,6 +443,7 @@ describe("Trip planner metrics (e2e)", () => {
             .join("&"),
           JSON.stringify(e.props),
           e.count,
+          e.path ?? "/en/orlando",
         ],
       );
     }
@@ -456,7 +458,9 @@ describe("Trip planner metrics (e2e)", () => {
     datacenter: null,
   });
 
-  it("splits the trip funnel at the first day of the dates-first planner's events, and reads page types", async () => {
+  it("splits the trip funnel at the first day of the dates-first planner's events, and reads page types and the tile", async () => {
+    const MK_PAGE =
+      "/de/parks/north-america/united-states/orlando/magic-kingdom-park";
     const orlando = { region: "orlando" };
     await insertEvents([
       // The old planner, four days back.
@@ -521,11 +525,36 @@ describe("Trip planner metrics (e2e)", () => {
         props: { product: "wdw-date-based", kind: "official", position: "1" },
         count: 3,
       },
+      // The tile on a park page: its views by the page, and another section of it.
+      {
+        name: "section_seen",
+        props: { section: "trip_tile" },
+        count: 9,
+        pageType: "park",
+        path: MK_PAGE,
+      },
+      {
+        name: "section_seen",
+        props: { section: "main_end" },
+        count: 30,
+        pageType: "park",
+        path: MK_PAGE,
+      },
+      {
+        name: "trip_tile_clicked",
+        props: { ...orlando, link: "plan" },
+        count: 3,
+        pageType: "park",
+        path: MK_PAGE,
+      },
     ]);
     const options = {
       region: "orlando",
       knownRegions: ["orlando"],
       productRegions: new Map([["wdw-date-based", "orlando"]]),
+      parkRegions: new Map([
+        ["north-america/united-states/orlando/magic-kingdom-park", "orlando"],
+      ]),
       series: true,
     };
     const report = await app
@@ -550,6 +579,11 @@ describe("Trip planner metrics (e2e)", () => {
       ticketLinks: 3,
     });
     expect(report.lists.windowsFound).toEqual([{ windows: "3", count: 4 }]);
+    // The tile's views come from the hourly rows by page; its other sections are no view of it.
+    expect(report.tile).toEqual([
+      { region: "orlando", shown: 9, clicked: 3, plan: 3, calendar: 0 },
+    ]);
+    expect(report.totals).toMatchObject({ tileShown: 9, tilePlan: 3 });
     expect(report.lists.linksByProduct).toEqual([
       { product: "wdw-date-based", count: 3 },
     ]);

@@ -323,6 +323,50 @@ describe("trip_planner_report", () => {
     expect(step("ticketsEntered")).toMatchObject({ count: 6, before: 6 });
   });
 
+  it("reads the tile as a way in beside the sources: shown, clicked by link, per region", async () => {
+    const page =
+      "/de/parks/north-america/united-states/orlando/magic-kingdom-park";
+    const { trip, map } = services([
+      ...ROWS,
+      {
+        name: "section_seen",
+        props: { section: "trip_tile" },
+        count: 40,
+        path: page,
+      },
+      orlando(TRIP_EVENTS.tileClicked, { link: "plan" }, 8),
+      orlando(TRIP_EVENTS.tileClicked, { link: "calendar" }, 2),
+    ]);
+    const answer = await run(tripPlannerReportTool, {}, map);
+    // The region parks' pages, from regions.ts.
+    expect(
+      trip.report.mock.calls[0][1].parkRegions.get(
+        "north-america/united-states/orlando/magic-kingdom-park",
+      ),
+    ).toBe("orlando");
+    expect(answer.tile).toEqual({
+      shown: 40,
+      clicked: 10,
+      plan: 8,
+      calendar: 2,
+      clickRate: 0.25,
+    });
+    expect(answer.visitorData.datesPicked.tile).toEqual([
+      {
+        region: "orlando",
+        shown: 40,
+        clicked: 10,
+        plan: 8,
+        calendar: 2,
+        clickRate: 0.25,
+      },
+    ]);
+    expect(answer.visitorData.datesPicked.tileClicks).toEqual([
+      { link: "plan", count: 8 },
+      { link: "(other)", count: 2 },
+    ]);
+  });
+
   it("draws the series on request, its small values hidden", async () => {
     const { map } = services();
     const answer = await run(tripPlannerReportTool, { series: true }, map);

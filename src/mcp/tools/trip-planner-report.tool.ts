@@ -29,6 +29,19 @@ import {
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
 
 const REGIONS = Object.keys(TRIP_REGIONS) as [string, ...string[]];
+
+/** Each region park's region by its page (`continent/country/city/slug`), for the tile's views. */
+const PARK_REGIONS = new Map(
+  Object.values(TRIP_REGIONS).flatMap((region) =>
+    region.parks.map(
+      (park) =>
+        [
+          `${park.continent}/${park.country}/${park.city}/${park.slug}`,
+          region.slug,
+        ] as const,
+    ),
+  ),
+);
 const ERAS: readonly TripFunnelEra[] = ["before", "since"];
 
 /** A ratio to three places, null without both counts or a base. */
@@ -51,7 +64,9 @@ export const tripPlannerReportTool = defineMcpTool({
     "the ticket question; nothing for changed) and its `since` days by the new ones, and every " +
     "rate is taken over the days both steps count, so a window across the deploy still adds " +
     "up. Counts are events, not visitors: an answer fires once per distinct request. Then: ways " +
-    "in (source, via), the requests (mode dates or when, trip length bucket, parks with 0 for " +
+    "in (source, via) and the planner tile on the region parks' pages (shown: its section_seen, " +
+    "attributed to a region by the park in its page; clicked: trip_tile_clicked by link, plan " +
+    "or calendar; clickRate), the requests (mode dates or when, trip length bucket, parks with 0 for " +
     "the headliners, owned tickets, hopper none/some/all, blocks, rest), answers by mode and " +
     "outcome (ok, relaxed with the rule, error with the HTTP status, 0 = no answer), parks left " +
     "out and the fix chosen, cities of a route, find dates (toggles, periods, windows found and " +
@@ -108,6 +123,7 @@ export const tripPlannerReportTool = defineMcpTool({
         region: region ?? null,
         knownRegions: REGIONS,
         productRegions,
+        parkRegions: PARK_REGIONS,
         series,
       });
 
@@ -206,6 +222,13 @@ export const tripPlannerReportTool = defineMcpTool({
           datesSearched: t("datesSearched"),
           parksHeadliners: t("parksHeadliners"),
         },
+        tile: {
+          shown: t("tileShown"),
+          clicked: t("tileClicked"),
+          plan: t("tilePlan"),
+          calendar: t("tileCalendar"),
+          clickRate: ratio(t("tileClicked"), t("tileShown")),
+        },
         findDates: {
           searched: t("datesSearched"),
           shown: t("findDatesShown"),
@@ -256,7 +279,22 @@ export const tripPlannerReportTool = defineMcpTool({
             sum: ["datesPicked", "planRequested", "planShown", "events"],
           },
         ),
-        datesPicked: { sources: list("sources"), via: list("startedVia") },
+        datesPicked: {
+          sources: list("sources"),
+          via: list("startedVia"),
+          tile: foldSmallRows(
+            report.tile.map((row) => ({
+              ...row,
+              clickRate: ratio(row.clicked, row.shown),
+            })),
+            {
+              dims: ["region"],
+              count: "shown",
+              sum: ["shown", "clicked", "plan", "calendar"],
+            },
+          ),
+          tileClicks: list("tileClicks"),
+        },
         requests: {
           mode: list("requestMode"),
           days: list("requestDays"),

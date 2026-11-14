@@ -2,6 +2,7 @@ import {
   TICKET_LINK_EVENT,
   TRIP_EVENTS,
   TRIP_FUNNEL,
+  parkKeyOf,
   tripPlannerFigures,
   type TripEventRow,
 } from "./site-analytics-trip";
@@ -340,6 +341,69 @@ describe("tripPlannerFigures", () => {
     expect(
       tripPlannerFigures(ROWS, { ...OPTIONS, region: "japan" }).totals,
     ).toMatchObject({ planRequested: 0, ticketLinks: 2 });
+  });
+
+  it("reads the tile on the region parks' pages: its views by the park in the page, its clicks by region and link", () => {
+    const MK = "/parks/north-america/united-states/orlando/magic-kingdom-park";
+    const seen = (path: string, count: number, section = "trip_tile") => ({
+      name: "section_seen",
+      props: { section },
+      count,
+      path,
+    });
+    const rows: TripEventRow[] = [
+      seen(`/de${MK}`, 20),
+      // The tile stands on a park's calendar page too.
+      seen(
+        "/en/parks/north-america/united-states/orlando/epcot/crowd-calendar",
+        6,
+      ),
+      // No region park: the region is (other).
+      seen("/de/parks/europe/germany/bruehl/phantasialand", 2),
+      // Another section of a park page says nothing about the tile.
+      seen(`/de${MK}`, 50, "main_end"),
+      orlando(TRIP_EVENTS.tileClicked, { link: "plan" }, 5),
+      orlando(TRIP_EVENTS.tileClicked, { link: "calendar" }, 2),
+    ];
+    const parkRegions = new Map([
+      ["north-america/united-states/orlando/magic-kingdom-park", "orlando"],
+      ["north-america/united-states/orlando/epcot", "orlando"],
+    ]);
+    const all = tripPlannerFigures(rows, {
+      ...OPTIONS,
+      region: null,
+      parkRegions,
+    });
+    expect(all.tile).toEqual([
+      { region: "orlando", shown: 26, clicked: 7, plan: 5, calendar: 2 },
+      { region: "(other)", shown: 2, clicked: 0, plan: 0, calendar: 0 },
+    ]);
+    expect(all.totals).toMatchObject({
+      tileShown: 28,
+      tileClicked: 7,
+      tilePlan: 5,
+      tileCalendar: 2,
+    });
+    expect(all.lists.tileClicks).toEqual([
+      { link: "plan", count: 5 },
+      { link: "calendar", count: 2 },
+    ]);
+    // A view is no planner event: it adds no region to the side-by-side table.
+    expect(all.regions.map((row) => row.region)).toEqual(["orlando"]);
+
+    const one = tripPlannerFigures(rows, {
+      ...OPTIONS,
+      region: "orlando",
+      parkRegions,
+    });
+    expect(one.tile).toEqual([
+      { region: "orlando", shown: 26, clicked: 7, plan: 5, calendar: 2 },
+    ]);
+    expect(one.totals.tileShown).toBe(26);
+    expect(parkKeyOf(`/de${MK}/wartezeiten-kalender`)).toBe(
+      "north-america/united-states/orlando/magic-kingdom-park",
+    );
+    expect(parkKeyOf("/de/orlando")).toBeNull();
   });
 
   it("names an empty value (none) rather than dropping it", () => {

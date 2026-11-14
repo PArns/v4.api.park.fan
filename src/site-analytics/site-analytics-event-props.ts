@@ -20,14 +20,22 @@ export interface EventPropRow {
   /** The UTC day of `period`. */
   day?: string;
   pageType?: string;
+  /** The page; only from the hourly rows, which alone keep it. */
+  path?: string;
 }
+
+/** A property key as a statement may name it. */
+const PROP_KEY = /^[a-z][a-z0-9_]{0,31}$/;
 
 /**
  * The properties of some events summed over a report's window, one row per
  * name and combination, and per period (the hour in an hourly window, else
- * the UTC day) or page type when asked: one
+ * the UTC day), page type or page when asked, of the rows whose properties
+ * have the values `propsEqual` names: one
  * statement over `rowsOf`, so whole rolled-up days come from the daily rows
- * (the name-and-properties cuboid, with the page type the one that has it).
+ * (the name-and-properties cuboid, with the page type the one that has it;
+ * a statement that needs the page reads the hourly rows, which `hourlyFrom`
+ * then says).
  * What the event reports over one feature's events read (the trip planner,
  * Parky).
  */
@@ -35,7 +43,12 @@ export async function readEventProps(
   runner: SiteReportRunner,
   window: SiteAnalyticsWindow,
   names: readonly string[],
-  options: { period?: boolean; pageType?: boolean } = {},
+  options: {
+    period?: boolean;
+    pageType?: boolean;
+    path?: boolean;
+    propsEqual?: Readonly<Record<string, string>>;
+  } = {},
 ): Promise<EventPropRow[]> {
   const params = new SqlParams();
   const namesParam = params.add(names);
@@ -43,7 +56,12 @@ export async function readEventProps(
     "name",
     "props_key",
     ...(options.pageType ? ["page_type"] : []),
+    ...(options.path ? ["path"] : []),
   ];
+  const propsWhere = Object.entries(options.propsEqual ?? {})
+    .filter(([key]) => PROP_KEY.test(key))
+    .map(([key, value]) => ` AND e.props ->> '${key}' = ${params.add(value)}`)
+    .join("");
   const source = await rowsOf(
     (s, cuboid) => runner.rolledDays(s, cuboid),
     "events",
@@ -56,24 +74,27 @@ export async function readEventProps(
   const extra = [
     ...(options.period ? [`${periodOf(window.hourly, "e")} AS period`] : []),
     ...(options.pageType ? ["e.page_type"] : []),
+    ...(options.path ? ["e.path"] : []),
   ];
   const groups = [
     "name",
     "props",
     ...(options.period ? ["period"] : []),
     ...(options.pageType ? ["page_type"] : []),
+    ...(options.path ? ["path"] : []),
   ].join(", ");
   const rows: Array<{
     name: string;
     props: Record<string, string> | null;
     period?: unknown;
     page_type?: string;
+    path?: string;
     count: Count;
   }> = await runner.query(
     `SELECT ${groups}, SUM(count) AS count
        FROM (SELECT e.name, e.props, ${[...extra, "e.count"].join(", ")}
                FROM ${source.from}
-              WHERE e.name = ANY(${namesParam}::text[]) AND ${source.where}) s
+              WHERE e.name = ANY(${namesParam}::text[]) AND ${source.where}${propsWhere}) s
       GROUP BY ${groups}`,
     params.values,
   );
@@ -86,6 +107,7 @@ export async function readEventProps(
       count: num(row.count),
       ...(period !== null && { period, day: period.slice(0, 10) }),
       ...(row.page_type !== undefined && { pageType: row.page_type }),
+      ...(row.path !== undefined && { path: row.path }),
     };
   });
 }

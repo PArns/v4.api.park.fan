@@ -13,6 +13,7 @@ import { firstDayOf, readEventProps } from "./site-analytics-event-props";
 import {
   NEW_FUNNEL_EVENTS,
   TICKET_LINK_EVENT,
+  TILE_SEEN,
   TRIP_EVENTS,
   tripPlannerFigures,
   type TripFigureOptions,
@@ -33,7 +34,8 @@ export type SiteTripPlannerReport = ReturnType<typeof echo> &
 /**
  * The trip planner's report over its `trip_*` events and the purchase links
  * of its ticket catalog: the events' properties summed per period and page
- * type over the window (`readEventProps`), and the first day the dates-first
+ * type over the window (`readEventProps`), the planner tile's views on the
+ * region parks' pages by page, and the first day the dates-first
  * planner's events were counted, which splits the funnel between the two
  * flows. The figures are `tripPlannerFigures`'. Read by the MCP tool
  * `trip_planner_report`, which has the catalog that attributes a purchase
@@ -51,16 +53,21 @@ export class SiteAnalyticsTripService {
     return this.runner.run(async () => {
       const window = siteAnalyticsWindow(query, now);
       refuseFiltersBeyond(window, "The trip planner report", EVENT_DIMS);
-      const [rows, newFunnelFrom] = await Promise.all([
+      const [rows, tileViews, newFunnelFrom] = await Promise.all([
         readEventProps(
           this.runner,
           window,
           [...Object.values(TRIP_EVENTS), TICKET_LINK_EVENT],
           { period: true, pageType: true },
         ),
+        // The tile's views by page, whose park names the region.
+        readEventProps(this.runner, window, [TILE_SEEN.name], {
+          path: true,
+          propsEqual: { section: TILE_SEEN.section },
+        }),
         firstDayOf(this.runner, NEW_FUNNEL_EVENTS),
       ]);
-      const figures = tripPlannerFigures(rows, {
+      const figures = tripPlannerFigures([...rows, ...tileViews], {
         ...options,
         window: { from: window.from, to: window.to },
         newFunnelFrom,

@@ -51,12 +51,23 @@ export const TRIP_EVENTS = {
   staySuggestion: "trip_stay_suggestion",
   viewSeen: "trip_view_seen",
   pinsAction: "trip_pins_action",
+  tileClicked: "trip_tile_clicked",
 } as const;
 
 const E = TRIP_EVENTS;
 
 /** A purchase link of the planner's ticket catalog followed. */
 export const TICKET_LINK_EVENT = "ticket_link_clicked";
+
+/**
+ * The planner tile on a region park's pages came on screen (PAR-1317): a
+ * `section_seen` of its own section, which names no region; the park in its
+ * path does.
+ */
+export const TILE_SEEN = {
+  name: "section_seen",
+  section: "trip_tile",
+} as const;
 
 /**
  * The events only the dates-first planner sends: the first UTC day any of
@@ -122,6 +133,8 @@ export interface TripEventRow {
   /** The row's UTC day; absent: before every cut-over. */
   day?: string;
   pageType?: string;
+  /** The page, for a tile's view: its park names the region. */
+  path?: string;
 }
 
 export const TRIP_LISTS = {
@@ -190,6 +203,7 @@ export const TRIP_LISTS = {
   dayOpenedByView: { events: [E.dayOpened], props: ["view"] },
   dayPinned: { events: [E.dayPinned], props: ["pinned"] },
   pinsActions: { events: [E.pinsAction], props: ["action"] },
+  tileClicks: { events: [E.tileClicked], props: ["link"] },
   accuracyOpened: { events: [E.accuracyOpened], props: ["surface"] },
   savedDays: { events: [E.daysSaved], props: ["days"] },
   icsDays: { events: [E.icsExported], props: ["days"] },
@@ -268,8 +282,16 @@ export const TRIP_TOTALS = {
   icsExported: { events: [E.icsExported], props: [] },
   linkCopied: { events: [E.linkCopied], props: [] },
   ticketLinks: { events: [TICKET_LINK_EVENT], props: [] },
+  tileClicked: { events: [E.tileClicked], props: [] },
+  tilePlan: { events: [E.tileClicked], props: [], where: { link: "plan" } },
+  tileCalendar: {
+    events: [E.tileClicked],
+    props: [],
+    where: { link: "calendar" },
+  },
 } as const satisfies Record<string, ListSpec>;
-export type TripTotalKey = keyof typeof TRIP_TOTALS | "unattributedTicketLinks";
+export type TripTotalKey =
+  keyof typeof TRIP_TOTALS | "unattributedTicketLinks" | "tileShown";
 export type TripTotals = Record<TripTotalKey, number>;
 
 export interface ValueCount {
@@ -285,6 +307,19 @@ export interface TripFigureOptions {
   knownRegions: readonly string[];
   /** Each catalog product's region, for the purchase links, which name none. */
   productRegions: ReadonlyMap<string, string>;
+  /**
+   * Each region park's region by its page (`continent/country/city/slug`,
+   * {@link parkKeyOf}), for the tile's views, which name none.
+   */
+  parkRegions?: ReadonlyMap<string, string>;
+}
+
+/** The park a page belongs to, as `continent/country/city/slug`; null for a page of no park. */
+export function parkKeyOf(path: string | undefined): string | null {
+  const [, , parks, continent, country, city, slug] = (path ?? "").split("/");
+  return parks === "parks" && continent && country && city && slug
+    ? `${continent}/${country}/${city}/${slug}`
+    : null;
 }
 
 /** One funnel step's counts per era; null where the window has none of that era's days or the era no such event. */
@@ -308,6 +343,14 @@ export interface TripPlannerFigures {
     errors: number;
     kept: number;
     ticketLinks: number;
+  }>;
+  /** The tile on the region parks' pages as a way in: views and clicks per region and link. */
+  tile: Array<{
+    region: string;
+    shown: number;
+    clicked: number;
+    plan: number;
+    calendar: number;
   }>;
   /** Where the planner is used: its starts, requests and answers by the page they came from. */
   pageTypes: Array<{
@@ -355,16 +398,49 @@ export function tripPlannerFigures(
   };
 
   const totals = Object.fromEntries(
-    [...Object.keys(TRIP_TOTALS), "unattributedTicketLinks"].map((k) => [k, 0]),
+    [...Object.keys(TRIP_TOTALS), "unattributedTicketLinks", "tileShown"].map(
+      (k) => [k, 0],
+    ),
   ) as TripTotals;
+  const byTile = new Map<string, TripPlannerFigures["tile"][number]>();
+  const tileOf = (region: string) => {
+    const row = byTile.get(region) ?? {
+      region,
+      shown: 0,
+      clicked: 0,
+      plan: 0,
+      calendar: 0,
+    };
+    byTile.set(region, row);
+    return row;
+  };
   const funnel = new Map<string, number>();
   const lists = new Map<TripListKey, Map<string, number>>();
   const byRegion = new Map<string, TripPlannerFigures["regions"][number]>();
   const byPage = new Map<string, TripPlannerFigures["pageTypes"][number]>();
 
   for (const row of rows) {
-    const region = regionOf(row);
     const n = row.count;
+    // The tile's views carry no region and are no planner event: their park names the region.
+    if (row.name === TILE_SEEN.name) {
+      if (row.props.section !== TILE_SEEN.section) continue;
+      const key = parkKeyOf(row.path);
+      const tileRegion =
+        (key && options.parkRegions?.get(key)) || OVERFLOW_VALUE;
+      if (options.region !== null && tileRegion !== options.region) continue;
+      tileOf(tileRegion).shown += n;
+      totals.tileShown += n;
+      continue;
+    }
+    const region = regionOf(row);
+    if (row.name === E.tileClicked && region !== null) {
+      if (options.region === null || region === options.region) {
+        const tile = tileOf(region);
+        tile.clicked += n;
+        if (row.props.link === "plan") tile.plan += n;
+        if (row.props.link === "calendar") tile.calendar += n;
+      }
+    }
     if (row.name === TICKET_LINK_EVENT && region === null) {
       // Attributed to no region: counted, and listed only with every region.
       totals.unattributedTicketLinks += n;
@@ -443,6 +519,11 @@ export function tripPlannerFigures(
       return { step, before: count("before"), since: count("since") };
     }),
     totals,
+    tile: byCountDesc(
+      [...byTile.values()],
+      (row) => row.shown,
+      (row) => row.region,
+    ),
     regions: byCountDesc(
       [...byRegion.values()],
       (row) => row.datesPicked,
