@@ -7,6 +7,7 @@ import {
   SEASON_IMPORTS_PER_HOUR,
 } from "../../admin/content/admin-season.service";
 import { SEASON_LIMITS } from "../../admin/content/dto/curation.dto";
+import { PARK_SEASON_KINDS } from "../../parks/entities/park-season.entity";
 
 /**
  * A row of `scripts/trip-regions/seasons/*.json`. Kinds, statuses, dates and
@@ -26,9 +27,7 @@ const row = z.object({
   kind: z
     .string()
     .max(40)
-    .describe(
-      "halloween, christmas, summer_nights, special_event, opening, closure or maintenance",
-    ),
+    .describe(`One of ${PARK_SEASON_KINDS.join(", ")}`),
   name: z
     .string()
     .max(SEASON_LIMITS.name)

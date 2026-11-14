@@ -231,8 +231,8 @@ by the key guard). It answers 400 for:
     holidays). A break the search range starts inside counts, since it began before the range;
   - `before_spring_break`: and the next school break starts within 14 days after it, in February
     to April;
-  - `festival` (with `seasons`): a chosen park's `special_event`, `halloween`, `christmas` or
-    `summer_nights` season that needs no separate ticket runs in the window;
+  - `festival` (with `seasons`): a chosen park's `special_event`, `halloween`, `christmas`,
+    `winter` or `summer_nights` season that needs no separate ticket runs in the window;
   - `long_days`: the chosen headliner parks' mean day-guest hours in the window beat the range's by
     an hour or more;
   - `mild_weather`: the climate normals over the window (at the region's climate park) give a mean

@@ -12,6 +12,10 @@ import {
   worksPeriodCovering,
   type WorksPeriod,
 } from "../../attractions/utils/curated-out-of-service.util";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
+import type { ParkSeason } from "../../parks/entities/park-season.entity";
+import { seasonsOn } from "../../trip-regions/trip-calendar.util";
+import { seasonDayView } from "./trip-season.inputs";
 
 const LOCAL_ISO = "yyyy-MM-dd'T'HH:mmxxx";
 const HEADLINERS = 5;
@@ -33,12 +37,15 @@ type MaintenanceRides = ReadonlyArray<{
 
 /**
  * One calendar day for a tool. With `maintenance`, the rides a window shuts
- * that day, by name; a closed day lists none, since nothing runs anyway.
+ * that day, by name; a closed day lists none, since nothing runs anyway. With
+ * `seasons`, the curated seasons running that day (`seasonsOn`): a cancelled
+ * one never, one with single `dates` only on those.
  */
 export function compactDay(
   day: CalendarDay,
   timezone: string,
   maintenance: MaintenanceRides = [],
+  seasons: readonly ParkSeason[] = [],
 ) {
   const weather = day.weather;
   const inMaintenance =
@@ -47,6 +54,7 @@ export function compactDay(
       : maintenance
           .filter((ride) => worksPeriodCovering(ride.windows, day.date))
           .map((ride) => ride.name);
+  const daySeasons = seasonsOn(seasons, day.date).map(seasonDayView);
   return {
     date: day.date,
     status: day.status,
@@ -73,6 +81,7 @@ export function compactDay(
       ? day.events.map((event) => `${event.name} (${event.type})`)
       : undefined,
     ridesInMaintenance: inMaintenance.length > 0 ? inMaintenance : undefined,
+    seasons: daySeasons.length > 0 ? daySeasons : undefined,
   };
 }
 
@@ -85,7 +94,8 @@ export const parkForecastTool = defineMcpTool({
     "peak against a typical day's peak), the expected peak wait of the headliners, weather " +
     "(`basis: climate_normal` is the long-run average, not a forecast) and holidays, school " +
     "breaks and bridge days, the rides a maintenance or works window shuts that day " +
-    "(ridesInMaintenance, by name); today's hourly forecast (expected level and wait per hour) and " +
+    "(ridesInMaintenance, by name), the park's curated seasons running that day (seasons: kind, " +
+    "name, status where not confirmed, separateTicket); today's hourly forecast (expected level and wait per hour) and " +
     "today's headliner waits; and which models serve which horizon. Days after " +
     "`scheduleCoverage.to` have no published hours: their status is inferred, read it as " +
     "unknown. For the live state use get_park; for how wrong the forecasts are use ml_accuracy. " +
@@ -116,7 +126,7 @@ export const parkForecastTool = defineMcpTool({
       defaultToDaysAhead: days - 1,
     });
     // `today` carries the hourly curve; the calendar caches months per variant.
-    const [calendar, overview, maintenance] = await Promise.all([
+    const [calendar, overview, maintenance, seasons] = await Promise.all([
       ctx
         .get(CalendarService)
         .buildCalendarResponse(park, fromDate, toDate, "today"),
@@ -128,6 +138,18 @@ export const parkForecastTool = defineMcpTool({
       Promise.resolve()
         .then(() => ctx.get(PlanDayService).maintenanceWindows(park))
         .catch(() => []),
+      // Likewise their seasons: the public seasons route's query, over the same days.
+      Promise.resolve()
+        .then(() =>
+          ctx
+            .get(ParkSeasonService)
+            .forParkInRange(
+              park.id,
+              formatInTimeZone(fromDate, park.timezone, "yyyy-MM-dd"),
+              formatInTimeZone(toDate, park.timezone, "yyyy-MM-dd"),
+            ),
+        )
+        .catch((): ParkSeason[] => []),
     ]);
 
     const today = calendar.days.find((day) => day.isToday);
@@ -140,7 +162,7 @@ export const parkForecastTool = defineMcpTool({
       },
       scheduleCoverage: calendar.meta.scheduleCoverage,
       days: calendar.days.map((day) =>
-        compactDay(day, park.timezone, maintenance),
+        compactDay(day, park.timezone, maintenance, seasons),
       ),
       todayHourly: today?.hourly?.length
         ? today.hourly.map((hour) => ({

@@ -18,7 +18,8 @@ import type { AdminSeasonView } from "../../admin/content/admin-season.service";
  */
 
 const KIND =
-  "halloween, christmas, summer_nights (late summer openings), special_event (anything else " +
+  "halloween, christmas (a Christmas event or party), winter (a winter season, Christmas or " +
+  "not: Wintertraum, Winter Efteling), summer_nights (late summer openings), special_event (anything else " +
   "with a name), opening (the park's own operating season), closure (the park shut), " +
   "maintenance (named rides or an area down: attractionIds)";
 const STATUS =
@@ -171,5 +172,20 @@ export function seasonView(
     confirmedAt: season.confirmedAt,
     note: season.note,
     updatedAt: season.updatedAt,
+  };
+}
+
+/**
+ * A season on one day of a tool's calendar: what it is, and how settled where
+ * that is not `confirmed`, since an `expected` date is no promise.
+ */
+export function seasonDayView(
+  season: Pick<ParkSeason, "kind" | "name" | "status" | "separateTicket">,
+) {
+  return {
+    kind: season.kind,
+    name: season.name,
+    status: season.status === "confirmed" ? undefined : season.status,
+    separateTicket: season.separateTicket || undefined,
   };
 }

@@ -18,6 +18,10 @@ import type {
   ParkAttractionDto,
   ParkWithAttractionsDto,
 } from "../../parks/dto/park-with-attractions.dto";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
+import type { ParkSeason } from "../../parks/entities/park-season.entity";
+import { SEASON_WINDOW_DAYS } from "../../parks/park-seasons.controller";
+import { seasonView } from "./trip-season.inputs";
 
 function rideStatus(ride: ParkAttractionDto): string {
   return ride.effectiveStatus ?? ride.status ?? "UNKNOWN";
@@ -31,7 +35,12 @@ function standbyWait(ride: ParkAttractionDto): number | null {
   return standby?.waitTime ?? null;
 }
 
-function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
+function summarize(
+  dto: ParkWithAttractionsDto,
+  park: Park,
+  topWaits: number,
+  seasons: ParkSeason[] | null,
+) {
   const rides = dto.attractions ?? [];
   const byStatus: Record<string, number> = {};
   for (const ride of rides) {
@@ -150,6 +159,8 @@ function summarize(dto: ParkWithAttractionsDto, park: Park, topWaits: number) {
     shows: (dto.shows ?? []).length,
     restaurants: (dto.restaurants ?? []).length,
     funFacts: dto.funFacts ?? null,
+    // `null` when the lookup failed; `[]` is a park nobody curated a season for.
+    seasons: seasons?.map((season) => seasonView(season)) ?? null,
   };
 }
 
@@ -162,9 +173,11 @@ export const getParkTool = defineMcpTool({
     "the longest standby waits, rides that are down (since when, and whether the park reported it " +
     "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
     "(since when, and the curated window with its end where one runs today), maintenance windows " +
-    "starting in the next 30 days (maintenanceAhead), rides that have not run today, and the " +
-    "editors' fun facts about the park " +
-    "per locale. Pass the park id from find_parks, or its slug when that is unambiguous.",
+    "starting in the next 30 days (maintenanceAhead), rides that have not run today, the " +
+    "editors' fun facts about the park per locale, and the park's seasons and events running " +
+    "today or starting within a year (seasons, as list_trip_seasons gives them; null when " +
+    "they could not be read). Pass the park id from find_parks, or its slug when that is " +
+    "unambiguous.",
   input: {
     park: z
       .string()
@@ -188,9 +201,25 @@ export const getParkTool = defineMcpTool({
     const parks = ctx.get(ParksService);
 
     await parks.loadParkRelations(park);
-    const dto = await ctx
-      .get(ParkIntegrationService)
-      .buildIntegratedResponse(park, false, false);
-    return summarize(dto, park, longestWaits);
+    const today = getCurrentDateInTimezone(park.timezone);
+    const [dto, seasons] = await Promise.all([
+      ctx
+        .get(ParkIntegrationService)
+        .buildIntegratedResponse(park, false, false),
+      // The public seasons route's query and window; a failed read costs the
+      // answer its seasons, never the park.
+      Promise.resolve()
+        .then(() =>
+          ctx
+            .get(ParkSeasonService)
+            .forParkInRange(
+              park.id,
+              today,
+              addIsoDays(today, SEASON_WINDOW_DAYS),
+            ),
+        )
+        .catch((): null => null),
+    ]);
+    return summarize(dto, park, longestWaits, seasons);
   },
 });

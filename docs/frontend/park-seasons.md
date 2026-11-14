@@ -33,7 +33,7 @@ minutes, and seasons change a few times a year (`ParkSeasonsController`, `src/pa
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `halloween`, `christmas`, `summer_nights`, `special_event`, `opening` (the park's own operating season), `closure` (deliberately shut), `maintenance` (a ride or area down inside a normal season). The strings are contract (`PARK_SEASON_KINDS`); translate them |
+| `kind` | `halloween`, `christmas` (a Christmas event or party), `winter` (a winter season the park runs as one, Christmas or not: Wintertraum, Winter Efteling), `summer_nights`, `special_event`, `opening` (the park's own operating season), `closure` (deliberately shut), `maintenance` (a ride or area down inside a normal season). The strings are contract (`PARK_SEASON_KINDS`); translate them, and expect a new one: a kind the client does not know falls back to the generic label |
 | `name` | the park's own brand name, never translated; absent → show the label for `kind` |
 | `startDate`, `endDate` | the outer bounds, park-local, both inclusive |
 | `dates` | **absent: every day between the bounds.** Otherwise the sorted list of the days the season actually runs; never empty. Render a range only when it is absent |
