@@ -8,6 +8,7 @@ import {
   LeadSnapshotSource,
 } from "../entities/prediction-lead-snapshot.entity";
 import { PredictionDto } from "../dto/prediction-response.dto";
+import { servedLevelSource } from "../utils/season-level.util";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { Park } from "../../parks/entities/park.entity";
 import { formatInParkTimezone } from "../../common/utils/date.util";
@@ -280,7 +281,7 @@ export class PredictionLeadSnapshotService {
    * CatBoost's own answer passed through.
    */
   static sourceOf(p: PredictionDto): LeadSnapshotSource {
-    return p.modelVersion === "tft" ? "tft" : "catboost";
+    return servedLevelSource(p.modelVersion);
   }
 
   /**

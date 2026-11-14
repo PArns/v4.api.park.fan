@@ -1453,6 +1453,84 @@ describe("MLService", () => {
       expect(res.predictions[0].predictedWaitTime).toBe(20);
       expect(res.modelVersion).toBe("catboost-v1");
     });
+
+    describe("the season level (PAR-1343)", () => {
+      // A season that runs over both days, and what attr-1 measured in it.
+      const inputs = {
+        seasons: [
+          {
+            id: "s1",
+            startDate: "2026-05-20",
+            endDate: "2026-06-30",
+            dates: null,
+          },
+        ],
+        references: [
+          {
+            seasonId: "s1",
+            attractionId: "attr-1",
+            weekend: null,
+            days: 5,
+            level: 58,
+          },
+        ],
+      };
+      const serve = async () => {
+        mockParkRepository.findOne.mockResolvedValue({
+          id: parkId,
+          timezone: "UTC",
+        });
+        mockRedis.get.mockImplementation(async (key: string) =>
+          key === `ml:season-level:v1:${parkId}`
+            ? JSON.stringify(inputs)
+            : null,
+        );
+        jest.spyOn(service, "getParkPredictions").mockResolvedValue({
+          predictions: [
+            mkPred("attr-1", "2026-08-01", 25, "catboost"),
+            mkPred("attr-2", "2026-05-25", 99, "catboost"),
+          ],
+          count: 2,
+          modelVersion: "catboost-v1",
+        } as any);
+        jest
+          .spyOn(service, "getTftDailyPredictions")
+          .mockResolvedValue([mkPred("attr-1", "2026-05-25", 15, "tft")]);
+        const res = await service.getServingDailyPredictions(parkId, 30);
+        return new Map(
+          res.predictions.map((p) => [
+            `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
+            p,
+          ]),
+        );
+      };
+      afterEach(() => {
+        delete process.env.SEASON_LEVEL;
+      });
+
+      it("serves a season day what the ride measured in the season", async () => {
+        process.env.SEASON_LEVEL = "true";
+        const byKey = await serve();
+
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 60,
+          modelVersion: "tft+season",
+          crowdLevel: "unknown",
+        });
+        // No reference for attr-2; 1 August is past the season.
+        expect(byKey.get("attr-2|2026-05-25")?.predictedWaitTime).toBe(99);
+        expect(byKey.get("attr-1|2026-08-01")?.modelVersion).toBe("catboost");
+      });
+
+      it("leaves the models' numbers alone while the switch is off", async () => {
+        const byKey = await serve();
+
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 15,
+          modelVersion: "tft",
+        });
+      });
+    });
   });
 
   describe("storePredictions", () => {

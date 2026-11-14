@@ -323,6 +323,11 @@ services:
       # 30-minute Redis answer again (PAR-1330). A run that took 10 minutes or more
       # makes the next one read the cache, so the job cannot fall behind its cadence.
       - GENERATE_HOURLY_FRESH=${GENERATE_HOURLY_FRESH:-true}
+      # Season level (PAR-1343): on a day of a running, published park season the
+      # served daily level of a ride is the median of what it measured on that
+      # season's days so far (3 days needed), not the model's number — no model
+      # reads park_seasons. Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
+      - SEASON_LEVEL=${SEASON_LEVEL:-true}
       # Calendar: leave a headliner out of the days its season rules out (PAR-1326).
       - CALENDAR_SEASON_FILTER=${CALENDAR_SEASON_FILTER:-false}
       - NODE_ENV=production

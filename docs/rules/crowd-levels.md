@@ -16,6 +16,8 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   works window on that day is not in the average (`withoutRidesInMaintenance`). With
   `CALENDAR_SEASON_FILTER=true` (default off, PAR-1326) neither is a headliner whose season months
   or bound park season rule the day out (`withoutRidesOutOfSeason`, the rule `/plan/day` applies).
+  On a day of a running park season the predicted wait of a ride is its
+  [season level](../ml/season-level.md), not the model's number (`SEASON_LEVEL`, PAR-1343).
 - **Point-in-time and live signals use ratio-vs-P50.** `calculateParkOccupancy` is
   `Σ latest_wait ÷ Σ attraction_p50 × 100` over headliners reporting in the last 60 min
   (`getHeadlinerLoad`), falling back to `avg(latest) ÷ park_p50` without per-ride baselines. The

@@ -15,6 +15,11 @@ then open the reference page of the model you are changing.
 | Daily level beyond TFT | days 61–365, up to the operator's published calendar ([measured](long-range-forecasting.md#1-the-models-and-how-far-they-reach)) | **CatBoost** daily (max of the park-local 12/14/16 h predictions) | — | — |
 | `/plan/day` hours past CatBoost's 48 h (`tier: "composed"`) | to the end of the daily horizon | the served daily level × the ride's historical hour shape; the **H5 composer** (`slots[]`) up to day 21 (`PLAN_DAY_H5_MAX_LEAD_DAYS`) | — | `PLAN_DAY_H5_COMPOSER` (off in the code, on in `docker-compose.production.yml` since PAR-1341) |
 
+On a day of a running, published park season both daily rows are overridden per ride by the
+**season level** — the median of what the ride measured on that season's days so far — once three
+such days exist (`SEASON_LEVEL`, on in production since PAR-1343; [season level](season-level.md)).
+No model reads a season.
+
 `SERVE_PCN_INTRADAY` and `SERVE_CHRONOS_INTRADAY` default to off in the code and in
 `docker-compose.production.yml`; production sets them in the server's `.env`. PCN has served
 intraday since 2026-06-29. What is live right now is on `GET /v1/admin/ml-overview`: the `pcn`
