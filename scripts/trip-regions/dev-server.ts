@@ -28,8 +28,9 @@
  *   the shim re-starts itself with it when a proxy is configured.
  * - **Seasons:** production has no Orlando seasons yet. `DEV_SEASONS_FILE`
  *   adds the rows of a researcher's JSON (the shape
- *   `import-seasons.mjs` reads), skipping a row without an end date and one
- *   production already has.
+ *   `import-seasons.mjs` reads), skipping a row without an end date, one
+ *   production already has and one whose `region` is another region's (the
+ *   Paris file's Disneyland Park is not Anaheim's).
  * - **Cache:** each fetched park answer is kept 15 minutes in memory.
  * - **Tickets:** the shim has no database, so its ticket catalog is the seed
  *   (`tickets.ts` with `ticket-seed-links.ts`, `seedCatalog`), put on the region
@@ -232,6 +233,8 @@ async function regionParks(region: RegionConfig): Promise<RegionParkRecord[]> {
 }
 
 interface DevSeasonRow {
+  /** The trip region whose park the row means, where the slug repeats (Disneyland Park). */
+  region?: string | null;
   parkSlug: string;
   kind: string;
   name?: string | null;
@@ -259,6 +262,7 @@ async function seasonsFor(
   park: RegionParkRecord,
   from: string,
   to: string,
+  regionSlug: string,
 ): Promise<RegionSeasonSource[]> {
   const live = await upstreamJson<{ seasons: RegionSeasonSource[] }>(
     `${parkBase(park.config)}/seasons?from=${from}&to=${to}`,
@@ -266,6 +270,7 @@ async function seasonsFor(
   const out = live.seasons.map((s) => ({ ...s, parkId: park.id }));
   devSeasons().forEach((row, i) => {
     if (row.parkSlug !== park.slug || !row.endDate) return;
+    if (row.region != null && row.region !== regionSlug) return;
     if (row.startDate > to || row.endDate < from) return;
     const known = out.some(
       (s) =>
@@ -378,7 +383,7 @@ async function regionCalendar(
     }),
   );
   const seasons = (
-    await Promise.all(parks.map((p) => seasonsFor(p, from, to)))
+    await Promise.all(parks.map((p) => seasonsFor(p, from, to, region.slug)))
   ).flat();
   return assembleRegionCalendar({
     region,

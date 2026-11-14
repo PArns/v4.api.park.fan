@@ -8,8 +8,9 @@
  *   PARKFAN_ADMIN_TOKEN=… node scripts/trip-regions/import-seasons.mjs seasons.json --apply  # write
  *
  * Input: a JSON array of
- *   { parkSlug, kind, name, startDate, endDate, dates?, status, separateTicket,
- *     priceFrom?, priceCurrency?, opensAt?, closesAt?, url?, sourceUrl?, notes? }
+ *   { region?, parkSlug, kind, name, startDate, endDate, dates?, status,
+ *     separateTicket, priceFrom?, priceCurrency?, opensAt?, closesAt?, url?,
+ *     sourceUrl?, notes? }
  *
  * - **Dry run by default.** It prints what it would create and what it skips;
  *   only `--apply` writes.
@@ -27,8 +28,10 @@
  *   docs/rules/automated-retirement-and-identity.md#7 first, dry-run, then apply.
  *
  * A park is found by its geographic path in src/trip-regions/regions.ts when
- * the region lists it (slugs repeat across cities), else by an exact slug match
- * in the admin park search, which must be unique.
+ * a region lists it (slugs repeat across cities: Disneyland Park is in
+ * Anaheim and in Paris), else by an exact slug match in the admin park search,
+ * which must be unique. `region` names the trip region whose park the row
+ * means; a slug that two regions list is refused without it.
  */
 import { readFileSync } from "node:fs";
 
@@ -89,20 +92,38 @@ async function api(method, path, body) {
   return json;
 }
 
+/** The region parks a row's slug may mean: its region's, else every region's that lists it. */
+function regionParksOf(slug, regionSlug) {
+  if (regionSlug != null) {
+    const region = TRIP_REGIONS[regionSlug];
+    if (!region) throw new Error(`region ${regionSlug} is no trip region`);
+    const config = region.parks.find((p) => p.slug === slug);
+    if (!config) throw new Error(`${slug} is no park of ${regionSlug}`);
+    return [config];
+  }
+  return Object.values(TRIP_REGIONS).flatMap((r) =>
+    r.parks.filter((p) => p.slug === slug).map((p) => ({ ...p, region: r.slug })),
+  );
+}
+
 /** The park id for a slug: the region's geographic path first, else a unique admin match. */
 const parkIds = new Map();
-async function parkIdOf(slug) {
-  if (parkIds.has(slug)) return parkIds.get(slug);
+async function parkIdOf(slug, regionSlug) {
+  const key = `${regionSlug ?? ""}|${slug}`;
+  if (parkIds.has(key)) return parkIds.get(key);
   let id = null;
-  for (const region of Object.values(TRIP_REGIONS)) {
-    const config = region.parks.find((p) => p.slug === slug);
-    if (!config) continue;
+  const configs = regionParksOf(slug, regionSlug);
+  if (configs.length > 1) {
+    throw new Error(
+      `${slug} is a park of ${configs.map((c) => c.region).join(" and ")}: give the row its region`,
+    );
+  }
+  for (const config of configs) {
     const park = await api(
       "GET",
       `parks/${config.continent}/${config.country}/${config.city}/${config.slug}`,
     );
     id = park?.id ?? null;
-    break;
   }
   if (!id) {
     const found = await api("GET", `admin/content/parks?q=${encodeURIComponent(slug)}&limit=50`);
@@ -112,7 +133,7 @@ async function parkIdOf(slug) {
     }
     id = rows[0].id;
   }
-  parkIds.set(slug, id);
+  parkIds.set(key, id);
   return id;
 }
 
@@ -132,6 +153,7 @@ const norm = (s) => (s ?? "").trim().toLowerCase();
 /** What is wrong with a row before the API sees it, or null. */
 function problem(row) {
   if (!row.parkSlug) return "no parkSlug";
+  if (row.region != null && typeof row.region !== "string") return "region is not a slug";
   if (!KINDS.has(row.kind)) return `kind "${row.kind}" is not one of ${[...KINDS].join(", ")}`;
   if (!row.startDate || !DATE.test(row.startDate)) return "startDate is not YYYY-MM-DD";
   if (row.endDate == null) return "no endDate: the end is not announced, so the row waits";
@@ -183,7 +205,7 @@ const onFile = await existingSeasons();
 const counts = { create: 0, exists: 0, invalid: 0, failed: 0 };
 
 for (const [i, row] of rows.entries()) {
-  const label = `#${i + 1} ${row.parkSlug} ${row.kind} "${row.name ?? ""}" ${row.startDate} – ${row.endDate ?? "?"}`;
+  const label = `#${i + 1} ${row.region ? `${row.region}/` : ""}${row.parkSlug} ${row.kind} "${row.name ?? ""}" ${row.startDate} – ${row.endDate ?? "?"}`;
   const issue = problem(row);
   if (issue) {
     counts.invalid++;
@@ -192,7 +214,7 @@ for (const [i, row] of rows.entries()) {
   }
   let parkId;
   try {
-    parkId = await parkIdOf(row.parkSlug);
+    parkId = await parkIdOf(row.parkSlug, row.region);
   } catch (err) {
     counts.invalid++;
     console.log(`  skip   ${label}: ${err.message}`);

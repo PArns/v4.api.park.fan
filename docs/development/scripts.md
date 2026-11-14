@@ -14,7 +14,7 @@ uncommitted. Tracked:
 | `scripts/backup/parkfan-backup.sh`, `backup.env.example` | The nightly host backup ([backup](../deployment/backup.md)).                                                                                                                                  |
 | `scripts/python-deps/`                                   | Artefact compatibility checks for a Python dependency upgrade ([Python dependencies](python-dependencies.md#re-running-the-check)).                                                           |
 | `scripts/generate-swagger-spec.ts`                       | Runs as `postbuild` and writes the Swagger spec; skipped with a warning when it fails.                                                                                                        |
-| `scripts/trip-regions/` | `build-travel-matrix.mjs <region>` rebuilds one OSRM region's travel matrix and keeps the others' (a region whose travel is curated, Japan's trains, has none); `import-seasons.mjs` imports researched park seasons through the admin API, a dry run unless `--apply` (the Orlando list researched for 2026/27, with its sources per row, is `seasons/orlando-2026-27.json`); `dev-server.ts` is the local stand-in for the trip-region routes (below) ([trip regions](../frontend/trip-regions.md)) |
+| `scripts/trip-regions/` | `build-travel-matrix.mjs <region>` rebuilds one OSRM region's travel matrix and keeps the others' (a region whose travel is curated, Japan's trains, has none); `import-seasons.mjs` imports researched park seasons through the admin API, a dry run unless `--apply` (the lists researched for 2026/27, with their sources per row, are `seasons/orlando-2026-27.json`, `orlando-day-trips-2026-27.json`, `southern-california-2026-27.json` and `paris-2026-27.json`; a row's `region` names the trip region whose park it means, required where a slug repeats, as Disneyland Park does in Anaheim and Paris); `dev-server.ts` is the local stand-in for the trip-region routes (below) ([trip regions](../frontend/trip-regions.md)) |
 | [`scripts/README.md`](../../scripts/README.md)           | A pointer to this page.                                                                                                                                                                       |
 
 ## Package commands
@@ -64,8 +64,9 @@ and wiring and no rule of its own, so its answers are the API's for the same dat
 - **Proxy:** Node's `fetch` reaches a proxy only with `NODE_USE_ENV_PROXY=1`; the shim restarts
   itself with it when `HTTPS_PROXY` is set (without it production answers 401).
 - **Seasons:** production holds no Orlando seasons yet. `DEV_SEASONS_FILE=<file>` adds the rows of a
-  JSON file in the shape `import-seasons.mjs` reads, skipping a row without an end date and one
-  production already has (same park, kind and name, overlapping dates).
+  JSON file in the shape `import-seasons.mjs` reads, skipping a row without an end date, one
+  production already has (same park, kind and name, overlapping dates) and one whose `region` is
+  another region's.
 - **Cache:** each production answer is kept 15 minutes in memory; a cold calendar takes a few
   seconds.
 - **Tickets:** the shim has no database, so its ticket catalog is the seed (`tickets.ts` with
