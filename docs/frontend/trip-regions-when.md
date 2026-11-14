@@ -177,8 +177,8 @@ by the key guard). It answers 400 for:
   - `headlinerWait`: the `weeks` figures, each weighted by its days in the month; `basis` combines
     theirs.
   - `climate`: the climate normals (2015–2024, ERA5) at the region's climate park
-    (`weather.climatePark` on the region route: Magic Kingdom in Orlando, one park for a region in
-    several cities), from `WeatherService.getClimateNormals`: the month's mean high and low and its total
+    (`weather.climatePark` on the region route: Magic Kingdom in Orlando, Disneyland Park in
+    Southern California and in Paris, one park for a region in several cities), from `WeatherService.getClimateNormals`: the month's mean high and low and its total
     precipitation. Never a forecast. Absent while the normals are not cached yet (the service
     fetches them in the background). No `rainDays`: a normal is a mean per calendar day, and a mean
     of 3 mm does not say on how many days it rains.

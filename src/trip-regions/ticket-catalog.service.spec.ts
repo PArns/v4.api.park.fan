@@ -1,10 +1,10 @@
 import type { Redis } from "ioredis";
 import type { Repository } from "typeorm";
-import { ORLANDO } from "./regions";
+import { ORLANDO, TRIP_REGIONS } from "./regions";
 import type { TicketProductRecord } from "./entities/ticket-product.entity";
 import { TicketCatalogService } from "./ticket-catalog.service";
 import { seedCatalog, seedRows } from "./ticket-catalog";
-import { ORLANDO_TICKETS } from "./tickets";
+import { ORLANDO_TICKETS, seedTickets } from "./tickets";
 
 /** A table of rows in memory, with the unique (region, slug) index a second boot meets. */
 function table(initial: TicketProductRecord[] = []) {
@@ -95,6 +95,28 @@ describe("TicketCatalogService", () => {
     );
     expect(await second.seed(ORLANDO)).toBe(0);
     expect(racing.rows).toHaveLength(ORLANDO_TICKETS.length);
+  });
+
+  it("seeds every region on boot under its own slug, each with its own products", async () => {
+    const { repo, rows } = table();
+    const { redis } = redisStub();
+    const service = new TicketCatalogService(
+      repo as unknown as Repository<TicketProductRecord>,
+      redis as unknown as Redis,
+    );
+    await service.onApplicationBootstrap();
+    for (const region of Object.values(TRIP_REGIONS)) {
+      const own = rows.filter((r) => r.region === region.slug);
+      expect(own.map((r) => r.slug)).toEqual(
+        seedTickets(region).map((p) => p.id),
+      );
+      const groups = new Set(region.groups.map((g) => g.key));
+      for (const row of own) expect(groups.has(row.resort)).toBe(true);
+    }
+    expect(rows.filter((r) => r.region === "paris")).toHaveLength(9);
+    expect(rows.filter((r) => r.region === "southern-california")).toHaveLength(
+      25,
+    );
   });
 
   it("serves the table's products, versioned, from memory after the first read", async () => {
