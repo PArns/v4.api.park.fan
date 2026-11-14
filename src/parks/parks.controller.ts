@@ -529,7 +529,7 @@ export class ParksController {
     @Query("from") from?: string,
     @Query("to") to?: string,
     // Unchecked, any string became part of the Redis key
-    // `calendar:month:{parkId}:YYYY-MM:{includeHourly}` (PAR-415).
+    // `calendar:month:v2:{parkId}:YYYY-MM:{includeHourly}` (PAR-415).
     @Query(
       "includeHourly",
       new ParseEnumPipe(INCLUDE_HOURLY_VALUES, {

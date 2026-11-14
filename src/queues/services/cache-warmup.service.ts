@@ -286,7 +286,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       }
 
       // Warm the SAME variant the frontend park page requests (includeHourly="none").
-      // The month-cache key is `calendar:month:{parkId}:{ym}:{includeHourly}`, so warming
+      // The month-cache key is `calendar:month:v2:{parkId}:{ym}:{includeHourly}`, so warming
       // "today+tomorrow" populated a key the FE never reads → every real calendar request
       // missed the warmed cache and rebuilt from cold (incl. the ~15s cold daily ML call).
       //

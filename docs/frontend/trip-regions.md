@@ -1973,7 +1973,7 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 ## Caching and cost
 
-The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
+The days are assembled from the calendar's month caches (`calendar:month:v2:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
 hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`, the plan's ideas
 `trip-regions:plan-ideas:v1:*`), the plan by its normalized query, so the same trip asked with its parameters in another order is one entry. A plan reads the
