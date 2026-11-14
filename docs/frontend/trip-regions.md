@@ -367,13 +367,14 @@ or a `hurricane` penalty.
 - **The Disney Springs Resort Area** (`disney_springs`, hotel kind `disney_springs`) is the hotels on
   Hotel Plaza Boulevard that Disney lists among the "other select hotels" with Early Entry: the
   Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree
-  Suites, Holiday Inn Orlando, Wyndham Lake Buena Vista and Wyndham Garden. Their guests get Early
+  Suites, Holiday Inn Orlando, Renaissance Orlando Resort and Spa (the former B Resort), Wyndham Lake
+  Buena Vista and Wyndham Garden. Their guests get Early
   Entry at the four Disney theme parks and no Extended Evening Hours, which Disney's list keeps for
   its Deluxe and Deluxe Villa hotels, the Swan, Dolphin, Swan Reserve and Shades of Green
   ([Early Entry](https://disneyworld.disney.go.com/guest-services/early-entry/),
   [Extended Evening Hours](https://disneyworld.disney.go.com/guest-services/extended-evening/)).
-  `lake_buena_vista` stays `offsite`: the B Resort on the same boulevard, on neither list, and the
-  hotels along SR 535. Both areas drive from the same point on Hotel Plaza Boulevard.
+  `lake_buena_vista` stays `offsite`, for the hotels along SR 535, and drives from the same point on
+  Hotel Plaza Boulevard.
 - **Venues** are where an evening goes outside the parks, curated in `regions.ts` with the
   operator's page as `url`: Disney Springs (`district`), Disney's BoardWalk (`resort_area`, a view
   of EPCOT's fireworks), the Polynesian beach (`viewpoint` across the lagoon from Magic Kingdom, on

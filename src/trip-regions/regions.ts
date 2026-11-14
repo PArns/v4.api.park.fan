@@ -616,8 +616,7 @@ export const ORLANDO: RegionConfig = {
   hotelNames: {
     disney: "a Walt Disney World resort hotel",
     disney_deluxe: "a Disney Deluxe or Deluxe Villa resort hotel",
-    disney_springs:
-      "a Disney Springs Resort Area hotel other than the B Resort",
+    disney_springs: "a Disney Springs Resort Area hotel",
     universal: "a Universal Orlando hotel",
     universal_premier:
       "a Universal Premier hotel (Royal Pacific, Hard Rock, Portofino Bay)",
@@ -1004,17 +1003,17 @@ export const ORLANDO: RegionConfig = {
       // Disney names these hotels among the "other select hotels" whose guests
       // get Early Entry, and not among those with Extended Evening Hours
       // (disneyworld.disney.go.com/guest-services/early-entry/ and
-      // /extended-evening/). The B Resort on the same boulevard is on neither.
+      // /extended-evening/).
       key: "disney_springs",
       name: "Disney Springs Resort Area",
       latitude: 28.3768,
       longitude: -81.5138,
       hotel: "disney_springs",
-      note: "Hotel Plaza Boulevard by Disney Springs: the Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree Suites, Holiday Inn Orlando, Wyndham Lake Buena Vista and Wyndham Garden",
+      note: "Hotel Plaza Boulevard by Disney Springs: the Hilton Orlando Lake Buena Vista, Hilton Orlando Buena Vista Palace, Drury Plaza, DoubleTree Suites, Holiday Inn Orlando, Renaissance Orlando Resort and Spa, Wyndham Lake Buena Vista and Wyndham Garden",
     },
     {
-      // The same point: the B Resort sits on Hotel Plaza Boulevard, the
-      // Lake Buena Vista hotels along SR 535 a few minutes' drive away.
+      // The same point as Disney Springs: the Lake Buena Vista hotels along
+      // SR 535 are a few minutes' drive away.
       key: "lake_buena_vista",
       name: "Lake Buena Vista",
       latitude: 28.3768,

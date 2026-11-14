@@ -904,7 +904,7 @@ describe("get_park_events", () => {
     expect(json?.statusMeans.expected).toMatch(/last year's pattern/);
     expect(json?.slots).toContainEqual({
       park: "Magic Kingdom Park",
-      slot: "Early Entry (guests of a Walt Disney World resort hotel, a Disney Deluxe or Deluxe Villa resort hotel or a Disney Springs Resort Area hotel other than the B Resort)",
+      slot: "Early Entry (guests of a Walt Disney World resort hotel, a Disney Deluxe or Deluxe Villa resort hotel or a Disney Springs Resort Area hotel)",
       minutesBeforeOpening: 30,
       days: [`${day(10)}..${day(14)}`],
     });
