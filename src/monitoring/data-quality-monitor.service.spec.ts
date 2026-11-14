@@ -1,3 +1,4 @@
+import { attractionIsSeasonal } from "../common/utils/season-window.sql";
 import {
   DataQualityMonitorService,
   MONITORED_QUEUES,
@@ -110,9 +111,8 @@ describe("DataQualityMonitorService", () => {
       await build(query).findSilencedClusters();
 
       const [sql] = query.mock.calls[0] as [string];
-      expect(sql).toMatch(
-        /NOT COALESCE\(a\.curated_is_seasonal, a\.is_seasonal\)/,
-      );
+      // The resolved flag, so a park season that binds the ride counts too.
+      expect(sql).toContain(`NOT ${attractionIsSeasonal("a")}`);
       expect(sql).toMatch(/a\.retired_at IS NULL/);
     });
   });

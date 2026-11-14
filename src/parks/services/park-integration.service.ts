@@ -78,7 +78,10 @@ import {
   currentSlotStartMs,
   ttlSecondsToNextBoundary,
 } from "../../common/utils/best-visit-times.util";
-import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import {
+  resolveCuratedFacts,
+  type ResolvedCuratedFacts,
+} from "../../attractions/utils/curated-attraction-facts.util";
 import { withoutRidesInMaintenance } from "../../attractions/utils/curated-out-of-service.util";
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { partialRunWeekdays } from "../../common/utils/run-weekdays.util";
@@ -708,17 +711,17 @@ export class ParkIntegrationService {
       // and the favorites list already override that; this list did not, which
       // is the surface people actually look at. The flag lives on the entity,
       // not on the DTO, so read it from the park we were handed.
-      // A Map, not a Set: the season gate needs each attraction's months, and
-      // they live on the entity for the same reason the flag does.
-      const openWithPark = new Map<string, number[] | null>(
+      // A Map, not a Set: the season gate needs each attraction's season, and
+      // it lives on the entity for the same reason the flag does.
+      const openWithPark = new Map<string, ResolvedCuratedFacts>(
         (park.attractions ?? [])
           .filter((a) => a.openWithPark)
-          // Resolved months, so a curated season governs the free-flow gate
-          // too. On these rows the months are hand-written either way — the
-          // detector can never derive them for something it never sees
-          // OPERATING — but a curated `is_seasonal: false` has to be able to
-          // take them out of play.
-          .map((a) => [a.id, resolveCuratedFacts(a).seasonMonths]),
+          // Resolved, so a curated season or a bound park season governs the
+          // free-flow gate too. On these rows the months are hand-written
+          // either way — the detector can never derive them for something it
+          // never sees OPERATING — but a curated `is_seasonal: false` has to
+          // be able to take them out of play.
+          .map((a) => [a.id, resolveCuratedFacts(a)]),
       );
 
       // The silent-source facts, for the same reason and off the same entity:
@@ -852,7 +855,8 @@ export class ParkIntegrationService {
             openWithPark: openWithPark.has(attraction.id),
             parkStatus: dto.status,
             waitTimesReadable,
-            seasonMonths: openWithPark.get(attraction.id),
+            seasonMonths: openWithPark.get(attraction.id)?.seasonMonths,
+            seasonBindings: openWithPark.get(attraction.id)?.seasonBindings,
             parkTimezone: park.timezone,
           })
         ) {

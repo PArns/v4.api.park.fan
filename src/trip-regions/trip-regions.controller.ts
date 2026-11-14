@@ -35,6 +35,7 @@ import {
   TripPlanQueryDto,
 } from "./dto/trip-region-query.dto";
 import type { TripBestDays } from "./trip-best-days";
+import type { PlanIdeasAnswer } from "./trip-plan-ideas";
 import {
   TripAccuracyDto,
   TripCalendarDto,
@@ -211,6 +212,31 @@ export class TripRegionsController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<TripPlanDto> {
     const body = await this.plans.plan(region, query);
+    if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
+    return body;
+  }
+
+  @Get(":region/plan/ideas")
+  @RequiresApiKey()
+  @ApiOperation({
+    summary: "The plan's best single edits, each planned again",
+    description:
+      "The same query as `/plan`. At most three ideas (move, swap, add, travel_day, hopper, " +
+      "avoid_party), each the change as query parameters and the plan's figures before and after " +
+      "it is planned again: the park's `headlinerWait` on its day and `totals.headlinerWait`. " +
+      "An idea places a park the plan leaves out or saves at least 5 minutes over the visits " +
+      "both plans place. At most 10 plans per answer; cached an hour by the plan's query.",
+  })
+  @ApiParam({ name: "region", example: "orlando" })
+  @ApiResponse({ status: 200, description: "The ideas, best first" })
+  @ApiResponse({ status: 400, description: "Invalid trip, parks or options" })
+  @ApiResponse({ status: 404, description: "Unknown region" })
+  async planIdeas(
+    @Param("region") region: string,
+    @Query() query: TripPlanQueryDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PlanIdeasAnswer> {
+    const body = await this.plans.ideas(region, query);
     if (!res.headersSent) res.setHeader("Cache-Control", KEYED_CACHE_CONTROL);
     return body;
   }

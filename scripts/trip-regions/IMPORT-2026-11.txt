@@ -1,0 +1,66 @@
+# Production import, November 2026
+
+The owner approved these writes. Run them through the park.fan admin MCP with a token of scope
+`admin:write` or `admin:owner` (check with `whoami`). Every write runs as a dry run first. Read the
+dry run's answer and fix anything it reports before you run the write.
+
+## 1. Seasons (`import_trip_seasons`, at most 100 rows per call)
+
+Pass each file's rows as `rows`, first with `dryRun: true`, then with `dryRun: false`. A row that
+reports `exists` is already in production: skip it, never duplicate it.
+
+1. `seasons/japan-2026-27.json` with `region: "japan"`. The 13 rows with `startDate: null` come back
+   `invalid`, which is expected, since step 5 replaces them.
+2. `seasons/southern-california-2026-27.json` with `region: "southern-california"`.
+3. `seasons/paris-2026-27.json` with `region: "paris"`.
+4. `seasons/europe-2026-27.json` (78 rows, no region).
+   - It holds the Christmas and winter seasons of 2026/27 at the European parks, including
+     Phantasialand's Wintertraum.
+   - It also holds Halloween 2027 and Christmas/winter 2027/28 at the main parks, mostly as
+     `expected`.
+   - Eleven rows use the new kind `winter` (Wintertraum, Winter Efteling, Winterzauber and others).
+   - A row already in production as `christmas` under the same name needs `update_trip_season` to
+     `kind: "winter"` instead of a second row.
+5. `seasons/japan-curation-2026-27.json` with `region: "japan"`: dated `expected` versions of the
+   Tokyo Disney and USJ events, plus LEGOLAND Japan.
+6. `seasons/southern-california-curation-2026-27.json` with `region: "southern-california"`: 2027
+   events at Disneyland, California Adventure, Knott's, Six Flags Magic Mountain and LEGOLAND
+   California.
+
+## 2. Rides bound to a season
+
+A ride that runs only during a season gets bound to it through the season's `attractionIds`.
+1. Find the rides with `find_attractions` and the seasons with `list_trip_seasons`.
+2. Set `attractionIds` with `update_trip_season`.
+
+Bind at least these:
+- **Phantasialand:** the ice rink and "Ice Skate Hire", to Wintertraum 2026/27.
+- **Movie Park Germany:** its Halloween mazes, to every Halloween Horror Festival season in
+  production (2027 included).
+- **Other parks:** the Halloween mazes of every other park that has a Halloween season. Rides
+  flagged as mazes are listed by `get_park` (maze badge, `docs/architecture/attraction-status/maze-rule.md`).
+- **Winter rides:** the ice rinks and other winter-only rides of each park with a `winter` or
+  `christmas` season.
+
+Bind only rides that clearly belong to the event. List what you bound.
+
+## 3. Ticket products (`upsert_ticket_product`, a dry run by default)
+
+1. **Store links.** `tickets/prod-link-updates-2026-11.json` adds 52 country-store links and the
+   `store` field on 91 existing links, across 37 products.
+   - Each entry is `{ region, slug, links }` and replaces the product's whole link list.
+   - Check that production's links still match the `review` section before writing.
+2. **Names.** Five names still carry the planner's `.h` token. Set `product: { name }` to the seed's
+   name in `src/trip-regions/tickets*.ts`:
+   - `dlr-1-day` and `dlr-multi-day` (southern-california)
+   - `dlp-1-day` (paris)
+   - `wdw-date-based-plus` and `uor-date-based` (orlando)
+3. **UK suggestion ranks.** Compare `list_ticket_products` for Orlando with the seed. Give each UK
+   product the seed's `suggest` rank where production has none, so the planner can suggest the UK
+   14-day tickets.
+
+## After the import
+
+- Check two park calendars in a season month: Phantasialand in December, Movie Park Germany in
+  October 2027. The icons should sit on the right days.
+- Record what you wrote in the pull request of the current release.

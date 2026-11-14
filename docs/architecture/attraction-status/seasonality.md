@@ -18,6 +18,62 @@ the TypeScript rule, in the [season contract](../../frontend/seasonality.md).
 Both pairs resolve through `resolveCuratedFacts`; a curated `false` takes the months down with it.
 `isCurrentlyInSeason` (`curated-attraction-facts.util.ts`) turns them into three values; what each
 means and who reads it is the [season contract](../../frontend/seasonality.md#iscurrentlyinseason-has-three-values).
+A third writer sits between the two pairs: a park season that names the ride
+([below](#a-ride-bound-to-a-park-season)).
+
+## A ride bound to a park season
+
+Phantasialand's ice rink and skate hire exist only during Wintertraum. Naming them in the
+Wintertraum season's `attractionIds` makes them seasonal, with the season's days as their window.
+Nothing is stored on the ride: `Attraction.seasonBindings` is a virtual column (a subquery in the
+SELECT, never a table column, so `synchronize` leaves the schema alone) that lists the seasons
+binding the row.
+
+**What binds.** A season of a kind in `PARK_SEASON_BINDING_KINDS` (`halloween`, `christmas`,
+`winter`, `summer_nights`, `special_event`) whose status is not `cancelled`; `expected` binds, since
+the dates are still the best on file. `maintenance` keeps its own meaning (the named rides are down
+inside a normal season), and `opening` and `closure` describe the park, so none of the three binds.
+The predicate is `seasonBindsAttraction` (`season-window.sql.ts`). Ids are matched as lowercase
+text, which `ParkSeasonService` writes.
+
+**The window.** In season on the season's days: its `dates` when it has them, every day between its
+bounds otherwise, park-local. Every other day is out of season. With several bound seasons (one per
+year), any of them counts. A season binding an all-year ride it only re-themes would put that ride
+out of season for the rest of the year, so a re-theme is not listed in `attractionIds`.
+
+**Precedence**, the same in `resolveCuratedFacts` and its SQL twin `attractionIsOutOfSeason`:
+
+| Writer | Wins over | Note |
+| --- | --- | --- |
+| the ride's curated `false` or curated months | everything | the ride's own page is the most specific statement |
+| a binding park season | the detector | a curated `true` without months agrees and leaves the window to the season |
+| `detect-seasonal` | nothing | `is_seasonal`, `season_months`, `season_out_since` |
+
+When a binding decides, the resolved `seasonMonths` and `seasonOutSince` are null: the days say
+more than either. `seasonBindings` on the resolved facts is empty whenever a binding does not
+decide.
+
+**Who reads it.** Every reader of the season goes through the two resolvers, so a bound ride needs
+no code of its own: the park payload and its counters, the ride page, favourites, nearby, the free
+flow gate (`isFreeFlowOpen` passes the bindings to `isCurrentlyInSeason`), `/plan/day` (judged on
+the planned day), ride alerts, the rain-soon push, the SQL counters (park listings, discovery,
+global stats), the outage and „not run today" lines, and the MCP and Parky tools. Out of its window
+a bound ride reads `isCurrentlyInSeason: false` and carries `boundSeason`
+([contract](../../frontend/seasonality.md#a-ride-bound-to-a-park-season)). The detectors read the
+same answer: `findSilencedClusters` takes a bound ride as a known season, `findAbsenceRetiredUnreviewed`
+does not ask about one, the retirement candidates leave it out while it is outside its days, and
+the children sync's absence step does not retire it (`isSeasonalRow`).
+
+**Explicit selects.** A `find` with `select` loads the virtual column only when it lists
+`seasonBindings: true` (`/plan/day` and the children sync do); without it the ride resolves as not
+bound. Raw SQL reads `attractionIsSeasonal`, `attractionIsSeasonBound` or `attractionIsOutOfSeason`.
+
+**Publishing.** A season write evicts the park and the rides it binds, before and after the edit
+(`AdminSeasonService`), so a ride page does not keep its old season for the cache's lifetime.
+
+**Checked.** On 2026-11-14 the two resolvers were compared on a scratch Postgres over 756
+combinations of the five seasonality columns and seven bindings (none, running, future,
+cancelled, `maintenance`, a `dates` list with and without today): no disagreement.
 
 ## The observation-window artefact
 

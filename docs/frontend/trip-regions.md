@@ -24,6 +24,7 @@ sold in, and, in Japan and Paris, its bases ([below](#what-a-region-defines)).
 | `GET /v1/trip-regions/:region`           | none | an hour in the browser, a day at the edge               | parks, groups, hotel areas, travel times        |
 | `GET /v1/trip-regions/:region/calendar`  | data | private, an hour; Redis an hour                         | every park's days side by side, with its events |
 | `GET /v1/trip-regions/:region/plan`      | data | private, an hour; Redis an hour by the normalized query | the optimized itinerary for a trip              |
+| `GET /v1/trip-regions/:region/plan/ideas` | data | private, an hour; Redis an hour by the plan's normalized query | the plan's best single edits, each planned again ([ideas](#ideas-get-v1trip-regionsorlandoplanideas)) |
 | `GET /v1/trip-regions/:region/best-days` | data | private, an hour; built from the calendar's Redis entry | per park its quietest and busiest days          |
 | `GET /v1/trip-regions/:region/tickets`   | none | five minutes at the edge, ten more stale                | the ticket catalog ([tickets](#tickets))        |
 | `GET /v1/trip-regions/:region/accuracy`  | none | an hour in the browser, a day at the edge; Redis a day  | how accurate the forecast was ([accuracy](#how-accurate-the-forecast-was-get-v1trip-regionsregionaccuracy)) |
@@ -747,7 +748,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "objective": "headliner_wait",
     "exact": true,
     "ticket": "base", // base | hopper
-    "warnings": ["hop_needs_hopper"], // absent when empty
+    "warnings": ["hop_needs_hopper"], // absent when empty; hop_needs_hopper | blockouts_unchecked | resort_left_out
   },
   "days": [
     {
@@ -863,6 +864,14 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
   both are this optimizer on the same days, so the plan for a window's dates leaves out the same
   parks, unless days without published hours, which `/when` prices as if open
   ([when to go](./trip-regions-when.md)), change which park's cheapest day costs most.
+- **`resort_left_out`** in `meta.warnings`: a resort the visitor chose a park of has no day in the
+  plan at all, every chosen park of it `no_day_left`, while another park has one. The Paris weekend
+  of 14–16 May 2027 with a free arrival and departure day has one park day; on last year's
+  Saturday Disneyland Park queued 55 minutes, Disney Adventure World 65, Parc Astérix 40, so both
+  Disney parks drop (the rule below) and the plan is a day at Parc Astérix. The code lets the
+  client say so in the Parks step ("Disneyland Paris has no day: one park day, and Parc Astérix's
+  is the quietest"), and the [ideas](#ideas-get-v1trip-regionsorlandoplanideas) price the way out:
+  `departure=park` or `arrival=park` places Disneyland Park.
 - **`spare: true`** marks a rest day the visitor did not ask for: not pinned (`rest@date`), and a
   park on it would still keep the rest rule (with `rest=auto`, no run past four park days; with
   `rest=none` every rest day is spare). The chosen visits have no use for it. `kind` stays `rest`
@@ -888,7 +897,9 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
 
 - **Which parks drop** when the chosen ones outnumber the park days: a second visit first, then
   the park whose cheapest day costs most. The rule is the optimizer's, the same for `/plan` and
-  `/when`.
+  `/when`. A day is read by its waits there, without the penalty for hours not yet published: that
+  penalty says which day of a park to use last, not which park is worth a day, and Disneyland
+  Paris publishes its hours months after Parc Astérix does (release 2.22.0).
 
 **The objective.** Minimize the sum over planned visits of their [day cost](#how-a-day-is-priced).
 A hotel perk takes a fixed share off the day it applies: `early_entry` and `early_park_admission`
@@ -918,7 +929,15 @@ chosen visits leave room for. A rest day straight after three or more park days 
 `rest_after_streak`. When the chosen visits leave too few days for the rule, it is loosened as
 little as possible, `meta.relaxed` says `streak_relaxed` and each day past the fourth in a row
 carries `long_streak`; the plan never drops a visit to make a rest day. `rest=max:n` holds n the
-same way. `rest=none` keeps no rule and gives the spare days no reasons. `rest@date` pins a rest
+same way. `rest=none` keeps no rule and gives the spare days no reasons. **A short trip**, at most
+`SHORT_TRIP_DAYS` (4, the run `rest=auto` allows) days, needs no rest day, so its park days run
+together: a day left without a park goes before or after them, never between two. Paris, 12–14
+March 2027, arrival and departure park days, Disneyland Park and Disney Adventure World (Parc
+Astérix is closed until April): two park days in a row and a free departure day, not park, rest
+(the busier Saturday), park. Each day between two park days costs `shortTripGapPenalty` (400
+minutes), more than days' waits differ and less than what means "only when nothing else fits",
+so a park's two visits still go a day apart, and a pinned day or a closed one still wins
+(release 2.22.0). `rest@date` pins a rest
 day; a free arrival or departure day stays `arrival`/`departure`, also when `arrival=park` left it
 empty. Which rest days are the visitor's and which are only spare: `spare` (above).
 
@@ -991,6 +1010,91 @@ served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so
 the two can be read side by side; absent where nothing is measured at those distances (a `last_year`
 visit never counts). `parkDays` counts days with a park, `visits` the visits placed.
+
+## Ideas (`GET /v1/trip-regions/orlando/plan/ideas`)
+
+The plan's best single edits, for Parky's cards over the plan, at the day and in the chat. The
+same query as `/plan`, the same 400s. Each idea is the query with one change, planned again by the
+optimizer on the same calendar (`trip-plan-ideas.ts`: `optimizePlan`, never a second way of
+planning), and priced in the two figures the plan prints.
+
+```jsonc
+// GET /v1/trip-regions/orlando/plan/ideas?from=2026-12-06&to=2026-12-13&area=disney
+{
+  "meta": {
+    "region": "orlando",
+    "from": "2026-12-06",
+    "to": "2026-12-13",
+    "computedAt": "…",
+    "plans": 6, // plans made beyond the plan itself, at most 10
+  },
+  "ideas": [
+    // best first, at most 3
+    {
+      "kind": "travel_day", // move | swap | add | travel_day | hopper | avoid_party
+      "query": "arrival=park", // set each parameter to this value, then ask /plan
+      "park": "disneys-hollywood-studios", // the park the idea is about
+      "to": "2026-12-11", // its day with the idea; `from`: its day now, where it has one
+      "headlinerWait": { "after": 75 }, // the park's days[].headlinerWait, before and after
+      "totals": { "before": 52, "after": 55 }, // totals.headlinerWait, before and after
+      "savedMinutes": 10, // over the visits both plans place; negative where longer
+      "places": ["disneys-hollywood-studios"], // parks only the idea's plan places
+    },
+    {
+      "kind": "hopper",
+      "query": "hopper=walt-disney-world&hop=1",
+      "park": "disneys-hollywood-studios",
+      "to": "2026-12-11",
+      "headlinerWait": { "after": 75 },
+      "totals": { "before": 52, "after": 55 },
+      "savedMinutes": 0,
+      "places": ["disneys-hollywood-studios"],
+    },
+  ],
+}
+```
+
+- **`query`** is the change as `/plan` parameters (`&`-separated, values unencoded as the plan's
+  own links write them). Each one replaces the current value whole: `lock` lists the visitor's
+  pins and the new one, `parks` every chosen park and the added one. Applied as is, `/plan`
+  answers the plan the idea priced (`totals.after` is its `totals.headlinerWait`).
+- **`headlinerWait`** is the park's figure on its day (`from` before, `to` after); **`totals`** the
+  trip's mean. `savedMinutes` pairs each park's visits in date order, as the hopper verdict's
+  `savedMinutes` does, and sums the minutes; a visit only one plan has is not in it.
+- **Which ideas.** An idea places a chosen park the plan leaves out, or adds a park on a spare day,
+  or saves at least 5 minutes (`MIN_IDEA_MINUTES`) over the visits both plans place, and never
+  costs a visit or a park the plan has, nor a pin (a pin the plan would ignore drops the idea).
+  `avoid_party` is kept without the minutes where it takes the visit off the party night and
+  costs less than 5. Ranked by the parks they place, then the minutes saved, then the kind in the
+  order `travel_day`, `hopper`, `move`, `swap`, `add`, `avoid_party`; two ideas that make the same
+  plan are one. At most three (`MAX_IDEAS`, the owner's default).
+
+| Kind          | Tried when                                                                 | Sets                        |
+| ------------- | -------------------------------------------------------------------------- | --------------------------- |
+| `travel_day`  | the arrival or departure day is free                                       | `arrival=park`, `departure=park` |
+| `hopper`      | a chosen park is left out (`no_day_left`), its resort has no hopper yet, and no owned ticket decides it | `hopper=<resort>&hop=1`     |
+| `avoid_party` | `fireworks=any` and a visit falls on a party night (`party_night_short_hours`) | `fireworks=want`            |
+| `add`         | the plan has a spare day: the first of `spareDayParks`, on its cheapest     | `parks=…,<park>&lock=…,<park>@<date>` |
+| `move`        | a visit not pinned has a cheaper day in `parks[].alternatives`, at least 5 minutes by the calendar, not a free arrival or departure day nor a pinned rest day; the three that save most by the calendar | `lock=…,<park>@<date>`      |
+| `swap`        | two unpinned visits of different parks save at least 5 minutes by the calendar on each other's day; the two that save most | `lock=…,<a>@<b's day>,<b>@<a's day>` |
+
+- **No idea takes back a pin.** The API cannot tell a default from an answer (a client leaves
+  `arrival=free` out of the query), so an idea may set a parameter the visitor answered in the
+  assistant: a client that knows the visitor chose a free arrival day drops `travel_day`, one
+  that knows they want no hopper drops `hopper`. Taking all pins off is the client's own "Alle
+  lösen", not an idea.
+- **Cost.** The candidates are ranked by what the calendar alone says they save and at most 10 are
+  planned (`MAX_IDEA_PLANS`), so an answer costs the plan once and at most ten plans more,
+  whatever the trip; the plan's ticket suggestion, evenings and expected error are not made for
+  them. Cached an hour in Redis by the plan's normalized query
+  (`trip-regions:plan-ideas:v1:*`), apart from the plan, so `/plan` pays nothing for its ideas
+  and a client asks for them after the plan is on screen. On the dev shim (production's data,
+  calendar cached): Paris 14–16 May 17 ms, Orlando 6–13 December with a Disney hotel 45–60 ms,
+  Japan 14–30 January (three parks twice) 60–70 ms, Southern California 3–10 April 21 ms,
+  Orlando 1–14 February with three owned tickets 72 ms, and the heaviest, Orlando 1–21 February
+  with eight parks and second visits, 2.2–2.3 s for 5–6 plans of 0.3 s each (`/plan` there:
+  0.28 s). No metric row is written for an ideas answer yet
+  ([what the server records](#what-the-server-records)).
 
 ## Evenings
 
@@ -1867,8 +1971,8 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`), the plan by its normalized
-query, so the same trip asked with its parameters in another order is one entry. A plan reads the
+hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`, the plan's ideas
+`trip-regions:plan-ideas:v1:*`), the plan by its normalized query, so the same trip asked with its parameters in another order is one entry. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
 

@@ -349,7 +349,11 @@ export class ParkSeasonService {
 
     let attractionIds: string[] | null = null;
     if (input.attractionIds && input.attractionIds.length > 0) {
-      const unique = [...new Set(input.attractionIds)];
+      // Lowercase: a ride is bound by matching its id as text
+      // (`seasonBindsAttraction`), and Postgres renders a uuid in lowercase.
+      const unique = [
+        ...new Set(input.attractionIds.map((id) => id.toLowerCase())),
+      ];
       const found = await this.attractions.find({
         where: { id: In(unique), parkId },
         select: { id: true },

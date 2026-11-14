@@ -317,4 +317,41 @@ describe("Paris", () => {
       expect(m).not.toHaveProperty("usSchoolBreakDays");
     }
   });
+
+  it("says resort_left_out when a weekend's one park day goes to Parc Astérix", () => {
+    // 14–16 May 2027 with a free arrival and departure: one park day, and
+    // last year's Saturday queued 55 and 65 minutes at Disney, 40 at Astérix.
+    const waits: Record<string, number> = {
+      [DLP]: 55,
+      [DAW]: 65,
+      [ASTERIX]: 40,
+    };
+    const answer = regionPlan(
+      REGION,
+      { from: "2027-05-14", to: "2027-05-16" },
+      TODAY,
+      (slug, _date, cell) => {
+        cell.headlinerWait = waits[slug];
+        cell.waitExact = waits[slug];
+      },
+    ) as ReturnType<typeof regionPlan> & {
+      parksLeftOut: Array<{ park: string; reason: string }>;
+    };
+    expect(answer.days.flatMap((d) => d.parks.map((p) => p.slug))).toEqual([
+      ASTERIX,
+    ]);
+    expect(answer.parksLeftOut.map((p) => p.park)).toEqual([DLP, DAW]);
+    expect(answer.meta.warnings).toEqual(["resort_left_out"]);
+    // With the arrival day a park day, Disney has its day and the code goes.
+    const withArrival = regionPlan(
+      REGION,
+      { from: "2027-05-14", to: "2027-05-16", arrival: "park" },
+      TODAY,
+      (slug, _date, cell) => {
+        cell.headlinerWait = waits[slug];
+        cell.waitExact = waits[slug];
+      },
+    );
+    expect(withArrival.meta.warnings).toBeUndefined();
+  });
 });

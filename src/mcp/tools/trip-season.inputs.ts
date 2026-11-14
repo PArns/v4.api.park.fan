@@ -87,7 +87,12 @@ export const seasonPatchFields = {
     .nullable()
     .optional()
     .describe(
-      "Rides of this park the season is about (a maintenance window, a re-themed ride); find_attractions has the ids",
+      "Rides of this park the season is about; find_attractions has the ids. On maintenance the " +
+        "rides are down for the season. On halloween, christmas, winter, summer_nights and " +
+        "special_event they run ONLY on the season's days and read out of season outside them " +
+        "(an ice rink during Wintertraum, a maze during Fright Nights), unless a cancelled " +
+        "status or the ride's own curated season says otherwise. Never list an all-year ride " +
+        "the season only re-themes",
     ),
   url: z
     .string()

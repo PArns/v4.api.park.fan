@@ -1,4 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
+import {
+  attractionIsOutOfSeason,
+  attractionIsSeasonBound,
+} from "../../common/utils/season-window.sql";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, DataSource } from "typeorm";
 import { AttractionReviewMark } from "../entities/attraction-review-mark.entity";
@@ -79,6 +83,8 @@ export class AttractionReviewService {
    * The `same_day` clause is the load-bearing part: a whole block of a park
    * falling silent on one date is a seasonal closure (Wet'n'Wild's 13+9 on
    * 2026-06-29 is the Southern-Hemisphere winter), not a set of retirements.
+   * A ride a park season binds is left out while it is outside the season's
+   * days, which is the one seasonal closure a person has written down.
    */
   async findRetirementCandidates(): Promise<RetirementCandidate[]> {
     const rows: Array<{
@@ -106,6 +112,10 @@ export class AttractionReviewService {
            AND act.last_row > now() - interval '2 days'
            AND act.max_wait > 0
            AND a.retired_at IS NULL
+           -- Outside the days of a park season that binds it, silence is the
+           -- season, not a retirement. Only a binding: the detector's own
+           -- season cannot tell a winter from a demolition.
+           AND NOT (${attractionIsSeasonBound("a")} AND ${attractionIsOutOfSeason("a")})
       ), same_day AS (
         SELECT "parkId", d, count(*) AS n FROM cand GROUP BY 1, 2
       )

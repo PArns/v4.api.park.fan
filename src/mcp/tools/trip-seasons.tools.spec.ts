@@ -204,7 +204,7 @@ describe("import_trip_seasons", () => {
     });
     expect(h.seasonRepo.save).not.toHaveBeenCalled();
     expect(h.audit.record).not.toHaveBeenCalled();
-    expect(h.curation.publishParks).toHaveBeenCalledWith([]);
+    expect(h.curation.publishParks).toHaveBeenCalledWith([], new Map());
   });
 
   it("writes the new rows with an audit row each and publishes the park once", async () => {
@@ -228,7 +228,10 @@ describe("import_trip_seasons", () => {
       expect.objectContaining({ actor: WRITER, action: "park.season.create" }),
     );
     expect(h.curation.publish).not.toHaveBeenCalled();
-    expect(h.curation.publishParks).toHaveBeenCalledWith([TDL]);
+    expect(h.curation.publishParks).toHaveBeenCalledWith(
+      [TDL],
+      expect.any(Map),
+    );
   });
 
   it("is refused to a read-only token, which is not even shown it", async () => {

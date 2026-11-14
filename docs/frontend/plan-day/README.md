@@ -16,7 +16,7 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/plan/day?date=YYYY-MM-DD
   whose `ridesUnavailable.reason` is `data_unavailable`: that one is sent
   `no-store`, so a transient fault does not outlive itself at the edge. At the
   origin the built day is kept 15 minutes in Redis
-  (`plan-day:resp:v1:<park>:<date>`, `src/parks/services/plan-day-cache.ts`), the
+  (`plan-day:resp:v2:<park>:<date>`, `src/parks/services/plan-day-cache.ts`), the
   entry [`/plan/optimize`](./optimize.md) plans against too; the pieces underneath
   (calendar month, hourly profile, ML predictions, H5 profiles) each have their
   own.

@@ -27,6 +27,7 @@ import {
   type NormalizedPlanQuery,
 } from "./trip-plan.assembly";
 import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
+import { planIdeas, type PlanIdeasAnswer } from "./trip-plan-ideas";
 import type { TripPlanDto } from "./dto/trip-region-response.dto";
 import { planShapeOf } from "./metrics/trip-request-facts";
 import { noteTripCache, noteTripShape } from "./metrics/trip-request-trace";
@@ -91,6 +92,41 @@ export class TripPlanService {
     return this.flight.run(key, async () => {
       noteTripCache("cache", "miss");
       const built = await this.build(region, q);
+      await this.redis
+        .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)
+        .catch(() => undefined);
+      return built;
+    });
+  }
+
+  /**
+   * The plan's ideas (`/plan/ideas`): its best single edits, each planned
+   * again on the same calendar. Cached an hour by the plan's normalized
+   * query, apart from the plan, so `/plan` pays nothing for them.
+   */
+  async ideas(slug: string, query: TripPlanQueryDto): Promise<PlanIdeasAnswer> {
+    const region = await this.regions.regionWithTickets(slug);
+    const q = await this.normalizeIn(region, query);
+    const key = CacheKeys.tripRegionPlanIdeas(slug, planCacheQuery(q));
+    const cached = safeJsonParse<PlanIdeasAnswer>(await this.redis.get(key));
+    if (cached) return cached;
+    return this.flight.run(key, async () => {
+      const calendar = await this.regions.internalCalendar(
+        region,
+        q.from,
+        q.to,
+      );
+      const known = (await this.regions.resolveParks(region)).map(
+        (p) => p.config.slug,
+      );
+      const built = planIdeas({
+        region,
+        known,
+        query,
+        today: this.regions.today(region),
+        calendar,
+        computedAt: new Date().toISOString(),
+      });
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)
         .catch(() => undefined);

@@ -41,7 +41,7 @@ minutes, and seasons change a few times a year (`ParkSeasonsController`, `src/pa
 | `separateTicket` | `true` when a normal day ticket is not enough |
 | `priceFrom`, `priceCurrency` | the cheapest advertised price as a decimal **string** (`"39.50"`) and its ISO 4217 code; a price never comes without a currency |
 | `opensAt`, `closesAt` | the event's hours, park-local `HH:MM`. Independent of the schedule rows: an evening event can have no `OPERATING` row at all |
-| `attractionIds` | the rides the season is about (the ride under maintenance, the rides an overlay re-themes) |
+| `attractionIds` | the rides the season is about. On `maintenance` they are down for the season. On `halloween`, `christmas`, `winter`, `summer_nights` and `special_event` they run **only** on the season's days and read out of season outside them, with the season as their `boundSeason` ([season-bound rides](./seasonality.md#a-ride-bound-to-a-park-season)); an all-year ride an event only re-themes is not listed |
 | `url` | the park's own page for the event |
 | `sourceUrl`, `confirmedAt` | where the dates were read and when they were last checked against it; show "as of" from `confirmedAt`, not from any edit date |
 
@@ -52,5 +52,5 @@ The editor's `note` and the admin account that last wrote the row stay in the ad
 The route sets no policy of its own, so the edge gets the global 5-minute one
 ([edge caching](../deployment/edge-and-throttling.md#cache-headers)); there is no Redis cache. An
 editor's write publishes like any curated change (`AdminCurationService.publish`,
-[publish outside-in](../rules/publish-outside-in.md)), so the old answer can live at the edge for up to
-that window.
+[publish outside-in](../rules/publish-outside-in.md)), with the rides it binds before and after the
+edit, so the old answer can live at the edge for up to that window.

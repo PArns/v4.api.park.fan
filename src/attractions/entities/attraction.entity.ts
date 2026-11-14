@@ -10,12 +10,15 @@ import {
   Index,
   JoinColumn,
   OneToMany,
+  VirtualColumn,
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { generateSlug } from "../../common/utils/slug.util";
 import type { AttractionKind } from "../../common/types/attraction-kind.type";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
+import type { SeasonBinding } from "../../common/types/season-binding.type";
+import { attractionSeasonBindingsSql } from "../../common/utils/season-window.sql";
 import {
   normalizeWorksPeriod,
   type WorksPeriod,
@@ -505,6 +508,21 @@ export class Attraction {
    */
   @Column({ name: "season_out_since", type: "date", nullable: true })
   seasonOutSince: string | null;
+
+  /**
+   * The park seasons that bind this ride (`PARK_SEASON_BINDING_KINDS`, not
+   * cancelled, the ride in `attraction_ids`), oldest first; `[]` when none.
+   *
+   * Read with the row rather than stored on it: the binding is written on the
+   * season, and a copy here would be a second writer of one fact. A virtual
+   * column is a subquery in the SELECT, never a column, so `synchronize`
+   * leaves the table alone. It costs one lookup on `idx_park_season_park_start`
+   * per row. A `find` with an explicit `select` loads it only when asked
+   * (`seasonBindings: true`), and `resolveCuratedFacts` reads a missing list
+   * as "not bound".
+   */
+  @VirtualColumn({ type: "jsonb", query: attractionSeasonBindingsSql })
+  seasonBindings?: SeasonBinding[];
 
   // When true: attraction is shown as OPERATING whenever the park is OPERATING,
   // regardless of queue data status. Use for free-flow attractions (playgrounds,

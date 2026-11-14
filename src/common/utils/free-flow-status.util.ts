@@ -4,6 +4,8 @@ import {
   LiveStatus,
 } from "../../external-apis/themeparks/themeparks.types";
 import { getCurrentDateInTimezone } from "./date.util";
+import type { SeasonBinding } from "../types/season-binding.type";
+import { isCurrentlyInSeason } from "../../attractions/utils/curated-attraction-facts.util";
 
 /**
  * Free-flow attractions: playgrounds, splash pads, climbing nets.
@@ -31,6 +33,12 @@ export interface FreeFlowContext {
    * which is the case for most free-flow areas and must keep working.
    */
   seasonMonths?: number[] | null;
+  /**
+   * Resolved `seasonBindings`: a park season that binds the area gates it by
+   * the season's days instead of its months (a snow playground during
+   * Wintertraum). Empty or absent leaves the months to decide.
+   */
+  seasonBindings?: readonly SeasonBinding[] | null;
   /** IANA timezone of the park. "Which month is it" is a park-local question. */
   parkTimezone?: string | null;
 }
@@ -84,14 +92,26 @@ export function isFreeFlowOpen(context: FreeFlowContext): boolean {
     parkStatus,
     waitTimesReadable = true,
     seasonMonths,
+    seasonBindings,
     parkTimezone,
   } = context;
 
+  // The season resolver rather than `isInSeason`, so a bound season gates the
+  // area exactly as it gates a ride. No `seasonOutSince`: the detector never
+  // flags a free-flow row, and months alone answer as `isInSeason` does.
   return (
     Boolean(openWithPark) &&
     parkStatus === "OPERATING" &&
     waitTimesReadable &&
-    isInSeason(seasonMonths, parkTimezone)
+    isCurrentlyInSeason(
+      {
+        isSeasonal: true,
+        seasonMonths: seasonMonths ?? null,
+        seasonOutSince: null,
+        seasonBindings,
+      },
+      parkTimezone,
+    ) !== false
   );
 }
 

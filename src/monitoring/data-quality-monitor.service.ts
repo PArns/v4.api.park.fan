@@ -5,6 +5,10 @@ import {
   observedReadingsSql,
 } from "../common/utils/closure-gap.sql";
 import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
+import {
+  attractionIsSeasonal,
+  attractionIsSeasonBound,
+} from "../common/utils/season-window.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
@@ -394,8 +398,9 @@ export class DataQualityMonitorService {
          AND NOT a.open_with_park
          -- A ride with a known season going quiet is the season ending, which
          -- is the answer this card asks for. Without this, the admin's
-         -- "season ends" button would leave the card standing (PAR-695).
-         AND NOT COALESCE(a.curated_is_seasonal, a.is_seasonal)
+         -- "season ends" button would leave the card standing (PAR-695). A
+         -- park season that binds the ride is a known season too.
+         AND NOT ${attractionIsSeasonal("a")}
          AND a.retired_at IS NULL
        GROUP BY a."parkId", p.name, p.timezone, (act.last_op AT TIME ZONE p.timezone)::date
       HAVING count(*) >= $3::int
@@ -647,7 +652,8 @@ export class DataQualityMonitorService {
    * the attraction again, under its old id or a new one; false says "not
    * seasonal" and the retirement stands. A row the detector already calls
    * seasonal is not listed: the absence step would not have retired it unless a
-   * twin replaced it, and that is a merge question, not a season question.
+   * twin replaced it, and that is a merge question, not a season question. Nor
+   * is one a park season binds: binding it is the answer.
    */
   async findAbsenceRetiredUnreviewed(): Promise<AbsenceRetiredUnreviewed[]> {
     const rows: Array<{
@@ -678,6 +684,8 @@ export class DataQualityMonitorService {
        WHERE a.retired_reason = $1
          AND a.curated_is_seasonal IS NULL
          AND NOT a.is_seasonal
+         -- A park season naming the ride has answered the question already.
+         AND NOT ${attractionIsSeasonBound("a")}
        ORDER BY p.name, a.name
       `,
       [ABSENT_UPSTREAM_REASON],

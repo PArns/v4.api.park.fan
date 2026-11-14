@@ -193,6 +193,32 @@ export function parksLeftOut(
 }
 
 /**
+ * The resorts the visitor chose a park of that the plan has no day for at
+ * all, for lack of days (`no_day_left`), while it plans another park: a
+ * Paris weekend with a free arrival and departure day has one park day, and
+ * Parc Astérix's queues are shorter than both Disney parks'. In the region's
+ * order. A plan with such a resort says `resort_left_out` in `meta.warnings`.
+ */
+export function resortsLeftOut(
+  region: Pick<RegionConfig, "parks" | "groups">,
+  chosen: readonly string[],
+  leftOut: readonly ParkLeftOut[],
+): string[] {
+  const out = new Set(
+    leftOut.filter((p) => p.reason === "no_day_left").map((p) => p.park),
+  );
+  if (out.size === 0 || chosen.every((slug) => out.has(slug))) return [];
+  const groupOf = new Map(region.parks.map((p) => [p.slug, p.group]));
+  return region.groups
+    .filter((g) => g.kind === "resort")
+    .map((g) => g.key)
+    .filter((key) => {
+      const mine = chosen.filter((slug) => groupOf.get(slug) === key);
+      return mine.length > 0 && mine.every((slug) => out.has(slug));
+    });
+}
+
+/**
  * Validates the query against the region and today; 400 with the reason
  * otherwise. `known` are the region parks the database has.
  */
@@ -933,12 +959,16 @@ export function dayHopSets(
   };
 }
 
+/** The codes of `meta.warnings`. */
+export type PlanMetaWarning =
+  "hop_needs_hopper" | "blockouts_unchecked" | "resort_left_out";
+
 /** The ticket parts of an answer: the owned tickets, plan first's suggestion and its days. */
 export interface PlanTicketParts {
   summaries: ReturnType<typeof ticketSummaries>;
   suggestions: TicketSuggestion[];
   days: Map<string, DayTicket>;
-  warnings: Array<"hop_needs_hopper" | "blockouts_unchecked">;
+  warnings: Array<Exclude<PlanMetaWarning, "resort_left_out">>;
 }
 
 /** The answer's ticket parts for a planned trip. */
@@ -1134,6 +1164,14 @@ export function planResponse(
     errors.length > 0
       ? Math.round(errors.reduce((s, e) => s + e, 0) / errors.length)
       : undefined;
+  const chosen = q.parks.map((p) => p.slug);
+  const leftOut = parksLeftOut(region, chosen, plan);
+  const warnings: PlanMetaWarning[] = [
+    ...tickets.warnings,
+    ...(resortsLeftOut(region, chosen, leftOut).length > 0
+      ? (["resort_left_out"] as const)
+      : []),
+  ];
   return {
     meta: {
       region: region.slug,
@@ -1152,7 +1190,7 @@ export function planResponse(
       ...(tickets.suggestions.length > 0 && {
         ticketSuggestion: tickets.suggestions,
       }),
-      ...(tickets.warnings.length > 0 && { warnings: tickets.warnings }),
+      ...(warnings.length > 0 && { warnings }),
       ...(plan.stays && {
         stays: plan.stays.map((st) => {
           const area = q.stays?.bases.find((b) => b.base === st.base)?.area;
@@ -1193,11 +1231,7 @@ export function planResponse(
       }),
     },
     unplaced: plan.unplaced,
-    parksLeftOut: parksLeftOut(
-      region,
-      q.parks.map((p) => p.slug),
-      plan,
-    ),
+    parksLeftOut: leftOut,
     ...(plan.ignoredLocks.length > 0 && { ignoredLocks: plan.ignoredLocks }),
     ...(plan.spareDayParks && { spareDayParks: plan.spareDayParks }),
   };
