@@ -262,8 +262,8 @@ describe("/when", () => {
 
   it("ranks Feb 16–25 on a forecast above a hot, peak-season late August from last year within 3 minutes", () => {
     // 36 minutes on a forecast in mid-February; 28 from last year in late
-    // August, 32 °C normals and the hurricane peak: about 35 a visit, within
-    // 3 minutes of February, so the forecast goes first.
+    // August, 32 °C normals and the hurricane peak: the heat and the storm
+    // terms put August behind February, its plain figure lower still.
     const from = "2027-02-01";
     const n = 222;
     const cal = flat(from, n);
@@ -315,13 +315,26 @@ describe("/when", () => {
     );
   });
 
-  it("prefers a forecast window over a last-year one when their figures are equal", () => {
-    // Out of the hurricane season; the first 20 days read last year.
+  it("never orders equal windows by their basis: the earlier one goes first", () => {
+    // Out of the hurricane season; the first 20 days read last year. Every
+    // figure is on the measured scale, so a forecast window wins nothing by
+    // being one (the tie-break that did read about 40 % low, PAR-1319).
     const result = run(
       flat("2027-01-04", 40, (i) => (i < 20 ? "last_year" : "forecast")),
       2,
     );
-    expect(result.windows[0].basis).toBe("forecast");
-    expect(result.windows[0].headlinerWait).toBe(40);
+    expect(result.windows[0]).toMatchObject({
+      from: "2027-01-04",
+      basis: "last_year",
+      headlinerWait: 40,
+    });
+    const reversed = run(
+      flat("2027-01-04", 40, (i) => (i < 20 ? "forecast" : "last_year")),
+      2,
+    );
+    expect(reversed.windows[0]).toMatchObject({
+      from: "2027-01-04",
+      basis: "forecast",
+    });
   });
 });

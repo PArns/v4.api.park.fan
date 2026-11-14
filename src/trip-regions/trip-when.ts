@@ -454,14 +454,6 @@ function priceOf(
   };
 }
 
-/** A window's basis, best first: the tie-break between equal windows. */
-const BASIS_RANK: Record<WhenBasis, number> = {
-  forecast: 0,
-  mixed: 1,
-  last_year: 2,
-  none: 3,
-};
-
 /** forecast | last_year | mixed over the cells a figure read; none without one. */
 function basisOf(bases: Array<string | undefined>): WhenBasis {
   const known = bases
@@ -504,7 +496,6 @@ interface Evaluated {
   /** The score per visit: windows within {@link WHEN_TIE_MINUTES} of it are equal. */
   perVisit: number;
   basis: WhenBasis;
-  basisRank: number;
   /** Heat and storm minutes per park day: comfort, between equal windows. */
   penaltyTotal: number;
   /** The plan's mean over its park days, without its penalties. */
@@ -553,16 +544,17 @@ interface Rankable {
   index: number;
   score: number;
   perVisit?: number;
-  basisRank?: number;
   penaltyTotal?: number;
 }
 
 /**
  * The ranking's tiers. From the cheapest window left (by cost per visit), it
  * and every window within {@link WHEN_TIE_MINUTES} of it count as equal and
- * form a tier, ordered by comfort: forecast before mixed before last year,
- * then the lower heat and storm penalty, then the exact cost and the
- * earlier start. Then the next tier from the cheapest window left.
+ * form a tier, ordered by comfort: the lower heat and storm penalty, then the
+ * exact cost and the earlier start. Then the next tier from the cheapest
+ * window left. The basis orders nothing: every figure is on the measured
+ * scale, and a tie-break that put forecast windows first rewarded the basis
+ * that read about 40 % low (PAR-1319).
  */
 function tiersOf<T extends Rankable>(
   evaluated: readonly T[],
@@ -577,7 +569,6 @@ function tiersOf<T extends Rankable>(
     const items = left.filter((e) => cost(e) <= start + WHEN_TIE_MINUTES);
     items.sort(
       (a, b) =>
-        (a.basisRank ?? 0) - (b.basisRank ?? 0) ||
         (a.penaltyTotal ?? 0) - (b.penaltyTotal ?? 0) ||
         a.score - b.score ||
         a.index - b.index,
@@ -766,7 +757,6 @@ export function findTripDates(input: WhenInput): TripWhen {
       score,
       perVisit: score / visitCount(i),
       basis,
-      basisRank: BASIS_RANK[basis],
       penaltyTotal:
         (penalties?.heat ?? 0) +
         (penalties?.hurricane ?? 0) +
