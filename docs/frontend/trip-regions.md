@@ -2001,8 +2001,8 @@ day, which is pointless for a month that has passed. What it adds:
 
 ## What the server records
 
-Every answer of `/plan`, `/when` and `/best-days`, and every plan Parky's trip tools make through
-the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
+Every answer of `/plan`, `/plan/ideas`, `/when` and `/best-days`, and every plan or idea Parky's
+trip tools make through the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
 the MCP tool `trip_planner_ops` reads them
 ([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
 frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
@@ -2010,7 +2010,8 @@ answer. Code: `src/trip-regions/metrics/`.
 
 **Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
 the services (400, 404), a failure (5xx). Parky's `plan_vacation`, `change_trip`, `get_trip_plan`
-and `find_trip_dates` call the services without the route; their plans are recorded the same way,
+and `find_trip_dates` call the services without the route, and the ideas his plan tools offer
+(`plan_ideas`) too; their plans are recorded the same way,
 with `caller` `parky` (`TripRequestMetricsService.measure`). Not recorded: a request the data-key
 guard turns away (401, 403, 429: it never reaches the route), an answer Cloudflare serves from its
 cache, and the plan of the trip on screen Parky reads for every question (`visitorTripItinerary`),
@@ -2020,7 +2021,7 @@ which would count one trip once per question.
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
 | `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
-| `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `route`                                                | `plan`, `plan_ideas` (`/plan/ideas`: the shape, the caches and the latency, no answer facts), `when`, `best_days`                                          |
 | `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
 | `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
 | `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |

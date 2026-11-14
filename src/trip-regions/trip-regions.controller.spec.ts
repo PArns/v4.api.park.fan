@@ -755,7 +755,7 @@ describe("TripRegionsController", () => {
     });
   });
 
-  describe("the metric rows of /plan, /when and /best-days", () => {
+  describe("the metric rows of /plan, /plan/ideas, /when and /best-days", () => {
     const get = (url: string) =>
       request(app.getHttpServer()).get(url).set("X-API-Key", KEY);
 
@@ -796,6 +796,38 @@ describe("TripRegionsController", () => {
         cache: "hit",
         calendarCache: null,
         tripDays: 8,
+      });
+    });
+
+    it("records the plan's ideas as their own route, built and then cached", async () => {
+      const qs = `from=${day(1)}&to=${day(6)}&parks=magic-kingdom-park,epcot`;
+      await get(`/v1/trip-regions/orlando/plan/ideas?${qs}`).expect(200);
+      await get(`/v1/trip-regions/orlando/plan/ideas?${qs}`).expect(200);
+      await get(
+        `/v1/trip-regions/orlando/plan/ideas?from=${day(1)}&to=${day(5)}&parks=europa-park`,
+      ).expect(400);
+
+      expect(recorded).toHaveLength(3);
+      expect(recorded[0]).toMatchObject({
+        route: "plan_ideas",
+        caller: "site",
+        status: 200,
+        cache: "miss",
+        calendarCache: "miss",
+        exact: null,
+        tripDays: 6,
+        parks: 2,
+        parksNamed: true,
+      });
+      expect(recorded[1]).toMatchObject({
+        route: "plan_ideas",
+        cache: "hit",
+        calendarCache: null,
+      });
+      expect(recorded[2]).toMatchObject({
+        route: "plan_ideas",
+        status: 400,
+        errorCode: "unknown_park",
       });
     });
 

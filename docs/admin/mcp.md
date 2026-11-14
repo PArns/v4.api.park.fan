@@ -145,7 +145,7 @@ against these rules.
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
 | `trip_planner_report`        | the multi-day trip planner per region: the dates-first funnel (started → requested → shown → changed → tickets → kept), the optional steps as shares of the plans shown, split at the new planner's first day, find dates, edits and options, parks left out, tickets, hopper, views, purchase links by seller kind and position, errors shown, the page types it was used from | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
-| `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
+| `trip_planner_ops`           | the server's record of `/plan`, `/plan/ideas`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
@@ -291,8 +291,8 @@ one from each side; `planner_report` is the day planner's.
   nothing. The small-value and `visitorData` rules are the other event tools': lists fold, a region
   narrows like a filter, so one region's counts from 1 to 4 are null, per era too, and so is every
   rate computed from one.
-- **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/when` and `/best-days`
-  and per plan of Parky's trip tools
+- **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/plan/ideas`
+  (`plan_ideas`), `/when` and `/best-days` and per plan or idea of Parky's trip tools
   ([what the server records](../frontend/trip-regions.md#what-the-server-records)) through
   `TripRequestMetricsService.ops`: per region, route and caller (`site`, `parky`) the requests,
   errors, latency p50/p90/p99 and max over every 200 and over the built ones, the cache and the

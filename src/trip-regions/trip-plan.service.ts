@@ -107,10 +107,16 @@ export class TripPlanService {
   async ideas(slug: string, query: TripPlanQueryDto): Promise<PlanIdeasAnswer> {
     const region = await this.regions.regionWithTickets(slug);
     const q = await this.normalizeIn(region, query);
+    noteTripShape(planShapeOf(region, q, Boolean(query.parks)));
     const key = CacheKeys.tripRegionPlanIdeas(slug, planCacheQuery(q));
     const cached = safeJsonParse<PlanIdeasAnswer>(await this.redis.get(key));
-    if (cached) return cached;
+    if (cached) {
+      noteTripCache("cache", "hit");
+      return cached;
+    }
+    noteTripCache("cache", "joined");
     return this.flight.run(key, async () => {
+      noteTripCache("cache", "miss");
       const calendar = await this.regions.internalCalendar(
         region,
         q.from,
