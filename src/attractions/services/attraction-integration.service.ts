@@ -1162,6 +1162,12 @@ export class AttractionIntegrationService {
             }
             closingTimeSlot = `${finalCH.toString().padStart(2, "0")}:${finalCM.toString().padStart(2, "0")}`;
             closingHourVal = finalCH;
+            // Closing at/after midnight (16:00–00:00, or a 24h day): an
+            // upper bound would drop every slot after opening, so the day runs to its end.
+            if (closingTimeSlot <= openingTimeSlot) {
+              closingTimeSlot = null;
+              closingHourVal = null;
+            }
           }
 
           // Slots within operating hours (drops off-hour outlier samples

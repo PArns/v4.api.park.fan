@@ -1172,6 +1172,57 @@ describe("AttractionIntegrationService", () => {
     });
   });
 
+  describe("calculateAttractionHistory for a park closing at or after midnight", () => {
+    it.each([
+      ["00:00", "2026-11-12T21:00:00Z"],
+      ["01:00", "2026-11-12T22:00:00Z"],
+      ["02:00", "2026-11-12T23:00:00Z"],
+    ])("keeps the evening slots of a day closing at %s", async (_, closing) => {
+      jest.useFakeTimers({
+        now: new Date("2026-11-14T09:00:00Z"),
+        doNotFake: ["nextTick"],
+      });
+      try {
+        mockRedis.get.mockResolvedValue(null);
+        // Six Flags Qiddiya City opens 16:00 Asia/Riyadh
+        mockParksService.getSchedule.mockResolvedValue([
+          {
+            date: "2026-11-12",
+            scheduleType: "OPERATING",
+            openingTime: new Date("2026-11-12T13:00:00Z"),
+            closingTime: new Date(closing),
+          },
+        ]);
+        const slots = ["16:00", "18:00", "21:00", "23:00"].map((time_slot) => ({
+          time_slot,
+          p90: 40,
+          avgWait: 30,
+          sampleCount: 3,
+        }));
+        mockAnalyticsService.getAttractionHourlyHistory.mockResolvedValue(
+          new Map([["2026-11-12", { slots, downCount: 0 }]]),
+        );
+
+        const history = await service.calculateAttractionHistory(
+          "attraction-1",
+          "park-1",
+          "Asia/Riyadh",
+          3,
+        );
+        const day = history.find((h) => h.date === "2026-11-12");
+        expect(day?.utilization).not.toBe("closed");
+        expect(day?.hourlyP90.map((h) => h.hour)).toEqual([
+          "16:00",
+          "18:00",
+          "21:00",
+          "23:00",
+        ]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe("calculateAttractionHistory live day slice", () => {
     it("keeps carried heartbeat rows out of both live queries, as the rollup does", async () => {
       jest.useFakeTimers({
