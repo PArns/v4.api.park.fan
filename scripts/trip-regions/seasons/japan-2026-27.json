@@ -376,14 +376,38 @@
   {
     "parkSlug": "universal-studios-japan",
     "kind": "special_event",
-    "name": "Universal Cool Japan 2027: other titles",
+    "name": "Universal Cool Japan 2027: Detective Conan World",
+    "startDate": "2027-02-10",
+    "endDate": "2027-06-30",
+    "status": "confirmed",
+    "separateTicket": false,
+    "url": "https://www.usj.co.jp/web/ja/jp/events/universal-cool-japan-2027/conan",
+    "sourceUrl": "https://www.usj.co.jp/company/news/2026/1020/",
+    "notes": "USJ press release 2026-10-20: 2027-02-10 (Wed) - 2027-06-30 (Wed). Detective Conan The Escape, the Detective Conan Live Restaurant in a new venue (Peacock Theater) and the Detective Conan x Story Ride."
+  },
+  {
+    "parkSlug": "universal-studios-japan",
+    "kind": "special_event",
+    "name": "Universal Cool Japan 2027: The Apothecary Diaries",
+    "startDate": "2027-02-10",
+    "endDate": "2027-06-30",
+    "status": "confirmed",
+    "separateTicket": false,
+    "url": "https://www.usj.co.jp/web/en/us/events/universal-cool-japan-2027",
+    "sourceUrl": "https://www.usj.co.jp/company/news/2026/1001/",
+    "notes": "USJ press release 2026-10-01: 2027-02-10 (Wed) - 2027-06-30 (Wed), a new programme tied to the film released 2026-12-11. USJ's second collaboration with the series, after Universal Cool Japan 2025."
+  },
+  {
+    "parkSlug": "universal-studios-japan",
+    "kind": "special_event",
+    "name": "Universal Cool Japan 2027: Fullmetal Alchemist and Yomi no Tsugai",
     "startDate": null,
     "endDate": null,
     "status": "announced",
     "separateTicket": false,
     "url": "https://www.usj.co.jp/web/en/us/events/universal-cool-japan-2027",
     "sourceUrl": "https://www.usj.co.jp/company/news/2026/1028/",
-    "notes": "Announced without dates in the releases read: The Apothecary Diaries (2026-10-01), Detective Conan World (2026-10-20), Fullmetal Alchemist and Yomi no Tsugai (2026-10-28). One secondary source says the Cool Japan run lasts to 2027-06-30 (unverified)."
+    "notes": "USJ press release 2026-10-28: both programmes open together in spring 2027; no start or end date yet. The row waits until USJ dates it."
   },
   {
     "parkSlug": "universal-studios-japan",
