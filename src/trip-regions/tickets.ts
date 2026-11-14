@@ -241,7 +241,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
   },
   {
     id: "wdw-date-based-plus",
-    name: "Walt Disney World date-based ticket with Water Park and Sports (Park Hopper Plus with .h)",
+    name: "Walt Disney World date-based ticket with Water Park and Sports (Park Hopper Plus)",
     resort: "walt-disney-world",
     markets: ["us", "uk", "intl"],
     parks: DISNEY,
@@ -339,7 +339,7 @@ export const ORLANDO_TICKETS: TicketProduct[] = [
   // ── Universal Orlando ──────────────────────────────────────────────────
   {
     id: "uor-date-based",
-    name: "Universal Orlando date-based ticket (park-to-park with .h)",
+    name: "Universal Orlando date-based ticket (1 park per day or park-to-park)",
     resort: "universal-orlando",
     markets: ["us", "intl"],
     parks: [USF, IOA, EPIC],

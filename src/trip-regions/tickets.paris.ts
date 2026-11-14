@@ -22,7 +22,7 @@ import type { TicketProduct } from "./tickets";
 export const PARIS_TICKETS: TicketProduct[] = [
   {
     id: "dlp-1-day",
-    name: "Disneyland Paris 1-Day dated ticket (1 Park, or 2 Parks with .h)",
+    name: "Disneyland Paris 1-Day dated ticket (1 Park, or 2 Parks)",
     resort: "disneyland-paris",
     markets: ["eu", "intl"],
     parks: ["disneyland-park", "disney-adventure-world"],

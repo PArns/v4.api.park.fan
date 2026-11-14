@@ -22,7 +22,7 @@ import type { TicketProduct } from "./tickets";
 export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
   {
     id: "dlr-1-day",
-    name: "Disneyland Resort 1-Day ticket (1 Park Per Day, Park Hopper with .h)",
+    name: "Disneyland Resort 1-Day ticket (1 Park Per Day or Park Hopper)",
     resort: "disneyland-resort",
     markets: ["us", "uk", "intl"],
     parks: ["disneyland-park", "disney-california-adventure-park"],
@@ -51,7 +51,7 @@ export const SOUTHERN_CALIFORNIA_TICKETS: TicketProduct[] = [
   },
   {
     id: "dlr-multi-day",
-    name: "Disneyland Resort 2- to 5-Day ticket (1 Park Per Day, Park Hopper with .h)",
+    name: "Disneyland Resort 2- to 5-Day ticket (1 Park Per Day or Park Hopper)",
     resort: "disneyland-resort",
     markets: ["us", "uk", "intl"],
     parks: ["disneyland-park", "disney-california-adventure-park"],
