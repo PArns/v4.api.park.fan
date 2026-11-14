@@ -1,6 +1,8 @@
 /**
- * The purchase links the ticket catalog is seeded with, one entry per product
- * of `tickets.ts`: the operator's own shop (`official`), where research found
+ * The purchase links the ticket catalog is seeded with, one entry per seed
+ * product of every region (`TICKET_CATALOGS`; Orlando's here, each other
+ * region's in its own `tickets-<region>.ts`, so a product id is unique across
+ * regions): the operator's own shop (`official`), where research found
  * them the cheapest authorized seller (`cheapest`) and Attraction Tickets'
  * pages (`attractionTickets`, each for one park.fan locale or for all). The
  * seed orders them cheapest, Attraction Tickets, official. Plain links only:
@@ -14,6 +16,7 @@
  * a region's `ticket_products` table is empty; once seeded, links are edited
  * in the admin (docs/frontend/trip-regions.md#editing-the-catalog).
  */
+import { SOUTHERN_CALIFORNIA_SEED_LINKS } from "./tickets-southern-california";
 
 export interface SeedLink {
   seller: string;
@@ -578,4 +581,6 @@ export const TICKET_SEED_LINKS: SeedLinkEntry[] = [
       url: "https://www.legoland.com/florida/tickets-passes/",
     },
   },
+  // Each other region's research file, in its own module.
+  ...SOUTHERN_CALIFORNIA_SEED_LINKS,
 ];

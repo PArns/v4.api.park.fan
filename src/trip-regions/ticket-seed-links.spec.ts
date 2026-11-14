@@ -1,8 +1,8 @@
 import {
   ATTRACTION_TICKETS_SELLER,
-  ORLANDO_TICKETS,
   seedLinksFrom,
   seedLinksOf,
+  TICKET_CATALOGS,
 } from "./tickets";
 import { TICKET_LOCALES } from "./ticket-validation";
 import { TICKET_SEED_LINKS } from "./ticket-seed-links";
@@ -11,9 +11,13 @@ import { TICKET_SEED_LINKS } from "./ticket-seed-links";
 const TRACKING =
   /^(utm_|aff|affiliate|partner|ref$|refid|irclickid|clickid|gclid|fbclid|cjevent|awc|subid|tag$|campaign|source$|medium$)/i;
 
+/** Every region's seed products, in one list: their ids are unique across regions. */
+const SEED_PRODUCTS = Object.values(TICKET_CATALOGS).flat();
+
 describe("the catalog's seed links", () => {
-  it("has one entry for every seed product and none for others", () => {
-    const ids = ORLANDO_TICKETS.map((p) => p.id).sort();
+  it("has one entry for every seed product of every region and none for others", () => {
+    const ids = SEED_PRODUCTS.map((p) => p.id).sort();
+    expect(new Set(ids).size).toBe(ids.length);
     expect(TICKET_SEED_LINKS.map((e) => e.productId).sort()).toEqual(ids);
   });
 
@@ -39,7 +43,7 @@ describe("the catalog's seed links", () => {
   });
 
   it("gives every seed product its official link, never a sponsored one", () => {
-    for (const product of ORLANDO_TICKETS) {
+    for (const product of SEED_PRODUCTS) {
       const links = seedLinksOf(product);
       expect(links.filter((l) => l.official)).toHaveLength(1);
       expect(links.every((l) => l.sponsored === false)).toBe(true);

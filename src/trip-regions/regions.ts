@@ -1026,8 +1026,474 @@ export const ORLANDO: RegionConfig = {
   ]),
 };
 
+// ── Southern California (PAR-1303) ──────────────────────────────────────────
+// Researched 2026-11-13: the parks, car parks, hotels and transport from the
+// operators' pages and OpenStreetMap; the night shows and day-guest closes
+// from our own data. The sources per value are in the research's region.md.
+
+/**
+ * Southern California's heat thresholds, set as Orlando's were at the
+ * region's climate park: Disneyland's 2015–2024 daily normals (ERA5, measured
+ * 2026-11-14) top out at 32.4 °C on 7 September, and the top fifth of its
+ * June–October normals starts at 30.4 °C. A forecast counts from 35 °C (the
+ * highest normal plus Orlando's margin of about 3 °C), a normal from 30.5 °C.
+ * Every park is read against them with its own temperatures: Six Flags Magic
+ * Mountain, inland in the Santa Clarita Valley, runs a June–October median of
+ * 32.9 °C and peaks at 35.7 °C, so it is the park the heat prices most; the
+ * San Diego parks never reach the normal's threshold.
+ */
+export const SOUTHERN_CALIFORNIA_HEAT: HeatModelConfig = {
+  forecastFromC: 35,
+  normalFromC: 30.5,
+  perDegree: 0.08,
+  normalWeight: 0.5,
+  cap: 1.4,
+};
+
+const DISNEYLAND_RESORT_PARKS = [
+  "disneyland-park",
+  "disney-california-adventure-park",
+];
+
+/** Mickey & Friends: the drive to either Disneyland park ends there, the tram follows. */
+const MICKEY_AND_FRIENDS = {
+  latitude: 33.8153,
+  longitude: -117.9262,
+  note: "Mickey & Friends parking structure off Disneyland Drive (Pixar Pals is beside it); the tram runs to the Esplanade between the two gates",
+};
+
+export const SOUTHERN_CALIFORNIA: RegionConfig = {
+  slug: "southern-california",
+  name: "Southern California",
+  timezone: "America/Los_Angeles",
+  // No storm season: coastal Southern California has no hurricane season.
+  weather: {
+    heat: SOUTHERN_CALIFORNIA_HEAT,
+    climatePark: "disneyland-park",
+  },
+  travel: { source: "osrm" },
+  ticketMarkets: { home: "us", codes: ["us", "uk", "intl"] },
+  // No perk in this region. Disneyland ended Early Entry for its hotel guests
+  // on 2026-01-05 (the last day was 2026-01-04); its hotel guests now get one
+  // Lightning Lane Multi Pass entry per stay, a single ride's skip that moves
+  // no park choice and has no perk kind. Universal owns no hotel here, and the
+  // hotels by Universal City run a shuttle without any admission benefit.
+  perkNames: {},
+  hotelNames: {
+    disney:
+      "a Disneyland Resort hotel (Disneyland Hotel, Grand Californian, Pixar Place)",
+    offsite: "any other hotel",
+  },
+  groups: [
+    {
+      key: "disneyland-resort",
+      name: "Disneyland Resort",
+      kind: "resort",
+      earlyKind: "early_entry",
+    },
+    {
+      // A day trip, not a resort: one park, no hotel of Universal's own, and
+      // 54 km from the Disneyland gates.
+      key: "universal-studios-hollywood",
+      name: "Universal Studios Hollywood",
+      kind: "day_trip",
+      // The feed carries a one-hour slot before opening every day from
+      // September 2026, most likely the separately sold SUPER NINTENDO WORLD
+      // Early Access (Universal's pages as the search index quotes them; not
+      // verified). No hotel guest gets it, so it carries a name of its own
+      // rather than Orlando's hotel perk, and a client that does not know the
+      // code shows nothing.
+      earlyKind: "early_access_ticket",
+    },
+    {
+      key: "day-trips",
+      name: "Day trips",
+      kind: "day_trip",
+      earlyKind: "early_entry",
+    },
+  ],
+  parks: [
+    {
+      slug: "disneyland-park",
+      ...US,
+      city: "anaheim",
+      group: "disneyland-resort",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 1,
+      carPark: MICKEY_AND_FRIENDS,
+      transfer: { via: "tram", minutes: 15 },
+    },
+    {
+      slug: "disney-california-adventure-park",
+      ...US,
+      city: "anaheim",
+      group: "disneyland-resort",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 2,
+      carPark: MICKEY_AND_FRIENDS,
+      transfer: { via: "tram", minutes: 15 },
+    },
+    {
+      slug: "universal-studios-hollywood",
+      ...US,
+      city: "los-angeles",
+      group: "universal-studios-hollywood",
+      type: "theme_park",
+      headliner: true,
+      secondVisitRank: 3,
+      carPark: {
+        // Which of Universal's garages is open to day guests on a day is not
+        // published where we could read it; the Frankenstein garage is the
+        // one at the top of the drive, by CityWalk.
+        latitude: 34.1383,
+        longitude: -118.3566,
+        note: "Universal's garages at the top of Universal Hollywood Drive (Frankenstein garage); the gate is a walk through CityWalk",
+      },
+    },
+    {
+      slug: "knotts-berry-farm",
+      ...US,
+      city: "buena-park",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 33.8449,
+        longitude: -117.9955,
+        note: "main car park off Beach Boulevard, Buena Park",
+      },
+    },
+    {
+      slug: "six-flags-magic-mountain",
+      ...US,
+      city: "santa-clarita",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 34.4289,
+        longitude: -118.5961,
+        note: "main car park north of the entrance off Magic Mountain Parkway, Valencia",
+      },
+    },
+    {
+      slug: "seaworld-san-diego",
+      ...US,
+      city: "san-diego",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 32.7629,
+        longitude: -117.225,
+        note: "main car park off SeaWorld Drive, Mission Bay",
+      },
+    },
+    {
+      slug: "legoland-california",
+      ...US,
+      city: "carlsbad",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 33.1244,
+        longitude: -117.3119,
+        note: "car park south of the entrance off LEGOLAND Drive and Armada Drive, Carlsbad",
+      },
+    },
+    {
+      slug: "sesame-place-san-diego",
+      ...US,
+      city: "chula-vista",
+      group: "day-trips",
+      type: "theme_park",
+      headliner: false,
+      carPark: {
+        latitude: 32.5881,
+        longitude: -117.0058,
+        note: "car park by the North Island Credit Union Amphitheatre, Entertainment Circle, Chula Vista",
+      },
+    },
+  ],
+  venues: [
+    {
+      key: "downtown-disney",
+      name: "Downtown Disney District",
+      group: "disneyland-resort",
+      kind: "district",
+      latitude: 33.8091,
+      longitude: -117.9214,
+      typicalHours: { opens: "07:00", closes: "01:00" },
+      free: true,
+      url: "https://disneyland.disney.go.com/destinations/downtown-disney-district/",
+      notes:
+        "between the Esplanade and the Disneyland Hotel; no ticket needed; open 07:00-01:00, Thursdays to 23:00; parking in the Simba Lot",
+      highlights: ["dining", "shopping"],
+    },
+    {
+      key: "universal-citywalk",
+      name: "Universal CityWalk Hollywood",
+      group: "universal-studios-hollywood",
+      kind: "district",
+      latitude: 34.1363,
+      longitude: -118.3549,
+      free: true,
+      url: "https://www.universalstudioshollywood.com/web/en/us/things-to-do/citywalk",
+      notes:
+        "outside the park gate, between the garages and the entrance; entry free, parking paid; venue and cinema hours vary",
+      highlights: ["dining", "shopping"],
+    },
+  ],
+  hopperSets: [DISNEYLAND_RESORT_PARKS],
+  nightShows: {
+    // Fire of the Rising Moons is the castle fireworks seen from Galaxy's
+    // Edge, so it is left out: it would count one show twice. On some nights
+    // (2026-11-13) our data lists the fireworks under that slug only.
+    "disneyland-park": [
+      {
+        slug: "believein-holiday-magic-fireworks-spectacular",
+        name: '"Believe...In Holiday Magic" Fireworks Spectacular',
+        kind: "fireworks",
+      },
+      {
+        slug: "halloween-screams-with-fireworks",
+        name: "Halloween Screams",
+        kind: "fireworks",
+      },
+      { slug: "fantasmic", name: "Fantasmic!", kind: "night_show" },
+      {
+        slug: "tapestry-of-happiness",
+        name: "Tapestry of Happiness",
+        kind: "night_show",
+      },
+      {
+        slug: "shadows-of-memory-a-skywalker-saga",
+        name: "Shadows of Memory: A Skywalker Saga",
+        kind: "night_show",
+      },
+    ],
+    // World of Color Happiness! was the 70th celebration's version, which
+    // ended on 2026-08-09; ONE is the one performing.
+    "disney-california-adventure-park": [
+      {
+        slug: "world-of-color-one",
+        name: "World of Color - ONE",
+        kind: "night_show",
+      },
+    ],
+    "seaworld-san-diego": [
+      {
+        slug: "a-christmas-wish-fireworks-show",
+        name: "A Christmas Wish Fireworks Show",
+        kind: "fireworks",
+      },
+      {
+        slug: "donner-and-blitzens-lazer-light-show",
+        name: "Donner and Blitzen's Lazer Light Show",
+        kind: "night_show",
+      },
+      { slug: "fireworks", name: "Fireworks", kind: "fireworks" },
+    ],
+  },
+  hotelAreas: [
+    {
+      key: "disneyland_resort",
+      name: "Disneyland Resort hotels",
+      latitude: 33.8078,
+      longitude: -117.9248,
+      hotel: "disney",
+      note: "the Disneyland Hotel, Grand Californian and Pixar Place along Downtown Disney; the point is the middle of the three",
+    },
+    {
+      key: "anaheim_harbor",
+      name: "Harbor Boulevard (Anaheim)",
+      latitude: 33.8063,
+      longitude: -117.9145,
+      hotel: "offsite",
+      note: "Harbor Boulevard opposite the main entrance, where the walking-distance Good Neighbor hotels are (The Anaheim Hotel, 1700 S Harbor Blvd)",
+    },
+    {
+      key: "buena_park",
+      name: "Buena Park",
+      latitude: 33.8404,
+      longitude: -117.9984,
+      hotel: "offsite",
+      note: "Knott's Hotel on Crescent Avenue, next to Knott's Berry Farm",
+    },
+    {
+      key: "universal_city",
+      name: "Universal City",
+      latitude: 34.1369,
+      longitude: -118.3583,
+      hotel: "offsite",
+      note: "Hilton Los Angeles/Universal City and Sheraton Universal below CityWalk; free hotel shuttle to the park, no admission perks",
+    },
+    {
+      key: "hollywood",
+      name: "Hollywood",
+      latitude: 34.1017,
+      longitude: -118.3393,
+      hotel: "offsite",
+      note: "Hollywood Boulevard at Hollywood/Highland, one Metro B Line stop from Universal City",
+    },
+    {
+      key: "santa_monica",
+      name: "Santa Monica",
+      latitude: 34.0163,
+      longitude: -118.4969,
+      hotel: "offsite",
+      note: "downtown Santa Monica at the Third Street Promenade, near the pier",
+    },
+    {
+      key: "downtown_la",
+      name: "Downtown Los Angeles",
+      latitude: 34.0484,
+      longitude: -118.253,
+      hotel: "offsite",
+      note: "Pershing Square, on the Metro B Line to Universal City",
+    },
+    {
+      key: "san_diego",
+      name: "San Diego (Downtown)",
+      latitude: 32.7115,
+      longitude: -117.1601,
+      hotel: "offsite",
+      note: "Gaslamp Quarter, downtown San Diego; Santa Fe Depot (Pacific Surfliner, COASTER) is 1 km west",
+    },
+    {
+      key: "carlsbad",
+      name: "Carlsbad",
+      latitude: 33.126,
+      longitude: -117.3096,
+      hotel: "offsite",
+      note: "the LEGOLAND California Hotel at the park; Carlsbad's other hotels are along Palomar Airport Road and in the Village",
+    },
+  ],
+  perks: { disney: [], offsite: [] },
+  legs: [
+    {
+      // The two gates face each other across the Esplanade; both parks share
+      // the car park, so OSRM answers no drive.
+      from: "disneyland-park",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 5, km: 0.1 },
+      alternatives: [{ mode: "walk", minutes: 5, via: "esplanade" }],
+    },
+    {
+      from: "hotel:disneyland_resort",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 15, via: "downtown_disney" },
+      alternatives: [{ mode: "walk", minutes: 15, via: "downtown_disney" }],
+    },
+    {
+      from: "hotel:disneyland_resort",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 15, via: "downtown_disney" },
+      alternatives: [
+        { mode: "walk", minutes: 15, via: "downtown_disney" },
+        // The Grand Californian's own gate into the park reopened in January
+        // 2026 (press, not Disney's page) and may be kept for its guests at
+        // busy times, so it is an alternative, never the leg.
+        { mode: "walk", minutes: 10, via: "grand_californian_entrance" },
+      ],
+    },
+    {
+      from: "hotel:anaheim_harbor",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 10, via: "harbor_entrance" },
+      alternatives: [
+        { mode: "walk", minutes: 10, via: "harbor_entrance" },
+        { mode: "bus", name: "Anaheim Resort Transportation (ART)" },
+      ],
+    },
+    {
+      from: "hotel:anaheim_harbor",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 10, via: "harbor_entrance" },
+      alternatives: [
+        { mode: "walk", minutes: 10, via: "harbor_entrance" },
+        { mode: "bus", name: "Anaheim Resort Transportation (ART)" },
+      ],
+    },
+    {
+      from: "venue:downtown-disney",
+      to: "disneyland-park",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "venue:downtown-disney",
+      to: "disney-california-adventure-park",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "hotel:buena_park",
+      to: "knotts-berry-farm",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      from: "hotel:universal_city",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        { mode: "shuttle", name: "hotel shuttle" },
+        { mode: "walk", minutes: 15, via: "citywalk" },
+      ],
+    },
+    {
+      from: "venue:universal-citywalk",
+      to: "universal-studios-hollywood",
+      primary: { mode: "walk", minutes: 5 },
+      alternatives: [{ mode: "walk", minutes: 5 }],
+    },
+    {
+      // Metro to Universal City/Studio City, then Universal's free shuttle up
+      // the hill; no minutes, the waits for both vary too much.
+      from: "hotel:hollywood",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        {
+          mode: "metro",
+          name: "Metro B Line",
+          via: "universal_city_studio_city",
+        },
+      ],
+    },
+    {
+      from: "hotel:downtown_la",
+      to: "universal-studios-hollywood",
+      alternatives: [
+        {
+          mode: "metro",
+          name: "Metro B Line",
+          via: "universal_city_studio_city",
+        },
+      ],
+    },
+    {
+      from: "hotel:carlsbad",
+      to: "legoland-california",
+      primary: { mode: "walk", minutes: 10 },
+      alternatives: [{ mode: "walk", minutes: 10 }],
+    },
+    {
+      // The COASTER to Carlsbad Poinsettia, then 2 km by bus or taxi.
+      from: "hotel:san_diego",
+      to: "legoland-california",
+      alternatives: [
+        { mode: "rail", name: "COASTER", via: "carlsbad_poinsettia" },
+      ],
+    },
+  ],
+};
+
 export const TRIP_REGIONS: Record<string, RegionConfig> = {
   [ORLANDO.slug]: ORLANDO,
+  [SOUTHERN_CALIFORNIA.slug]: SOUTHERN_CALIFORNIA,
 };
 
 /** The region a slug names, or null. */
