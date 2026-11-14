@@ -224,7 +224,9 @@ export class SeasonWriteDto {
 
   @ApiPropertyOptional({
     description:
-      "Attractions this season is about — a maintenance window, a re-themed ride.",
+      "Attractions this season is about. On `maintenance` they are down for the season; on " +
+      "a kind in `PARK_SEASON_BINDING_KINDS` they run only on its days and read out of " +
+      "season outside them.",
     type: [String],
   })
   @IsOptional()

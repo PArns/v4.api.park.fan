@@ -13,7 +13,9 @@ Same rule and same three-valued source as the park page's "12 von 45 geöffnet"
 counter: `isCurrentlyInSeason` / `attractionIsOutOfSeason`, where `false` closes,
 `true` opens and `null` changes nothing (see [seasonality](../seasonality.md)).
 
-- **The month is the planned day's**, not today's.
+- **The month is the planned day's**, not today's. A ride bound to a park season
+  is judged on the planned day itself: on one of the season's days or not
+  ([season-bound rides](../seasonality.md#a-ride-bound-to-a-park-season)).
 - **A past date is not filtered.** `observed` reads the rollup, and a row there
   means the ride ran.
 - **A ride flagged by the detector without months (`season_out_since`) drops out

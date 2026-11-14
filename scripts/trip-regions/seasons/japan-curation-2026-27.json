@@ -1,0 +1,110 @@
+[
+  {
+    "parkSlug": "tokyo-disneyland",
+    "kind": "halloween",
+    "name": "Disney Halloween (2027)",
+    "startDate": "2027-09-15",
+    "endDate": "2027-10-31",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.tokyodisneyresort.jp/en/index.html",
+    "sourceUrl": "https://www.tokyodisneyresort.jp/en/topics/event/halloween2026/tdl.html",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 16 Sep-31 Oct 2026. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. OLC announced the FY2026 schedule on 17 Nov 2025; the FY2027 schedule is not out yet. Included."
+  },
+  {
+    "parkSlug": "tokyo-disneyland",
+    "kind": "christmas",
+    "name": "Disney Christmas (2027)",
+    "startDate": "2027-11-10",
+    "endDate": "2027-12-25",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.tokyodisneyresort.jp/en/index.html",
+    "sourceUrl": "https://www.tokyodisneyresort.jp/en/topics/event/christmas2026/tdl.html",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 11 Nov-25 Dec 2026. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. FY2027 schedule not out yet. Included."
+  },
+  {
+    "parkSlug": "tokyo-disneysea",
+    "kind": "halloween",
+    "name": "Disney Halloween (2027)",
+    "startDate": "2027-09-15",
+    "endDate": "2027-10-31",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.tokyodisneyresort.jp/en/index.html",
+    "sourceUrl": "https://www.tokyodisneyresort.jp/en/topics/event/halloween2026/tds.html",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 16 Sep-31 Oct 2026. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. OLC announced the FY2026 schedule on 17 Nov 2025; the FY2027 schedule is not out yet. Included."
+  },
+  {
+    "parkSlug": "tokyo-disneysea",
+    "kind": "christmas",
+    "name": "Disney Christmas (2027)",
+    "startDate": "2027-11-10",
+    "endDate": "2027-12-25",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.tokyodisneyresort.jp/en/index.html",
+    "sourceUrl": "https://www.tokyodisneyresort.jp/en/topics/event/christmas2026/tds.html",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 11 Nov-25 Dec 2026. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. FY2027 schedule not out yet. Included."
+  },
+  {
+    "parkSlug": "universal-studios-japan",
+    "kind": "halloween",
+    "name": "Halloween Horror Nights (2027)",
+    "startDate": "2027-09-09",
+    "endDate": "2027-11-07",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.usj.co.jp/web/en/us",
+    "sourceUrl": "https://asset.japan.travel/image/upload/v1785737727/pdf/USJ_20260803.pdf",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: Universal Extreme Autumn 10 Sep-8 Nov 2026, HHN from 11 Sep. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. Street zombies with a normal Studio Pass; some mazes need an e-timed ticket or Express."
+  },
+  {
+    "parkSlug": "universal-studios-japan",
+    "kind": "christmas",
+    "name": "Holiday event (2027-28)",
+    "startDate": "2027-11-12",
+    "endDate": "2028-01-16",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.usj.co.jp/web/en/us",
+    "sourceUrl": "https://www.usj.co.jp/company/news/2026/0914_2/",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: Universal Holiday Wonders 13 Nov 2026-17 Jan 2027. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. Kind christmas, as the 2026-27 edition (the committed placeholder had special_event). Included."
+  },
+  {
+    "parkSlug": "universal-studios-japan",
+    "kind": "special_event",
+    "name": "Countdown 2028",
+    "startDate": "2027-12-31",
+    "endDate": "2028-01-01",
+    "status": "expected",
+    "separateTicket": true,
+    "url": "https://www.usj.co.jp/web/en/us",
+    "sourceUrl": "https://www.usj.co.jp/company/news/2026/0928/",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: NO LIMIT! Countdown 2027, 31 Dec 19:00 to 1 Jan 21:00, Party Pass only. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. Day guests leave at 17:00 on 31 Dec."
+  },
+  {
+    "parkSlug": "legoland-japan",
+    "kind": "halloween",
+    "name": "Halloween Party at LEGOLAND (2027)",
+    "startDate": "2027-10-01",
+    "endDate": "2027-11-03",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.legoland.jp/operation/events-timeline/",
+    "sourceUrl": "https://prtimes.jp/main/html/rd/p/000000105.000025163.html",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 2 Oct-3 Nov 2026 per LEGOLAND Japan's press release. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. Included."
+  },
+  {
+    "parkSlug": "legoland-japan",
+    "kind": "christmas",
+    "name": "Merry Christmas at LEGOLAND (2027)",
+    "startDate": "2027-11-19",
+    "endDate": "2027-12-25",
+    "status": "expected",
+    "separateTicket": false,
+    "url": "https://www.legoland.jp/operation/events-timeline/",
+    "sourceUrl": "https://www.legoland.jp/operation/events-timeline/",
+    "notes": "Not announced for this edition as of 2026-11-14. Last edition: 20 Nov-25 Dec 2026. Bounds projected from the 2026 dates by weekday (fixed holidays kept); days not published. Included."
+  }
+]

@@ -173,10 +173,10 @@ export class AdminSeasonService {
       sourceUrl: season.sourceUrl,
       reason: season.note,
     });
-    // A season changes the park page, not the ride cards, so only the park's
-    // own caches need dropping.
+    // A season changes the park page, and the cards of the rides it binds:
+    // their season state comes from it.
     if (options.publish !== false)
-      await this.curation.publish(season.parkId, []);
+      await this.curation.publish(season.parkId, season.attractionIds ?? []);
     return season;
   }
 
@@ -210,7 +210,14 @@ export class AdminSeasonService {
       },
       sourceUrl: season.sourceUrl,
     });
-    await this.curation.publish(season.parkId, []);
+    // The rides it bound before and after: one dropped from the list leaves
+    // its season as surely as one added joins it.
+    await this.curation.publish(season.parkId, [
+      ...new Set([
+        ...(before.attractionIds ?? []),
+        ...(season.attractionIds ?? []),
+      ]),
+    ]);
     return season;
   }
 
@@ -248,7 +255,7 @@ export class AdminSeasonService {
         note: season.note,
       },
     });
-    await this.curation.publish(season.parkId, []);
+    await this.curation.publish(season.parkId, season.attractionIds ?? []);
     return season;
   }
 
@@ -358,6 +365,7 @@ export class AdminSeasonService {
           );
 
     const written = new Set<string>();
+    const boundRides = new Map<string, string[]>();
     for (const { index, row, parkId, input } of checked) {
       const same = seasonOnFile(known, parkId, row);
       if (same) {
@@ -389,6 +397,10 @@ export class AdminSeasonService {
         });
         known.push(season);
         written.add(parkId);
+        boundRides.set(parkId, [
+          ...(boundRides.get(parkId) ?? []),
+          ...(season.attractionIds ?? []),
+        ]);
         report(index, "created", { parkId, seasonId: season.id });
       } catch (error) {
         const reason = clientErrorMessage(error);
@@ -404,7 +416,7 @@ export class AdminSeasonService {
       }
     }
 
-    await this.curation.publishParks([...written]);
+    await this.curation.publishParks([...written], boundRides);
     results.sort((a, b) => a.row - b.row);
     return { dryRun, counts, rows: results };
   }

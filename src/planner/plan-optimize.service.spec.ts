@@ -148,10 +148,10 @@ describe("PlanOptimizeService", () => {
     expect(answer.status).toBe("optimized");
     expect(answer.plan?.stops.map((s) => s.entryId)).not.toContain("shut1");
     expect(redis.get).toHaveBeenCalledWith(
-      `plan-day:resp:v1:${PARK.id}:2026-11-14`,
+      `plan-day:resp:v2:${PARK.id}:2026-11-14`,
     );
     expect(redis.get).toHaveBeenCalledWith(
-      `plan-day:resp:v1:${PARK.id}:2026-11-14:works`,
+      `plan-day:resp:v2:${PARK.id}:2026-11-14:works`,
     );
   });
 

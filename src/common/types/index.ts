@@ -27,3 +27,4 @@ export {
   RIDE_OPENING_CONFIDENCE_THRESHOLDS,
   rideOpeningConfidence,
 } from "./ride-opening.type";
+export type { SeasonBinding } from "./season-binding.type";

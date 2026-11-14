@@ -38,6 +38,7 @@ import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 import {
   isCurrentlyInSeason,
+  nextSeasonBindingDay,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
@@ -53,6 +54,7 @@ import {
 } from "../../common/utils/date.util";
 import { DataSource, In, IsNull, type EntityTarget } from "typeorm";
 import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
+import type { SeasonBinding } from "../../common/types/season-binding.type";
 import { Park } from "../../parks/entities/park.entity";
 import { frontendParkPath } from "../../common/utils/frontend-url.util";
 import { Show as ShowEntity } from "../../shows/entities/show.entity";
@@ -1268,6 +1270,7 @@ interface RideClosure {
   facts?: {
     seasonMonths?: number[] | null;
     isCurrentlyInSeason?: boolean | null;
+    boundSeason?: SeasonBinding | null;
   };
   downtime?: { kind: string; medianMinutes?: number } | null;
 }
@@ -1275,7 +1278,8 @@ interface RideClosure {
 /**
  * Why a ride is not running and what is known about its return, so "when does it reopen" is
  * answered from data: a breakdown (since when, how such outages ended before), a works period
- * (its last closed day, when the park named one), out of season (the next season month), or
+ * (its last closed day, when the park named one), out of season (the park season the ride is
+ * bound to, else the next season month), or
  * `unknown`. Null while the ride runs.
  */
 export function reopeningOf(ride: RideClosure, month: number) {
@@ -1289,6 +1293,11 @@ export function reopeningOf(ride: RideClosure, month: number) {
     };
   }
   if (ride.facts?.isCurrentlyInSeason === false) {
+    // A park season the ride is bound to says when better than months do.
+    const bound = ride.facts.boundSeason;
+    if (bound) {
+      return { reason: "season" as const, season: bound };
+    }
     const months = ride.facts.seasonMonths ?? [];
     const next =
       months.find((candidate) => candidate > month) ?? months[0] ?? null;
@@ -1320,7 +1329,8 @@ export function reopeningOf(ride: RideClosure, month: number) {
 
 /**
  * The park-local day to look for the park's next opening from: the day after a works period's
- * last closed day, or the first of the next season month (next year when it has come round).
+ * last closed day, the next day of the park season the ride is bound to, or the first of the next
+ * season month (next year when it has come round).
  * Null when nothing says when the closure ends.
  */
 export function reopenSearchFrom(
@@ -1329,6 +1339,9 @@ export function reopenSearchFrom(
 ): string | null {
   if (reopening?.reason === "works" && reopening.closedUntil) {
     return addIsoDays(reopening.closedUntil, 1);
+  }
+  if (reopening?.reason === "season" && reopening.season) {
+    return nextSeasonBindingDay(reopening.season, today);
   }
   if (reopening?.reason === "season" && reopening.nextSeasonMonth) {
     const [year, month] = today.split("-").map(Number);
@@ -2311,7 +2324,8 @@ export const ASSISTANT_TOOLS = [
       "runsOnWeekdays (ISO, Monday 1), worksPeriods (every planned maintenance or works window: " +
       "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
-      "reopening: why (breakdown, works, season or unknown) and what is known about its return.",
+      "reopening: why (breakdown, works, season or unknown) and what is known about its return " +
+      "(for season: the park season the ride runs in when one is bound, its name and days).",
     input: z.object({
       ...rideRef,
       park: parkRef.optional().describe("With ride: the ride's park"),
