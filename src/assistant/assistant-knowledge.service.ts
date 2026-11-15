@@ -48,14 +48,29 @@ export class AssistantKnowledgeService implements OnModuleInit {
   }
 
   /**
-   * Fills an empty base with the seed files' topics. Only an empty one: a topic deleted in the
-   * admin stays deleted, and an edited one is never overwritten. A failure keeps the API up.
+   * Adds every seed topic the base has never held: one that is there is never overwritten, and one
+   * deleted in the admin (its delete is in the audit log) is never added back. A failure keeps the
+   * API up.
    */
   async seed(): Promise<number> {
     try {
-      if ((await this.repository.count()) > 0) return 0;
+      const held = new Set(
+        (await this.repository.find({ select: { topic: true } })).map(
+          (row) => row.topic,
+        ),
+      );
+      const missing = KNOWLEDGE_SEED.filter((entry) => !held.has(entry.id));
+      if (missing.length === 0) return 0;
+      const { entries } = await this.audit.list({
+        entityType: KNOWLEDGE_AUDIT_ENTITY,
+        action: "assistant.knowledge.delete",
+        limit: 200,
+      });
+      const deleted = new Set(entries.map((entry) => entry.entityId));
+      const fresh = missing.filter((entry) => !deleted.has(entry.id));
+      if (fresh.length === 0) return 0;
       await this.repository.insert(
-        KNOWLEDGE_SEED.map((entry) => ({
+        fresh.map((entry) => ({
           topic: entry.id,
           readWhen: entry.readWhen,
           text: entry.text,
@@ -64,7 +79,7 @@ export class AssistantKnowledgeService implements OnModuleInit {
         })),
       );
       this.cache = null;
-      return KNOWLEDGE_SEED.length;
+      return fresh.length;
     } catch (error) {
       this.logger.error(
         `Could not seed the knowledge base: ${(error as Error).message}`,

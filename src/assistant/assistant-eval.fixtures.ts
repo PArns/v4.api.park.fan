@@ -1141,6 +1141,25 @@ export const EVAL_CASES: EvalCase[] = [
     forbid: ["read_knowledge"],
   },
   {
+    id: "privacy-what-stored-de",
+    locale: "de",
+    pagePath: "/de",
+    pageSubject: "the park.fan home page",
+    message: "Was speichert ihr eigentlich von meinem Chat?",
+    want: [{ tool: "read_knowledge", input: { topic: "privacy" } }],
+    forbid: ["submit_feedback"],
+  },
+  {
+    id: "crowd-scale-why-very-high-en",
+    locale: "en",
+    pagePath: "/en/parks/europe/germany/bruehl/phantasialand/taron",
+    pageSubject: `the ride "Taron" (ride id ${TARON_ID}) in ${PHL_SUBJECT}`,
+    message:
+      "Why does 70 minutes count as very high here when another park calls 70 minutes normal?",
+    allowBefore: ["get_ride"],
+    want: [{ tool: "read_knowledge", input: { topic: "crowd_scale" } }],
+  },
+  {
     id: "feedback-empty-threat",
     locale: "de",
     pagePath: "/de",

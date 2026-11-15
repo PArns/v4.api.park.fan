@@ -248,7 +248,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 99 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 101 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -638,15 +638,23 @@ topic's history, which `GET …/knowledge/:topic` and `assistant_knowledge` retu
 that should rest is switched off (`enabled` false) rather than deleted.
 
 A topic is English, written for Parky, its facts taken from the doc or page it summarizes;
-`readWhen` is 20 to 400 characters, `text` 40 to 4,000 (`knowledgeWriteSchema`). An empty table is
-seeded once at boot from `src/assistant/knowledge/` (`KNOWLEDGE_SEED`); after that the table is the
-base, and a deleted seed topic stays deleted. `SYSTEM_PROMPT_VERSION` counts the prompt's own text
-only: an answer written after a topic was edited carries the same version, and the topic's history
-says what it read then. A topic whose wording matters is worth an eval case, as for the prompt.
+`readWhen` is 20 to 400 characters, `text` 40 to 4,000 (`knowledgeWriteSchema`). The topics the
+base starts with are files in `src/assistant/knowledge/` (`KNOWLEDGE_SEED`): at boot each one the
+table has never held is added, one that is there is never overwritten, and one deleted in the admin
+(its `assistant.knowledge.delete` row in the audit log) is never added back. A new seed file is
+how a topic ships with a deploy; after that the table is the base. `SYSTEM_PROMPT_VERSION` counts
+the prompt's own text only: an answer written after a topic was edited carries the same version,
+and the topic's history says what it read then. A topic whose wording matters is worth an eval
+case, as for the prompt.
 
-| Topic       | Holds                                                                                                                                                           |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `forecasts` | the three crowd readings (now, the day's forecast, the day so far) and why they differ; how Fancast forecasts; what to do when a visitor calls a forecast wrong |
+| Topic          | Holds                                                                                                                                                           |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `forecasts`    | the three crowd readings (now, the day's forecast, the day so far) and why they differ; how Fancast forecasts; what to do when a visitor calls a forecast wrong |
+| `crowd_scale`  | the ladder from very low to extreme, live against a ride's normal and days against a typical day, normal, busy and record on a ride's page                      |
+| `data_sources` | the wait-time sources and their cadence, holidays, weather, opening hours, and the three cases where a field stays empty                                        |
+| `ride_status`  | operating, down, closed, refurbishment, unknown, out of season, set showtimes; a ride opening after the gates; how sure a reopening estimate is                 |
+| `best_times`   | how the best visit times today are chosen (optimal, good, the live slot), when there are none, and the rope-drop rule                                           |
+| `privacy`      | what a chat stores and for how long, what goes to Anthropic, location, feedback, the site's statistic and cookies, as the privacy page says                     |
 
 The first topic came from the feedback of 15 November 2026: a visitor saw „Andrang jetzt: hoch" on
 Europa-Park's today panel and the day so far as „Normal" in the day dialog, and called the forecast

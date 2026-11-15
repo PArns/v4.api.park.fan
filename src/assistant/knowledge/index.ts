@@ -1,14 +1,27 @@
 import { z } from "zod";
+import { BEST_TIMES } from "./best-times";
+import { CROWD_SCALE } from "./crowd-scale";
+import { DATA_SOURCES } from "./data-sources";
 import { FORECASTS } from "./forecasts";
+import { PRIVACY } from "./privacy";
+import { RIDE_STATUS } from "./ride-status";
 import type { KnowledgeEntry } from "./knowledge-entry";
 
 export type { KnowledgeEntry };
 
 /**
- * The topics an empty knowledge base starts with. After that the table is the base: the admin and
- * the admin MCP edit it, and these files are never read again (`AssistantKnowledgeService.seed`).
+ * The topics the knowledge base starts with. At boot each one the table has never held is added
+ * (`AssistantKnowledgeService.seed`); one that is there is never overwritten and one deleted in the
+ * admin is never added back. After that the table is the base, which the admin and the MCP edit.
  */
-export const KNOWLEDGE_SEED: readonly KnowledgeEntry[] = [FORECASTS];
+export const KNOWLEDGE_SEED: readonly KnowledgeEntry[] = [
+  FORECASTS,
+  CROWD_SCALE,
+  DATA_SOURCES,
+  RIDE_STATUS,
+  BEST_TIMES,
+  PRIVACY,
+];
 
 /** A topic's name: lowercase words joined by "_", as read_knowledge, the admin and the MCP take it. */
 export const knowledgeTopicSchema = z

@@ -3,13 +3,17 @@ import type { AdminAuditService } from "../admin/auth/admin-audit.service";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
 import { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import type { AssistantKnowledge } from "./entities/assistant-knowledge.entity";
-import { KNOWLEDGE_SEED } from "./knowledge";
+import {
+  KNOWLEDGE_SEED,
+  knowledgeTopicSchema,
+  knowledgeWriteSchema,
+} from "./knowledge";
 import { fillKnowledge, systemPromptWith } from "./system-prompt";
 
 const ADMIN = { email: "you@park.fan", userId: "u" } as AdminPrincipal;
 
 /** A table in memory, with the calls the service makes. */
-function table(rows: AssistantKnowledge[] = []) {
+function table(rows: AssistantKnowledge[] = [], deletedTopics: string[] = []) {
   const store = new Map(rows.map((row) => [row.topic, { ...row }]));
   const repository = {
     count: jest.fn(async () => store.size),
@@ -34,7 +38,13 @@ function table(rows: AssistantKnowledge[] = []) {
       store.delete(topic);
     }),
   };
-  const audit = { record: jest.fn(), list: jest.fn() };
+  const audit = {
+    record: jest.fn(),
+    list: jest.fn(async () => ({
+      entries: deletedTopics.map((topic) => ({ entityId: topic })),
+      total: deletedTopics.length,
+    })),
+  };
   const service = new AssistantKnowledgeService(
     repository as unknown as Repository<AssistantKnowledge>,
     audit as unknown as AdminAuditService,
@@ -54,17 +64,30 @@ const row = (topic: string, enabled = true): AssistantKnowledge =>
   }) as AssistantKnowledge;
 
 describe("AssistantKnowledgeService", () => {
-  it("seeds an empty base with the seed topics, and never again", async () => {
+  it("seeds an empty base with every seed topic, and never again", async () => {
     const { service, store } = table();
     expect(await service.seed()).toBe(KNOWLEDGE_SEED.length);
     expect(store.has("forecasts")).toBe(true);
     expect(await service.seed()).toBe(0);
   });
 
-  it("leaves a base that has topics alone, a deleted seed topic included", async () => {
-    const { service, repository } = table([row("tickets")]);
-    expect(await service.seed()).toBe(0);
-    expect(repository.insert).not.toHaveBeenCalled();
+  it("adds a seed topic the base never held, and leaves an edited one as it is", async () => {
+    const edited = {
+      ...row("forecasts"),
+      text: "edited in the admin, long enough",
+    };
+    const { service, store } = table([edited]);
+    expect(await service.seed()).toBe(KNOWLEDGE_SEED.length - 1);
+    expect(store.get("forecasts")?.text).toBe(
+      "edited in the admin, long enough",
+    );
+    expect(store.has("privacy")).toBe(true);
+  });
+
+  it("never adds back a seed topic deleted in the admin", async () => {
+    const { service, store } = table([], ["privacy"]);
+    expect(await service.seed()).toBe(KNOWLEDGE_SEED.length - 1);
+    expect(store.has("privacy")).toBe(false);
   });
 
   it("lists only enabled topics in the prompt, and reads only those", async () => {
@@ -128,6 +151,26 @@ describe("AssistantKnowledgeService", () => {
       }),
     );
     expect(await service.remove("tickets", ADMIN)).toBeNull();
+  });
+});
+
+describe("the seed topics", () => {
+  it.each(KNOWLEDGE_SEED.map((entry) => [entry.id, entry] as const))(
+    "%s passes the admin's own checks, so it can be edited as it stands",
+    (_id, entry) => {
+      expect(knowledgeTopicSchema.safeParse(entry.id).success).toBe(true);
+      expect(
+        knowledgeWriteSchema.safeParse({
+          readWhen: entry.readWhen,
+          text: entry.text,
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it("names every topic once", () => {
+    const ids = KNOWLEDGE_SEED.map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
