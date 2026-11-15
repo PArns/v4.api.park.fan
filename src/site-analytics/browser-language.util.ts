@@ -14,3 +14,29 @@ export function browserLanguage(header: string | null | undefined): string {
   const primary = first.split(";")[0].trim().split("-")[0].toLowerCase();
   return /^[a-z]{2}$/.test(primary) ? primary : UNKNOWN_BROWSER_LANGUAGE;
 }
+
+/** More than the whole `Accept-Language` of any real browser. */
+const MAX_ACCEPTED_HEADER_LENGTH = 256;
+
+/**
+ * Every language an `Accept-Language` accepts: the two-letter primary subtag
+ * of each tag, lowercased, without the tags weighted `q=0` (refused) and
+ * without `*`. Empty without a header. Read for one decision and kept nowhere.
+ */
+export function acceptedLanguages(
+  header: string | null | undefined,
+): Set<string> {
+  const languages = new Set<string>();
+  for (const tag of (header ?? "")
+    .slice(0, MAX_ACCEPTED_HEADER_LENGTH)
+    .split(",")) {
+    const [range, ...params] = tag.split(";");
+    const weight = params
+      .map((param) => param.trim().toLowerCase())
+      .find((param) => param.startsWith("q="));
+    if (weight !== undefined && !(Number(weight.slice(2)) > 0)) continue;
+    const primary = range.trim().split("-")[0].toLowerCase();
+    if (/^[a-z]{2}$/.test(primary)) languages.add(primary);
+  }
+  return languages;
+}

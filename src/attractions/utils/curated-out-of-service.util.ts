@@ -73,6 +73,13 @@ export interface WorksPeriod {
 export type WorksPeriodSource = CuratedOutOfServiceSource;
 
 /**
+ * A run of park-local days, both bounds inclusive and either open. A works
+ * period is one, and so is the span a performance schedule holds for
+ * (`performance-schedule.util`); the comparisons below take any of them.
+ */
+export type DayWindow = Pick<WorksPeriod, "from" | "to">;
+
+/**
  * One stored window as the API serves it.
  *
  * Two normalisations, both so a client cannot render a half-statement:
@@ -164,7 +171,7 @@ export function resolveWorksPeriods(source: WorksPeriodSource): WorksPeriod[] {
       seen.add(key);
       return true;
     })
-    .sort(compareWorksPeriods);
+    .sort(compareDayWindows);
 }
 
 /**
@@ -178,7 +185,8 @@ export function worksPeriodsOf(source: WorksPeriodSource): {
   return worksPeriods.length > 0 ? { worksPeriods } : {};
 }
 
-function compareWorksPeriods(a: WorksPeriod, b: WorksPeriod): number {
+/** Sort order of day windows: by `from`, an open start first, then by `to`, an open end last. */
+export function compareDayWindows(a: DayWindow, b: DayWindow): number {
   if (a.from !== b.from) {
     if (a.from === null) return -1;
     if (b.from === null) return 1;
@@ -191,7 +199,7 @@ function compareWorksPeriods(a: WorksPeriod, b: WorksPeriod): number {
 }
 
 /** Whether one window covers a park-local day. Both bounds inclusive. */
-function covers(window: WorksPeriod, day: string): boolean {
+export function dayWindowCovers(window: DayWindow, day: string): boolean {
   // Plain YYYY-MM-DD strings, so a lexicographic compare is a calendar
   // compare. No Date objects: constructing one would drag the server's offset
   // back into a park-local question.
@@ -231,7 +239,7 @@ export function resolveWorksPeriod(
   if (!day) return publicWorksPeriod(windows[0]);
 
   return publicWorksPeriod(
-    windows.find((window) => covers(window, day)) ??
+    windows.find((window) => dayWindowCovers(window, day)) ??
       windows.find((window) => window.from !== null && window.from > day) ??
       windows.reduce((latest, window) =>
         (window.to ?? "") > (latest.to ?? "") ? window : latest,
@@ -257,7 +265,7 @@ export function isCuratedOutOfService(
   const day = onDate ?? safeToday(timezone);
   if (!day) return false;
 
-  return windows.some((window) => covers(window, day));
+  return windows.some((window) => dayWindowCovers(window, day));
 }
 
 /**
@@ -287,7 +295,7 @@ export function worksPeriodCovering(
   windows: readonly WorksPeriod[],
   day: string,
 ): WorksPeriod | null {
-  return windows.find((window) => covers(window, day)) ?? null;
+  return windows.find((window) => dayWindowCovers(window, day)) ?? null;
 }
 
 /** One ride's curated windows, as a park-wide read hands them out. */
@@ -443,6 +451,11 @@ export const MAX_WORKS_PERIODS = 20;
  * open in its direction.
  */
 export function worksPeriodsOverlap(a: WorksPeriod, b: WorksPeriod): boolean {
+  return dayWindowsOverlap(a, b);
+}
+
+/** {@link worksPeriodsOverlap} for any two day windows. */
+export function dayWindowsOverlap(a: DayWindow, b: DayWindow): boolean {
   return (
     (!a.from || !b.to || a.from <= b.to) && (!b.from || !a.to || b.from <= a.to)
   );

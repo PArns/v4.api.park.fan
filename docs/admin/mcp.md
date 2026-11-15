@@ -159,8 +159,9 @@ against these rules.
 The site-statistic tools share `tools/site-analytics.inputs.ts`: `days` (1–365, 30 when absent;
 1–180 for `seo_trends`, which needs the window before) or `from` and `to` (`YYYY-MM-DD`), `interval`
 (`hour`, `day`, `week`, `month`), `locale`, and `filters` as `[{ dim, value }]`, which become the
-reports' `filter=<dim>:<value>`, and `datacenter` (`exclude` by default, `include`, `only`;
-[data centres](../frontend/site-analytics.md#data-centres)). The filter's and the breakdown's help
+reports' `filter=<dim>:<value>`, `datacenter` (`exclude` by default, `include`, `only`;
+[data centres](../frontend/site-analytics.md#data-centres)) and `automated` (the same three;
+[automated visits](../frontend/site-analytics.md#automated-visits)). The filter's and the breakdown's help
 lists every page type the frontend sends (`SITE_PAGE_TYPES`), among them a trip region's hub,
 month and best-time pages, `trip_hub`, `trip_month` and `trip_best_time` since release 2.21.0
 (they were `other` before), so `page_type:trip_hub` reads the hub's numbers. The tools over events (`analytics_events`,
@@ -200,7 +201,7 @@ the count that decides, and the measures that add up.
   series). Nothing is added to `(other)` that a tool did not list as additive, so a new field never
   carries one row's value onto the others'. A list without a small row comes back as it is. Totals are
   not folded and still count every value: `total`, a report's `totals`, `previous`; but under a
-  filter, a language or `datacenter=only` a total or previous count of 1 to 4 is null (with the rates computed from it,
+  filter, a language, `datacenter=only` or `automated=only` a total or previous count of 1 to 4 is null (with the rates computed from it,
   and the `change` that needs it) and `smallValuesHidden` says so.
 - **Where.** `analytics_breakdown`, `analytics_events`, `analytics_event` (property values, combinations,
   page types, devices, entities), `analytics_live` (pages, countries, channels, referrers, devices,

@@ -26,6 +26,10 @@ import {
   normalizeWorksPeriod,
   type WorksPeriod,
 } from "../utils/curated-out-of-service.util";
+import {
+  normalizePerformanceSchedule,
+  type PerformanceSchedule,
+} from "../utils/performance-schedule.util";
 
 /**
  * Attraction Entity
@@ -335,6 +339,29 @@ export class Attraction {
     },
   })
   curatedOutOfServicePeriods: WorksPeriod[] | null;
+
+  /**
+   * The start times of a ride that runs as performances rather than
+   * continuously, per run of park-local days (PAR-1355): a 4D cinema the feed
+   * reports as CLOSED all winter while it plays every hour.
+   *
+   * Each entry is `{ from, to, times }`: inclusive park-local `YYYY-MM-DD`
+   * bounds, either or both open, and `HH:MM` start times. Schedules do not
+   * share a day. `AdminCurationService` enforces it and stores the list
+   * sorted, or null for none — never `[]`. Human-only; no feed writes it. Read
+   * through `resolvePerformanceSchedules()`.
+   */
+  @Column({
+    name: "curated_performance_schedules",
+    type: "jsonb",
+    nullable: true,
+    transformer: {
+      to: (value: PerformanceSchedule[] | null | undefined) => value,
+      from: (value: unknown) =>
+        Array.isArray(value) ? value.map(normalizePerformanceSchedule) : null,
+    },
+  })
+  curatedPerformanceSchedules: PerformanceSchedule[] | null;
 
   /**
    * Whether the ride has a single-rider line at all — a static fact about the

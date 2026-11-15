@@ -131,7 +131,11 @@ describe("SiteAnalyticsCollectService", () => {
 
   const collect = (
     hits: unknown[],
-    overrides: { ip?: string | null; userAgent?: string | null } = {},
+    overrides: {
+      ip?: string | null;
+      userAgent?: string | null;
+      acceptLanguage?: string | null;
+    } = {},
     now = NOW,
   ) => service.collect({ hits, ip: IP, userAgent: BROWSER, ...overrides }, now);
 
@@ -210,6 +214,99 @@ describe("SiteAnalyticsCollectService", () => {
     await collect([pageview()]);
     expect(buffered().pageviews[0].dims[11]).toBe("other");
     expect([...redis.sets.keys()]).toContain(KEYS.visitors(DAY, "all"));
+  });
+
+  describe("automated visits", () => {
+    /** A headless browser's header: it names one language, whatever the page. */
+    const ENGLISH = { acceptLanguage: "en-US,en;q=0.9" };
+    const networks = () => {
+      const { pageviews, events } = buffered();
+      return {
+        pageviews: pageviews.map(({ dims }) => dims[11]),
+        events: events.map(({ dims }) => dims[10]),
+      };
+    };
+
+    it("marks a visit opened without a referrer on a page in a language the browser does not name, for every hit of it", async () => {
+      await collect(
+        [pageview(), event("search_opened", { surface: "hero" })],
+        ENGLISH,
+      );
+      expect(networks()).toEqual({
+        pageviews: ["automated", "automated"],
+        events: ["automated"],
+      });
+      const [visit] = visitKeys();
+      expect(
+        JSON.parse(redis.hashes.get(visit)?.get("c") ?? "{}"),
+      ).toMatchObject({ automated: true, channel: "direct" });
+      const hlls = [...redis.sets.keys()];
+      expect(hlls).toContain(KEYS.visitors(DAY, "aca"));
+      expect(hlls).toContain(KEYS.visitors(DAY, "ade"));
+      expect(hlls).not.toContain(KEYS.visitors(DAY, "all"));
+      expect(hlls).not.toContain(KEYS.visitors(DAY, "de"));
+
+      // A later request of the visit, without a page view, keeps the mark.
+      await collect([engagement(2)], ENGLISH);
+      expect(new Set(networks().pageviews)).toEqual(new Set(["automated"]));
+    });
+
+    it.each([
+      [
+        "came from a search engine",
+        pageview({ referrer: "www.google.de" }),
+        ENGLISH,
+      ],
+      [
+        "opened on an English page",
+        pageview({
+          locale: "en",
+          path: "/en/parks/europe/germany/bruehl/phantasialand",
+        }),
+        ENGLISH,
+      ],
+      [
+        "names the page's language among the browser's",
+        pageview(),
+        { acceptLanguage: "en-GB,en;q=0.9,de;q=0.5" },
+      ],
+      ["names no language at all", pageview(), { acceptLanguage: null }],
+    ])("leaves a visit that %s a reader's", async (_, hit, headers) => {
+      await collect([hit], headers);
+      expect(new Set(networks().pageviews)).toEqual(new Set(["other"]));
+      const [visit] = visitKeys();
+      expect(redis.hashes.get(visit)?.get("c")).not.toContain("automated");
+    });
+
+    it("keeps a data centre's visit a data centre's, whatever way it opened", async () => {
+      lookupAsn.mockReturnValue(16509);
+      await collect([pageview()], ENGLISH);
+      expect(new Set(networks().pageviews)).toEqual(new Set(["datacenter"]));
+      expect([...redis.sets.keys()]).toContain(KEYS.visitors(DAY, "dca"));
+    });
+
+    it("leaves a visit that opened as a reader's unmarked, whatever its later pages", async () => {
+      await collect([pageview({ referrer: "www.google.de" })], ENGLISH);
+      await collect(
+        [pageview({ path: "/de/parks/europe/germany/rust/europa-park" })],
+        ENGLISH,
+      );
+      expect(new Set(networks().pageviews)).toEqual(new Set(["other"]));
+    });
+
+    it("decides by the first page view of the request that opens the visit", async () => {
+      await collect(
+        [
+          pageview(),
+          pageview({
+            referrer: "www.google.de",
+            path: "/de/parks/europe/germany/rust/europa-park",
+          }),
+        ],
+        ENGLISH,
+      );
+      expect(new Set(networks().pageviews)).toEqual(new Set(["automated"]));
+    });
   });
 
   it("buffers a page view without visit dimensions, and its visit on a row of its own", async () => {

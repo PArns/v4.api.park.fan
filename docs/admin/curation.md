@@ -32,7 +32,9 @@ Human-only, nothing syncs them: `attraction_kind` ([attraction kind](../frontend
 `indoor_outdoor` ([indoor/outdoor](../frontend/indoor-outdoor.md)), `has_single_rider`,
 `has_virtual_line`, `open_with_park`, `rcdb_id`, the works periods `curated_out_of_service_periods` and the
 older single window `curated_out_of_service_from` / `_to` / `_to_uncertain`
-([works period](../frontend/works-period.md)), `retired_at` / `retired_reason` /
+([works period](../frontend/works-period.md)), the performance schedules
+`curated_performance_schedules` ([performance schedules](../frontend/performance-schedules.md)),
+`retired_at` / `retired_reason` /
 `retired_kind`, the fast-pass columns below, and the rest of `attraction_ride_profiles`
 ([ride ↔ glossary](../frontend/ride-glossary-link.md)).
 
@@ -186,6 +188,13 @@ on the page, and leaves no audit row.
   `source`, so a save does not turn the sync's windows into hand-written ones; changing a window's
   dates makes it the editor's. `source` is in the field value and the audit rows, never on public
   payloads.
+- **Performance schedules** (PAR-1355) are one field, `curatedPerformanceSchedules`, type
+  `performances`, group „Vorstellungen": `Array<{ from: string | null; to: string | null; times:
+  string[] }>` or null, dates park-local `YYYY-MM-DD` and inclusive, times park-local `HH:MM`. A
+  write sends the whole list; it is validated (real dates, `from <= to`, at least one time, every
+  time `00:00`–`23:59`, no two schedules sharing a day, at most `max` schedules and `maxTimes`
+  times each) and stored sorted with each schedule's times sorted and unique; `[]` becomes null.
+  A schedule with neither bound holds every day and so stands alone.
 - **Recording a check that changed nothing** (PAR-601): `POST /v1/admin/content/parks/:id/verify` with
   `fields`, optional `reason` and a required http(s) `sourceUrl` writes one `park.verify` audit row
   (`before` = the fields as they stand, `after` null), saves nothing, evicts nothing, cannot be undone, and

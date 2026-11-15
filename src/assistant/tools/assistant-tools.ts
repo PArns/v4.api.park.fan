@@ -64,6 +64,7 @@ import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { worksPeriodOn } from "../../attractions/utils/curated-out-of-service.util";
+import { nextPerformanceTime } from "../../attractions/utils/performance-schedule.util";
 import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
 import {
   RIDE_ALERT_THRESHOLD_MAX,
@@ -725,10 +726,20 @@ async function rideDetails(
       (r) => r.attractionId === rideId.toLowerCase(),
     );
     if (plan && planned) ride.today = rideOpeningOf(planned, plan);
-    const reopening = reopeningOf(
-      ride as RideClosure,
-      Number(today.slice(5, 7)),
+    const performances = performancesOf(
+      ride as RidePerformances,
+      plan ? plan.context.openHour !== null : null,
+      formatInTimeZone(new Date(), park.timezone, "HH:mm"),
     );
+    if (performances) {
+      ride.today = {
+        ...(ride.today as Record<string, unknown> | undefined),
+        performances,
+      };
+    }
+    const reopening = performances
+      ? null
+      : reopeningOf(ride as RideClosure, Number(today.slice(5, 7)));
     if (reopening) {
       const from = reopenSearchFrom(reopening, today);
       ride.reopening = {
@@ -1281,6 +1292,33 @@ interface RideClosure {
     pausedBySeason?: SeasonBinding | null;
   };
   downtime?: { kind: string; medianMinutes?: number } | null;
+}
+
+interface RidePerformances {
+  status?: string | null;
+  effectiveStatus?: string | null;
+  performanceTimesToday?: string[] | null;
+  worksPeriod?: { runningToday: boolean } | null;
+}
+
+/**
+ * Today's performances of a ride that starts at set times (a 4D cinema), or
+ * null: park-local start times and the next one, null once the last has begun.
+ * Its feed reads CLOSED between two of them, so such a ride gets this instead
+ * of a reopening. A breakdown or works keep theirs, and so does a day the park
+ * is shut (`parkOpen` false; null when the day's plan could not be read).
+ */
+export function performancesOf(
+  ride: RidePerformances,
+  parkOpen: boolean | null,
+  now: string,
+) {
+  const times = ride.performanceTimesToday;
+  if (!times?.length || parkOpen === false) return null;
+  const status = ride.effectiveStatus ?? ride.status ?? null;
+  if (status === "DOWN" || status === "REFURBISHMENT") return null;
+  if (ride.worksPeriod?.runningToday) return null;
+  return { times, next: nextPerformanceTime(times, now) };
 }
 
 /**
@@ -2396,8 +2434,10 @@ export const ASSISTANT_TOOLS = [
       "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
       "best visit times (bestVisitTimesToday: the slots our intraday forecast rates optimal or " +
       "good, renewed every 15 minutes), its pageUrl, today: opensAt (when the ride usually " +
-      "starts, later than the park's gates; absent means not known, never 'with the park') and " +
-      "runsOnWeekdays (ISO, Monday 1), worksPeriods (every planned maintenance or works window: " +
+      "starts, later than the park's gates; absent means not known, never 'with the park'), " +
+      "runsOnWeekdays (ISO, Monday 1) and performances (a ride that starts at set times instead " +
+      "of running continuously: today's park-local start times and the next one, null once the " +
+      "last has begun), worksPeriods (every planned maintenance or works window: " +
       "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
       "reopening: why (breakdown, works, season or unknown) and what is known about its return " +

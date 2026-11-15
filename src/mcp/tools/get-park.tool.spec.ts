@@ -51,6 +51,27 @@ describe("get_park maintenance", () => {
       ride("Piraña", "OPERATING", [window(60, 90)]),
       ride("Python", "REFURBISHMENT"),
       ride("Symbolica", "OPERATING"),
+      {
+        ...ride("Fata Morgana", "CLOSED"),
+        notRunToday: { lastRunAt: "2026-11-14T16:00:00.000Z" },
+      },
+      {
+        ...ride("Kino", "CLOSED"),
+        notRunToday: { lastRunAt: "2026-11-14T16:00:00.000Z" },
+        performanceSchedules: [
+          {
+            from: addIsoDays(today, -1),
+            to: addIsoDays(today, 1),
+            times: ["23:59"],
+          },
+        ],
+      },
+      {
+        ...ride("Zomerkino", "CLOSED"),
+        performanceSchedules: [
+          { from: addIsoDays(today, 30), to: null, times: ["12:00"] },
+        ],
+      },
     ],
   };
   const seasons = {
@@ -130,6 +151,25 @@ describe("get_park maintenance", () => {
       ctx,
     )) as any;
     expect(failed.seasons).toBeNull();
+  });
+
+  it("lists the rides that start at set times today, and leaves them out of notRunToday (PAR-1355)", async () => {
+    const out = (await getParkTool.handler(
+      { park: PARK_ID, longestWaits: 5 } as never,
+      ctx,
+    )) as any;
+    expect(out.rides.performancesToday).toEqual([
+      {
+        id: "Kino-id",
+        name: "Kino",
+        status: "CLOSED",
+        times: ["23:59"],
+        next: "23:59",
+      },
+    ]);
+    expect(out.rides.notRunToday).toEqual([
+      { id: "Fata Morgana-id", name: "Fata Morgana" },
+    ]);
   });
 
   it("names the windows starting in the next 30 days, soonest first", async () => {

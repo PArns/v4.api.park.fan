@@ -2,6 +2,7 @@ import { BadRequestException } from "@nestjs/common";
 import { addIsoDays, ISO_DATE_PATTERN } from "../common/utils/date.util";
 import { utcDay } from "../common/utils/reader-hash.util";
 import {
+  AUTOMATED_SCOPES,
   BUCKET_SECONDS,
   DATACENTER_SCOPES,
   DAY_MS,
@@ -13,6 +14,8 @@ import {
   MAX_RANGE_DAYS,
   bucketOf,
   isVisitDim,
+  networksOf,
+  type AutomatedScope,
   type DatacenterScope,
   type FilterDim,
   type SiteInterval,
@@ -55,8 +58,10 @@ export interface SiteAnalyticsQuery {
   locale?: SiteLocale | null;
   /** `<dim>:<value>`, all of which a row must match. */
   filter?: string[] | null;
-  /** Which rows count by network; `exclude` when absent. */
+  /** Which rows count by the data centres' mark; `exclude` when absent. */
   datacenter?: DatacenterScope | null;
+  /** Which rows count by the automated visits' mark; `exclude` when absent. */
+  automated?: AutomatedScope | null;
 }
 
 /** A stretch of UTC days, and the instants that bound its rows: `[start, end)`. */
@@ -80,6 +85,8 @@ export interface SiteAnalyticsWindow extends SiteAnalyticsRange {
   filters: SiteFilter[];
   /** Which rows count by network: `exclude` leaves the data centres' out. */
   datacenter: DatacenterScope;
+  /** Which rows count by network: `exclude` leaves the automated visits' out. */
+  automated: AutomatedScope;
   previous: SiteAnalyticsRange | null;
   /** The series step. */
   interval: SiteInterval;
@@ -170,6 +177,12 @@ export function siteAnalyticsWindow(
       `datacenter is ${DATACENTER_SCOPES.join(", ")}`,
     );
   }
+  const automated = query.automated ?? "exclude";
+  if (!AUTOMATED_SCOPES.includes(automated)) {
+    throw new BadRequestException(
+      `automated is ${AUTOMATED_SCOPES.join(", ")}`,
+    );
+  }
   const interval = query.interval ?? defaultInterval(days);
   if (!INTERVALS.includes(interval)) {
     throw new BadRequestException(`interval is ${INTERVALS.join(", ")}`);
@@ -197,6 +210,7 @@ export function siteAnalyticsWindow(
     locale: query.locale ?? null,
     filters: parseFilters(query.filter),
     datacenter,
+    automated,
     previous:
       days > MAX_COMPARABLE_DAYS
         ? null
@@ -406,13 +420,13 @@ export function bucketRanges(
 /**
  * The window's language, network and filters as conditions on the dimension
  * columns, values as parameters; the same on every table a report reads. A
- * window without `datacenter` leaves the data centres' rows out, as a query
- * without one does.
+ * window without `datacenter` or `automated` leaves those rows out, as a
+ * query without one does.
  */
 export function dimConditionsOf(
   params: SqlParams,
   window: Pick<SiteAnalyticsWindow, "locale" | "filters"> &
-    Partial<Pick<SiteAnalyticsWindow, "datacenter">>,
+    Partial<Pick<SiteAnalyticsWindow, "datacenter" | "automated">>,
   alias = "",
 ): string[] {
   const col = (name: string) => (alias ? `${alias}.${name}` : name);
@@ -420,13 +434,24 @@ export function dimConditionsOf(
   if (window.locale) {
     conditions.push(`${col("locale")} = ${params.add(window.locale)}`);
   }
-  const datacenter = window.datacenter ?? "exclude";
-  // IS DISTINCT FROM keeps a row whose network reads NULL, which `<>` would
-  // drop without a word.
-  if (datacenter !== "include") {
+  const networks = networksOf({
+    datacenter: window.datacenter ?? "exclude",
+    automated: window.automated ?? "exclude",
+  });
+  // The networks are a closed list, so they are written into the SQL. IS
+  // DISTINCT FROM keeps a row whose network reads NULL, which `<>` would drop
+  // without a word.
+  if ("only" in networks) {
+    const listed = networks.only.map((network) => `'${network}'`);
     conditions.push(
-      `${col("network")} ${datacenter === "only" ? "=" : "IS DISTINCT FROM"} 'datacenter'`,
+      listed.length === 1
+        ? `${col("network")} = ${listed[0]}`
+        : `${col("network")} IN (${listed.join(", ")})`,
     );
+  } else {
+    for (const network of networks.without) {
+      conditions.push(`${col("network")} IS DISTINCT FROM '${network}'`);
+    }
   }
   for (const filter of window.filters) {
     conditions.push(
@@ -449,7 +474,7 @@ export function whereOf(
     SiteAnalyticsWindow,
     "locale" | "filters" | "start" | "end" | "previous"
   > &
-    Partial<Pick<SiteAnalyticsWindow, "datacenter">>,
+    Partial<Pick<SiteAnalyticsWindow, "datacenter" | "automated">>,
   scope: "current" | "both",
   alias = "",
 ): string {

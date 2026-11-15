@@ -395,6 +395,7 @@ import {
   showsCard,
   showsOnDay,
   reopeningOf,
+  performancesOf,
   reopenSearchFrom,
   storedToolInput,
   CHAT_END_COOLDOWN_MINUTES,
@@ -2972,6 +2973,55 @@ describe("alert tools", () => {
       { ...alerts, push: "unavailable" as never },
     );
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("performancesOf (PAR-1355)", () => {
+  const times = ["13:00", "14:00", "15:00", "16:00", "17:00"];
+
+  it("gives a CLOSED ride on a schedule its next start instead of a reopening", () => {
+    expect(
+      performancesOf(
+        { status: "CLOSED", performanceTimesToday: times },
+        true,
+        "13:37",
+      ),
+    ).toEqual({ times, next: "14:00" });
+  });
+
+  it("says none is left once the last has begun", () => {
+    expect(
+      performancesOf(
+        { effectiveStatus: "OPERATING", performanceTimesToday: times },
+        null,
+        "17:30",
+      ),
+    ).toEqual({ times, next: null });
+  });
+
+  it("leaves a breakdown, works, a shut park and a ride without times alone", () => {
+    const ride = { status: "CLOSED", performanceTimesToday: times };
+    expect(
+      performancesOf({ ...ride, status: "DOWN" }, true, "12:00"),
+    ).toBeNull();
+    expect(
+      performancesOf({ ...ride, status: "REFURBISHMENT" }, true, "12:00"),
+    ).toBeNull();
+    expect(
+      performancesOf(
+        { ...ride, worksPeriod: { runningToday: true } },
+        true,
+        "12:00",
+      ),
+    ).toBeNull();
+    expect(performancesOf(ride, false, "12:00")).toBeNull();
+    expect(
+      performancesOf(
+        { status: "CLOSED", performanceTimesToday: null },
+        true,
+        "12:00",
+      ),
+    ).toBeNull();
   });
 });
 

@@ -334,6 +334,10 @@ export class SiteAnalyticsRedisMock {
     return "OK";
   }
 
+  async hget(key: string, field: string): Promise<string | null> {
+    return this.top("hget", key, [field]) as string | null;
+  }
+
   async hgetall(key: string): Promise<Record<string, string>> {
     return Object.fromEntries(this.hashes.get(key) ?? []);
   }

@@ -974,6 +974,74 @@ describe("Site analytics (e2e)", () => {
     }
   });
 
+  it("marks an automated visit, and leaves it out of the reports, the live view and the rankings unless asked", async () => {
+    const geoip = app.get(GeoipService, { strict: false });
+    jest.spyOn(geoip, "isAsnAvailable").mockReturnValue(true);
+    jest.spyOn(geoip, "lookupAsn").mockReturnValue(3320);
+    // A headless browser names the one language it runs with.
+    const english = "en-US,en;q=0.9";
+    try {
+      // A reader from a search engine, and two programs straight on the page.
+      await beacon([
+        pageview({ referrer: "www.google.de" }),
+        event("page_read", { kind: "news", key: "read-by-people" }),
+      ])
+        .set("Accept-Language", english)
+        .expect(204);
+      for (const ip of ["203.0.113.81", "203.0.113.82"]) {
+        await beacon(
+          [
+            pageview(),
+            event("page_read", { kind: "news", key: "read-by-a-program" }),
+          ],
+          ip,
+        )
+          .set("Accept-Language", english)
+          .expect(204);
+      }
+      await flush();
+      expect(
+        await dataSource.query(
+          `SELECT network, SUM(views)::int AS views FROM site_pageviews
+            GROUP BY network ORDER BY network`,
+        ),
+      ).toEqual([
+        { network: "automated", views: 2 },
+        { network: "other", views: 1 },
+      ]);
+
+      const overview = async (query = "") =>
+        (await admin(`/v1/admin/analytics/overview?days=1${query}`).expect(200))
+          .body;
+      const without = await overview();
+      expect(without.automated).toBe("exclude");
+      expect(without.totals).toMatchObject({ pageviews: 1, visitors: 1 });
+      expect(without.realtime.activeVisitors).toBe(1);
+      expect((await overview("&automated=only")).totals).toMatchObject({
+        pageviews: 2,
+        visitors: 2,
+      });
+      const all = await overview("&automated=include");
+      expect(all.totals).toMatchObject({ pageviews: 3, visitors: 3 });
+      expect(all.realtime.activeVisitors).toBe(3);
+      await admin("/v1/admin/analytics/overview?automated=all").expect(400);
+
+      const live = await admin("/v1/admin/analytics/live").expect(200);
+      expect(live.body.activeVisitors).toBe(1);
+      const liveAll = await admin(
+        "/v1/admin/analytics/live?automated=include",
+      ).expect(200);
+      expect(liveAll.body.activeVisitors).toBe(3);
+
+      const news = await request(app.getHttpServer())
+        .get("/v1/page-views/top?kind=news&locale=de&days=7")
+        .expect(200);
+      expect(news.body.items).toEqual([{ key: "read-by-people", views: 1 }]);
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
   it("reports the planner's funnel, ways in, blocks and planned parks from its events", async () => {
     const park = await savePark();
     // A park merged into this one is counted for it.
@@ -1417,7 +1485,7 @@ describe("Site analytics (e2e)", () => {
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,
       written: 2,
-      hoursWritten: 336,
+      hoursWritten: 504,
     });
     await expect(storage.snapshotVisitors()).resolves.toEqual({
       found: 2,

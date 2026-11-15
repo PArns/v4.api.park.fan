@@ -32,7 +32,9 @@ import {
   UNKNOWN_NETWORK,
   VISIT_IDLE_SECONDS,
   bucketOf,
+  automatedVisitorScope,
   datacenterVisitorScope,
+  markedVisitorScopes,
   flushWindowOf,
   hourKey,
 } from "./site-analytics.constants";
@@ -615,7 +617,11 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
   ): Promise<{ found: number; written: number; hoursWritten: number }> {
     const day = addIsoDays(utcDay(now), -1);
     const own = [ALL_LOCALES_SCOPE, ...SITE_LOCALES];
-    const scopes = [...own, ...own.map(datacenterVisitorScope)];
+    const scopes = [
+      ...own,
+      ...own.map(datacenterVisitorScope),
+      ...own.map(automatedVisitorScope),
+    ];
     const keys = scopes.map((scope) => ({
       day,
       scope,
@@ -656,11 +662,9 @@ export class SiteAnalyticsStorageService implements OnApplicationBootstrap {
 
     // The all-languages keys say the day was counted, for readers from any
     // network: then an hour without a reader of a scope is a zero, also for
-    // the data centres alone on a day none of them came.
-    const datacenterAll = datacenterVisitorScope(ALL_LOCALES_SCOPE);
-    const counted = rows.some(
-      (row) => row.scope === ALL_LOCALES_SCOPE || row.scope === datacenterAll,
-    );
+    // a mark's readers alone on a day none of them came.
+    const allScopes = new Set(markedVisitorScopes(ALL_LOCALES_SCOPE));
+    const counted = rows.some((row) => allScopes.has(row.scope));
     const base = 2 * keys.length;
     const wanted = counted
       ? keys

@@ -431,17 +431,21 @@ describe("SiteAnalyticsController", () => {
         ok: "live",
       });
       expect(live.headers["cache-control"]).toContain("no-store");
-      expect(liveView.live).toHaveBeenLastCalledWith(
-        "de",
-        expect.any(Date),
-        "exclude",
-      );
+      expect(liveView.live).toHaveBeenLastCalledWith("de", expect.any(Date), {
+        datacenter: "exclude",
+        automated: "exclude",
+      });
       await get("/v1/admin/analytics/live?datacenter=include").expect(200);
-      expect(liveView.live).toHaveBeenLastCalledWith(
-        null,
-        expect.any(Date),
-        "include",
-      );
+      expect(liveView.live).toHaveBeenLastCalledWith(null, expect.any(Date), {
+        datacenter: "include",
+        automated: "exclude",
+      });
+      await get("/v1/admin/analytics/live?automated=only").expect(200);
+      expect(liveView.live).toHaveBeenLastCalledWith(null, expect.any(Date), {
+        datacenter: "exclude",
+        automated: "only",
+      });
+      await get("/v1/admin/analytics/live?automated=some").expect(400);
     });
 
     it("blocks and unblocks an event name in the admin's name", async () => {

@@ -153,6 +153,7 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
   "curated_out_of_service_to",
   "curated_out_of_service_to_uncertain",
   "curated_out_of_service_periods",
+  "curated_performance_schedules",
   // Not `curated_`-prefixed because no sync owns them, but written by hand and
   // by hand only — a ride carrying one has been looked at.
   "attraction_kind",
