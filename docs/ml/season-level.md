@@ -53,6 +53,15 @@ A season-level row is its own source, `season` (`servedLevelSource`):
 - `/plan/day`'s H5 composer scales a busy ride by the TFT level at leads 0–2; a season-level row
   is not a TFT level, so such a ride gets the plain H5 profile.
 
+## A ride the season pauses
+
+A season can also name rides that do not run while it lasts (`paused_attraction_ids`, River Quest
+during Wintertraum). Such a ride measures nothing in the season, so it has no season level and
+keeps the model's number — which is why two other rules take it out: the calendar and the yearly
+view drop it from the day's average (`CALENDAR_SEASON_FILTER`, PAR-1326), `/plan/day` leaves it
+out of the plan, and its own page serves no hourly forecast, best visit time or rope-drop
+recommendation while it is shut.
+
 ## Known limits
 
 - **Known limit:** the first days of a season have no reference, because only the running edition

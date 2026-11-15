@@ -14,7 +14,7 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   wherever it covers the ride, CatBoost beyond and for any ride-day TFT lacks. That merge is for
   serving only; the prediction writer stores pure CatBoost. A headliner in a curated maintenance or
   works window on that day is not in the average (`withoutRidesInMaintenance`). With
-  `CALENDAR_SEASON_FILTER=true` (default off, PAR-1326) neither is a headliner whose season months
+  `CALENDAR_SEASON_FILTER=true` (PAR-1326; off in the code, on in production) neither is a headliner that a park season pauses, or whose season months
   or bound park season rule the day out (`withoutRidesOutOfSeason`, the rule `/plan/day` applies).
   On a day of a running park season the predicted wait of a ride is its
   [season level](../ml/season-level.md), not the model's number (`SEASON_LEVEL`, PAR-1343).

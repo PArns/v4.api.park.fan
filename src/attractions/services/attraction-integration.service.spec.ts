@@ -995,6 +995,7 @@ describe("AttractionIntegrationService", () => {
     const buildRide = async (
       status = "DOWN",
       waitTime: number | null = null,
+      overrides: Record<string, unknown> = {},
     ) => {
       mockRedis.get.mockResolvedValue(null);
       mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([
@@ -1042,6 +1043,7 @@ describe("AttractionIntegrationService", () => {
           id: "attraction-down",
           slug: "down-ride",
           park: park as never,
+          ...overrides,
         }),
       );
     };
@@ -1073,6 +1075,39 @@ describe("AttractionIntegrationService", () => {
         ).not.toHaveBeenCalled();
       },
     );
+
+    describe("a ride its season rules out today (PAR-1343)", () => {
+      // River Quest during Wintertraum: a season that pauses the ride and
+      // covers every day this suite can run on.
+      const paused = {
+        seasonPauses: [
+          {
+            id: "s1",
+            kind: "winter",
+            name: "Wintertraum",
+            status: "confirmed",
+            startDate: "2000-01-01",
+            endDate: "2999-12-31",
+            dates: null,
+          },
+        ],
+      };
+
+      it("gets no hourly forecast and no best visit time while it is shut", async () => {
+        const result = await buildRide("CLOSED", null, paused);
+
+        expect(result.isCurrentlyInSeason).toBe(false);
+        expect(result.hourlyForecast).toEqual([]);
+        expect(result.bestVisitTimes).toBeUndefined();
+      });
+
+      it("keeps both when the feed says it is running after all", async () => {
+        const result = await buildRide("OPERATING", 20, paused);
+
+        expect(result.effectiveStatus).toBe("OPERATING");
+        expect(result.hourlyForecast?.length).toBeGreaterThan(0);
+      });
+    });
 
     it("never offers the current slot as a best visit time", async () => {
       const result = await buildRide();

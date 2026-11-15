@@ -328,8 +328,11 @@ services:
       # season's days so far (3 days needed), not the model's number — no model
       # reads park_seasons. Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
       - SEASON_LEVEL=${SEASON_LEVEL:-true}
-      # Calendar: leave a headliner out of the days its season rules out (PAR-1326).
-      - CALENDAR_SEASON_FILTER=${CALENDAR_SEASON_FILTER:-false}
+      # Calendar and yearly view: leave a headliner out of the days its season
+      # rules out (PAR-1326) — River Quest, paused for Wintertraum, counted in
+      # every Wintertraum day with a forecast of ~10 minutes.
+      # Rollback: CALENDAR_SEASON_FILTER=false.
+      - CALENDAR_SEASON_FILTER=${CALENDAR_SEASON_FILTER:-true}
       - NODE_ENV=production
       # The API's only heap setting: a node flag in the Dockerfile's CMD would
       # override it. api has no mem_limit; one added later needs ~2 GB above the
