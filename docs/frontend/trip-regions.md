@@ -679,13 +679,16 @@ a theme park moves to a cooler day where its waits allow, and the water park tak
 Heat multiplies the queueing, so where two parks trade days the one with the shorter queues takes
 the hotter day. Nothing else changes: no shown wait, the rest days' rules, the blocks.
 
-**What the answer says.** A plan day's `extreme_heat` is read against the model the plan was
-priced with: with `weather=avoid` a park day that stays above the lower threshold still says
-`extreme_heat`, which is how a client shows "still hot despite the option". Every park day carries
+**What the answer says.** A plan day's `extreme_heat` is read against the region's own thresholds
+with the option too: the stronger model only prices, so a park day that stays hot by the region's
+measure still says `extreme_heat` ("still hot despite the option"), and turning the option on never
+makes a trip read hotter. In Orlando's August every park day's normal passes the stronger model's
+30.5 °C: warned by it, 15–28 August 2027 would read 10 hot park days with the option against 3
+without it. Every park day carries
 the park's high, `weather: { tempMax, basis }` (one decimal; `forecast` within the forecast's 16
 days, else `climate_normal`, the 2015–2024 normal for the date), on the day for one park and on
 each park of a hop day; absent where the calendar has none. `meta.heat` gives the two thresholds
-the warning read (`forecastFromC`, `normalFromC`: the region's, or the stronger ones), so a client
+the warning read (`forecastFromC`, `normalFromC`, the region's own), so a client
 can say "über 35 °C vorhergesagt" for a forecast and "im Schnitt 32 °C" for a normal, and count the
 hot days by their `extreme_heat`. The storm codes
 (`hurricane_season`, `hurricane_peak`, `typhoon_*`) are the same either way: the option weighs the
@@ -829,7 +832,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "objective": "headliner_wait",
     "exact": true,
     "ticket": "base", // base | hopper
-    "heat": { "forecastFromC": 35, "normalFromC": 31.5 }, // what `extreme_heat` was read against
+    "heat": { "forecastFromC": 35, "normalFromC": 31.5 }, // what `extreme_heat` was read against, the region's own
     "warnings": ["hop_needs_hopper"], // absent when empty; hop_needs_hopper | blockouts_unchecked | resort_left_out
   },
   "days": [

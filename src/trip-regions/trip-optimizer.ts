@@ -123,7 +123,7 @@ export const HeatModel: HeatModelConfig = ORLANDO_HEAT;
 /** What the weather does to a day's cost: a region's heat, storm season and notes. */
 export type WeatherModel = Pick<
   RegionWeatherConfig,
-  "heat" | "storm" | "notes"
+  "heat" | "warnHeat" | "storm" | "notes"
 >;
 
 /**
@@ -3336,7 +3336,7 @@ class TripOptimizer {
                 : "party_night_short_hours",
             );
           }
-          if (heatOf(c.weather, this.weather.heat)) {
+          if (heatOf(c.weather, this.weather.warnHeat ?? this.weather.heat)) {
             warnings.add("extreme_heat");
           }
         } else if (weatherFactor(c.weather).warmDry) {
