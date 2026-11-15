@@ -1,4 +1,5 @@
 import {
+  nextPerformanceTime,
   normalizePerformanceSchedule,
   performanceSchedulesOf,
   performanceTimesOn,
@@ -51,6 +52,15 @@ describe("performance schedules (PAR-1355)", () => {
     ["the day after the last", "2027-01-25", null],
   ])("finds the start times on %s", (_, day, times) => {
     expect(performanceTimesOn([summer, winter], day)).toEqual(times);
+  });
+
+  it.each([
+    ["before the first", "11:05", "13:00"],
+    ["between two", "13:37", "14:00"],
+    ["in the minute one starts", "14:00", "14:00"],
+    ["after the last has begun", "17:01", null],
+  ])("finds the next start %s", (_, now, next) => {
+    expect(nextPerformanceTime(winter.times, now)).toBe(next);
   });
 
   it("reads a schedule without dates as holding every day", () => {

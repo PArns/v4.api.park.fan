@@ -14,6 +14,10 @@ import {
   nextWorksPeriod,
   worksPeriodCovering,
 } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  nextPerformanceTime,
+  performanceTimesOn,
+} from "../../attractions/utils/performance-schedule.util";
 import type {
   ParkAttractionDto,
   ParkWithAttractionsDto,
@@ -61,6 +65,19 @@ function summarize(
   // The curated window running today, which a feed's CLOSED does not tell apart from a breakdown.
   const windowToday = (ride: ParkAttractionDto) =>
     worksPeriodCovering(ride.worksPeriods ?? [], today);
+  const localTime = formatInTimeZone(
+    new Date(),
+    dto.timezone,
+    "yyyy-MM-dd'T'HH:mmxxx",
+  );
+  // Rides that start at set times today (a 4D cinema): the feed reads them
+  // CLOSED between two performances, which is neither a closure nor "has not
+  // run today".
+  const performancesToday = rides.flatMap((ride) => {
+    const times = performanceTimesOn(ride.performanceSchedules ?? [], today);
+    return times ? [{ ride, times }] : [];
+  });
+  const onScheduleToday = new Set(performancesToday.map(({ ride }) => ride.id));
 
   return {
     id: dto.id,
@@ -68,11 +85,7 @@ function summarize(
     city: dto.city,
     country: dto.country,
     timezone: dto.timezone,
-    localTime: formatInTimeZone(
-      new Date(),
-      dto.timezone,
-      "yyyy-MM-dd'T'HH:mmxxx",
-    ),
+    localTime,
     pageUrl: parkPageUrl(park),
     status: dto.status ?? null,
     retiredAt: dto.retiredAt ?? null,
@@ -161,8 +174,17 @@ function summarize(
           (a.window?.from ?? "").localeCompare(b.window?.from ?? ""),
         ),
       notRunToday: rides
-        .filter((ride) => ride.notRunToday)
+        .filter((ride) => ride.notRunToday && !onScheduleToday.has(ride.id))
         .map((ride) => ({ id: ride.id, name: ride.name })),
+      // Park-local `HH:MM` start times and the next one; `next` null once the
+      // last has begun.
+      performancesToday: performancesToday.map(({ ride, times }) => ({
+        id: ride.id,
+        name: ride.name,
+        status: rideStatus(ride),
+        times,
+        next: nextPerformanceTime(times, localTime.slice(11, 16)),
+      })),
       // With the park season a ride is bound to, when one is: its days are the ride's window.
       outOfSeason: rides
         .filter((ride) => rideStatus(ride) === "OUT_OF_SEASON")
@@ -193,6 +215,8 @@ export const getParkTool = defineMcpTool({
     "or park.fan inferred it from a gap: signal `down` vs `closed_gap`), rides under maintenance " +
     "(since when, and the curated window with its end where one runs today), maintenance windows " +
     "starting in the next 30 days (maintenanceAhead), rides that have not run today, rides " +
+    "that start at set times today instead of running continuously (performancesToday: " +
+    "park-local start times and the next one; the feed reads them CLOSED in between), rides " +
     "out of season (outOfSeason, with the park season a ride runs in when one is bound), the " +
     "editors' fun facts about the park per locale, and the park's seasons and events running " +
     "today or starting within a year (seasons, as list_trip_seasons gives them; null when " +

@@ -849,6 +849,16 @@ park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query be
 the calendar has none yet, absent when nothing says when the closure ends.
 Parky words a breakdown as an estimate from past outages, never a promise.
 
+**A ride that starts at set times** (PAR-1355, prompt version 58). Where a curated
+[performance schedule](./performance-schedules.md) covers the park's today, `get_ride` carries
+`today.performances` (`performancesOf`): the park-local start times and `next`, the first at or
+after the park's current minute, null once the last has begun. Such a ride gets no `reopening`,
+since its feed reads CLOSED between two performances. DOWN, REFURBISHMENT, a running works period
+and a shut park (the day's plan has no opening hour) keep their usual answer. `get_park_live` lists
+the park's rides on a schedule today as `rides.performancesToday` and leaves them out of
+`notRunToday`, as the admin MCP's `get_park` does. The prompt has Parky answer with the next start,
+never a wait.
+
 **Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
 park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
 included), `ridesInMaintenance` on `get_park_day` and on each day of `get_days`, and

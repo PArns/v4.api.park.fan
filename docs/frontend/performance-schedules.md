@@ -56,6 +56,16 @@ feed's reading. A client showing today's schedule:
   [works period](./works-period.md);
 - shows nothing of the schedule while the park is closed.
 
+## MCP and Parky
+
+- `curate_attraction` and `curate_park_attractions` write `curatedPerformanceSchedules`, checked
+  as the admin's form is; `curation_fields` lists the field with `max` and `maxTimes`.
+- `get_attraction` adds `performanceSchedules` and `performanceTimesToday`.
+- `get_park` lists `rides.performancesToday` (id, name, status, park-local `times`, `next`) and
+  leaves those rides out of `notRunToday`.
+- Parky's `get_ride` carries `today.performances` instead of a `reopening`; `get_park_live`
+  passes `get_park`'s list on. See [assistant](./assistant.md).
+
 ## Pinned by
 
 `performance-schedule.util.spec.ts` (order, the day a schedule covers, an open schedule) and the
