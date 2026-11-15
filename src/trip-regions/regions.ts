@@ -267,6 +267,12 @@ export interface SeasonNoteConfig {
 /** What the weather does to a region's days. */
 export interface RegionWeatherConfig {
   heat: HeatModelConfig;
+  /**
+   * The thresholds a day's `extreme_heat` is read against where they are not `heat`'s:
+   * `weather=avoid` prices by stronger ones and warns by the region's own, so the option never
+   * makes a trip read hotter. Absent: `heat`.
+   */
+  warnHeat?: HeatModelConfig;
   /** Absent: the region has no storm season worth a cost (California, Paris). */
   storm?: StormSeasonConfig;
   notes?: SeasonNoteConfig[];
@@ -320,6 +326,7 @@ export function avoidingWeather(
   return {
     ...weather,
     heat: avoidingHeat(weather.heat),
+    warnHeat: weather.heat,
     ...(storm && {
       storm: {
         ...storm,
