@@ -63,6 +63,7 @@ import { AttractionOutageService } from "./attraction-outage.service";
 import { toNotRunTodayDto, toOutageDto } from "../dto/attraction-outage.dto";
 import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
 import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
+import { hasMeasuredDays } from "../../analytics/utils/typical-waits.util";
 import { servedHourlyConfidence } from "../../ml/utils/hourly-confidence.util";
 
 /**
@@ -644,6 +645,11 @@ export class AttractionIntegrationService {
           ]);
 
         dto.typicalWaits = typicalWaits;
+        // A ride without one measured day in the year gets no forecast, best
+        // times or rope drop: Lanzadera, closed all year without a reading, was
+        // offered "15 min, optimal" twice a day. A failed read keeps them.
+        const measured = typicalWaits === null || hasMeasuredDays(typicalWaits);
+        if (!measured) dto.hourlyForecast = [];
 
         // Curated glossary link (track figures, ride type, manufacturer).
         // A single indexed PK lookup on a hand-seeded table — cheap enough to
@@ -694,7 +700,7 @@ export class AttractionIntegrationService {
         const ropeDropStored = await this.analyticsService.getRopeDropFromCache(
           attraction.id,
         );
-        if (ropeDropStored && forecastable) {
+        if (ropeDropStored && forecastable && measured) {
           const rdTodayStr = getCurrentDateInTimezone(park.timezone);
           const rdTodayEntry = dto.schedule.find((s) => s.date === rdTodayStr);
           dto.ropeDrop = buildRopeDropInfo(
@@ -709,7 +715,7 @@ export class AttractionIntegrationService {
         // Cached with the integrated response (expires at the next 5-min boundary).
         // Skipped for an unreadable park, same as hourlyForecast above: the
         // predictions these rank are a prior over a park nobody has measured.
-        if (forecastable && mlPredictionsRaw.length > 0) {
+        if (forecastable && measured && mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);
 

@@ -1004,10 +1004,11 @@ describe("a closed park's crowd", () => {
     expect(json.nextSchedule).toBeDefined();
   });
 
-  it("keeps the whole reading while it runs", async () => {
+  it("keeps the whole reading but the occupancy while it runs", async () => {
     summary("OPERATING");
     const { json } = await run("get_park_live", { park: PARK_ID }, new Map());
-    expect(json.crowd).toEqual(crowd);
+    const { occupancyPercent: _occupancy, ...shown } = crowd;
+    expect(json.crowd).toEqual(shown);
   });
 
   it("hands the model the whole live summary with the park card", async () => {
@@ -1018,9 +1019,10 @@ describe("a closed park's crowd", () => {
       new Map(),
     );
     // One call instead of the card and get_park_live side by side.
+    const { occupancyPercent: _occupancy, ...shown } = crowd;
     expect(result.json.live).toMatchObject({
       name: "Six Flags Fiesta Texas",
-      crowd,
+      crowd: shown,
     });
   });
 
@@ -2525,6 +2527,20 @@ describe("planner tools", () => {
       expect((await ask("suggest_replies", { replies: ["Yes"] })).isError).toBe(
         true,
       );
+      // One chip too long for the widget drops alone; the others still show.
+      expect(
+        (
+          await ask("suggest_replies", {
+            replies: [
+              "26 de octubre al 4 de noviembre",
+              "Mantengamos el 24 de octubre al 2 de noviembre",
+            ],
+          })
+        ).action,
+      ).toEqual({
+        type: "replies",
+        replies: ["26 de octubre al 4 de noviembre"],
+      });
       const state = answer();
       const twice = async () =>
         runAssistantTool(

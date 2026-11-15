@@ -1,5 +1,6 @@
 import {
   buildTypicalWaits,
+  hasMeasuredDays,
   percentileCont,
   typicalWaitsWindow,
   TypicalWaitsDayInput,
@@ -107,6 +108,17 @@ describe("buildTypicalWaits", () => {
     });
     expect(result.byDayOfWeek).toEqual([]);
     expect(result.peak).toBeNull();
+  });
+});
+
+describe("hasMeasuredDays", () => {
+  it("is false only for a ride without one measured day in the window", () => {
+    expect(
+      hasMeasuredDays(buildTypicalWaits([], DE_WEEKEND, WINDOW, NOW)),
+    ).toBe(false);
+    expect(
+      hasMeasuredDays(buildTypicalWaits(days(1, 20), DE_WEEKEND, WINDOW, NOW)),
+    ).toBe(true);
   });
 });
 

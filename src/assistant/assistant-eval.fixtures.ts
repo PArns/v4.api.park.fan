@@ -45,6 +45,7 @@ export interface EvalCase {
 const PHL_ID = "0b8f3c1e-7d2a-4c55-9a61-2f1e3d4c5b6a";
 const TARON_ID = "5f2d9a7c-1b3e-4f60-8a2d-6c7e8f9a0b1c";
 const BLUE_FIRE_ID = "9c1e2d3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+const DLP_ID = "8355a0b7-26e9-4a90-af47-246ec143e99a";
 const PHL_PAGE = "/de/parks/europe/germany/bruehl/phantasialand";
 const PHL_SUBJECT = `the park "Phantasialand" in "Brühl, Germany" (park id ${PHL_ID})`;
 
@@ -582,6 +583,21 @@ const REGION_CASES: EvalCase[] = [
       },
     ],
   },
+  {
+    // "All the big parks" while the plan holds all three: a yes to what stands changes nothing.
+    id: "interview-parks-confirmed-de",
+    locale: "de",
+    pagePath: "/de/japan",
+    pageSubject: "the trip planner hub of Japan",
+    trips: [JAPAN_TRIP],
+    interview: {
+      ...INTERVIEW_AT("parks", ["region", "dates"]),
+      region: "japan",
+    },
+    message: "Alle großen Parks",
+    want: [{ tool: "interview", input: { op: "answered", step: "parks" } }],
+    forbid: ["change_trip", "trip_undo", "plan_vacation"],
+  },
 ];
 
 export const EVAL_CASES: EvalCase[] = [
@@ -992,6 +1008,67 @@ export const EVAL_CASES: EvalCase[] = [
     pageSubject: PHL_SUBJECT,
     message: "transfer language to chinese",
     forbid: ["switch_language"],
+  },
+  {
+    // 11 November 2026 is a Wednesday holiday in France; the Thursday after it is no bridge day.
+    id: "no-inferred-bridge-day-fr",
+    locale: "fr",
+    pagePath: "/fr/parks/europe/france/paris/disneyland-park",
+    pageSubject: `the park "Disneyland Park" in "Paris, France" (park id ${DLP_ID})`,
+    message: "Disney le 12 novembre, il y aura du monde ?",
+    want: [{ tool: ["get_park_day", "get_days"] }],
+    results: {
+      get_park_day: {
+        date: "2026-11-12",
+        status: "OPERATING",
+        crowdLevel: "moderate",
+        isHoliday: false,
+        isBridgeDay: false,
+        isSchoolVacation: false,
+        isWeekend: false,
+        neighborHolidays: [],
+      },
+      get_days: {
+        days: [
+          {
+            date: "2026-11-12",
+            weekday: "Thursday",
+            status: "OPERATING",
+            crowdLevel: "moderate",
+            isHoliday: false,
+            isBridgeDay: false,
+          },
+        ],
+      },
+    },
+    answer: [{ must: "^(?![\\s\\S]*\\bpont\\b)" }],
+  },
+  {
+    // A name alone says nothing about a language: the German chat stays German on the English page.
+    id: "language-single-word-keeps-chat",
+    locale: "en",
+    pagePath: "/en/parks/europe/germany/bruehl/phantasialand",
+    pageSubject: PHL_SUBJECT,
+    history: [
+      ["user", "Wie geht's dir?"],
+      [
+        "assistant",
+        "Mir geht's prima, danke! Und dir? Hast du heute schon einen Park im Kopf?",
+      ],
+    ],
+    message: "Taron",
+    want: [{ tool: ["show_card", "get_ride"] }],
+    forbid: ["switch_language"],
+    results: {
+      show_card: { name: "Taron", status: "OPERATING", waitMinutes: 15 },
+      get_ride: {
+        id: TARON_ID,
+        name: "Taron",
+        status: "OPERATING",
+        waitMinutes: 15,
+      },
+    },
+    answer: [{ must: "\\b(ist|gerade|Minuten|Wartezeit|jetzt)\\b" }],
   },
   {
     id: "parky-own-favourites",

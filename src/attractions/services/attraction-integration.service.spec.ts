@@ -1118,6 +1118,25 @@ describe("AttractionIntegrationService", () => {
       ).not.toContain(slotStart);
     });
 
+    it("gets no forecast and no best time without one measured day in the year", async () => {
+      mockAnalyticsService.getAttractionTypicalWaits.mockResolvedValueOnce({
+        weekday: { typical: null, busy: null, sampleDays: 0 },
+        weekend: { typical: null, busy: null, sampleDays: 0 },
+        byDayOfWeek: [],
+        peak: null,
+        windowDays: 365,
+        dataFrom: "2025-11-16",
+        dataTo: "2026-11-15",
+        displayable: false,
+        generatedAt: "2026-11-15T03:00:00.000Z",
+      });
+
+      const result = await buildRide("CLOSED");
+
+      expect(result.hourlyForecast).toEqual([]);
+      expect(result.bestVisitTimes).toBeUndefined();
+    });
+
     it("still rates an OPERATING ride's live wait against its baseline", async () => {
       mockAnalyticsService.getAttractionP50BaselineFromCache.mockResolvedValue(
         20,
