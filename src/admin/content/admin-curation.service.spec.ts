@@ -1013,6 +1013,131 @@ describe("AdminCurationService", () => {
     });
   });
 
+  describe("the performance schedules (PAR-1355)", () => {
+    const winter = {
+      from: "2026-11-14",
+      to: "2027-01-24",
+      times: ["13:00", "14:00", "15:00", "16:00", "17:00"],
+    };
+    const always = { from: null, to: null, times: ["10:00"] };
+
+    async function write(
+      schedules: unknown,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const { service, attractions } = build(anAttraction(overrides));
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedPerformanceSchedules: schedules } },
+        ACTOR,
+      );
+      const saved = attractions.update.mock.calls[0]?.[1] as
+        Record<string, unknown> | undefined;
+      return { result, saved };
+    }
+
+    it("stores schedules sorted by start, times sorted and without repeats", async () => {
+      const summer = {
+        from: "2026-04-01",
+        to: "2026-10-31",
+        times: [" 15:30", "11:00", "15:30"],
+      };
+      const { saved } = await write([winter, summer]);
+      expect(saved).toEqual({
+        curatedPerformanceSchedules: [
+          { from: "2026-04-01", to: "2026-10-31", times: ["11:00", "15:30"] },
+          winter,
+        ],
+      });
+    });
+
+    it("reads a blank entry as the gap after a trailing comma", async () => {
+      const { saved } = await write([
+        { from: null, to: null, times: ["10:00", " ", ""] },
+      ]);
+      expect(saved).toEqual({ curatedPerformanceSchedules: [always] });
+    });
+
+    it("takes a schedule without dates, which holds every day", async () => {
+      const { saved } = await write([always]);
+      expect(saved).toEqual({ curatedPerformanceSchedules: [always] });
+    });
+
+    it("stores an empty list as null", async () => {
+      const { saved } = await write([], {
+        curatedPerformanceSchedules: [winter],
+      });
+      expect(saved).toEqual({ curatedPerformanceSchedules: null });
+    });
+
+    it("writes nothing when the list is resent unchanged", async () => {
+      const { saved } = await write([winter], {
+        curatedPerformanceSchedules: [winter],
+      });
+      expect(saved).toBeUndefined();
+    });
+
+    it.each([
+      ["not a list", winter, /must be a list of schedules/],
+      [
+        "an entry that is no object",
+        ["13:00"],
+        /schedule 1 must be an object with from, to and times/,
+      ],
+      [
+        "a schedule without times",
+        [{ from: "2026-11-14", to: null, times: [] }],
+        /schedule 1 needs at least one start time/,
+      ],
+      [
+        "a time that is no HH:MM",
+        [{ from: null, to: null, times: ["13 Uhr"] }],
+        /"13 Uhr" is not a time in HH:MM form/,
+      ],
+      [
+        "an hour past 23",
+        [{ from: null, to: null, times: ["24:00"] }],
+        /"24:00" is not a time in HH:MM form/,
+      ],
+      [
+        "an inverted span",
+        [{ from: "2027-01-24", to: "2026-11-14", times: ["13:00"] }],
+        /schedule 1 ends 2026-11-14 and starts 2027-01-24/,
+      ],
+      [
+        "an every-day schedule beside a dated one",
+        [winter, always],
+        /schedule 1 \(2026-11-14 – 2027-01-24\) overlaps schedule 2 \(open start – open end\)/,
+      ],
+      [
+        "more than ten schedules",
+        Array.from({ length: 11 }, (_, i) => ({
+          from: `2026-01-${String(i + 1).padStart(2, "0")}`,
+          to: `2026-01-${String(i + 1).padStart(2, "0")}`,
+          times: ["12:00"],
+        })),
+        /at most 10 schedules/,
+      ],
+      [
+        "more than 48 times",
+        [
+          {
+            from: null,
+            to: null,
+            times: Array.from(
+              { length: 49 },
+              (_, i) =>
+                `${String(Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`,
+            ),
+          },
+        ],
+        /at most 48 start times/,
+      ],
+    ])("refuses %s", async (_, schedules, message) => {
+      await expect(write(schedules)).rejects.toThrow(message);
+    });
+  });
+
   describe("the works period", () => {
     it("refuses a window that ends before it begins", async () => {
       const attraction = anAttraction({

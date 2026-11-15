@@ -84,6 +84,7 @@ function specView(spec: CuratedFieldSpec) {
     ...(spec.min !== undefined && { min: spec.min }),
     ...(spec.max !== undefined && { max: spec.max }),
     ...(spec.maxLength !== undefined && { maxLength: spec.maxLength }),
+    ...(spec.maxTimes !== undefined && { maxTimes: spec.maxTimes }),
     ...(spec.hint && { hint: spec.hint }),
   };
 }
@@ -103,6 +104,7 @@ function valueView(view: CuratedFieldView) {
     ...(view.unit && { unit: view.unit }),
     ...(view.min !== undefined && { min: view.min }),
     ...(view.max !== undefined && { max: view.max }),
+    ...(view.maxTimes !== undefined && { maxTimes: view.maxTimes }),
     ...(view.hint && { hint: view.hint }),
   };
 }

@@ -42,6 +42,11 @@ import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
 import { WorksPeriodDto } from "./works-period.dto";
 import {
+  PERFORMANCE_SCHEDULES_API_PROPERTY,
+  PerformanceScheduleDto,
+} from "./performance-schedule.dto";
+import { performanceSchedulesOf } from "../utils/performance-schedule.util";
+import {
   resolveWorksPeriod,
   worksPeriodsOf,
 } from "../utils/curated-out-of-service.util";
@@ -265,6 +270,9 @@ export class AttractionResponseDto {
     type: [WorksPeriodDto],
   })
   worksPeriods?: WorksPeriodDto[];
+
+  @ApiProperty(PERFORMANCE_SCHEDULES_API_PROPERTY)
+  performanceSchedules?: PerformanceScheduleDto[];
 
   @ApiProperty({
     description:
@@ -732,6 +740,7 @@ export class AttractionResponseDto {
       // block of nulls on every attraction of every park payload.
       worksPeriod: resolveWorksPeriod(attraction, attraction.park?.timezone),
       ...worksPeriodsOf(attraction),
+      ...performanceSchedulesOf(attraction),
       // The name lives on the park row, so this is the one resolver that needs
       // both entities. A projection that did not join the park still resolves —
       // it just falls back to the neutral name and withholds the price.
