@@ -20,7 +20,10 @@ import { ApiOperation, ApiSecurity, ApiTags } from "@nestjs/swagger";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
-import { AdminAuditInterceptor } from "../admin/auth/admin-audit.interceptor";
+import {
+  AdminAuditInterceptor,
+  SelfAudited,
+} from "../admin/auth/admin-audit.interceptor";
 import {
   AdminMinRole,
   CurrentAdmin,
@@ -38,6 +41,8 @@ import {
   settingsUpdateSchema,
 } from "./assistant.schemas";
 import { FEEDBACK_STATUSES } from "./entities/site-feedback.entity";
+import { AssistantKnowledgeService } from "./assistant-knowledge.service";
+import { knowledgeTopicSchema, knowledgeWriteSchema } from "./knowledge";
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).max(1000).default(1),
@@ -59,9 +64,10 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 /**
- * Parky in the admin: the settings with the Claude key, the stored chats and
- * the feedback visitors sent. Changing the settings is for owners; the key is
- * never sent back, only its masked form, and the audit log redacts `apiKey`.
+ * Parky in the admin: the settings with the Claude key, the stored chats, the
+ * feedback visitors sent and his knowledge base. Changing the settings is for
+ * owners; the key is never sent back, only its masked form, and the audit log
+ * redacts `apiKey`.
  */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
@@ -72,6 +78,7 @@ export class AdminAssistantController {
   constructor(
     private readonly settings: AssistantSettingsService,
     private readonly records: AssistantRecordsService,
+    private readonly knowledge: AssistantKnowledgeService,
   ) {}
 
   @Get("settings")
@@ -187,5 +194,60 @@ export class AdminAssistantController {
       throw new NotFoundException();
     }
     return { ok: true };
+  }
+
+  @Get("knowledge")
+  @ApiOperation({
+    summary: "Parky's knowledge base: every topic, switched-off ones too",
+  })
+  knowledgeTopics() {
+    return this.knowledge.list();
+  }
+
+  @Get("knowledge/:topic")
+  @ApiOperation({
+    summary: "One topic of Parky's knowledge base, with its edits",
+  })
+  async knowledgeTopic(@Param("topic") topic: string) {
+    const name = parse(knowledgeTopicSchema, topic);
+    const found = await this.knowledge.get(name);
+    if (!found) throw new NotFoundException();
+    return { ...found, history: await this.knowledge.history(name) };
+  }
+
+  @Put("knowledge/:topic")
+  @AdminMinRole("editor")
+  @SelfAudited()
+  @ApiOperation({
+    summary: "Create a topic of Parky's knowledge base or replace its fields",
+  })
+  saveKnowledgeTopic(
+    @Param("topic") topic: string,
+    @Body() body: unknown,
+    @CurrentAdmin() admin: AdminPrincipal,
+  ) {
+    return this.knowledge.save(
+      parse(knowledgeTopicSchema, topic),
+      parse(knowledgeWriteSchema, body),
+      admin,
+    );
+  }
+
+  @Delete("knowledge/:topic")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @AdminMinRole("editor")
+  @SelfAudited()
+  @ApiOperation({
+    summary: "Delete a topic; the audit log keeps all of it",
+  })
+  async deleteKnowledgeTopic(
+    @Param("topic") topic: string,
+    @CurrentAdmin() admin: AdminPrincipal,
+  ): Promise<void> {
+    const removed = await this.knowledge.remove(
+      parse(knowledgeTopicSchema, topic),
+      admin,
+    );
+    if (!removed) throw new NotFoundException();
   }
 }

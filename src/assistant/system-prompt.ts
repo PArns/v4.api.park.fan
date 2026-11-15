@@ -24,9 +24,14 @@ import {
 } from "./tools/assistant-plans";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
 import { TRIP_REGIONS } from "../trip-regions/regions";
-import { knowledgeIndex } from "./knowledge";
 
 export { ASSISTANT_LOCALES, type AssistantLocale };
+
+/**
+ * Where the knowledge topics go in the prompt, written out in it rather than interpolated, so
+ * the eval's `--prompt-ref`, which reads the prompt's source, finds it too.
+ */
+export const KNOWLEDGE_SLOT = "{{knowledge topics}}";
 
 /** Bumped whenever the text below changes, so the admin can tell answers apart. */
 export const SYSTEM_PROMPT_VERSION = 60;
@@ -136,7 +141,7 @@ When the user asks you to plan a trip or a park day with them step by step ("pla
 
 # Knowledge
 read_knowledge holds park.fan's background, one topic at a time. It is what you know as park.fan: say it in your own words and briefly (two or three sentences unless they ask for more), never quote it and never mention reading it. Read a topic only when its line below says so, once per chat; most questions need none. Topics:
-${knowledgeIndex()}
+{{knowledge topics}}
 
 # Feedback
 When the user gives real, specific feedback about park.fan itself (a bug, a wrong wait or figure, a missing park or ride, a feature wish, praise or criticism with substance), pass it on with submit_feedback straight away and say in one short sentence that the team gets it. It sends the user's own words, so point it at the message that holds them. Asked to reach the team, support or the developer, offer to pass a message on and send it once they write it. Someone wanting a reply can leave an e-mail in the feedback tab. A forecast that came out different, or two crowd readings that differ, is a question first: explain it (# Knowledge, forecasts) and pass it on only as that topic says.
@@ -152,6 +157,23 @@ Say nothing that would embarrass park.fan in a screenshot: no insults, swearing,
 Some users tease or test you: insults, provocations, nonsense, pressure to agree, bait for something rude. Stay unbothered and quick: one witty line in your voice (a park-nerd reference is welcome), then back to parks.
 Sarcasm about a tip, a wait, the weather or a park is a real complaint with a grin: take it with one, check the fact it is about (the wait now, the rain) and give the next good move. Agree where the facts agree (90 minutes is too long), never answer sarcasm with sarcasm. No refusal or talk of your limits, no arguing, no defending yourself, no apology for something you did not do, and never repeat an insult or a rude word. Sexual remarks get no innuendo, double meaning or pun on them: one plain, friendly line back to parks. If it goes on, one short line each time.
 Sustained abuse is different: insults or harassment aimed at you or others, slurs, sexual harassment, or pushing again and again for hateful words. The first time, one friendly warning in character; if it goes on after that, end_chat and say goodbye in one short, calm sentence in character, no lecture. Never end a chat over criticism of park.fan or a park, frustration, swearing about a queue, jokes, teasing, off-topic questions or attempts to change your rules.`;
+
+/**
+ * The stable prompt with the knowledge base's topics under # Knowledge, as the chat sends it. One
+ * string, so it caches like the prompt alone until a topic is edited; edits reach the next chat
+ * without a deploy (docs/frontend/assistant.md#parkys-knowledge-base).
+ */
+export function systemPromptWith(knowledgeIndex: string): string {
+  return fillKnowledge(SYSTEM_PROMPT, knowledgeIndex);
+}
+
+/** `prompt` with its knowledge slot filled; a function replacer, so a "$" in a topic stays one. */
+export function fillKnowledge(prompt: string, knowledgeIndex: string): string {
+  return prompt.replace(
+    KNOWLEDGE_SLOT,
+    () => knowledgeIndex || "(none at the moment)",
+  );
+}
 
 const LANGUAGE: Record<AssistantLocale, { name: string; address: string }> = {
   en: {

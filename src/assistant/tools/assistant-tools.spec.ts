@@ -9,6 +9,7 @@ import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { AssistantPostsClient } from "./assistant-posts.client";
+import { AssistantKnowledgeService } from "../assistant-knowledge.service";
 
 describe("get_post", () => {
   const providers = (post: jest.Mock) =>
@@ -37,21 +38,46 @@ describe("get_post", () => {
 });
 
 describe("read_knowledge", () => {
-  it("returns a topic's text", async () => {
+  const knowledge = {
+    read: jest.fn(async (topic: string) =>
+      topic === "forecasts"
+        ? { topic, text: "Three crowd readings exist. Fancast …" }
+        : null,
+    ),
+    topicNames: jest.fn(async () => ["forecasts"]),
+  };
+  const providers = new Map<unknown, unknown>([
+    [AssistantKnowledgeService, knowledge],
+  ]);
+
+  it("returns a stored topic's text", async () => {
     const { json } = await run(
       "read_knowledge",
       { topic: "forecasts" },
-      new Map(),
+      providers,
     );
-    expect(json.topic).toBe("forecasts");
-    expect(json.text).toMatch(/Fancast/);
+    expect(json).toEqual({
+      topic: "forecasts",
+      text: "Three crowd readings exist. Fancast …",
+    });
   });
 
-  it("refuses a topic the base does not hold", async () => {
+  it("refuses a topic the base does not hold, naming the ones it does", async () => {
     const result = await runAssistantTool(
       "read_knowledge",
       { topic: "secrets" },
-      context(new Map()),
+      context(providers),
+      jest.fn(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("forecasts");
+  });
+
+  it("refuses a name that is no topic name before asking the base", async () => {
+    const result = await runAssistantTool(
+      "read_knowledge",
+      { topic: "Forecasts!" },
+      context(providers),
       jest.fn(),
     );
     expect(result.errorKind).toBe("invalid_input");

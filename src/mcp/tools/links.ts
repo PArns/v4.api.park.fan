@@ -21,6 +21,12 @@ export function adminFeedbackUrl(): string {
   return `${getFrontendUrl()}/admin/assistant/feedback`;
 }
 
+/** The admin's page of Parky's knowledge base, or one topic on it. */
+export function adminKnowledgeUrl(topic?: string): string {
+  const base = `${getFrontendUrl()}/admin/assistant/knowledge`;
+  return topic ? `${base}/${topic}` : base;
+}
+
 /** The ride's page on park.fan. */
 export function attractionPageUrl(
   park: GeocodedEntity,

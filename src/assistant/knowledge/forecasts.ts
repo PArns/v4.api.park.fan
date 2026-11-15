@@ -1,8 +1,9 @@
 import type { KnowledgeEntry } from "./knowledge-entry";
 
 /**
- * How park.fan's crowd readings and forecasts are made, and why "now", "today's forecast" and
- * "today so far" differ. The facts follow docs/analytics/crowd-levels.md and the Fancast page.
+ * The seed of the topic on park.fan's crowd readings and forecasts, and why "now", "today's
+ * forecast" and "today so far" differ. The facts follow docs/analytics/crowd-levels.md and the
+ * Fancast page; once seeded, the stored topic is edited in the admin, not here.
  */
 export const FORECASTS: KnowledgeEntry = {
   id: "forecasts",

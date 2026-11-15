@@ -2,7 +2,8 @@ import { HttpException, type Type } from "@nestjs/common";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
-import { KNOWLEDGE_TOPICS, knowledgeEntry } from "../knowledge";
+import { knowledgeTopicSchema } from "../knowledge";
+import { AssistantKnowledgeService } from "../assistant-knowledge.service";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
@@ -4412,14 +4413,20 @@ export const ASSISTANT_TOOLS = [
       "work behind the numbers. # Knowledge lists the topics and when each is needed; read one " +
       "only then, before you answer, and once per chat.",
     input: z.object({
-      topic: z
-        .enum(KNOWLEDGE_TOPICS)
-        .describe("The topic, as # Knowledge names it"),
+      topic: knowledgeTopicSchema.describe(
+        "The topic, as # Knowledge names it",
+      ),
     }),
-    run: ({ topic }) => {
-      const entry = knowledgeEntry(topic);
-      if (!entry) throw new McpToolError(`No topic ${topic}`);
-      return Promise.resolve({ topic: entry.id, text: entry.text });
+    run: async ({ topic }, ctx) => {
+      const knowledge = ctx.get(AssistantKnowledgeService);
+      const entry = await knowledge.read(topic);
+      if (!entry) {
+        const names = await knowledge.topicNames();
+        throw new McpToolError(
+          `No topic ${topic}; the topics are: ${names.join(", ") || "none"}`,
+        );
+      }
+      return { topic: entry.topic, text: entry.text };
     },
   }),
   tool({

@@ -19,6 +19,8 @@ park.fan's `docs/features/assistant.md`.
 | `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
 | `GET/DELETE /v1/admin/assistant/conversations[/id]` | admin, DELETE ed. | stored chats with tool calls, tokens and cost; delete one    |
 | `GET/PATCH /v1/admin/assistant/feedback`            | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                |
+| `GET /v1/admin/assistant/knowledge[/topic]`         | admin             | Parky's knowledge base; one topic with its edits             |
+| `PUT/DELETE /v1/admin/assistant/knowledge/:topic`   | editor            | write a topic (`readWhen`, `text`, `enabled`), delete one    |
 
 ## The challenge
 
@@ -618,22 +620,29 @@ state, or opens the hub with it.
 
 ### Parky's knowledge base
 
-Background Parky needs for a few questions, not for most, lives outside the prompt and is read on
-demand with `read_knowledge` (`topic`). The prompt's `# Knowledge` lists each topic with one line on
-when to read it (`readWhen`, built by `knowledgeIndex`), and the tool returns the topic's `text` as
-its result, so a chat that needs none pays only for the list. Parky says it in his own words and
-never mentions reading it. The call is stored like any other, so the admin and the tools report
-show which topics get read.
+Background Parky needs for a few questions, not for most, lives outside the prompt in a wiki the
+admin and the admin MCP edit: the table `assistant_knowledge`, one row per topic (`topic`,
+`readWhen`, `text`, `enabled`). The prompt's `# Knowledge` lists every enabled topic with its
+`readWhen` (the slot `{{knowledge topics}}`, filled per chat by `systemPromptWith`), and
+`read_knowledge` (`topic`) returns the topic's `text`, so a chat that needs none pays only for the
+list. The list sits in the stable, cached block, so it caches like the prompt until a topic
+changes. Parky says what he reads in his own words and never mentions reading it. The call is
+stored like any other, so the admin and the tools report show which topics get read.
 
-Topics are files in `src/assistant/knowledge/`, one per topic, registered in `KNOWLEDGE`
-(`index.ts`): English, written for Parky, each fact taken from the doc or page it summarizes. To add
-one: write the file, register it, bump `SYSTEM_PROMPT_VERSION`, and add an eval case for a question
-that needs it and one that must not read it. `knowledge.spec.ts` checks the names, that each topic
-stays under 4,000 characters and that the prompt lists it.
+`AssistantKnowledgeService` serves the enabled topics from a per-process copy for a minute: an
+edit reaches the next chat within a minute, without a deploy. Writes go through the admin
+(`/admin/assistant/knowledge`, editor) or the MCP (`write_assistant_knowledge`,
+`delete_assistant_knowledge`, `assistant_knowledge` to read), and each is audited with the whole
+topic before and after (`entityType` `assistant_knowledge`, the topic as `entityId`): that is the
+topic's history, which `GET …/knowledge/:topic` and `assistant_knowledge` return with it. A topic
+that should rest is switched off (`enabled` false) rather than deleted.
 
-They are files rather than a table edited in the admin because a topic changes answers the way the
-prompt does: it goes through review, the eval and the prompt version. If topics ever need to change
-without a deploy, `read_knowledge` can read a table instead and nothing else moves.
+A topic is English, written for Parky, its facts taken from the doc or page it summarizes;
+`readWhen` is 20 to 400 characters, `text` 40 to 4,000 (`knowledgeWriteSchema`). An empty table is
+seeded once at boot from `src/assistant/knowledge/` (`KNOWLEDGE_SEED`); after that the table is the
+base, and a deleted seed topic stays deleted. `SYSTEM_PROMPT_VERSION` counts the prompt's own text
+only: an answer written after a topic was edited carries the same version, and the topic's history
+says what it read then. A topic whose wording matters is worth an eval case, as for the prompt.
 
 | Topic       | Holds                                                                                                                                                           |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
