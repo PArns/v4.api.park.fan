@@ -14,6 +14,8 @@ import { AssistantSettings } from "./entities/assistant-settings.entity";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import { AssistantMessage } from "./entities/assistant-message.entity";
 import { SiteFeedback } from "./entities/site-feedback.entity";
+import { AssistantKnowledge } from "./entities/assistant-knowledge.entity";
+import { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import { ASSISTANT_TOOLS } from "./tools/assistant-tools";
 import { TRIP_REGIONS } from "../trip-regions/regions";
 
@@ -30,6 +32,7 @@ import { TRIP_REGIONS } from "../trip-regions/regions";
       AssistantConversation,
       AssistantMessage,
       SiteFeedback,
+      AssistantKnowledge,
     ]),
     RedisModule,
   ],
@@ -42,8 +45,13 @@ import { TRIP_REGIONS } from "../trip-regions/regions";
     AssistantRateLimitService,
     AssistantChallengeService,
     AssistantPostsClient,
+    AssistantKnowledgeService,
   ],
-  exports: [AssistantRecordsService, AssistantSettingsService],
+  exports: [
+    AssistantRecordsService,
+    AssistantSettingsService,
+    AssistantKnowledgeService,
+  ],
 })
 export class AssistantModule implements OnModuleInit {
   constructor(private readonly records: AssistantRecordsService) {}

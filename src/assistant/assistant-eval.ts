@@ -12,7 +12,8 @@
 import { execFileSync } from "node:child_process";
 import Anthropic from "@anthropic-ai/sdk";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
-import { chatContext, SYSTEM_PROMPT } from "./system-prompt";
+import { chatContext, fillKnowledge, SYSTEM_PROMPT } from "./system-prompt";
+import { KNOWLEDGE_SEED, knowledgeIndex } from "./knowledge";
 import { visitorTrips } from "./tools/assistant-plans";
 import { ASSISTANT_TOOL_PARAMS } from "./tools/assistant-tools";
 import { EVAL_CASES, type EvalCase } from "./assistant-eval.fixtures";
@@ -205,7 +206,11 @@ async function main(): Promise<void> {
   };
   const ref = arg("--prompt-ref");
   const only = arg("--only");
-  const prompt = ref ? promptAt(ref) : SYSTEM_PROMPT;
+  // The seed's topics stand in for the stored ones: the eval reads no database.
+  const prompt = fillKnowledge(
+    ref ? promptAt(ref) : SYSTEM_PROMPT,
+    knowledgeIndex(KNOWLEDGE_SEED),
+  );
   const client = new Anthropic({ apiKey, maxRetries: 2 });
 
   const probe: Anthropic.MessageParam[] = [{ role: "user", content: "hi" }];

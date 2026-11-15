@@ -14,9 +14,10 @@ import {
 } from "./entities/assistant-message.entity";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { AssistantPageService } from "./assistant-page.service";
+import { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import {
   chatContext,
-  SYSTEM_PROMPT,
+  systemPromptWith,
   SYSTEM_PROMPT_VERSION,
   type LookedUpEntity,
 } from "./system-prompt";
@@ -118,6 +119,7 @@ export class AssistantChatService {
     @InjectRepository(AssistantMessage)
     private readonly messages: Repository<AssistantMessage>,
     private readonly pages: AssistantPageService,
+    private readonly knowledge: AssistantKnowledgeService,
   ) {}
 
   /**
@@ -235,14 +237,15 @@ export class AssistantChatService {
       },
       answer,
     };
-    const [pageSubject, digest] = await Promise.all([
+    const [pageSubject, digest, knowledgeIndex] = await Promise.all([
       this.pages.subject(request.pagePath, request.locale),
       this.tripDigestOf(toolContext, pickTrip(trips)),
+      this.knowledge.promptIndex(),
     ]);
     const system: Anthropic.TextBlockParam[] = [
       {
         type: "text",
-        text: SYSTEM_PROMPT,
+        text: systemPromptWith(knowledgeIndex),
         cache_control: { type: "ephemeral" },
       },
       {

@@ -2,6 +2,8 @@ import { HttpException, type Type } from "@nestjs/common";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
+import { knowledgeTopicSchema } from "../knowledge";
+import { AssistantKnowledgeService } from "../assistant-knowledge.service";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
@@ -423,6 +425,9 @@ function claimOnce(
   return { round: answer.round, release: () => answer.done.delete(name) };
 }
 
+/** A reply chip's longest text: the widget drops a longer one (`MAX_REPLY_CHARS`). */
+const REPLY_MAX_CHARS = 40;
+
 /** Shortest feedback worth storing, after trimming: "ok" and "yes, do it" say nothing. */
 const MIN_FEEDBACK_CHARS = 12;
 /** As long as the feedback form lets a visitor write. */
@@ -489,7 +494,6 @@ function mcp(ctx: AssistantToolContext): McpToolContext {
 const LIVE_CROWD_NOW = [
   "level",
   "avgWaitMinutes",
-  "occupancyPercent",
   "comparedToTypicalPercent",
 ] as const;
 
@@ -497,7 +501,9 @@ const LIVE_CROWD_NOW = [
  * `get_park`'s summary, its crowd reading of this moment only while the park runs. Closed, the
  * reading sits at its floor, and Parky called a closed park "very low for the moment". The level
  * becomes null with the reason beside it; today's average and peak so far stay, since they
- * describe hours the park was open.
+ * describe hours the park was open. `occupancyPercent` never reaches him: it is
+ * `comparedToTypicalPercent` plus 100, and „al 192 % de su ocupación normal" read as a park filled
+ * past capacity.
  */
 async function parkNow(
   ctx: AssistantToolContext,
@@ -507,8 +513,12 @@ async function parkNow(
     string,
     unknown
   >;
-  if (live.status === "OPERATING" || !live.crowd) return live;
-  const crowd = { ...(live.crowd as Record<string, unknown>) };
+  if (!live.crowd) return live;
+  const { occupancyPercent: _occupancy, ...crowd } = live.crowd as Record<
+    string,
+    unknown
+  >;
+  if (live.status === "OPERATING") return { ...live, crowd };
   for (const key of LIVE_CROWD_NOW) delete crowd[key];
   return {
     ...live,
@@ -4397,6 +4407,29 @@ export const ASSISTANT_TOOLS = [
     run: async ({ term }, ctx) => ({ terms: await findTerms(ctx, term) }),
   }),
   tool({
+    name: "read_knowledge",
+    description:
+      "park.fan's own background on one topic, for you to explain in your words: how things " +
+      "work behind the numbers. # Knowledge lists the topics and when each is needed; read one " +
+      "only then, before you answer, and once per chat.",
+    input: z.object({
+      topic: knowledgeTopicSchema.describe(
+        "The topic, as # Knowledge names it",
+      ),
+    }),
+    run: async ({ topic }, ctx) => {
+      const knowledge = ctx.get(AssistantKnowledgeService);
+      const entry = await knowledge.read(topic);
+      if (!entry) {
+        const names = await knowledge.topicNames();
+        throw new McpToolError(
+          `No topic ${topic}; the topics are: ${names.join(", ") || "none"}`,
+        );
+      }
+      return { topic: entry.topic, text: entry.text };
+    },
+  }),
+  tool({
     name: "find_parks_nearby",
     status: "location",
     description:
@@ -5931,8 +5964,9 @@ export const ASSISTANT_TOOLS = [
       "Two to four short replies the user can tap under your answer, each sent as their " +
       "message: written as they would say it, in their language, under 40 characters, the " +
       "likeliest first. Call it last, alone, after your answer's text (# Calling suggest_replies).",
+    // A chip over the limit is dropped in `run`, not refused here: refused, the call shows none.
     input: z.object({
-      replies: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
+      replies: z.array(z.string().trim().min(1).max(200)).min(2).max(4),
     }),
     run: ({ replies }, ctx) => {
       claimOnce(ctx, "suggest_replies");
@@ -5941,7 +5975,12 @@ export const ASSISTANT_TOOLS = [
         .map((reply) => reply.replace(/\s+/g, " ").replace(/[*_`#>[\]]/g, ""))
         .filter((reply) => {
           const key = reply.toLowerCase();
-          if (!reply || seen.has(key) || /https?:|www\./i.test(reply))
+          if (
+            !reply ||
+            reply.length > REPLY_MAX_CHARS ||
+            seen.has(key) ||
+            /https?:|www\./i.test(reply)
+          )
             return false;
           if (junkReason(reply)) return false;
           seen.add(key);

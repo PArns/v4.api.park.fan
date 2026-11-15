@@ -53,7 +53,8 @@ export class AdminAuditLog {
   action: string;
 
   /** `park` | `attraction` | `park_season` | `ride_profile` | `admin_user` |
-   *  `system` — the kind of thing `entityId` points at. */
+   *  `assistant_knowledge` (its topic as `entityId`) | `system` — the kind of
+   *  thing `entityId` points at. */
   @Column({ name: "entity_type", type: "text" })
   entityType: string;
 

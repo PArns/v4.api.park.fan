@@ -760,6 +760,7 @@ describe("assistant tools", () => {
       "search_posts",
       "get_post",
       "look_up_glossary",
+      "read_knowledge",
       "find_parks_nearby",
       "request_location",
       "get_directions",

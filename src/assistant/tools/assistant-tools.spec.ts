@@ -9,6 +9,7 @@ import { getAttractionTool } from "../../mcp/tools/get-attraction.tool";
 import { findAttractionsTool } from "../../mcp/tools/find-attractions.tool";
 import { BestDaysService } from "../../parks/services/best-days.service";
 import { AssistantPostsClient } from "./assistant-posts.client";
+import { AssistantKnowledgeService } from "../assistant-knowledge.service";
 
 describe("get_post", () => {
   const providers = (post: jest.Mock) =>
@@ -33,6 +34,53 @@ describe("get_post", () => {
     const post = jest.fn(async () => ({ text: "…" }));
     await run("get_post", { slug: "europa-park-guide" }, providers(post));
     expect(post).toHaveBeenCalledWith("en", "europa-park-guide", undefined);
+  });
+});
+
+describe("read_knowledge", () => {
+  const knowledge = {
+    read: jest.fn(async (topic: string) =>
+      topic === "forecasts"
+        ? { topic, text: "Three crowd readings exist. Fancast …" }
+        : null,
+    ),
+    topicNames: jest.fn(async () => ["forecasts"]),
+  };
+  const providers = new Map<unknown, unknown>([
+    [AssistantKnowledgeService, knowledge],
+  ]);
+
+  it("returns a stored topic's text", async () => {
+    const { json } = await run(
+      "read_knowledge",
+      { topic: "forecasts" },
+      providers,
+    );
+    expect(json).toEqual({
+      topic: "forecasts",
+      text: "Three crowd readings exist. Fancast …",
+    });
+  });
+
+  it("refuses a topic the base does not hold, naming the ones it does", async () => {
+    const result = await runAssistantTool(
+      "read_knowledge",
+      { topic: "secrets" },
+      context(providers),
+      jest.fn(),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("forecasts");
+  });
+
+  it("refuses a name that is no topic name before asking the base", async () => {
+    const result = await runAssistantTool(
+      "read_knowledge",
+      { topic: "Forecasts!" },
+      context(providers),
+      jest.fn(),
+    );
+    expect(result.errorKind).toBe("invalid_input");
   });
 });
 
@@ -1004,10 +1052,11 @@ describe("a closed park's crowd", () => {
     expect(json.nextSchedule).toBeDefined();
   });
 
-  it("keeps the whole reading while it runs", async () => {
+  it("keeps the whole reading but the occupancy while it runs", async () => {
     summary("OPERATING");
     const { json } = await run("get_park_live", { park: PARK_ID }, new Map());
-    expect(json.crowd).toEqual(crowd);
+    const { occupancyPercent: _occupancy, ...shown } = crowd;
+    expect(json.crowd).toEqual(shown);
   });
 
   it("hands the model the whole live summary with the park card", async () => {
@@ -1018,9 +1067,10 @@ describe("a closed park's crowd", () => {
       new Map(),
     );
     // One call instead of the card and get_park_live side by side.
+    const { occupancyPercent: _occupancy, ...shown } = crowd;
     expect(result.json.live).toMatchObject({
       name: "Six Flags Fiesta Texas",
-      crowd,
+      crowd: shown,
     });
   });
 
@@ -2525,6 +2575,20 @@ describe("planner tools", () => {
       expect((await ask("suggest_replies", { replies: ["Yes"] })).isError).toBe(
         true,
       );
+      // One chip too long for the widget drops alone; the others still show.
+      expect(
+        (
+          await ask("suggest_replies", {
+            replies: [
+              "26 de octubre al 4 de noviembre",
+              "Mantengamos el 24 de octubre al 2 de noviembre",
+            ],
+          })
+        ).action,
+      ).toEqual({
+        type: "replies",
+        replies: ["26 de octubre al 4 de noviembre"],
+      });
       const state = answer();
       const twice = async () =>
         runAssistantTool(

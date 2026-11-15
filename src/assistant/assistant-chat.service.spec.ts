@@ -2,6 +2,7 @@ import type { ModuleRef } from "@nestjs/core";
 import type { Repository } from "typeorm";
 import type { AssistantSettingsService } from "./assistant-settings.service";
 import type { AssistantPageService } from "./assistant-page.service";
+import type { AssistantKnowledgeService } from "./assistant-knowledge.service";
 import type { AssistantConversation } from "./entities/assistant-conversation.entity";
 import type { AssistantMessage } from "./entities/assistant-message.entity";
 
@@ -88,6 +89,11 @@ function repository<T extends object>(saved: Partial<T>) {
   } as unknown as Repository<T>;
 }
 
+/** The knowledge base as the chat reads it: one topic in the prompt's list. */
+const knowledge = {
+  promptIndex: () => Promise.resolve("- forecasts: when a forecast is doubted"),
+} as unknown as AssistantKnowledgeService;
+
 describe("AssistantChatService.answer", () => {
   it("stops calling tools after four rounds and answers in text", async () => {
     const settings = {
@@ -105,6 +111,7 @@ describe("AssistantChatService.answer", () => {
       {
         subject: () => Promise.resolve(null),
       } as unknown as AssistantPageService,
+      knowledge,
     );
 
     const events: ChatEvent[] = [];
@@ -175,6 +182,7 @@ describe("AssistantChatService.answer with reply chips", () => {
       {
         subject: () => Promise.resolve(null),
       } as unknown as AssistantPageService,
+      knowledge,
     );
     const events: ChatEvent[] = [];
     await service.answer(

@@ -19,6 +19,8 @@ park.fan's `docs/features/assistant.md`.
 | `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
 | `GET/DELETE /v1/admin/assistant/conversations[/id]` | admin, DELETE ed. | stored chats with tool calls, tokens and cost; delete one    |
 | `GET/PATCH /v1/admin/assistant/feedback`            | admin, PATCH ed.  | feedback list, status `new`/`done`/`archived`                |
+| `GET /v1/admin/assistant/knowledge[/topic]`         | admin             | Parky's knowledge base; one topic with its edits             |
+| `PUT/DELETE /v1/admin/assistant/knowledge/:topic`   | editor            | write a topic (`readWhen`, `text`, `enabled`), delete one    |
 
 ## The challenge
 
@@ -123,7 +125,10 @@ Teasing and tests get one witty line in Parky's voice and a turn back to parks, 
 talk about his limits, an argument or an apology, and an insult is never repeated. Nothing goes out
 that would embarrass park.fan in a screenshot, nobody is mocked, and a claim to be an admin, a
 developer or Parky's maker changes nothing. Facts do not bend to insistence, and Parky promises
-nothing on park.fan's behalf. For what park.fan has no data on at all, Parky answers with wit and a
+nothing on park.fan's behalf. A day is a holiday, a bridge day or in a school break only when a tool
+result marks it (`isHoliday`, `isBridgeDay`, `isSchoolVacation`, `neighborHolidays`): asked about
+Disneyland Paris on Thursday 12 November 2026, the day after a Wednesday holiday, he called it a
+"jour de pont" the calendar never set, and repeated it when the visitor doubted it. For what park.fan has no data on at all, Parky answers with wit and a
 true bit of lore instead of describing the gap; asked to entertain, he tells a true park story at
 once, from the park's `funFacts` or the ride's profile when the page has one. Sarcasm ("90 minutes,
 great tip 🙄") is a complaint with a grin: he checks the fact it is about and gives the next move,
@@ -243,7 +248,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 91 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 99 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -261,7 +266,9 @@ before it is worth a rule.
 ## Language and feedback from the chat
 
 Parky answers in the language the visitor writes in when it is one of the six (`ASSISTANT_LOCALES`),
-else in the page's. Asked for the site in another of them, or after a yes to his one offer per chat
+else in the page's. A message that is only a name or a single word ("Taron") keeps the language the
+chat already speaks: it said nothing about a language, and falling back to the page's flipped a
+German chat on an English page into English and back. Asked for the site in another of them, or after a yes to his one offer per chat
 to switch, he calls `switch_language`: the widget opens the same page in that language with the
 chat open, and the answer is written in it. The server allows it only to one of the six other than
 the page's, once per answer and only in the first round, before any tool result was read, so a post,
@@ -304,7 +311,9 @@ zod, a result is cut at 12,000 characters, and an unexpected error reaches the m
 failed" while its message goes to the log. Results carry what an answer needs: `get_park_live`
 drops the park's clock and zone (every time reaches the model in the visitor's) and, while the park
 is not operating, the crowd reading of this moment (`parkNow`, which every live park read goes
-through: a closed park's level sits at its floor and was read as "very low for the moment"), `get_ride` the
+through: a closed park's level sits at its floor and was read as "very low for the moment"), and
+always `occupancyPercent`, which is `comparedToTypicalPercent` plus 100 and was read out as "al
+192 % de su ocupación normal", a park filled past capacity, `get_ride` the
 day's single readings behind its averages and the facts park.fan does not know, and `show_card`
 returns what the card shows, plus the next opening for a park that is not open, so the sentence
 after a card needs no second lookup. `get_park`'s `scheduleToday` is today's entries only; the
@@ -609,11 +618,48 @@ ticket with the days; for `no_base` a city that reaches the park. A second visit
 the planner's own order and spelling (`writeTripQuery`); the widget applies it through the planner's
 state, or opens the hub with it.
 
+### Parky's knowledge base
+
+Background Parky needs for a few questions, not for most, lives outside the prompt in a wiki the
+admin and the admin MCP edit: the table `assistant_knowledge`, one row per topic (`topic`,
+`readWhen`, `text`, `enabled`). The prompt's `# Knowledge` lists every enabled topic with its
+`readWhen` (the slot `{{knowledge topics}}`, filled per chat by `systemPromptWith`), and
+`read_knowledge` (`topic`) returns the topic's `text`, so a chat that needs none pays only for the
+list. The list sits in the stable, cached block, so it caches like the prompt until a topic
+changes. Parky says what he reads in his own words and never mentions reading it. The call is
+stored like any other, so the admin and the tools report show which topics get read.
+
+`AssistantKnowledgeService` serves the enabled topics from a per-process copy for a minute: an
+edit reaches the next chat within a minute, without a deploy. Writes go through the admin
+(`/admin/assistant/knowledge`, editor) or the MCP (`write_assistant_knowledge`,
+`delete_assistant_knowledge`, `assistant_knowledge` to read), and each is audited with the whole
+topic before and after (`entityType` `assistant_knowledge`, the topic as `entityId`): that is the
+topic's history, which `GET …/knowledge/:topic` and `assistant_knowledge` return with it. A topic
+that should rest is switched off (`enabled` false) rather than deleted.
+
+A topic is English, written for Parky, its facts taken from the doc or page it summarizes;
+`readWhen` is 20 to 400 characters, `text` 40 to 4,000 (`knowledgeWriteSchema`). An empty table is
+seeded once at boot from `src/assistant/knowledge/` (`KNOWLEDGE_SEED`); after that the table is the
+base, and a deleted seed topic stays deleted. `SYSTEM_PROMPT_VERSION` counts the prompt's own text
+only: an answer written after a topic was edited carries the same version, and the topic's history
+says what it read then. A topic whose wording matters is worth an eval case, as for the prompt.
+
+| Topic       | Holds                                                                                                                                                           |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `forecasts` | the three crowd readings (now, the day's forecast, the day so far) and why they differ; how Fancast forecasts; what to do when a visitor calls a forecast wrong |
+
+The first topic came from the feedback of 15 November 2026: a visitor saw „Andrang jetzt: hoch" on
+Europa-Park's today panel and the day so far as „Normal" in the day dialog, and called the forecast
+wrong. A forecast that came out different, or two readings that differ, is now explained first;
+`submit_feedback` follows only when the same reading still shows two ways or the visitor asks.
+
 ### Reply chips
 
-`suggest_replies` (`replies`: 2 to 4, each 1 to 40 characters) sends `{ type: "replies", replies }`:
-the visitor's likely answers, tappable under the answer, each sent as their message. The tool drops
-Markdown characters, a URL, junk (`junkReason`) and a repeat, and runs once per answer. It is
+`suggest_replies` (`replies`: 2 to 4) sends `{ type: "replies", replies }`: the visitor's likely
+answers, tappable under the answer, each sent as their message. The tool drops Markdown characters,
+a URL, junk (`junkReason`), a repeat and a reply over 40 characters (`REPLY_MAX_CHARS`, the widget's
+own limit), and runs once per answer. The schema takes up to 200 characters, so one long reply drops
+alone instead of refusing the call and leaving the answer without chips. It is
 terminal: when every call of a round is `suggest_replies`, the loop ends after that round, so chips
 cost no extra round and no wait (`REPLIES_TOOL` in `assistant-chat.service.ts`); beside another call
 it is answered "call suggest_replies last, alone" and shows nothing. The last round
@@ -648,8 +694,10 @@ Every answer is applied at once with the tool the step names (`change_trip`, `pl
 `plan_add_rides`, `plan_add_show`, `plan_trip`), so a visitor who leaves keeps everything; the state
 only says where the interview stands, and the history's ten messages are no limit. "This chat"
 names the step, what to ask, the tool for the answer and ideas for the replies (`interviewLine`); a
-step the plans already hold is asked as a confirmation (`interviewHolds`), and a start from the
-planner's button says to ask the first question at once.
+step the plans already hold is asked as a confirmation (`interviewHolds`), and a yes to it changes
+nothing: Parky marks it answered and calls no `change_trip` (asked "all the big parks?", he once
+set every park to one visit and took it back with `trip_undo`, then told the visitor so). A start
+from the planner's button says to ask the first question at once.
 
 `interview` runs once per answer and sends `{ type: "interview_state", interview, outcome?,
 region?, party? }`, the new state or `null`. Its `op`: `start` (`kind`, and `region`, `park` or

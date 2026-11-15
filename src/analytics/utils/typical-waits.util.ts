@@ -83,6 +83,17 @@ function bucketOf(peaks: number[]): TypicalWaitsDto["weekday"] {
 }
 
 /**
+ * Whether the look-back year holds a single measured day for the ride. Without one, its wait
+ * forecast is the model's prior: the models fill every ride from the calendar and the weather,
+ * whether or not it was ever seen running.
+ */
+export function hasMeasuredDays(
+  typicalWaits: Pick<TypicalWaitsDto, "weekday" | "weekend">,
+): boolean {
+  return typicalWaits.weekday.sampleDays + typicalWaits.weekend.sampleDays > 0;
+}
+
+/**
  * Build the typical-waits payload from a ride's daily peaks (ascending by date).
  * Weekend membership is country-aware — pass the country's weekend days.
  */

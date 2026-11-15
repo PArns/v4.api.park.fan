@@ -21,6 +21,11 @@ import { auditLogTool } from "./audit-log.tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
 import { siteFeedbackTool } from "./site-feedback.tool";
+import {
+  assistantKnowledgeTool,
+  deleteAssistantKnowledgeTool,
+  writeAssistantKnowledgeTool,
+} from "./assistant-knowledge.tools";
 import { assistantToolsReportTool } from "./assistant-tools-report.tool";
 import { assistantReportTool } from "./assistant-report.tool";
 import { downtimeTool } from "./downtime.tool";
@@ -120,6 +125,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   assistantConversationsTool,
   assistantConversationTool,
   siteFeedbackTool,
+  assistantKnowledgeTool,
   assistantToolsReportTool,
   assistantReportTool,
   downtimeTool,
@@ -177,6 +183,8 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   runMaintenanceTool,
   setFeedbackStatusTool,
   deleteAssistantConversationTool,
+  writeAssistantKnowledgeTool,
+  deleteAssistantKnowledgeTool,
   blockEventTool,
   apiKeysTool,
   createApiKeyTool,

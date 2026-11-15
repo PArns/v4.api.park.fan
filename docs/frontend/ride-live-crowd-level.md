@@ -40,3 +40,14 @@ ranked on its live wait instead of the forecast.
 
 The gate lives in `computeBestVisitTimes(predictions, closingTimeIso, rideOperating)`
 (`src/common/utils/best-visit-times.util.ts`), which all three surfaces call.
+
+## No forecast for a ride without one measured day in the year
+
+The attraction detail payload leaves `hourlyForecast` empty and sets neither
+`bestVisitTimes` nor `ropeDrop` when the ride's `typicalWaits` count no measured day
+in their 365-day window (`hasMeasuredDays`, `src/analytics/utils/typical-waits.util.ts`).
+The models forecast every ride from the calendar and the weather whether or not it
+was ever seen running, so for such a ride the slots are the prior: Lanzadera at
+Parque de Atracciones de Madrid, closed all year without a reading, was offered
+"15 min, optimal" twice a day. A failed typical-waits read keeps them. The park
+payload and favorites have no per-ride count to read this from and are unchanged.
