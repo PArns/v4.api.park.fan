@@ -636,9 +636,10 @@ region's own figures (`regions.ts`, `weather`):
   figure carries it.
 
 Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
-window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
-(`{ heat?, hurricane? }`, or `{ heat?, typhoon? }` in Japan, minutes per park day, one decimal,
-absent when zero) say what the ranking added, so a client can say "ranked lower: hurricane peak".
+window stays the plain figure; a window's `penalties` (`{ heat?, hurricane? }`, or
+`{ heat?, typhoon? }` in Japan, minutes per park day, one decimal, absent when zero) say what the
+ranking added, so a client can say "ranked lower: hurricane peak". The plan's answer carries no
+such figure: its days' warnings (`extreme_heat`, the storm codes) say which days the terms hit.
 
 **A season named, not priced** (`weather.notes`): Japan's rainy season (tsuyu, early June to mid
 July around Tokyo) makes a day wetter but its parks no emptier or fuller in a way a figure does not
@@ -671,7 +672,13 @@ the hotter day. Nothing else changes: no shown wait, the rest days' rules, the b
 
 **What the answer says.** A plan day's `extreme_heat` is read against the model the plan was
 priced with: with `weather=avoid` a park day that stays above the lower threshold still says
-`extreme_heat`, which is how a client shows "still hot despite the option". The storm codes
+`extreme_heat`, which is how a client shows "still hot despite the option". Every park day carries
+the park's high, `weather: { tempMax, basis }` (one decimal; `forecast` within the forecast's 16
+days, else `climate_normal`, the 2015–2024 normal for the date), on the day for one park and on
+each park of a hop day; absent where the calendar has none. `meta.heat` gives the two thresholds
+the warning read (`forecastFromC`, `normalFromC`: the region's, or the stronger ones), so a client
+can say "über 35 °C vorhergesagt" for a forecast and "im Schnitt 32 °C" for a normal, and count the
+hot days by their `extreme_heat`. The storm codes
 (`hurricane_season`, `hurricane_peak`, `typhoon_*`) are the same either way: the option weighs the
 season, it does not move it. `/when`'s windows, their `penalties` and `extreme_heat` follow the
 same model, so the hottest windows and those in the storm peak rank further down.
@@ -813,6 +820,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "objective": "headliner_wait",
     "exact": true,
     "ticket": "base", // base | hopper
+    "heat": { "forecastFromC": 35, "normalFromC": 31.5 }, // what `extreme_heat` was read against
     "warnings": ["hop_needs_hopper"], // absent when empty; hop_needs_hopper | blockouts_unchecked | resort_left_out
   },
   "days": [
@@ -830,6 +838,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
       "headlinerWait": 45,
       "crowdLevel": "low",
       "basis": "forecast",
+      "weather": { "tempMax": 27.4, "basis": "forecast" }, // the park's high; on a hop day per park
       "travel": {
         "from": "hotel:disney",
         "to": "universal-epic-universe",
@@ -1069,9 +1078,7 @@ day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[]
 
 **`totals`** compare like with like: the planned visits' mean `headlinerWait` against, for the same
 visits, the mean over every open day of the window of that park. `savedMinutesPerRide` is that
-difference, per headliner ride. Show it as such; it is not hours saved per day. `penalties`
-(`{ heat?, hurricane? }`, minutes per park day) is what heat and the hurricane season added to the
-plan's cost, never to these waits; absent when zero. `orderMatters` is
+difference, per headliner ride. Show it as such; it is not hours saved per day. `orderMatters` is
 false when it is under 3 minutes: any order will do. `expectedError` is the measured error of the
 served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so

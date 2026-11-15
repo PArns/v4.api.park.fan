@@ -482,6 +482,25 @@ export interface PlannedParkVisit {
   crowdLevel?: string;
   basis?: PlanBasis;
   perks?: PerkKind[];
+  /** The park's high that day, one decimal: the forecast, else the climate normal. */
+  weather?: PlannedWeather;
+}
+
+/** A plan day's high and where it comes from, as {@link heatOf} reads it. */
+export interface PlannedWeather {
+  tempMax: number;
+  basis: "forecast" | "climate_normal";
+}
+
+/** The high a plan day says, rounded to a tenth; absent where the calendar has none. */
+export function plannedWeather(
+  weather: PlanCell["weather"],
+): PlannedWeather | undefined {
+  if (!weather || weather.tempMax == null) return undefined;
+  return {
+    tempMax: Math.round(weather.tempMax * 10) / 10,
+    basis: weather.basis === "climate_normal" ? "climate_normal" : "forecast",
+  };
 }
 
 /** A move between bases on a plan day (a region with bases). */
@@ -511,6 +530,8 @@ export interface PlannedDay {
   crowdLevel?: string;
   basis?: PlanBasis;
   perks?: PerkKind[];
+  /** A one-park day's high; on a hop day each park carries its own. */
+  weather?: PlannedWeather;
   reasons: PlanReason[];
   warnings: PlanWarning[];
   /** The owned ticket the day uses (its id); plan first's days get theirs later. */
@@ -3331,6 +3352,7 @@ class TripOptimizer {
           warnings.add("outside_ticket_window");
           this.relaxed.add("ticket_window_relaxed");
         }
+        const weather = plannedWeather(c.weather);
         return {
           slug: u.slug,
           part: row.units.length > 1 ? "half" : "full",
@@ -3338,6 +3360,7 @@ class TripOptimizer {
           ...(c.crowdLevel && { crowdLevel: c.crowdLevel }),
           basis: c.basis,
           ...(listed.length > 0 && { perks: listed }),
+          ...(weather && { weather }),
         };
       });
 

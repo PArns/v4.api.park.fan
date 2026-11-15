@@ -207,6 +207,10 @@ describe("weather=avoid", () => {
     const avoid = plan(weatherFor(ORLANDO, "avoid"));
     expect(epcotDay(avoid)?.date).toBe(dates[1]);
     expect(epcotDay(avoid)?.warnings).not.toContain("extreme_heat");
+    expect(epcotDay(avoid)?.weather).toEqual({
+      tempMax: 31,
+      basis: "forecast",
+    });
     expect(
       avoid.days.find((d) => d.date === dates[0])?.parks.map((v) => v.slug),
     ).toEqual(["disneys-typhoon-lagoon-water-park"]);

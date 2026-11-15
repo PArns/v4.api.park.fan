@@ -765,8 +765,8 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season
   said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
-  every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
-date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
+  every day, and `extreme_heat` in a day's `watch`; `reserve` is the `[{ park: id, date }]` list
+  `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
   characters, its tickets to buy included (`assistant-trip.spec.ts`); a result is cut at 12,000.
 - **`hubUrl`** is `https://park.fan/trip-regions/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any[&weather=avoid]&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
