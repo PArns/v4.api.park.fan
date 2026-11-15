@@ -2,6 +2,7 @@ import { HttpException, type Type } from "@nestjs/common";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { McpToolError, type McpToolContext } from "../../mcp/mcp-tool";
+import { KNOWLEDGE_TOPICS, knowledgeEntry } from "../knowledge";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { findParksTool } from "../../mcp/tools/find-parks.tool";
 import { getParkTool } from "../../mcp/tools/get-park.tool";
@@ -4403,6 +4404,23 @@ export const ASSISTANT_TOOLS = [
       term: z.string().trim().min(3).max(60).describe("The word to look up"),
     }),
     run: async ({ term }, ctx) => ({ terms: await findTerms(ctx, term) }),
+  }),
+  tool({
+    name: "read_knowledge",
+    description:
+      "park.fan's own background on one topic, for you to explain in your words: how things " +
+      "work behind the numbers. # Knowledge lists the topics and when each is needed; read one " +
+      "only then, before you answer, and once per chat.",
+    input: z.object({
+      topic: z
+        .enum(KNOWLEDGE_TOPICS)
+        .describe("The topic, as # Knowledge names it"),
+    }),
+    run: ({ topic }) => {
+      const entry = knowledgeEntry(topic);
+      if (!entry) throw new McpToolError(`No topic ${topic}`);
+      return Promise.resolve({ topic: entry.id, text: entry.text });
+    },
   }),
   tool({
     name: "find_parks_nearby",

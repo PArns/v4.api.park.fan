@@ -246,7 +246,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 96 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 99 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -615,6 +615,34 @@ ticket with the days; for `no_base` a city that reaches the park. A second visit
 `visitsDropped`, apart, since its park is in the plan. The digest says both in a line. `query` is written in
 the planner's own order and spelling (`writeTripQuery`); the widget applies it through the planner's
 state, or opens the hub with it.
+
+### Parky's knowledge base
+
+Background Parky needs for a few questions, not for most, lives outside the prompt and is read on
+demand with `read_knowledge` (`topic`). The prompt's `# Knowledge` lists each topic with one line on
+when to read it (`readWhen`, built by `knowledgeIndex`), and the tool returns the topic's `text` as
+its result, so a chat that needs none pays only for the list. Parky says it in his own words and
+never mentions reading it. The call is stored like any other, so the admin and the tools report
+show which topics get read.
+
+Topics are files in `src/assistant/knowledge/`, one per topic, registered in `KNOWLEDGE`
+(`index.ts`): English, written for Parky, each fact taken from the doc or page it summarizes. To add
+one: write the file, register it, bump `SYSTEM_PROMPT_VERSION`, and add an eval case for a question
+that needs it and one that must not read it. `knowledge.spec.ts` checks the names, that each topic
+stays under 4,000 characters and that the prompt lists it.
+
+They are files rather than a table edited in the admin because a topic changes answers the way the
+prompt does: it goes through review, the eval and the prompt version. If topics ever need to change
+without a deploy, `read_knowledge` can read a table instead and nothing else moves.
+
+| Topic       | Holds                                                                                                                                                           |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `forecasts` | the three crowd readings (now, the day's forecast, the day so far) and why they differ; how Fancast forecasts; what to do when a visitor calls a forecast wrong |
+
+The first topic came from the feedback of 15 November 2026: a visitor saw „Andrang jetzt: hoch" on
+Europa-Park's today panel and the day so far as „Normal" in the day dialog, and called the forecast
+wrong. A forecast that came out different, or two readings that differ, is now explained first;
+`submit_feedback` follows only when the same reading still shows two ways or the visitor asks.
 
 ### Reply chips
 

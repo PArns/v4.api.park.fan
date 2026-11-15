@@ -36,6 +36,28 @@ describe("get_post", () => {
   });
 });
 
+describe("read_knowledge", () => {
+  it("returns a topic's text", async () => {
+    const { json } = await run(
+      "read_knowledge",
+      { topic: "forecasts" },
+      new Map(),
+    );
+    expect(json.topic).toBe("forecasts");
+    expect(json.text).toMatch(/Fancast/);
+  });
+
+  it("refuses a topic the base does not hold", async () => {
+    const result = await runAssistantTool(
+      "read_knowledge",
+      { topic: "secrets" },
+      context(new Map()),
+      jest.fn(),
+    );
+    expect(result.errorKind).toBe("invalid_input");
+  });
+});
+
 describe("posts and glossary cards", () => {
   const POST = {
     title: "Im Phantasialand lohnt der Quick Pass nur an vollen Tagen",

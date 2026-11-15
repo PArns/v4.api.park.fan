@@ -46,6 +46,8 @@ const PHL_ID = "0b8f3c1e-7d2a-4c55-9a61-2f1e3d4c5b6a";
 const TARON_ID = "5f2d9a7c-1b3e-4f60-8a2d-6c7e8f9a0b1c";
 const BLUE_FIRE_ID = "9c1e2d3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
 const DLP_ID = "8355a0b7-26e9-4a90-af47-246ec143e99a";
+const EUROPA_PARK_SUBJECT =
+  'the park "Europa-Park" in "Rust, Germany" (park id 3a4b5c6d-7e8f-4a0b-9c1d-2e3f4a5b6c7d)';
 const PHL_PAGE = "/de/parks/europe/germany/bruehl/phantasialand";
 const PHL_SUBJECT = `the park "Phantasialand" in "Brühl, Germany" (park id ${PHL_ID})`;
 
@@ -1104,6 +1106,39 @@ export const EVAL_CASES: EvalCase[] = [
       "Your site shows 5 minutes for Black Mamba but I've been standing in that queue for 45 minutes now. The data is wrong.",
     allowBefore: ["find_rides", "get_ride", "get_park_live"],
     want: [{ tool: "submit_feedback" }],
+  },
+  {
+    // The feedback of 15 November 2026: two readings, the moment and the day, read as a wrong
+    // forecast. Explained first, passed on only if it still looks wrong.
+    id: "forecast-two-readings-de",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/rust/europa-park/wartezeiten-kalender",
+    pageSubject: `the crowd calendar of ${EUROPA_PARK_SUBJECT}`,
+    message:
+      "Deine Prognosen stimmen nicht. Im Dashboard wird angezeigt «Andrang jetzt» hoch, Prognose heute hoch, wenn ich dann aber auf die Details klicke, erscheint Prognose hoch, Andrang jetzt Normal.",
+    allowBefore: ["get_park_live", "get_days", "get_park_day"],
+    want: [{ tool: "read_knowledge", input: { topic: "forecasts" } }],
+    forbid: ["submit_feedback"],
+  },
+  {
+    id: "forecast-how-made-en",
+    locale: "en",
+    pagePath: "/en",
+    pageSubject: "the park.fan home page",
+    message: "How do you actually predict the crowds?",
+    want: [{ tool: "read_knowledge", input: { topic: "forecasts" } }],
+  },
+  {
+    // Knowledge only when a question needs it: a plain crowd question does not.
+    id: "crowd-today-no-knowledge-de",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/rust/europa-park",
+    pageSubject: EUROPA_PARK_SUBJECT,
+    message: "Wie voll ist es heute?",
+    want: [
+      { tool: ["get_park_live", "show_card", "get_days", "get_park_day"] },
+    ],
+    forbid: ["read_knowledge"],
   },
   {
     id: "feedback-empty-threat",
