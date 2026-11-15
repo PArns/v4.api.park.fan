@@ -21,8 +21,27 @@ export const TICKETS_PATTERN = new RegExp(
   `^${TICKET_ITEM}(,${TICKET_ITEM}){0,5}$`,
 );
 
+/**
+ * What every trip-region query takes beside its own names: `v`, the client's
+ * release. The frontend sends it so each of its releases reads its own copy
+ * at the edge, which the API cannot purge; no route reads it, and no Redis
+ * key holds it (docs/frontend/trip-regions.md, "The release in the query").
+ */
+export class TripReleaseQueryDto {
+  @ApiPropertyOptional({
+    description:
+      "The client's release, read by no route: it keys the edge's copy, not the answer.",
+    example: "2.22.1",
+  })
+  @IsOptional()
+  @Matches(/^[0-9A-Za-z.+-]{1,32}$/, {
+    message: "v must be a release of at most 32 letters, digits, . + or -",
+  })
+  v?: string;
+}
+
 /** `GET /v1/trip-regions/:region/calendar` */
-export class TripCalendarQueryDto {
+export class TripCalendarQueryDto extends TripReleaseQueryDto {
   @ApiPropertyOptional({
     description: "First day (region-local). Defaults to the region's today.",
     example: "2026-11-28",
@@ -55,7 +74,7 @@ export class TripBestDaysQueryDto extends TripCalendarQueryDto {
 }
 
 /** `GET /v1/trip-regions/:region/plan` */
-export class TripPlanQueryDto {
+export class TripPlanQueryDto extends TripReleaseQueryDto {
   @ApiProperty({
     description: "Arrival day (region-local).",
     example: "2026-11-28",

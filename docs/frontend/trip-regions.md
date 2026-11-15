@@ -52,6 +52,15 @@ the calendar and the best days, `trip-tickets:<slug>` on the ticket catalog, whi
 revalidates on every catalog edit of that region ([editing](#editing-the-catalog)). The list route
 changes only with a deploy.
 
+**The release in the query (`v`).** Every route here takes an optional `v`, the client's release,
+and none reads it. The API cannot purge Cloudflare, which keeps the region route a day plus two
+hours stale, so after a deploy that changes an answer the edge would serve the old copy for up to
+26 hours. Cloudflare keys its copy by the whole URL, so the frontend sends its own release
+(`v=2.22.1`), and each frontend release, deployed after the API's, reads a fresh copy. The routes
+that check their query take `v` through one DTO (`TripReleaseQueryDto`: at most 32 letters, digits,
+`.`, `+` or `-`); the others ignore it like any name. Redis keys are built from the parsed query,
+never the URL, so `v` splits none of them.
+
 **Metrics.** Every answer of `/plan`, `/when` and `/best-days` leaves a row of operational facts
 for the planner's operators: no date, name, text, address or visitor id, and nothing a client sees
 ([what the server records](#what-the-server-records)).
