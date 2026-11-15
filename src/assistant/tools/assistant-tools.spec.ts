@@ -3299,6 +3299,25 @@ describe("get_ride › today / get_park_day", () => {
     });
   });
 
+  it("gives a ride on set times its next start, no reopening and no best visit times (PAR-1358)", async () => {
+    jest.spyOn(getAttractionTool, "handler").mockResolvedValue({
+      id: RIDE,
+      name: "Die 3 Mausketiere",
+      status: "CLOSED",
+      park: { id: PARK_ID, name: "Phantasialand" },
+      performanceTimesToday: ["23:59"],
+      bestVisitTimesToday: [{ time: "2026-11-07T11:45:00.000Z" }],
+      facts: {},
+    });
+    const { json } = await run("get_ride", { rideId: RIDE }, providers());
+    expect(json.today.performances).toEqual({
+      times: ["23:59"],
+      next: "23:59",
+    });
+    expect(json.reopening).toBeUndefined();
+    expect(json.bestVisitTimesToday).toBeUndefined();
+  });
+
   it("names the rides a maintenance window shuts that day", async () => {
     const window = { from: "2026-11-01", to: "2026-11-20", toUncertain: false };
     const ridesInMaintenance = jest.fn(async () => [

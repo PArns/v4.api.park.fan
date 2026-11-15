@@ -2,6 +2,7 @@ import {
   isFreeFlowOpen,
   isInSeason,
   freeFlowQueues,
+  freeFlowRanOn,
 } from "./free-flow-status.util";
 
 /**
@@ -142,5 +143,22 @@ describe("free-flow status", () => {
 
       expect(new Date(q.lastUpdated).getTime()).toBeGreaterThanOrEqual(before);
     });
+  });
+});
+
+describe("freeFlowRanOn (PAR-1359)", () => {
+  const TZ = "Europe/Berlin";
+
+  it("asks the season of the day, not of today", () => {
+    const summer = { openWithPark: true, seasonMonths: [6, 7, 8] };
+    expect(freeFlowRanOn(summer, "2026-07-15", TZ)).toBe(true);
+    expect(freeFlowRanOn(summer, "2026-11-15", TZ)).toBe(false);
+  });
+
+  it("needs the flag", () => {
+    expect(freeFlowRanOn({ openWithPark: false }, "2026-11-15", TZ)).toBe(
+      false,
+    );
+    expect(freeFlowRanOn({ openWithPark: true }, "2026-11-15", TZ)).toBe(true);
   });
 });

@@ -76,4 +76,15 @@ export class HistoryDayDto {
     required: false,
   })
   outageMinutes?: number;
+
+  @ApiProperty({
+    description:
+      "True on a day a free-flow attraction (a playground, an `open_with_park` " +
+      "ride) ran while the park was open but no reading reached 5 minutes, so " +
+      "`hourlyP90` is empty and `utilization` is `unknown`. The ride was walk-on " +
+      "that day, not closed. Absent on every other day.",
+    required: false,
+    example: true,
+  })
+  withoutWait?: true;
 }

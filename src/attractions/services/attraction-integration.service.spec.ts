@@ -1258,6 +1258,79 @@ describe("AttractionIntegrationService", () => {
     });
   });
 
+  describe("calculateAttractionHistory for a free-flow ride (PAR-1359)", () => {
+    // Phantasialand on 2026-11-15, 12:50 local: the park opened at 11:00.
+    const NOW = "2026-11-15T11:50:00Z";
+    const day = (date: string, opensUtc: string) => ({
+      date,
+      scheduleType: "OPERATING",
+      openingTime: new Date(`${date}T${opensUtc}:00Z`),
+      closingTime: new Date(`${date}T19:00:00Z`),
+    });
+    const run = async (freeFlow?: object) => {
+      jest.useFakeTimers({ now: new Date(NOW), doNotFake: ["nextTick"] });
+      try {
+        mockRedis.get.mockResolvedValue(null);
+        mockParksService.getSchedule.mockResolvedValue([
+          day("2026-11-13", "08:00"),
+          day("2026-11-15", "10:00"),
+        ]);
+        mockAnalyticsService.getAttractionHourlyHistory.mockResolvedValue(
+          new Map([
+            [
+              "2026-11-14",
+              {
+                slots: [
+                  { time_slot: "12:00", p90: 5, avgWait: 5, sampleCount: 3 },
+                  { time_slot: "13:00", p90: 5, avgWait: 5, sampleCount: 3 },
+                ],
+                downCount: 0,
+              },
+            ],
+          ]),
+        );
+        mockDataSource.query.mockResolvedValue([]);
+        return await service.calculateAttractionHistory(
+          "attraction-1",
+          "park-1",
+          "Europe/Berlin",
+          3,
+          freeFlow as never,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    };
+
+    it("reads an open park day without a 5-minute wait as walk-on, today once the park has opened", async () => {
+      const history = await run({ openWithPark: true });
+      expect(history.map((h) => [h.date, h.withoutWait ?? false])).toEqual([
+        ["2026-11-13", true],
+        ["2026-11-14", false],
+        ["2026-11-15", true],
+      ]);
+      expect(history[0]).toEqual({
+        date: "2026-11-13",
+        utilization: "unknown",
+        hourlyP90: [],
+        downCount: 0,
+        withoutWait: true,
+      });
+    });
+
+    it("leaves those days out for a ride that is not free-flow, or out of its season", async () => {
+      expect((await run()).map((h) => h.date)).toEqual(["2026-11-14"]);
+      expect((await run({ openWithPark: false })).map((h) => h.date)).toEqual([
+        "2026-11-14",
+      ]);
+      expect(
+        (await run({ openWithPark: true, seasonMonths: [6, 7, 8] })).map(
+          (h) => h.date,
+        ),
+      ).toEqual(["2026-11-14"]);
+    });
+  });
+
   describe("calculateAttractionHistory live day slice", () => {
     it("keeps carried heartbeat rows out of both live queries, as the rollup does", async () => {
       jest.useFakeTimers({
