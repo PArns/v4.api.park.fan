@@ -17,7 +17,8 @@ import {
  * planner (PAR-1309, dates first) adds the edits, options, ticket openings,
  * parks left out, the finder, the date grid's mode, the accuracy note, the
  * stay suggestion, the park pages' tile (PAR-1317) and the hub's two buttons
- * and resort chips (PAR-1312).
+ * and resort chips (PAR-1312). 2.22.2 adds a trip deleted on the hub
+ * (`trip_deleted`), counted under the changed step.
  */
 export const TRIP_EVENTS = {
   started: "trip_planner_started",
@@ -44,6 +45,7 @@ export const TRIP_EVENTS = {
   outsideTicketAction: "trip_outside_ticket_action",
   editOpened: "trip_edit_opened",
   optionChanged: "trip_option_changed",
+  deleted: "trip_deleted",
   ticketsOpened: "trip_tickets_opened",
   leftOutFix: "trip_left_out_fix",
   findToggled: "trip_find_toggled",
@@ -301,6 +303,7 @@ export const TRIP_TOTALS = {
     props: [],
     where: { by: "parky" },
   },
+  deleted: { events: [E.deleted], props: [] },
   ticketsOpened: { events: [E.ticketsOpened], props: [] },
   ticketsAnsweredYes: {
     events: [E.ticketsAnswered],
