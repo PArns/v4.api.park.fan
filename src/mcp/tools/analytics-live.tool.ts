@@ -10,7 +10,7 @@ import {
   isNarrowed,
 } from "./small-cells";
 import { VISITOR_DATA_DESCRIPTION, withVisitorData } from "./visitor-data";
-import { datacenterInput } from "./site-analytics.inputs";
+import { automatedInput, datacenterInput } from "./site-analytics.inputs";
 
 export const analyticsLiveTool = defineMcpTool({
   name: "analytics_live",
@@ -25,7 +25,7 @@ export const analyticsLiveTool = defineMcpTool({
     VISITOR_DATA_DESCRIPTION +
     " " +
     SMALL_CELLS_DESCRIPTION +
-    ` With locale or datacenter=only, a minute's values from 1 to ${MCP_MIN_CELL - 1} are null and ` +
+    ` With locale, datacenter=only or automated=only, a minute's values from 1 to ${MCP_MIN_CELL - 1} are null and ` +
     "smallValuesHidden says whether any were; the minutes of the whole site are as counted.",
   input: {
     locale: z
@@ -33,13 +33,17 @@ export const analyticsLiveTool = defineMcpTool({
       .optional()
       .describe("Only this language of the site; all six when absent"),
     datacenter: datacenterInput,
+    automated: automatedInput,
   },
-  async handler({ locale, datacenter }, ctx) {
+  async handler({ locale, datacenter, automated }, ctx) {
     const live = await ctx
       .get(SiteAnalyticsLiveService)
-      .live(locale ?? null, new Date(), datacenter ?? "exclude");
+      .live(locale ?? null, new Date(), {
+        datacenter: datacenter ?? "exclude",
+        automated: automated ?? "exclude",
+      });
     // A minute of the whole site is a total; one language's is a slice.
-    const narrowed = isNarrowed({ locale, datacenter });
+    const narrowed = isNarrowed({ locale, datacenter, automated });
     const minutes = narrowed
       ? hideSmallInSeries(live.perMinute, ["pageviews", "events", "visitors"])
       : { series: live.perMinute, hidden: false };

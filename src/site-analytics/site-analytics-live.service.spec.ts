@@ -132,11 +132,17 @@ describe("SiteAnalyticsLiveService", () => {
     expect(without.perMinute[30]).toMatchObject({ pageviews: 2 });
     expect(without.countries).toEqual([{ country: "DE", views: 2 }]);
 
-    const only = await service.live(null, NOW, "only");
+    const only = await service.live(null, NOW, {
+      datacenter: "only",
+      automated: "exclude",
+    });
     expect(only.activeVisitors).toBe(2);
     expect(only.countries).toEqual([{ country: "US", views: 5 }]);
 
-    const all = await service.live(null, NOW, "include");
+    const all = await service.live(null, NOW, {
+      datacenter: "include",
+      automated: "exclude",
+    });
     expect(all.activeVisitors).toBe(3);
     expect(all.perMinute[30]).toMatchObject({ pageviews: 7, visitors: 3 });
     expect(all.countries).toEqual([

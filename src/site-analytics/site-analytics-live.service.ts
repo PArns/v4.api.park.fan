@@ -16,8 +16,9 @@ import {
   LIVE_TOP_REFERRERS,
   SITE_ANALYTICS_KEYS as KEYS,
   minuteKey,
+  DEFAULT_NETWORK_CHOICE,
   visitorScopesOf,
-  type DatacenterScope,
+  type NetworkChoice,
   type LiveList,
   type SiteLocale,
 } from "./site-analytics.constants";
@@ -45,15 +46,16 @@ export class SiteAnalyticsLiveService {
 
   /**
    * The last {@link LIVE_LONG_MINUTES} whole minutes and the current one, for
-   * all languages or one, without the data centres' readers unless asked. 503
-   * when Redis does not answer: zeros would read as an empty site.
+   * all languages or one, without the data centres' readers and the automated
+   * visits' unless asked. 503 when Redis does not answer: zeros would read as
+   * an empty site.
    */
   async live(
     locale: SiteLocale | null = null,
     now = new Date(),
-    datacenter: DatacenterScope = "exclude",
+    networks: NetworkChoice = DEFAULT_NETWORK_CHOICE,
   ): Promise<SiteLiveDto> {
-    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, datacenter);
+    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, networks);
     const current = Math.floor(now.getTime() / 60_000) * 60_000;
     const minutes = Array.from(
       { length: LIVE_LONG_MINUTES + 1 },

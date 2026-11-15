@@ -20,19 +20,19 @@ export const OTHER_ROW = OVERFLOW_VALUE;
 export const SMALL_CELLS_DESCRIPTION =
   `Values counted fewer than ${MCP_MIN_CELL} times are folded into one "${OTHER_ROW}" row ` +
   "(the counts added up, rates, averages and durations null); totals are complete, but under a " +
-  `filter, a language or datacenter=only a total from 1 to ${MCP_MIN_CELL - 1} is null and smallValuesHidden says so.`;
+  `filter, a language or datacenter=only or automated=only a total from 1 to ${MCP_MIN_CELL - 1} is null and smallValuesHidden says so.`;
 
 /** The sentence for the crosstabs, whose small values are cells as well as rows. */
 export const CROSSTAB_SMALL_CELLS =
   `A value on a side whose cells add up to fewer than ${MCP_MIN_CELL} is folded into "${OTHER_ROW}" ` +
   `on that side (a day side keeps every period); a cell below ${MCP_MIN_CELL} is null in counts and ` +
   "counted in other: { cells, count }; the total is complete, but under a filter, a language or " +
-  "datacenter=only a total from 1 to " +
+  "datacenter=only or automated=only a total from 1 to " +
   `${MCP_MIN_CELL - 1} is null and smallValuesHidden says so.`;
 
 /** One sentence for the tools that draw a series by something. */
 export const SMALL_SERIES_DESCRIPTION =
-  `In a series under a filter, a language or datacenter=only, or per event or surface, values from 1 to ${MCP_MIN_CELL - 1} ` +
+  `In a series under a filter, a language, datacenter=only or automated=only, or per event or surface, values from 1 to ${MCP_MIN_CELL - 1} ` +
   "are null, and smallValuesHidden says whether any were.";
 
 type Row = Record<string, unknown>;
@@ -223,18 +223,20 @@ export function foldCrosstab(
 }
 
 /**
- * Whether a tool's window is narrowed by a filter, a language or the data
- * centres alone, which can be as few readers as a filter.
+ * Whether a tool's window is narrowed by a filter, a language, or one mark's
+ * rows alone, which can be as few readers as a filter.
  */
 export function isNarrowed(input: {
   filters?: readonly unknown[];
   locale?: unknown;
   datacenter?: unknown;
+  automated?: unknown;
 }): boolean {
   return (
     Boolean(input.filters?.length) ||
     Boolean(input.locale) ||
-    input.datacenter === "only"
+    input.datacenter === "only" ||
+    input.automated === "only"
   );
 }
 

@@ -12,6 +12,7 @@ import {
   Min,
 } from "class-validator";
 import {
+  AUTOMATED_SCOPES,
   BREAKDOWN_DIMS,
   CHANNELS,
   DATACENTER_SCOPES,
@@ -28,6 +29,7 @@ import {
   SITE_DEVICES,
   VISIT_DIMS,
   type BreakdownDim,
+  type AutomatedScope,
   type Channel,
   type DatacenterScope,
   type SiteInterval,
@@ -197,6 +199,20 @@ export class SiteAnalyticsQueryDto {
   @IsOptional()
   @IsIn(DATACENTER_SCOPES)
   datacenter?: DatacenterScope;
+
+  @ApiPropertyOptional({
+    enum: AUTOMATED_SCOPES,
+    default: "exclude",
+    description:
+      "Rows of automated visits (opened without a referrer on a page that is not English, by a " +
+      "browser whose Accept-Language names no language of the page): left out (`exclude`, the " +
+      "default), counted with the rest (`include`) or alone (`only`). With `only` here and on " +
+      "`datacenter`, the rows of both marks. Rows written before the mark existed count as not " +
+      "automated.",
+  })
+  @IsOptional()
+  @IsIn(AUTOMATED_SCOPES)
+  automated?: AutomatedScope;
 }
 
 export class SiteAnalyticsBreakdownQueryDto extends SiteAnalyticsQueryDto {
@@ -297,6 +313,16 @@ export class SiteLiveQueryDto {
   @IsOptional()
   @IsIn(DATACENTER_SCOPES)
   datacenter?: DatacenterScope;
+
+  @ApiPropertyOptional({
+    enum: AUTOMATED_SCOPES,
+    default: "exclude",
+    description:
+      "Readers of automated visits: left out, counted too, or alone.",
+  })
+  @IsOptional()
+  @IsIn(AUTOMATED_SCOPES)
+  automated?: AutomatedScope;
 }
 
 export class SiteChannelQueryDto extends SiteAnalyticsQueryDto {
@@ -381,6 +407,12 @@ class WindowDto {
     description: "Which rows count by network; see the query's `datacenter`.",
   })
   datacenter: DatacenterScope;
+
+  @ApiProperty({
+    enum: AUTOMATED_SCOPES,
+    description: "Which rows count by network; see the query's `automated`.",
+  })
+  automated: AutomatedScope;
 
   @ApiProperty({
     nullable: true,

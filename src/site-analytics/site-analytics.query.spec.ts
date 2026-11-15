@@ -45,6 +45,7 @@ describe("site-analytics.query", () => {
       locale: null,
       filters: [],
       datacenter: "exclude",
+      automated: "exclude",
       interval: "day",
       // 07:12 today: the window before ends with its last day's 07 hour.
       previous: {
@@ -259,7 +260,7 @@ describe("site-analytics.query", () => {
     );
     const params = new SqlParams();
     expect(whereOf(params, window, "current", "e")).toBe(
-      "e.bucket >= $1::timestamptz AND e.bucket < $2::timestamptz AND e.locale = $3 AND e.network IS DISTINCT FROM 'datacenter' AND e.channel = $4 AND e.entry = $5",
+      "e.bucket >= $1::timestamptz AND e.bucket < $2::timestamptz AND e.locale = $3 AND e.network IS DISTINCT FROM 'datacenter' AND e.network IS DISTINCT FROM 'automated' AND e.channel = $4 AND e.entry = $5",
     );
     expect(params.values).toEqual([
       "2026-10-22T00:00:00.000Z",
@@ -285,7 +286,7 @@ describe("site-analytics.query", () => {
     const window = siteAnalyticsWindow({ days: 7 }, NOW);
     const params = new SqlParams();
     expect(whereOf(params, window, "both")).toBe(
-      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND NOT (bucket >= $3::timestamptz AND bucket < $4::timestamptz) AND network IS DISTINCT FROM 'datacenter'",
+      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND NOT (bucket >= $3::timestamptz AND bucket < $4::timestamptz) AND network IS DISTINCT FROM 'datacenter' AND network IS DISTINCT FROM 'automated'",
     );
     expect(params.values).toEqual([
       "2026-10-15T00:00:00.000Z",
@@ -296,7 +297,7 @@ describe("site-analytics.query", () => {
     // Without a window before, both is the window alone.
     const long = new SqlParams();
     expect(whereOf(long, siteAnalyticsWindow({ days: 365 }, NOW), "both")).toBe(
-      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND network IS DISTINCT FROM 'datacenter'",
+      "bucket >= $1::timestamptz AND bucket < $2::timestamptz AND network IS DISTINCT FROM 'datacenter' AND network IS DISTINCT FROM 'automated'",
     );
   });
 
@@ -306,15 +307,42 @@ describe("site-analytics.query", () => {
         new SqlParams(),
         siteAnalyticsWindow({ days: 7, datacenter }, NOW),
       );
-    expect(of("exclude")).toEqual(["network IS DISTINCT FROM 'datacenter'"]);
-    expect(of("include")).toEqual([]);
+    const automatedOut = "network IS DISTINCT FROM 'automated'";
+    expect(of("exclude")).toEqual([
+      "network IS DISTINCT FROM 'datacenter'",
+      automatedOut,
+    ]);
+    expect(of("include")).toEqual([automatedOut]);
     expect(of("only")).toEqual(["network = 'datacenter'"]);
     expect(
       dimConditionsOf(new SqlParams(), { locale: null, filters: [] }),
-    ).toEqual(["network IS DISTINCT FROM 'datacenter'"]);
+    ).toEqual(["network IS DISTINCT FROM 'datacenter'", automatedOut]);
     expect(() =>
       siteAnalyticsWindow({ days: 7, datacenter: "all" as never }, NOW),
     ).toThrow(/datacenter is exclude, include, only/);
+  });
+
+  it("leaves the automated visits' rows out unless asked, and shows both marks alone with only on both", () => {
+    type Scope = "exclude" | "include" | "only";
+    const of = (datacenter: Scope, automated: Scope) =>
+      dimConditionsOf(
+        new SqlParams(),
+        siteAnalyticsWindow({ days: 7, datacenter, automated }, NOW),
+      );
+    expect(of("exclude", "include")).toEqual([
+      "network IS DISTINCT FROM 'datacenter'",
+    ]);
+    expect(of("include", "include")).toEqual([]);
+    expect(of("exclude", "only")).toEqual(["network = 'automated'"]);
+    expect(of("include", "only")).toEqual(["network = 'automated'"]);
+    expect(of("only", "include")).toEqual(["network = 'datacenter'"]);
+    expect(of("only", "only")).toEqual([
+      "network IN ('datacenter', 'automated')",
+    ]);
+    expect(siteAnalyticsWindow({ days: 7 }, NOW).automated).toBe("exclude");
+    expect(() =>
+      siteAnalyticsWindow({ days: 7, automated: "all" as never }, NOW),
+    ).toThrow(/automated is exclude, include, only/);
   });
 
   it("buckets by the UTC day or hour and prints the period after the grouping", () => {

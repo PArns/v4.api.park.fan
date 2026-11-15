@@ -468,24 +468,74 @@ export const ROLLUP_RUN_BUDGET_MS = 25 * 60 * 1000;
 export const ALL_LOCALES_SCOPE = "all";
 
 /**
- * The network a row's reader came from, from the address's autonomous system
- * (`datacenter-networks.ts`): a data centre's, any other, or `unknown` without
- * the ASN database and on the rows written before the column existed. Every
- * page-view and event row carries it; the address and the ASN are not kept.
+ * Where a row's reader came from: `datacenter` when the address's autonomous
+ * system is a cloud's or a hoster's (`datacenter-networks.ts`), `automated`
+ * when the address is no data centre's but the visit opened the way programs
+ * open one ({@link isAutomatedStart}), `other` for any other, and `unknown`
+ * without the ASN database and on the rows written before the column existed.
+ * Every page-view and event row carries it; the address and the ASN are not
+ * kept.
  */
-export const SITE_NETWORKS = ["datacenter", "other", "unknown"] as const;
+export const SITE_NETWORKS = [
+  "datacenter",
+  "automated",
+  "other",
+  "unknown",
+] as const;
 export type SiteNetwork = (typeof SITE_NETWORKS)[number];
 
 /** The network of a row written before the column existed. */
 export const UNKNOWN_NETWORK: SiteNetwork = "unknown";
 
 /**
- * Which rows a report counts by network (`datacenter=`): without the data
- * centres' (`exclude`, the default), all of them, or only theirs. A data
- * centre's hit is kept, so the choice is the report's, not the collector's.
+ * Which rows of one mark a report counts: none of them (`exclude`, the
+ * default), them with the rest (`include`), or them alone (`only`). A marked
+ * hit is kept, so the choice is the report's, not the collector's.
  */
-export const DATACENTER_SCOPES = ["exclude", "include", "only"] as const;
-export type DatacenterScope = (typeof DATACENTER_SCOPES)[number];
+export const MARKED_ROW_SCOPES = ["exclude", "include", "only"] as const;
+export type MarkedRowScope = (typeof MARKED_ROW_SCOPES)[number];
+
+/** Which rows a report counts by the data centres' mark (`datacenter=`). */
+export const DATACENTER_SCOPES = MARKED_ROW_SCOPES;
+export type DatacenterScope = MarkedRowScope;
+
+/** Which rows a report counts by the automated visits' mark (`automated=`). */
+export const AUTOMATED_SCOPES = MARKED_ROW_SCOPES;
+export type AutomatedScope = MarkedRowScope;
+
+/** Both marks a report chooses by, as the query names them. */
+export interface NetworkChoice {
+  datacenter: DatacenterScope;
+  automated: AutomatedScope;
+}
+
+/** What a report counts without being asked: neither mark. */
+export const DEFAULT_NETWORK_CHOICE: NetworkChoice = {
+  datacenter: "exclude",
+  automated: "exclude",
+};
+
+/**
+ * The marked networks a report counts and how: with `only` on one switch or
+ * both, the rows of those marks alone; else every row but those of the marks
+ * left at `exclude`. A row has one network, so `only` on one switch leaves
+ * the other's `include` nothing to add.
+ */
+export function networksOf(
+  choice: NetworkChoice,
+): { only: SiteNetwork[] } | { without: SiteNetwork[] } {
+  const marks = [
+    ["datacenter", choice.datacenter],
+    ["automated", choice.automated],
+  ] as const;
+  const only = marks.filter(([, scope]) => scope === "only");
+  if (only.length > 0) return { only: only.map(([network]) => network) };
+  return {
+    without: marks
+      .filter(([, scope]) => scope === "exclude")
+      .map(([network]) => network),
+  };
+}
 
 /**
  * The visitor scope a data centre's readers are counted under, beside `all`
@@ -498,19 +548,72 @@ export function datacenterVisitorScope(scope: string): string {
   return scope === ALL_LOCALES_SCOPE ? "dca" : `d${scope}`;
 }
 
-/** The scope a reader's visitors are written under: a data centre's own, or the scope itself. */
-export function visitorScopeFor(scope: string, network: SiteNetwork): string {
-  return network === "datacenter" ? datacenterVisitorScope(scope) : scope;
+/**
+ * The visitor scope the readers of an automated visit are counted under, as
+ * the data centres' are: `aca` for all languages, `a` and the language for
+ * one (`ade`).
+ */
+export function automatedVisitorScope(scope: string): string {
+  return scope === ALL_LOCALES_SCOPE ? "aca" : `a${scope}`;
 }
 
-/** The visitor scopes a report sums: disjoint readers, so their counts add up. */
+/** Every visitor scope one scope is counted under: its own and each mark's. */
+export function markedVisitorScopes(scope: string): string[] {
+  return [scope, datacenterVisitorScope(scope), automatedVisitorScope(scope)];
+}
+
+/** The scope a reader's visitors are written under: a mark's own, or the scope itself. */
+export function visitorScopeFor(scope: string, network: SiteNetwork): string {
+  if (network === "datacenter") return datacenterVisitorScope(scope);
+  if (network === "automated") return automatedVisitorScope(scope);
+  return scope;
+}
+
+/**
+ * The visitor scopes a report sums. A request counts its reader in one scope,
+ * so the counts add up; a reader with an automated visit and another visit
+ * on the same day sits in two and counts twice under `include`.
+ */
 export function visitorScopesOf(
   scope: string,
-  datacenter: DatacenterScope,
+  choice: NetworkChoice,
 ): string[] {
-  if (datacenter === "exclude") return [scope];
-  if (datacenter === "only") return [datacenterVisitorScope(scope)];
-  return [scope, datacenterVisitorScope(scope)];
+  const networks = networksOf(choice);
+  if ("only" in networks) {
+    return networks.only.map((network) => visitorScopeFor(scope, network));
+  }
+  return (["other", "datacenter", "automated"] as const)
+    .filter((network) => !networks.without.includes(network))
+    .map((network) => visitorScopeFor(scope, network));
+}
+
+/**
+ * Whether a page view that opens a visit opens it the way programs do: no
+ * referrer, a page that is not English, and a browser whose `Accept-Language`
+ * names languages, none of them the page's. A program that fetches each
+ * language version of a page states the one language it runs with; a person
+ * who opens a link to a page names that page's language among theirs. English
+ * pages stay out, since readers whose language the site lacks are sent there,
+ * and so does a request that names no language: it says nothing either way.
+ */
+export function isAutomatedStart(
+  hit: { locale: string; referrer: string | null },
+  acceptedLanguages: ReadonlySet<string>,
+): boolean {
+  return (
+    hit.referrer === null &&
+    hit.locale !== "en" &&
+    acceptedLanguages.size > 0 &&
+    !acceptedLanguages.has(hit.locale)
+  );
+}
+
+/** A reader's network once the visit is known: a data centre stays one. */
+export function markedNetwork(
+  network: SiteNetwork,
+  automated: boolean,
+): SiteNetwork {
+  return automated && network !== "datacenter" ? "automated" : network;
 }
 
 /** The country of an address GeoIP cannot place. */
