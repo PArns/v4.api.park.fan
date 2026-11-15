@@ -55,6 +55,8 @@ import {
   VISIT_KEY_TTL_SECONDS,
   flushWindowOf,
   hourKey,
+  isAutomatedStart,
+  markedNetwork,
   minuteKey,
   visitorScopeFor,
   type Channel,
@@ -72,7 +74,7 @@ import {
   type ValidHit,
   type ValidPageviewHit,
 } from "./site-analytics.hits";
-import { browserLanguage } from "./browser-language.util";
+import { acceptedLanguages, browserLanguage } from "./browser-language.util";
 import {
   visitorDimKeys,
   visitorDimMember,
@@ -107,8 +109,9 @@ export interface CollectRequest {
 
 /**
  * What the server derives about the reader, never what the browser says:
- * families and a class from the User-Agent, the country and the network from
- * the address, the language from `Accept-Language`.
+ * families and a class from the User-Agent, the country from the address, the
+ * language from `Accept-Language`, the network from the address and from how
+ * the visit opened (`automated`).
  */
 interface Reader {
   browser: string;
@@ -129,6 +132,12 @@ export interface VisitStart {
   pageType: string;
   referrer: string;
   channel: Channel;
+  /**
+   * The visit opened the way programs open one ({@link isAutomatedStart}), so
+   * each of its hits counts under the network `automated`. Absent otherwise,
+   * and on a visit opened before the mark existed.
+   */
+  automated?: true;
 }
 
 /** A hit that passed the guards, with what Redis said about its visit. */
@@ -276,36 +285,37 @@ export class SiteAnalyticsCollectService
     const capBucket = addressBucket(ip, ADDRESS_CAP_IPV6_PREFIX) ?? NO_ADDRESS;
     const { browser, os, device } = parseUserAgent(userAgent);
     const country = (ip && this.geoip.lookupCountry(ip)) || UNKNOWN_COUNTRY;
-    const network = ip
-      ? networkOf(this.geoip.isAsnAvailable(), this.geoip.lookupAsn(ip))
-      : "unknown";
-    const reader: Reader = {
+    const readerBucket = addressBucket(ip);
+    let reader: Reader = {
       browser,
       os,
       device,
       country,
       browserLanguage: browserLanguage(acceptLanguage),
-      network,
+      network: ip
+        ? networkOf(this.geoip.isAsnAvailable(), this.geoip.lookupAsn(ip))
+        : "unknown",
     };
 
     let observed: { hits: ObservedHit[]; visit: VisitUpdate | null };
     try {
-      const allowed = await this.withinCaps(
-        capBucket,
-        day,
-        window,
-        hits.length,
-        drops,
-        now,
-      );
+      // The open visit's start is read beside the caps, not after them: its
+      // mark decides the visitor scopes the next pipeline writes.
+      const [allowed, openVisit] = await Promise.all([
+        this.withinCaps(capBucket, day, window, hits.length, drops, now),
+        this.openVisitStart(day, readerBucket, userAgent ?? ""),
+      ]);
       hits = hits.slice(0, allowed);
       if (hits.length === 0) return this.noteDrops(drops, now);
+      const automated = automatedVisit(openVisit, hits, acceptLanguage);
+      reader = { ...reader, network: markedNetwork(reader.network, automated) };
       observed = await this.observe(
         hits,
         capBucket,
-        addressBucket(ip),
+        readerBucket,
         userAgent ?? "",
-        network,
+        reader.network,
+        automated,
         drops,
         now,
       );
@@ -333,7 +343,7 @@ export class SiteAnalyticsCollectService
       hits: observed.hits,
       country,
       device,
-      network,
+      network: reader.network,
     });
     return observed.hits.length;
   }
@@ -422,13 +432,40 @@ export class SiteAnalyticsCollectService
   }
 
   /**
+   * How the reader's open visit began, from its key; null without one, or
+   * without an address to key it by. Throws when Redis is away.
+   */
+  private async openVisitStart(
+    day: string,
+    readerBucket: string | null,
+    userAgent: string,
+  ): Promise<VisitStart | null> {
+    if (!readerBucket) return null;
+    const raw = await this.redis.hget(
+      KEYS.visit(this.visitMember(day, readerBucket, userAgent)),
+      "c",
+    );
+    return parseVisitStart(raw);
+  }
+
+  /** The visit key's pseudonym: the address's bucket and the User-Agent, under the day's key. */
+  private visitMember(
+    day: string,
+    readerBucket: string,
+    userAgent: string,
+  ): string {
+    return this.hash(day, "visit", readerBucket, userAgent);
+  }
+
+  /**
    * One pipeline for the guards and the visit: the day's guards (each value
    * through {@link ADMIT_SCRIPT}), `page_read`'s per-reader, per-page and
    * per-address counters, the visit key (how the visit began and its
    * page-view count), the day's and the hour's visitors and the minute's
    * visitors and page views, which the realtime figure and the live view
-   * read, under the data centres' own scopes for a reader from one. Throws
-   * when Redis is away.
+   * read, under a mark's own scopes for a reader with one (`network`). A visit
+   * this request opens keeps `automated` in its start. Throws when Redis is
+   * away.
    */
   private async observe(
     hits: ValidHit[],
@@ -436,6 +473,7 @@ export class SiteAnalyticsCollectService
     readerBucket: string | null,
     userAgent: string,
     network: SiteNetwork,
+    automated: boolean,
     drops: Drops,
     now: Date,
   ): Promise<{ hits: ObservedHit[]; visit: VisitUpdate | null }> {
@@ -587,7 +625,7 @@ export class SiteAnalyticsCollectService
     let startReply: number | null = null;
     const countReplies = new Map<ValidHit, number>();
     if (readerBucket) {
-      visitMember = this.hash(day, "visit", readerBucket, userAgent);
+      visitMember = this.visitMember(day, readerBucket, userAgent);
       visitKey = KEYS.visit(visitMember);
       visitor = this.hash(day, "visitor", readerBucket, userAgent);
       pipeline.hget(visitKey, "c");
@@ -692,6 +730,7 @@ export class SiteAnalyticsCollectService
             pageType: hit.pageType,
             referrer,
             channel: source.channel,
+            ...(automated ? { automated: true as const } : {}),
           };
           opened = true;
           observed.push({ hit, start: current, engaged: null });
@@ -882,8 +921,9 @@ export class SiteAnalyticsCollectService
   /**
    * The live view's minute, all languages and each: page views by page,
    * country and device, visits started by channel and referrer site, events
-   * by name, and the events counter. The values are the guarded ones; a data
-   * centre's reader counts under its own scopes.
+   * by name, and the events counter. The values are the guarded ones; a
+   * marked reader (a data centre's, an automated visit's) counts under the
+   * mark's own scopes.
    */
   private addLive(
     tx: ReturnType<Redis["multi"]>,
@@ -1020,6 +1060,26 @@ export class SiteAnalyticsCollectService
   private staticHash(...parts: string[]): string {
     return readerHash(this.hashSecret, "site-analytics", ...parts);
   }
+}
+
+/**
+ * Whether a request's hits belong to an automated visit: the open visit's
+ * mark, or, with none open, how the request's first page view would open one
+ * ({@link isAutomatedStart}). Hits without a page view and without an open
+ * visit are a reader's.
+ */
+export function automatedVisit(
+  open: VisitStart | null,
+  hits: readonly ValidHit[],
+  acceptLanguage: string | null,
+): boolean {
+  if (open) return open.automated === true;
+  const first = hits.find(
+    (hit): hit is ValidPageviewHit => hit.t === "pageview",
+  );
+  return first
+    ? isAutomatedStart(first, acceptedLanguages(acceptLanguage))
+    : false;
 }
 
 function parseVisitStart(raw: unknown): VisitStart | null {

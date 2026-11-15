@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AUTOMATED_SCOPES,
   DATACENTER_SCOPES,
   EVENT_DIMS,
   FILTER_DIMS,
@@ -55,7 +56,9 @@ export const SITE_ANALYTICS_CAVEATS =
   "site by up to about six minutes. Readers with Do Not Track, Global Privacy Control or the " +
   "privacy page's opt-out, and bots, are not counted. Hits from data-centre networks (clouds and " +
   "hosters, by the address's ASN: headless browsers that pass as readers) are kept but left out " +
-  "unless datacenter is include or only; the window echoes which.";
+  "unless datacenter is include or only, and so are the hits of automated visits (opened without " +
+  "a referrer on a page that is not English, by a browser that names no language of the page) " +
+  "unless automated is include or only; the window echoes both.";
 
 /** The `datacenter` input every report takes. */
 export const datacenterInput = z
@@ -65,6 +68,16 @@ export const datacenterInput = z
     "Rows from data-centre networks: exclude (default) leaves them out, include counts them with " +
       "the rest, only shows them alone. Rows from before the network was recorded count as " +
       "not from a data centre",
+  );
+
+/** The `automated` input every report takes. */
+export const automatedInput = z
+  .enum(AUTOMATED_SCOPES)
+  .optional()
+  .describe(
+    "Rows of automated visits: exclude (default) leaves them out, include counts them with the " +
+      "rest, only shows them alone; only here and on datacenter shows the rows of both. Rows " +
+      "from before the mark existed count as not automated",
   );
 
 /** The page types for the descriptions: the trip regions' three first, the rest after. */
@@ -130,6 +143,7 @@ export const siteWindowInput = {
         "crosstab, search and not-found tools refuse them",
     ),
   datacenter: datacenterInput,
+  automated: automatedInput,
 };
 
 /** The `filters` input of a tool that offers only some of the dimensions. */
@@ -202,6 +216,7 @@ export type SiteWindowInput = {
   locale?: (typeof SITE_LOCALES)[number];
   filters?: Array<{ dim: (typeof FILTER_DIMS)[number]; value: string }>;
   datacenter?: (typeof DATACENTER_SCOPES)[number];
+  automated?: (typeof AUTOMATED_SCOPES)[number];
 };
 
 /** The service's query: `filter` as the `<dim>:<value>` strings the HTTP route takes. */
@@ -214,6 +229,7 @@ export function siteQuery(input: SiteWindowInput): SiteAnalyticsQuery {
     locale: input.locale ?? null,
     filter: (input.filters ?? []).map(({ dim, value }) => `${dim}:${value}`),
     datacenter: input.datacenter ?? null,
+    automated: input.automated ?? null,
   };
 }
 
@@ -226,6 +242,7 @@ export function windowOf(report: {
   locale: string | null;
   filters: string[];
   datacenter?: string;
+  automated?: string;
   hourlyFrom?: string | null;
 }) {
   return {
@@ -236,6 +253,7 @@ export function windowOf(report: {
     locale: report.locale,
     filters: report.filters,
     datacenter: report.datacenter ?? "exclude",
+    automated: report.automated ?? "exclude",
     hourlyFrom: report.hourlyFrom ?? null,
   };
 }

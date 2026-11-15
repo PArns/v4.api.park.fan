@@ -32,6 +32,7 @@ const NO_WINDOW = {
   to: null,
   interval: null,
   datacenter: null,
+  automated: null,
 };
 
 /** Runs a tool the way the server does: the input parsed by its schema first. */
@@ -82,6 +83,7 @@ describe("site statistic tools", () => {
     ).toEqual({
       days: null,
       datacenter: null,
+      automated: null,
       from: "2026-09-01",
       to: "2026-09-30",
       interval: "week",
@@ -556,17 +558,20 @@ describe("site statistic tools", () => {
     };
     const service = { live: jest.fn(async () => live) };
     const answer = await run(analyticsLiveTool, { locale: "de" }, service);
-    expect(service.live).toHaveBeenCalledWith(
-      "de",
-      expect.any(Date),
-      "exclude",
-    );
+    expect(service.live).toHaveBeenCalledWith("de", expect.any(Date), {
+      datacenter: "exclude",
+      automated: "exclude",
+    });
     await run(analyticsLiveTool, { datacenter: "only" }, service);
-    expect(service.live).toHaveBeenLastCalledWith(
-      null,
-      expect.any(Date),
-      "only",
-    );
+    expect(service.live).toHaveBeenLastCalledWith(null, expect.any(Date), {
+      datacenter: "only",
+      automated: "exclude",
+    });
+    await run(analyticsLiveTool, { automated: "only" }, service);
+    expect(service.live).toHaveBeenLastCalledWith(null, expect.any(Date), {
+      datacenter: "exclude",
+      automated: "only",
+    });
     expect(answer).toMatchObject({
       at: live.at,
       activeVisitors: 3,

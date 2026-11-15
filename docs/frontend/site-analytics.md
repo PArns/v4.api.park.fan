@@ -77,7 +77,9 @@ Qwant, Startpage, Brave, Kagi, …), `ai` (ChatGPT, Perplexity, Gemini, Copilot,
 `referral`. A new site is one line in `REFERRER_RULES`. The **browser language** is the primary
 subtag of the first `Accept-Language` tag, lowercased (`de-AT, en;q=0.8` → `de`), and `zz` for
 anything that is not two letters (`browser-language.util.ts`). The site's language is the path's;
-this one says what the browser asked for, and only the rows of `site_pageviews` carry it.
+this one says what the browser asked for, and only the rows of `site_pageviews` carry it. The whole
+header's languages (`acceptedLanguages`) decide one thing, whether a visit is
+[automated](#automated-visits), and are kept nowhere.
 
 **The device class** (`deviceClassOf`, `mobile`, `tablet` or `desktop`, `SITE_DEVICES`) is read from the
 request's User-Agent alone, in this order, with plain `includes` tests (no regular expression, so no
@@ -166,7 +168,8 @@ request.
   a day that has not expired; the secret lives in the environment, never in Redis. A visit that runs
   over midnight UTC is two visits.
 - **What a visit key holds** (`site-analytics:visit:<hmac>`, a hash): `c` how the visit began (its
-  first page view's language, path and page type, the referrer site and channel), `n` its page views, `s` and `l` the server's clock in UTC seconds at its first and its
+  first page view's language, path and page type, the referrer site and channel, and `automated`
+  when it opened as [an automated visit](#automated-visits)), `n` its page views, `s` and `l` the server's clock in UTC seconds at its first and its
   last hit, and `x` the exit row its last page view would make (that page's language, path, page
   type with the device, browser, OS, country and browser language, with how the visit began). It lives
   40 minutes past the last hit (`VISIT_KEY_TTL_SECONDS`) and is deleted when the flush ends the
@@ -244,6 +247,43 @@ is kept.
 - **Adding a network** is a line in `DATACENTER_ASNS` with its holder, in a pull request; a deploy
   applies it to new hits, not to rows already written.
 
+## Automated visits
+
+Programs that run a real browser on a home connection pass `isBotUserAgent` and the data centres'
+list alike. They still open a visit in a way readers do not (PAR-1353): from 2 to 15 November 2026
+the direct visits of Chrome with an English browser language came to 5,200 on the Spanish, German,
+Dutch, French and Italian pages, 99 to 100 % of them bounces lasting 0 to 3 seconds, while direct
+visits from Safari, which are readers, almost never had a browser language the page was not in (9 in
+those two weeks). Such a program fetches each language version of a page and states the one
+language it runs with.
+
+- **The rule** (`isAutomatedStart`): the page view that opens the visit has no referrer and no
+  source, its page is not English, and no tag of the request's `Accept-Language` (`acceptedLanguages`,
+  every primary subtag not weighted `q=0`) is the page's language. English pages stay out, because
+  readers whose language the site lacks are sent there; a reader who opens a link to a page in a
+  language of theirs names it in the header, whatever language comes first.
+- **Decided once, kept by the visit.** The collector reads the open visit's `c` beside the caps (the
+  same round trip), so it knows the mark before it writes the visitor keys. With no visit open, the
+  request's first page view decides, and the visit's `c` keeps `automated: true`; every later hit of
+  the visit, an engagement or an event without a page view included, counts under it. A visit that
+  opened as a reader's stays one, whatever its later pages.
+- **Marked, never dropped**, like the data centres: `network` reads `automated` (the column is
+  `varchar(10)`, no schema change), and a data centre stays `datacenter` (`markedNetwork`). Every
+  report and the live view leave the rows out unless the query says `automated=include` or
+  `automated=only`; the window echoes `automated`. With `only` on both switches a report shows the
+  rows of both marks (`network IN ('datacenter', 'automated')`); with `only` on one, the other's
+  `include` adds nothing, since a row has one network (`networksOf`).
+- **Visitors** of an automated visit count under scopes of their own, `aca` for all languages and `a`
+  with the language (`ade`), beside the data centres' `dca` and `dde`; the snapshot writes them to the
+  same tables. A reader is counted under one scope a request, so a reader with an automated visit and
+  another visit on the same day sits in both and counts twice under `include`.
+- **The most-read rankings** never count an automated visit's read.
+- **Where the mark is wrong.** A reader whose browser names only English and who opens a link to a
+  Spanish page from an app that sends no referrer (a messenger, a mail client) is marked. The rule
+  does not see programs on English pages: in the same two weeks 1,205 direct Chrome visits with an
+  English browser on English pages bounced 91 % of the time and stay counted.
+- **From the deploy on.** Rows written before it keep the network they were written with.
+
 ## Visits, visitors, bounce, realtime
 
 - A **visit** starts on a page view whose visit key (the /64 and the User-Agent, under the day's key)
@@ -319,7 +359,7 @@ is kept.
 ## Storage: insert-only, no dead tuples
 
 **Hot path in Redis.** A request costs three Redis round trips and no Postgres: the address's and the
-window's caps; one pipeline for the guards, the visit, the visitors and the realtime minute; and one
+window's caps, with the open visit's start read beside them; one pipeline for the guards, the visit, the visitors and the realtime minute; and one
 `MULTI` with `HINCRBY` of the counts into the current five-minute window's hash,
 `site-analytics:buf:<window>`, the window's id in `site-analytics:buf:windows`, the visit's key and
 its place among the open visits, the reader's visitor keys by dimension, the live view's minute and
@@ -528,8 +568,9 @@ Days are UTC days, not a park's: a reader belongs to no park
 `interval`, and `filter=<dim>:<value>` (repeatable, AND; dim ∈ `path`, `page_type`, `country`,
 `device`, `browser`, `os`, `locale`, `browser_language`, and the visit dimensions `entry`,
 `referrer`, `channel`), `datacenter` (`exclude`, the default, `include` or `only`,
-[data centres](#data-centres)), and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`,
-`datacenter` and `hourlyFrom`.
+[data centres](#data-centres)), `automated` (the same three, [automated visits](#automated-visits)),
+and echoes `from`, `to`, `days`, `interval`, `locale`, `filters`, `datacenter`, `automated` and
+`hourlyFrom`.
 
 **The window** is `days` (1–365, the last days with today; 30 without one) or `from` and `to`
 (`YYYY-MM-DD`, both included, `to` today at the latest, at most 366 days). Both at once, one of

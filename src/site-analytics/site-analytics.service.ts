@@ -27,7 +27,7 @@ import {
   minuteKey,
   visitorScopesOf,
   type BreakdownDim,
-  type DatacenterScope,
+  type NetworkChoice,
   type FilterDim,
   type SiteLocale,
   type VisitorDim,
@@ -242,7 +242,7 @@ export class SiteAnalyticsService {
             : visitorBasis.filter
               ? this.dimVisitors(window, visitorBasis.filter, now)
               : this.visitors(window, now),
-          this.realtime(window.locale, window.datacenter, now),
+          this.realtime(window.locale, window, now),
           // A bot's hit is dropped before it has a language or any dimension.
           window.locale || window.filters.length > 0
             ? Promise.resolve(null)
@@ -1427,10 +1427,13 @@ export class SiteAnalyticsService {
     now: Date,
   ): Promise<Visitors> {
     const scope = window.locale ?? ALL_LOCALES_SCOPE;
-    const scopes = visitorScopesOf(scope, window.datacenter);
+    const scopes = visitorScopesOf(scope, window);
     // Whether the site counted a day is whether any reader was counted in
     // it, whichever kind of network the asked-for ones came from.
-    const countedScopes = visitorScopesOf(scope, "include");
+    const countedScopes = visitorScopesOf(scope, {
+      datacenter: "include",
+      automated: "include",
+    });
     const today = utcDay(now);
     const first = window.previous?.from ?? window.from;
     const hourPoints = window.hourly
@@ -1533,7 +1536,7 @@ export class SiteAnalyticsService {
     now: Date,
   ): Promise<Visitors> {
     const byValue = await this.dimDays(
-      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window),
       filter.dim,
       [filter.value],
       window.previous?.from ?? window.from,
@@ -1561,7 +1564,7 @@ export class SiteAnalyticsService {
     const basis = visitorBasisOf(window.filters, dim);
     if (!basis?.by) return null;
     const days = await this.dimDays(
-      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window.datacenter),
+      visitorScopesOf(window.locale ?? ALL_LOCALES_SCOPE, window),
       basis.by,
       values,
       window.from,
@@ -1644,14 +1647,14 @@ export class SiteAnalyticsService {
    * Distinct visitors over the last {@link REALTIME_ACTIVE_MINUTES} minutes
    * (one PFCOUNT over the minute keys counts their union) and page views per
    * minute over the last {@link REALTIME_SERIES_MINUTES}, for all languages or
-   * one and the report's network; filters do not apply. Zero with Redis down.
+   * one and the report's networks; filters do not apply. Zero with Redis down.
    */
   private async realtime(
     locale: SiteLocale | null,
-    datacenter: DatacenterScope,
+    networks: NetworkChoice,
     now: Date,
   ): Promise<SiteOverviewDto["realtime"]> {
-    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, datacenter);
+    const scopes = visitorScopesOf(locale ?? ALL_LOCALES_SCOPE, networks);
     const start = Math.floor(now.getTime() / 60_000) * 60_000;
     const minutes = Array.from(
       { length: REALTIME_SERIES_MINUTES },
@@ -1713,6 +1716,7 @@ export function echo(window: SiteAnalyticsWindow) {
     locale: window.locale,
     filters: window.filters.map((f) => `${f.dim}:${f.value}`),
     datacenter: window.datacenter,
+    automated: window.automated,
     hourlyFrom: window.reach.hourlyFrom,
   };
 }
