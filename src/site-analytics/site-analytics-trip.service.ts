@@ -258,6 +258,7 @@ export class SiteAnalyticsTripService {
           editOpened: t("editOpened"),
           optionChanged: t("optionChanged"),
           optionChangedByParky: t("optionChangedByParky"),
+          deleted: t("deleted"),
         }),
         ...(step === "tickets" && {
           ticketsOpened: t("ticketsOpened"),

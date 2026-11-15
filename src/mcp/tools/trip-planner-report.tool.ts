@@ -26,7 +26,7 @@ export const tripPlannerReportTool = defineMcpTool({
     "docs/features/orlando-planner.md#the-funnel): started (trip_planner_started, source hero, " +
     "button, link or dates) → requested (trip_plan_requested) → shown (trip_plan_shown) → " +
     "changed (trip_edit_opened, and trip_option_changed by the visitor; Parky's are counted " +
-    "beside) → tickets (trip_tickets_opened) → kept (days saved to the day planner, .ics " +
+    "beside; trip_deleted, a trip deleted on the hub) → tickets (trip_tickets_opened) → kept (days saved to the day planner, .ics " +
     "exported, link copied). Every step has ofStarted; requested and shown have fromPrevious and " +
     "dropOff (1 − fromPrevious, null where a step outnumbers the one before); changed and " +
     "tickets are optional (a plan that suits needs neither), so they come as ofShown, a share of " +
