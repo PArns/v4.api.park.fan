@@ -14,7 +14,9 @@ import { addressBucket } from "../common/utils/request.util";
  * limiter gives: the global throttler is a loose circuit breaker, and every
  * chat costs money at Anthropic. A chat is held in three windows, so rapid
  * fire, a long burst and a whole day of questions are all bounded. Three in
- * thirty seconds leaves room for a quick "yes" to an offer Parky made.
+ * thirty seconds leaves room for a quick "yes" to an offer Parky made; a tap on
+ * one of the replies he offered does not count in that window at all (the
+ * controller's `answersOffer`), since an interview answers chip after chip.
  */
 const BUCKETS = {
   chatShort: { max: 3, windowSeconds: 30 },

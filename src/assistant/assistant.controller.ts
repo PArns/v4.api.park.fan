@@ -160,12 +160,18 @@ export class AssistantController {
       chatEnded(response, banned);
       return;
     }
-    const verdict = await this.rateLimit.check(
-      { session },
-      "chatShort",
-      "chatBurst",
-      "chatDay",
-    );
+    // The short window holds rapid fire. A question that opens a chat counts in it at once; in a
+    // running chat a tap on one of the replies Parky just offered does not, which is the pace an
+    // interview sets, and only the history `prepare` reads says whether it is one.
+    const opens = !input.conversationId;
+    const verdict = opens
+      ? await this.rateLimit.check(
+          { session },
+          "chatShort",
+          "chatBurst",
+          "chatDay",
+        )
+      : await this.rateLimit.check({ session }, "chatBurst", "chatDay");
     if (!verdict.allowed) {
       tooManyQuestions(response, verdict.retryAfterSeconds);
       return;
@@ -179,6 +185,13 @@ export class AssistantController {
     if (prepared === "junk") {
       await this.refuseJunk(response, session);
       return;
+    }
+    if (!opens && typeof prepared === "object" && !prepared.answersOffer) {
+      const short = await this.rateLimit.check({ session }, "chatShort");
+      if (!short.allowed) {
+        tooManyQuestions(response, short.retryAfterSeconds);
+        return;
+      }
     }
     await this.rateLimit.clearStrikes(session);
     if (prepared === "ended") {
