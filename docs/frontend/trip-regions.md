@@ -636,9 +636,10 @@ region's own figures (`regions.ts`, `weather`):
   figure carries it.
 
 Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
-window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
-(`{ heat?, hurricane? }`, or `{ heat?, typhoon? }` in Japan, minutes per park day, one decimal,
-absent when zero) say what the ranking added, so a client can say "ranked lower: hurricane peak".
+window stays the plain figure; a window's `penalties` (`{ heat?, hurricane? }`, or
+`{ heat?, typhoon? }` in Japan, minutes per park day, one decimal, absent when zero) say what the
+ranking added, so a client can say "ranked lower: hurricane peak". The plan's answer carries no
+such figure: its days' warnings (`extreme_heat`, the storm codes) say which days the terms hit.
 
 **A season named, not priced** (`weather.notes`): Japan's rainy season (tsuyu, early June to mid
 July around Tokyo) makes a day wetter but its parks no emptier or fuller in a way a figure does not
@@ -1069,9 +1070,7 @@ day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[]
 
 **`totals`** compare like with like: the planned visits' mean `headlinerWait` against, for the same
 visits, the mean over every open day of the window of that park. `savedMinutesPerRide` is that
-difference, per headliner ride. Show it as such; it is not hours saved per day. `penalties`
-(`{ heat?, hurricane? }`, minutes per park day) is what heat and the hurricane season added to the
-plan's cost, never to these waits; absent when zero. `orderMatters` is
+difference, per headliner ride. Show it as such; it is not hours saved per day. `orderMatters` is
 false when it is under 3 minutes: any order will do. `expectedError` is the measured error of the
 served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so

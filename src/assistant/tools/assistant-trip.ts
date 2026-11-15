@@ -858,7 +858,7 @@ export function vacationItinerary(input: {
     days,
     totals: {
       ...totals,
-      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; expectedError: the forecast's typical miss per headliner ride at these days' distance ahead, measured (get_forecast_accuracy has the region's), absent where the days are estimated from last year; penalties: minutes a park day that ${penaltiesMean(region)} added to the plan's cost, not to the waits`,
+      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; expectedError: the forecast's typical miss per headliner ride at these days' distance ahead, measured (get_forecast_accuracy has the region's), absent where the days are estimated from last year`,
     },
     ...(leftOut.length > 0 && {
       parksLeftOut: leftOut.map((l) => ({
