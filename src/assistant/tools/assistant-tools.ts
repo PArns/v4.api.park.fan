@@ -1849,6 +1849,14 @@ const hotelInput = z
     `Whose perks count; default the area's. Orlando: ${Object.keys(ORLANDO.perks).join(", ")}`,
   );
 
+/** `weather=` of the plan and `/when`: the visitor wants extreme weather kept off the trip. */
+const weatherInput = z
+  .enum(["avoid", "any"])
+  .optional()
+  .describe(
+    "avoid: they can't take the heat or want clear of the storm season; heat and the storm season weigh more. any (default)",
+  );
+
 /** A hotel area of the region, validated by it (Orlando's in the description). */
 const areaInput = z
   .string()
@@ -3294,6 +3302,7 @@ export const ASSISTANT_TOOLS = [
         .describe(
           "want: keep the evening show, no party nights unless nothing else fits; any (default): price by the hours",
         ),
+      weather: weatherInput,
       rest: z
         .string()
         .regex(/^(auto|none|max:[1-9])$/)
@@ -3405,6 +3414,7 @@ export const ASSISTANT_TOOLS = [
         moveBuffer: input.moveBuffer,
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
+        weather: input.weather,
         rest: input.rest,
         ticket: input.ticket,
         hopper: input.hopper?.join(","),
@@ -3464,7 +3474,7 @@ export const ASSISTANT_TOOLS = [
       'park or "rest" on a date: "Magic Kingdom on Thursday", "a rest day on the 6th"); unpin ' +
       "(dates); swap (two dates trade what is on them); rest (auto, none, max:n park days in a " +
       "row); tickets (the compact form, empty clears); hotel, area; hopper (resorts); fireworks; " +
-      "evenings; arrival, departure (park: a park that day); search (look for the best dates " +
+      "weather; evenings; arrival, departure (park: a park that day); search (look for the best dates " +
       "instead, as the planner's date finder: the dates go). A region with bases (Japan, Paris), " +
       "the route: bases (the stays they fix: city, nights, hotel area), startBase or endBase " +
       "(the city they land in or fly home from), landAt or leaveFrom (an airport or station " +
@@ -3515,6 +3525,7 @@ export const ASSISTANT_TOOLS = [
         .optional()
         .describe("The resorts planned with a hopper; empty: none"),
       fireworks: z.enum(["want", "any"]).optional(),
+      weather: weatherInput,
       evenings: z
         .boolean()
         .optional()
@@ -3589,6 +3600,7 @@ export const ASSISTANT_TOOLS = [
         ...(input.hopper !== undefined && { hopper: input.hopper }),
         ...(input.fireworks !== undefined && { fireworks: input.fireworks }),
         ...(input.evenings !== undefined && { evenings: input.evenings }),
+        ...(input.weather !== undefined && { weather: input.weather }),
         ...(input.arrival !== undefined && { arrival: input.arrival }),
         ...(input.departure !== undefined && { departure: input.departure }),
         ...(input.moveBuffer !== undefined && { moveBuffer: input.moveBuffer }),
@@ -3993,6 +4005,7 @@ export const ASSISTANT_TOOLS = [
       area: areaInput,
       blocks: z.boolean().optional(),
       fireworks: z.enum(["want", "any"]).optional(),
+      weather: weatherInput,
       split: z.enum(["auto", "fixed"]).optional(),
       rest: z
         .string()
@@ -4074,6 +4087,7 @@ export const ASSISTANT_TOOLS = [
         area: input.area,
         blocks: flag(input.blocks),
         fireworks: input.fireworks,
+        weather: input.weather,
         split: input.split,
         rest: input.rest,
         hop: flag(input.hop),

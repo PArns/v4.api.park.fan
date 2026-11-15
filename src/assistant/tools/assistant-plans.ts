@@ -50,6 +50,7 @@ const PLAN_NAMES = [
   "departure",
   "blocks",
   "fireworks",
+  "weather",
   "split",
   "rest",
   "ticket",
@@ -72,6 +73,7 @@ const WRITE_ORDER = [
   "days",
   "within",
   "parks",
+  "weather",
   "hotel",
   "area",
   "bases",
@@ -253,6 +255,7 @@ export function tripLine(trip: VisitorTrip): string {
           .join(", ")}`
       : "parks: the region's headliners (untouched)",
   );
+  if (p.get("weather") === "avoid") parts.push("avoid extreme weather");
   if (p.get("lock")) parts.push(`pinned ${p.get("lock")?.replace(/,/g, ", ")}`);
   if (p.get("hotel")) parts.push(`hotel ${p.get("hotel")}`);
   if (p.get("area")) parts.push(`staying in ${p.get("area")}`);
@@ -366,6 +369,8 @@ export interface TripChange {
   area?: string;
   hopper?: string[];
   fireworks?: "want" | "any";
+  /** `avoid`: extreme heat and the storm season weigh more (the Parks step's option). */
+  weather?: "avoid" | "any";
   evenings?: boolean;
   arrival?: "free" | "park";
   departure?: "free" | "park";
@@ -655,6 +660,10 @@ export function changeTripParams(
     setOrDefault(params, "evenings", change.evenings ? "1" : "0", "1");
     kinds.add("pace");
   }
+  if (change.weather !== undefined) {
+    setOrDefault(params, "weather", change.weather, "any");
+    kinds.add("parks");
+  }
   if (change.arrival !== undefined) {
     setOrDefault(params, "arrival", change.arrival, "free");
     kinds.add("dates");
@@ -858,7 +867,7 @@ const STEP_GUIDE: Record<Exclude<InterviewStep, "refine">, StepGuide> = {
   parks: {
     ask: "which parks they want to see (all the big ones is fine) and any ride they must not miss",
     apply:
-      "change_trip parks (visits 1-3, 0 removes); must-do rides go into interview's mustDoRides by ride id, for the filing",
+      "change_trip parks (visits 1-3, 0 removes), and weather avoid when they can't take the heat or want clear of the storm season; must-do rides go into interview's mustDoRides by ride id, for the filing",
     chips: "all the big parks / Disney only / two parks by name",
   },
   party: {
@@ -994,7 +1003,11 @@ export function interviewHolds(
       return `${p.get("from")} to ${p.get("to")}`;
     }
     if (step === "party" && trip?.party) return partyPhrase(trip.party);
-    if (step === "parks" && p?.get("parks")) return p.get("parks");
+    if (step === "parks" && p?.get("parks")) {
+      return p.get("weather") === "avoid"
+        ? `${p.get("parks")}, avoid extreme weather`
+        : p.get("parks");
+    }
     if (step === "tickets" && p?.get("tickets")) return p.get("tickets");
     if (step === "hotel" && trip?.region.bases?.length) {
       return p?.get("moveBuffer")

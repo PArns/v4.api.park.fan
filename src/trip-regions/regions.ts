@@ -275,6 +275,73 @@ export interface RegionWeatherConfig {
 }
 
 /**
+ * `weather=` on the plan and `/when`: `any` prices a day with the region's
+ * own heat and storm models; `avoid` ("avoid extreme weather") with
+ * {@link avoidingWeather}'s stronger ones.
+ */
+export type WeatherOption = "any" | "avoid";
+
+/**
+ * How `weather=avoid` derives a region's stronger models from its own: one
+ * rule for every region, so no region keeps a second set of numbers in step.
+ * The forecast threshold drops by the margin the region's own keeps above its
+ * hottest normal (Orlando 35 °C to 32 °C, about its hottest normal of 32.1 °C),
+ * the normal's by a degree (31.5 °C to 30.5 °C, below the June–October median
+ * of 30.9 °C), each degree costs twice as much and the cap rises to 2.5, so
+ * the hottest forecast days of a summer (37–39 °C) still rank apart instead of
+ * all hitting the cap. The storm season's minutes and `/when`'s peak term
+ * count `stormFactor` times. Calibrated on 2026's measured highs and the
+ * plans' own days: docs/frontend/trip-regions.md#how-a-day-is-priced.
+ */
+export const AVOID_WEATHER = {
+  forecastDropC: 3,
+  normalDropC: 1,
+  perDegreeFactor: 2,
+  cap: 2.5,
+  stormFactor: 2,
+} as const;
+
+/** A region's heat model as `weather=avoid` prices it ({@link AVOID_WEATHER}). */
+export function avoidingHeat(heat: HeatModelConfig): HeatModelConfig {
+  return {
+    ...heat,
+    forecastFromC: heat.forecastFromC - AVOID_WEATHER.forecastDropC,
+    normalFromC: heat.normalFromC - AVOID_WEATHER.normalDropC,
+    perDegree: heat.perDegree * AVOID_WEATHER.perDegreeFactor,
+    cap: Math.max(heat.cap, AVOID_WEATHER.cap),
+  };
+}
+
+/** A region's weather as `weather=avoid` prices it: the stronger heat and storm season. */
+export function avoidingWeather(
+  weather: RegionWeatherConfig,
+): RegionWeatherConfig {
+  const { storm } = weather;
+  return {
+    ...weather,
+    heat: avoidingHeat(weather.heat),
+    ...(storm && {
+      storm: {
+        ...storm,
+        peakMinutes: storm.peakMinutes * AVOID_WEATHER.stormFactor,
+        ...(storm.peakWindowMinutes !== undefined && {
+          peakWindowMinutes:
+            storm.peakWindowMinutes * AVOID_WEATHER.stormFactor,
+        }),
+      },
+    }),
+  };
+}
+
+/** The weather a plan or `/when` is priced with: the region's, or its stronger variant. */
+export function weatherFor(
+  region: Pick<RegionConfig, "weather">,
+  option: WeatherOption,
+): RegionWeatherConfig {
+  return option === "avoid" ? avoidingWeather(region.weather) : region.weather;
+}
+
+/**
  * Where a region's travel times come from. `osrm`: a drive with no traffic
  * between car parks, read once from OpenStreetMap
  * (`travel-matrix.generated.ts`), with curated legs laid over it. `curated`:

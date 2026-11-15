@@ -1,5 +1,5 @@
 import { addIsoDays } from "../common/utils/date.util";
-import { ORLANDO } from "./regions";
+import { ORLANDO, weatherFor } from "./regions";
 import {
   dayCost,
   dayCostParts,
@@ -12,7 +12,7 @@ import {
   type PlanCell,
 } from "./trip-optimizer";
 import { regionBestDays } from "./trip-best-days";
-import { normalizePlanQuery } from "./trip-plan.assembly";
+import { normalizePlanQuery, planCacheQuery } from "./trip-plan.assembly";
 import type { InternalRegionCalendar } from "./trip-region.assembly";
 import type { TripParkDayInternal } from "./trip-calendar.util";
 import { findTripDates } from "./trip-when";
@@ -134,6 +134,100 @@ describe("the plan", () => {
     const day = plan.days.find((d) => d.kind === "park");
     expect(day?.warnings).toEqual(
       expect.arrayContaining(["extreme_heat", "hurricane_peak"]),
+    );
+  });
+});
+
+describe("weather=avoid", () => {
+  const dates = ["2027-07-12", "2027-07-13"];
+  /** EPCOT quieter on a 34 °C forecast day, a 31 °C day beside it, and a water park. */
+  const plan = (weather?: ReturnType<typeof weatherFor>) =>
+    optimizeTrip({
+      days: dates.map((date) => ({
+        date,
+        weekday: new Date(`${date}T12:00:00Z`).getUTCDay(),
+        isHoliday: false,
+        isSchoolVacation: false,
+      })),
+      parks: [
+        {
+          slug: "epcot",
+          group: "walt-disney-world",
+          type: "theme_park",
+          visits: 1,
+        },
+        {
+          slug: "disneys-typhoon-lagoon-water-park",
+          group: "walt-disney-world",
+          type: "water_park",
+          visits: 1,
+        },
+      ],
+      cells: {
+        epcot: {
+          [dates[0]]: cell(40, { weather: hot(34, "forecast") }),
+          [dates[1]]: cell(45, { weather: hot(31, "forecast") }),
+        },
+        "disneys-typhoon-lagoon-water-park": {
+          [dates[0]]: {
+            status: "OPERATING",
+            basis: "none",
+            weather: hot(34, "forecast"),
+          },
+          [dates[1]]: {
+            status: "OPERATING",
+            basis: "none",
+            weather: hot(31, "forecast"),
+          },
+        },
+      },
+      options: {
+        arrival: "park",
+        departure: "park",
+        blocks: false,
+        blockGroups: [],
+        fireworks: "any",
+        rest: { mode: "none" },
+        hop: false,
+        hopPairs: [],
+        perkRules: [],
+        locks: [],
+        ...(weather && { weather }),
+      },
+    });
+  const epcotDay = (p: ReturnType<typeof plan>) =>
+    p.days.find((d) => d.parks.some((v) => v.slug === "epcot"));
+
+  it("moves a theme park off a hot day the region's model leaves it on, the water park takes it", () => {
+    // 34 °C is under Orlando's 35: EPCOT keeps its 40-minute day. With the
+    // option it counts from 32 (40 × 1.32 > 45), so EPCOT goes to the 31 °C day.
+    const any = plan(weatherFor(ORLANDO, "any"));
+    expect(epcotDay(any)?.date).toBe(dates[0]);
+    expect(epcotDay(any)?.warnings).not.toContain("extreme_heat");
+    const avoid = plan(weatherFor(ORLANDO, "avoid"));
+    expect(epcotDay(avoid)?.date).toBe(dates[1]);
+    expect(epcotDay(avoid)?.warnings).not.toContain("extreme_heat");
+    expect(
+      avoid.days.find((d) => d.date === dates[0])?.parks.map((v) => v.slug),
+    ).toEqual(["disneys-typhoon-lagoon-water-park"]);
+  });
+
+  it("changes nothing when it is left out: the region's own weather, the same cache key", () => {
+    expect(weatherFor(ORLANDO, "any")).toBe(ORLANDO.weather);
+    expect(plan(ORLANDO.weather)).toEqual(plan());
+    const query = { from: "2027-07-12", to: "2027-07-18" };
+    const known = ORLANDO.parks.map((p) => p.slug);
+    const without = normalizePlanQuery(ORLANDO, known, query, "2027-01-01");
+    expect(without.weather).toBe("any");
+    expect(planCacheQuery(without)).not.toContain("weather");
+    const avoid = normalizePlanQuery(
+      ORLANDO,
+      known,
+      { ...query, weather: "avoid" },
+      "2027-01-01",
+    );
+    expect(planCacheQuery(avoid)).toBe(
+      `${planCacheQuery(without)}|weather:avoid`,
     );
   });
 });
