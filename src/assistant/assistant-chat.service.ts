@@ -21,7 +21,7 @@ import {
   SYSTEM_PROMPT_VERSION,
   type LookedUpEntity,
 } from "./system-prompt";
-import { repeatsLastQuestion } from "./assistant-junk";
+import { repeatsLastQuestion, sameText } from "./assistant-junk";
 import { RepliesTextGuard } from "./assistant-replies-text";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
@@ -61,6 +61,30 @@ const TRIP_DIGEST_BUDGET_MS = 1500;
 /** The tool that only adds the reply chips: a round of nothing else ends the answer. */
 const REPLIES_TOOL = "suggest_replies";
 
+/**
+ * Whether `message` is one of the replies Parky offered under his last answer (`suggest_replies`),
+ * which is what a tap on one of his chips sends. The answer has to be the chat's last message: an
+ * older offer no longer counts.
+ */
+export function answersOffer(
+  message: string,
+  earlier: ReadonlyArray<Pick<AssistantMessage, "role" | "toolCalls">>,
+): boolean {
+  const lastAnswer = earlier[earlier.length - 1];
+  if (lastAnswer?.role !== "assistant") return false;
+  const asked = sameText(message);
+  return (lastAnswer.toolCalls ?? []).some((call) => {
+    if (call.name !== REPLIES_TOOL) return false;
+    const replies = (call.input as { replies?: unknown } | null)?.replies;
+    return (
+      Array.isArray(replies) &&
+      replies.some(
+        (reply) => typeof reply === "string" && sameText(reply) === asked,
+      )
+    );
+  });
+}
+
 /** US dollars per million tokens for Claude Haiku 5.5, up to 100K tokens of prompt. */
 const PRICE_PER_MTOK = {
   input: 0.1,
@@ -90,6 +114,11 @@ export interface PreparedChat {
   session: string;
   /** The session's hash, which its token budget is counted under. */
   sessionHash: string;
+  /**
+   * The question is one of the replies Parky offered under his last answer ({@link answersOffer}):
+   * the chat's own pace, which the short window does not count. Absent where nobody asked.
+   */
+  answersOffer?: boolean;
 }
 
 /** Why a chat is refused before anything is streamed. */
@@ -142,6 +171,7 @@ export class AssistantChatService {
     let conversation: AssistantConversation | null;
     let history: Anthropic.MessageParam[] = [];
     let lookedUp: LookedUpId[] = [];
+    let offered = false;
     if (request.conversationId) {
       conversation = await this.conversations.findOneBy({
         id: request.conversationId,
@@ -162,6 +192,7 @@ export class AssistantChatService {
       }
       history = historyOf(earlier);
       lookedUp = lookedUpIds(earlier);
+      offered = answersOffer(request.message, earlier);
     } else {
       conversation = await this.conversations.save(
         this.conversations.create({
@@ -180,6 +211,7 @@ export class AssistantChatService {
       request,
       session,
       sessionHash,
+      answersOffer: offered,
     };
   }
 

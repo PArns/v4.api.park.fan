@@ -71,9 +71,13 @@ export function repeatsLastQuestion(
   ) {
     return false;
   }
-  const same = (a: string) => a.trim().toLowerCase().replace(/\s+/g, " ");
   return (
-    same(lastQuestion.text) === same(message) &&
+    sameText(lastQuestion.text) === sameText(message) &&
     now.getTime() - lastQuestion.createdAt.getTime() < REPEAT_WINDOW_MS
   );
+}
+
+/** A message as two of them are compared: trimmed, lower case, runs of white space as one. */
+export function sameText(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
 }

@@ -40,7 +40,15 @@ function fakeResponse() {
     headers: Record<string, string>;
     body?: unknown;
   } = { headers: {} };
+  // A stream is opened, written and ended only; what it carries is the chat service's test.
   const response = {
+    writableEnded: false,
+    flushHeaders: () => undefined,
+    on: () => response,
+    write: () => true,
+    end: () => {
+      response.writableEnded = true;
+    },
     status: (code: number) => {
       sent.status = code;
       return response;
@@ -166,6 +174,69 @@ describe("AssistantController.ask, after Parky ended a chat", () => {
       code: "chat_ended",
     });
     expect(refused.headers["Retry-After"]).toBeUndefined();
+  });
+});
+
+describe("AssistantController.ask, the short window and Parky's offers", () => {
+  const CHAT = "5d0f6c1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f";
+
+  function setup(chips: readonly string[]) {
+    const rateLimit = new AssistantRateLimitService(fakeRedis() as never);
+    const chat = {
+      prepare: jest.fn((input: { message: string }) =>
+        Promise.resolve({ answersOffer: chips.includes(input.message) }),
+      ),
+      answer: jest.fn().mockResolvedValue(undefined),
+    } as unknown as AssistantChatService;
+    const controller = new AssistantController(
+      {} as AssistantSettingsService,
+      chat,
+      {} as AssistantRecordsService,
+      rateLimit,
+      { session: () => "session-1" } as unknown as AssistantChallengeService,
+    );
+    const ask = async (message: string, conversationId?: string) => {
+      const { response, sent } = fakeResponse();
+      await controller.ask(
+        {
+          locale: "de",
+          pagePath: "/de",
+          message,
+          sessionToken: "t",
+          ...(conversationId && { conversationId }),
+        },
+        { headers: {}, socket: {} } as unknown as Request,
+        response,
+      );
+      return sent.status;
+    };
+    return { ask };
+  }
+
+  it("lets an interview go on chip after chip, and still holds typed rapid fire", async () => {
+    const chips = [
+      "Morgen",
+      "Ich bin noch unsicher",
+      "Europa-Park bitte",
+      "Taron zuerst",
+    ];
+    const { ask } = setup(chips);
+    // The interview's first question opens the chat and counts; every tap after it is a reply
+    // Parky offered, which the window lets through however fast it comes.
+    expect(await ask("Plan meinen Parktag mit mir, Frage für Frage.")).toBe(
+      200,
+    );
+    for (const chip of chips) expect(await ask(chip, CHAT)).toBe(200);
+    // Typed questions fill the rest of the window, and the one after waits.
+    expect(await ask("Wie lang ist Blue Fire?", CHAT)).toBe(200);
+    expect(await ask("Und Silver Star?", CHAT)).toBe(200);
+    expect(await ask("Und Voltron?", CHAT)).toBe(429);
+  });
+
+  it("still counts every reply in the ten-minute window", async () => {
+    const { ask } = setup(["Ja"]);
+    for (let i = 0; i < 20; i++) expect(await ask("Ja", CHAT)).toBe(200);
+    expect(await ask("Ja", CHAT)).toBe(429);
   });
 });
 

@@ -63,6 +63,7 @@ jest.mock("@anthropic-ai/sdk", () => {
 
 import {
   AssistantChatService,
+  answersOffer,
   historyOf,
   lookedUpIds,
   type ChatEvent,
@@ -231,6 +232,38 @@ describe("historyOf", () => {
       { role: "user", content: "Wie voll?" },
       { role: "assistant", content: "Ziemlich." },
     ]);
+  });
+});
+
+describe("answersOffer", () => {
+  type Earlier = Pick<AssistantMessage, "role" | "toolCalls">;
+  const question: Earlier = { role: "user", toolCalls: null };
+  const offered = (replies: unknown): Earlier => ({
+    role: "assistant",
+    toolCalls: [
+      { name: "compare_parks", input: { date: "2026-11-16" } },
+      { name: "suggest_replies", input: { replies } },
+    ],
+  });
+
+  it("takes a tap on one of the replies under Parky's last answer, in any case and spacing", () => {
+    const earlier = [
+      question,
+      offered(["Phantasialand bitte", "Europa-Park bitte"]),
+    ];
+    expect(answersOffer("Europa-Park bitte", earlier)).toBe(true);
+    expect(answersOffer("  europa-park   BITTE ", earlier)).toBe(true);
+    expect(answersOffer("Heide Park bitte", earlier)).toBe(false);
+  });
+
+  it("counts no older offer, no answer without one and no input it cannot read", () => {
+    expect(answersOffer("Morgen", [offered(["Morgen"]), question])).toBe(false);
+    expect(
+      answersOffer("Morgen", [{ role: "assistant", toolCalls: null }]),
+    ).toBe(false);
+    expect(answersOffer("Morgen", [offered("Morgen")])).toBe(false);
+    expect(answersOffer("Morgen", [offered([1, null, "Morgen"])])).toBe(true);
+    expect(answersOffer("Morgen", [])).toBe(false);
   });
 });
 
