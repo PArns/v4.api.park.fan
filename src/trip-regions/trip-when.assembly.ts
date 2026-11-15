@@ -74,6 +74,7 @@ function planQueryOf(
     departure: query.departure,
     blocks: query.blocks,
     fireworks,
+    weather: query.weather,
     split: query.split,
     rest: query.rest,
     hop: query.hop,

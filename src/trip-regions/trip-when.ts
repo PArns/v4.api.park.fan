@@ -20,7 +20,7 @@ import { isoDaysBetween, isoWeekStart } from "../common/utils/date.util";
 import { mean, median } from "../common/utils/stats.util";
 import type { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { CLIMATE_NORMAL_PERIOD } from "../external-apis/weather/climate-normals";
-import type { RegionConfig, PerkRule } from "./regions";
+import { weatherFor, type RegionConfig, type PerkRule } from "./regions";
 import {
   dayCostParts,
   inSeasonNote,
@@ -573,6 +573,8 @@ function tierStartOf<T extends Rankable>(
 export function findTripDates(input: WhenInput): TripWhen {
   const { region, calendar, query } = input;
   const q = query.plan;
+  // `weather=avoid` ranks by the stronger heat and storm models, as its plans are priced.
+  const weather = weatherFor(region, q.weather);
   // A region with bases: every stay's hotel perks may count, so the bound
   // takes them all.
   const rules = q.stays
@@ -632,10 +634,10 @@ export function findTripDates(input: WhenInput): TripWhen {
     );
   // A window that touches the storm peak on any day pays this per visit, in
   // its bound and its score alike, so the search stays exact.
-  const peakWindowMinutes = region.weather.storm?.peakWindowMinutes ?? 0;
+  const peakWindowMinutes = weather.storm?.peakWindowMinutes ?? 0;
   const peakTermAt = (i: number): number =>
     peakWindowMinutes > 0 &&
-    touchesStormPeak(region.weather.storm, dates[i], dates[i + length - 1])
+    touchesStormPeak(weather.storm, dates[i], dates[i + length - 1])
       ? peakWindowMinutes
       : 0;
 
@@ -655,13 +657,8 @@ export function findTripDates(input: WhenInput): TripWhen {
     const costsOf = (slug: string) =>
       open.map(
         (d) =>
-          priceOf(
-            q,
-            rules,
-            pricing.get(slug) as ParkPricing,
-            days[d],
-            region.weather,
-          ).rank,
+          priceOf(q, rules, pricing.get(slug) as ParkPricing, days[d], weather)
+            .rank,
       );
     // The plan pairs parks on a hop day only when the visits outnumber the days.
     if (q.hop && total > open.length) {
@@ -712,7 +709,7 @@ export function findTripDates(input: WhenInput): TripWhen {
           rules,
           pricing.get(v.slug) as ParkPricing,
           calendarDay,
-          region.weather,
+          weather,
         );
       });
       const hop = prices.length > 1;
@@ -735,12 +732,7 @@ export function findTripDates(input: WhenInput): TripWhen {
     score += peakTerm * visitCount(i);
     storm += peakTerm * parkDays;
     const basis = basisOf(bases);
-    const penalties = penaltiesOf(
-      heat,
-      storm,
-      parkDays,
-      region.weather.storm?.kind,
-    );
+    const penalties = penaltiesOf(heat, storm, parkDays, weather.storm?.kind);
     const evaluated: Evaluated = {
       index: i,
       score,

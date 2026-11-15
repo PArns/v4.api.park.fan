@@ -181,6 +181,18 @@ export class TripPlanQueryDto {
   fireworks?: string;
 
   @ApiPropertyOptional({
+    enum: ["avoid", "any"],
+    default: "any",
+    description:
+      "`avoid`: extreme weather weighs more. Heat counts from lower highs and costs more per " +
+      "degree, so theme park days move to cooler days where the waits allow, and the storm " +
+      "season counts twice. `any`: the region's own heat and storm models.",
+  })
+  @IsOptional()
+  @IsIn(["avoid", "any"])
+  weather?: string;
+
+  @ApiPropertyOptional({
     enum: ["auto", "fixed"],
     default: "auto",
     description:
