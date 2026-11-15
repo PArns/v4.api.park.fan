@@ -28,7 +28,9 @@ import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
  * on other days, each within five minutes of its old one, so that the park
  * days spread wider; the windows rank on those plans, so one of them starts
  * a day earlier. It also added each spare rest day's `spare`, `spareDays`
- * and `spareDayParks`.
+ * and `spareDayParks`. PAR-1349 only added fields: each park day's
+ * `weather` (its high and basis) and `meta.heat` (the thresholds); every other
+ * value is unchanged.
  *
  * `WRITE_ORLANDO_IDENTITY=1` rewrites the file: only for a change that is
  * meant to move Orlando's answers, and the diff then says how.

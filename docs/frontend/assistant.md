@@ -575,7 +575,7 @@ for a remembered trip, the line says to read it with `get_trip_plan`.
 stay; the first edit of an untouched trip starts from the region's headliners, as the planner does),
 `pin` (`{ park | "rest", date }`, one pin a date), `unpin` (dates), `swap` (`{ a, b }`: each day
 pinned to what the other holds, the planner's own `swapLocks`; a travel or two-park day is refused),
-`rest`, `tickets` (`""` clears), `hotel`, `area`, `hopper`, `fireworks`, `evenings`, `arrival`,
+`rest`, `tickets` (`""` clears), `hotel`, `area`, `hopper`, `fireworks`, `weather`, `evenings`, `arrival`,
 `departure`, `search` (`{ from, to, days, within? }`: the planner's date finder, `when=`; the dates
 and pins go) and, in a region with bases, the route: `bases` (the stays they fix,
 `city[:nights][@area]`, the whole list; `""` clears it, and `area` and `hotel` go, which a bases
@@ -736,7 +736,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
 (`resolvePark`); a park found outside Orlando is refused with that reason.
 
 - **`plan_vacation`** (status `forecast`): `from`, `to`, optional `parks` (`{ park, visits 1–3 }`,
-  default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `rest`, `ticket`
+  default the seven headliner parks), `hotel`, `area`, `blocks`, `fireworks`, `weather` (`avoid`
+  when they can't take the heat or want clear of the storm season,
+  [avoiding extreme weather](trip-regions.md#avoiding-extreme-weather-weatheravoid)), `rest`, `ticket`
   (`base` or `hopper`: Disney's Park Hopper or Universal's park-to-park, every resort), `hopper`
   (the resorts planned with it), `tickets` (the tickets they hold, in the route's compact form;
   the description lists the common product ids), `hop` (only with a hopper), `arrival`,
@@ -763,10 +765,10 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   `searchCutShort` when the plan is not proven best, `hopIgnored` when `hop` came without a
   hopper ticket, `hubUrl` and `reserve`, the hurricane season
   said once for the trip (`season`, "peak of the hurricane season …, not a forecast") rather than on
-  every day, `extreme_heat` in a day's `watch`, and the plan's `totals.penalties`, the `[{ park: id,
-date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
+  every day, and `extreme_heat` in a day's `watch`; `reserve` is the `[{ park: id, date }]` list
+  `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays under 10,000
   characters, its tickets to buy included (`assistant-trip.spec.ts`); a result is cut at 12,000.
-- **`hubUrl`** is `https://park.fan/trip-regions/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
+- **`hubUrl`** is `https://park.fan/trip-regions/orlando?from=…&to=…&parks=<slug>:<n>,…&hotel=…&area=…&blocks=0|1&fireworks=want|any[&weather=avoid]&split=auto|fixed&rest=…[&ticket=hopper]&hop=0|1&arrival=…&departure=…[&lock=…][&tickets=…][&hopper=…]#planner`,
   the `/plan` route's own query names from the normalized plan, so the hub reads it as the plan
   route does; `localizePageUrls` adds the locale.
 - **`find_trip_dates`** (status `forecast`): when to go
@@ -774,7 +776,7 @@ date }]` list `plan_trip`'s `days` takes. A 21-day trip with 16 visits stays und
   `days` (3–21, default 10), `parks` (`{ park, visits? }`; a park without `visits` may get a second
   visit by `split=auto`, as on the hub), `within` (a code from `/school-breaks`: `DE-NW`, `NL-GR`,
   `GB-ENG`, `BE-NL`, `FR-ZC`, `AT-WI` …), the plan options (`hotel`, `area`, `blocks`, `fireworks`,
-  `split`, `rest`, `hop`, `arrival`, `departure`), `tickets` (without dates), `suggest` and
+  `weather`, `split`, `rest`, `hop`, `arrival`, `departure`), `tickets` (without dates), `suggest` and
   `limit`. It runs `TripWhenService.when` (six
   hours in Redis), a refusal as the route's own sentence (an unknown `within` names the codes its
   country has). Per window: `from`/`to` with their weekdays, `headlinerWait`, `rangeAverageWait`,

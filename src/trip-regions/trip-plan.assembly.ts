@@ -10,8 +10,10 @@ import {
   hotelKinds,
   resortKeys,
   stayRulesOf,
+  weatherFor,
   type HotelKind,
   type RegionConfig,
+  type WeatherOption,
 } from "./regions";
 import type { StaysOption } from "./trip-stays";
 import { minuteOfClock } from "./tickets";
@@ -85,6 +87,8 @@ export interface NormalizedPlanQuery {
   departure: "free" | "park";
   blocks: boolean;
   fireworks: FireworksOption;
+  /** `avoid`: the region's stronger heat and storm models ({@link weatherFor}). */
+  weather: WeatherOption;
   split: "auto" | "fixed";
   rest: RestOption;
   ticket: TicketKind;
@@ -354,6 +358,7 @@ export function normalizePlanQuery(
     departure: query.departure === "park" ? "park" : "free",
     blocks: flag(query.blocks, true),
     fireworks: query.fireworks === "want" ? "want" : "any",
+    weather: query.weather === "avoid" ? "avoid" : "any",
     split: query.split === "fixed" ? "fixed" : "auto",
     rest,
     ticket,
@@ -563,6 +568,8 @@ export function planCacheQuery(q: NormalizedPlanQuery): string {
     // An edited ticket rule never serves a plan made under the old one.
     `catalog:${q.catalogVersion}`,
     ...(q.stays ? [`stays:${staysCacheQuery(q.stays)}`] : []),
+    // Absent by default, so every key made without it stays as it was.
+    ...(q.weather === "avoid" ? ["weather:avoid"] : []),
   ].join("|");
 }
 
@@ -647,7 +654,7 @@ export function planInput(
       // A region with bases: each stay's hotel brings its own perks.
       perkRules: q.stays ? [] : region.perks[q.hotel],
       locks: q.locks,
-      weather: region.weather,
+      weather: weatherFor(region, q.weather),
       ...(q.stays && { stays: staysOption(region, q.stays, legs) }),
     },
     ...(q.tickets.length > 0 && {
@@ -1166,6 +1173,7 @@ export function planResponse(
       : undefined;
   const chosen = q.parks.map((p) => p.slug);
   const leftOut = parksLeftOut(region, chosen, plan);
+  const { heat } = region.weather;
   const warnings: PlanMetaWarning[] = [
     ...tickets.warnings,
     ...(resortsLeftOut(region, chosen, leftOut).length > 0
@@ -1180,6 +1188,11 @@ export function planResponse(
       computedAt: ctx.computedAt,
       objective: "headliner_wait",
       exact: plan.exact,
+      // What a day's `extreme_heat` was read against: the region's own, with weather=avoid too.
+      heat: {
+        forecastFromC: heat.forecastFromC,
+        normalFromC: heat.normalFromC,
+      },
       ...(plan.relaxed.length > 0 && { relaxed: plan.relaxed }),
       ...(trip.split.length > 0 && { split: trip.split }),
       ticket: q.ticket,

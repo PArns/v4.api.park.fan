@@ -52,6 +52,15 @@ the calendar and the best days, `trip-tickets:<slug>` on the ticket catalog, whi
 revalidates on every catalog edit of that region ([editing](#editing-the-catalog)). The list route
 changes only with a deploy.
 
+**The release in the query (`v`).** Every route here takes an optional `v`, the client's release,
+and none reads it. The API cannot purge Cloudflare, which keeps the region route a day plus two
+hours stale, so after a deploy that changes an answer the edge would serve the old copy for up to
+26 hours. Cloudflare keys its copy by the whole URL, so the frontend sends its own release
+(`v=2.22.1`), and each frontend release, deployed after the API's, reads a fresh copy. The routes
+that check their query take `v` through one DTO (`TripReleaseQueryDto`: at most 32 letters, digits,
+`.`, `+` or `-`); the others ignore it like any name. Redis keys are built from the parsed query,
+never the URL, so `v` splits none of them.
+
 **Metrics.** Every answer of `/plan`, `/when` and `/best-days` leaves a row of operational facts
 for the planner's operators: no date, name, text, address or visitor id, and nothing a client sees
 ([what the server records](#what-the-server-records)).
@@ -636,15 +645,89 @@ region's own figures (`regions.ts`, `weather`):
   figure carries it.
 
 Neither term touches a shown wait. `headlinerWait` on a day, the plan's totals and a `/when`
-window stays the plain figure; the plan's `totals.penalties` and a window's `penalties`
-(`{ heat?, hurricane? }`, or `{ heat?, typhoon? }` in Japan, minutes per park day, one decimal,
-absent when zero) say what the ranking added, so a client can say "ranked lower: hurricane peak".
+window stays the plain figure; a window's `penalties` (`{ heat?, hurricane? }`, or
+`{ heat?, typhoon? }` in Japan, minutes per park day, one decimal, absent when zero) say what the
+ranking added, so a client can say "ranked lower: hurricane peak". The plan's answer carries no
+such figure: its days' warnings (`extreme_heat`, the storm codes) say which days the terms hit.
 
 **A season named, not priced** (`weather.notes`): Japan's rainy season (tsuyu, early June to mid
 July around Tokyo) makes a day wetter but its parks no emptier or fuller in a way a figure does not
 already carry: the forecast and last year's days hold the crowds, and a rain shower is not a reason
 to move a park to another day weeks ahead. So it costs nothing, and a plan day and a `/when` window
 that touch it say `rainy_season`, a month `rainySeason: true` ([when to go](./trip-regions-when.md)).
+
+### Avoiding extreme weather (`weather=avoid`)
+
+For a visitor who can't take the heat or wants clear of the storm season ("Extremes Wetter
+vermeiden" in the planner's Parks step, Parky's `weather: "avoid"`), `/plan` and `/when` take
+`weather=avoid`. Absent or `any`, nothing changes: the same plan, the same cache key. With it, every
+term above is priced by a stronger model derived from the region's own (`AVOID_WEATHER`,
+`avoidingWeather` in `regions.ts`), one rule for every region:
+
+| Term                          | The region's own (Orlando)        | `weather=avoid` (Orlando)              |
+| ----------------------------- | --------------------------------- | -------------------------------------- |
+| forecast high counts from     | `forecastFromC` (35 °C)           | 3 °C lower (32 °C, about its hottest normal) |
+| climate normal counts from    | `normalFromC` (31.5 °C)           | 1 °C lower (30.5 °C, under the June–October median) |
+| per degree                    | `perDegree` (8 %, a normal half)  | twice that (16 %, a normal half)       |
+| cap                           | `cap` (× 1.4)                     | × 2.5                                  |
+| storm season, `/when` peak term | `peakMinutes`, `peakWindowMinutes` (8, 10) | twice (16, 20)            |
+
+The other regions get the same steps from their own figures: Southern California 32 °C and 29.5 °C,
+Japan 32 °C and 29.5 °C, Paris 27 °C and 24 °C, each degree 16 %, and Japan's typhoon season twice.
+Water parks and Discovery Cove still take no heat term, so on a hot day they are what is left:
+a theme park moves to a cooler day where its waits allow, and the water park takes the hot one.
+Heat multiplies the queueing, so where two parks trade days the one with the shorter queues takes
+the hotter day. Nothing else changes: no shown wait, the rest days' rules, the blocks.
+
+**What the answer says.** A plan day's `extreme_heat` is read against the region's own thresholds
+with the option too: the stronger model only prices, so a park day that stays hot by the region's
+measure still says `extreme_heat` ("still hot despite the option"), and turning the option on never
+makes a trip read hotter. In Orlando's August every park day's normal passes the stronger model's
+30.5 °C: warned by it, 15–28 August 2027 would read 10 hot park days with the option against 3
+without it. Every park day carries
+the park's high, `weather: { tempMax, basis }` (one decimal; `forecast` within the forecast's 16
+days, else `climate_normal`, the 2015–2024 normal for the date), on the day for one park and on
+each park of a hop day; absent where the calendar has none. `meta.heat` gives the two thresholds
+the warning read (`forecastFromC`, `normalFromC`, the region's own), so a client
+can say "über 35 °C vorhergesagt" for a forecast and "im Schnitt 32 °C" for a normal, and count the
+hot days by their `extreme_heat`. The storm codes
+(`hurricane_season`, `hurricane_peak`, `typhoon_*`) are the same either way: the option weighs the
+season, it does not move it. `/when`'s windows, their `penalties` and `extreme_heat` follow the
+same model, so the hottest windows and those in the storm peak rank further down.
+
+**Calibration** (release 2.22.2, plans with and without the option on production's data: the
+summer's days a year ahead, and, for the forecast's 16 days, 2026's measured highs of the same
+dates fed in as the forecast; park days moved, the theme park visits' mean high, the change in
+their mean headliner wait):
+
+| Trip (2027)                                 | Highs        | Moved | Mean high     | Wait per park day |
+| ------------------------------------------- | ------------ | ----- | ------------- | ----------------- |
+| Orlando, 2–15 Aug, 7 parks                  | 30.0–37.5 °C | 4     | 34.1 → 32.7 °C (days over 35 °C: 3 → 1) | +3.6 min |
+| Orlando, 5–18 Jul, 7 parks                  | 32.6–37.4 °C | 5     | 33.9 → 33.3 °C | +2.1 min        |
+| Orlando, 9–18 Aug, 7 parks                  | 36.5–38.7 °C | 0     | 37.5 °C       | 0: no cooler day  |
+| Orlando, 20–29 May, 7 parks                 | 32.5–38.1 °C | 3     | 35.2 → 34.9 °C (degrees over 35 °C: 4.9 → 2.8) | +2.1 min |
+| Orlando, 17–30 May, 7 parks                 | 33.0–35.4 °C | 6     | 34.5 → 33.6 °C | +1.4 min        |
+| Orlando, 6–19 Sep, 7 parks                  | 31.4–34.8 °C | 5     | 33.3 → 32.9 °C | +1.4 min        |
+| Southern California, 1–12 Sep, 5 parks      | 28.5–39.0 °C | 3     | 32.6 → 28.9 °C (Magic Mountain off its 39 °C day) | +4.0 min |
+| Paris, 2–8 Aug                              | 25.1–35.5 °C | 2     | 28.9 → 27.8 °C | +2.5 min        |
+| Japan, 26 Jul–6 Aug, three parks once       | 28.5–31.9 °C | 0     | 30.3 °C       | 0                 |
+
+Past the forecast the days carry climate normals, which change by less than half a degree within
+a trip, so a plan rarely moves (Orlando in July and August: none). There the option works in
+`/when`: Orlando's 10-day windows of 12–21 June and 1–10 July leave the top eight, 19–28 October
+(hurricane season) falls from third to sixth, late February and early May come in; Southern
+California's 28 August and 7 September windows fall from second and third to eighth and fifth;
+Japan's typhoon-peak week of 2–8 September and its late-July week leave the top eight for April and
+May; Paris' two July windows leave it.
+
+**Severe weather in the forecast** (thunderstorms, heavy rain, wind) is not priced. The daily
+forecast carries a WMO weather code, the precipitation sum and the highest wind, but none of them
+tells a severe day apart: the thunderstorm code (95) marks Orlando's ordinary summer afternoon
+storm (20 of 168 days from June to mid-November 2026 at Magic Kingdom) and never appears at Tokyo
+Disneyland; the highest wind on any of those days was 35 km/h at Magic Kingdom and 41 km/h at Tokyo
+Disneyland, so there is no wind event to set a threshold by; and how well a heavy-rain day is
+forecast a week or more ahead has not been measured. The water parks' wet-day factor stays the only
+forecast weather term.
 
 ## The best days (`GET /v1/trip-regions/orlando/best-days?from=&to=&limit=5`)
 
@@ -716,6 +799,7 @@ calendar does not.
 | `departure`  | `free`                                               | the same for the last day                                                                                                               |
 | `blocks`     | `1`                                                  | each resort's days in one block, in the best order (default `1`)                                                                        |
 | `fireworks`  | `any`                                                | `any` (default): a day is priced by the hours a day guest gets; `want`: a night that costs the evening show only when nothing else fits |
+| `weather`    | `avoid`                                              | `any` (default): the region's heat and storm models; `avoid`: stronger ones, so theme park days move to cooler days ([avoiding extreme weather](#avoiding-extreme-weather-weatheravoid)) |
 | `split`      | `auto`                                               | `auto` (default): parks listed without a count may get a second visit where the trip has days to spare; `fixed`: never                  |
 | `rest`       | `auto`                                               | `auto` (default, below), `none`, or `max:3` (at most three park days in a row)                                                          |
 | `tickets`    | `wdw-uk-14-day-magic@2027-02-01,uor-date-based.3.h`  | the tickets the visitor already has, at most 6 ([tickets](#tickets)); the parks none of them covers are planned "plan first"            |
@@ -748,6 +832,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
     "objective": "headliner_wait",
     "exact": true,
     "ticket": "base", // base | hopper
+    "heat": { "forecastFromC": 35, "normalFromC": 31.5 }, // what `extreme_heat` was read against, the region's own
     "warnings": ["hop_needs_hopper"], // absent when empty; hop_needs_hopper | blockouts_unchecked | resort_left_out
   },
   "days": [
@@ -765,6 +850,7 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
       "headlinerWait": 45,
       "crowdLevel": "low",
       "basis": "forecast",
+      "weather": { "tempMax": 27.4, "basis": "forecast" }, // the park's high; on a hop day per park
       "travel": {
         "from": "hotel:disney",
         "to": "universal-epic-universe",
@@ -1004,9 +1090,7 @@ day of the trip, or fewer open days than visits), `no_day_left`. `ignoredLocks[]
 
 **`totals`** compare like with like: the planned visits' mean `headlinerWait` against, for the same
 visits, the mean over every open day of the window of that park. `savedMinutesPerRide` is that
-difference, per headliner ride. Show it as such; it is not hours saved per day. `penalties`
-(`{ heat?, hurricane? }`, minutes per park day) is what heat and the hurricane season added to the
-plan's cost, never to these waits; absent when zero. `orderMatters` is
+difference, per headliner ride. Show it as such; it is not hours saved per day. `orderMatters` is
 false when it is under 3 minutes: any order will do. `expectedError` is the measured error of the
 served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so

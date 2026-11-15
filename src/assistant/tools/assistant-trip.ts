@@ -381,6 +381,7 @@ const HUB_PARAMS = [
   "area",
   "blocks",
   "fireworks",
+  "weather",
   "split",
   "rest",
   "ticket",
@@ -405,6 +406,7 @@ export const HUB_VALUES: Record<(typeof HUB_PARAMS)[number], RegExp> = {
   area: /^[a-z_]+$/,
   blocks: /^[01]$/,
   fireworks: /^(want|any)$/,
+  weather: /^(avoid|any)$/,
   split: /^(auto|fixed)$/,
   rest: /^(auto|none|max:[1-9])$/,
   ticket: /^(base|hopper)$/,
@@ -445,6 +447,7 @@ function hubQuery(q: NormalizedPlanQuery): string {
     ...(q.area && { area: q.area }),
     blocks: q.blocks ? "1" : "0",
     fireworks: q.fireworks,
+    ...(q.weather === "avoid" && { weather: q.weather }),
     split: q.split,
     rest: q.rest.mode === "max" ? `max:${q.rest.n}` : q.rest.mode,
     ...(q.ticket === "hopper" && { ticket: q.ticket }),
@@ -855,7 +858,7 @@ export function vacationItinerary(input: {
     days,
     totals: {
       ...totals,
-      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; expectedError: the forecast's typical miss per headliner ride at these days' distance ahead, measured (get_forecast_accuracy has the region's), absent where the days are estimated from last year; penalties: minutes a park day that ${penaltiesMean(region)} added to the plan's cost, not to the waits`,
+      means: `headlinerWait: the planned visits' mean; averageDayWait: the same parks on an average open day of the trip; savedMinutesPerRide: the difference, per headliner ride, not per day; expectedError: the forecast's typical miss per headliner ride at these days' distance ahead, measured (get_forecast_accuracy has the region's), absent where the days are estimated from last year`,
     },
     ...(leftOut.length > 0 && {
       parksLeftOut: leftOut.map((l) => ({
