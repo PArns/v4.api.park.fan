@@ -25,7 +25,14 @@ import {
   type WorksPeriod,
   worksPeriodEndsBeforeItBegins,
   worksPeriodsOverlap,
+  dayWindowsOverlap,
+  type DayWindow,
 } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  PERFORMANCE_TIME_PATTERN,
+  resolvePerformanceSchedules,
+  type PerformanceSchedule,
+} from "../../attractions/utils/performance-schedule.util";
 import { Park } from "../../parks/entities/park.entity";
 import {
   abbreviationsProblem,
@@ -893,6 +900,43 @@ export class AdminCurationService {
         return resolveWorksPeriods({ curatedOutOfServicePeriods: windows });
       }
 
+      case "performances": {
+        if (!Array.isArray(raw)) {
+          throw new BadRequestException(
+            `${spec.label} must be a list of schedules`,
+          );
+        }
+        if (raw.length === 0) return unset;
+        if (spec.max !== undefined && raw.length > spec.max) {
+          throw new BadRequestException(
+            `${spec.label} may hold at most ${spec.max} schedules`,
+          );
+        }
+        const schedules = raw.map((entry: unknown, index) =>
+          parsePerformanceSchedule(
+            `${spec.label}: schedule ${index + 1}`,
+            entry,
+            spec.maxTimes,
+          ),
+        );
+        // Refused like overlapping works periods: two schedules on one day
+        // are two answers to "when is the next performance".
+        for (let i = 0; i < schedules.length; i++) {
+          for (let j = i + 1; j < schedules.length; j++) {
+            if (dayWindowsOverlap(schedules[i], schedules[j])) {
+              throw new BadRequestException(
+                `${spec.label}: schedule ${i + 1} (${describeWindow(schedules[i])}) ` +
+                  `overlaps schedule ${j + 1} (${describeWindow(schedules[j])}). ` +
+                  `Schedules must not share a day.`,
+              );
+            }
+          }
+        }
+        return resolvePerformanceSchedules({
+          curatedPerformanceSchedules: schedules,
+        });
+      }
+
       case "months": {
         if (!Array.isArray(raw)) {
           throw new BadRequestException(
@@ -1082,6 +1126,58 @@ function parseWorksPeriod(label: string, entry: unknown): WorksPeriod {
   });
 }
 
-function describeWindow(window: WorksPeriod): string {
+/**
+ * One entry of a performance-schedule list. Unlike a works period it may have
+ * neither bound: a schedule that holds on every day is the ordinary case for a
+ * cinema that always plays on the hour.
+ */
+function parsePerformanceSchedule(
+  label: string,
+  entry: unknown,
+  maxTimes: number | undefined,
+): PerformanceSchedule {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new BadRequestException(
+      `${label} must be an object with from, to and times`,
+    );
+  }
+  const { from, to, times: rawTimes } = entry as Record<string, unknown>;
+  const first = parseParkLocalDate(`${label} "from"`, from);
+  const last = parseParkLocalDate(`${label} "to"`, to);
+  if (worksPeriodEndsBeforeItBegins(first, last)) {
+    throw new BadRequestException(
+      `${label} ends ${last} and starts ${first}. A schedule that ends ` +
+        `before it begins never applies.`,
+    );
+  }
+  // The admin edits the times as one comma-separated input, so a blank
+  // entry is the gap after a trailing comma, not a time.
+  const times = Array.isArray(rawTimes)
+    ? rawTimes.filter((time) => !(typeof time === "string" && !time.trim()))
+    : [];
+  if (times.length === 0) {
+    throw new BadRequestException(`${label} needs at least one start time`);
+  }
+  if (maxTimes !== undefined && times.length > maxTimes) {
+    throw new BadRequestException(
+      `${label} may hold at most ${maxTimes} start times`,
+    );
+  }
+  const parsed = times.map((time) => {
+    const trimmed = typeof time === "string" ? time.trim() : time;
+    if (
+      typeof trimmed !== "string" ||
+      !PERFORMANCE_TIME_PATTERN.test(trimmed)
+    ) {
+      throw new BadRequestException(
+        `${label}: "${String(time)}" is not a time in HH:MM form (00:00–23:59)`,
+      );
+    }
+    return trimmed;
+  });
+  return { from: first, to: last, times: [...new Set(parsed)].sort() };
+}
+
+function describeWindow(window: DayWindow): string {
   return `${window.from ?? "open start"} – ${window.to ?? "open end"}`;
 }

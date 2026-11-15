@@ -54,6 +54,7 @@ page for the field or endpoint you are reading or changing.
 | [live-wait-times-availability](./live-wait-times-availability.md) | `liveWaitTimes`: parks we cannot read, single `UNKNOWN` rides                                                   |
 | [seasonality](./seasonality.md)                                   | `isSeasonal`, `seasonMonths`, `isCurrentlyInSeason`                                                             |
 | [works-period](./works-period.md)                                 | `worksPeriod`, `worksPeriods`: curated rebuild windows                                                          |
+| [performance-schedules](./performance-schedules.md)               | `performanceSchedules`: start times of a ride that runs as performances                                         |
 | [not-run-today](./not-run-today.md)                               | `notRunToday`: a ride that has not run yet today                                                                |
 | [retired-parks](./retired-parks.md)                               | `retiredAt` on a park                                                                                           |
 | [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                          |

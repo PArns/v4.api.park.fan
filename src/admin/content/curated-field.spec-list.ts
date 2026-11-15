@@ -13,6 +13,10 @@ import {
   resolveWorksPeriods,
   type WorksPeriodSource,
 } from "../../attractions/utils/curated-out-of-service.util";
+import {
+  MAX_PERFORMANCE_SCHEDULES,
+  MAX_PERFORMANCE_TIMES,
+} from "../../attractions/utils/performance-schedule.util";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
 
@@ -48,7 +52,14 @@ export type CuratedFieldType =
    * A list of works periods: `Array<{ from: string | null; to: string | null;
    * toUncertain: boolean }>` or null, dates park-local `YYYY-MM-DD`.
    */
-  | "periods";
+  | "periods"
+  /**
+   * A list of performance schedules: `Array<{ from: string | null; to: string
+   * | null; times: string[] }>` or null, dates park-local `YYYY-MM-DD`, times
+   * park-local `HH:MM`. `max` is the most schedules, `maxTimes` the most
+   * start times one schedule takes.
+   */
+  | "performances";
 
 export interface CuratedFieldSpec {
   /** The curated column's TS property name — also the PATCH body key. */
@@ -96,6 +107,8 @@ export interface CuratedFieldSpec {
    * should show instead. Served on the view so the admin can hide it.
    */
   legacy?: true;
+  /** `performances` only: the most start times one schedule takes. */
+  maxTimes?: number;
 }
 
 /**
@@ -244,6 +257,22 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "Schätzung sein. Solange eines läuft, meldet die Seite für diese Bahn " +
       "keine Störung — weder live noch in der Auswertung. Fenster dürfen sich " +
       "nicht überschneiden.",
+  },
+  {
+    key: "curatedPerformanceSchedules",
+    label: "Vorstellungszeiten",
+    type: "performances",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Vorstellungen",
+    max: MAX_PERFORMANCE_SCHEDULES,
+    maxTimes: MAX_PERFORMANCE_TIMES,
+    hint:
+      "Nur für Attraktionen, die zu festen Zeiten beginnen statt durchgehend " +
+      "zu laufen (4D-Kino, Show-Walkthrough). Je Zeitraum die Startzeiten in " +
+      "Parkzeit; ein Zeitraum ohne Daten gilt an jedem Tag. Solange einer " +
+      "läuft, zeigt die Seite einen Countdown zur nächsten Vorstellung statt " +
+      "der Wartezeit. Zeiträume dürfen sich nicht überschneiden.",
   },
   {
     key: "curatedOutOfServiceFrom",
@@ -744,6 +773,7 @@ export interface CuratedFieldView {
   min?: number;
   max?: number;
   maxLength?: number;
+  maxTimes?: number;
   hint?: string;
   legacy?: true;
 }
@@ -798,6 +828,7 @@ function buildViews(
       ...(spec.min !== undefined ? { min: spec.min } : {}),
       ...(spec.max !== undefined ? { max: spec.max } : {}),
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
+      ...(spec.maxTimes !== undefined ? { maxTimes: spec.maxTimes } : {}),
       ...(spec.legacy ? { legacy: spec.legacy } : {}),
       ...((spec.entityHint?.(entity) ?? spec.hint)
         ? { hint: spec.entityHint?.(entity) ?? spec.hint }

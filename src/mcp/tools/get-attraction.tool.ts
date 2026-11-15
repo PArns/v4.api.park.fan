@@ -7,6 +7,7 @@ import { AttractionIntegrationService } from "../../attractions/services/attract
 import { rideFacts } from "../../attractions/utils/ride-facts.util";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { performanceTimesOn } from "../../attractions/utils/performance-schedule.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { bindingView } from "./bind-ride-seasons.tool";
 
@@ -26,7 +27,8 @@ export const getAttractionTool = defineMcpTool({
   description:
     "One ride as park.fan shows it now: status and effective status, every queue (standby, single " +
     "rider, virtual queue …) with its wait, live crowd level and trend against its baseline, a " +
-    "running outage, whether it has run today, works periods, the curated facts (minimum height, " +
+    "running outage, whether it has run today, works periods, performance schedules (a ride " +
+    "that starts at fixed times, with today's start times), the curated facts (minimum height, " +
     "gets you wet, single rider, indoor/outdoor, season months, every park season that binds it " +
     "(seasonBindings) or pauses it (seasonPauses), land, the paid fast pass, headliner), the rope-drop recommendation and today's best visit times where computed, " +
     "the ride profile where one is " +
@@ -103,6 +105,13 @@ export const getAttractionTool = defineMcpTool({
         : null,
       // Every window, for "when is it closed next" — worksPeriod is just one.
       worksPeriods: dto.worksPeriods ?? [],
+      // A ride that runs as performances: every schedule, and the start times
+      // of the one covering the park's today (null: it runs as `status` says).
+      performanceSchedules: dto.performanceSchedules ?? [],
+      performanceTimesToday: performanceTimesOn(
+        dto.performanceSchedules ?? [],
+        getCurrentDateInTimezone(attraction.park.timezone),
+      ),
       facts: {
         kind: dto.attractionKind ?? null,
         indoorOutdoor: dto.indoorOutdoor ?? null,

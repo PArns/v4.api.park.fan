@@ -42,6 +42,11 @@ import {
 } from "../../attractions/dto/attraction-outage.dto";
 import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
 import {
+  PERFORMANCE_SCHEDULES_API_PROPERTY,
+  PerformanceScheduleDto,
+} from "../../attractions/dto/performance-schedule.dto";
+import { performanceSchedulesOf } from "../../attractions/utils/performance-schedule.util";
+import {
   resolveWorksPeriod,
   worksPeriodsOf,
 } from "../../attractions/utils/curated-out-of-service.util";
@@ -351,6 +356,9 @@ export class ParkAttractionDto {
     type: [WorksPeriodDto],
   })
   worksPeriods?: WorksPeriodDto[];
+
+  @ApiProperty(PERFORMANCE_SCHEDULES_API_PROPERTY)
+  performanceSchedules?: PerformanceScheduleDto[];
 
   @ApiProperty({
     description:
@@ -1075,6 +1083,7 @@ export class ParkWithAttractionsDto {
               // attraction rather than a block of nulls across the catalogue.
               worksPeriod: resolveWorksPeriod(attraction, park.timezone),
               ...worksPeriodsOf(attraction),
+              ...performanceSchedulesOf(attraction),
               // `park` here, not `attraction.park`: the list is built from the
               // park being mapped, and the attractions carry no back-reference.
               fastPass: resolveFastPass(attraction, park),
