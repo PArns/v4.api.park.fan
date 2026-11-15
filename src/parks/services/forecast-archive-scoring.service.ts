@@ -29,7 +29,6 @@ import {
   ScoreAccumulator,
   TruthReading,
   buildTruthSlots,
-  truthRowsSql,
   calendarDayValue,
   regionOf,
   scoreCrossParkCrowd,
@@ -355,7 +354,13 @@ export class ForecastArchiveScoringService {
     const truth = new Map<string, Map<number, number>>();
     if (windows.length > 0) {
       for (const [id, list] of readings) {
-        truth.set(id, buildTruthSlots(list, windows));
+        truth.set(
+          id,
+          buildTruthSlots(
+            list.filter((r) => !r.heartbeat),
+            windows,
+          ),
+        );
       }
     }
 
@@ -609,15 +614,23 @@ export class ForecastArchiveScoringService {
     toMs: number,
   ): Promise<Map<string, TruthReading[]>> {
     const rows = await queryWithLimits<
-      Array<{ id: string; ts: Date; status: string; wait: number | null }>
+      Array<{
+        id: string;
+        ts: Date;
+        status: string;
+        wait: number | null;
+        hb: boolean;
+      }>
     >(
       this.curveRepository.manager.connection,
-      `SELECT "attractionId" AS id, timestamp AS ts, status::text AS status, "waitTime" AS wait
+      // Heartbeats come along flagged: the truth slots leave them out, the
+      // calendar's day statistic (D6) counts them as its baseline does.
+      `SELECT "attractionId" AS id, timestamp AS ts, status::text AS status, "waitTime" AS wait,
+              COALESCE(is_heartbeat, false) AS hb
          FROM queue_data
         WHERE "attractionId" = ANY($1::uuid[])
           AND "queueType" = 'STANDBY'
           AND timestamp >= $2 AND timestamp < $3
-          AND ${truthRowsSql()}
         ORDER BY "attractionId", timestamp`,
       [attractionIds, new Date(fromMs), new Date(toMs)],
       READ_LIMITS,
@@ -629,6 +642,7 @@ export class ForecastArchiveScoringService {
         timestamp: new Date(r.ts).getTime(),
         status: r.status,
         waitTime: r.wait === null ? null : Number(r.wait),
+        heartbeat: r.hb === true,
       });
       out.set(r.id, list);
     }

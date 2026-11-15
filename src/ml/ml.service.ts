@@ -51,6 +51,11 @@ import {
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
+import { applySeasonLevel } from "./utils/season-level.util";
+import {
+  loadSeasonLevelInputs,
+  type SeasonLevelInputs,
+} from "./utils/season-level.query";
 import {
   applyChronosOverride,
   readChronosServeCache,
@@ -451,6 +456,9 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
+    // Skip the cache read and ask the model: for a caller that stores the
+    // answer as this run's forecast (PAR-1330). The build still fills the cache.
+    fresh = false,
   ): Promise<BulkPredictionResponseDto> {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
@@ -471,7 +479,7 @@ export class MLService {
     // Try cache first (include date in park timezone to invalidate daily)
     const today = getCurrentDateInTimezone(park.timezone);
     const cacheKey = CacheKeys.mlParkPredictions(parkId, predictionType, today);
-    const cached = await this.redis.get(cacheKey);
+    const cached = fresh ? null : await this.redis.get(cacheKey);
 
     if (cached) {
       const cachedData = JSON.parse(cached);
@@ -1295,7 +1303,7 @@ export class MLService {
           `TFT daily merge skipped for ${parkId}: ${e instanceof Error ? e.message : e}`,
         );
       }
-      if (tft.length === 0) return base;
+      if (tft.length === 0) return this.withSeasonLevel(parkId, base);
 
       // Keyed on the PARK-LOCAL day for both sides (PAR-818): TFT names the
       // local day, CatBoost an instant whose UTC date can be the day after.
@@ -1312,12 +1320,74 @@ export class MLService {
       const tftKeys = new Set(tft.map(key));
       const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
       const merged = [...tft, ...farCatboost];
-      return {
-        predictions: merged,
-        count: merged.length,
-        modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
-      };
+      return this.withSeasonLevel(
+        parkId,
+        {
+          predictions: merged,
+          count: merged.length,
+          modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
+        },
+        tz,
+      );
     });
+  }
+
+  /** `SEASON_LEVEL=true`, read per call like the other serving switches. */
+  static seasonLevelEnabled(): boolean {
+    return process.env.SEASON_LEVEL === "true";
+  }
+
+  /**
+   * The served daily rows with the season level on the days of a running park
+   * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
+   * move once a night, so they are cached for six hours; a failed read costs
+   * the season level, never the response.
+   */
+  private async withSeasonLevel(
+    parkId: string,
+    served: BulkPredictionResponseDto,
+    timezone?: string,
+  ): Promise<BulkPredictionResponseDto> {
+    if (!MLService.seasonLevelEnabled() || served.predictions.length === 0) {
+      return served;
+    }
+    try {
+      const tz =
+        timezone ??
+        (
+          await this.parkRepository.findOne({
+            where: { id: parkId },
+            select: { id: true, timezone: true },
+          })
+        )?.timezone ??
+        "UTC";
+      const cacheKey = `ml:season-level:v1:${parkId}`;
+      const cached = await this.redis.get(cacheKey);
+      const inputs: SeasonLevelInputs = cached
+        ? JSON.parse(cached)
+        : await loadSeasonLevelInputs(
+            this.parkRepository.manager.connection,
+            parkId,
+            tz,
+          );
+      if (!cached) {
+        await this.redis
+          .set(cacheKey, JSON.stringify(inputs), "EX", 6 * 60 * 60)
+          .catch(() => undefined);
+      }
+      const predictions = applySeasonLevel(
+        served.predictions,
+        inputs.seasons,
+        inputs.references,
+        (p) => MLService.localDateOf(p.predictedTime, tz),
+      );
+      return { ...served, predictions };
+    } catch (e: unknown) {
+      this.logger.warn(
+        `Season level skipped for ${parkId}: ${e instanceof Error ? e.message : e}`,
+      );
+      return served;
+    }
   }
 
   /**

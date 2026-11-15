@@ -4,7 +4,6 @@ import { MLService } from "./ml.service";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { MLModelService } from "./services/ml-model.service";
 import { MLDashboardService } from "./services/ml-dashboard.service";
-import { PredictionDeviationService } from "./services/prediction-deviation.service";
 import { ForecastErrorBreakdownService } from "./services/forecast-error-breakdown.service";
 import { MLDriftMonitoringService } from "./services/ml-drift-monitoring.service";
 import { MLFeatureDriftService } from "./services/ml-feature-drift.service";
@@ -75,7 +74,6 @@ import { BullModule } from "@nestjs/bull";
     PredictionAccuracyService,
     MLModelService,
     MLDashboardService,
-    PredictionDeviationService,
     MLDriftMonitoringService,
     MLFeatureDriftService,
     MLAlertService,
@@ -91,7 +89,6 @@ import { BullModule } from "@nestjs/bull";
     PredictionAccuracyService,
     MLModelService,
     MLDashboardService,
-    PredictionDeviationService,
     MLFeatureDriftService,
     MLAlertService,
     MLAnomalyDetectionService,

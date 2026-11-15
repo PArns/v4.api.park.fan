@@ -3695,6 +3695,38 @@ describe("PlanDayService", () => {
       expect(plan.rides[0].slots!.find((s) => s.minute === 600)!.wait).toBe(26);
     });
 
+    describe("with a served lead cap (PAR-1331)", () => {
+      afterEach(() => {
+        delete process.env.PLAN_DAY_H5_MAX_LEAD_DAYS;
+      });
+
+      it("serves H5 up to the cap and the old composer past it", async () => {
+        process.env.PLAN_DAY_H5_MAX_LEAD_DAYS = "5";
+
+        const inside = await service.buildPlanDay(
+          park,
+          composedDay("tft", dayFromToday(5)),
+        );
+        expect(inside.rides[0].composer).toBe("h5");
+
+        const past = await service.buildPlanDay(
+          park,
+          composedDay("tft", dayFromToday(6)),
+        );
+        expect(past.rides[0].composer).toBe("peak_scaled");
+        expect(past.rides[0].slots).toBeUndefined();
+      });
+
+      it("ignores a cap that is not a whole number below 90", () => {
+        for (const value of ["", "abc", "-1", "2.5", "400"]) {
+          process.env.PLAN_DAY_H5_MAX_LEAD_DAYS = value;
+          expect(PlanDayService.h5ServedMaxLeadDays()).toBe(90);
+        }
+        process.env.PLAN_DAY_H5_MAX_LEAD_DAYS = "21";
+        expect(PlanDayService.h5ServedMaxLeadDays()).toBe(21);
+      });
+    });
+
     it("serves a quiet ride the plain profile even at d2", async () => {
       const date = composedDay("tft", dayFromToday(2));
       h5Profiles = new Map([["a-taron", { ...h5(), q90: 30 }]]);

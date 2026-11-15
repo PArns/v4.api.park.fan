@@ -7,6 +7,8 @@ actual daily P90 — headliners only (the rides that drive crowd levels).
 Run inside nf-service: docker exec <nf> python3 /app/backtest_headliners.py
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
@@ -15,8 +17,10 @@ import db
 import forecast
 from neuralforecast import NeuralForecast
 
-BASE = "2026-05-10"          # train < BASE
-END = "2026-05-24"           # holdout = [BASE, END)
+# train < BASE, holdout = [BASE, END). Override for a newer holdout:
+#   NF_BACKTEST_BASE=2026-10-25 NF_BACKTEST_END=2026-11-08 python3 backtest_headliners.py
+BASE = os.environ.get("NF_BACKTEST_BASE", "2026-05-10")
+END = os.environ.get("NF_BACKTEST_END", "2026-05-24")
 H = 14
 
 
@@ -125,6 +129,10 @@ def main():
         yh["aid"] = yh["unique_id"].astype(str)
         yh["d"] = pd.to_datetime(yh["ds"]).dt.date
         tft = yh[["aid", "d", tcol]].rename(columns={tcol: "tft"})
+        # PAR-1334: `TFT` is the mean of 1,000 draws and what production serves;
+        # `TFT-median` comes from the same fit, so the two are paired.
+        if tcol == "TFT" and "TFT-median" in yh.columns:
+            tft["tft_median"] = yh["TFT-median"].to_numpy()
         m = act.merge(tft, on=["aid", "d"], how="inner").merge(cat, on=["aid", "d"], how="inner")
         print("--- loss=%-9s matched=%d attractions=%d ---"
               % (label, len(m), m["aid"].nunique()), flush=True)
@@ -137,6 +145,16 @@ def main():
                 print("  %-9s n=%-5d TFT MAE=%5.1f bias=%+5.1f | CatBoost MAE=%5.1f bias=%+5.1f"
                       % (lbl, len(sub), mae(sub.y, sub.tft), bias(sub.y, sub.tft),
                          mae(sub.y, sub.cb), bias(sub.y, sub.cb)), flush=True)
+        if "tft_median" in m.columns:
+            print("  served mean (TFT) vs TFT-median, same fit, same rows:", flush=True)
+            for lbl, mk in [("ALL", m.y >= 0), ("quiet<40", m.y < 40),
+                            ("busy>=40", m.y >= 40), ("busy>=70", m.y >= 70)]:
+                sub = m[mk]
+                if len(sub):
+                    print("  %-9s n=%-5d mean MAE=%5.2f bias=%+5.2f | median MAE=%5.2f bias=%+5.2f"
+                          % (lbl, len(sub), mae(sub.y, sub.tft), bias(sub.y, sub.tft),
+                             mae(sub.y, sub.tft_median), bias(sub.y, sub.tft_median)),
+                          flush=True)
 
 
 if __name__ == "__main__":

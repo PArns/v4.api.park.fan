@@ -76,6 +76,25 @@ export class AttractionsService {
   }
 
   /**
+   * The season columns of every live ride of a park, for a caller that asks
+   * whether a ride runs on many different days (`withoutRidesOutOfSeason`).
+   */
+  async getSeasonFacts(parkId: string): Promise<Attraction[]> {
+    return this.attractionRepository.find({
+      where: { parkId, retiredAt: IsNull() },
+      select: {
+        id: true,
+        isSeasonal: true,
+        seasonMonths: true,
+        curatedIsSeasonal: true,
+        curatedSeasonMonths: true,
+        seasonBindings: true,
+        seasonPauses: true,
+      },
+    });
+  }
+
+  /**
    * Finds all attractions
    */
   async findAll(): Promise<Attraction[]> {

@@ -55,6 +55,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
 
   const attractionsService = {
     getMaintenanceWindows: jest.fn().mockResolvedValue([]),
+    getSeasonFacts: jest.fn().mockResolvedValue([]),
   };
 
   const TZ = "Europe/Copenhagen";
@@ -303,6 +304,61 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         ["2027-01-04", 50],
         ["2027-01-05", 70],
       ]);
+    });
+
+    it("leaves out a headliner a season pauses on the day, with the filter on (PAR-1326)", async () => {
+      process.env.CALENDAR_SEASON_FILTER = "true";
+      try {
+        analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+          new Set(["river-quest", "taron"]),
+        );
+        analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+        // River Quest during Wintertraum: paused on the 4th, running on the 5th.
+        attractionsService.getSeasonFacts.mockResolvedValueOnce([
+          {
+            id: "river-quest",
+            seasonPauses: [
+              {
+                id: "s1",
+                kind: "winter",
+                name: "Wintertraum",
+                status: "confirmed",
+                startDate: "2027-01-01",
+                endDate: "2027-01-04",
+                dates: null,
+              },
+            ],
+          },
+        ]);
+
+        const days = await service.aggregateDailyPredictions(
+          buildPredictions([
+            {
+              attractionId: "river-quest",
+              date: "2027-01-04",
+              hour: 12,
+              wait: 10,
+            },
+            { attractionId: "taron", date: "2027-01-04", hour: 12, wait: 50 },
+            {
+              attractionId: "river-quest",
+              date: "2027-01-05",
+              hour: 12,
+              wait: 10,
+            },
+            { attractionId: "taron", date: "2027-01-05", hour: 12, wait: 50 },
+          ]),
+          "p1",
+          TZ,
+        );
+
+        expect(days.map((d) => [d.date, d.avgWaitTime])).toEqual([
+          ["2027-01-04", 50],
+          ["2027-01-05", 30],
+        ]);
+      } finally {
+        delete process.env.CALENDAR_SEASON_FILTER;
+      }
     });
 
     it("rates the day as before when the windows cannot be read", async () => {

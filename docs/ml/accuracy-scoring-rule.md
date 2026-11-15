@@ -125,3 +125,46 @@ FROM prediction_accuracy
 WHERE target_time >= now() - interval '7 days' AND score_class = 'scored'
 GROUP BY 1 ORDER BY 1 DESC;
 ```
+
+### Rides that rarely have a queue (PAR-1332)
+
+Every model trains on waits ≥ 5 min only, so it predicts the wait *given a queue*. The scored
+slots include real zeros (the table above), which is where the positive bias of the raw CatBoost
+figure comes from: a ride that is walk-on on most hours is forecast at the height of its rare
+queues. The replay below measures what a hurdle would buy before anyone builds one. `p_queue` is
+the ride's share of scored slots with a wait ≥ 5 in the 14 days **before** the 14 scored ones
+(ex ante); the hurdle serves 0 where `p_queue < 0.5` — the median of a wait that is absent more
+often than not — and the stored forecast everywhere else. Read `rarely_queues = true` for the
+gain and `false` to confirm nothing else moves; the segments are by actual wait, as on the PCN
+board.
+
+```sql
+-- Hurdle replay: raw CatBoost hourly, scored slots, last 14 days
+WITH scored AS (
+  SELECT attraction_id, target_time,
+         predicted_wait_time AS pred, actual_wait_time AS actual
+  FROM prediction_accuracy
+  WHERE "predictionType" = 'hourly' AND comparison_status = 'COMPLETED'
+    AND score_class = 'scored' AND actual_wait_time <= 400
+    AND target_time >= now() - interval '28 days'
+), ride AS (
+  SELECT attraction_id, avg((actual >= 5)::int) AS p_queue
+  FROM scored
+  WHERE target_time < now() - interval '14 days'
+  GROUP BY 1 HAVING count(*) >= 50
+), replay AS (
+  SELECT s.pred, s.actual, r.p_queue < 0.5 AS rarely_queues,
+         CASE WHEN r.p_queue < 0.5 THEN 0 ELSE s.pred END AS hurdle
+  FROM scored s JOIN ride r USING (attraction_id)
+  WHERE s.target_time >= now() - interval '14 days'
+)
+SELECT rarely_queues,
+       CASE WHEN actual >= 60 THEN 'busy' WHEN actual >= 30 THEN 'mid' ELSE 'quiet' END AS segment,
+       count(*) AS n,
+       round(avg(abs(pred - actual)), 2)   AS mae_served,
+       round(avg(pred - actual), 2)        AS bias_served,
+       round(avg(abs(hurdle - actual)), 2) AS mae_hurdle,
+       round(avg(hurdle - actual), 2)      AS bias_hurdle
+FROM replay
+GROUP BY 1, 2 ORDER BY 1, 2;
+```

@@ -30,7 +30,6 @@ produced each slot (`pcn` / `chronos` / `catboost`).
 | `getParkPredictions(…, "hourly")` | park page curve, `/plan/day` today, calendar today, favourites | served (steps 1–3 on copies of the cached answer) |
 | `getBatchStoredPredictions` | the attraction cards in the park response | served |
 | `getAttractionPredictionsWithFallback` | ride page `hourlyForecast` (stored rows, or the live ml-service answer for a new ride) | served |
-| `PredictionDeviationService.getServedPcnWait` | deviation badges | the served PCN value, so a badge judges the number a reader saw |
 | `servedIntradayValues` | `storePredictions`, recording the reader-facing badge's columns (`prediction_accuracy.served_*`, captured ≥ 2 h ahead, `SERVED_ACCURACY_MIN_LEAD_MS`) | served value + source — [Reader-facing accuracy](reader-facing-accuracy.md) |
 | `getRawParkPredictions` | `predictions/generate-hourly` and `generate-daily` only | **CatBoost-pure**, Redis-cached (hourly 30 min, daily 13 h) |
 

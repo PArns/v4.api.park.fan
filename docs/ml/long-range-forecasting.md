@@ -101,7 +101,8 @@ CatBoost's daily accuracy beyond one day cannot be measured retrospectively: `de
 rewrites a day's prediction on every nightly run, so of its rows for passed target dates 72,795 sat
 at lead 1 and 179 at 8–30 days. `prediction_lead_snapshots`
 (`src/ml/entities/prediction-lead-snapshot.entity.ts`, `PredictionLeadSnapshotService`) records the
-served daily level forward at lead buckets 1/3/7/14/30/60/90 (`LEAD_BUCKETS`) and backs `/plan/day`'s
+served daily level forward at lead buckets 1/3/7/14/30/60/90/120/180 (`LEAD_BUCKETS`; d120 and
+d180 since PAR-1341, first figures about 120 and 180 days after that deploy) and backs `/plan/day`'s
 `leadTimeMae` once a bucket has `MIN_SCORED` = 100 scored rows (an unfilled bucket falls back to the
 nearest published one below it). `d60` and `d90` lie past the TFT horizon (forecast day + 59), so
 they record CatBoost's own error (PAR-167, [the seam](quantile-serving-and-calibration.md)); since PAR-854 it snapshots the
@@ -119,7 +120,10 @@ they are not comparable line for line with §2. The 15-minute curve's equivalent
 (`src/ml/services/forecast-accuracy.service.ts`); `/plan/day` attaches `expectedError` per ride and
 an `accuracy` block per day, with `basis: "unmeasured"` past 60 days. The buckets are
 **`d1/d3/d7/d14/d30/d60`**, the distances the forward archive samples (four until PAR-17, which
-answered a 10-day question with the 30-day cell). Every cell needs 500 comparisons (`MIN_SAMPLE`);
+answered a 10-day question with the 30-day cell). A target day is scored once it is over in the
+park's own timezone, against all of its hours; until PAR-1333 the truth was cut at UTC midnight,
+so the newest day of every American park was scored without its evening. Every cell needs 500
+comparisons (`MIN_SAMPLE`);
 all 18 cleared it by an order of magnitude on 2026-09-11:
 
 | Predicted | ≤ 1 d | ≤ 3 d | ≤ 7 d | ≤ 14 d | ≤ 30 d | ≤ 60 d |

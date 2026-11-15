@@ -20,6 +20,7 @@ import {
   nextRideLater,
   percentileCont,
 } from "../../ml/utils/forecast-archive-scoring.util";
+import { servedLevelSource } from "../../ml/utils/season-level.util";
 import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
 import {
@@ -1285,7 +1286,7 @@ export class ForecastArchiveService {
     for (const p of serving.predictions ?? []) {
       sources.set(
         `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
-        p.modelVersion === "tft" ? "tft" : "catboost",
+        servedLevelSource(p.modelVersion),
       );
     }
     const catboost = new Map<string, number>();

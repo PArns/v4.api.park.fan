@@ -67,6 +67,7 @@ Start at the first page: which model serves which surface today.
 - [reader-facing-accuracy](ml/reader-facing-accuracy.md) — Badge, leadTimeMae and day-curve forecastError: which model each measures and how it is scored
 - [hourly-lead-snapshots](ml/hourly-lead-snapshots.md) — hourly_lead_snapshots: the hourly forecast at fixed leads (PAR-658), sampling, volume, retention, how to read it
 - [long-range-forecasting](ml/long-range-forecasting.md) — Measured forecast horizons per model, TFT lead-time error, outcome-conditioning trap, served error grid
+- [season-level](ml/season-level.md) — The served daily level on a day of a running park season: the rule, its inputs, what it does to the evaluation
 - [level-drivers](ml/level-drivers.md) — What explains the daily level: driver analysis, covariates TFT lacks, driver_level results and its prod shadow
 - [ml-overview](ml/ml-overview.md) — Admin ML overview: switch decisions and evaluateOn, frozen decision reports, component status, drift watch
 - [forward-archive/](ml/forward-archive/README.md) — Forward archive of served curves: what it answers, code, queues, tables, when scores appear; index

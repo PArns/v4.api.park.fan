@@ -45,6 +45,15 @@ function build(
                 status: "OPERATING",
                 wait: 40,
               },
+              // A heartbeat copy of the 20: not truth (it would pull the
+              // 09:00 slot down to 20), but a row of the calendar's day value.
+              {
+                id: "r1",
+                ts: T("2026-10-08T08:50:00Z"),
+                status: "OPERATING",
+                wait: 20,
+                hb: true,
+              },
               {
                 id: "r1",
                 ts: T("2026-10-08T09:20:00Z"),
@@ -227,7 +236,9 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
       PAIRED_DEFINITION,
     ]);
     const truth = sql.find((q) => q.includes("FROM queue_data"))!;
-    expect(truth).toContain("NOT COALESCE(is_heartbeat, false)");
+    // Heartbeats are read flagged and dropped from the truth slots in code,
+    // so the calendar's day value (D6) can count them as its baseline does.
+    expect(truth).toContain("COALESCE(is_heartbeat, false) AS hb");
   });
 
   it("catches up the unscored dates only, replaces each date's rows, and retires the board cache", async () => {
@@ -262,7 +273,8 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
     expect(byKey.has("EU|UC3|d1|level_climatology|all")).toBe(true);
     // dayPeak 45 vs truth P90 40: an over-forecast, inside the one-sided band.
     expect(uc3).toMatchObject({ nPeak: 1, nPeakBand: 1, nPeakBandCov: 1 });
-    // D6: calendar day value P90(20,40,30 ≥ 10) = 38 ÷ 30 = 127 % → high.
+    // D6: calendar day value P90(20,40,20,30 ≥ 10, the heartbeat included)
+    // = 37 ÷ 30 = 123 % → high.
     expect(byKey.get("EU|D6|d1|predicted|all")).toMatchObject({
       n: 1,
       exact: 1,

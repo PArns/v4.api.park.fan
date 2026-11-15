@@ -46,8 +46,8 @@ covariates cannot be missing: a day without a published window is not forecast.
 
 ## Information cut and data reads
 
-The context is BENCH truth (STANDBY in force at each slot midpoint, OPERATING, ≥ 5, inside the
-published window) for slots that **ended by the origin**; today's readings up to the origin
+The context is BENCH truth (STANDBY in force at each slot midpoint, OPERATING, ≥ 5, no heartbeat
+rows since PAR-1329, inside the published window) for slots that **ended by the origin**; today's readings up to the origin
 instant. Schedule and holidays are known-future inputs read at the origin.
 
 nf-service caches each park's truth slots of complete past days as parquet

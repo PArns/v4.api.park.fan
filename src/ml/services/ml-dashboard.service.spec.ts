@@ -4,7 +4,6 @@ import { MLDashboardService } from "./ml-dashboard.service";
 import { MLModelService } from "./ml-model.service";
 import { MLService } from "../ml.service";
 import { PredictionAccuracyService } from "./prediction-accuracy.service";
-import { PredictionDeviationService } from "./prediction-deviation.service";
 import { MLDriftMonitoringService } from "./ml-drift-monitoring.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
@@ -38,7 +37,6 @@ describe("MLDashboardService", () => {
     getDayOfWeekAccuracyPatterns: jest.fn(),
     getServedIntradayAccuracy: jest.fn(),
   };
-  const deviationService = {};
   const driftService = {
     getDriftMetrics: jest.fn(),
   };
@@ -57,7 +55,6 @@ describe("MLDashboardService", () => {
         { provide: MLModelService, useValue: mlModelService },
         { provide: MLService, useValue: mlService },
         { provide: PredictionAccuracyService, useValue: accuracyService },
-        { provide: PredictionDeviationService, useValue: deviationService },
         { provide: MLDriftMonitoringService, useValue: driftService },
         { provide: getQueueToken("ml-training"), useValue: mlTrainingQueue },
         { provide: REDIS_CLIENT, useValue: redis },

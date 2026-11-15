@@ -8,8 +8,9 @@ reads it, and the measurements behind its place in the stack. Its two nightly sh
 ## What it serves
 
 - **`predicted_peak`** per ride and park-local day up to forecast day + 59 (`NF_HORIZON` = 60 counts from the last
-  observed day): the median of the
-  forecast distribution of the ride's daily P90 — E[daily-P90], not an upper quantile
+  observed day): the mean of 1,000 draws from the
+  forecast distribution of the ride's daily P90 — E[daily-P90], not an upper quantile and not the
+  median (NeuralForecast's `TFT` column; the median is `TFT-median`, which `_tft_column` passes over)
   ([Quantile serving](quantile-serving-and-calibration.md#tft--the-served-peak-is-edaily-p90-not-an-upper-quantile)).
 - **Every ride in `tft_forecasts`** (3,581 rides against 1,237 headliners on 2026-09-03), not only
   headliners: it is 28 % better than CatBoost on the other rides too
@@ -67,7 +68,9 @@ The tropics keep the northern months (their seasonality is in the school-holiday
 
 Static covariates (`NF_USE_STATIC`, on): country and region as integer codes. The static frame
 must be passed to `nf.predict` as well as `fit`, or the run fails with "static exogenous
-variables not found". No past-only covariates in the served model.
+variables not found". NeuralForecast pairs static rows with series by position, never by id, so
+the frame handed to `fit` holds exactly the series of the fit frame (`forecast.fit_static`,
+PAR-1327). No past-only covariates in the served model.
 
 Trap: series ids are text on both sides of every join (`attractionId::text`, `parkId::text`). A
 UUID on one side once made the covariate join miss — "calendar covariates done: 0 parks" — and
@@ -78,7 +81,7 @@ every holiday flag was 0.
 | Setting | Value |
 |---|---|
 | Model | NeuralForecast `TFT` only (NHITS was dropped: it doubled the time and was flatter) |
-| Loss | `NF_LOSS=studentt` — `DistributionLoss` StudentT, levels 80/90; the point is the median |
+| Loss | `NF_LOSS=studentt` — `DistributionLoss` StudentT, levels 80/90; the served point is the sample mean (`TFT`), not `TFT-median`. The backtests read the same column, so their MAEs describe what is served; a sample mean of a heavy-tailed draw differs between two runs of the same model |
 | Shape | `NF_HORIZON` 60, `NF_INPUT_SIZE` 90, `start_padding_enabled` (short, gappy series) |
 | Training | `NF_MAX_STEPS` 500, `NF_HIDDEN_SIZE` 64, lr 1e-3, `scaler_type="robust"`, no validation set, no early stopping |
 | Memory | `NF_WINDOWS_BATCH_SIZE` 128, `NF_BATCH_SIZE` 16, `NF_NUM_WORKERS` 4, container 14 g, `shm_size` 2 g |

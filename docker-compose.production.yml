@@ -312,6 +312,27 @@ services:
       # Chronos-2 SHADOW capture into the forward archive (PAR-852). Never served to
       # users; "false" stops the API calling nf-service /chronos/forecast at all.
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}
+      # /plan/day composed days from the H5 profile in 15-minute slots, served up
+      # to day 21: the leads the forward archive had decided on 2026-11-14 (days
+      # 2–5 −1.46 min, days 6–21 −1.79 min against the old composer). Raise the cap
+      # to 90 once days 30–60 are judged (decision planner_h5_slots, 2026-12-22).
+      # Rollback: PLAN_DAY_H5_COMPOSER=false. docs/frontend/plan-day/slots-and-h5.md
+      - PLAN_DAY_H5_COMPOSER=${PLAN_DAY_H5_COMPOSER:-true}
+      - PLAN_DAY_H5_MAX_LEAD_DAYS=${PLAN_DAY_H5_MAX_LEAD_DAYS:-21}
+      # generate-hourly asks CatBoost on every 15-minute run instead of storing the
+      # 30-minute Redis answer again (PAR-1330). A run that took 10 minutes or more
+      # makes the next one read the cache, so the job cannot fall behind its cadence.
+      - GENERATE_HOURLY_FRESH=${GENERATE_HOURLY_FRESH:-true}
+      # Season level (PAR-1343): on a day of a running, published park season the
+      # served daily level of a ride is the median of what it measured on that
+      # season's days so far (3 days needed), not the model's number — no model
+      # reads park_seasons. Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
+      - SEASON_LEVEL=${SEASON_LEVEL:-true}
+      # Calendar and yearly view: leave a headliner out of the days its season
+      # rules out (PAR-1326) — River Quest, paused for Wintertraum, counted in
+      # every Wintertraum day with a forecast of ~10 minutes.
+      # Rollback: CALENDAR_SEASON_FILTER=false.
+      - CALENDAR_SEASON_FILTER=${CALENDAR_SEASON_FILTER:-true}
       - NODE_ENV=production
       # The API's only heap setting: a node flag in the Dockerfile's CMD would
       # override it. api has no mem_limit; one added later needs ~2 GB above the

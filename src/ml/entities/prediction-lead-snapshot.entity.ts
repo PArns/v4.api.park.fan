@@ -7,7 +7,7 @@ import {
 } from "typeorm";
 
 /** The model behind a served daily number. See {@link PredictionLeadSnapshot.source}. */
-export type LeadSnapshotSource = "tft" | "catboost";
+export type LeadSnapshotSource = "tft" | "catboost" | "season";
 
 /**
  * PredictionLeadSnapshot Entity

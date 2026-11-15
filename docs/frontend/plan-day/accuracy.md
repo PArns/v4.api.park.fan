@@ -49,8 +49,8 @@ CatBoost where TFT has nothing) at this distance
 (`PredictionLeadSnapshotService.getLeadTimeMae`;
 [reader-facing accuracy](../../ml/reader-facing-accuracy.md#leadtimemae)). It reads
 the nearest published bucket **at or below** `leadDays` (`LEAD_BUCKETS`
-1/3/7/14/30/60/90): a 20-day question gets the 14-day figure, and a 120-day question
-gets the 60-day figure until the 90-day bucket has filled.
+1/3/7/14/30/60/90/120/180): a 20-day question gets the 14-day figure, and a 120-day question
+gets the 60-day figure until the 90-day and 120-day buckets have filled.
 
 A bucket publishes once it has `MIN_SCORED` scored served rows (when each fills:
 [the snapshot archive](../../ml/long-range-forecasting.md#6-the-lead-time-snapshot-archive)).

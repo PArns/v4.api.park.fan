@@ -87,6 +87,8 @@ export interface TruthReading {
   timestamp: number;
   status: string;
   waitTime: number | null;
+  /** A heartbeat copy: never truth, but a row of the calendar's day statistic. */
+  heartbeat?: boolean;
 }
 
 export interface OperatingWindow {

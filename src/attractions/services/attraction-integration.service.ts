@@ -453,8 +453,17 @@ export class AttractionIntegrationService {
     // features — but it has never been shown a wait time from this park, so the
     // forecast is the prior, not a prediction. Hansa-Park's carousel was served
     // "10 min, 67% confidence" for every slot of every day on zero observations.
+    // Nor for a ride its season rules out today (PAR-1343): the models forecast
+    // every ride on every day and read no season, so River Quest, paused for
+    // Wintertraum, was offered "10:00, 10 min, optimal". A live OPERATING row
+    // refutes a detector's season note, so a ride that is running keeps them.
+    const forecastable =
+      waitTimesReadable &&
+      !(
+        dto.isCurrentlyInSeason === false && dto.effectiveStatus !== "OPERATING"
+      );
     dto.hourlyForecast =
-      waitTimesReadable && mlPredictionsRaw.length > 0
+      forecastable && mlPredictionsRaw.length > 0
         ? enrichedPredictions.map((p) => ({
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
@@ -677,7 +686,7 @@ export class AttractionIntegrationService {
         const ropeDropStored = await this.analyticsService.getRopeDropFromCache(
           attraction.id,
         );
-        if (ropeDropStored) {
+        if (ropeDropStored && forecastable) {
           const rdTodayStr = getCurrentDateInTimezone(park.timezone);
           const rdTodayEntry = dto.schedule.find((s) => s.date === rdTodayStr);
           dto.ropeDrop = buildRopeDropInfo(
@@ -692,7 +701,7 @@ export class AttractionIntegrationService {
         // Cached with the integrated response (expires at the next 5-min boundary).
         // Skipped for an unreadable park, same as hourlyForecast above: the
         // predictions these rank are a prior over a park nobody has measured.
-        if (waitTimesReadable && mlPredictionsRaw.length > 0) {
+        if (forecastable && mlPredictionsRaw.length > 0) {
           const todayStr = getCurrentDateInTimezone(park.timezone);
           const todayEntry = dto.schedule.find((s) => s.date === todayStr);
 

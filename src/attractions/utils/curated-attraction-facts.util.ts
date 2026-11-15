@@ -392,3 +392,42 @@ export function isCurrentlyInSeason(
   }
   return facts.seasonOutSince ? false : null;
 }
+
+/**
+ * `predictions` without the rows of a ride whose season rules out the row's day.
+ *
+ * The models forecast every ride for every day and read no season, so a ride
+ * outside its months or its bound park season arrives with an ordinary wait
+ * and counts towards the day's average and crowd level. `/plan/day` already
+ * drops it (`PlanDayService.outOfSeasonOn`); this is the same rule for a list.
+ *
+ * `seasonOutSince` is left out on purpose: it says "not now", and a row's day
+ * is not now. A ride that is seasonal with nothing else known stays in.
+ *
+ * @param dayOf - The row's park-local `YYYY-MM-DD`.
+ */
+export function withoutRidesOutOfSeason<T extends { attractionId: string }>(
+  predictions: T[],
+  rides: readonly (CuratedFactsSource & { id: string })[],
+  dayOf: (prediction: T) => string,
+): T[] {
+  if (rides.length === 0) return predictions;
+  const factsByRide = new Map(
+    rides.map((ride) => [
+      ride.id,
+      { ...resolveCuratedFacts(ride), seasonOutSince: null },
+    ]),
+  );
+  return predictions.filter((prediction) => {
+    const facts = factsByRide.get(prediction.attractionId);
+    return (
+      !facts ||
+      // The row's own day: noon UTC of that date, read in UTC.
+      isCurrentlyInSeason(
+        facts,
+        "UTC",
+        new Date(`${dayOf(prediction)}T12:00:00Z`),
+      ) !== false
+    );
+  });
+}

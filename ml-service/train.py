@@ -448,6 +448,9 @@ def _neutral_far_weather_and_schedule(
             merged["weatherCode"] = merged["weatherCode"].fillna(0).astype(int)
         if "precipitation" in merged.columns:
             merged["is_raining"] = (merged["precipitation"] > 0).astype(int)
+        if settings.FAR_RAIN_FROM_WEATHER_CODE and "weatherCode" in merged.columns:
+            # Serving's rule for a row past the forecast (predict.apply_weather_features).
+            merged["is_raining"] = (merged["weatherCode"] >= 51).astype(int)
         for c in ("is_rain_starting", "is_rain_stopping", "is_temp_extreme",
                   "is_wind_extreme", "temperature_deviation"):
             if c in merged.columns:

@@ -15,8 +15,8 @@ import {
  * against every registered queue.
  *
  * Deliberately NOT flushed (state, not cache): popularity:* (ranking),
- * downtime:* (open downtime tracking), prediction:deviation:* (deviation
- * tracking), ratelimit:* (circuit breakers), ml:accuracy:* and
+ * downtime:* (open downtime tracking), prediction:deviation:* (written until
+ * PAR-1341, expires within the hour), ratelimit:* (circuit breakers), ml:accuracy:* and
  * ml:last-accuracy-check (job markers), ml:hourly-fresh:* (PAR-874 — the only
  * thing that makes a park's unchanged hourly rows servable; flushing it blanks
  * every intraday forecast until the generator's next run), geocoding:* (results

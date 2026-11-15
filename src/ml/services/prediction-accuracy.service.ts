@@ -2111,7 +2111,13 @@ export class PredictionAccuracyService {
         "pb",
         'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
       )
-      .select("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE 'UTC')", "hour")
+      // The park's own hour: "hour 14" in UTC pooled Florida's 09:00 with
+      // Germany's 15:00 and Japan's 23:00 (PAR-1333).
+      .innerJoin("parks", "p", 'p.id = a."parkId"')
+      .select(
+        "EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE p.timezone)",
+        "hour",
+      )
       .addSelect("AVG(pa.absoluteError)", "mae")
       .addSelect("COUNT(*)", "predictionsCount")
       .where("pa.targetTime >= :startDate", { startDate })
@@ -2120,7 +2126,7 @@ export class PredictionAccuracyService {
         maxWait: MAX_PLAUSIBLE_WAIT_TIME,
       })
       .andWhere('pa."wasUnplannedClosure" = false')
-      .groupBy("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE 'UTC')")
+      .groupBy("EXTRACT(HOUR FROM pa.targetTime AT TIME ZONE p.timezone)")
       .orderBy("hour", "ASC")
       .getRawMany();
 
@@ -2168,8 +2174,10 @@ export class PredictionAccuracyService {
         "pb",
         'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
       )
+      // The park's own weekday, as the hourly pattern above (PAR-1333).
+      .innerJoin("parks", "p", 'p.id = a."parkId"')
       .select(
-        "EXTRACT(DOW FROM pa.targetTime AT TIME ZONE 'UTC')",
+        "EXTRACT(DOW FROM pa.targetTime AT TIME ZONE p.timezone)",
         "day_of_week",
       )
       .addSelect("AVG(pa.absoluteError)", "mae")
@@ -2180,7 +2188,7 @@ export class PredictionAccuracyService {
         maxWait: MAX_PLAUSIBLE_WAIT_TIME,
       })
       .andWhere('pa."wasUnplannedClosure" = false')
-      .groupBy("EXTRACT(DOW FROM pa.targetTime AT TIME ZONE 'UTC')")
+      .groupBy("EXTRACT(DOW FROM pa.targetTime AT TIME ZONE p.timezone)")
       .orderBy("day_of_week", "ASC")
       .getRawMany();
 

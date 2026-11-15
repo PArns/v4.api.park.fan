@@ -168,6 +168,45 @@ def test_sinusoid_peaks_at_14_on_both_sides():
     assert served["temperature_avg"].tolist() == pytest.approx([16.0, 28.0])
 
 
+def test_a_row_past_the_forecast_reads_raining_unless_the_switch_is_on(monkeypatch):
+    """PAR-1341: July's mean of 4 mm made every far row `is_raining = 1`, with a
+    most frequent weather code of 3 (overcast). January's code 71 is snow."""
+    import predict
+
+    df = rows(["2026-07-01 14:00", "2026-07-20 14:00", "2026-01-20 14:00"])
+    forecast = hourly_forecast("2026-07-01", precip_per_hour=0.0)
+
+    out = apply_weather_features(df, forecast, CLIM, {PARK: TZ})
+    assert out["is_raining"].tolist() == [0, 1, 1]  # the forecast day is dry
+
+    monkeypatch.setattr(predict.settings, "FAR_RAIN_FROM_WEATHER_CODE", True)
+    out = apply_weather_features(df, forecast, CLIM, {PARK: TZ})
+    assert out["is_raining"].tolist() == [0, 0, 1]
+
+
+def test_temperature_deviation_against_the_rows_own_mean_with_the_switch_on(monkeypatch):
+    """PAR-1341: training subtracts the mean over a park-month's rows. An
+    average July day served 10:00-18:00 read +0.7 to +6 against the all-day
+    mean of 22; against the mean of its own rows it reads around 0."""
+    import predict
+
+    hours = [f"2026-07-20 {h:02d}:00" for h in range(10, 19)]
+    df = rows(hours)
+
+    served = apply_weather_features(df, None, CLIM, {PARK: TZ})
+    assert served["temperature_deviation"].min() > 0
+    assert served["temperature_deviation"].max() == pytest.approx(6.0)  # 28 - 22
+
+    monkeypatch.setattr(predict.settings, "TEMP_DEVIATION_ROW_BASELINE", True)
+    out = apply_weather_features(df, None, CLIM, {PARK: TZ})
+    assert out["temperature_deviation"].mean() == pytest.approx(0.0, abs=1e-9)
+    # What training computes for the same curve on the same hours.
+    curve = out["temperature_avg"]
+    assert out["temperature_deviation"].tolist() == pytest.approx(
+        (curve - curve.mean()).tolist()
+    )
+
+
 def test_no_climatology_and_no_forecast_keeps_neutral_defaults():
     out = apply_weather_features(rows(["2026-07-01 14:00"]), None, None, {PARK: TZ})
     assert out["temperature_avg"].iloc[0] == pytest.approx(25.0)

@@ -80,6 +80,7 @@ import {
 } from "../../common/utils/best-visit-times.util";
 import {
   resolveCuratedFacts,
+  withoutRidesOutOfSeason,
   type ResolvedCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { withoutRidesInMaintenance } from "../../attractions/utils/curated-out-of-service.util";
@@ -1839,20 +1840,35 @@ export class ParkIntegrationService {
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, typicalDayPeak, closedDates, maintenance] =
-      await Promise.all([
-        this.analyticsService.getHeadlinerAttractionIds(parkId),
-        this.analyticsService.getTypicalDayPeakFromCache(parkId),
-        this.getClosedPredictionDates(predictions, parkId, timezone),
-        this.attractionsService
-          .getMaintenanceWindows(parkId)
-          .catch((err: Error) => {
+    const [
+      headlinerIds,
+      typicalDayPeak,
+      closedDates,
+      maintenance,
+      seasonFacts,
+    ] = await Promise.all([
+      this.analyticsService.getHeadlinerAttractionIds(parkId),
+      this.analyticsService.getTypicalDayPeakFromCache(parkId),
+      this.getClosedPredictionDates(predictions, parkId, timezone),
+      this.attractionsService
+        .getMaintenanceWindows(parkId)
+        .catch((err: Error) => {
+          this.logger.warn(
+            `Maintenance windows unavailable for park ${parkId}: ${err.message}`,
+          );
+          return [];
+        }),
+      // The calendar's switch and rule (PAR-1326), or the two would rate a
+      // day differently.
+      process.env.CALENDAR_SEASON_FILTER === "true"
+        ? this.attractionsService.getSeasonFacts(parkId).catch((err: Error) => {
             this.logger.warn(
-              `Maintenance windows unavailable for park ${parkId}: ${err.message}`,
+              `Ride seasons unavailable for park ${parkId}: ${err.message}`,
             );
             return [];
-          }),
-      ]);
+          })
+        : Promise.resolve([]),
+    ]);
     // Calendar-parity crowd level: AVG of predicted headliner waits ÷ the
     // typical-day-peak baseline ("predicted level vs a typical day's peak").
     // Same numerator (equal-weighted headliner mean) and denominator the
@@ -1867,9 +1883,13 @@ export class ParkIntegrationService {
     // Group by date, filtering to headliners only (fall back to all if none
     // defined). A ride in maintenance on a day is out first, as in the
     // monthly calendar, or the two would rate that day differently.
-    const open = withoutRidesInMaintenance(
-      predictions,
-      maintenance,
+    const open = withoutRidesOutOfSeason(
+      withoutRidesInMaintenance(
+        predictions,
+        maintenance,
+        (p) => p.predictedTime.split("T")[0],
+      ),
+      seasonFacts,
       (p) => p.predictedTime.split("T")[0],
     );
     const filtered =
