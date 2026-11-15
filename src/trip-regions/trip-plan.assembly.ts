@@ -1173,6 +1173,7 @@ export function planResponse(
       : undefined;
   const chosen = q.parks.map((p) => p.slug);
   const leftOut = parksLeftOut(region, chosen, plan);
+  const { heat } = weatherFor(region, q.weather);
   const warnings: PlanMetaWarning[] = [
     ...tickets.warnings,
     ...(resortsLeftOut(region, chosen, leftOut).length > 0
@@ -1187,6 +1188,11 @@ export function planResponse(
       computedAt: ctx.computedAt,
       objective: "headliner_wait",
       exact: plan.exact,
+      // What a day's `extreme_heat` was read against: the region's, or weather=avoid's.
+      heat: {
+        forecastFromC: heat.forecastFromC,
+        normalFromC: heat.normalFromC,
+      },
       ...(plan.relaxed.length > 0 && { relaxed: plan.relaxed }),
       ...(trip.split.length > 0 && { split: trip.split }),
       ticket: q.ticket,
