@@ -6,6 +6,8 @@ import {
 import {
   isFreeFlowOpen,
   freeFlowQueues,
+  freeFlowRanOn,
+  type FreeFlowSeasonContext,
 } from "../../common/utils/free-flow-status.util";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
@@ -575,6 +577,12 @@ export class AttractionIntegrationService {
           attraction.parkId,
           park.timezone,
           days,
+          {
+            openWithPark: attraction.openWithPark,
+            seasonMonths: resolveCuratedFacts(attraction).seasonMonths,
+            seasonBindings: resolveCuratedFacts(attraction).seasonBindings,
+            seasonPauses: resolveCuratedFacts(attraction).seasonPauses,
+          },
         ).catch((err) => {
           this.logger.warn(
             `Failed to calculate history for attraction ${attraction.id}:`,
@@ -809,6 +817,9 @@ export class AttractionIntegrationService {
    * @param parkId - Park ID
    * @param timezone - Park timezone (IANA format)
    * @param days - Number of days to include (including today)
+   * @param freeFlow - The ride's free-flow flag and season: such a ride reads
+   *   `withoutWait` on an open park day that has no wait of 5 minutes or more,
+   *   instead of being left out (PAR-1359)
    * @returns Array of history entries (only for days when park was open)
    */
   async calculateAttractionHistory(
@@ -816,6 +827,7 @@ export class AttractionIntegrationService {
     parkId: string,
     timezone: string,
     days: number,
+    freeFlow?: FreeFlowSeasonContext,
   ): Promise<HistoryDayDto[]> {
     // Check cache first
     const cacheKey = `attraction:history:${attractionId}:${days}`;
@@ -1366,6 +1378,26 @@ export class AttractionIntegrationService {
                   outageMinutes: outageByDate.get(dateStr)!.outageMinutes,
                 }
               : {}),
+          });
+        } else if (
+          freeFlow &&
+          schedule &&
+          freeFlowRanOn(freeFlow, dateStr, timezone) &&
+          // Today only once the park has opened.
+          (dateStr !== todayStr ||
+            (schedule.openingTime !== null &&
+              schedule.openingTime !== undefined &&
+              new Date(schedule.openingTime).getTime() <= Date.now()))
+        ) {
+          // A free-flow ride reads 0 minutes all day, and readings under 5
+          // never reach a slot, so the day used to vanish and read as closed
+          // on the ride's page: walk-on, not shut (PAR-1359).
+          history.push({
+            date: dateStr,
+            utilization: "unknown",
+            hourlyP90: [],
+            downCount: 0,
+            withoutWait: true,
           });
         }
       }

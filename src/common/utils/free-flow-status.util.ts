@@ -3,6 +3,7 @@ import {
   QueueType,
   LiveStatus,
 } from "../../external-apis/themeparks/themeparks.types";
+import { fromZonedTime } from "date-fns-tz";
 import { getCurrentDateInTimezone } from "./date.util";
 import type { SeasonBinding } from "../types/season-binding.type";
 import { isCurrentlyInSeason } from "../../attractions/utils/curated-attraction-facts.util";
@@ -115,6 +116,41 @@ export function isFreeFlowOpen(context: FreeFlowContext): boolean {
         seasonPauses,
       },
       parkTimezone,
+    ) !== false
+  );
+}
+
+/** What {@link freeFlowRanOn} reads: the flag and the season, not the park's live status. */
+export type FreeFlowSeasonContext = Pick<
+  FreeFlowContext,
+  "openWithPark" | "seasonMonths" | "seasonBindings" | "seasonPauses"
+>;
+
+/**
+ * Whether a free-flow attraction ran on a park-local day the park was open:
+ * the history's twin of {@link isFreeFlowOpen}. The caller has already found
+ * the park's published OPERATING day, which stands in for the live status;
+ * the season is asked of that day rather than of today (PAR-1359).
+ *
+ * @param day - Park-local `YYYY-MM-DD` with an OPERATING schedule entry.
+ */
+export function freeFlowRanOn(
+  context: FreeFlowSeasonContext,
+  day: string,
+  parkTimezone: string,
+): boolean {
+  return (
+    Boolean(context.openWithPark) &&
+    isCurrentlyInSeason(
+      {
+        isSeasonal: true,
+        seasonMonths: context.seasonMonths ?? null,
+        seasonOutSince: null,
+        seasonBindings: context.seasonBindings,
+        seasonPauses: context.seasonPauses,
+      },
+      parkTimezone,
+      fromZonedTime(`${day}T12:00:00`, parkTimezone),
     ) !== false
   );
 }

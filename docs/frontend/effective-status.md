@@ -28,6 +28,12 @@ neither, so one ride can read differently on the two. Why each case exists:
 - Otherwise `status` on the park payload. The detail gives `status` while the park's wait times
   are readable and `UNKNOWN` when they are not, whatever `status` says.
 
+**The free-flow ride in the history.** The detail's `history` counts only readings of 5 minutes or
+more, so a free-flow ride, which reads 0, used to have no day at all and its page drew every open
+day as „ganztägig geschlossen". On a park day with an OPERATING schedule, inside the ride's season
+and, for today, once the park has opened, such a ride now gets `{ utilization: "unknown",
+hourlyP90: [], withoutWait: true }` (`freeFlowRanOn`, PAR-1359): walk-on, not shut.
+
 ## What reads it
 
 - **Counts.** `operatingAttractions` and the total count use `effectiveStatus`; a ride closed by
