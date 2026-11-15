@@ -736,6 +736,9 @@ async function rideDetails(
         ...(ride.today as Record<string, unknown> | undefined),
         performances,
       };
+      // The wait forecast's quiet slots say nothing about a ride that starts
+      // at set times: its next start is the answer (PAR-1358).
+      delete ride.bestVisitTimesToday;
     }
     const reopening = performances
       ? null
@@ -2432,7 +2435,7 @@ export const ASSISTANT_TOOLS = [
       "in order, launches, inversions, manufacturer, model, opening year, top speed, height, " +
       "length, duration), typical waits, reliability, ropeDrop (whether arriving at opening " +
       "pays off: wait at opening vs the busy peak, ride by when, or betterLateInTheDay), today's " +
-      "best visit times (bestVisitTimesToday: the slots our intraday forecast rates optimal or " +
+      "best visit times (bestVisitTimesToday, absent for a ride on set times today: the slots our intraday forecast rates optimal or " +
       "good, renewed every 15 minutes), its pageUrl, today: opensAt (when the ride usually " +
       "starts, later than the park's gates; absent means not known, never 'with the park'), " +
       "runsOnWeekdays (ISO, Monday 1) and performances (a ride that starts at set times instead " +

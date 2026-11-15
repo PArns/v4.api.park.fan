@@ -857,7 +857,8 @@ since its feed reads CLOSED between two performances. DOWN, REFURBISHMENT, a run
 and a shut park (the day's plan has no opening hour) keep their usual answer. `get_park_live` lists
 the park's rides on a schedule today as `rides.performancesToday` and leaves them out of
 `notRunToday`, as the admin MCP's `get_park` does. The prompt has Parky answer with the next start,
-never a wait.
+never a wait. Such a ride's `get_ride` carries no `bestVisitTimesToday` either (PAR-1358, prompt
+version 59): the wait forecast's quiet slots answer nothing for it.
 
 **Maintenance on another day.** `reopening` and the ride card's `worksPeriod` badge are about the
 park's today. For any other day Parky reads `worksPeriods` on `get_ride` (every window, past ones
