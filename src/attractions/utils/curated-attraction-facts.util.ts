@@ -38,6 +38,8 @@ export interface CuratedFactsSource {
   seasonOutSince?: string | null;
   /** The park seasons that bind this ride (`Attraction.seasonBindings`). */
   seasonBindings?: readonly SeasonBinding[] | null;
+  /** The park seasons that pause this ride (`Attraction.seasonPauses`). */
+  seasonPauses?: readonly SeasonBinding[] | null;
 }
 
 export interface ResolvedCuratedFacts {
@@ -67,6 +69,15 @@ export interface ResolvedCuratedFacts {
    * null, because the season's days say more than either.
    */
   seasonBindings: SeasonBinding[];
+
+  /**
+   * The park seasons on whose days this ride does not run, oldest first: it
+   * is out of season on them and in season on every other day. Empty unless
+   * a pause decides, under the same rule as {@link seasonBindings}; when it
+   * is not empty the ride is seasonal and `seasonMonths` and `seasonOutSince`
+   * are null.
+   */
+  seasonPauses: SeasonBinding[];
 
   /**
    * Whether the resolved seasonality came from a human.
@@ -181,9 +192,10 @@ export function resolveCuratedFacts(
   // serves a not-seasonal ride carrying a list of the months it operates in.
   //
   // Three writers, in this order: the ride's own curation, a park season that
-  // binds the ride, the detector. A curated `true` without months agrees with a
-  // binding and leaves the window to it; a curated `false` or curated months
-  // override it. The SQL twin is `attractionIsOutOfSeason`.
+  // binds or pauses the ride, the detector. A curated `true` without months
+  // agrees with a binding or a pause and leaves the window to it; a curated
+  // `false` or curated months override both. The SQL twin is
+  // `attractionIsOutOfSeason`.
   const curatedIsSeasonal = attraction.curatedIsSeasonal;
   const curatedMonths = attraction.curatedSeasonMonths;
   const hasCuratedMonths =
@@ -192,11 +204,12 @@ export function resolveCuratedFacts(
     (curatedIsSeasonal !== null && curatedIsSeasonal !== undefined) ||
     hasCuratedMonths;
 
-  const seasonBindings =
-    curatedIsSeasonal === false || hasCuratedMonths
-      ? []
-      : [...(attraction.seasonBindings ?? [])];
-  const bound = seasonBindings.length > 0;
+  const overridden = curatedIsSeasonal === false || hasCuratedMonths;
+  const seasonBindings = overridden
+    ? []
+    : [...(attraction.seasonBindings ?? [])];
+  const seasonPauses = overridden ? [] : [...(attraction.seasonPauses ?? [])];
+  const bound = seasonBindings.length > 0 || seasonPauses.length > 0;
 
   const isSeasonal = seasonalityCurated
     ? (curatedIsSeasonal ?? hasCuratedMonths)
@@ -213,6 +226,7 @@ export function resolveCuratedFacts(
     seasonOutSince:
       seasonalityCurated || bound ? null : (attraction.seasonOutSince ?? null),
     seasonBindings,
+    seasonPauses,
     // `name` is the one field with no meaningful null: a ride always has a
     // name, and the curated column only ever replaces it.
     name: resolveAttractionName(attraction),
@@ -288,18 +302,41 @@ export function nextSeasonBindingDay(
 }
 
 /**
- * The `boundSeason` key of an attraction payload: the season `shownSeasonBinding`
+ * The first park-local day after `day` that a pausing season leaves the ride
+ * to run on: the day after its last listed day in a row, or after its end.
+ */
+export function dayAfterSeasonPause(
+  season: SeasonBinding,
+  day: string,
+): string {
+  if (season.dates?.length) {
+    let next = addIsoDays(day, 1);
+    while (season.dates.includes(next)) next = addIsoDays(next, 1);
+    return next;
+  }
+  return addIsoDays(season.endDate >= day ? season.endDate : day, 1);
+}
+
+/**
+ * The `boundSeason` and `pausedBySeason` keys of an attraction payload: of the
+ * seasons that bind and that pause the ride, the one `shownSeasonBinding`
  * picks for the park's today, or no key at all, since nearly no ride has one.
  */
 export function boundSeasonOf(
-  facts: Pick<ResolvedCuratedFacts, "seasonBindings">,
+  facts: Pick<ResolvedCuratedFacts, "seasonBindings"> &
+    Partial<Pick<ResolvedCuratedFacts, "seasonPauses">>,
   timezone: string | null | undefined,
   now: Date = new Date(),
-): { boundSeason?: SeasonBinding } {
-  if (facts.seasonBindings.length === 0) return {};
+): { boundSeason?: SeasonBinding; pausedBySeason?: SeasonBinding } {
+  const pauses = facts.seasonPauses ?? [];
+  if (facts.seasonBindings.length === 0 && pauses.length === 0) return {};
   const today = formatInParkTimezone(now, timezone || "UTC").slice(0, 10);
   const boundSeason = shownSeasonBinding(facts.seasonBindings, today);
-  return boundSeason ? { boundSeason } : {};
+  const pausedBySeason = shownSeasonBinding(pauses, today);
+  return {
+    ...(boundSeason && { boundSeason }),
+    ...(pausedBySeason && { pausedBySeason }),
+  };
 }
 
 /**
@@ -307,7 +344,9 @@ export function boundSeasonOf(
  *
  * A ride a park season binds is a calendar question by the day: in season on
  * the season's days (its `dates`, or every day between its bounds), out of it
- * on every other, before the months are looked at.
+ * on every other, before the months are looked at. A ride a season pauses is
+ * the same question the other way round: out of season on its days, in
+ * season on every other.
  *
  * Three answers, and the third is the point. With months, it is a calendar
  * question. Without months but with a `seasonOutSince`, it is a different
@@ -329,14 +368,23 @@ export function isCurrentlyInSeason(
   facts: Pick<
     ResolvedCuratedFacts,
     "isSeasonal" | "seasonMonths" | "seasonOutSince"
-  > & { seasonBindings?: readonly SeasonBinding[] | null },
+  > & {
+    seasonBindings?: readonly SeasonBinding[] | null;
+    seasonPauses?: readonly SeasonBinding[] | null;
+  },
   timezone: string | null | undefined,
   now: Date = new Date(),
 ): boolean | null {
   if (!facts.isSeasonal) return null;
   const today = formatInParkTimezone(now, timezone || "UTC");
-  if (facts.seasonBindings && facts.seasonBindings.length > 0) {
-    return seasonBindingRunsOn(facts.seasonBindings, today.slice(0, 10));
+  const bindings = facts.seasonBindings ?? [];
+  const pauses = facts.seasonPauses ?? [];
+  if (bindings.length > 0 || pauses.length > 0) {
+    // A pausing season's days are out of season whatever a binding says;
+    // past them a binding decides, and a paused ride alone runs.
+    const day = today.slice(0, 10);
+    if (seasonBindingRunsOn(pauses, day)) return false;
+    return bindings.length > 0 ? seasonBindingRunsOn(bindings, day) : true;
   }
   if (facts.seasonMonths && facts.seasonMonths.length > 0) {
     const month = Number(today.slice(5, 7));

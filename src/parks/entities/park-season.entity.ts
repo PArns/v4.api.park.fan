@@ -52,7 +52,9 @@ export type ParkSeasonKind = (typeof PARK_SEASON_KINDS)[number];
  * `opening`, `closure` and `maintenance` are left out on purpose. A
  * maintenance window's rides are down *inside* it, the opposite statement,
  * and the other two describe the whole park, not a ride. A `cancelled`
- * season binds nothing. The resolver and its precedence:
+ * season binds nothing. The same kinds pause the rides of
+ * `pausedAttractionIds`: a `closure` shuts every ride with the park, so a
+ * list there would say nothing the closure does not. The resolver and its precedence:
  * `docs/architecture/attraction-status/seasonality.md#a-ride-bound-to-a-park-season`.
  */
 export const PARK_SEASON_BINDING_KINDS = [
@@ -220,6 +222,18 @@ export class ParkSeason {
    */
   @Column({ name: "attraction_ids", type: "jsonb", nullable: true })
   attractionIds: string[] | null;
+
+  /**
+   * The inverse binding: rides that do NOT run during this season and run
+   * the rest of the year, as lowercase attraction UUIDs (Phantasialand's
+   * River Quest during Wintertraum). On a kind in `PARK_SEASON_BINDING_KINDS`
+   * such a ride is out of season on the season's days and in season on every
+   * other (`Attraction.seasonPauses`). A ride is never in both lists of one
+   * season. Nullable and added to a populated table, so no backfill: null
+   * pauses nothing (docs/rules/the-entities-are-the-schema.md).
+   */
+  @Column({ name: "paused_attraction_ids", type: "jsonb", nullable: true })
+  pausedAttractionIds: string[] | null;
 
   /** The park's own page for the event. */
   @Column({ type: "text", nullable: true })

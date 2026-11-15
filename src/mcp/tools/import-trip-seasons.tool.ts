@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineMcpTool } from "../mcp-tool";
+import { defineMcpTool, uuidInput } from "../mcp-tool";
 import { asToolRefusal, dryRunInput } from "../mcp-write";
 import {
   AdminSeasonService,
@@ -95,6 +95,18 @@ const row = z.object({
     .nullable()
     .optional()
     .describe("Stored as the season's note"),
+  attractionIds: z
+    .array(uuidInput())
+    .max(100)
+    .nullable()
+    .optional()
+    .describe("Rides of the park that run only during the season, by id"),
+  pausedAttractionIds: z
+    .array(uuidInput())
+    .max(100)
+    .nullable()
+    .optional()
+    .describe("Rides of the park that do not run during the season, by id"),
 });
 
 export const importTripSeasonsTool = defineMcpTool({

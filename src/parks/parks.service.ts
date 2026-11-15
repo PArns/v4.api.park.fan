@@ -24,6 +24,7 @@ import {
   getCurrentDateInTimezone,
   getStartOfDayInTimezone,
   getTomorrowDateInTimezone,
+  ISO_DATE_PATTERN,
 } from "../common/utils/date.util";
 import { addDays, subDays } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
@@ -139,7 +140,7 @@ export interface ScheduleSyncEntry {
 function cachedScheduleDay(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const day = value.split("T")[0];
-  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+  return ISO_DATE_PATTERN.test(day) ? day : null;
 }
 
 /**
@@ -1413,7 +1414,7 @@ export class ParksService {
           : entry.date instanceof Date
             ? entry.date.toISOString().split("T")[0]
             : String(entry.date);
-      const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+      const dateStr = ISO_DATE_PATTERN.test(raw)
         ? raw
         : formatInParkTimezone(new Date(raw), park!.timezone);
 

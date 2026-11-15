@@ -280,6 +280,14 @@ export function tripLine(trip: VisitorTrip): string {
 type Itinerary = ReturnType<typeof vacationItinerary>;
 
 /**
+ * A day without a park in the words Parky reads: a `spare` day is a free day,
+ * a rest day only the one the rest rule set or the visitor pinned.
+ */
+function restDayWords(day: { spare?: true }): string {
+  return day.spare ? "free day" : "rest day";
+}
+
+/**
  * The plan of the on-screen trip in one line a day, for the hints Parky gives unasked: the parks
  * with their big rides' wait, a party night, why the day was chosen, what to watch, an evening;
  * then the trip's season and what did not fit. The figures are the plan's own.
@@ -299,7 +307,7 @@ export function tripDigest(itinerary: Itinerary): string[] {
       day.kind === "park" || day.kind === "hop"
         ? parks.join(" + ")
         : day.kind === "rest"
-          ? "rest day"
+          ? restDayWords(day)
           : day.kind;
     return [
       `${head}: ${body}`,
@@ -661,7 +669,7 @@ export function changeTripParams(
 
 /** One day of a plan as the comparison reads it: its date and what is on it. */
 function dayContent(day: Itinerary["days"][number]): string {
-  if (day.kind === "rest") return "rest day";
+  if (day.kind === "rest") return restDayWords(day);
   if (day.kind !== "park" && day.kind !== "hop") return day.kind;
   return (day.parks ?? []).map((p) => p.park).join(" + ");
 }

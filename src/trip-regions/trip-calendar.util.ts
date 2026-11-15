@@ -148,7 +148,8 @@ export interface LastYearEntry {
   x?: number;
 }
 
-const round5 = (min: number): number => Math.round(min / 5) * 5;
+/** To the nearest five minutes: a wait as a reader sees it, here and on the park calendar. */
+export const round5 = (min: number): number => Math.round(min / 5) * 5;
 /** One decimal: the unrounded figures a ranking reads, and the averages `/when` shows. */
 export const round1 = (min: number): number => Math.round(min * 10) / 10;
 
@@ -226,6 +227,22 @@ export function seasonsOn<T extends SeasonLike>(
 /** A season that states something: not last year's pattern, not called off. */
 const isStatement = (season: SeasonLike): boolean =>
   season.status === "confirmed" || season.status === "announced";
+
+/**
+ * The curated closure that shuts a park on a date: a `closure` season,
+ * confirmed or announced, running that day. A stated fact (the operator's
+ * page), so it may close a day the feed is silent about; the caller never
+ * lets it override an OPERATING day. The park calendar and the region
+ * calendar both read it.
+ */
+export function curatedClosureOn<T extends SeasonLike>(
+  seasons: readonly T[],
+  date: string,
+): T | undefined {
+  return seasons.find(
+    (s) => s.kind === "closure" && isStatement(s) && seasonCovers(s, date),
+  );
+}
 
 /**
  * The day guests' hours and the slots beside them, read off one date's
@@ -442,11 +459,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
   const daySeasons = seasonsOn(seasons, date);
   let closedBy: string | undefined;
   if (status !== "OPERATING") {
-    // A curated closure is a stated fact (the operator's page), so it may close
-    // a day the feed is silent about. It never overrides an OPERATING row.
-    const closure = daySeasons.find(
-      (s) => s.kind === "closure" && isStatement(s),
-    );
+    const closure = curatedClosureOn(seasons, date);
     if (closure) {
       status = "CLOSED";
       closedBy = closure.id;

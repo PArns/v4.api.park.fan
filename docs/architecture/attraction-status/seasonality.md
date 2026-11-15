@@ -18,8 +18,9 @@ the TypeScript rule, in the [season contract](../../frontend/seasonality.md).
 Both pairs resolve through `resolveCuratedFacts`; a curated `false` takes the months down with it.
 `isCurrentlyInSeason` (`curated-attraction-facts.util.ts`) turns them into three values; what each
 means and who reads it is the [season contract](../../frontend/seasonality.md#iscurrentlyinseason-has-three-values).
-A third writer sits between the two pairs: a park season that names the ride
-([below](#a-ride-bound-to-a-park-season)).
+A third writer sits between the two pairs: a park season that names the ride, to run only during
+it ([below](#a-ride-bound-to-a-park-season)) or not during it
+([paused](#a-ride-a-park-season-pauses)).
 
 ## A ride bound to a park season
 
@@ -61,8 +62,9 @@ global stats), the outage and „not run today" lines, and the MCP and Parky too
 a bound ride reads `isCurrentlyInSeason: false` and carries `boundSeason`
 ([contract](../../frontend/seasonality.md#a-ride-bound-to-a-park-season)). The detectors read the
 same answer: `findSilencedClusters` takes a bound ride as a known season, `findAbsenceRetiredUnreviewed`
-does not ask about one, the retirement candidates leave it out while it is outside its days, and
-the children sync's absence step does not retire it (`isSeasonalRow`).
+does not ask about one, the retirement candidates leave it out while it is outside its days,
+the children sync's absence step does not retire it (`isSeasonalRow`), and the
+[maze rule](maze-rule.md) reads a bound season's months as its season.
 
 **Explicit selects.** A `find` with `select` loads the virtual column only when it lists
 `seasonBindings: true` (`/plan/day` and the children sync do); without it the ride resolves as not
@@ -74,6 +76,40 @@ bound. Raw SQL reads `attractionIsSeasonal`, `attractionIsSeasonBound` or `attra
 **Checked.** On 2026-11-14 the two resolvers were compared on a scratch Postgres over 756
 combinations of the five seasonality columns and seven bindings (none, running, future,
 cancelled, `maintenance`, a `dates` list with and without today): no disagreement.
+
+## A ride a park season pauses
+
+The inverse binding. Phantasialand's River Quest and Phenies close for Wintertraum and run the rest
+of the year; curated months cannot say that (they would put the rides out of season every winter
+month, Wintertraum or not, and on its days only by luck). The season says it instead: its
+`paused_attraction_ids` (`ParkSeason.pausedAttractionIds`, a nullable jsonb column beside
+`attraction_ids`, added by `synchronize` with no backfill) lists the rides that do not run during
+it.
+
+- **What pauses.** The same five kinds that bind (`PARK_SEASON_BINDING_KINDS`), not cancelled.
+  `closure` is left out: it shuts the whole park, every ride with it, and the park calendar reads
+  it ([calendar rules](../calendar-schedule-and-ml-rules.md)). `maintenance` keeps its own
+  meaning, its rides down inside it, and `opening` describes the park. On another kind the list is
+  stored and pauses nothing, as `attraction_ids` binds nothing there.
+- **The window.** Out of season on the season's days (its `dates`, else every day between its
+  bounds), in season on every other. A ride a season binds and another pauses is out of season on
+  the pausing days whatever the binding says; past them the binding decides.
+- **Precedence.** Where the binding sits: the ride's curated `false` or curated months override a
+  pause, a pause overrides the detector. Paused, the ride is seasonal, and the resolved
+  `seasonMonths` and `seasonOutSince` are null.
+- **The twins.** `Attraction.seasonPauses` is the virtual column (`attractionSeasonPausesSql`,
+  `seasonPausesAttraction`); `resolveCuratedFacts` returns `seasonPauses`, empty when a pause does
+  not decide, and `isCurrentlyInSeason` reads it; the SQL twin is `attractionIsOutOfSeason`, and
+  `attractionIsSeasonal` and `attractionIsSeasonBound` count a pause as they count a binding. A
+  `find` with `select` lists `seasonPauses: true` beside `seasonBindings: true`.
+- **What a client reads.** `pausedBySeason` beside `boundSeason`
+  ([contract](../../frontend/seasonality.md#a-ride-a-park-season-pauses)). Parky's ride answer
+  names the pausing season and the day after it as the reopening; `get_park` lists it as
+  `pausedBy` on the rides out of season.
+- **Writes.** One season never lists a ride both ways (`ParkSeasonService` refuses it), a park
+  merge rewrites both lists and keeps a ride the merge leaves in both in `attraction_ids`
+  (`remapSeasonAttractionIds`), and a season write evicts the rides of both lists, before and
+  after the edit (`seasonRides` in `AdminSeasonService`).
 
 ## The observation-window artefact
 

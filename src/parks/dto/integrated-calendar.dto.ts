@@ -359,6 +359,16 @@ export class CalendarDay {
   })
   status: ParkStatus;
 
+  @ApiProperty({
+    description:
+      "The id of the curated `closure` season (`/seasons`) that makes this day CLOSED, a " +
+      "confirmed or announced one running that day. A stated closure, so it holds past " +
+      "`scheduleCoverage.to` as well. Never on an OPERATING day: the feed's newer word wins. " +
+      "Absent otherwise.",
+    required: false,
+  })
+  closedBy?: string;
+
   @ApiProperty()
   isToday: boolean;
 

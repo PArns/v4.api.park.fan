@@ -5,7 +5,11 @@ import { Holiday } from "./entities/holiday.entity";
 import { NagerPublicHoliday } from "../external-apis/nager-date/nager-date.types";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { addIsoDays, formatInParkTimezone } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  formatInParkTimezone,
+  ISO_DATE_PATTERN,
+} from "../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
 import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
@@ -1064,7 +1068,7 @@ export function bridgeDaysOf(
   const days = new Set<string>();
   for (const weekend of longWeekends) {
     for (const day of weekend.bridgeDays ?? []) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !day.startsWith(`${year}-`)) {
+      if (!ISO_DATE_PATTERN.test(day) || !day.startsWith(`${year}-`)) {
         continue;
       }
       const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();

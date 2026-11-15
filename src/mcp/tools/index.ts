@@ -49,6 +49,7 @@ import { createTripSeasonTool } from "./create-trip-season.tool";
 import { updateTripSeasonTool } from "./update-trip-season.tool";
 import { deleteTripSeasonTool } from "./delete-trip-season.tool";
 import { importTripSeasonsTool } from "./import-trip-seasons.tool";
+import { bindRideSeasonsTool } from "./bind-ride-seasons.tool";
 import { listTicketProductsTool } from "./list-ticket-products.tool";
 import { upsertTicketProductTool } from "./upsert-ticket-product.tool";
 import { archiveTicketProductTool } from "./archive-ticket-product.tool";
@@ -147,6 +148,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   updateTripSeasonTool,
   deleteTripSeasonTool,
   importTripSeasonsTool,
+  bindRideSeasonsTool,
   listTicketProductsTool,
   upsertTicketProductTool,
   archiveTicketProductTool,

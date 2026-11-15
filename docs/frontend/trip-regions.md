@@ -912,8 +912,10 @@ nothing else fits, with `fireworks_missed`; with `any` it carries `party_night_s
 **Second visits (`split=auto`).** Parks listed without a count, and the default headliners, get a
 second visit in the curated order (`secondVisitRank`: Magic Kingdom, EPCOT, Epic Universe, Islands
 of Adventure, Hollywood Studios, Universal Studios, Animal Kingdom) while the trip has park days
-left after the rest days `rest` keeps and the park has two open days. A written `slug:n` never
-changes. `meta.split` lists `{ slug, visits, auto: true }` for each park that got one.
+left after the rest days `rest` keeps and the park has two open days. A chosen park closed on every
+day a park can go on takes none of those days (Parc Astérix in March leaves Disneyland Park its
+second day on 12–14 March 2027). A written `slug:n` never changes. `meta.split` lists
+`{ slug, visits, auto: true }` for each park that got one.
 
 **Repeat visits.** A park takes up to three visits, never two on one day, and at least a day apart:
 the search keeps the gap as a rule (branch and bound on the assignment) and breaks it only where no
@@ -1356,10 +1358,12 @@ them; the 400 cheapest are solved, branch and bound as before, and a plan left o
 could beat the result makes `meta.exact` false (proven for the cheapest). **A tie:** a plan with
 the same number of moves as the cheapest that costs less than 3 minutes per park day more (the
 plan's "any order will do", `ORDER_MATTERS_MINUTES`) ties it, and the tie goes to the plan whose
-bases lie closer to the trip's parks (each park's reach from the closest of the plan's bases,
-summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix pays 5
-minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix from
-the Disney hotels) and stays at the Disney hotels. Plans with a different number of moves never
+bases lie closer to the parks it keeps (each placed park's reach from the closest of the plan's
+bases, summed), never to the base listed first. A Paris trip to Disneyland Park and Parc Astérix
+pays 5 minutes past the free day trip either way (Disneyland Park from central Paris, Parc Astérix
+from the Disney hotels) and stays at the Disney hotels. A park the plan leaves out does not count:
+the weekend of 14–16 May 2027 whose one park day is Parc Astérix sleeps at Parc Astérix, not at
+the Disney hotels for the two Disney parks it dropped. Plans with a different number of moves never
 tie, so a move still has to pay for itself: Fuji-Q stays a day trip from Tokyo. A region without
 bases has no stays and keeps its cheapest plan. Inside the stays kept, the visits take the
 placement that spreads them best among those that tie ([spread among ties](#the-plan-get-v1trip-regionsorlandoplan)),
@@ -1969,7 +1973,7 @@ each region reads the archive once a day. For the hub's line on how far to trust
 
 ## Caching and cost
 
-The days are assembled from the calendar's month caches (`calendar:month:{parkId}:{YYYY-MM}:none`),
+The days are assembled from the calendar's month caches (`calendar:month:v2:{parkId}:{YYYY-MM}:none`),
 the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
 hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`, the plan's ideas
 `trip-regions:plan-ideas:v1:*`), the plan by its normalized query, so the same trip asked with its parameters in another order is one entry. A plan reads the
@@ -1997,8 +2001,8 @@ day, which is pointless for a month that has passed. What it adds:
 
 ## What the server records
 
-Every answer of `/plan`, `/when` and `/best-days`, and every plan Parky's trip tools make through
-the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
+Every answer of `/plan`, `/plan/ideas`, `/when` and `/best-days`, and every plan or idea Parky's
+trip tools make through the same services, leaves one row in `trip_request_metrics`, so the planner can be tuned from data:
 the MCP tool `trip_planner_ops` reads them
 ([admin MCP](../admin/mcp.md#the-trip-planners-tools)), beside `trip_planner_report` over the
 frontend's `trip_*` events. Nothing of it reaches a client: no field, no header, no change to an
@@ -2006,7 +2010,8 @@ answer. Code: `src/trip-regions/metrics/`.
 
 **Which answers.** Every one the route gives: a 200, a refusal of the query's own validation or of
 the services (400, 404), a failure (5xx). Parky's `plan_vacation`, `change_trip`, `get_trip_plan`
-and `find_trip_dates` call the services without the route; their plans are recorded the same way,
+and `find_trip_dates` call the services without the route, and the ideas his plan tools offer
+(`plan_ideas`) too; their plans are recorded the same way,
 with `caller` `parky` (`TripRequestMetricsService.measure`). Not recorded: a request the data-key
 guard turns away (401, 403, 429: it never reaches the route), an answer Cloudflare serves from its
 cache, and the plan of the trip on screen Parky reads for every question (`visitorTripItinerary`),
@@ -2016,7 +2021,7 @@ which would count one trip once per question.
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bucket`                                               | the UTC hour the answer left in, never the moment                                                                                                          |
 | `region`                                               | the region's slug; `(unknown)` for a slug that names none, since the slug is then the visitor's own text                                                  |
-| `route`                                                | `plan`, `when`, `best_days`                                                                                                                                |
+| `route`                                                | `plan`, `plan_ideas` (`/plan/ideas`: the shape, the caches and the latency, no answer facts), `when`, `best_days`                                          |
 | `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
 | `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
 | `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |

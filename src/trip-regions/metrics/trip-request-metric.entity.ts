@@ -1,7 +1,7 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 
 /**
- * One answer of `/plan`, `/when` or `/best-days`, as operational facts: what
+ * One answer of `/plan`, `/plan/ideas`, `/when` or `/best-days`, as operational facts: what
  * route and region, how long, which caches, whether the search was proven,
  * what it loosened and left out, and the trip's shape in counts. No date, no
  * park or ticket name, no free text, no address, no visitor id: the hour is
@@ -28,7 +28,7 @@ export class TripRequestMetric {
   @Column({ type: "varchar", length: 32 })
   region: string;
 
-  /** `plan`, `when` or `best_days` (`TRIP_METRIC_ROUTES`). */
+  /** `plan`, `plan_ideas`, `when` or `best_days` (`TRIP_METRIC_ROUTES`). */
   @Column({ type: "varchar", length: 16 })
   route: string;
 

@@ -59,6 +59,18 @@ export type AdminSeasonView = Omit<ParkSeason, "park"> & {
 };
 
 /** A season loaded with its park, as the admin's list and its season route answer it. */
+/** The rides a season names in either list, whose caches a write of it evicts. */
+export function seasonRides(
+  season: Pick<ParkSeason, "attractionIds" | "pausedAttractionIds">,
+): string[] {
+  return [
+    ...new Set([
+      ...(season.attractionIds ?? []),
+      ...(season.pausedAttractionIds ?? []),
+    ]),
+  ];
+}
+
 export function adminSeasonView(season: ParkSeason): AdminSeasonView {
   return {
     ...season,
@@ -173,10 +185,10 @@ export class AdminSeasonService {
       sourceUrl: season.sourceUrl,
       reason: season.note,
     });
-    // A season changes the park page, and the cards of the rides it binds:
-    // their season state comes from it.
+    // A season changes the park page, and the cards of the rides it binds or
+    // pauses: their season state comes from it.
     if (options.publish !== false)
-      await this.curation.publish(season.parkId, season.attractionIds ?? []);
+      await this.curation.publish(season.parkId, seasonRides(season));
     return season;
   }
 
@@ -210,13 +222,10 @@ export class AdminSeasonService {
       },
       sourceUrl: season.sourceUrl,
     });
-    // The rides it bound before and after: one dropped from the list leaves
-    // its season as surely as one added joins it.
+    // The rides it bound or paused before and after: one dropped from a
+    // list leaves its season as surely as one added joins it.
     await this.curation.publish(season.parkId, [
-      ...new Set([
-        ...(before.attractionIds ?? []),
-        ...(season.attractionIds ?? []),
-      ]),
+      ...new Set([...seasonRides(before), ...seasonRides(season)]),
     ]);
     return season;
   }
@@ -250,12 +259,13 @@ export class AdminSeasonService {
         opensAt: season.opensAt,
         closesAt: season.closesAt,
         attractionIds: season.attractionIds,
+        pausedAttractionIds: season.pausedAttractionIds,
         url: season.url,
         sourceUrl: season.sourceUrl,
         note: season.note,
       },
     });
-    await this.curation.publish(season.parkId, season.attractionIds ?? []);
+    await this.curation.publish(season.parkId, seasonRides(season));
     return season;
   }
 
@@ -399,7 +409,7 @@ export class AdminSeasonService {
         written.add(parkId);
         boundRides.set(parkId, [
           ...(boundRides.get(parkId) ?? []),
-          ...(season.attractionIds ?? []),
+          ...seasonRides(season),
         ]);
         report(index, "created", { parkId, seasonId: season.id });
       } catch (error) {

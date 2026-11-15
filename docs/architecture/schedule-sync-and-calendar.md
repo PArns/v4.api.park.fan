@@ -157,7 +157,7 @@ by one.
 `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`,
 `CalendarService.buildCalendarResponse()`.
 
-- **Cache:** per month only, `calendar:month:{parkId}:{YYYY-MM}:{includeHourly}`; TTLs and slicing in
+- **Cache:** per month only, `calendar:month:v2:{parkId}:{YYYY-MM}:{includeHourly}`; TTLs and slicing in
   [caching](caching-strategy.md#keys-and-ttls).
 - **One cold build** fetches schedule, weather (`getWeatherData(parkId, from, to, timezone)`), daily ML,
   holidays, refurbishments, historical queue data and daily stats in one `Promise.all`; hourly ML once

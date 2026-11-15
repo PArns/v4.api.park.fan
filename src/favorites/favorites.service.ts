@@ -737,6 +737,7 @@ export class FavoritesService {
           // closed on its own page, on a date a human had explicitly written down.
           seasonMonths: resolveCuratedFacts(attraction).seasonMonths,
           seasonBindings: resolveCuratedFacts(attraction).seasonBindings,
+          seasonPauses: resolveCuratedFacts(attraction).seasonPauses,
           parkTimezone: attraction.park?.timezone,
         });
         if (freeFlowOpen) {

@@ -89,6 +89,7 @@ export class AttractionsService {
         curatedIsSeasonal: true,
         curatedSeasonMonths: true,
         seasonBindings: true,
+        seasonPauses: true,
       },
     });
   }

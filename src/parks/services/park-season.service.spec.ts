@@ -281,6 +281,44 @@ describe("ParkSeasonService", () => {
         ),
       ).rejects.toThrow(/not in this park: ride-from-elsewhere/);
     });
+
+    it("stores the rides a season pauses, lowercased, and never one in both lists", async () => {
+      const { service, seasons, attractionRepo } = build();
+      attractionRepo.find = jest.fn(
+        async (opts: { where: { id: { value: string[] } } }) =>
+          opts.where.id.value.map((id) => ({ id })),
+      ) as never;
+      await service.create(
+        "park-1",
+        {
+          ...valid,
+          kind: "winter",
+          attractionIds: ["ride-1"],
+          pausedAttractionIds: ["RIDE-2", "ride-2"],
+        },
+        null,
+      );
+      expect(seasons.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attractionIds: ["ride-1"],
+          pausedAttractionIds: ["ride-2"],
+        }),
+      );
+      await expect(
+        service.create(
+          "park-1",
+          {
+            ...valid,
+            kind: "winter",
+            attractionIds: ["ride-1"],
+            pausedAttractionIds: ["ride-1"],
+          },
+          null,
+        ),
+      ).rejects.toThrow(
+        /cannot run only during the season and pause during it: ride-1/,
+      );
+    });
   });
 
   describe("update", () => {

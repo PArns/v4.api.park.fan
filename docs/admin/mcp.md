@@ -117,7 +117,7 @@ against these rules.
 | `get_park`                   | live state: schedule, crowd, weather, rides by status, longest waits, rides down (reported or inferred), in maintenance (with the curated window), maintenance ahead, not run today; the seasons of the year ahead (`seasonView`) | `ParkIntegrationService`, `ParkSeasonService` |
 | `park_forecast`              | days ahead as the calendar shows them: hours, crowd level, expected peak wait, weather, holidays, rides in maintenance (`PlanDayService`), the seasons running each day (`seasonsOn`: kind, name, status where not confirmed, separate ticket; on a closed day only listed dates and a closure); today's hourly curve and headliners; models  | `CalendarService`, `MlOverviewService`, `ParkSeasonService` |
 | `find_attractions`           | rides by name, optionally in one park, with status and wait                                                                                                                             | `SearchService`                                  |
-| `get_attraction`             | one ride: queues, crowd level, outage, curated facts, ride profile, typical waits, downtime, retirement, optional history                                                               | `AttractionIntegrationService`                   |
+| `get_attraction`             | one ride: queues, crowd level, outage, curated facts with every season that binds it, ride profile, typical waits, downtime, retirement, optional history                              | `AttractionIntegrationService`                   |
 | `page_views`                 | reads per kind, language and page                                                                                                                                                       | `PageViewsService.adminOverview`                 |
 | `system_health`              | host, Postgres, Redis, data freshness, the site statistic's flush backlog and drops; or the ML half, whose PCN boards bring their day rows only with `boardRows` (14 days of them run past the answer limit) | `SystemHealthService`                            |
 | `queue_status`               | Bull counts per queue, recent failures of one                                                                                                                                           | `AdminQueueStatusService`                        |
@@ -145,7 +145,7 @@ against these rules.
 | `search_report`              | the site search per surface: openings, typed, clicks, dead ends, rates; what was clicked where; the parks and rides opened most                                                         | `SiteAnalyticsService.search`                    |
 | `planner_report`             | the trip planner: funnel with rates, ways in with the days they led to, wizard steps, blocks by kind and source, tools, sharing, push, the parks and rides planned most                 | `SiteAnalyticsService.planner`                   |
 | `trip_planner_report`        | the multi-day trip planner per region: the dates-first funnel (started → requested → shown → changed → tickets → kept), the optional steps as shares of the plans shown, split at the new planner's first day, find dates, edits and options, parks left out, tickets, hopper, views, purchase links by seller kind and position, errors shown, the page types it was used from | `SiteAnalyticsTripService.report`, `TicketCatalogService` |
-| `trip_planner_ops`           | the server's record of `/plan`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
+| `trip_planner_ops`           | the server's record of `/plan`, `/plan/ideas`, `/when`, `/best-days` and of Parky's trip tools (`caller`): latency percentiles (all and built), caches, exact share, relaxation, unplaced, left-out and error codes, owned tickets by kind, move buffer and gateways, the slowest shapes | `TripRequestMetricsService.ops`                  |
 | `seo_landing_pages`          | the pages visits of one channel (search by default) entered on, with change, bounce, sources                                                                                            | `SiteAnalyticsSeoService.landingPages`           |
 | `seo_trends`                 | landing pages rising and falling against the window before                                                                                                                              | `SiteAnalyticsSeoService.trends`                 |
 | `seo_not_found`              | paths that showed the not-found page, with the referrers of the visits that entered on them                                                                                             | `SiteAnalyticsSeoService.notFound`               |
@@ -291,8 +291,8 @@ one from each side; `planner_report` is the day planner's.
   nothing. The small-value and `visitorData` rules are the other event tools': lists fold, a region
   narrows like a filter, so one region's counts from 1 to 4 are null, per era too, and so is every
   rate computed from one.
-- **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/when` and `/best-days`
-  and per plan of Parky's trip tools
+- **`trip_planner_ops`** reads the server's own row per answer of `/plan`, `/plan/ideas`
+  (`plan_ideas`), `/when` and `/best-days` and per plan or idea of Parky's trip tools
   ([what the server records](../frontend/trip-regions.md#what-the-server-records)) through
   `TripRequestMetricsService.ops`: per region, route and caller (`site`, `parky`) the requests,
   errors, latency p50/p90/p99 and max over every 200 and over the built ones, the cache and the
@@ -351,6 +351,7 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
 | `update_trip_season`     | changes the fields given, `null` clears an optional one                                | `AdminSeasonService.update`                 |
 | `delete_trip_season`     | deletes one season, with `confirm: true`                                               | `AdminSeasonService.remove`                 |
 | `import_trip_seasons`    | the rows of `scripts/trip-regions/seasons/*.json`, a dry run unless `dryRun: false`    | `AdminSeasonService.import`                 |
+| `bind_ride_seasons`      | binds one ride to seasons or unbinds it, from the ride's side, a dry run unless `dryRun: false` ([below](#binding-a-ride-to-seasons)) | `AdminSeasonService.findOne`, `.update` |
 | `list_ticket_products`   | reads a region's catalog, archived products too, or one product whole (any token)      | `AdminTicketService.list`, `.get`           |
 | `upsert_ticket_product`  | patches a slug the region has or creates a new one, a dry run unless `dryRun: false`   | `AdminTicketService.validate`, `.create`, `.update` |
 | `archive_ticket_product` | the catalog's delete: archives a product, with `confirm: true`                         | `AdminTicketService.archive`                |
@@ -378,11 +379,39 @@ gate and the shared inputs are in `src/mcp/mcp-write.ts`.
   `<tool> for <email> in N ms` does, at `log` level for a write. Seasons publish through
   `AdminCurationService.publish`, an import once for all its parks (`publishParks`); tickets through
   `AdminTicketService.publish` ([publish outside-in](../rules/publish-outside-in.md)).
-- **Dry runs and confirms.** `import_trip_seasons`, `upsert_ticket_product` and the deletes of the
-  other admin pages write nothing unless `dryRun: false`. `delete_trip_season`,
+- **Dry runs and confirms.** `import_trip_seasons`, `bind_ride_seasons`, `upsert_ticket_product` and
+  the deletes of the other admin pages write nothing unless `dryRun: false`. `delete_trip_season`,
   `archive_ticket_product` and `remove_redirect` need `confirm: true`. A deleted
   season stays whole in its audit row; an archived product comes back with `active: true`. There is
   no hard delete of a ticket product: plans and shared links may name it.
+
+### Binding a ride to seasons
+
+`bind_ride_seasons` (`src/mcp/tools/bind-ride-seasons.tool.ts`) binds a ride from its own side, where
+`update_trip_season` needs a season's whole list read and written back. Input:
+`attraction` (the ride's uuid), `bind` and `unbind` (up to 20 season ids each, none in both),
+`mode` (`only_during`, the default, edits `attractionIds`: the ride runs only during the season;
+`not_during` edits `pausedAttractionIds`: it does not run during it) and `dryRun` (default true).
+Editor, `writes: change`.
+
+- **Checks**, per season: of the ride's park, of a kind in `PARK_SEASON_BINDING_KINDS` (`halloween`,
+  `christmas`, `winter`, `summer_nights`, `special_event`), and not cancelled to bind; a ride may
+  leave a cancelled season. A season that lists the ride the other way is refused until the ride
+  leaves that list (the other `mode`). A season the ride is already in, or not in, is left alone.
+- **The dry run** answers `mode`, `changes` (each season, `bind` or `unbind`, whether its list
+  changes), `seasonsBefore` and `seasonsAfter` (the mode's seasons), and `warnings` when the
+  ride's curated season months or a curated `isSeasonal: false` take precedence, so a binding
+  would have no effect ([seasonality](../architecture/attraction-status/seasonality.md)).
+- **The write** is one `AdminSeasonService.update` per season that changes, with the ride added to
+  or taken out of the mode's list: the route's checks, a `park.season.update` audit row each, and
+  the publishing of the park and of the rides the season named before and after in either list,
+  this ride among them. `written` lists the seasons written.
+
+`get_attraction` lists them in `facts.seasonBindings` and `facts.seasonPauses`: each `seasons`,
+every season of a binding kind, not cancelled, that lists the ride that way (the row's own
+`seasonBindings` and `seasonPauses`, `season-window.sql.ts`), and `decides`, false where the
+ride's curated season takes precedence over them. `boundSeason` and `pausedBySeason` stay the
+ones a reader is shown today.
 
 ### The admin's other pages
 

@@ -53,6 +53,7 @@ import { ExternalEntityMapping } from "../database/entities/external-entity-mapp
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { StatsModule } from "../stats/stats.module";
 import { PopularityModule } from "../popularity/popularity.module";
+import { ParkSeasonsModule } from "./park-seasons.module";
 
 @Module({
   imports: [
@@ -90,6 +91,8 @@ import { PopularityModule } from "../popularity/popularity.module";
     forwardRef(() => HolidaysModule),
     QueueTimesModule,
     WartezeitenModule,
+    // The calendar reads the curated closures.
+    ParkSeasonsModule,
   ],
   controllers: [ParksController],
   providers: [

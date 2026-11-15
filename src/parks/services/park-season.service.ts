@@ -36,6 +36,8 @@ export interface SeasonInput {
   opensAt?: string | null;
   closesAt?: string | null;
   attractionIds?: string[] | null;
+  /** Rides that do not run during the season; never one of `attractionIds`. */
+  pausedAttractionIds?: string[] | null;
   url?: string | null;
   sourceUrl?: string | null;
   confirmedAt?: string | null;
@@ -189,6 +191,10 @@ export class ParkSeasonService {
         input.attractionIds !== undefined
           ? input.attractionIds
           : season.attractionIds,
+      pausedAttractionIds:
+        input.pausedAttractionIds !== undefined
+          ? input.pausedAttractionIds
+          : season.pausedAttractionIds,
       url: input.url !== undefined ? input.url : season.url,
       sourceUrl:
         input.sourceUrl !== undefined ? input.sourceUrl : season.sourceUrl,
@@ -347,28 +353,20 @@ export class ParkSeasonService {
       throw new BadRequestException("priceFrom needs a priceCurrency");
     }
 
-    let attractionIds: string[] | null = null;
-    if (input.attractionIds && input.attractionIds.length > 0) {
-      // Lowercase: a ride is bound by matching its id as text
-      // (`seasonBindsAttraction`), and Postgres renders a uuid in lowercase.
-      const unique = [
-        ...new Set(input.attractionIds.map((id) => id.toLowerCase())),
-      ];
-      const found = await this.attractions.find({
-        where: { id: In(unique), parkId },
-        select: { id: true },
-      });
-      // Checked against THIS park, not globally: a maintenance window naming a
-      // ride in another park is a copy-paste error, and it would render on a
-      // page where that ride does not exist.
-      if (found.length !== unique.length) {
-        const foundIds = new Set(found.map((a) => a.id));
-        const missing = unique.filter((id) => !foundIds.has(id));
-        throw new BadRequestException(
-          `These attractions are not in this park: ${missing.join(", ")}`,
-        );
-      }
-      attractionIds = unique;
+    const attractionIds = await this.parkRides(parkId, input.attractionIds);
+    const pausedAttractionIds = await this.parkRides(
+      parkId,
+      input.pausedAttractionIds,
+    );
+    // One season cannot say both: a ride that runs only during it cannot be
+    // one that pauses during it.
+    const both = (pausedAttractionIds ?? []).filter((id) =>
+      attractionIds?.includes(id),
+    );
+    if (both.length > 0) {
+      throw new BadRequestException(
+        `A ride cannot run only during the season and pause during it: ${both.join(", ")}`,
+      );
     }
 
     return {
@@ -384,6 +382,7 @@ export class ParkSeasonService {
       opensAt: input.opensAt?.trim() || null,
       closesAt: input.closesAt?.trim() || null,
       attractionIds,
+      pausedAttractionIds,
       // Both are rendered as links on the public park page, so they go through
       // the same scheme check as a curated website rather than being trusted
       // because an editor typed them.
@@ -392,6 +391,35 @@ export class ParkSeasonService {
       confirmedAt: this.optionalTimestamp(input.confirmedAt, "confirmedAt"),
       note: input.note?.trim() || null,
     };
+  }
+
+  /**
+   * A list of rides as a season stores it, or null for none: lowercase, once
+   * each, every one a ride of this park (400 naming the others).
+   */
+  private async parkRides(
+    parkId: string,
+    ids: string[] | null | undefined,
+  ): Promise<string[] | null> {
+    if (!ids || ids.length === 0) return null;
+    // Lowercase: a ride is bound by matching its id as text
+    // (`seasonBindsAttraction`), and Postgres renders a uuid in lowercase.
+    const unique = [...new Set(ids.map((id) => id.toLowerCase()))];
+    const found = await this.attractions.find({
+      where: { id: In(unique), parkId },
+      select: { id: true },
+    });
+    // Checked against THIS park, not globally: a maintenance window naming a
+    // ride in another park is a copy-paste error, and it would render on a
+    // page where that ride does not exist.
+    if (found.length !== unique.length) {
+      const foundIds = new Set(found.map((a) => a.id));
+      const missing = unique.filter((id) => !foundIds.has(id));
+      throw new BadRequestException(
+        `These attractions are not in this park: ${missing.join(", ")}`,
+      );
+    }
+    return unique;
   }
 
   private optionalUrl(

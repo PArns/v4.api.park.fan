@@ -5,7 +5,11 @@
  * the field it is about, so the form can show it there. Contract:
  * docs/frontend/trip-regions.md#editing-the-catalog.
  */
-import { addIsoDays, isRealIsoDate } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  eachIsoDate,
+  isRealIsoDate,
+} from "../common/utils/date.util";
 import type { RegionConfig } from "./regions";
 import type { TicketSource } from "./entities/ticket-product.entity";
 import { withCatalog } from "./ticket-catalog";
@@ -708,28 +712,25 @@ export function sampleCalendar(
   to: string,
 ): InternalRegionCalendar {
   const slugs = region.parks.map((p) => p.slug);
-  const days = [];
-  for (let d = from, i = 0; d <= to; d = addIsoDays(d, 1), i++) {
-    days.push({
-      date: d,
-      isHoliday: false,
-      isSchoolVacation: false,
-      parks: Object.fromEntries(
-        slugs.map((s) => [
-          s,
-          {
-            status: "OPERATING" as const,
-            hoursPublished: true,
-            crowdLevel: "moderate",
-            headlinerWait: 40,
-            waitExact: 30 + ((s.length * 7 + i * 11) % 30),
-            basis: "forecast" as const,
-            dayHours: 12,
-          },
-        ]),
-      ),
-    });
-  }
+  const days = eachIsoDate(from, to).map((d, i) => ({
+    date: d,
+    isHoliday: false,
+    isSchoolVacation: false,
+    parks: Object.fromEntries(
+      slugs.map((s) => [
+        s,
+        {
+          status: "OPERATING" as const,
+          hoursPublished: true,
+          crowdLevel: "moderate",
+          headlinerWait: 40,
+          waitExact: 30 + ((s.length * 7 + i * 11) % 30),
+          basis: "forecast" as const,
+          dayHours: 12,
+        },
+      ]),
+    ),
+  }));
   return {
     meta: {
       region: region.slug,
@@ -770,14 +771,9 @@ export function dryRunTicket(
   const problems: TicketProblem[] = [];
 
   const firstDay = addIsoDays(today, SAMPLE_LEAD_DAYS);
-  const lastStart = addIsoDays(today, 365 - SAMPLE_DAYS);
-  let from: string | undefined;
-  for (let d = firstDay; d <= lastStart; d = addIsoDays(d, 1)) {
-    if (onSaleAt(product, d)) {
-      from = d;
-      break;
-    }
-  }
+  const from = eachIsoDate(firstDay, addIsoDays(today, 365 - SAMPLE_DAYS)).find(
+    (d) => onSaleAt(product, d),
+  );
 
   const plan = (start: string, tickets?: string): void => {
     const to = addIsoDays(start, SAMPLE_DAYS - 1);

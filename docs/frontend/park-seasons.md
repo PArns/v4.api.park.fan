@@ -42,6 +42,7 @@ minutes, and seasons change a few times a year (`ParkSeasonsController`, `src/pa
 | `priceFrom`, `priceCurrency` | the cheapest advertised price as a decimal **string** (`"39.50"`) and its ISO 4217 code; a price never comes without a currency |
 | `opensAt`, `closesAt` | the event's hours, park-local `HH:MM`. Independent of the schedule rows: an evening event can have no `OPERATING` row at all |
 | `attractionIds` | the rides the season is about. On `maintenance` they are down for the season. On `halloween`, `christmas`, `winter`, `summer_nights` and `special_event` they run **only** on the season's days and read out of season outside them, with the season as their `boundSeason` ([season-bound rides](./seasonality.md#a-ride-bound-to-a-park-season)); an all-year ride an event only re-themes is not listed |
+| `pausedAttractionIds` | the inverse: rides that do **not** run during the season and run the rest of the year (River Quest during Wintertraum). On the same five kinds they read out of season on the season's days, with the season as their `pausedBySeason` ([paused rides](./seasonality.md#a-ride-a-park-season-pauses)); null on every other season. Never a ride also in `attractionIds` |
 | `url` | the park's own page for the event |
 | `sourceUrl`, `confirmedAt` | where the dates were read and when they were last checked against it; show "as of" from `confirmedAt`, not from any edit date |
 
