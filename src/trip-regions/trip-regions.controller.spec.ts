@@ -996,4 +996,42 @@ describe("TripRegionsController", () => {
         .expect(400);
     });
   });
+
+  describe("the release in the query (v)", () => {
+    it.each([
+      ["the region", ""],
+      ["the calendar", `/calendar?from=${day(1)}&to=${day(5)}`],
+      ["the best days", `/best-days?from=${day(1)}&to=${day(5)}`],
+      ["the plan", `/plan?from=${day(1)}&to=${day(5)}`],
+      ["/when", `/when?from=${day(1)}&to=${day(10)}&days=5&parks=epcot`],
+      ["the school breaks", `/school-breaks?from=${day(1)}&to=${day(60)}`],
+    ])("%s takes it", async (_what, route) => {
+      const sep = route.includes("?") ? "&" : "?";
+      await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando${route}${sep}v=2.22.1`)
+        .set("X-API-Key", KEY)
+        .expect(200);
+    });
+
+    it("keeps one Redis entry for every release", async () => {
+      const plan = `/v1/trip-regions/orlando/plan?from=${day(1)}&to=${day(5)}`;
+      await request(app.getHttpServer())
+        .get(`${plan}&v=2.22.1`)
+        .set("X-API-Key", KEY)
+        .expect(200);
+      const keys = [...store.keys()].sort();
+      await request(app.getHttpServer())
+        .get(`${plan}&v=2.23.0`)
+        .set("X-API-Key", KEY)
+        .expect(200);
+      expect([...store.keys()].sort()).toEqual(keys);
+    });
+
+    it("refuses a value that is no release with 400", async () => {
+      await request(app.getHttpServer())
+        .get(`/v1/trip-regions/orlando/calendar?v=${"9".repeat(33)}`)
+        .set("X-API-Key", KEY)
+        .expect(400);
+    });
+  });
 });
