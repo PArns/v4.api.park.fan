@@ -1,7 +1,11 @@
 import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, Matches, Max, Min } from "class-validator";
 import { ISO_DATE_PATTERN } from "../../common/utils/date.util";
-import { DATE_MESSAGE, TripPlanQueryDto } from "./trip-region-query.dto";
+import {
+  DATE_MESSAGE,
+  TripPlanQueryDto,
+  TripReleaseQueryDto,
+} from "./trip-region-query.dto";
 import {
   WHEN_DEFAULT_DAYS,
   WHEN_DEFAULT_GAP,
@@ -103,7 +107,7 @@ export class TripWhenQueryDto extends OmitType(TripPlanQueryDto, [
 }
 
 /** `GET /v1/trip-regions/:region/school-breaks` */
-export class TripSchoolBreaksQueryDto {
+export class TripSchoolBreaksQueryDto extends TripReleaseQueryDto {
   @ApiPropertyOptional({
     description: "First day. Defaults to today.",
     example: "2027-01-01",
