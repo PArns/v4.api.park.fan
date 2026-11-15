@@ -108,3 +108,16 @@ export function performanceTimesOn(
     schedules.find((schedule) => dayWindowCovers(schedule, day))?.times ?? null
   );
 }
+
+/**
+ * The first start at or after the park's wall-clock `now`, or null once the
+ * day's last one has begun. `HH:MM` strings compare as times.
+ *
+ * @param now - The park's wall-clock time, `HH:MM`.
+ */
+export function nextPerformanceTime(
+  times: readonly string[],
+  now: string,
+): string | null {
+  return times.find((time) => time >= now) ?? null;
+}
