@@ -20,6 +20,13 @@ handling in `ml-service`. What a client may conclude from these fields:
 | past and today, park **without** any OPERATING entry (`hasOperatingSchedule` false) | `UNKNOWN` with a crowd level other than `closed` → `OPERATING` (status reconstructed from rides) |
 | past and today, park with OPERATING entries | a day without a schedule row stays `UNKNOWN` |
 | strictly past, measured activity on a CLOSED day | see §1.5 |
+| any day not `OPERATING` by the rows above, a curated `closure` season confirmed or announced running that day | `CLOSED`, `closedBy` naming the season, `isEstimated` false |
+
+A curated closure (`curatedClosureOn`, `src/trip-regions/trip-calendar.util.ts`) is the rule the region
+calendar applies in `buildParkDay`, read once per window through `ParkSeasonService.forParkInRange`. It
+closes a day the feed is silent about or the gap fill guessed shut, never an OPERATING day: the
+operator's newer word wins over a curated range. An `expected` closure closes nothing. If the seasons
+cannot be read, the days are built without them.
 
 The crowd level never changes the status. UNKNOWN means "opening hours not yet available", CLOSED means
 closed.
@@ -45,7 +52,8 @@ schedule the way the calendar does: a CLOSED entry, or a day with neither OPERAT
 `isClosedByOperatingRange()` (`src/parks/utils/schedule-closed-day.util.ts`) places strictly between the
 first and last OPERATING date, or outside that range for a seasonal park (`isParkSeasonal`), reads
 `crowdLevel: "closed"`, `recommendation: "closed"` and no `avgWaitTime`. A day rated `unknown` carries no
-`recommendation`. The response ends about 182 days out (the CatBoost daily horizon). Before PAR-410 the
+`recommendation`. It does not read curated closures yet, so a day a `closure` season shuts can carry
+a forecast there while `/calendar` calls it CLOSED. The response ends about 182 days out (the CatBoost daily horizon). Before PAR-410 the
 route never read the schedule and recommended 28 of the 49 days `/calendar` called CLOSED at Legoland
 Billund.
 

@@ -207,6 +207,42 @@ describe("mazeSeasonEvidenceMonths", () => {
     ).toBeNull();
   });
 
+  it("reads a bound season's months before anything the detector wrote", () => {
+    const halloween = {
+      id: "s1",
+      kind: "halloween" as const,
+      name: "Halloween Fright Nights",
+      status: "confirmed" as const,
+      startDate: "2026-10-01",
+      endDate: "2026-11-02",
+      dates: null,
+    };
+    expect(
+      mazeSeasonEvidenceMonths({
+        isSeasonal: true,
+        seasonMonths: [6],
+        seasonOutSince: "2026-06-01",
+        seasonBindings: [halloween],
+      }),
+    ).toEqual([10, 11]);
+    // Listed days count, not the range around them.
+    expect(
+      mazeSeasonEvidenceMonths({
+        isSeasonal: true,
+        seasonMonths: null,
+        seasonOutSince: null,
+        seasonBindings: [
+          {
+            ...halloween,
+            startDate: "2026-09-26",
+            endDate: "2026-11-01",
+            dates: ["2026-10-03", "2026-10-31"],
+          },
+        ],
+      }),
+    ).toEqual([10]);
+  });
+
   it("is null for a row that is not seasonal", () => {
     expect(
       mazeSeasonEvidenceMonths({
@@ -402,6 +438,47 @@ describe("selectMazeRows", () => {
     expect(select([row({ attractionKind: "MAZE" })])).toEqual([]);
     expect(select([row({ attractionKind: "RIDE" })])).toEqual([]);
     expect(select([row({ attractionKind: "WALKTHROUGH" })])).toEqual([]);
+  });
+
+  /**
+   * A maze the detector never flagged (it ran twelve evenings) that its park's
+   * Halloween season binds: the binding makes it seasonal on the season's
+   * days, as everywhere else the season is read (PAR-1325).
+   */
+  it("files a ride a Halloween season binds, and not one a curated false overrides", () => {
+    const binding = {
+      id: "s1",
+      kind: "halloween" as const,
+      name: null,
+      status: "confirmed" as const,
+      startDate: "2026-10-02",
+      endDate: "2026-10-31",
+      dates: null,
+    };
+    const bound = row({
+      isSeasonal: false,
+      seasonMonths: null,
+      seasonBindings: [binding],
+    });
+    expect(select([bound])).toEqual(["row-1"]);
+    expect(select([{ ...bound, seasonBindings: [] }])).toEqual([]);
+    expect(select([{ ...bound, curatedIsSeasonal: false }])).toEqual([]);
+    // A Christmas binding is a season, but not an autumn one.
+    expect(
+      select([
+        {
+          ...bound,
+          seasonBindings: [
+            {
+              ...binding,
+              kind: "christmas" as const,
+              startDate: "2026-12-01",
+              endDate: "2027-01-06",
+            },
+          ],
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("resolves curated seasonality over the detector's", () => {

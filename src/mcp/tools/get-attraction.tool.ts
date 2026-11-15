@@ -7,6 +7,8 @@ import { AttractionIntegrationService } from "../../attractions/services/attract
 import { rideFacts } from "../../attractions/utils/ride-facts.util";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { getCurrentDateInTimezone } from "../../common/utils/date.util";
+import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { bindingView } from "./bind-ride-seasons.tool";
 
 /** Whether `day` lies inside a works window; an open end runs on. */
 function inWindow(
@@ -25,8 +27,8 @@ export const getAttractionTool = defineMcpTool({
     "One ride as park.fan shows it now: status and effective status, every queue (standby, single " +
     "rider, virtual queue …) with its wait, live crowd level and trend against its baseline, a " +
     "running outage, whether it has run today, works periods, the curated facts (minimum height, " +
-    "gets you wet, single rider, indoor/outdoor, season months, land, the paid fast pass, " +
-    "headliner), the rope-drop recommendation and today's best visit times where computed, " +
+    "gets you wet, single rider, indoor/outdoor, season months, every park season that binds it " +
+    "(seasonBindings) or pauses it (seasonPauses), land, the paid fast pass, headliner), the rope-drop recommendation and today's best visit times where computed, " +
     "the ride profile where one is " +
     "curated (type, track figures in order, launches, inversions, manufacturer, model, opening " +
     "year, top speed, height, length, duration), typical waits, downtime reliability and, if " +
@@ -115,6 +117,19 @@ export const getAttractionTool = defineMcpTool({
         isCurrentlyInSeason: dto.isCurrentlyInSeason ?? null,
         // The park season the ride runs in, when one binds it: its days are the window.
         boundSeason: dto.boundSeason ?? null,
+        // Every season that lists the ride and binds it (the row's own
+        // `seasonBindings`); bind_ride_seasons edits them. `decides` is false
+        // where the ride's curated months or curated false take precedence.
+        seasonBindings: {
+          decides: resolveCuratedFacts(attraction).seasonBindings.length > 0,
+          seasons: (attraction.seasonBindings ?? []).map(bindingView),
+        },
+        // The seasons it does not run during (`pausedAttractionIds`), the same way.
+        pausedBySeason: dto.pausedBySeason ?? null,
+        seasonPauses: {
+          decides: resolveCuratedFacts(attraction).seasonPauses.length > 0,
+          seasons: (attraction.seasonPauses ?? []).map(bindingView),
+        },
         land: dto.land ?? null,
         // Absent is "nobody checked or none sold", never "no fast pass".
         fastPass: dto.fastPass ?? null,

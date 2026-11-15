@@ -518,8 +518,8 @@ const SITE_ENTITY_MERGES_DEPENDENCY: MergeDependency = {
 };
 
 /**
- * Rewrites the ride ids inside `park_seasons.attraction_ids` (a jsonb array
- * with no FK) when a ride is merged away.
+ * Rewrites the ride ids inside `park_seasons.attraction_ids` and
+ * `paused_attraction_ids` (jsonb arrays with no FK) when a ride is merged away.
  *
  * A `MergeDependency` moves whole rows, and this is an id INSIDE a column, so
  * it is a `custom` entry: the loser→winner pair is only known here, to the
@@ -545,16 +545,22 @@ export async function remapSeasonAttractionIds(
 
   const seasons = asRows(
     await manager.query(
-      `SELECT id, attraction_ids FROM park_seasons
-        WHERE jsonb_exists(attraction_ids, $1)`,
+      `SELECT id, attraction_ids, paused_attraction_ids FROM park_seasons
+        WHERE jsonb_exists(attraction_ids, $1)
+           OR jsonb_exists(paused_attraction_ids, $1)`,
       [loserId],
     ),
   );
   if (seasons.length === 0) return;
 
+  const listOf = (value: unknown): string[] =>
+    Array.isArray(value) ? (value as string[]) : [];
   const candidates = new Set<string>([winnerId]);
   for (const season of seasons) {
-    for (const id of (season.attraction_ids as string[]) ?? []) {
+    for (const id of [
+      ...listOf(season.attraction_ids),
+      ...listOf(season.paused_attraction_ids),
+    ]) {
       if (typeof id === "string" && UUID_PATTERN.test(id)) candidates.add(id);
     }
   }
@@ -568,18 +574,33 @@ export async function remapSeasonAttractionIds(
   );
 
   for (const season of seasons) {
-    const before = season.attraction_ids as string[];
-    const after = rewriteSeasonAttractionIds(before, loserId, winnerId, live);
-    if (after.length !== before.length) {
-      logger.warn(
-        `park_seasons ${String(season.id)}: dropped ${
-          before.length - after.length
-        } attraction id(s) that no longer resolve after merging ${loserId} into ${winnerId}`,
-      );
-    }
+    const rewrite = (column: string, ids: string[]) => {
+      const after = rewriteSeasonAttractionIds(ids, loserId, winnerId, live);
+      if (after.length !== ids.length) {
+        logger.warn(
+          `park_seasons ${String(season.id)}.${column}: dropped ${
+            ids.length - after.length
+          } attraction id(s) that no longer resolve after merging ${loserId} into ${winnerId}`,
+        );
+      }
+      return after;
+    };
+    const bound = rewrite("attraction_ids", listOf(season.attraction_ids));
+    // Two merged rides may leave one in both lists, which the season service
+    // refuses on the next edit: running only during the season wins.
+    const paused = rewrite(
+      "paused_attraction_ids",
+      listOf(season.paused_attraction_ids),
+    ).filter((id) => !bound.includes(id));
     await manager.query(
-      `UPDATE park_seasons SET attraction_ids = $1::jsonb WHERE id = $2`,
-      [after.length > 0 ? JSON.stringify(after) : null, season.id],
+      `UPDATE park_seasons
+          SET attraction_ids = $1::jsonb, paused_attraction_ids = $2::jsonb
+        WHERE id = $3`,
+      [
+        bound.length > 0 ? JSON.stringify(bound) : null,
+        paused.length > 0 ? JSON.stringify(paused) : null,
+        season.id,
+      ],
     );
   }
 }

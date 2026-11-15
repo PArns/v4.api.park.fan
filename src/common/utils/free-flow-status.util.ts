@@ -39,6 +39,8 @@ export interface FreeFlowContext {
    * Wintertraum). Empty or absent leaves the months to decide.
    */
   seasonBindings?: readonly SeasonBinding[] | null;
+  /** Resolved `seasonPauses`: a park season on whose days the area does not run. */
+  seasonPauses?: readonly SeasonBinding[] | null;
   /** IANA timezone of the park. "Which month is it" is a park-local question. */
   parkTimezone?: string | null;
 }
@@ -93,6 +95,7 @@ export function isFreeFlowOpen(context: FreeFlowContext): boolean {
     waitTimesReadable = true,
     seasonMonths,
     seasonBindings,
+    seasonPauses,
     parkTimezone,
   } = context;
 
@@ -109,6 +112,7 @@ export function isFreeFlowOpen(context: FreeFlowContext): boolean {
         seasonMonths: seasonMonths ?? null,
         seasonOutSince: null,
         seasonBindings,
+        seasonPauses,
       },
       parkTimezone,
     ) !== false

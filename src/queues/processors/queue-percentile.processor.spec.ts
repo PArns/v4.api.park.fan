@@ -2,6 +2,7 @@ import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attrac
 import { HEARTBEAT_SOURCE } from "../../common/utils/outage-rows.sql";
 import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+import { attractionSeasonBindingsSql } from "../../common/utils/season-window.sql";
 import { HOURLY_AGGREGATE_SELECT } from "./hourly-aggregate.sql";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
@@ -505,6 +506,10 @@ describe("QueuePercentileProcessor — classifyHalloweenMazes", () => {
     // `season_out_since` has to arrive as a park-local 'YYYY-MM-DD' string;
     // a driver-parsed Date would shift the month at a timezone boundary.
     expect(selectSql).toContain('a.season_out_since::text AS "seasonOutSince"');
+    // The bindings as the entity loads them, so a bound ride resolves alike.
+    expect(selectSql).toContain(
+      `(${attractionSeasonBindingsSql("a")}) AS "seasonBindings"`,
+    );
     expect(seasonSql).toContain("ps.kind = 'halloween'");
     expect(seasonSql).toContain("ps.status <> 'cancelled'");
 

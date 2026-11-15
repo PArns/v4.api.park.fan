@@ -236,7 +236,7 @@ describe("BestDaysService", () => {
       expect(slug).toBe("phantasialand");
       expect(redis.set).toHaveBeenCalledTimes(1);
       const [key, payload, mode, ttl] = redis.set.mock.calls[0];
-      expect(key).toBe("best-days:park-1");
+      expect(key).toBe("best-days:v2:park-1");
       expect(mode).toBe("EX");
       // A PROJECTION MAY NOT OUTLIVE ITS SOURCE. This snapshot is
       // `calendar.days.map(projectDay)`, and the month caches it is built from

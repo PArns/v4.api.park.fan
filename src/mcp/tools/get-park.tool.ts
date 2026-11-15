@@ -170,6 +170,8 @@ function summarize(
           id: ride.id,
           name: ride.name,
           season: ride.boundSeason ?? null,
+          // A season the ride does not run during, when one pauses it.
+          ...(ride.pausedBySeason && { pausedBy: ride.pausedBySeason }),
         })),
     },
     shows: (dto.shows ?? []).length,

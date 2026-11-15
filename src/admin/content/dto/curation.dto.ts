@@ -234,6 +234,18 @@ export class SeasonWriteDto {
   @IsString({ each: true })
   attractionIds?: string[] | null;
 
+  @ApiPropertyOptional({
+    description:
+      "Attractions that do NOT run during this season and run the rest of the year " +
+      "(River Quest during Wintertraum). On a kind in `PARK_SEASON_BINDING_KINDS` they " +
+      "read out of season on its days. Rides of this park, none also in `attractionIds`.",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  pausedAttractionIds?: string[] | null;
+
   @ApiPropertyOptional({ description: "The park's own page for the event." })
   @IsOptional()
   @IsString()

@@ -66,6 +66,7 @@ import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
 import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
+import { ISO_DATE_PATTERN } from "../common/utils/date.util";
 import {
   AttractionRetirementService,
   RetirementRequest,
@@ -648,7 +649,7 @@ export class AdminController {
   async getModelComparisonDayOptions(
     @Query("date") date?: string,
   ): Promise<ModelComparisonDayOptionsDto> {
-    if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (date !== undefined && !ISO_DATE_PATTERN.test(date)) {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     return this.modelComparison.getDayOptions(date);
@@ -683,7 +684,7 @@ export class AdminController {
     if (!attractionId || !uuid.test(attractionId)) {
       throw new BadRequestException("attractionId must be a UUID");
     }
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (!date || !ISO_DATE_PATTERN.test(date)) {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     const o = (origin ?? "morning") as ModelComparisonOriginId;
@@ -999,7 +1000,7 @@ export class AdminController {
     @Body() body: { fromDate?: string; toDate?: string; parkId?: string },
   ): Promise<{ message: string; jobId: string }> {
     const isDay = (v: unknown): v is string =>
-      typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+      typeof v === "string" && ISO_DATE_PATTERN.test(v);
     if (!isDay(body?.fromDate) || !isDay(body?.toDate)) {
       throw new BadRequestException(
         "fromDate and toDate are required as YYYY-MM-DD",

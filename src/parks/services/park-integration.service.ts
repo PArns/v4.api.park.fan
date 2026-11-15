@@ -857,6 +857,7 @@ export class ParkIntegrationService {
             waitTimesReadable,
             seasonMonths: openWithPark.get(attraction.id)?.seasonMonths,
             seasonBindings: openWithPark.get(attraction.id)?.seasonBindings,
+            seasonPauses: openWithPark.get(attraction.id)?.seasonPauses,
             parkTimezone: park.timezone,
           })
         ) {

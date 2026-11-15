@@ -218,6 +218,7 @@ export class TripRegionsController {
 
   @Get(":region/plan/ideas")
   @RequiresApiKey()
+  @MeasureTripRequest("plan_ideas")
   @ApiOperation({
     summary: "The plan's best single edits, each planned again",
     description:
