@@ -2441,6 +2441,7 @@ describe("planner tools", () => {
       before: {
         totalWaitMinutes: 75,
         idleMinutes: 10,
+        walkMinutes: 20,
         endMinute: 1000,
         overflow: 0,
         clashes: 0,
@@ -2448,6 +2449,7 @@ describe("planner tools", () => {
       after: {
         totalWaitMinutes: 55,
         idleMinutes: 5,
+        walkMinutes: 12,
         endMinute: 980,
         overflow: 0,
         clashes: 0,
@@ -2528,7 +2530,8 @@ describe("planner tools", () => {
       totalWaitMinutes: 75,
       endsAt: "16:40",
       closes: "18:00",
-      sortingSaves: "plan_optimize would save about 20 min of queueing",
+      sortingSaves:
+        "plan_optimize would save about 20 min of queueing and 8 min of walking",
     });
     expect(optimize).toHaveBeenCalledWith(
       {

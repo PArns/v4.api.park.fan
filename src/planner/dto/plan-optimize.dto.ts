@@ -347,6 +347,11 @@ export class PlanScoreDto {
   })
   idleMinutes: number;
 
+  @ApiProperty({
+    description: "Minutes on foot between the stops that happen.",
+  })
+  walkMinutes: number;
+
   @ApiProperty({ description: "When the last queue is left, ride included." })
   endMinute: number;
 
@@ -369,6 +374,11 @@ export class OptimizedPlanDto {
 
   @ApiProperty()
   idleMinutes: number;
+
+  @ApiProperty({
+    description: "Minutes on foot between the stops that happen.",
+  })
+  walkMinutes: number;
 
   @ApiProperty()
   endMinute: number;

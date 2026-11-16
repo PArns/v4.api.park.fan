@@ -1,7 +1,7 @@
 import {
   type DayGrid,
   RIDE_DURATION_MIN,
-  SNAP_MIN_FINE,
+  START_STEP_MIN,
   dayStartMin,
   rideFloor,
 } from "./day-grid";
@@ -34,8 +34,9 @@ import type {
  * What is minimised, in this order:
  *
  * 1. **Rides that do not fit before the park closes**, in the tiers of {@link OVERFLOW_STRIDE}.
- * 2. **What the day costs**: `cost = Σ wait + IDLE_WEIGHT × Σ idle`, where idle is only the
- *    standing about this file decided on (see {@link idleFor}).
+ * 2. **What the day costs**: `cost = Σ wait + IDLE_WEIGHT × Σ idle + WALK_WEIGHT × Σ walk`, where
+ *    idle is only the standing about this file decided on (see {@link idleFor}) and walk the
+ *    walking between two stops that happen.
  * 3. **The moment the last queue is left**, only to settle a tie.
  *
  * A ride the optimiser adds is never filed past closing; an entry the visitor already has keeps
@@ -66,12 +67,23 @@ export const MAX_DELAY_MIN = 120;
  * What a minute of standing about costs, in minutes of queueing: a free minute is still worth
  * something to the visitor, and less than one spent in a queue.
  *
- * Two cases in `optimize.vectors.spec.ts` bracket it at 1/6 < k < 14/15 (§17: five queued
- * minutes may not buy thirty idle ones; §11: seventy queued minutes must outweigh seventy-five idle
- * ones), and no lexicographic order over queue and clock gets both right. Exported so the tests
- * read it instead of restating 0.5.
+ * Two cases in `optimize.vectors.spec.ts` bracket it at 1/7 < k < 14/17 (§17: five queued
+ * minutes may not buy thirty-five idle ones; §11: seventy queued minutes must outweigh eighty-five
+ * idle ones), and no lexicographic order over queue and clock gets both right. Exported so the
+ * tests read it instead of restating 0.5.
  */
 export const IDLE_WEIGHT = 0.5;
+
+/**
+ * What a minute on foot between two stops costs, in minutes of queueing. Without it a walk only
+ * moved the clock, and a day criss-crossed the park for a queue a minute shorter.
+ *
+ * A judgement, bracketed by park.fan's rule that waiting outweighs walking: §20 of
+ * `optimize.vectors.spec.ts` keeps a queue five minutes shorter beating a kilometre more of walking
+ * (22 minutes at park pace), so k < 5/22. At 0.2 a headliner day walked 22 % less over 23 park-days
+ * for 1 % more queueing; at 0.5 it walked 30 % less and broke that rule.
+ */
+export const WALK_WEIGHT = 0.2;
 
 /**
  * How a plan's overflow is ranked, in tiers rather than as one count, worst first: an entry the
@@ -184,10 +196,14 @@ export function movableEntries(
  *
  * Not rounded, and that matters: at {@link IDLE_WEIGHT} a cost lands on halves,
  * and rounding them away would collapse exactly the differences a delay of one
- * SNAP_MIN_FINE step is decided by.
+ * START_STEP_MIN step is decided by.
  */
-function planCost(waitMinutes: number, idleMinutes: number): number {
-  return waitMinutes + IDLE_WEIGHT * idleMinutes;
+function planCost(
+  waitMinutes: number,
+  idleMinutes: number,
+  walkMinutes: number,
+): number {
+  return waitMinutes + IDLE_WEIGHT * idleMinutes + WALK_WEIGHT * walkMinutes;
 }
 
 /**
@@ -240,6 +256,8 @@ export interface OptimizedPlan {
    * forty minutes of nothing in it.
    */
   idleMinutes: number;
+  /** Minutes on foot between the stops that happen, the third term of the cost. */
+  walkMinutes: number;
   /** When the last queue is left, in park-local minutes. */
   endMinute: number;
   /** Stops that do not fit before the park closes. */
@@ -457,7 +475,8 @@ interface Candidate {
   waitBySlot: (number | null)[];
   /**
    * What the stop occupies at that quarter hour: the expected wait, band excluded, so the day is
-   * not paced off the pessimistic end of every queue. The block is still drawn a band taller.
+   * not paced off the pessimistic end of every queue. The block is still drawn a band taller. No
+   * floor under it: a five-minute queue held a quarter hour made the visitor stand about for ten.
    */
   occupiedBySlot: number[];
 }
@@ -468,6 +487,8 @@ interface Context {
   fixed: FixedBlock[];
   /** `transfer[i][j]` — minutes from candidate i to candidate j, ceiling. */
   transfer: number[][];
+  /** `walk[i][j]` — the walk alone inside that ceiling, what {@link WALK_WEIGHT} prices. */
+  walk: number[][];
   /** Rides {@link MAX_STOPS} had no room for. Reported, never swallowed. */
   capped: number;
   /**
@@ -506,7 +527,7 @@ function slotIndex(minute: number): number {
 /**
  * Every quarter hour's answer, once, before the search starts, from the app's own `estimateFor` so
  * the minutes the optimiser reckons with are the minutes the block draws. Probed per quarter hour
- * because starts snap to {@link SNAP_MIN_FINE} and the API may answer per quarter hour; an hourly
+ * because the API may answer per quarter hour; an hourly
  * day answers the same figure four times and plans exactly as it did.
  *
  * `occupiedBySlot` is the planned length, not the drawn one (see `plannedMinutes`). The table runs
@@ -526,7 +547,7 @@ function tabulate(
       startMinute: slot * SLOT_MIN,
     };
     waitBySlot.push(estimateFor(day, probe).wait);
-    occupiedBySlot.push(Math.max(plannedMinutes(day, probe), SNAP_MIN_FINE));
+    occupiedBySlot.push(plannedMinutes(day, probe));
   }
   return { waitBySlot, occupiedBySlot };
 }
@@ -552,7 +573,7 @@ function clearFixed(
     for (const block of fixed) {
       const { before, after } = fixedPads(ride, block, "ceiling");
       if (at < block.to + after && at + span + before > block.from) {
-        at = snapUp(block.to + after, SNAP_MIN_FINE);
+        at = snapUp(block.to + after, START_STEP_MIN);
         moved = true;
       }
     }
@@ -588,10 +609,10 @@ function placementsFrom(
 ): Placement[] {
   const { grid } = ctx;
   const spanAt = (minute: number) =>
-    candidate.occupiedBySlot[slotIndex(minute)] ?? SNAP_MIN_FINE;
+    candidate.occupiedBySlot[slotIndex(minute)] ?? 0;
 
   const options: Placement[] = [];
-  for (let delay = 0; delay <= MAX_DELAY_MIN; delay += SNAP_MIN_FINE) {
+  for (let delay = 0; delay <= MAX_DELAY_MIN; delay += START_STEP_MIN) {
     const raw = first + delay;
     // Waiting into a closed park is never better, so the delay loop stops at the gate.
     if (raw >= grid.closeMin) break;
@@ -616,7 +637,7 @@ function placementsFrom(
     // fixed blocks like every other option, or an overflowing ride lies across a dinner and
     // `isExecutable` rejects the day on every press.
     const spanOutside = (minute: number) =>
-      candidate.occupiedBySlot[slotIndex(minute)] ?? SNAP_MIN_FINE;
+      candidate.occupiedBySlot[slotIndex(minute)] ?? 0;
     const start = clearFixed(
       Math.max(first, grid.closeMin),
       spanOutside,
@@ -630,7 +651,7 @@ function placementsFrom(
         // No figure out here, and that is `estimateFor`'s own answer: a queue
         // joined after closing is `outside-hours`, not a wait of zero.
         waitMinutes: candidate.waitBySlot[slot] ?? null,
-        freeAt: start + (candidate.occupiedBySlot[slot] ?? SNAP_MIN_FINE),
+        freeAt: start + (candidate.occupiedBySlot[slot] ?? 0),
         fits: false,
       },
     ];
@@ -640,7 +661,7 @@ function placementsFrom(
   // is common to every option and cancels; the callers add the true idle. Ranking on the bare queue
   // would keep an option a minute cheaper and half an hour later.
   const costOf = (option: Placement) =>
-    planCost(waitCost(option), option.startMinute - first);
+    planCost(waitCost(option), option.startMinute - first, 0);
   options.sort(
     (a, b) =>
       a.freeAt - b.freeAt ||
@@ -695,7 +716,7 @@ function earliestStart(
   // park's opening, and the floor decides. Without early entry it is `openMin`.
   const earliest =
     freeBefore === null ? dayStartMin(ctx.grid) : freeBefore + transferMinutes;
-  return snapUp(Math.max(earliest, candidate.floorMin), SNAP_MIN_FINE);
+  return snapUp(Math.max(earliest, candidate.floorMin), START_STEP_MIN);
 }
 
 /**
@@ -705,8 +726,8 @@ function earliestStart(
  * from the gates is free but choosing to wait past it is not; otherwise idling the morning costs
  * nothing and a filler moves behind the ride it should precede.
  *
- * The quarter-hour grid: the base is the arrival snapped up, because charging the rounding favours
- * routes that happen to arrive on the quarter hour, such as crossing the park between every ride.
+ * The start step: the base is the arrival snapped up, because charging the rounding favours routes
+ * that happen to arrive on the step, such as crossing the park between every ride.
  */
 function idleFor(
   ctx: Context,
@@ -718,7 +739,7 @@ function idleFor(
   const base =
     freeBefore === null
       ? earliestStart(ctx, index, null, 0)
-      : snapUp(freeBefore + transferMinutes, SNAP_MIN_FINE);
+      : snapUp(freeBefore + transferMinutes, START_STEP_MIN);
   return Math.max(0, startMinute - base);
 }
 
@@ -746,6 +767,7 @@ interface Scored extends OverflowCounts {
   stops: OptimizeStop[];
   totalWaitMinutes: number;
   idleMinutes: number;
+  walkMinutes: number;
   endMinute: number;
 }
 
@@ -761,6 +783,7 @@ interface PartialSchedule extends OverflowCounts {
   stops: OptimizeStop[];
   totalWaitMinutes: number;
   idleMinutes: number;
+  walkMinutes: number;
   /** When the visitor is free after the last stop. `null` before the first. */
   freeAt: number | null;
   /**
@@ -774,8 +797,8 @@ function comparePartials(a: PartialSchedule, b: PartialSchedule): number {
   const aOver = overflowKey(a);
   const bOver = overflowKey(b);
   if (aOver !== bOver) return aOver - bOver;
-  const aCost = planCost(a.totalWaitMinutes, a.idleMinutes);
-  const bCost = planCost(b.totalWaitMinutes, b.idleMinutes);
+  const aCost = planCost(a.totalWaitMinutes, a.idleMinutes, a.walkMinutes);
+  const bCost = planCost(b.totalWaitMinutes, b.idleMinutes, b.walkMinutes);
   if (aCost !== bCost) return aCost - bCost;
   const aFree = a.freeAt ?? 0;
   const bFree = b.freeAt ?? 0;
@@ -793,12 +816,12 @@ function partialDominates(a: PartialSchedule, b: PartialSchedule): boolean {
   return schedulingDominates(
     {
       overflow: overflowKey(a),
-      cost: planCost(a.totalWaitMinutes, a.idleMinutes),
+      cost: planCost(a.totalWaitMinutes, a.idleMinutes, a.walkMinutes),
       freeAt: a.freeAt ?? 0,
     },
     {
       overflow: overflowKey(b),
-      cost: planCost(b.totalWaitMinutes, b.idleMinutes),
+      cost: planCost(b.totalWaitMinutes, b.idleMinutes, b.walkMinutes),
       freeAt: b.freeAt ?? 0,
     },
   );
@@ -843,6 +866,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
       stops: [],
       totalWaitMinutes: 0,
       idleMinutes: 0,
+      walkMinutes: 0,
       ...NO_OVERFLOW,
       freeAt: null,
       endMinute: 0,
@@ -853,6 +877,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
   for (const index of order) {
     const candidate = ctx.candidates[index];
     const transfer = previous < 0 ? 0 : ctx.transfer[previous][index];
+    const walk = previous < 0 ? 0 : ctx.walk[previous][index];
     const grown: PartialSchedule[] = [];
     for (const state of states) {
       for (const placement of placementsFor(
@@ -886,6 +911,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
                   placement.startMinute,
                 )
               : 0),
+          walkMinutes: state.walkMinutes + (placement.fits ? walk : 0),
           overflow: state.overflow + tier.overflow,
           overflowEntries: state.overflowEntries + tier.overflowEntries,
           overflowHeadliners:
@@ -918,6 +944,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
       stops: [],
       totalWaitMinutes: 0,
       idleMinutes: 0,
+      walkMinutes: 0,
       endMinute: ctx.grid.openMin,
       ...NO_OVERFLOW,
     };
@@ -926,6 +953,7 @@ function scheduleOrder(ctx: Context, order: readonly number[]): Scored {
     stops: best.stops,
     totalWaitMinutes: best.totalWaitMinutes,
     idleMinutes: best.idleMinutes,
+    walkMinutes: best.walkMinutes,
     endMinute: best.endMinute || ctx.grid.openMin,
     overflow: best.overflow,
     overflowEntries: best.overflowEntries,
@@ -939,8 +967,8 @@ function better(a: Scored, b: Scored): boolean {
   const aOver = overflowKey(a);
   const bOver = overflowKey(b);
   if (aOver !== bOver) return aOver < bOver;
-  const aCost = planCost(a.totalWaitMinutes, a.idleMinutes);
-  const bCost = planCost(b.totalWaitMinutes, b.idleMinutes);
+  const aCost = planCost(a.totalWaitMinutes, a.idleMinutes, a.walkMinutes);
+  const bCost = planCost(b.totalWaitMinutes, b.idleMinutes, b.walkMinutes);
   if (aCost !== bCost) return aCost < bCost;
   return a.endMinute < b.endMinute;
 }
@@ -952,18 +980,19 @@ interface Label extends OverflowCounts {
   freeAt: number;
   totalWait: number;
   totalIdle: number;
+  totalWalk: number;
 }
 
 function dominates(a: Label, b: Label): boolean {
   return schedulingDominates(
     {
       overflow: overflowKey(a),
-      cost: planCost(a.totalWait, a.totalIdle),
+      cost: planCost(a.totalWait, a.totalIdle, a.totalWalk),
       freeAt: a.freeAt,
     },
     {
       overflow: overflowKey(b),
-      cost: planCost(b.totalWait, b.totalIdle),
+      cost: planCost(b.totalWait, b.totalIdle, b.totalWalk),
       freeAt: b.freeAt,
     },
   );
@@ -985,6 +1014,7 @@ function search(ctx: Context, beamWidth: number): number[] {
       freeAt: 0,
       totalWait: 0,
       totalIdle: 0,
+      totalWalk: 0,
       ...NO_OVERFLOW,
     },
   ];
@@ -995,6 +1025,7 @@ function search(ctx: Context, beamWidth: number): number[] {
       for (let index = 0; index < n; index++) {
         if (label.placed & (1 << index)) continue;
         const transfer = label.last < 0 ? 0 : ctx.transfer[label.last][index];
+        const walk = label.last < 0 ? 0 : ctx.walk[label.last][index];
         // Every worthwhile delay for this ride is a branch of its own, so the
         // beam chooses when to queue as well as in which order.
         const freeBefore = label.last < 0 ? null : label.freeAt;
@@ -1022,6 +1053,7 @@ function search(ctx: Context, beamWidth: number): number[] {
                     placement.startMinute,
                   )
                 : 0),
+            totalWalk: label.totalWalk + (placement.fits ? walk : 0),
             overflow: label.overflow + tier.overflow,
             overflowEntries: label.overflowEntries + tier.overflowEntries,
             overflowHeadliners:
@@ -1060,8 +1092,8 @@ function compareLabels(a: Label, b: Label): number {
   const aOver = overflowKey(a);
   const bOver = overflowKey(b);
   if (aOver !== bOver) return aOver - bOver;
-  const aCost = planCost(a.totalWait, a.totalIdle);
-  const bCost = planCost(b.totalWait, b.totalIdle);
+  const aCost = planCost(a.totalWait, a.totalIdle, a.totalWalk);
+  const bCost = planCost(b.totalWait, b.totalIdle, b.totalWalk);
   if (aCost !== bCost) return aCost - bCost;
   if (a.freeAt !== b.freeAt) return a.freeAt - b.freeAt;
   // The last tie-break is the order itself, so two runs cannot disagree.
@@ -1153,8 +1185,7 @@ function buildContext(input: OptimizeInput): Context | null {
     .filter((entry) => entry.done || entry.custom || hasStarted(entry, clock))
     .map((entry) => ({
       from: entry.startMinute,
-      to:
-        entry.startMinute + Math.max(plannedMinutes(day, entry), SNAP_MIN_FINE),
+      to: entry.startMinute + plannedMinutes(day, entry),
       place: entry.showSlug ? entryPlace(day, entry) : null,
       ride: !isBlockEntry(entry),
     }))
@@ -1212,11 +1243,21 @@ function buildContext(input: OptimizeInput): Context | null {
   // One candidate is still a question: it has a floor, fixed blocks to clear and a delay to weigh.
   if (candidates.length === 0) return null;
 
-  const transfer = candidates.map((from) =>
-    candidates.map((to) => transferBetween(from.ride, to.ride).ceilingMinutes),
+  const legs = candidates.map((from) =>
+    candidates.map((to) => transferBetween(from.ride, to.ride)),
   );
+  const transfer = legs.map((row) => row.map((leg) => leg.ceilingMinutes));
+  const walk = legs.map((row) => row.map((leg) => leg.walkMinutes));
 
-  return { grid, candidates, fixed, transfer, capped, fronts: new Map() };
+  return {
+    grid,
+    candidates,
+    fixed,
+    transfer,
+    walk,
+    capped,
+    fronts: new Map(),
+  };
 }
 
 /**
@@ -1365,6 +1406,7 @@ export function optimizeDay(input: OptimizeInput): OptimizedPlan | null {
     stops,
     totalWaitMinutes: scored.totalWaitMinutes,
     idleMinutes: scored.idleMinutes,
+    walkMinutes: scored.walkMinutes,
     endMinute: scored.endMinute,
     overflow: scored.overflow,
     capped: ctx.capped,
@@ -1394,7 +1436,7 @@ function isExecutable(input: OptimizeInput, ctx: Context): boolean {
 
   for (let i = 0; i < stops.length; i++) {
     const entry = stops[i];
-    const span = Math.max(plannedMinutes(day, entry), SNAP_MIN_FINE);
+    const span = plannedMinutes(day, entry);
     const there = ctx.candidates.find((c) => c.entryId === entry.id);
     for (const block of ctx.fixed) {
       const { before, after } = fixedPads(there?.ride ?? null, block, "floor");
@@ -1409,7 +1451,7 @@ function isExecutable(input: OptimizeInput, ctx: Context): boolean {
     const previous = stops[i - 1];
     const from = ctx.candidates.find((c) => c.entryId === previous.id);
     const to = there;
-    const occupied = Math.max(plannedMinutes(day, previous), SNAP_MIN_FINE);
+    const occupied = plannedMinutes(day, previous);
     const floor = transferBetween(
       from?.ride ?? null,
       to?.ride ?? null,
@@ -1434,6 +1476,7 @@ export function scoreOrder(
 ): {
   totalWaitMinutes: number;
   idleMinutes: number;
+  walkMinutes: number;
   endMinute: number;
   overflow: number;
   overflowKey: number;
@@ -1454,6 +1497,7 @@ export function scoreOrder(
   return {
     totalWaitMinutes: scored.totalWaitMinutes,
     idleMinutes: scored.idleMinutes,
+    walkMinutes: scored.walkMinutes,
     endMinute: scored.endMinute,
     overflow: scored.overflow,
     // The tier order as one comparable number, so a check can assert WHICH
@@ -1517,6 +1561,7 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
 
   let totalWaitMinutes = 0;
   let idleMinutes = 0;
+  let walkMinutes = 0;
   let overflow = 0;
   let endMinute = grid.openMin;
   let freeBefore: number | null = null;
@@ -1525,26 +1570,27 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
 
   for (const entry of movable) {
     const estimate = estimateFor(day, entry);
-    const span = Math.max(plannedMinutes(day, entry), SNAP_MIN_FINE);
+    const span = plannedMinutes(day, entry);
     const freeAt = entry.startMinute + span;
     const ride =
       day.rides.find((r) => r.attractionSlug === entry.attractionSlug) ?? null;
-    const transfer =
-      previous === null ? 0 : transferBetween(previous, ride).ceilingMinutes;
+    const leg = previous === null ? null : transferBetween(previous, ride);
+    const transfer = leg?.ceilingMinutes ?? 0;
     // Decided on the start, like everywhere else. See {@link Placement.fits}.
     const fits = entry.startMinute < grid.closeMin;
     if (!fits) overflow++;
     // A queue nobody joins costs nothing on this side too, or the incumbent and the plan measure
     // different days. See {@link waitOf}.
     if (fits && estimate.wait !== null) totalWaitMinutes += estimate.wait;
-    // {@link idleFor}'s rule: the arrival snapped up to the grid, and nothing before the first
+    // {@link idleFor}'s rule: the arrival snapped up to the step, and nothing before the first
     // block, since this file does not know when the visitor came through the gates.
     if (fits && freeBefore !== null) {
       idleMinutes += Math.max(
         0,
-        entry.startMinute - snapUp(freeBefore + transfer, SNAP_MIN_FINE),
+        entry.startMinute - snapUp(freeBefore + transfer, START_STEP_MIN),
       );
     }
+    if (fits) walkMinutes += leg?.walkMinutes ?? 0;
     // The same rule the scheduler uses: a block the visitor dragged into the
     // night is not when their day ends, it is the thing being fixed.
     if (fits) endMinute = Math.max(endMinute, freeAt + RIDE_DURATION_MIN);
@@ -1566,6 +1612,7 @@ export function scoreCurrent(input: OptimizeInput): Scored | null {
     stops,
     totalWaitMinutes,
     idleMinutes,
+    walkMinutes,
     endMinute,
     overflow,
     overflowEntries: overflow,
