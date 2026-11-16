@@ -8,6 +8,7 @@ import {
   MLDashboardDto,
   ModelMetricsHistoryDto,
 } from "../dto/ml-dashboard.dto";
+import { ApiPermission } from "../../api-keys/api-permission.decorator";
 
 /**
  * MLController
@@ -33,6 +34,7 @@ export class MLController {
    * Returns complete ML system health in a single call.
    */
   @Get("dashboard")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Get comprehensive ML system dashboard",
     description:
@@ -52,6 +54,7 @@ export class MLController {
    * Returns MAE, RMSE, MAPE, R² over time ordered oldest→newest.
    */
   @Get("models/metrics-history")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Get model metrics history for sparklines",
     description:
@@ -76,6 +79,7 @@ export class MLController {
    * Get System-Wide Accuracy Statistics
    */
   @Get("accuracy/system")
+  @ApiPermission("stats.accuracy")
   @ApiOperation({
     summary: "Get system-wide prediction accuracy",
     description: "Aggregated accuracy metrics across all attractions.",

@@ -8,6 +8,7 @@ import {
   GlobalBestTimesDto,
 } from "./dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 @ApiTags("stats")
 @Controller("analytics")
@@ -15,6 +16,7 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("realtime")
+  @ApiPermission("stats.platform")
   @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Get global platform statistics",
@@ -35,6 +37,7 @@ export class AnalyticsController {
   }
 
   @Get("geo-live")
+  @ApiPermission("stats.platform")
   @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Get live geographic statistics",
@@ -57,6 +60,7 @@ export class AnalyticsController {
   }
 
   @Get("ticker")
+  @ApiPermission("stats.platform")
   @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "Live wait-time ticker",
@@ -75,6 +79,7 @@ export class AnalyticsController {
   }
 
   @Get("best-times")
+  @ApiPermission("stats.platform")
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60))
   @ApiOperation({
     summary: "Global best time to visit theme parks",

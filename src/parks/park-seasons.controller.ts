@@ -17,6 +17,7 @@ import {
   isRealIsoDate,
 } from "../common/utils/date.util";
 import { ParkSeasonService } from "./services/park-season.service";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * How far ahead of the park's today a season list looks when nobody names a
@@ -47,6 +48,7 @@ export class ParkSeasonsController {
   ) {}
 
   @Get(":continent/:country/:city/:park/seasons")
+  @ApiPermission("parks.seasons")
   @ApiOperation({
     summary: "A park's named seasons and events",
     description:

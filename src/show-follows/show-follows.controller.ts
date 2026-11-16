@@ -29,6 +29,7 @@ import {
   ShowFollowResponseDto,
 } from "./dto/show-follow.dto";
 import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /**
  * A visitor's followed shows — same anonymous shape as `ride-alerts`: the
@@ -36,6 +37,7 @@ import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
  * `PushFollowWriteRateLimitService` for the reason documented there.
  */
 @ApiTags("show-follows")
+@OpenRoute("park.fan's show reminders; the push endpoint is the identity")
 @Controller("push/show-follows")
 @UseInterceptors(new NoCdnCacheInterceptor())
 export class ShowFollowsController {

@@ -280,9 +280,10 @@ describe("TripRegionsController", () => {
   });
 
   describe("GET /v1/trip-regions", () => {
-    it("lists every region without a key, with its park count and groups", async () => {
+    it("lists every region to a key, with its park count and groups", async () => {
       const res = await request(app.getHttpServer())
         .get("/v1/trip-regions")
+        .set("X-API-Key", KEY)
         .expect(200);
       expect(res.body.regions).toHaveLength(Object.keys(TRIP_REGIONS).length);
       expect(res.body.regions[0]).toEqual({
@@ -310,15 +311,16 @@ describe("TripRegionsController", () => {
           { key: "day-trips", name: "Day trips", kind: "day_trip" },
         ],
       });
-      expect(res.headers["cache-control"]).toContain("max-age=3600");
-      expect(res.headers["cdn-cache-control"]).toContain("max-age=86400");
+      expect(res.headers["cache-control"]).toBe("private, max-age=3600");
+      expect(res.headers["cdn-cache-control"]).toBeUndefined();
     });
   });
 
   describe("GET /v1/trip-regions/:region", () => {
-    it("answers without a key, with the region's parks, groups and legs", async () => {
+    it("answers a key with the region's parks, groups and legs", async () => {
       const res = await request(app.getHttpServer())
         .get("/v1/trip-regions/orlando")
+        .set("X-API-Key", KEY)
         .expect(200);
       expect(res.body.parks).toHaveLength(16);
       expect(res.body.groups).toEqual([
@@ -361,21 +363,23 @@ describe("TripRegionsController", () => {
       );
       expect(toMk).toMatchObject({ mode: "drive", via: "ttc" });
       expect(res.body.travel.attribution).toBe("© OpenStreetMap contributors");
-      expect(res.headers["cache-control"]).toContain("max-age=3600");
-      expect(res.headers["cdn-cache-control"]).toContain("max-age=86400");
+      expect(res.headers["cache-control"]).toBe("private, max-age=3600");
+      expect(res.headers["cdn-cache-control"]).toBeUndefined();
     });
 
     it("answers an unknown region with 404", async () => {
       await request(app.getHttpServer())
         .get("/v1/trip-regions/atlantis")
+        .set("X-API-Key", KEY)
         .expect(404);
     });
   });
 
   describe("GET /v1/trip-regions/:region/tickets", () => {
-    it("serves the catalog without a key, versioned, short at the edge", async () => {
+    it("serves the catalog to a key, versioned, privately", async () => {
       const res = await request(app.getHttpServer())
         .get("/v1/trip-regions/orlando/tickets")
+        .set("X-API-Key", KEY)
         .expect(200);
       expect(res.body.region).toBe("orlando");
       expect(res.body.version).toMatch(/^[0-9a-f]{12}$/);
@@ -394,16 +398,15 @@ describe("TripRegionsController", () => {
       ).toBe(true);
       expect(disney.shopUrl).toBe(official[0].url);
       expect(disney.suggest).toBeUndefined();
-      // Five minutes at the edge, ten stale: an edit shows within 15 minutes.
-      expect(res.headers["cache-control"]).toBe(
-        "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
-      );
+      // Keyed, so private: five minutes in the caller's own cache, none at the edge.
+      expect(res.headers["cache-control"]).toBe("private, max-age=300");
       expect(res.headers["cdn-cache-control"]).toBeUndefined();
     });
 
     it("answers an unknown region with 404", async () => {
       await request(app.getHttpServer())
         .get("/v1/trip-regions/atlantis/tickets")
+        .set("X-API-Key", KEY)
         .expect(404);
     });
   });
@@ -626,11 +629,12 @@ describe("TripRegionsController", () => {
     });
   });
   describe("GET /v1/trip-regions/:region/accuracy", () => {
-    it("answers without a key with the region's 30 measured days, a day at the edge", async () => {
+    it("answers a key with the region's 30 measured days, privately", async () => {
       const res = await request(app.getHttpServer())
         .get("/v1/trip-regions/orlando/accuracy")
+        .set("X-API-Key", KEY)
         .expect(200);
-      expect(res.headers["cache-control"]).toContain("s-maxage=86400");
+      expect(res.headers["cache-control"]).toBe("private, max-age=3600");
       const parks = ORLANDO.parks.length;
       expect(res.body).toEqual({
         region: "orlando",
@@ -655,6 +659,7 @@ describe("TripRegionsController", () => {
       const calls = parkDayErrors.mock.calls.length;
       await request(app.getHttpServer())
         .get("/v1/trip-regions/orlando/accuracy")
+        .set("X-API-Key", KEY)
         .expect(200);
       expect(parkDayErrors.mock.calls.length).toBe(calls);
     });
@@ -670,10 +675,12 @@ describe("TripRegionsController", () => {
       );
       const res = await request(app.getHttpServer())
         .get("/v1/trip-regions/paris/accuracy")
+        .set("X-API-Key", KEY)
         .expect(200);
       expect(res.body).toEqual({ region: "paris", forecastAccuracy: null });
       await request(app.getHttpServer())
         .get("/v1/trip-regions/atlantis/accuracy")
+        .set("X-API-Key", KEY)
         .expect(404);
     });
   });
@@ -966,13 +973,15 @@ describe("TripRegionsController", () => {
   });
 
   describe("GET /v1/trip-regions/:region/school-breaks", () => {
-    it("answers without a key, by stored region code, a day at the edge", async () => {
+    it("answers a key by stored region code, privately", async () => {
       const res = await request(app.getHttpServer())
         .get(
           `/v1/trip-regions/orlando/school-breaks?from=${day(1)}&to=${day(60)}`,
         )
+        .set("X-API-Key", KEY)
         .expect(200);
-      expect(res.headers["cdn-cache-control"]).toContain("max-age=86400");
+      // Keyed, so never a copy a shared cache could hand another caller.
+      expect(res.headers["cdn-cache-control"]).toBeUndefined();
       const nrw = res.body.regions.find(
         (r: { code: string }) => r.code === "DE-NW",
       );
@@ -993,6 +1002,7 @@ describe("TripRegionsController", () => {
     it("refuses a malformed country list with 400", async () => {
       await request(app.getHttpServer())
         .get("/v1/trip-regions/orlando/school-breaks?countries=Germany")
+        .set("X-API-Key", KEY)
         .expect(400);
     });
   });

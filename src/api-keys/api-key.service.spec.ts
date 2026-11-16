@@ -147,6 +147,8 @@ describe("ApiKeyService.resolve", () => {
       usage: "commercial",
       requestsPerHour: 50,
       allowedParkIds: ["p1"],
+      // A row from before permissions: legacy, read by `effectivePermissions`.
+      permissions: null,
       expiresAt: null,
     };
     const { service, keys } = build(row);
@@ -223,6 +225,7 @@ describe("ApiKeyService.countRequest", () => {
     usage: "non-commercial" as const,
     requestsPerHour: 2,
     allowedParkIds: null,
+    permissions: null,
     expiresAt: null,
   };
   // 10:15 UTC: 45 minutes to the next full hour.
@@ -316,6 +319,7 @@ describe("ApiKeyService parks", () => {
         usage: "internal",
         requestsPerHour: 1000,
         allowedParkIds: null,
+        permissions: null,
         expiresAt: null,
       }),
     ).toBeNull();

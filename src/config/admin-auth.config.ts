@@ -115,9 +115,13 @@ export function getLoginLockoutMinutes(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 15;
 }
 
-/** Whether new accounts must enrol in TOTP before they can do anything. */
-export function isTotpRequired(): boolean {
-  return process.env.ADMIN_REQUIRE_TOTP === "true";
+/**
+ * Whether an account must enrol in TOTP before it can do anything. A developer
+ * account never must: `ADMIN_REQUIRE_TOTP` is about staff, and a developer's
+ * account opens nothing but its own data keys.
+ */
+export function isTotpRequired(role?: string): boolean {
+  return process.env.ADMIN_REQUIRE_TOTP === "true" && role !== "developer";
 }
 
 /**

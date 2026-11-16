@@ -20,6 +20,7 @@ import { OAuthClientService } from "./oauth-client.service";
 import { OAuthError, OAuthErrorFilter, setNoStore } from "./oauth-error";
 import { sendAuthorizeErrorPage } from "./oauth-error-page";
 import { requestOrigin } from "./request-origin";
+import { OpenRoute } from "../../api-keys/api-permission.decorator";
 
 type Params = Record<string, unknown>;
 
@@ -33,6 +34,9 @@ type Params = Record<string, unknown>;
  * these routes comes through the frontend with the bypass key.
  */
 @ApiTags("oauth")
+@OpenRoute(
+  "OAuth for the admin MCP; its tokens open the back office, never data routes",
+)
 @Controller("oauth")
 @UseFilters(OAuthErrorFilter)
 export class OAuthController {

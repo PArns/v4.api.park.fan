@@ -12,6 +12,7 @@ import {
 } from "./services/ride-profile.service";
 import { TermAttractionDto, mapTermAttraction } from "./dto/ride-profile.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * The glossary → rides direction of the ride/glossary link.
@@ -30,6 +31,7 @@ export class GlossaryRidesController {
 
   /** How many rides carry each term, for the whole curated set. */
   @Get("counts")
+  @ApiPermission("rides.profiles")
   @UseInterceptors(new HttpCacheInterceptor(3600))
   @ApiOperation({
     summary: "Ride counts per glossary term",
@@ -43,6 +45,7 @@ export class GlossaryRidesController {
   }
 
   @Get(":termId/attractions")
+  @ApiPermission("rides.profiles")
   @UseInterceptors(new HttpCacheInterceptor(3600))
   @ApiOperation({
     summary: "Rides that feature a glossary term",

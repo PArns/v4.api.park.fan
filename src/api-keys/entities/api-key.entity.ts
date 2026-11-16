@@ -8,12 +8,14 @@ import {
 import type { ApiKeyUsage } from "../api-key.constants";
 
 /**
- * A key that unlocks the forecast routes for one data consumer, issued by
- * hand in the admin. The key itself is never stored: only its SHA-256, the way
- * admin tokens are, so a database backup holds nothing anyone can present.
+ * A key that unlocks park.fan's data for one consumer, permission by
+ * permission, issued by hand in the admin or on approving a developer's
+ * request. The key itself is never stored: only its SHA-256, the way admin
+ * tokens are, so a database backup holds nothing anyone can present.
  */
 @Entity("api_keys")
 @Index("idx_api_keys_hash", ["keyHash"], { unique: true })
+@Index("idx_api_keys_owner", ["ownerUserId"])
 export class ApiKey {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -31,6 +33,36 @@ export class ApiKey {
 
   @Column({ type: "text", nullable: true })
   note: string | null;
+
+  /**
+   * The permissions the key carries (`permissions.ts`), in catalog order.
+   * Null for a key issued before permissions existed, which reads
+   * `LEGACY_KEY_PERMISSIONS`; an empty list is refused, so a key always opens
+   * something.
+   */
+  @Column({ type: "text", array: true, nullable: true })
+  permissions: string[] | null;
+
+  /**
+   * The developer account the key belongs to, which sees it, its statistics,
+   * rotates and revokes it on the developer dashboard; null for a key the
+   * admin keeps for someone without an account.
+   */
+  @Column({ name: "owner_user_id", type: "uuid", nullable: true })
+  ownerUserId: string | null;
+
+  /** The developer request the key was issued for; null for one issued by hand. */
+  @Column({ name: "request_id", type: "uuid", nullable: true })
+  requestId: string | null;
+
+  /**
+   * When someone last saw the secret in clear: the admin who created it, or the
+   * holder who picked it up on the dashboard. A key issued on approval starts
+   * without, because nobody has seen its first secret; its holder's first
+   * pickup gives it a new one.
+   */
+  @Column({ name: "revealed_at", type: "timestamptz", nullable: true })
+  revealedAt: Date | null;
 
   /**
    * How many requests the key may make in one clock hour; null means only the

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -274,7 +275,7 @@ export class AdminAuthService implements OnModuleInit {
     // would lock out the very accounts that need to enrol — but it carries the
     // debt, and the guard lets such a session reach only the enrolment
     // endpoints, exactly like a pending password change.
-    const owesEnrolment = isTotpRequired() && !user.totpEnabled;
+    const owesEnrolment = isTotpRequired(user.role) && !user.totpEnabled;
 
     if (user.totpEnabled) {
       if (!request.totpCode) {
@@ -450,6 +451,60 @@ export class AdminAuthService implements OnModuleInit {
   }
 
   /**
+   * A developer's own account, from the developer portal: role `developer`,
+   * signed in at once. Unlike an account the owner creates, the password is the
+   * developer's own, so nothing is owed. Ranked below `viewer`, the account
+   * reaches its own session endpoints and `/v1/developer/*` and nothing of the
+   * admin. A taken address is a 409.
+   */
+  async registerDeveloper(input: {
+    email: string;
+    displayName?: string;
+    password: string;
+    ip: string | null;
+    userAgent: string | null;
+  }): Promise<{ token: string; session: AdminSession }> {
+    const email = input.email.trim().toLowerCase();
+    if (!looksLikeEmailAddress(email)) {
+      throw new BadRequestException("A valid email address is required");
+    }
+    const complaint = validatePasswordStrength(input.password);
+    if (complaint) throw new BadRequestException(complaint);
+    const existing = await this.users.findOne({ where: { email } });
+    if (existing) {
+      throw new ConflictException({
+        error: "account-exists",
+        message: "That email already has an account. Sign in instead.",
+      });
+    }
+    const saved = await this.users.save(
+      this.users.create({
+        email,
+        displayName: input.displayName?.trim() || email.split("@")[0],
+        passwordHash: await hashPassword(input.password),
+        role: "developer",
+        isActive: true,
+        mustChangePassword: false,
+      }),
+    );
+    const ip = truncateIp(input.ip);
+    await this.users.update(
+      { id: saved.id },
+      { lastLoginAt: new Date(), lastLoginIp: ip },
+    );
+    return this.sessions.create({
+      userId: saved.id,
+      email: saved.email,
+      displayName: saved.displayName,
+      role: saved.role,
+      ip,
+      userAgent: input.userAgent?.slice(0, 300) ?? null,
+      mustChangePassword: false,
+      mustEnrolTotp: false,
+    });
+  }
+
+  /**
    * Change role or activation.
    *
    * Both changes take effect on live sessions immediately rather than at the
@@ -611,7 +666,7 @@ export class AdminAuthService implements OnModuleInit {
       // read as "enrolled" — and since change-password is one of the two
       // endpoints a debt-carrying session may reach, changing a password was a
       // way to walk out of a mandatory second factor.
-      mustEnrolTotp: isTotpRequired() && !user.totpEnabled,
+      mustEnrolTotp: isTotpRequired(user.role) && !user.totpEnabled,
     });
     // The new session's ceiling travels with the token. The caller writes a
     // cookie from it, and without the date it had to guess: the frontend used

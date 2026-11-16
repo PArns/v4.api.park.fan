@@ -3,6 +3,7 @@ import { getMlServiceUrl } from "../../config/ml-services.config";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { MLService } from "../ml.service";
 import { MLModelService } from "../services/ml-model.service";
+import { ApiPermission } from "../../api-keys/api-permission.decorator";
 
 /**
  * MLHealthController
@@ -29,6 +30,7 @@ export class MLHealthController {
    * - System operational status
    */
   @Get("health")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Check ML service health",
     description:

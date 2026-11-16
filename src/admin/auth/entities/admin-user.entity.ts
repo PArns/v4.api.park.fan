@@ -8,7 +8,7 @@ import {
 } from "typeorm";
 
 /**
- * The four things an admin account can be allowed to do.
+ * The five things an account can be allowed to do.
  *
  * Ordered from most to least privileged, and read that way by
  * `roleAtLeast` — a check written as "editor or above" must not have to
@@ -21,8 +21,20 @@ import {
  *             The role a normal curation session runs as.
  * - `author`  edits blog posts and media metadata, but not park/ride data.
  * - `viewer`  reads dashboards. Cannot write anything.
+ * - `developer` is not staff: an outside developer who registered on the
+ *             developer portal. Ranked below `viewer`, so every admin route
+ *             (whose default minimum is `viewer`), `/v1/mcp`, the token and the
+ *             OAuth consent endpoints refuse it without a line of their own.
+ *             It reaches its own session endpoints, which name it, and
+ *             `/v1/developer/*`, which shows only its own keys and requests.
  */
-export const ADMIN_ROLES = ["owner", "editor", "author", "viewer"] as const;
+export const ADMIN_ROLES = [
+  "owner",
+  "editor",
+  "author",
+  "viewer",
+  "developer",
+] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 
 /** Rank of a role, higher = more privileged. */
@@ -31,6 +43,7 @@ export const ADMIN_ROLE_RANK: Record<AdminRole, number> = {
   editor: 20,
   author: 10,
   viewer: 0,
+  developer: -10,
 };
 
 /** Whether `role` is at least as privileged as `minimum`. */

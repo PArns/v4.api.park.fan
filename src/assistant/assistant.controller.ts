@@ -35,6 +35,7 @@ import {
   ratingRequestSchema,
   sessionRequestSchema,
 } from "./assistant.schemas";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /** Parses a body with zod; a refusal names the fields, never echoes the input. */
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -60,6 +61,7 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
  * feedback table by posting to these URLs.
  */
 @ApiTags("assistant")
+@OpenRoute("Parky, park.fan's chat; a Turnstile session guards it")
 @Controller("assistant")
 export class AssistantController {
   constructor(
