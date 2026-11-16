@@ -291,11 +291,17 @@ exactly the handlers it reaches. `ADMIN_REQUIRE_TOTP` does not apply to it.
   `DELETE …/keys/:id`: the admin's rotation, end of grace and revocation, on the caller's own keys
   only (`ApiKeyService.findOwned`); another account's key id is a 404.
 
+Deleting the account (`DELETE /v1/admin/auth/users/:id`, owner only) erases its keys with their
+counters and every request it filed, through the hook `ApiKeyAccountDeletion` registers with
+`AdminAuthService.onAccountDeletion`; a key of a deleted account stops opening anything on the next
+request. See [authentication](../admin/authentication.md#deleting-an-account).
+
 Every request is decided by hand, by the owner, at `/v1/admin/api-key-requests`: `GET` lists
 them with the applicant, `POST /:id/approve { permissions, name?, usage?, requestsPerHour?,
 allowedParkIds?, expiresAt?, note?, message? }` issues a key bound to the applicant
 (`owner_user_id`, `request_id`) with `revealed_at` null, `POST /:id/reject { reason? }`,
-`POST /:id/reopen` and `DELETE /:id`. Audited as `api-key-request.*`. Nobody sees an approved
+`POST /:id/reopen` and `DELETE /:id`, which removes a request in any state; a key approved from
+it stays. Audited as `api-key-request.*`. Nobody sees an approved
 key's first secret: its holder picks it up on the dashboard, which is a rotation with
 `graceHours: 0` and sets `revealed_at`. The API sends no mail; the dashboard shows the decision
 and the owner's message.

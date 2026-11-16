@@ -787,6 +787,26 @@ export class ApiKeyService {
   }
 
   /**
+   * Deletes every key an account holds, active or not, with its counters: the
+   * account itself is being deleted. Returns how many went.
+   */
+  async deleteAllOwnedBy(
+    ownerUserId: string,
+    now = Date.now(),
+  ): Promise<number> {
+    const rows = await this.keys.find({ where: { ownerUserId } });
+    for (const row of rows) {
+      await this.keys.delete({ id: row.id });
+      await this.afterDeletion(row, now).catch((error: unknown) =>
+        this.logger.warn(
+          `Could not clear the counters of deleted API key ${row.id}: ${String(error)}`,
+        ),
+      );
+    }
+    return rows.length;
+  }
+
+  /**
    * Redis after a deletion: both secrets refused, as on a revocation, in case
    * that one's refusal never reached Redis; then every counter that can still
    * be alive, so nothing outlives the key it counted.
