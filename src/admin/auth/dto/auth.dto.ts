@@ -10,6 +10,7 @@ import {
   MinLength,
 } from "class-validator";
 import { ADMIN_ROLES, type AdminRole } from "../entities/admin-user.entity";
+import { MIN_PASSWORD_LENGTH } from "../password.util";
 import {
   ADMIN_TOKEN_SCOPE_NAMES,
   PAT_EXPIRY_DAYS,
@@ -58,10 +59,10 @@ export class AdminChangePasswordDto {
   currentPassword: string;
 
   @ApiProperty({
-    description: "At least 12 characters. Length only — no composition rules.",
+    description: `At least ${MIN_PASSWORD_LENGTH} characters. Length only — no composition rules.`,
   })
   @IsString()
-  @MinLength(12)
+  @MinLength(MIN_PASSWORD_LENGTH)
   @MaxLength(256)
   newPassword: string;
 }
@@ -90,7 +91,7 @@ export class AdminCreateUserDto {
       "so this one works exactly once.",
   })
   @IsString()
-  @MinLength(12)
+  @MinLength(MIN_PASSWORD_LENGTH)
   @MaxLength(256)
   password: string;
 }
@@ -116,7 +117,7 @@ export class AdminUpdateUserDto {
 export class AdminResetPasswordDto {
   @ApiProperty()
   @IsString()
-  @MinLength(12)
+  @MinLength(MIN_PASSWORD_LENGTH)
   @MaxLength(256)
   newPassword: string;
 }
@@ -244,9 +245,9 @@ export class RegisterAccountDto {
   @MaxLength(120)
   displayName?: string;
 
-  @ApiProperty({ description: "At least 12 characters." })
+  @ApiProperty({ description: `At least ${MIN_PASSWORD_LENGTH} characters.` })
   @IsString()
-  @MinLength(12)
+  @MinLength(MIN_PASSWORD_LENGTH)
   @MaxLength(256)
   password: string;
 

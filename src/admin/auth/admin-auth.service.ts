@@ -18,6 +18,8 @@ import {
   ADMIN_ROLES,
   AdminRole,
   AdminUser,
+  isSelfServiceRole,
+  type SelfServiceRole,
 } from "./entities/admin-user.entity";
 import {
   hashPassword,
@@ -66,9 +68,6 @@ export interface PublicAdminUser {
  * What another module erases of an account before the account goes: its API
  * keys, its key requests. Returns what it removed, for the audit log.
  */
-/** The roles somebody may give their own account. */
-export type SelfServiceRole = Extract<AdminRole, "developer" | "user">;
-
 export type AccountDeletionHook = (
   userId: string,
 ) => Promise<Record<string, number>>;
@@ -463,7 +462,7 @@ export class AdminAuthService implements OnModuleInit {
       select: { id: true, email: true, role: true, passwordHash: true },
     });
     if (!user) throw new NotFoundException("No such account");
-    if (user.role !== "developer" && user.role !== "user") {
+    if (!isSelfServiceRole(user.role)) {
       throw new ForbiddenException(
         "A staff account is deleted by an owner, not by itself",
       );
@@ -493,18 +492,10 @@ export class AdminAuthService implements OnModuleInit {
     user: AdminUser,
   ): Promise<{ user: PublicAdminUser; erased: Record<string, number> }> {
     const { id } = user;
-    if (user.role === "owner" && user.isActive) {
-      await this.assertAnotherActiveOwner(id);
-    }
-
-    await this.signOutEverywhere(id, "deleted");
-    const erased: Record<string, number> = {};
-    for (const hook of this.deletionHooks) {
-      Object.assign(erased, await hook(id));
-    }
+    // The account goes first, under the lock that keeps the last owner, so a
+    // refusal there leaves everything as it was. What hangs on the account
+    // goes after: its sessions, its tokens' cut-off, and what the hooks hold.
     await this.users.manager.transaction(async (manager) => {
-      // Checked again under the lock: two owners deleting each other in the
-      // same tick would otherwise both pass the check above.
       if (user.role === "owner" && user.isActive) {
         await this.assertAnotherActiveOwner(id, manager);
       }
@@ -519,6 +510,13 @@ export class AdminAuthService implements OnModuleInit {
       );
       await manager.delete(AdminUser, { id });
     });
+    await this.signOutEverywhere(id, "deleted");
+    const erased: Record<string, number> = {};
+    for (const result of await Promise.all(
+      this.deletionHooks.map((hook) => hook(id)),
+    )) {
+      Object.assign(erased, result);
+    }
     return { user: toPublicUser(user), erased };
   }
 
@@ -612,28 +610,33 @@ export class AdminAuthService implements OnModuleInit {
     }
     const complaint = validatePasswordStrength(input.password);
     if (complaint) throw new BadRequestException(complaint);
-    const existing = await this.users.findOne({ where: { email } });
-    if (existing) {
-      throw new ConflictException({
+    const taken = () =>
+      new ConflictException({
         error: "account-exists",
         message: "That email already has an account. Sign in instead.",
       });
-    }
-    const saved = await this.users.save(
-      this.users.create({
-        email,
-        displayName: input.displayName?.trim() || email.split("@")[0],
-        passwordHash: await hashPassword(input.password),
-        role: input.role,
-        isActive: true,
-        mustChangePassword: false,
-      }),
-    );
+    if (await this.users.exists({ where: { email } })) throw taken();
     const ip = truncateIp(input.ip);
-    await this.users.update(
-      { id: saved.id },
-      { lastLoginAt: new Date(), lastLoginIp: ip },
-    );
+    let saved: AdminUser;
+    try {
+      saved = await this.users.save(
+        this.users.create({
+          email,
+          displayName: input.displayName?.trim() || email.split("@")[0],
+          passwordHash: await hashPassword(input.password),
+          role: input.role,
+          isActive: true,
+          mustChangePassword: false,
+          lastLoginAt: new Date(),
+          lastLoginIp: ip,
+        }),
+      );
+    } catch (error) {
+      // Two registrations of one address at once: the unique index decides,
+      // and the loser hears what the check above would have told it.
+      if ((error as { code?: string }).code === "23505") throw taken();
+      throw error;
+    }
     return this.sessions.create({
       userId: saved.id,
       email: saved.email,

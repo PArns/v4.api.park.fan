@@ -141,6 +141,9 @@ export const API_PERMISSION_DESCRIPTIONS: Record<ApiPermission, string> = {
 /** What a caller without a key may read. */
 export const KEYLESS_PERMISSIONS: readonly ApiPermission[] = ["live.waits"];
 
+/** `KEYLESS_PERMISSIONS` as the set a caller without a key holds, built once. */
+export const KEYLESS_ACCESS: ReadonlySet<string> = new Set(KEYLESS_PERMISSIONS);
+
 /**
  * What a key issued before permissions existed reads: everything that was
  * open then, plus forecasts and the planner, which such a key opened. The

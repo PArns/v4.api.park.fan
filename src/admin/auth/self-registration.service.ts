@@ -2,9 +2,14 @@ import { ForbiddenException, Injectable, Logger } from "@nestjs/common";
 import { carriesThrottleBypassKey } from "../../common/throttler/throttler.config";
 import { isAdminLoginTurnstileEnforced } from "../../config/admin-auth.config";
 import { clientIp } from "./admin-auth.guard";
-import { AdminAuthService, type SelfServiceRole } from "./admin-auth.service";
+import { AdminAuthService } from "./admin-auth.service";
+import type { SelfServiceRole } from "./entities/admin-user.entity";
 import { AdminAuditService } from "./admin-audit.service";
-import type { RequestWithAdmin } from "./admin-principal";
+import {
+  principalFromSession,
+  sessionAnswer,
+  type RequestWithAdmin,
+} from "./admin-principal";
 import { AdminTurnstileService } from "./admin-turnstile.service";
 import type { RegisterAccountDto } from "./dto/auth.dto";
 
@@ -67,34 +72,12 @@ export class SelfRegistrationService {
     });
     const { session } = issued;
     await this.audit.record({
-      actor: {
-        userId: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        sessionToken: null,
-        legacy: false,
-        ip,
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
+      actor: principalFromSession(session, ip, null),
       action: REGISTER_ACTIONS[role],
       entityType: "admin_user",
       entityId: session.userId,
       entityLabel: session.email,
     });
-    return {
-      status: "ok" as const,
-      token: issued.token,
-      expiresAt: new Date(session.expiresAt).toISOString(),
-      user: {
-        id: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
-    };
+    return sessionAnswer(issued.token, session);
   }
 }

@@ -1,6 +1,7 @@
 import { UnauthorizedException } from "@nestjs/common";
 import type { AdminRole } from "./entities/admin-user.entity";
 import type { AdminApiTokenKind } from "./admin-api-token.constants";
+import type { AdminSession } from "./admin-session.store";
 
 /**
  * Who is making this request, as every admin endpoint sees it.
@@ -58,4 +59,44 @@ export function requireAccount(admin: AdminPrincipal): string {
     throw new UnauthorizedException("No account behind this session");
   }
   return admin.userId;
+}
+
+/**
+ * The principal a session stands for: the guard's for a request carrying the session's token, and
+ * the audit actor of a sign-in or registration, which carries none yet (`token: null`).
+ */
+export function principalFromSession(
+  session: AdminSession,
+  ip: string | null,
+  token: string | null,
+): AdminPrincipal {
+  return {
+    userId: session.userId,
+    email: session.email,
+    displayName: session.displayName,
+    role: session.role,
+    sessionToken: token,
+    ...(token && { sessionUserAgent: session.userAgent }),
+    legacy: false,
+    ip,
+    mustChangePassword: session.mustChangePassword,
+    mustEnrolTotp: session.mustEnrolTotp === true,
+  };
+}
+
+/** The login's answer for a new session: the token, when it ends, and who it is. */
+export function sessionAnswer(token: string, session: AdminSession) {
+  return {
+    status: "ok" as const,
+    token,
+    expiresAt: new Date(session.expiresAt).toISOString(),
+    user: {
+      id: session.userId,
+      email: session.email,
+      displayName: session.displayName,
+      role: session.role,
+      mustChangePassword: session.mustChangePassword,
+      mustEnrolTotp: session.mustEnrolTotp === true,
+    },
+  };
 }

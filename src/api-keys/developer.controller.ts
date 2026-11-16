@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -35,19 +34,13 @@ import type {
 } from "../admin/auth/admin-principal";
 import { requireAccount } from "../admin/auth/admin-principal";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
-import { isCanonicalUuid } from "../common/utils/uuid-param.util";
+import { CanonicalUuidPipe } from "../common/utils/uuid-param.util";
 import { ApiKeyRequestService } from "./api-key-request.service";
 import { ApiKeyService } from "./api-key.service";
 import { RotateApiKeyDto } from "./dto/create-api-key.dto";
 import { CreateApiKeyRequestDto } from "./dto/api-key-request.dto";
 import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
 import { SelfRegistrationService } from "../admin/auth/self-registration.service";
-
-/** A key id from a path, checked before it reaches a query. */
-function keyId(id: string): string {
-  if (!isCanonicalUuid(id)) throw new BadRequestException("id must be a uuid");
-  return id;
-}
 
 /**
  * The developer dashboard's API: an outside developer registers, files key
@@ -155,10 +148,10 @@ export class DeveloperController {
   @ApiOperation({ summary: "Withdraw an undecided request of the caller's" })
   async withdrawRequest(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const userId = requireAccount(admin);
-    const withdrawn = await this.requests.withdraw(keyId(id), userId);
+    const withdrawn = await this.requests.withdraw(id, userId);
     await this.audit.record({
       actor: admin,
       action: "api-key-request.withdraw",
@@ -177,7 +170,7 @@ export class DeveloperController {
   })
   async rotateKey(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: RotateApiKeyDto,
   ) {
     const owned = await this.ownedKey(admin, id);
@@ -202,7 +195,7 @@ export class DeveloperController {
   })
   async endGrace(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const owned = await this.ownedKey(admin, id);
     const ended = await this.apiKeys.revokePrevious(owned.id);
@@ -227,7 +220,7 @@ export class DeveloperController {
   })
   async revokeKey(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const owned = await this.ownedKey(admin, id);
     const revoked = await this.apiKeys.revoke(owned.id);
@@ -243,10 +236,7 @@ export class DeveloperController {
 
   /** A key of the caller's account; 404 for anyone else's, so ids reveal nothing. */
   private async ownedKey(admin: AdminPrincipal, id: string) {
-    const owned = await this.apiKeys.findOwned(
-      keyId(id),
-      requireAccount(admin),
-    );
+    const owned = await this.apiKeys.findOwned(id, requireAccount(admin));
     if (!owned) throw new NotFoundException("No such key");
     return owned;
   }

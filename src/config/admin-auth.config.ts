@@ -1,3 +1,4 @@
+import { isSelfServiceRole } from "../admin/auth/entities/admin-user.entity";
 import { Logger } from "@nestjs/common";
 import {
   ADMIN_ROLES,
@@ -121,11 +122,7 @@ export function getLoginLockoutMinutes(): number {
  * an account opens nothing but its own data.
  */
 export function isTotpRequired(role?: string): boolean {
-  return (
-    process.env.ADMIN_REQUIRE_TOTP === "true" &&
-    role !== "developer" &&
-    role !== "user"
-  );
+  return process.env.ADMIN_REQUIRE_TOTP === "true" && !isSelfServiceRole(role);
 }
 
 /**

@@ -41,6 +41,17 @@ export const ADMIN_ROLES = [
 ] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 
+/** The roles somebody gives their own account: a developer's, a visitor's. Neither is staff. */
+export const SELF_SERVICE_ROLES = ["developer", "user"] as const;
+export type SelfServiceRole = (typeof SELF_SERVICE_ROLES)[number];
+
+/** The role belongs to an account somebody opened for themselves. */
+export function isSelfServiceRole(
+  role: string | undefined,
+): role is SelfServiceRole {
+  return (SELF_SERVICE_ROLES as readonly string[]).includes(role ?? "");
+}
+
 /** Rank of a role, higher = more privileged. */
 export const ADMIN_ROLE_RANK: Record<AdminRole, number> = {
   owner: 30,

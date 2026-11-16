@@ -204,4 +204,37 @@ describe("Admin account deletion (e2e)", () => {
       .send({ role: "editor" })
       .expect(400);
   });
+
+  it("issues one key when a request is approved twice at once", async () => {
+    const owner = await account("owner-race@e2e.test", "owner");
+    const dev = await account("dev-race@e2e.test", "developer");
+    const filed = await call("post", "/v1/developer/requests", dev.session)
+      .send(REQUEST)
+      .expect(201);
+    const id = filed.body.item.id as string;
+    const approve = () =>
+      call(
+        "post",
+        `/v1/admin/api-key-requests/${id}/approve`,
+        owner.session,
+      ).send({
+        permissions: ["live.schedule"],
+      });
+    const statuses = (await Promise.all([approve(), approve()]))
+      .map((response) => response.status)
+      .sort();
+    expect(statuses).toEqual([200, 409]);
+    const keys = await dataSource.query(
+      `SELECT count(*)::int AS n FROM api_keys WHERE request_id = $1::uuid`,
+      [id],
+    );
+    expect(keys[0].n).toBe(1);
+    await call(
+      "post",
+      `/v1/admin/api-key-requests/not-a-uuid/approve`,
+      owner.session,
+    )
+      .send({ permissions: ["live.schedule"] })
+      .expect(400);
+  });
 });

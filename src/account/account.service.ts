@@ -84,24 +84,26 @@ export class AccountService implements OnModuleInit {
     userId: string,
     patch: UpdateAccountDataDto,
   ): Promise<AccountDataView> {
-    const current = await this.read(userId);
-    await this.data.save(
-      this.data.create({
-        userId,
-        favorites: patch.favorites
-          ? {
-              parks: unique(patch.favorites.parks),
-              attractions: unique(patch.favorites.attractions),
-              shows: unique(patch.favorites.shows),
-              restaurants: unique(patch.favorites.restaurants),
-            }
-          : current.favorites,
-        riddenRides: patch.riddenRides
-          ? unique(patch.riddenRides)
-          : current.riddenRides,
-        temperatureUnit: patch.temperatureUnit ?? current.temperatureUnit,
+    // Only the fields the body names are written, in one statement: two tabs
+    // writing different fields at once keep both, and `temperatureUnit: null`
+    // clears the unit.
+    const fields = {
+      ...(patch.favorites && {
+        favorites: {
+          parks: unique(patch.favorites.parks),
+          attractions: unique(patch.favorites.attractions),
+          shows: unique(patch.favorites.shows),
+          restaurants: unique(patch.favorites.restaurants),
+        },
       }),
-    );
+      ...(patch.riddenRides && { riddenRides: unique(patch.riddenRides) }),
+      ...(patch.temperatureUnit !== undefined && {
+        temperatureUnit: patch.temperatureUnit,
+      }),
+    };
+    await this.data.upsert({ userId, ...fields, updatedAt: new Date() }, [
+      "userId",
+    ]);
     return this.read(userId);
   }
 
@@ -160,27 +162,27 @@ export class AccountService implements OnModuleInit {
         message: `A stored value may be at most ${MAX_ACCOUNT_STORAGE_BYTES} bytes as JSON`,
       });
     }
-    const exists = await this.storage.exists({ where: { userId, key: name } });
-    if (!exists) {
-      const count = await this.storage.count({ where: { userId } });
-      if (count >= MAX_ACCOUNT_STORAGE_KEYS) {
-        throw new BadRequestException({
-          error: "too-many-keys",
-          message: `An account keeps at most ${MAX_ACCOUNT_STORAGE_KEYS} keys`,
-        });
-      }
-    }
-    // Raw upsert: TypeORM's typed one cannot take an opaque JSON value.
-    await this.storage.query(
+    // One statement: a key already there is replaced, a new one is added only
+    // while the account is under its limit; no row back means it was full.
+    const rows = (await this.storage.query(
       `INSERT INTO account_storage (user_id, key, value, updated_at)
-       VALUES ($1::uuid, $2, $3::jsonb, now())
-       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [userId, name, JSON.stringify(value)],
-    );
-    return this.readStorage(userId, name).then(({ key: k, updatedAt }) => ({
-      key: k,
-      updatedAt,
-    }));
+       SELECT $1::uuid, $2::varchar, $3::jsonb, now()
+        WHERE EXISTS (SELECT 1 FROM account_storage WHERE user_id = $1::uuid AND key = $2::varchar)
+           OR (SELECT count(*) FROM account_storage WHERE user_id = $1::uuid) < $4
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+       RETURNING key, updated_at`,
+      [userId, name, JSON.stringify(value), MAX_ACCOUNT_STORAGE_KEYS],
+    )) as { key: string; updated_at: Date }[];
+    if (rows.length === 0) {
+      throw new BadRequestException({
+        error: "too-many-keys",
+        message: `An account keeps at most ${MAX_ACCOUNT_STORAGE_KEYS} keys`,
+      });
+    }
+    return {
+      key: rows[0].key,
+      updatedAt: new Date(rows[0].updated_at).toISOString(),
+    };
   }
 
   /** Removes a key; true when there was something under it. */

@@ -16,6 +16,7 @@ import {
 } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
+import { CanonicalUuidPipe } from "../../common/utils/uuid-param.util";
 import { AdminAuthService, toPublicUser } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
@@ -34,6 +35,8 @@ import {
   requireAccount,
   type AdminPrincipal,
   type RequestWithAdmin,
+  principalFromSession,
+  sessionAnswer,
 } from "./admin-principal";
 import {
   AdminChangePasswordDto,
@@ -177,36 +180,14 @@ export class AdminAuthController {
     }
 
     await this.audit.record({
-      actor: {
-        userId: result.session.userId,
-        email: result.session.email,
-        displayName: result.session.displayName,
-        role: result.session.role,
-        sessionToken: null,
-        legacy: false,
-        ip: clientIp(request),
-        mustChangePassword: result.session.mustChangePassword,
-        mustEnrolTotp: result.session.mustEnrolTotp === true,
-      },
+      actor: principalFromSession(result.session, clientIp(request), null),
       action: "auth.login",
       entityType: "admin_user",
       entityId: result.session.userId,
       entityLabel: result.session.email,
     });
 
-    return {
-      status: "ok" as const,
-      token: result.token,
-      expiresAt: new Date(result.session.expiresAt).toISOString(),
-      user: {
-        id: result.session.userId,
-        email: result.session.email,
-        displayName: result.session.displayName,
-        role: result.session.role,
-        mustChangePassword: result.session.mustChangePassword,
-        mustEnrolTotp: result.session.mustEnrolTotp === true,
-      },
-    };
+    return sessionAnswer(result.token, result.session);
   }
 
   @Post("logout")
@@ -452,7 +433,7 @@ export class AdminAuthController {
   @ApiOperation({ summary: "Change an account's name, role or activation" })
   async updateUser(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: AdminUpdateUserDto,
   ) {
     const before = await this.auth.findById(id);
@@ -490,7 +471,7 @@ export class AdminAuthController {
   })
   async deleteUser(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ) {
     const { user, erased } = await this.auth.remove(id, requireAccount(admin));
     await this.audit.record({
@@ -519,7 +500,7 @@ export class AdminAuthController {
   })
   async resetTotp(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     await this.auth.clearTotp(id);
     const user = await this.auth.findById(id);
@@ -543,7 +524,7 @@ export class AdminAuthController {
   })
   async resetPassword(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: AdminResetPasswordDto,
   ) {
     const result = await this.auth.resetPassword(id, body.newPassword);

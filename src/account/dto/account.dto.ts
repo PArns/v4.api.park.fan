@@ -53,10 +53,14 @@ export class UpdateAccountDataDto {
   @IsUUID("all", { each: true })
   riddenRides?: string[];
 
-  @ApiPropertyOptional({ enum: ["C", "F"], nullable: true })
+  @ApiPropertyOptional({
+    enum: ["C", "F"],
+    nullable: true,
+    description: "null clears the unit.",
+  })
   @IsOptional()
   @IsIn(["C", "F"])
-  temperatureUnit?: "C" | "F";
+  temperatureUnit?: "C" | "F" | null;
 }
 
 /** The body of `DELETE /v1/account`: the password confirms it. */

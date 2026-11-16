@@ -20,6 +20,10 @@ import {
 } from "./api-key.constants";
 import { ApiKey } from "./entities/api-key.entity";
 import { grantedPermissions } from "./permissions";
+import {
+  accountsByIds,
+  type AccountName,
+} from "../admin/auth/accounts-by-ids.util";
 
 /** What the admin list shows of a key: everything but the hash. */
 export interface ApiKeyItem {
@@ -411,7 +415,7 @@ export class ApiKeyService {
     const days = lastDays(now, USAGE_DAYS);
     const months = lastMonths(now, USAGE_MONTHS);
     const perKey = 1 + 2 * days.length + months.length;
-    const counts = await this.redis
+    const countsRead = this.redis
       .mget(
         ...rows.flatMap((row) => [
           hourKey(row.id, hour),
@@ -421,12 +425,18 @@ export class ApiKeyService {
         ]),
       )
       .catch(() => [] as (string | null)[]);
-    const names = await this.parkNames(
-      rows.flatMap((row) => row.allowedParkIds ?? []),
-    );
-    const owners = await this.ownerNames(
-      rows.flatMap((row) => (row.ownerUserId ? [row.ownerUserId] : [])),
-    );
+    // Independent reads, in one round trip of waiting. A developer's own list
+    // needs no owner names: they are the caller's.
+    const [counts, names, owners] = await Promise.all([
+      countsRead,
+      this.parkNames(rows.flatMap((row) => row.allowedParkIds ?? [])),
+      filter.ownerUserId
+        ? Promise.resolve(new Map<string, AccountName>())
+        : accountsByIds(
+            this.keys,
+            rows.flatMap((row) => (row.ownerUserId ? [row.ownerUserId] : [])),
+          ),
+    ]);
     return rows.map((row, i) => {
       const at = (offset: number) => Number(counts[i * perKey + offset] ?? 0);
       return {
@@ -456,23 +466,6 @@ export class ApiKeyService {
   /** One key of a developer account, or null when it is not theirs. */
   async findOwned(id: string, ownerUserId: string): Promise<ApiKey | null> {
     return this.keys.findOne({ where: { id, ownerUserId } });
-  }
-
-  /** The accounts behind owned keys, by id, for the admin list. */
-  private async ownerNames(
-    ids: string[],
-  ): Promise<Map<string, { email: string; displayName: string }>> {
-    if (ids.length === 0) return new Map();
-    const rows = (await this.keys.query(
-      `SELECT id, email, display_name FROM admin_users WHERE id = ANY($1::uuid[])`,
-      [[...new Set(ids)]],
-    )) as { id: string; email: string; display_name: string }[];
-    return new Map(
-      rows.map((row) => [
-        row.id,
-        { email: row.email, displayName: row.display_name },
-      ]),
-    );
   }
 
   /**
@@ -795,14 +788,17 @@ export class ApiKeyService {
     now = Date.now(),
   ): Promise<number> {
     const rows = await this.keys.find({ where: { ownerUserId } });
-    for (const row of rows) {
-      await this.keys.delete({ id: row.id });
-      await this.afterDeletion(row, now).catch((error: unknown) =>
-        this.logger.warn(
-          `Could not clear the counters of deleted API key ${row.id}: ${String(error)}`,
+    if (rows.length === 0) return 0;
+    await this.keys.delete({ ownerUserId });
+    await Promise.all(
+      rows.map((row) =>
+        this.afterDeletion(row, now).catch((error: unknown) =>
+          this.logger.warn(
+            `Could not clear the counters of deleted API key ${row.id}: ${String(error)}`,
+          ),
         ),
-      );
-    }
+      ),
+    );
     return rows.length;
   }
 

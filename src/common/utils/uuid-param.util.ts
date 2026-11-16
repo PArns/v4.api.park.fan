@@ -1,3 +1,9 @@
+import {
+  BadRequestException,
+  Injectable,
+  type PipeTransform,
+} from "@nestjs/common";
+
 /**
  * Bind ids so Postgres can use the index on a uuid column (PAR-871).
  *
@@ -17,4 +23,18 @@ const CANONICAL_UUID =
 
 export function isCanonicalUuid(value: unknown): value is string {
   return typeof value === "string" && CANONICAL_UUID.test(value);
+}
+
+/**
+ * `@Param("id", CanonicalUuidPipe)`: a 400 for a path id that is not a canonical uuid, before it
+ * reaches a `$1::uuid` cast that would fail the statement (22P02) and answer 500.
+ */
+@Injectable()
+export class CanonicalUuidPipe implements PipeTransform<string, string> {
+  transform(value: string): string {
+    if (!isCanonicalUuid(value)) {
+      throw new BadRequestException("id must be a uuid");
+    }
+    return value;
+  }
 }
