@@ -208,6 +208,11 @@ export function languageName(locale: AssistantLocale): string {
   return LANGUAGE[locale].name;
 }
 
+/** How Parky addresses the user in that language ("du", never "Sie"), as one prompt line. */
+export function languageAddress(locale: AssistantLocale): string {
+  return LANGUAGE[locale].address;
+}
+
 /** A park or ride an earlier answer in this chat looked up. */
 export interface LookedUpEntity {
   kind: "park" | "ride";
