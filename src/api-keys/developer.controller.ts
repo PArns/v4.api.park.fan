@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -22,32 +21,27 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { AdminAuthGuard, clientIp } from "../admin/auth/admin-auth.guard";
+import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
 import {
   AdminLegacyAccess,
   AdminMinRole,
   AdminPublic,
   CurrentAdmin,
 } from "../admin/auth/admin-auth.decorators";
-import { AdminAuthService } from "../admin/auth/admin-auth.service";
 import { AdminAuditService } from "../admin/auth/admin-audit.service";
 import type {
   AdminPrincipal,
   RequestWithAdmin,
 } from "../admin/auth/admin-principal";
 import { requireAccount } from "../admin/auth/admin-principal";
-import { AdminTurnstileService } from "../admin/auth/admin-turnstile.service";
-import { carriesThrottleBypassKey } from "../common/throttler/throttler.config";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { isCanonicalUuid } from "../common/utils/uuid-param.util";
-import { isAdminLoginTurnstileEnforced } from "../config/admin-auth.config";
 import { ApiKeyRequestService } from "./api-key-request.service";
 import { ApiKeyService } from "./api-key.service";
 import { RotateApiKeyDto } from "./dto/create-api-key.dto";
-import {
-  CreateApiKeyRequestDto,
-  RegisterDeveloperDto,
-} from "./dto/api-key-request.dto";
+import { CreateApiKeyRequestDto } from "./dto/api-key-request.dto";
+import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
+import { SelfRegistrationService } from "../admin/auth/self-registration.service";
 
 /** A key id from a path, checked before it reaches a query. */
 function keyId(id: string): string {
@@ -75,8 +69,7 @@ export class DeveloperController {
   private readonly logger = new Logger(DeveloperController.name);
 
   constructor(
-    private readonly auth: AdminAuthService,
-    private readonly turnstile: AdminTurnstileService,
+    private readonly registration: SelfRegistrationService,
     private readonly audit: AdminAuditService,
     private readonly apiKeys: ApiKeyService,
     private readonly requests: ApiKeyRequestService,
@@ -101,69 +94,8 @@ export class DeveloperController {
     status: 409,
     description: "That address already has an account",
   })
-  async register(
-    @Body() body: RegisterDeveloperDto,
-    @Req() request: RequestWithAdmin,
-  ) {
-    // As at the login: our own frontend verified the challenge before
-    // forwarding and sends the bypass key; anyone else solves it here.
-    if (
-      isAdminLoginTurnstileEnforced() &&
-      !carriesThrottleBypassKey(request.headers)
-    ) {
-      const verdict = await this.turnstile.verify(
-        body.turnstileToken ?? "",
-        clientIp(request),
-      );
-      if (!verdict.success) {
-        this.logger.warn(
-          `Turnstile refused a developer registration: ${verdict.reason ?? "no reason given"}`,
-        );
-        throw new ForbiddenException({
-          error: "turnstile-failed",
-          message: "A solved Turnstile token is required to register.",
-        });
-      }
-    }
-    const userAgent = request.headers?.["user-agent"];
-    const issued = await this.auth.registerDeveloper({
-      email: body.email,
-      displayName: body.displayName,
-      password: body.password,
-      ip: clientIp(request),
-      userAgent: typeof userAgent === "string" ? userAgent : null,
-    });
-    const { session } = issued;
-    await this.audit.record({
-      actor: {
-        userId: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        sessionToken: null,
-        legacy: false,
-        ip: clientIp(request),
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
-      action: "developer.register",
-      entityType: "admin_user",
-      entityId: session.userId,
-      entityLabel: session.email,
-    });
-    return {
-      status: "ok" as const,
-      token: issued.token,
-      expiresAt: new Date(session.expiresAt).toISOString(),
-      user: {
-        id: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
-    };
+  register(@Body() body: RegisterAccountDto, @Req() request: RequestWithAdmin) {
+    return this.registration.register("developer", body, request);
   }
 
   @Get("overview")

@@ -117,11 +117,15 @@ export function getLoginLockoutMinutes(): number {
 
 /**
  * Whether an account must enrol in TOTP before it can do anything. A developer
- * account never must: `ADMIN_REQUIRE_TOTP` is about staff, and a developer's
- * account opens nothing but its own data keys.
+ * or visitor account never must: `ADMIN_REQUIRE_TOTP` is about staff, and such
+ * an account opens nothing but its own data.
  */
 export function isTotpRequired(role?: string): boolean {
-  return process.env.ADMIN_REQUIRE_TOTP === "true" && role !== "developer";
+  return (
+    process.env.ADMIN_REQUIRE_TOTP === "true" &&
+    role !== "developer" &&
+    role !== "user"
+  );
 }
 
 /**

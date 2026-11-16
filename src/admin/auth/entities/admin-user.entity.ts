@@ -27,6 +27,9 @@ import {
  *             OAuth consent endpoints refuse it without a line of their own.
  *             It reaches its own session endpoints, which name it, and
  *             `/v1/developer/*`, which shows only its own keys and requests.
+ * - `user`    a visitor's account on park.fan, ranked below `developer`. It
+ *             reaches its own session endpoints and `/v1/account/*`, which
+ *             holds its own favorites, trips and alerts, and nothing else.
  */
 export const ADMIN_ROLES = [
   "owner",
@@ -34,6 +37,7 @@ export const ADMIN_ROLES = [
   "author",
   "viewer",
   "developer",
+  "user",
 ] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 
@@ -44,6 +48,7 @@ export const ADMIN_ROLE_RANK: Record<AdminRole, number> = {
   author: 10,
   viewer: 0,
   developer: -10,
+  user: -20,
 };
 
 /** Whether `role` is at least as privileged as `minimum`. */

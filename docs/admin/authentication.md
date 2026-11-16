@@ -23,13 +23,20 @@ undecorated endpoints need any valid session. An endpoint marked `@AdminTokenOnl
 | `author`    | blog posts and media metadata, not park data                                                                                    |
 | `viewer`    | dashboards; writes nothing                                                                                                      |
 | `developer` | not staff: an outside developer's own data keys and key requests, nothing of the admin                                          |
+| `user`      | not staff: a visitor's own account on park.fan and its synced favorites, ridden rides and temperature unit                      |
 
-Roles are ranked (`owner > editor > author > viewer > developer`), so "editor or above" keeps meaning
+Roles are ranked (`owner > editor > author > viewer > developer > user`), so "editor or above" keeps meaning
 that when a role is added between them. `developer` sits below `viewer`, the default minimum of an
 undecorated endpoint, so it reaches only the handlers that name it: its own session, password and
 second factor, and `/v1/developer/*`. It registers itself on the developer portal, owes no
 mandatory TOTP and never gets MCP or a token
-([data API keys](../frontend/api-keys.md#developer-accounts-and-requests)).
+([data API keys](../frontend/api-keys.md#developer-accounts-and-requests)). `user` sits below
+`developer`: the session, password and second-factor handlers name it as their minimum, so every
+account reaches them, and beyond them it reaches only `/v1/account/*`
+([visitor accounts](../frontend/accounts.md)). Both register themselves through
+`SelfRegistrationService`, one flow with the Turnstile check, the audit entry and the login's answer,
+and both may delete their own account with their password (`AdminAuthService.removeOwn`, rate
+limited like a password change).
 
 ## Sessions: opaque tokens in Redis
 

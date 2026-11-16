@@ -66,6 +66,9 @@ export interface PublicAdminUser {
  * What another module erases of an account before the account goes: its API
  * keys, its key requests. Returns what it removed, for the audit log.
  */
+/** The roles somebody may give their own account. */
+export type SelfServiceRole = Extract<AdminRole, "developer" | "user">;
+
 export type AccountDeletionHook = (
   userId: string,
 ) => Promise<Record<string, number>>;
@@ -443,6 +446,53 @@ export class AdminAuthService implements OnModuleInit {
     }
     const user = await this.users.findOne({ where: { id } });
     if (!user) throw new NotFoundException("No such account");
+    return this.erase(user);
+  }
+
+  /**
+   * A developer or visitor deleting their own account, confirmed with its
+   * password. Staff accounts are deleted by an owner, so that the last owner
+   * and the audit trail stay in the owner's hands.
+   */
+  async removeOwn(
+    id: string,
+    password: string,
+  ): Promise<{ user: PublicAdminUser; erased: Record<string, number> }> {
+    const user = await this.users.findOne({
+      where: { id },
+      select: { id: true, email: true, role: true, passwordHash: true },
+    });
+    if (!user) throw new NotFoundException("No such account");
+    if (user.role !== "developer" && user.role !== "user") {
+      throw new ForbiddenException(
+        "A staff account is deleted by an owner, not by itself",
+      );
+    }
+    // Rate limited like a password change: the confirmation is a password
+    // check an attacker holding a session could otherwise repeat at will.
+    const limit = await this.loginLimiter.checkAction("delete-account", id);
+    if (!limit.allowed) {
+      throw new UnauthorizedException(
+        `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      );
+    }
+    if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure("delete-account", id);
+      throw new UnauthorizedException({
+        error: "wrong-password",
+        message: "The password is not correct",
+      });
+    }
+    await this.loginLimiter.recordActionSuccess("delete-account", id);
+    const full = await this.users.findOneOrFail({ where: { id } });
+    return this.erase(full);
+  }
+
+  /** Erases an account and everything that hangs on it; see `remove`. */
+  private async erase(
+    user: AdminUser,
+  ): Promise<{ user: PublicAdminUser; erased: Record<string, number> }> {
+    const { id } = user;
     if (user.role === "owner" && user.isActive) {
       await this.assertAnotherActiveOwner(id);
     }
@@ -541,13 +591,15 @@ export class AdminAuthService implements OnModuleInit {
   }
 
   /**
-   * A developer's own account, from the developer portal: role `developer`,
-   * signed in at once. Unlike an account the owner creates, the password is the
-   * developer's own, so nothing is owed. Ranked below `viewer`, the account
-   * reaches its own session endpoints and `/v1/developer/*` and nothing of the
-   * admin. A taken address is a 409.
+   * An account somebody opens for themselves, signed in at once: a developer's
+   * from the developer portal, or a visitor's from park.fan. Unlike an account
+   * the owner creates, the password is their own, so nothing is owed. Ranked
+   * below `viewer`, it reaches its own session endpoints and its own area
+   * (`/v1/developer/*` or `/v1/account/*`) and nothing of the admin. A taken
+   * address is a 409 `account-exists`.
    */
-  async registerDeveloper(input: {
+  async registerSelf(input: {
+    role: SelfServiceRole;
     email: string;
     displayName?: string;
     password: string;
@@ -572,7 +624,7 @@ export class AdminAuthService implements OnModuleInit {
         email,
         displayName: input.displayName?.trim() || email.split("@")[0],
         passwordHash: await hashPassword(input.password),
-        role: "developer",
+        role: input.role,
         isActive: true,
         mustChangePassword: false,
       }),

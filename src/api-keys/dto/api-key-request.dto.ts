@@ -5,7 +5,6 @@ import {
   Equals,
   IsArray,
   IsBoolean,
-  IsEmail,
   IsIn,
   IsInt,
   IsISO8601,
@@ -32,36 +31,6 @@ import { API_PERMISSIONS } from "../permissions";
 import { MAX_ALLOWED_PARKS, MAX_REQUESTS_PER_HOUR } from "./create-api-key.dto";
 
 const HTTP_URL = { protocols: ["http", "https"], require_protocol: true };
-
-/** The body of `POST /v1/developer/register`. */
-export class RegisterDeveloperDto {
-  @ApiProperty({ example: "dev@example.org" })
-  @IsEmail()
-  @MaxLength(320)
-  email: string;
-
-  @ApiPropertyOptional({
-    description: "Shown in the admin; defaults to the address's local part.",
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  displayName?: string;
-
-  @ApiProperty({ description: "At least 12 characters." })
-  @IsString()
-  @MinLength(12)
-  @MaxLength(256)
-  password: string;
-
-  @ApiPropertyOptional({
-    description: "The solved Turnstile token (action `developer-register`).",
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(2048)
-  turnstileToken?: string;
-}
 
 /** The body of `POST /v1/developer/requests`. */
 export class CreateApiKeyRequestDto {

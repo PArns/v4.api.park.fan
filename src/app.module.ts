@@ -49,6 +49,7 @@ import {
 } from "./common/throttler/throttler.config";
 import { CfThrottlerGuard } from "./common/guards/cf-throttler.guard";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
+import { AccountModule } from "./account/account.module";
 import { MonitoringModule } from "./monitoring/monitoring.module";
 
 @Module({
@@ -122,6 +123,7 @@ import { MonitoringModule } from "./monitoring/monitoring.module";
     OAuthModule,
     McpModule,
     ApiKeysModule,
+    AccountModule,
   ],
   controllers: [AppController],
   providers: [

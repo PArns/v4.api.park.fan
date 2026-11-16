@@ -228,3 +228,34 @@ export class AdminOAuthApproveDto extends PickType(AdminCreateApiTokenDto, [
   @IsIn(ADMIN_TOKEN_SCOPE_NAMES)
   scope?: AdminTokenScope;
 }
+
+/** The body of a self-service registration: `/v1/developer/register` or `/v1/account/register`. */
+export class RegisterAccountDto {
+  @ApiProperty({ example: "fan@example.org" })
+  @IsEmail()
+  @MaxLength(320)
+  email: string;
+
+  @ApiPropertyOptional({
+    description: "Shown in the admin; defaults to the address's local part.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  displayName?: string;
+
+  @ApiProperty({ description: "At least 12 characters." })
+  @IsString()
+  @MinLength(12)
+  @MaxLength(256)
+  password: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The solved Turnstile token (action `developer-register` or `account-register`).",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  turnstileToken?: string;
+}

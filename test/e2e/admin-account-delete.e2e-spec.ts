@@ -136,7 +136,7 @@ describe("Admin account deletion (e2e)", () => {
       `/v1/admin/auth/users/${dev.id}`,
       owner.session,
     ).expect(200);
-    expect(deleted.body.erased).toEqual({ apiKeys: 1, keyRequests: 2 });
+    expect(deleted.body.erased).toMatchObject({ apiKeys: 1, keyRequests: 2 });
 
     const counts = await dataSource.query(
       `SELECT
