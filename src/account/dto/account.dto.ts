@@ -3,6 +3,7 @@ import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
   IsArray,
+  IsDefined,
   IsIn,
   IsOptional,
   IsString,
@@ -63,4 +64,18 @@ export class DeleteOwnAccountDto {
   @IsString()
   @MaxLength(256)
   password: string;
+}
+
+/** A storage key: lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit. */
+export const ACCOUNT_STORAGE_KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** The most keys one account keeps. */
+export const MAX_ACCOUNT_STORAGE_KEYS = 100;
+/** The largest value, as JSON, in bytes. */
+export const MAX_ACCOUNT_STORAGE_BYTES = 64 * 1024;
+
+/** The body of `PUT /v1/account/storage/:key`: any JSON value. */
+export class PutAccountStorageDto {
+  @ApiPropertyOptional({ description: "Any JSON value, at most 64 KB." })
+  @IsDefined()
+  value: unknown;
 }

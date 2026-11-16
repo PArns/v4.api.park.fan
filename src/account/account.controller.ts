@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Put,
   Req,
@@ -36,11 +37,16 @@ import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
 import { SelfRegistrationService } from "../admin/auth/self-registration.service";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { AccountService } from "./account.service";
-import { DeleteOwnAccountDto, UpdateAccountDataDto } from "./dto/account.dto";
+import {
+  DeleteOwnAccountDto,
+  PutAccountStorageDto,
+  UpdateAccountDataDto,
+} from "./dto/account.dto";
 
 /**
  * A visitor's account on park.fan: registration, the synced favorites, ridden
- * rides and temperature unit, and deleting the account. Behind the admin's
+ * rides and temperature unit, a member's own storage for members-only
+ * features, and deleting the account. Behind the admin's
  * session guard at `user`, the lowest role: every account reaches it, and each
  * handler reads and writes only the caller's own row.
  */
@@ -102,6 +108,50 @@ export class AccountController {
     @Body() body: UpdateAccountDataDto,
   ) {
     return { data: await this.account.write(requireAccount(admin), body) };
+  }
+
+  @Get("storage")
+  @ApiOperation({
+    summary: "The keys in the caller's storage",
+    description:
+      "Every key a members-only feature stored for this account, newest first, with its size in bytes; not the values.",
+  })
+  async listStorage(@CurrentAdmin() admin: AdminPrincipal) {
+    return { items: await this.account.listStorage(requireAccount(admin)) };
+  }
+
+  @Get("storage/:key")
+  @ApiOperation({ summary: "One value of the caller's storage" })
+  @ApiResponse({ status: 404, description: "Nothing stored under this key" })
+  readStorage(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("key") key: string,
+  ) {
+    return this.account.readStorage(requireAccount(admin), key);
+  }
+
+  @Put("storage/:key")
+  @ApiOperation({
+    summary: "Store a value in the caller's storage",
+    description:
+      "Replaces the value under the key. A key is 1 to 64 of `a-z0-9._-`; a value is any JSON up to 64 KB; an account keeps at most 100 keys (400 `too-many-keys`, 413 `value-too-large`).",
+  })
+  writeStorage(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("key") key: string,
+    @Body() body: PutAccountStorageDto,
+  ) {
+    return this.account.writeStorage(requireAccount(admin), key, body.value);
+  }
+
+  @Delete("storage/:key")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: "Remove a key from the caller's storage" })
+  async deleteStorage(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("key") key: string,
+  ): Promise<void> {
+    await this.account.deleteStorage(requireAccount(admin), key);
   }
 
   @Delete()

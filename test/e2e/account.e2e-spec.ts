@@ -132,4 +132,57 @@ describe("Visitor accounts (e2e)", () => {
       .expect(403);
     expect(staff.body.user.role).toBe("user");
   });
+
+  it("keeps a member's own storage, bounded, and erases it with the account", async () => {
+    const registered = await call("post", "/v1/account/register")
+      .send({ email: "store@e2e.test", password: "a-long-enough-password" })
+      .expect(201);
+    const session = registered.body.token as string;
+
+    await call("get", "/v1/account/storage/notes", session).expect(404);
+    await call("put", "/v1/account/storage/notes", session)
+      .send({ value: { text: "Taron first", parks: [PARK] } })
+      .expect(200);
+    const read = await call("get", "/v1/account/storage/notes", session).expect(
+      200,
+    );
+    expect(read.body.value).toEqual({ text: "Taron first", parks: [PARK] });
+    const listed = await call("get", "/v1/account/storage", session).expect(
+      200,
+    );
+    expect(listed.body.items.map((item: { key: string }) => item.key)).toEqual([
+      "notes",
+    ]);
+
+    await call("put", "/v1/account/storage/Bad Key", session)
+      .send({ value: 1 })
+      .expect(400);
+    await call("put", "/v1/account/storage/big", session)
+      .send({ value: "x".repeat(70 * 1024) })
+      .expect(413);
+    await call("put", "/v1/account/storage/empty", session)
+      .send({})
+      .expect(400);
+
+    const other = await call("post", "/v1/account/register")
+      .send({
+        email: "other-store@e2e.test",
+        password: "a-long-enough-password",
+      })
+      .expect(201);
+    await call(
+      "get",
+      "/v1/account/storage/notes",
+      other.body.token as string,
+    ).expect(404);
+
+    await call("delete", "/v1/account/storage/notes", session).expect(204);
+    await call("put", "/v1/account/storage/keep", session)
+      .send({ value: true })
+      .expect(200);
+    const deleted = await call("delete", "/v1/account", session)
+      .send({ password: "a-long-enough-password" })
+      .expect(200);
+    expect(deleted.body.erased).toMatchObject({ accountStorage: 1 });
+  });
 });
