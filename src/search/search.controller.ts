@@ -4,6 +4,7 @@ import { SearchService } from "./search.service";
 import { SearchQueryDto } from "./dto/search-query.dto";
 import { SearchResultDto } from "./dto/search-result.dto";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 @ApiTags("search")
 @Controller("search")
@@ -11,6 +12,7 @@ export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
   @Get()
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(60)) // edge: 1 minute; Redis keeps 5 minutes (SearchService.CACHE_TTL)
   @ApiOperation({
     summary: "Intelligent search across all entities",

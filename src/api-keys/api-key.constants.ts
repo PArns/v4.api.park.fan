@@ -8,6 +8,13 @@
 export const DATA_TERMS_URL = "https://park.fan/en/impressum#data-use";
 
 /**
+ * Where a key is requested, its permissions are listed and its holder sees,
+ * rotates and revokes it: the frontend's developer portal. A refusal names it,
+ * so the caller who meets a 401 knows where the door is.
+ */
+export const DEVELOPER_PORTAL_URL = "https://park.fan/en/developers";
+
+/**
  * Every data key starts with this, so a key pasted into the wrong place is
  * recognisable and a secret scanner can match it. Distinct from the admin
  * tokens' `pfa_`/`pfo_`: a data key opens forecasts, never the back office.

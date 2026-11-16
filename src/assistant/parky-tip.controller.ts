@@ -17,7 +17,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import type { Response } from "express";
-import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 import { isRealIsoDate } from "../common/utils/date.util";
 import { ParksService } from "../parks/parks.service";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
@@ -41,7 +41,7 @@ export class ParkyTipController {
   ) {}
 
   @Get(":continent/:country/:city/:parkSlug/parky-tip")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd", { parkRequired: true })
   @ApiOperation({
     summary: "Parky's tip for one calendar day (geo)",
     description:

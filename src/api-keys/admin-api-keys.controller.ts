@@ -91,6 +91,7 @@ export class AdminApiKeysController {
         requestsPerHour: body.requestsPerHour,
         allowedParkIds: body.allowedParkIds,
         expiresAt: toDate(body.expiresAt),
+        permissions: body.permissions,
       },
       admin.userId ?? null,
     );
@@ -107,6 +108,7 @@ export class AdminApiKeysController {
         requestsPerHour: created.item.requestsPerHour,
         allowedParkIds: created.item.allowedParkIds,
         expiresAt: created.item.expiresAt,
+        permissions: created.item.permissions,
       },
     });
     return created;
@@ -114,9 +116,10 @@ export class AdminApiKeysController {
 
   @Patch(":id")
   @ApiOperation({
-    summary: "Change a data API key's hourly allowance, parks or end date",
+    summary:
+      "Change a data API key's permissions, hourly allowance, parks or end date",
     description:
-      "`requestsPerHour` per clock hour (null: no per-key limit), `allowedParkIds` (null: every park) and `expiresAt` (null: never; a new date brings an expired key back). A field left out stays as it is. Applies to the next request.",
+      "`permissions` (at least one), `requestsPerHour` per clock hour (null: no per-key limit), `allowedParkIds` (null: every park) and `expiresAt` (null: never; a new date brings an expired key back). A field left out stays as it is. Applies from the next request.",
   })
   @ApiResponse({ status: 404, description: "No such active key" })
   async update(
@@ -130,6 +133,7 @@ export class AdminApiKeysController {
       requestsPerHour: body.requestsPerHour,
       allowedParkIds: body.allowedParkIds,
       expiresAt: toDate(body.expiresAt),
+      permissions: body.permissions,
     });
     if (!changed) throw new NotFoundException("No such active key");
     await this.audit.record({

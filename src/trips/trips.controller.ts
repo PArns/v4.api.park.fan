@@ -26,6 +26,7 @@ import {
   RATE_LIMITED_RESPONSE,
   rateLimitedResponseWith,
 } from "../common/filters/rate-limited-response";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /**
  * Stored plans.
@@ -46,6 +47,7 @@ import {
  * plan or an old version of their own.
  */
 @ApiTags("trips")
+@OpenRoute("park.fan's stored trip plans; the trip id is the credential")
 @Controller("trips")
 @UseInterceptors(new NoCdnCacheInterceptor())
 export class TripsController {

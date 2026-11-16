@@ -14,12 +14,12 @@ import {
   ApiResponse,
   ApiTags,
 } from "@nestjs/swagger";
-import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
 import {
   PlanOptimizeRequestDto,
   PlanOptimizeResponseDto,
 } from "./dto/plan-optimize.dto";
 import { PlanOptimizeService } from "./plan-optimize.service";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * The trip planner's day optimizer, one route next to `/plan/day`. Its own controller so the parks
@@ -35,8 +35,8 @@ export class PlanOptimizeController {
    * POST /v1/parks/:continent/:country/:city/:parkSlug/plan/optimize
    */
   @Post(":continent/:country/:city/:parkSlug/plan/optimize")
+  @ApiPermission("planner.day")
   @HttpCode(HttpStatus.OK)
-  @RequiresApiKey()
   @Header("Cache-Control", "no-store")
   @ApiOperation({
     summary: "Optimize one planned day",

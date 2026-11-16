@@ -13,6 +13,7 @@ import {
   TopPageViewsQueryDto,
   TopPageViewsResponseDto,
 } from "./dto/page-view.dto";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * The public half: the rankings the frontend renders. A read is counted as a
@@ -25,6 +26,7 @@ export class PageViewsController {
   constructor(private readonly pageViews: PageViewsService) {}
 
   @Get("top")
+  @ApiPermission("stats.platform")
   @ApiOperation({
     summary: "Most viewed pages of one kind in one language",
     description:

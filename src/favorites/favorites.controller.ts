@@ -20,6 +20,7 @@ import {
 } from "./dto/favorites-response.dto";
 import { ParkWithDistanceDto } from "../common/dto/park-with-distance.dto";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * Favorites Controller
@@ -42,6 +43,7 @@ export class FavoritesController {
    * Supports optional distance calculation if user location is provided.
    */
   @Get()
+  @ApiPermission("parks.details", { parkRequired: true })
   @ForecastFields(
     "attractions[].hourlyForecast",
     "attractions[].bestVisitTimes",

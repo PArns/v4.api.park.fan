@@ -1,6 +1,8 @@
 import {
   applyDecorators,
   CallHandler,
+  ForbiddenException,
+  UnauthorizedException,
   ExecutionContext,
   Injectable,
   NestInterceptor,
@@ -13,13 +15,37 @@ import type { Response } from "express";
 import { from, map, Observable, switchMap } from "rxjs";
 import {
   apiKeyStore,
-  authorizeForecastRequest,
+  authorizeApiRequest,
   parkIdResolver,
+  type ApiAccess,
   type ForecastRequest,
 } from "./forecast-access.guard";
+import { DATA_TERMS_URL, DEVELOPER_PORTAL_URL } from "./api-key.constants";
 import { omitPaths } from "./omit-paths";
 
 const FORECAST_FIELDS_KEY = "forecastFields";
+
+/**
+ * Refuses `?forecast=true` to a caller whose access lacks `forecasts.waits`:
+ * 401 without a key (the route's guard let a keyless caller through only on a
+ * keyless route), 403 `api-key-permission-missing` with one.
+ */
+function requireForecastPermission(access: ApiAccess): void {
+  if (access.permissions.has("forecasts.waits")) return;
+  const body = {
+    message: `?forecast=true needs an API key carrying "forecasts.waits". Keys: ${DEVELOPER_PORTAL_URL}`,
+    requiredPermission: "forecasts.waits",
+    portal: DEVELOPER_PORTAL_URL,
+    terms: DATA_TERMS_URL,
+  };
+  if (!access.key) {
+    throw new UnauthorizedException({ error: "api-key-required", ...body });
+  }
+  throw new ForbiddenException({
+    error: "api-key-permission-missing",
+    ...body,
+  });
+}
 
 /** Whether the query asks for the forecast fields: `forecast=true` or `forecast=1`. */
 export function wantsForecast(query: unknown): boolean {
@@ -51,12 +77,24 @@ export class ForecastFieldsInterceptor implements NestInterceptor {
     const request = http.getRequest<ForecastRequest>();
 
     if (wantsForecast(request.query)) {
+      // The route's own guard has already decided who the caller is and
+      // counted the request; only the forecast permission is left to check.
+      // A route without one runs the whole check here, as before.
+      const access = request.apiAccess;
+      if (access) {
+        requireForecastPermission(access);
+        return next.handle();
+      }
       return from(
-        authorizeForecastRequest(
+        authorizeApiRequest(
           apiKeyStore(this.moduleRef),
           request,
           http.getResponse<Response>(),
-          { resolveParkId: parkIdResolver(this.moduleRef) },
+          {
+            permission: "forecasts.waits",
+            parkRequired: true,
+            resolveParkId: parkIdResolver(this.moduleRef),
+          },
         ),
       ).pipe(switchMap(() => next.handle()));
     }

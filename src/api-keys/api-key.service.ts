@@ -19,6 +19,7 @@ import {
   type ApiKeyUsage,
 } from "./api-key.constants";
 import { ApiKey } from "./entities/api-key.entity";
+import { grantedPermissions } from "./permissions";
 
 /** What the admin list shows of a key: everything but the hash. */
 export interface ApiKeyItem {
@@ -34,6 +35,16 @@ export interface ApiKeyItem {
   allowedParkIds: string[] | null;
   /** Those parks by name, for the list (list only). */
   allowedParks?: { id: string; name: string }[] | null;
+  /** The permissions it carries; null for a key from before permissions (legacy). */
+  permissions: string[] | null;
+  /** The developer account it belongs to; null for a key without one. */
+  ownerUserId: string | null;
+  /** That account's address and name, for the admin list (list only). */
+  owner?: { email: string; displayName: string } | null;
+  /** The developer request it was issued for. */
+  requestId: string | null;
+  /** When its secret was last shown in clear; null while its holder has not picked it up. */
+  revealedAt: Date | null;
   /** When the key stops working; null means never. */
   expiresAt: Date | null;
   /** Requests counted in the current clock hour (list only). */
@@ -69,6 +80,8 @@ export interface ResolvedApiKey {
   usage: ApiKeyUsage;
   requestsPerHour: number | null;
   allowedParkIds: string[] | null;
+  /** Null for a legacy key; `effectivePermissions` reads it. */
+  permissions: string[] | null;
   /** ISO 8601, so the cached copy reads back the same; null means never. */
   expiresAt: string | null;
 }
@@ -84,6 +97,7 @@ export interface ApiKeyPatch {
   requestsPerHour?: number | null;
   allowedParkIds?: string[] | null;
   expiresAt?: Date | null;
+  permissions?: string[];
 }
 
 /** One UTC day of a key's use: what it asked for, and how much of that its allowance refused. */
@@ -183,6 +197,7 @@ function toResolved(row: ApiKey): ResolvedApiKey {
     usage: row.usage,
     requestsPerHour: row.requestsPerHour,
     allowedParkIds: row.allowedParkIds,
+    permissions: row.permissions ?? null,
     expiresAt: row.expiresAt?.toISOString() ?? null,
   };
 }
@@ -235,6 +250,8 @@ function fromCached(entry: CachedLookup): ResolvedApiKey {
     usage: entry.usage,
     requestsPerHour: entry.requestsPerHour ?? null,
     allowedParkIds: entry.allowedParkIds ?? null,
+    // An entry cached before permissions existed has none: legacy, as its row.
+    permissions: entry.permissions ?? null,
     expiresAt: entry.expiresAt ?? null,
   };
 }
@@ -276,6 +293,10 @@ function toItem(row: ApiKey): ApiKeyItem {
     prefix: row.prefix,
     requestsPerHour: row.requestsPerHour,
     allowedParkIds: row.allowedParkIds,
+    permissions: row.permissions ?? null,
+    ownerUserId: row.ownerUserId ?? null,
+    requestId: row.requestId ?? null,
+    revealedAt: row.revealedAt ?? null,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
@@ -321,11 +342,22 @@ export class ApiKeyService {
       requestsPerHour?: number | null;
       allowedParkIds?: string[] | null;
       expiresAt?: Date | null;
+      /** Absent for every permission a key opened before permissions existed. */
+      permissions?: string[] | null;
+      ownerUserId?: string | null;
+      requestId?: string | null;
+      /**
+       * False for a key issued on approval: nobody sees its first secret, and
+       * its holder picks up a new one on the dashboard. Default true, the
+       * admin's dialog shows the key.
+       */
+      revealed?: boolean;
     },
     createdBy: string | null,
   ): Promise<{ key: string; item: ApiKeyItem }> {
     const expiresAt = futureExpiry(input.expiresAt);
     const allowedParkIds = await this.knownParkIds(input.allowedParkIds);
+    const permissions = grantedPermissions(input.permissions);
     const { key, prefix, keyHash } = newSecret();
     const row = await this.keys.save(
       this.keys.create({
@@ -341,6 +373,10 @@ export class ApiKeyService {
               : DEFAULT_REQUESTS_PER_HOUR,
         allowedParkIds,
         expiresAt,
+        permissions,
+        ownerUserId: input.ownerUserId ?? null,
+        requestId: input.requestId ?? null,
+        revealedAt: input.revealed === false ? null : new Date(),
         prefix,
         keyHash,
         createdBy,
@@ -356,12 +392,20 @@ export class ApiKeyService {
    * hour's count and its use over the last days and months. One MGET for all
    * of it; a Redis failure shows zeros rather than no list.
    */
-  async list(now = Date.now()): Promise<ApiKeyItem[]> {
-    const rows = await this.keys
+  async list(
+    now = Date.now(),
+    filter: { ownerUserId?: string } = {},
+  ): Promise<ApiKeyItem[]> {
+    const query = this.keys
       .createQueryBuilder("k")
       .orderBy("k.revoked_at IS NULL", "DESC")
-      .addOrderBy("k.created_at", "DESC")
-      .getMany();
+      .addOrderBy("k.created_at", "DESC");
+    if (filter.ownerUserId) {
+      query.where("k.owner_user_id = :owner::uuid", {
+        owner: filter.ownerUserId,
+      });
+    }
+    const rows = await query.getMany();
     if (rows.length === 0) return [];
     const hour = currentHour(now);
     const days = lastDays(now, USAGE_DAYS);
@@ -379,6 +423,9 @@ export class ApiKeyService {
       .catch(() => [] as (string | null)[]);
     const names = await this.parkNames(
       rows.flatMap((row) => row.allowedParkIds ?? []),
+    );
+    const owners = await this.ownerNames(
+      rows.flatMap((row) => (row.ownerUserId ? [row.ownerUserId] : [])),
     );
     return rows.map((row, i) => {
       const at = (offset: number) => Number(counts[i * perKey + offset] ?? 0);
@@ -401,8 +448,31 @@ export class ApiKeyService {
             id,
             name: names.get(id) ?? id,
           })) ?? null,
+        owner: row.ownerUserId ? (owners.get(row.ownerUserId) ?? null) : null,
       };
     });
+  }
+
+  /** One key of a developer account, or null when it is not theirs. */
+  async findOwned(id: string, ownerUserId: string): Promise<ApiKey | null> {
+    return this.keys.findOne({ where: { id, ownerUserId } });
+  }
+
+  /** The accounts behind owned keys, by id, for the admin list. */
+  private async ownerNames(
+    ids: string[],
+  ): Promise<Map<string, { email: string; displayName: string }>> {
+    if (ids.length === 0) return new Map();
+    const rows = (await this.keys.query(
+      `SELECT id, email, display_name FROM admin_users WHERE id = ANY($1::uuid[])`,
+      [[...new Set(ids)]],
+    )) as { id: string; email: string; display_name: string }[];
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        { email: row.email, displayName: row.display_name },
+      ]),
+    );
   }
 
   /**
@@ -437,6 +507,11 @@ export class ApiKeyService {
       before.expiresAt = row.expiresAt;
       row.expiresAt = futureExpiry(patch.expiresAt);
       after.expiresAt = row.expiresAt;
+    }
+    if (patch.permissions !== undefined) {
+      before.permissions = row.permissions ?? undefined;
+      row.permissions = grantedPermissions(patch.permissions);
+      after.permissions = row.permissions ?? undefined;
     }
     await this.keys.save(row);
     // Written over the cached lookups rather than deleted: a resolve that read
@@ -492,6 +567,8 @@ export class ApiKeyService {
       previousLastUsedAt: graceEndsAt ? row.lastUsedAt : null,
       lastUsedAt: null,
       rotatedAt: new Date(now),
+      // Whoever rotates sees the new secret: the admin, or the holder picking it up.
+      revealedAt: new Date(now),
     };
     // Conditional on the hash it read, so two rotations at once cannot both
     // answer with a secret when only the second one's works.

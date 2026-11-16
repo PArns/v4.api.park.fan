@@ -37,6 +37,7 @@ import {
   RideAlertResponseDto,
 } from "./dto/ride-alert.dto";
 import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /**
  * A visitor's wait-time alerts — which attraction, and how many minutes.
@@ -47,6 +48,7 @@ import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
  * for our own frontend, which is where every real write comes from.
  */
 @ApiTags("ride-alerts")
+@OpenRoute("park.fan's ride alerts; the push endpoint is the identity")
 @Controller("push/ride-alerts")
 @UseInterceptors(new NoCdnCacheInterceptor())
 export class RideAlertsController {

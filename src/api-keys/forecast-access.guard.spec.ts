@@ -148,7 +148,7 @@ describe("ForecastAccessGuard", () => {
       "x-api-key": VALID,
     });
     await expect(g.canActivate(ctx)).resolves.toBe(true);
-    expect(apiKeys.lookup).toHaveBeenCalledWith(VALID);
+    expect(apiKeys.lookup.mock.calls[0][0]).toBe(VALID);
     expect(apiKeys.countRequest).toHaveBeenCalled();
     expect((request.apiKey as { id: string }).id).toBe("k1");
   });
@@ -312,6 +312,7 @@ describe("ForecastAccessGuard", () => {
         usage: "commercial" as const,
         requestsPerHour: null,
         allowedParkIds: ["mk-id"],
+        permissions: null,
         expiresAt: null,
       };
       const options = {

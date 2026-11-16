@@ -5,6 +5,7 @@ import { LocationController } from "./location.controller";
 import { LocationService } from "./location.service";
 import { GeoipService } from "../geoip/geoip.service";
 import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
+import { ForecastAccessGuard } from "../api-keys/forecast-access.guard";
 
 /**
  * `parseFloat`/`parseInt` cut trailing garbage (`radius=5km` → 5) and a sent
@@ -34,7 +35,12 @@ describe("LocationController › nearby query parameters", () => {
           useValue: { lookupCoordinates, isAvailable: () => true },
         },
       ],
-    }).compile();
+    })
+      // Query validation is what these cases test; who may call the route is
+      // the access guard's own spec (api-permission.guard.spec.ts).
+      .overrideGuard(ForecastAccessGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication({ logger: false });
     app.setGlobalPrefix("v1");

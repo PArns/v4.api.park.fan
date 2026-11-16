@@ -21,6 +21,23 @@ import {
   MAX_GRACE_HOURS,
   type ApiKeyUsage,
 } from "../api-key.constants";
+import { API_PERMISSIONS } from "../permissions";
+
+/** The `permissions` field of a create, an update and an approval. */
+function PermissionsProperty(): PropertyDecorator {
+  return (target, key) => {
+    ApiPropertyOptional({
+      description:
+        "The permissions the key carries (`GET /v1/api-keys/permissions`), at least one. Absent on create: every permission, as keys from before permissions read.",
+      enum: API_PERMISSIONS,
+      isArray: true,
+    })(target, key);
+    IsOptional()(target, key);
+    IsArray()(target, key);
+    ArrayMinSize(1)(target, key);
+    IsIn(API_PERMISSIONS, { each: true })(target, key);
+  };
+}
 
 /** The largest hourly allowance the admin may set; above it, use null. */
 export const MAX_REQUESTS_PER_HOUR = 1_000_000;
@@ -102,6 +119,9 @@ export class CreateApiKeyDto {
   @IsOptional()
   @IsISO8601({ strict: true })
   expiresAt?: string | null;
+
+  @PermissionsProperty()
+  permissions?: string[];
 }
 
 /**
@@ -145,6 +165,9 @@ export class UpdateApiKeyDto {
   @IsOptional()
   @IsISO8601({ strict: true })
   expiresAt?: string | null;
+
+  @PermissionsProperty()
+  permissions?: string[];
 }
 
 /** The body of `POST /v1/admin/api-keys/:id/rotate`. */

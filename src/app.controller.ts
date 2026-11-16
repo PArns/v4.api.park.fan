@@ -1,8 +1,10 @@
 import { Controller, Get, Header } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { AppService } from "./app.service";
+import { OpenRoute } from "./api-keys/api-permission.decorator";
 
 @ApiTags("root")
+@OpenRoute("the API landing page and robots.txt")
 @Controller()
 export class AppController {
   constructor(private readonly appService: AppService) {}

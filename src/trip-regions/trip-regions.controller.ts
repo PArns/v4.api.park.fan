@@ -14,7 +14,6 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import type { Response } from "express";
-import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import { TripRegionService } from "./trip-region.service";
 import { TripPlanService } from "./trip-plan.service";
@@ -50,6 +49,7 @@ import {
   TripTicketDaysRangeDto,
   TripTicketSuggestionDto,
 } from "./dto/trip-tickets.dto";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * The policy a keyed answer asks for, as `/best-days` does: an hour, a day of
@@ -85,6 +85,7 @@ export class TripRegionsController {
   ) {}
 
   @Get()
+  @ApiPermission("travel.regions")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
     summary: "Every trip region: slug, name, timezone, park count and groups",
@@ -99,6 +100,7 @@ export class TripRegionsController {
   }
 
   @Get(":region")
+  @ApiPermission("travel.regions")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
     summary: "A trip region: its parks, groups, hotel areas and travel times",
@@ -115,6 +117,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/tickets")
+  @ApiPermission("travel.tickets")
   // Five minutes at the edge and ten stale: an admin edit reaches every reader
   // within 15 minutes, and the second revalidation after CDN_SETTLE_MS lands
   // after the edge has let go.
@@ -134,7 +137,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/calendar")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd", { parkRequired: true })
   @ApiOperation({
     summary: "Every park of a region, day by day, with its events",
     description:
@@ -160,7 +163,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/best-days")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd", { parkRequired: true })
   @MeasureTripRequest("best_days")
   @ApiOperation({
     summary:
@@ -193,7 +196,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/plan")
-  @RequiresApiKey()
+  @ApiPermission("planner.trip", { parkRequired: true })
   @MeasureTripRequest("plan")
   @ApiOperation({
     summary: "The optimized itinerary for a trip",
@@ -217,7 +220,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/plan/ideas")
-  @RequiresApiKey()
+  @ApiPermission("planner.trip", { parkRequired: true })
   @MeasureTripRequest("plan_ideas")
   @ApiOperation({
     summary: "The plan's best single edits, each planned again",
@@ -242,7 +245,7 @@ export class TripRegionsController {
     return body;
   }
   @Get(":region/when")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd", { parkRequired: true })
   @MeasureTripRequest("when")
   @ApiOperation({
     summary: "The best dates for a trip of given parks and length",
@@ -271,6 +274,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/accuracy")
+  @ApiPermission("stats.accuracy")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
     summary:
@@ -289,6 +293,7 @@ export class TripRegionsController {
   }
 
   @Get(":region/school-breaks")
+  @ApiPermission("travel.school-breaks")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60, 24 * 60 * 60))
   @ApiOperation({
     summary:
