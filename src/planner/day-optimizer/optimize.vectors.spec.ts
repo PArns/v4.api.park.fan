@@ -38,11 +38,13 @@ import * as optimizeModule from "./optimize";
 import { planEntries } from "./plan-entries";
 
 // Untyped on purpose: the fixtures are the browser's, written without types.
-const { RIDE_DURATION_MIN, earlyEntryOpenMin } = gridModule as any;
+const { RIDE_DURATION_MIN, START_STEP_MIN, earlyEntryOpenMin } =
+  gridModule as any;
 const { occupiedMinutes, plannedMinutes } = estimateModule as any;
 const { transferBetween } = legModule as any;
 const {
   IDLE_WEIGHT,
+  WALK_WEIGHT,
   MAX_STOPS,
   canOptimize,
   headlinersSkipped,
@@ -192,10 +194,7 @@ function spanOf(payload?: any, slug?: any, startMinute?: any): any {
  * split the two, and both passed only because their fixtures carry no band.
  */
 function plannedSpanOf(payload?: any, slug?: any, startMinute?: any): any {
-  return Math.max(
-    plannedMinutes(payload, { id: "", attractionSlug: slug, startMinute }),
-    15,
-  );
+  return plannedMinutes(payload, { id: "", attractionSlug: slug, startMinute });
 }
 
 /** Low early, high after lunch — the shape a headliner actually has. */
@@ -255,7 +254,9 @@ function costOf(plan?: any): any {
   // `scoreOrder` hands the key out for exactly this reason.
   return [
     plan.overflowKey ?? plan.overflow,
-    plan.totalWaitMinutes + IDLE_WEIGHT * plan.idleMinutes,
+    plan.totalWaitMinutes +
+      IDLE_WEIGHT * plan.idleMinutes +
+      WALK_WEIGHT * plan.walkMinutes,
     plan.endMinute,
   ];
 }
@@ -315,7 +316,7 @@ function lex([overflow, cost, end]: any): any {
  * search whether it agrees with itself. This walks the stops instead — the
  * block height from `occupiedMinutes`, the walk from `transferBetween` — and is
  * the plan as a visitor would time it. The base is the arrival snapped up to
- * the quarter hour, which is the rule in `idleFor`: a start on the grid is not
+ * the start step, which is the rule in `idleFor`: a start on the step is not
  * standing about.
  */
 function idleOfPlan(payload?: any, stops?: any): any {
@@ -333,7 +334,8 @@ function idleOfPlan(payload?: any, stops?: any): any {
     ).ceilingMinutes;
     idle += Math.max(
       0,
-      stops[i].startMinute - Math.ceil((free + transfer) / 15) * 15,
+      stops[i].startMinute -
+        Math.ceil((free + transfer) / START_STEP_MIN) * START_STEP_MIN,
     );
   }
   return idle;
@@ -512,11 +514,14 @@ function idleOfPlan(payload?: any, stops?: any): any {
 
 // A park where the morning is NOT the answer: the same code must not recommend
 // rope drop where the data says the queue builds later and falls at closing.
+// The two flat rides are long enough to carry the day to within a delay of
+// 17:00; with short ones the evening ride costs 70 at any hour it can reach,
+// and where it goes is a tie.
 {
   const rides = [
     ride("evening", morningRide(70, 10, 17), { land: "X" }),
-    ride("flat-1", flat(20), { land: "X" }),
-    ride("flat-2", flat(20), { land: "X" }),
+    ride("flat-1", flat(180), { land: "X" }),
+    ride("flat-2", flat(180), { land: "X" }),
   ];
   const payload = day(rides);
   const entries = [
@@ -949,12 +954,12 @@ function idleOfPlan(payload?: any, stops?: any): any {
 
 // ── 9. A day that cannot fit everything says so ─────────────────────────────
 {
-  // Five rides of 150 minutes each against an eleven-hour day: four fit and one
+  // Five rides of 160 minutes each against a twelve-hour day: four fit and one
   // cannot, and what must NOT happen is a silently dropped ride. They are strung
   // out along one axis so the order decides how much walking is paid for, which
   // is what makes one arrangement fit more of them than another.
   const rides = Array.from({ length: 5 }, (_: any, i: any) =>
-    ride(`long-${i}`, flat(150), { land: "X", lat: 50.8 + i * 0.006 }),
+    ride(`long-${i}`, flat(160), { land: "X", lat: 50.8 + i * 0.006 }),
   );
   const payload = day(rides);
   // Deliberately zig-zagging: 0 → 4 → 1 → 3 → 2 crosses the park four times.
@@ -1017,13 +1022,13 @@ function idleOfPlan(payload?: any, stops?: any): any {
 // filler. Both plans ride the filler first; the question is what to do with the
 // hour after it:
 //
-//     A  queue at once            100 queued    0 idle   done 11:15
-//     B  wait for 11:00            30 queued   75 idle   done 11:20
+//     A  queue at once            100 queued    0 idle   done 11:10
+//     B  wait for 11:00            30 queued   85 idle   done 11:25
 //
 // B is what a visitor would do and no lexicographic order can produce it: rank
-// the clock first and A wins by five minutes, five minutes that cost seventy in
-// a queue. This is the upper half of the bracket around IDLE_WEIGHT — B wins
-// while 30 + k×75 < 100, i.e. k < 14/15 — and §17 is the lower half, a case
+// the clock first and A wins by fifteen minutes, fifteen minutes that cost
+// seventy in a queue. This is the upper half of the bracket around IDLE_WEIGHT —
+// B wins while 30 + k×85 < 100, i.e. k < 14/17 — and §17 is the lower half, a case
 // that runs the other way. The one that used to stand here claimed the delay
 // was weighed against the queue and not against the clock, which was the same
 // mistake in the other direction and is why §17 exists.
@@ -1043,16 +1048,16 @@ function idleOfPlan(payload?: any, stops?: any): any {
   const found = optimizeDay(input);
   check(
     "für einen Einbruch um 11 Uhr wird eine Stunde Leerlauf in Kauf genommen",
-    found !== null && found.totalWaitMinutes === 30 && found.idleMinutes === 75,
+    found !== null && found.totalWaitMinutes === 30 && found.idleMinutes === 85,
     found
       ? `${found.totalWaitMinutes} Min. Schlange, ${found.idleMinutes} Min. Leerlauf`
       : "kein Plan",
   );
   check(
-    "und siebzig Warteminuten sind fünf Minuten später Feierabend wert",
+    "und siebzig Warteminuten sind zehn Minuten später Feierabend wert",
     found !== null &&
       before.totalWaitMinutes - found.totalWaitMinutes === 70 &&
-      found.endMinute - before.endMinute === 5,
+      found.endMinute - before.endMinute === 10,
     `${before.totalWaitMinutes}/${before.endMinute} → ${found?.totalWaitMinutes}/${found?.endMinute}`,
   );
 
@@ -1068,7 +1073,7 @@ function idleOfPlan(payload?: any, stops?: any): any {
 // ── 12. The budget is finite, and the report has to match the plan ─────────
 {
   const planned = Array.from({ length: 20 }, (_: any, i: any) =>
-    ride(`p${i}`, flat(15), { land: "X", lat: 50.8 + i * 0.0005 }),
+    ride(`p${i}`, flat(20), { land: "X", lat: 50.8 + i * 0.0005 }),
   );
   const heads = Array.from({ length: 8 }, (_: any, i: any) =>
     ride(`h${i}`, flat(45), {
@@ -1708,17 +1713,17 @@ function benchInput(n?: any): any {
 // ── 17. The 40-minute hole, as it was reported ─────────────────────────────
 //
 // Phantasialand, Sunday 2026-09-06, from production. Crazy Bats frees the
-// visitor at 12:05 and Taron is 355 m away — a 15-minute transfer, so the
-// earliest slot on the grid is 12:30, where Taron costs 55 minutes against 50
+// visitor at 12:05 and Taron is 355 m away — a 17-minute transfer, so the
+// earliest start on the step is 12:25, where Taron costs 55 minutes against 50
 // at 13:00:
 //
-//     A  queue at 12:30    55 queued    0 idle   done 13:25
-//     B  queue at 13:00    50 queued   30 idle   done 13:50
+//     A  queue at 12:25    55 queued    0 idle   done 13:25
+//     B  queue at 13:00    50 queued   35 idle   done 13:55
 //
 // The optimiser shipped **B**: five minutes less queueing, bought with forty
 // minutes of standing about and a day ending twenty-five minutes later. This is
 // the lower half of the bracket around IDLE_WEIGHT — A wins while
-// 55 < 50 + k×30, i.e. k > 1/6 — and §11 is the other half. Between them there
+// 55 < 50 + k×35, i.e. k > 1/7 — and §11 is the other half. Between them there
 // is no ordering of "queued minutes" and "the clock" that gets both right,
 // which is the whole reason there is a weight.
 //
@@ -1730,7 +1735,7 @@ function benchInput(n?: any): any {
   const OPEN_LATE = 11;
   const rides = [
     // 0.003193° of latitude is 355 m, which is the distance in the report and
-    // what makes the transfer 15 minutes rather than a number chosen to fit.
+    // what makes the transfer 17 minutes rather than a number chosen to fit.
     ride(
       "crazy-bats",
       {
@@ -1783,8 +1788,8 @@ function benchInput(n?: any): any {
   );
 
   check(
-    "Taron wird um 12:30 angestellt und nicht um 13:00",
-    taron?.startMinute === 12 * 60 + 30 && taron?.waitMinutes === 55,
+    "Taron wird um 12:25 angestellt und nicht um 13:00",
+    taron?.startMinute === 12 * 60 + 25 && taron?.waitMinutes === 55,
     found?.stops
       .map((s: any) => `${s.attractionSlug}@${s.startMinute}=${s.waitMinutes}`)
       .join(" → ") ?? "kein Plan",
@@ -1797,15 +1802,15 @@ function benchInput(n?: any): any {
     `${before?.totalWaitMinutes} → ${found?.totalWaitMinutes} Min. Schlange`,
   );
   check(
-    "und das Loch von 30 Minuten ist weg",
-    before?.idleMinutes === 30 && found?.idleMinutes === 0,
+    "und das Loch von 35 Minuten ist weg",
+    before?.idleMinutes === 35 && found?.idleMinutes === 0,
     `${before?.idleMinutes} → ${found?.idleMinutes} Min. Leerlauf`,
   );
   check(
-    "der Tag endet 25 Minuten früher",
+    "der Tag endet 30 Minuten früher",
     before !== null &&
       found !== null &&
-      before.endMinute - found.endMinute === 25,
+      before.endMinute - found.endMinute === 30,
     `${before?.endMinute} → ${found?.endMinute}`,
   );
 }
@@ -1836,14 +1841,14 @@ function benchInput(n?: any): any {
     found !== null && found.idleMinutes === idleOfPlan(payload, found.stops),
     `gemeldet ${found?.idleMinutes}, nachgerechnet ${idleOfPlan(payload, found?.stops ?? [])}`,
   );
-  // The sixty minutes in that plan are bought and not left lying about: `b`
-  // costs 80 minutes before noon and 5 after it, so an hour of standing about
+  // The ninety-five minutes in that plan are bought and not left lying about:
+  // `b` costs 80 minutes before noon and 5 after it, so the standing about
   // saves seventy-five in a queue. Where nothing falls there is nothing to buy,
   // and the plan then has no holes at all — which is the assertion that would
   // have caught what was reported, on a day with no cliff in it to explain it.
   check(
-    "die Stunde Leerlauf kauft fünfundsiebzig Warteminuten",
-    found !== null && found.idleMinutes === 60 && found.totalWaitMinutes === 55,
+    "der Leerlauf kauft fünfundsiebzig Warteminuten",
+    found !== null && found.idleMinutes === 95 && found.totalWaitMinutes === 55,
     `${found?.idleMinutes} Min. Leerlauf, ${found?.totalWaitMinutes} Min. Schlange`,
   );
 
@@ -1987,11 +1992,12 @@ function benchInput(n?: any): any {
   );
 }
 
-// ── 20. A walk never outweighs a queue ─────────────────────────────────────
+// ── 20. A walk does not outweigh a queue ───────────────────────────────────
 //
 // "Wartezeit ist Laufwegen vorzuziehen": with one slot left and two rides for
-// it, the shorter queue wins however far away it is. It holds because a walk
-// costs `planCost` nothing and only moves the clock — but it did NOT hold while
+// it, a queue five minutes shorter wins against a kilometre more of walking.
+// It holds because WALK_WEIGHT prices the 22 extra minutes on foot at 4.4
+// queued ones, under the five saved — but it did NOT hold while
 // the queue of a ride that never happens was still in the total: 10 + 60 + 45
 // is 10 + 45 + 60 whichever of the two actually gets ridden, so the totals tied
 // and the choice fell through to the clock, which prefers the short walk.

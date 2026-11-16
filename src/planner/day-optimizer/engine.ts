@@ -85,6 +85,8 @@ export interface PlanScore {
   totalWaitMinutes: number;
   /** Minutes standing about that the plan decided on. */
   idleMinutes: number;
+  /** Minutes on foot between the stops that happen. */
+  walkMinutes: number;
   /** When the last queue that happens is left, ride included. */
   endMinute: number;
   /** Stops whose queue is joined after closing. */
@@ -99,6 +101,7 @@ export interface OptimizedPlanView {
   stops: OptimizeStop[];
   totalWaitMinutes: number;
   idleMinutes: number;
+  walkMinutes: number;
   endMinute: number;
   overflow: number;
   /** Rides that never reached the search because {@link MAX_STOPS} was full. */
@@ -334,6 +337,7 @@ export function runDayOptimizer(
     ? {
         totalWaitMinutes: current.totalWaitMinutes,
         idleMinutes: current.idleMinutes,
+        walkMinutes: current.walkMinutes,
         endMinute: current.endMinute,
         overflow: current.overflow,
         clashes: clashCount(day, entries, clock),
@@ -349,6 +353,7 @@ export function runDayOptimizer(
     after: {
       totalWaitMinutes: plan.totalWaitMinutes,
       idleMinutes: plan.idleMinutes,
+      walkMinutes: plan.walkMinutes,
       endMinute: plan.endMinute,
       overflow: plan.overflow,
       clashes: clashCount(day, withPlan(entries, plan.stops), clock),
@@ -357,6 +362,7 @@ export function runDayOptimizer(
       stops: plan.stops,
       totalWaitMinutes: plan.totalWaitMinutes,
       idleMinutes: plan.idleMinutes,
+      walkMinutes: plan.walkMinutes,
       endMinute: plan.endMinute,
       overflow: plan.overflow,
       capped: plan.capped,

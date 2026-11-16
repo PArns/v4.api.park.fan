@@ -18,8 +18,15 @@ import { rideFirstMinute } from "./ride-series";
  */
 export const RIDE_DURATION_MIN = 5;
 
-/** The quarter hour every start the planner files lands on. */
+/** The quarter hour a floor lands on: a plan for today starts at the next one. */
 export const SNAP_MIN_FINE = 15;
+
+/**
+ * The step the optimizer files a start on. Finer than {@link SNAP_MIN_FINE} because every start
+ * rounded up to the quarter hour cost a packed day about seven minutes per stop between the end of
+ * one queue and the start of the next.
+ */
+export const START_STEP_MIN = 5;
 
 /** What a block with no measured length occupies: the planner's default for an unknown wait. */
 export const DEFAULT_OCCUPIED_MINUTES = 45;
