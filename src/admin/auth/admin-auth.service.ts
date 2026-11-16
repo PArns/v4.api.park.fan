@@ -969,12 +969,6 @@ export class AdminAuthService implements OnModuleInit {
     password: string,
     code: string,
   ): Promise<void> {
-    if (isTotpRequired()) {
-      throw new ForbiddenException(
-        "Two-factor is mandatory on this deployment (ADMIN_REQUIRE_TOTP)",
-      );
-    }
-
     // The code is six digits and three of them are valid at once, so this is
     // the one endpoint in the admin where an attacker can realistically
     // exhaust the secret. The global throttler will not help: it skips every
@@ -991,12 +985,19 @@ export class AdminAuthService implements OnModuleInit {
       select: {
         id: true,
         passwordHash: true,
+        role: true,
         totpSecret: true,
         totpEnabled: true,
       },
     });
     if (!user?.totpEnabled)
       throw new BadRequestException("Two-factor is not enabled");
+    // Mandatory for staff only: a visitor or developer who chose it may drop it again.
+    if (isTotpRequired(user.role)) {
+      throw new ForbiddenException(
+        "Two-factor is mandatory on this deployment (ADMIN_REQUIRE_TOTP)",
+      );
+    }
     if (!(await verifyPassword(password ?? "", user.passwordHash))) {
       await this.loginLimiter.recordActionFailure("totp-disable", userId);
       throw new UnauthorizedException("Password is incorrect");

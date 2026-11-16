@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from "@nestjs/common";
 import request from "supertest";
 import { DataSource } from "typeorm";
 import { AppModule } from "../../src/app.module";
+import { totpCodeForStep, totpStep } from "../../src/admin/auth/totp.util";
 import { AuthAttemptsService } from "../../src/admin/auth/auth-attempts.service";
 import {
   GLOBAL_PREFIX,
@@ -262,5 +263,47 @@ describe("Visitor accounts (e2e)", () => {
       200,
     );
     await call("get", "/v1/account", current).expect(401);
+  });
+
+  it("offers a visitor a second factor, asks for it at sign-in, and lets the visitor drop it even where staff must keep one", async () => {
+    process.env.ADMIN_REQUIRE_TOTP = "true";
+    try {
+      const registered = await call("post", "/v1/account/register")
+        .send({
+          email: "twofactor@e2e.test",
+          password: "a-long-enough-password",
+        })
+        .expect(201);
+      const session = registered.body.token as string;
+      // A visitor owes no enrolment, even on a deployment that demands it of staff.
+      await call("get", "/v1/account", session).expect(200);
+
+      const begun = await call("post", "/v1/admin/auth/totp/begin", session)
+        .send({ password: "a-long-enough-password" })
+        .expect(200);
+      const secret = begun.body.secret as string;
+      await call("post", "/v1/admin/auth/totp/confirm", session)
+        .send({ code: totpCodeForStep(secret, totpStep()) })
+        .expect(204);
+
+      const withoutCode = await call("post", "/v1/admin/auth/login")
+        .send({
+          email: "twofactor@e2e.test",
+          password: "a-long-enough-password",
+        })
+        .expect(200);
+      expect(withoutCode.body.status).toBe("totp-required");
+
+      await call("post", "/v1/admin/auth/totp/disable", session)
+        .send({
+          password: "a-long-enough-password",
+          code: totpCodeForStep(secret, totpStep() + 1),
+        })
+        .expect(204);
+      const me = await call("get", "/v1/account", session).expect(200);
+      expect(me.body.account.totpEnabled).toBe(false);
+    } finally {
+      delete process.env.ADMIN_REQUIRE_TOTP;
+    }
   });
 });
