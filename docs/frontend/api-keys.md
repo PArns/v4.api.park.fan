@@ -27,7 +27,7 @@ list of permissions, granted one by one or a group at a time:
 | stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, typical waits, rope drop, downtime                          |
 | stats     | `stats.platform`       | `/v1/analytics/{realtime,geo-live,ticker,best-times}`, `/v1/page-views/top`                                   |
 | stats     | `stats.accuracy`       | `/v1/ml/accuracy/system`, `/v1/trip-regions/{region}/accuracy`, `predictionAccuracy`                          |
-| forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`; a region's `/calendar`, `/best-days`, `/when`               |
+| forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`, `/parky-tip`; a region's `/calendar`, `/best-days`, `/when` |
 | forecasts | `forecasts.waits`      | `?forecast=true`: `bestVisitTimes`, `hourlyForecast`, the forecast in a day curve                             |
 | planner   | `planner.day`          | `/plan/day`, `POST /plan/optimize`                                                                            |
 | planner   | `planner.trip`         | a region's `/plan` and `/plan/ideas`                                                                          |

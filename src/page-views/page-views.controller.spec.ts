@@ -4,12 +4,13 @@ import request from "supertest";
 import { PageViewsController } from "./page-views.controller";
 import { PageViewsService } from "./page-views.service";
 import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
+import { ForecastAccessGuard } from "../api-keys/forecast-access.guard";
 
 /**
  * Runs the real HTTP pipeline, because the validation sits in the global pipe
  * and a direct method call would skip it. What is pinned: a ranking needs a
  * known kind and language and stays inside the fixed windows, and the old
- * beacon's write is gone.
+ * beacon's write is gone. The key check (`stats.platform`) has its own spec.
  */
 describe("PageViewsController", () => {
   let app: INestApplication;
@@ -29,7 +30,10 @@ describe("PageViewsController", () => {
           },
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(ForecastAccessGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication({ logger: false });
     app.setGlobalPrefix("v1");
