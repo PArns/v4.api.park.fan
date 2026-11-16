@@ -40,6 +40,7 @@ import { ApiKeyService } from "./api-key.service";
 import { RotateApiKeyDto } from "./dto/create-api-key.dto";
 import { CreateApiKeyRequestDto } from "./dto/api-key-request.dto";
 import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
+import { AdminAuthService } from "../admin/auth/admin-auth.service";
 import { SelfRegistrationService } from "../admin/auth/self-registration.service";
 
 /**
@@ -66,6 +67,7 @@ export class DeveloperController {
     private readonly audit: AdminAuditService,
     private readonly apiKeys: ApiKeyService,
     private readonly requests: ApiKeyRequestService,
+    private readonly auth: AdminAuthService,
   ) {}
 
   @Post("register")
@@ -95,19 +97,21 @@ export class DeveloperController {
   @ApiOperation({
     summary: "The caller's keys and requests",
     description:
-      "Every key issued to the caller's account, with this hour's count and the use per day (30) and month (12), and every request it filed, newest first. A key with `revealedAt: null` has not been picked up: `POST keys/:id/rotate` with `graceHours: 0` shows its first secret.",
+      "Every key issued to the caller's account, with this hour's count, whether the account has a second factor (`account.totpEnabled`) and the use per day (30) and month (12), and every request it filed, newest first. A key with `revealedAt: null` has not been picked up: `POST keys/:id/rotate` with `graceHours: 0` shows its first secret.",
   })
   async overview(@CurrentAdmin() admin: AdminPrincipal) {
     const userId = requireAccount(admin);
-    const [keys, requests] = await Promise.all([
+    const [keys, requests, user] = await Promise.all([
       this.apiKeys.list(Date.now(), { ownerUserId: userId }),
       this.requests.listForUser(userId),
+      this.auth.findById(userId),
     ]);
     return {
       account: {
         email: admin.email,
         displayName: admin.displayName,
         role: admin.role,
+        totpEnabled: user?.totpEnabled ?? false,
       },
       keys,
       requests,
