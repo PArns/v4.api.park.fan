@@ -136,7 +136,7 @@ describe("Admin account deletion (e2e)", () => {
       `/v1/admin/auth/users/${dev.id}`,
       owner.session,
     ).expect(200);
-    expect(deleted.body.erased).toEqual({ apiKeys: 1, keyRequests: 2 });
+    expect(deleted.body.erased).toMatchObject({ apiKeys: 1, keyRequests: 2 });
 
     const counts = await dataSource.query(
       `SELECT
@@ -202,6 +202,39 @@ describe("Admin account deletion (e2e)", () => {
     );
     await call("patch", `/v1/admin/auth/users/${keep.id}`, keep.session)
       .send({ role: "editor" })
+      .expect(400);
+  });
+
+  it("issues one key when a request is approved twice at once", async () => {
+    const owner = await account("owner-race@e2e.test", "owner");
+    const dev = await account("dev-race@e2e.test", "developer");
+    const filed = await call("post", "/v1/developer/requests", dev.session)
+      .send(REQUEST)
+      .expect(201);
+    const id = filed.body.item.id as string;
+    const approve = () =>
+      call(
+        "post",
+        `/v1/admin/api-key-requests/${id}/approve`,
+        owner.session,
+      ).send({
+        permissions: ["live.schedule"],
+      });
+    const statuses = (await Promise.all([approve(), approve()]))
+      .map((response) => response.status)
+      .sort();
+    expect(statuses).toEqual([200, 409]);
+    const keys = await dataSource.query(
+      `SELECT count(*)::int AS n FROM api_keys WHERE request_id = $1::uuid`,
+      [id],
+    );
+    expect(keys[0].n).toBe(1);
+    await call(
+      "post",
+      `/v1/admin/api-key-requests/not-a-uuid/approve`,
+      owner.session,
+    )
+      .send({ permissions: ["live.schedule"] })
       .expect(400);
   });
 });

@@ -27,6 +27,9 @@ import {
  *             OAuth consent endpoints refuse it without a line of their own.
  *             It reaches its own session endpoints, which name it, and
  *             `/v1/developer/*`, which shows only its own keys and requests.
+ * - `user`    a visitor's account on park.fan, ranked below `developer`. It
+ *             reaches its own session endpoints and `/v1/account/*`, which
+ *             holds its own favorites, trips and alerts, and nothing else.
  */
 export const ADMIN_ROLES = [
   "owner",
@@ -34,8 +37,20 @@ export const ADMIN_ROLES = [
   "author",
   "viewer",
   "developer",
+  "user",
 ] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
+
+/** The roles somebody gives their own account: a developer's, a visitor's. Neither is staff. */
+export const SELF_SERVICE_ROLES = ["developer", "user"] as const;
+export type SelfServiceRole = (typeof SELF_SERVICE_ROLES)[number];
+
+/** The role belongs to an account somebody opened for themselves. */
+export function isSelfServiceRole(
+  role: string | undefined,
+): role is SelfServiceRole {
+  return (SELF_SERVICE_ROLES as readonly string[]).includes(role ?? "");
+}
 
 /** Rank of a role, higher = more privileged. */
 export const ADMIN_ROLE_RANK: Record<AdminRole, number> = {
@@ -44,6 +59,7 @@ export const ADMIN_ROLE_RANK: Record<AdminRole, number> = {
   author: 10,
   viewer: 0,
   developer: -10,
+  user: -20,
 };
 
 /** Whether `role` is at least as privileged as `minimum`. */

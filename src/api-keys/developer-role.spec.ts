@@ -63,6 +63,28 @@ async function adminHandlers() {
   return found;
 }
 
+/** What every account reaches: its own session, password, second factor and account. */
+const OWN_ACCOUNT_HANDLERS = [
+  "AccountController.deleteStorage",
+  "AccountController.export",
+  "AccountController.listStorage",
+  "AccountController.read",
+  "AccountController.readStorage",
+  "AccountController.remove",
+  "AccountController.updateProfile",
+  "AccountController.write",
+  "AccountController.writeStorage",
+  "AdminAuthController.beginTotp",
+  "AdminAuthController.changePassword",
+  "AdminAuthController.confirmTotp",
+  "AdminAuthController.disableTotp",
+  "AdminAuthController.listSessions",
+  "AdminAuthController.logout",
+  "AdminAuthController.me",
+  "AdminAuthController.revokeAll",
+  "AdminAuthController.revokeSession",
+];
+
 /**
  * A developer account is an outside developer's, so it reaches its own
  * session, password and second factor, and the developer API, and nothing
@@ -74,22 +96,14 @@ describe("the developer role", () => {
     handlers = await adminHandlers();
   }, 60_000);
 
-  it("reaches only its own session endpoints and the developer API", () => {
+  it("reaches only its own session endpoints, its account and the developer API", () => {
     const reachable = handlers
       .filter((h) => !h.isPublic && roleAtLeast("developer", h.minRole))
       .map((h) => h.name.split(" ")[1])
       .sort();
     expect(reachable).toEqual(
       [
-        "AdminAuthController.beginTotp",
-        "AdminAuthController.changePassword",
-        "AdminAuthController.confirmTotp",
-        "AdminAuthController.disableTotp",
-        "AdminAuthController.listSessions",
-        "AdminAuthController.logout",
-        "AdminAuthController.me",
-        "AdminAuthController.revokeAll",
-        "AdminAuthController.revokeSession",
+        ...OWN_ACCOUNT_HANDLERS,
         "DeveloperController.createRequest",
         "DeveloperController.endGrace",
         "DeveloperController.overview",
@@ -119,6 +133,40 @@ describe("the developer role", () => {
     // A token's scope is capped by its account's role; the token endpoints
     // refuse the role before this, but the cap never lifts it either.
     expect(grantableScope("admin:read", "developer")).toBe("admin:read");
+  });
+});
+
+/**
+ * A visitor's account reaches its own session endpoints and its synced state,
+ * and nothing of the developer API, the admin or MCP.
+ */
+describe("the user role", () => {
+  let handlers: Awaited<ReturnType<typeof adminHandlers>> = [];
+  beforeAll(async () => {
+    handlers = await adminHandlers();
+  }, 60_000);
+
+  it("reaches only its own session endpoints and its account", () => {
+    const reachable = handlers
+      .filter((h) => !h.isPublic && roleAtLeast("user", h.minRole))
+      .map((h) => h.name.split(" ")[1])
+      .sort();
+    expect(reachable).toEqual([...OWN_ACCOUNT_HANDLERS].sort());
+  });
+
+  it("ranks below the developer and every staff role, and sees no MCP tool", () => {
+    for (const role of [
+      "owner",
+      "editor",
+      "author",
+      "viewer",
+      "developer",
+    ] as const) {
+      expect(roleAtLeast("user", role)).toBe(false);
+    }
+    expect(
+      MCP_TOOLS.filter((tool) => roleAtLeast("user", tool.minRole ?? "viewer")),
+    ).toEqual([]);
   });
 });
 

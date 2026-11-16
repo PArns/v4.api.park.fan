@@ -17,9 +17,12 @@ export class ApiKeyAccountDeletion implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.accounts.onAccountDeletion(async (userId) => ({
-      apiKeys: await this.keys.deleteAllOwnedBy(userId),
-      keyRequests: await this.requests.removeAllForUser(userId),
-    }));
+    this.accounts.onAccountDeletion(async (userId) => {
+      const [apiKeys, keyRequests] = await Promise.all([
+        this.keys.deleteAllOwnedBy(userId),
+        this.requests.removeAllForUser(userId),
+      ]);
+      return { apiKeys, keyRequests };
+    });
   }
 }

@@ -10,15 +10,19 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
 } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
+import { CanonicalUuidPipe } from "../../common/utils/uuid-param.util";
 import { AdminAuthService, toPublicUser } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
+import { AuthAttemptsService } from "./auth-attempts.service";
+import { isSelfServiceRole } from "./entities/admin-user.entity";
 import { AdminTurnstileService } from "./admin-turnstile.service";
 import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import { carriesThrottleBypassKey } from "../../common/throttler/throttler.config";
@@ -34,6 +38,8 @@ import {
   requireAccount,
   type AdminPrincipal,
   type RequestWithAdmin,
+  principalFromSession,
+  sessionAnswer,
 } from "./admin-principal";
 import {
   AdminChangePasswordDto,
@@ -67,8 +73,9 @@ import {
 // keep working for a legacy caller say so themselves.
 @AdminLegacyAccess(false)
 // The handlers about the caller's own session, password and second factor name
-// `developer` as their minimum: a developer account signs in here like staff,
-// and below `viewer` it would otherwise be refused its own logout.
+// `user`, the lowest role, as their minimum: developer and visitor accounts sign
+// in here like staff, and below `viewer` they would otherwise be refused their
+// own logout.
 export class AdminAuthController {
   private readonly logger = new Logger(AdminAuthController.name);
 
@@ -77,6 +84,7 @@ export class AdminAuthController {
     private readonly sessions: AdminSessionStore,
     private readonly audit: AdminAuditService,
     private readonly turnstile: AdminTurnstileService,
+    private readonly attempts: AuthAttemptsService,
   ) {}
 
   @Post("login")
@@ -143,6 +151,7 @@ export class AdminAuthController {
         this.logger.warn(
           `Turnstile refused an admin login: ${verdict.reason ?? "no reason given"}`,
         );
+        await this.attempts.count("login", "turnstile-failed");
         throw new ForbiddenException({
           error: "turnstile-failed",
           message: "A solved Turnstile token is required to sign in.",
@@ -151,14 +160,24 @@ export class AdminAuthController {
     }
 
     const userAgent = request.headers?.["user-agent"];
-    const result = await this.auth.login({
-      email: body.email,
-      password: body.password,
-      totpCode: body.totpCode,
-      ip: clientIp(request),
-      userAgent: typeof userAgent === "string" ? userAgent : null,
-    });
+    const result = await this.auth
+      .login({
+        email: body.email,
+        password: body.password,
+        totpCode: body.totpCode,
+        ip: clientIp(request),
+        userAgent: typeof userAgent === "string" ? userAgent : null,
+      })
+      .catch(async (error: unknown) => {
+        if (error instanceof UnauthorizedException) {
+          await this.attempts.count("login", "wrong-credentials");
+        }
+        throw error;
+      });
 
+    if (result.outcome !== "ok") {
+      await this.attempts.count("login", result.outcome);
+    }
     if (result.outcome === "totp-required") {
       return { status: "totp-required" as const };
     }
@@ -175,41 +194,25 @@ export class AdminAuthController {
       };
     }
 
+    await this.attempts.count(
+      "login",
+      isSelfServiceRole(result.session.role)
+        ? `success-${result.session.role}`
+        : "success-staff",
+    );
     await this.audit.record({
-      actor: {
-        userId: result.session.userId,
-        email: result.session.email,
-        displayName: result.session.displayName,
-        role: result.session.role,
-        sessionToken: null,
-        legacy: false,
-        ip: clientIp(request),
-        mustChangePassword: result.session.mustChangePassword,
-        mustEnrolTotp: result.session.mustEnrolTotp === true,
-      },
+      actor: principalFromSession(result.session, clientIp(request), null),
       action: "auth.login",
       entityType: "admin_user",
       entityId: result.session.userId,
       entityLabel: result.session.email,
     });
 
-    return {
-      status: "ok" as const,
-      token: result.token,
-      expiresAt: new Date(result.session.expiresAt).toISOString(),
-      user: {
-        id: result.session.userId,
-        email: result.session.email,
-        displayName: result.session.displayName,
-        role: result.session.role,
-        mustChangePassword: result.session.mustChangePassword,
-        mustEnrolTotp: result.session.mustEnrolTotp === true,
-      },
-    };
+    return sessionAnswer(result.token, result.session);
   }
 
   @Post("logout")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @AdminAllowPendingPassword()
   @AdminLegacyAccess(true)
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -219,7 +222,7 @@ export class AdminAuthController {
   }
 
   @Get("me")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @AdminAllowPendingPassword()
   @AdminLegacyAccess(true)
   @ApiOperation({
@@ -251,7 +254,7 @@ export class AdminAuthController {
   }
 
   @Post("change-password")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -289,7 +292,7 @@ export class AdminAuthController {
   // ── sessions ──────────────────────────────────────────────────────────────
 
   @Get("sessions")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @ApiOperation({ summary: "Where this account is currently signed in" })
   async listSessions(@CurrentAdmin() admin: AdminPrincipal) {
     if (!admin.userId) return { sessions: [] };
@@ -311,7 +314,7 @@ export class AdminAuthController {
   }
 
   @Delete("sessions/:id")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Revoke one of your sessions" })
   async revokeSession(
@@ -323,7 +326,7 @@ export class AdminAuthController {
   }
 
   @Post("sessions/revoke-all")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Sign out everywhere, including here",
@@ -349,7 +352,7 @@ export class AdminAuthController {
   // ── two-factor ────────────────────────────────────────────────────────────
 
   @Post("totp/begin")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -370,7 +373,7 @@ export class AdminAuthController {
   }
 
   @Post("totp/confirm")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Confirm and enable two-factor" })
@@ -390,7 +393,7 @@ export class AdminAuthController {
   }
 
   @Post("totp/disable")
-  @AdminMinRole("developer")
+  @AdminMinRole("user")
   @HttpCode(HttpStatus.NO_CONTENT)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOperation({
@@ -413,6 +416,17 @@ export class AdminAuthController {
   }
 
   // ── accounts (owner only) ─────────────────────────────────────────────────
+
+  @Get("attempts")
+  @AdminMinRole("owner")
+  @ApiOperation({
+    summary: "Sign-in and registration attempts per day",
+    description:
+      "Counts per UTC day, keyed `<kind>:<outcome>`: `login:success-staff|success-developer|success-user|wrong-credentials|totp-required|locked|rate-limited|turnstile-failed`, `register-user:…` and `register-developer:…` with `created|closed|exists|turnstile-failed|failed`. Numbers only; kept 90 days. `days` defaults to 30.",
+  })
+  async listAttempts(@Query("days") days?: string) {
+    return { days: await this.attempts.lastDays(Number(days) || 30) };
+  }
 
   @Get("users")
   @AdminMinRole("owner")
@@ -451,7 +465,7 @@ export class AdminAuthController {
   @ApiOperation({ summary: "Change an account's name, role or activation" })
   async updateUser(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: AdminUpdateUserDto,
   ) {
     const before = await this.auth.findById(id);
@@ -489,7 +503,7 @@ export class AdminAuthController {
   })
   async deleteUser(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ) {
     const { user, erased } = await this.auth.remove(id, requireAccount(admin));
     await this.audit.record({
@@ -518,7 +532,7 @@ export class AdminAuthController {
   })
   async resetTotp(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     await this.auth.clearTotp(id);
     const user = await this.auth.findById(id);
@@ -542,7 +556,7 @@ export class AdminAuthController {
   })
   async resetPassword(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: AdminResetPasswordDto,
   ) {
     const result = await this.auth.resetPassword(id, body.newPassword);

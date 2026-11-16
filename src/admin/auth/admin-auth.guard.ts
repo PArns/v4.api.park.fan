@@ -14,7 +14,11 @@ import {
   type RequestLike,
 } from "../../common/utils/request.util";
 import { roleAtLeast, type AdminRole } from "./entities/admin-user.entity";
-import type { AdminPrincipal, RequestWithAdmin } from "./admin-principal";
+import {
+  principalFromSession,
+  type AdminPrincipal,
+  type RequestWithAdmin,
+} from "./admin-principal";
 import {
   ADMIN_ALLOW_PENDING_PASSWORD_KEY,
   ADMIN_LEGACY_ALLOWED_KEY,
@@ -151,18 +155,7 @@ export class AdminAuthGuard implements CanActivate {
     const session = await this.sessions.resolve(token);
     if (!session) return null;
 
-    return {
-      userId: session.userId,
-      email: session.email,
-      displayName: session.displayName,
-      role: session.role,
-      sessionToken: token,
-      sessionUserAgent: session.userAgent,
-      legacy: false,
-      ip: clientIp(request),
-      mustChangePassword: session.mustChangePassword,
-      mustEnrolTotp: session.mustEnrolTotp === true,
-    };
+    return principalFromSession(session, clientIp(request), token);
   }
 
   private fromLegacyPass(request: RequestWithAdmin): AdminPrincipal | null {

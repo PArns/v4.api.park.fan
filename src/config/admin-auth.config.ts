@@ -1,3 +1,4 @@
+import { isSelfServiceRole } from "../admin/auth/entities/admin-user.entity";
 import { Logger } from "@nestjs/common";
 import {
   ADMIN_ROLES,
@@ -117,11 +118,11 @@ export function getLoginLockoutMinutes(): number {
 
 /**
  * Whether an account must enrol in TOTP before it can do anything. A developer
- * account never must: `ADMIN_REQUIRE_TOTP` is about staff, and a developer's
- * account opens nothing but its own data keys.
+ * or visitor account never must: `ADMIN_REQUIRE_TOTP` is about staff, and such
+ * an account opens nothing but its own data.
  */
 export function isTotpRequired(role?: string): boolean {
-  return process.env.ADMIN_REQUIRE_TOTP === "true" && role !== "developer";
+  return process.env.ADMIN_REQUIRE_TOTP === "true" && !isSelfServiceRole(role);
 }
 
 /**
@@ -165,4 +166,12 @@ export function isAdminLoginTurnstileEnforced(): boolean {
   if (process.env.ADMIN_LOGIN_TURNSTILE === "false") return false;
   if (!getAdminTurnstileSecret()) return false;
   return getThrottleBypassKeys().length > 0;
+}
+
+/**
+ * Whether visitors may make their own account. Closed unless `ACCOUNT_REGISTRATION=open`, so
+ * the visitor accounts can ship before anybody can sign up; existing accounts sign in either way.
+ */
+export function isAccountRegistrationOpen(): boolean {
+  return process.env.ACCOUNT_REGISTRATION === "open";
 }

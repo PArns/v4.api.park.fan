@@ -9,7 +9,7 @@ import { map, Observable } from "rxjs";
 import type { ForecastRequest } from "./forecast-access.guard";
 import { omitPaths } from "./omit-paths";
 import {
-  KEYLESS_PERMISSIONS,
+  KEYLESS_ACCESS,
   PERMISSION_FIELDS,
   withheldPaths,
 } from "./permissions";
@@ -37,7 +37,7 @@ export class PermissionFieldsInterceptor implements NestInterceptor {
     // keyless caller holds, so a route that lost its guard leaks no field.
     const held =
       context.switchToHttp().getRequest<ForecastRequest>().apiAccess
-        ?.permissions ?? new Set<string>(KEYLESS_PERMISSIONS);
+        ?.permissions ?? KEYLESS_ACCESS;
     const paths = withheldPaths(kind, held);
     if (paths.length === 0) return next.handle();
     return next.handle().pipe(map((body) => omitPaths(body, paths)));

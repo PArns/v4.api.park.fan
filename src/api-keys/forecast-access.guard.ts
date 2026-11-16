@@ -26,7 +26,7 @@ import {
 } from "./api-key.constants";
 import {
   ALL_PERMISSIONS_AND_INTERNAL,
-  KEYLESS_PERMISSIONS,
+  KEYLESS_ACCESS,
   effectivePermissions,
   type RoutePermission,
 } from "./permissions";
@@ -83,7 +83,6 @@ export interface ForecastRequest {
 }
 
 /** The permissions of a caller without a key. */
-const KEYLESS_ACCESS: ReadonlySet<string> = new Set(KEYLESS_PERMISSIONS);
 
 /** The four slugs that name a park, as the park routes carry them. */
 export type ParkPath = [string, string, string, string];

@@ -120,9 +120,12 @@ export function needsRehash(stored: string): boolean {
  * measurably push people towards `Password1!` and are not what makes a
  * passphrase hard to guess; 12 characters is. Returns the complaint or null.
  */
+/** The shortest password any account may have; the DTOs refuse a shorter one first. */
+export const MIN_PASSWORD_LENGTH = 12;
+
 export function validatePasswordStrength(password: string): string | null {
-  if (typeof password !== "string" || password.length < 12) {
-    return "Password must be at least 12 characters long";
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long`;
   }
   if (password.length > 256) {
     return "Password must be at most 256 characters long";

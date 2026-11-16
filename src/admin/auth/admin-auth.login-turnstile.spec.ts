@@ -41,14 +41,16 @@ function build(verdict: { success: boolean; reason?: string }) {
   };
   const audit = { record: jest.fn(async () => undefined) };
 
+  const attempts = { count: jest.fn(async () => undefined) };
   const controller = new AdminAuthController(
     auth as never,
     {} as never,
     audit as never,
     turnstile,
+    attempts as never,
   );
 
-  return { controller, turnstile, auth };
+  return { controller, turnstile, auth, attempts };
 }
 
 const request = (headers: Record<string, string>) =>
@@ -94,6 +96,27 @@ describe("AdminAuthController — Turnstile on the login", () => {
 
     expect(turnstile.verify).toHaveBeenCalledWith("tok", "198.51.100.7");
     expect(auth.login).toHaveBeenCalled();
+  });
+
+  it("counts a staff sign-in and a refused challenge, nothing about who", async () => {
+    const signedIn = build({ success: true });
+    await signedIn.controller.login(
+      credentials({ turnstileToken: "tok" }),
+      request({}),
+    );
+    expect(signedIn.attempts.count).toHaveBeenCalledWith(
+      "login",
+      "success-staff",
+    );
+
+    const refused = build({ success: false, reason: "missing-token" });
+    await expect(
+      refused.controller.login(credentials(), request({})),
+    ).rejects.toThrow(ForbiddenException);
+    expect(refused.attempts.count).toHaveBeenCalledWith(
+      "login",
+      "turnstile-failed",
+    );
   });
 
   it("refuses a direct caller with no token, before the password is looked at", async () => {

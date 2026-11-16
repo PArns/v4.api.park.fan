@@ -1,3 +1,4 @@
+import { CanonicalUuidPipe } from "../common/utils/uuid-param.util";
 import "reflect-metadata";
 import { ConflictException, NotFoundException } from "@nestjs/common";
 import { ADMIN_MIN_ROLE_KEY } from "../admin/auth/admin-auth.decorators";
@@ -87,9 +88,10 @@ describe("AdminApiKeysController rotation", () => {
     await expect(
       controller.rotate(owner, ID, { graceHours: 0 }),
     ).rejects.toBeInstanceOf(ConflictException);
-    await expect(
-      controller.rotate(owner, "not-a-uuid", { graceHours: 0 }),
-    ).rejects.toThrow("id must be a uuid");
+    // The id itself is checked by `CanonicalUuidPipe` before the handler runs.
+    expect(() => new CanonicalUuidPipe().transform("not-a-uuid")).toThrow(
+      "id must be a uuid",
+    );
     expect(audit.record).not.toHaveBeenCalled();
   });
 

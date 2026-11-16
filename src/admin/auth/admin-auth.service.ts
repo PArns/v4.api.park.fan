@@ -18,6 +18,8 @@ import {
   ADMIN_ROLES,
   AdminRole,
   AdminUser,
+  isSelfServiceRole,
+  type SelfServiceRole,
 } from "./entities/admin-user.entity";
 import {
   hashPassword,
@@ -443,18 +445,57 @@ export class AdminAuthService implements OnModuleInit {
     }
     const user = await this.users.findOne({ where: { id } });
     if (!user) throw new NotFoundException("No such account");
-    if (user.role === "owner" && user.isActive) {
-      await this.assertAnotherActiveOwner(id);
-    }
+    return this.erase(user);
+  }
 
-    await this.signOutEverywhere(id, "deleted");
-    const erased: Record<string, number> = {};
-    for (const hook of this.deletionHooks) {
-      Object.assign(erased, await hook(id));
+  /**
+   * A developer or visitor deleting their own account, confirmed with its
+   * password. Staff accounts are deleted by an owner, so that the last owner
+   * and the audit trail stay in the owner's hands.
+   */
+  async removeOwn(
+    id: string,
+    password: string,
+  ): Promise<{ user: PublicAdminUser; erased: Record<string, number> }> {
+    const user = await this.users.findOne({
+      where: { id },
+      select: { id: true, email: true, role: true, passwordHash: true },
+    });
+    if (!user) throw new NotFoundException("No such account");
+    if (!isSelfServiceRole(user.role)) {
+      throw new ForbiddenException(
+        "A staff account is deleted by an owner, not by itself",
+      );
     }
+    // Rate limited like a password change: the confirmation is a password
+    // check an attacker holding a session could otherwise repeat at will.
+    const limit = await this.loginLimiter.checkAction("delete-account", id);
+    if (!limit.allowed) {
+      throw new UnauthorizedException(
+        `Too many attempts. Try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      );
+    }
+    if (!(await verifyPassword(password ?? "", user.passwordHash))) {
+      await this.loginLimiter.recordActionFailure("delete-account", id);
+      throw new UnauthorizedException({
+        error: "wrong-password",
+        message: "The password is not correct",
+      });
+    }
+    await this.loginLimiter.recordActionSuccess("delete-account", id);
+    const full = await this.users.findOneOrFail({ where: { id } });
+    return this.erase(full);
+  }
+
+  /** Erases an account and everything that hangs on it; see `remove`. */
+  private async erase(
+    user: AdminUser,
+  ): Promise<{ user: PublicAdminUser; erased: Record<string, number> }> {
+    const { id } = user;
+    // The account goes first, under the lock that keeps the last owner, so a
+    // refusal there leaves everything as it was. What hangs on the account
+    // goes after: its sessions, its tokens' cut-off, and what the hooks hold.
     await this.users.manager.transaction(async (manager) => {
-      // Checked again under the lock: two owners deleting each other in the
-      // same tick would otherwise both pass the check above.
       if (user.role === "owner" && user.isActive) {
         await this.assertAnotherActiveOwner(id, manager);
       }
@@ -469,6 +510,13 @@ export class AdminAuthService implements OnModuleInit {
       );
       await manager.delete(AdminUser, { id });
     });
+    await this.signOutEverywhere(id, "deleted");
+    const erased: Record<string, number> = {};
+    for (const result of await Promise.all(
+      this.deletionHooks.map((hook) => hook(id)),
+    )) {
+      Object.assign(erased, result);
+    }
     return { user: toPublicUser(user), erased };
   }
 
@@ -496,6 +544,25 @@ export class AdminAuthService implements OnModuleInit {
         "This is the last active owner — promote another account first",
       );
     }
+  }
+
+  /**
+   * Renames one's own account. The live sessions carry the name too, so they
+   * are patched at once rather than at the next sign-in.
+   */
+  async updateOwnProfile(
+    id: string,
+    patch: { displayName: string },
+  ): Promise<PublicAdminUser> {
+    const displayName = patch.displayName.trim();
+    if (displayName.length === 0) {
+      throw new BadRequestException("A name cannot be empty");
+    }
+    await this.users.update({ id }, { displayName });
+    await this.sessions.patchUserSessions(id, { displayName });
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException("No such account");
+    return toPublicUser(user);
   }
 
   async findById(id: string): Promise<AdminUser | null> {
@@ -541,13 +608,15 @@ export class AdminAuthService implements OnModuleInit {
   }
 
   /**
-   * A developer's own account, from the developer portal: role `developer`,
-   * signed in at once. Unlike an account the owner creates, the password is the
-   * developer's own, so nothing is owed. Ranked below `viewer`, the account
-   * reaches its own session endpoints and `/v1/developer/*` and nothing of the
-   * admin. A taken address is a 409.
+   * An account somebody opens for themselves, signed in at once: a developer's
+   * from the developer portal, or a visitor's from park.fan. Unlike an account
+   * the owner creates, the password is their own, so nothing is owed. Ranked
+   * below `viewer`, it reaches its own session endpoints and its own area
+   * (`/v1/developer/*` or `/v1/account/*`) and nothing of the admin. A taken
+   * address is a 409 `account-exists`.
    */
-  async registerDeveloper(input: {
+  async registerSelf(input: {
+    role: SelfServiceRole;
     email: string;
     displayName?: string;
     password: string;
@@ -560,28 +629,33 @@ export class AdminAuthService implements OnModuleInit {
     }
     const complaint = validatePasswordStrength(input.password);
     if (complaint) throw new BadRequestException(complaint);
-    const existing = await this.users.findOne({ where: { email } });
-    if (existing) {
-      throw new ConflictException({
+    const taken = () =>
+      new ConflictException({
         error: "account-exists",
         message: "That email already has an account. Sign in instead.",
       });
-    }
-    const saved = await this.users.save(
-      this.users.create({
-        email,
-        displayName: input.displayName?.trim() || email.split("@")[0],
-        passwordHash: await hashPassword(input.password),
-        role: "developer",
-        isActive: true,
-        mustChangePassword: false,
-      }),
-    );
+    if (await this.users.exists({ where: { email } })) throw taken();
     const ip = truncateIp(input.ip);
-    await this.users.update(
-      { id: saved.id },
-      { lastLoginAt: new Date(), lastLoginIp: ip },
-    );
+    let saved: AdminUser;
+    try {
+      saved = await this.users.save(
+        this.users.create({
+          email,
+          displayName: input.displayName?.trim() || email.split("@")[0],
+          passwordHash: await hashPassword(input.password),
+          role: input.role,
+          isActive: true,
+          mustChangePassword: false,
+          lastLoginAt: new Date(),
+          lastLoginIp: ip,
+        }),
+      );
+    } catch (error) {
+      // Two registrations of one address at once: the unique index decides,
+      // and the loser hears what the check above would have told it.
+      if ((error as { code?: string }).code === "23505") throw taken();
+      throw error;
+    }
     return this.sessions.create({
       userId: saved.id,
       email: saved.email,
@@ -895,12 +969,6 @@ export class AdminAuthService implements OnModuleInit {
     password: string,
     code: string,
   ): Promise<void> {
-    if (isTotpRequired()) {
-      throw new ForbiddenException(
-        "Two-factor is mandatory on this deployment (ADMIN_REQUIRE_TOTP)",
-      );
-    }
-
     // The code is six digits and three of them are valid at once, so this is
     // the one endpoint in the admin where an attacker can realistically
     // exhaust the secret. The global throttler will not help: it skips every
@@ -917,12 +985,19 @@ export class AdminAuthService implements OnModuleInit {
       select: {
         id: true,
         passwordHash: true,
+        role: true,
         totpSecret: true,
         totpEnabled: true,
       },
     });
     if (!user?.totpEnabled)
       throw new BadRequestException("Two-factor is not enabled");
+    // Mandatory for staff only: a visitor or developer who chose it may drop it again.
+    if (isTotpRequired(user.role)) {
+      throw new ForbiddenException(
+        "Two-factor is mandatory on this deployment (ADMIN_REQUIRE_TOTP)",
+      );
+    }
     if (!(await verifyPassword(password ?? "", user.passwordHash))) {
       await this.loginLimiter.recordActionFailure("totp-disable", userId);
       throw new UnauthorizedException("Password is incorrect");

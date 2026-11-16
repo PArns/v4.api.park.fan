@@ -1,9 +1,7 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -22,38 +20,28 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { AdminAuthGuard, clientIp } from "../admin/auth/admin-auth.guard";
+import { AdminAuthGuard } from "../admin/auth/admin-auth.guard";
 import {
   AdminLegacyAccess,
   AdminMinRole,
   AdminPublic,
   CurrentAdmin,
 } from "../admin/auth/admin-auth.decorators";
-import { AdminAuthService } from "../admin/auth/admin-auth.service";
 import { AdminAuditService } from "../admin/auth/admin-audit.service";
 import type {
   AdminPrincipal,
   RequestWithAdmin,
 } from "../admin/auth/admin-principal";
 import { requireAccount } from "../admin/auth/admin-principal";
-import { AdminTurnstileService } from "../admin/auth/admin-turnstile.service";
-import { carriesThrottleBypassKey } from "../common/throttler/throttler.config";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
-import { isCanonicalUuid } from "../common/utils/uuid-param.util";
-import { isAdminLoginTurnstileEnforced } from "../config/admin-auth.config";
+import { CanonicalUuidPipe } from "../common/utils/uuid-param.util";
 import { ApiKeyRequestService } from "./api-key-request.service";
 import { ApiKeyService } from "./api-key.service";
 import { RotateApiKeyDto } from "./dto/create-api-key.dto";
-import {
-  CreateApiKeyRequestDto,
-  RegisterDeveloperDto,
-} from "./dto/api-key-request.dto";
-
-/** A key id from a path, checked before it reaches a query. */
-function keyId(id: string): string {
-  if (!isCanonicalUuid(id)) throw new BadRequestException("id must be a uuid");
-  return id;
-}
+import { CreateApiKeyRequestDto } from "./dto/api-key-request.dto";
+import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
+import { AdminAuthService } from "../admin/auth/admin-auth.service";
+import { SelfRegistrationService } from "../admin/auth/self-registration.service";
 
 /**
  * The developer dashboard's API: an outside developer registers, files key
@@ -75,11 +63,11 @@ export class DeveloperController {
   private readonly logger = new Logger(DeveloperController.name);
 
   constructor(
-    private readonly auth: AdminAuthService,
-    private readonly turnstile: AdminTurnstileService,
+    private readonly registration: SelfRegistrationService,
     private readonly audit: AdminAuditService,
     private readonly apiKeys: ApiKeyService,
     private readonly requests: ApiKeyRequestService,
+    private readonly auth: AdminAuthService,
   ) {}
 
   @Post("register")
@@ -101,88 +89,29 @@ export class DeveloperController {
     status: 409,
     description: "That address already has an account",
   })
-  async register(
-    @Body() body: RegisterDeveloperDto,
-    @Req() request: RequestWithAdmin,
-  ) {
-    // As at the login: our own frontend verified the challenge before
-    // forwarding and sends the bypass key; anyone else solves it here.
-    if (
-      isAdminLoginTurnstileEnforced() &&
-      !carriesThrottleBypassKey(request.headers)
-    ) {
-      const verdict = await this.turnstile.verify(
-        body.turnstileToken ?? "",
-        clientIp(request),
-      );
-      if (!verdict.success) {
-        this.logger.warn(
-          `Turnstile refused a developer registration: ${verdict.reason ?? "no reason given"}`,
-        );
-        throw new ForbiddenException({
-          error: "turnstile-failed",
-          message: "A solved Turnstile token is required to register.",
-        });
-      }
-    }
-    const userAgent = request.headers?.["user-agent"];
-    const issued = await this.auth.registerDeveloper({
-      email: body.email,
-      displayName: body.displayName,
-      password: body.password,
-      ip: clientIp(request),
-      userAgent: typeof userAgent === "string" ? userAgent : null,
-    });
-    const { session } = issued;
-    await this.audit.record({
-      actor: {
-        userId: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        sessionToken: null,
-        legacy: false,
-        ip: clientIp(request),
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
-      action: "developer.register",
-      entityType: "admin_user",
-      entityId: session.userId,
-      entityLabel: session.email,
-    });
-    return {
-      status: "ok" as const,
-      token: issued.token,
-      expiresAt: new Date(session.expiresAt).toISOString(),
-      user: {
-        id: session.userId,
-        email: session.email,
-        displayName: session.displayName,
-        role: session.role,
-        mustChangePassword: false,
-        mustEnrolTotp: false,
-      },
-    };
+  register(@Body() body: RegisterAccountDto, @Req() request: RequestWithAdmin) {
+    return this.registration.register("developer", body, request);
   }
 
   @Get("overview")
   @ApiOperation({
     summary: "The caller's keys and requests",
     description:
-      "Every key issued to the caller's account, with this hour's count and the use per day (30) and month (12), and every request it filed, newest first. A key with `revealedAt: null` has not been picked up: `POST keys/:id/rotate` with `graceHours: 0` shows its first secret.",
+      "Every key issued to the caller's account, with this hour's count, whether the account has a second factor (`account.totpEnabled`) and the use per day (30) and month (12), and every request it filed, newest first. A key with `revealedAt: null` has not been picked up: `POST keys/:id/rotate` with `graceHours: 0` shows its first secret.",
   })
   async overview(@CurrentAdmin() admin: AdminPrincipal) {
     const userId = requireAccount(admin);
-    const [keys, requests] = await Promise.all([
+    const [keys, requests, user] = await Promise.all([
       this.apiKeys.list(Date.now(), { ownerUserId: userId }),
       this.requests.listForUser(userId),
+      this.auth.findById(userId),
     ]);
     return {
       account: {
         email: admin.email,
         displayName: admin.displayName,
         role: admin.role,
+        totpEnabled: user?.totpEnabled ?? false,
       },
       keys,
       requests,
@@ -223,10 +152,10 @@ export class DeveloperController {
   @ApiOperation({ summary: "Withdraw an undecided request of the caller's" })
   async withdrawRequest(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const userId = requireAccount(admin);
-    const withdrawn = await this.requests.withdraw(keyId(id), userId);
+    const withdrawn = await this.requests.withdraw(id, userId);
     await this.audit.record({
       actor: admin,
       action: "api-key-request.withdraw",
@@ -245,7 +174,7 @@ export class DeveloperController {
   })
   async rotateKey(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: RotateApiKeyDto,
   ) {
     const owned = await this.ownedKey(admin, id);
@@ -270,7 +199,7 @@ export class DeveloperController {
   })
   async endGrace(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const owned = await this.ownedKey(admin, id);
     const ended = await this.apiKeys.revokePrevious(owned.id);
@@ -295,7 +224,7 @@ export class DeveloperController {
   })
   async revokeKey(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
     const owned = await this.ownedKey(admin, id);
     const revoked = await this.apiKeys.revoke(owned.id);
@@ -311,10 +240,7 @@ export class DeveloperController {
 
   /** A key of the caller's account; 404 for anyone else's, so ids reveal nothing. */
   private async ownedKey(admin: AdminPrincipal, id: string) {
-    const owned = await this.apiKeys.findOwned(
-      keyId(id),
-      requireAccount(admin),
-    );
+    const owned = await this.apiKeys.findOwned(id, requireAccount(admin));
     if (!owned) throw new NotFoundException("No such key");
     return owned;
   }
