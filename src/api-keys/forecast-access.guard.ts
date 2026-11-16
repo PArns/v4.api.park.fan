@@ -21,8 +21,15 @@ import {
   API_KEY_LIMIT_HEADERS,
   API_KEY_PREFIX,
   DATA_TERMS_URL,
+  DEVELOPER_PORTAL_URL,
   bypassKeyOpensForecasts,
 } from "./api-key.constants";
+import {
+  ALL_PERMISSIONS_AND_INTERNAL,
+  KEYLESS_PERMISSIONS,
+  effectivePermissions,
+  type RoutePermission,
+} from "./permissions";
 import {
   ApiKeyService,
   type ApiKeyLookup,
@@ -59,12 +66,24 @@ export function readPresentedApiKey(
   return readPresentedApiKeyWithSource(headers)?.key ?? null;
 }
 
+/** What a request may read, as the guard decided it. */
+export interface ApiAccess {
+  /** The permissions it holds: a key's, the keyless set, or all for park.fan itself. */
+  permissions: ReadonlySet<string>;
+  /** The key it came with; null without one or for the bypass key. */
+  key: ResolvedApiKey | null;
+}
+
 export interface ForecastRequest {
   headers: Record<string, unknown>;
   params?: Record<string, string | undefined>;
   query?: unknown;
   apiKey?: ResolvedApiKey;
+  apiAccess?: ApiAccess;
 }
+
+/** The permissions of a caller without a key. */
+const KEYLESS_ACCESS: ReadonlySet<string> = new Set(KEYLESS_PERMISSIONS);
 
 /** The four slugs that name a park, as the park routes carry them. */
 export type ParkPath = [string, string, string, string];
@@ -103,6 +122,18 @@ export interface ForecastAccessOptions {
    * limited to some parks, because it could reach any park's forecasts.
    */
   verify?: boolean;
+  /**
+   * Whether a route without a park in its path refuses a key limited to some
+   * parks. True for routes that could reach any park's forecasts or plans; a
+   * directory or a list of regions lets such a key through, since it is how
+   * the key finds its parks. Default true.
+   */
+  parkRequired?: boolean;
+}
+
+/** What a route asks of its caller: one permission, and the options of the check. */
+export interface ApiAccessOptions extends ForecastAccessOptions {
+  permission: RoutePermission;
 }
 
 /**
@@ -125,11 +156,43 @@ export interface ForecastAccessOptions {
  * past it is refused with `api-key-expired`.
  */
 export async function authorizeForecastRequest(
-  apiKeys: ApiKeyService,
+  apiKeys: ApiKeyStore,
   request: ForecastRequest,
   response: Response,
   options: ForecastAccessOptions = {},
 ): Promise<void> {
+  await authorizeApiRequest(apiKeys, request, response, {
+    permission: "forecasts.crowd",
+    ...options,
+  });
+}
+
+/**
+ * The check every public data route runs (`@ApiPermission`): the caller needs
+ * the route's permission. A caller without a key holds `KEYLESS_PERMISSIONS`
+ * and is answered as before, publicly cacheable, on a route those cover; on
+ * any other it gets 401. A key without the permission gets 403
+ * `api-key-permission-missing` with `requiredPermission`, before the request
+ * counts against its allowance. park.fan's own frontend (`usage: internal`, or
+ * the bypass key while it still opens data routes) holds every permission.
+ * Otherwise as `authorizeForecastRequest` describes: private answers, the
+ * hourly allowance, the end date, the parks.
+ */
+export async function authorizeApiRequest(
+  apiKeys: ApiKeyStore,
+  request: ForecastRequest,
+  response: Response,
+  options: ApiAccessOptions,
+): Promise<void> {
+  const { permission } = options;
+  const presentedWith = readPresentedApiKeyWithSource(request.headers);
+  // A keyless caller on a route the keyless set covers gets the answer every
+  // keyless caller gets, so it keeps its public cache policy.
+  if (!presentedWith && KEYLESS_ACCESS.has(permission)) {
+    request.apiAccess = { permissions: KEYLESS_ACCESS, key: null };
+    return;
+  }
+
   if (isForecastSharedCacheEnabled()) {
     varyResponseByKey(response, ["X-API-Key", getThrottleBypassHeader()]);
   } else {
@@ -138,12 +201,21 @@ export async function authorizeForecastRequest(
   // A data key goes first, the bypass key after it: park.fan's frontend sends
   // both, and checked the other way round its own key would never be looked
   // up, counted or marked as used while the bypass still opens forecasts.
-  const presentedWith = readPresentedApiKeyWithSource(request.headers);
   const presented = presentedWith?.key ?? null;
   const found = presented ? await apiKeys.lookup(presented) : null;
   if (found?.status === "active") {
     const resolved = found.key;
     if (presentedWith?.source === "bearer") keepResponsePrivate(response);
+    const permissions = effectivePermissions(resolved);
+    if (!permissions.has(permission)) {
+      throw new ForbiddenException({
+        error: "api-key-permission-missing",
+        message: `This API key does not carry the permission "${permission}". Its holder can ask for it on ${DEVELOPER_PORTAL_URL}.`,
+        requiredPermission: permission,
+        portal: DEVELOPER_PORTAL_URL,
+        terms: DATA_TERMS_URL,
+      });
+    }
     await checkAllowedPark(resolved, request, options);
     if (resolved.expiresAt && !response.headersSent) {
       response.setHeader(API_KEY_EXPIRES_HEADER, resolved.expiresAt);
@@ -172,10 +244,15 @@ export async function authorizeForecastRequest(
       );
     }
     request.apiKey = resolved;
+    request.apiAccess = { permissions, key: resolved };
     return;
   }
 
   if (bypassKeyOpensForecasts() && carriesThrottleBypassKey(request.headers)) {
+    request.apiAccess = {
+      permissions: ALL_PERMISSIONS_AND_INTERNAL,
+      key: null,
+    };
     return;
   }
 
@@ -184,7 +261,7 @@ export async function authorizeForecastRequest(
   }
   throw keyRefusal(
     found,
-    "Forecasts need an API key in the X-API-Key header. Keys for non-commercial use are free on request.",
+    `This route needs an API key with the permission "${permission}" in the X-API-Key header. Without a key only the live wait times are open. Keys: ${DEVELOPER_PORTAL_URL}`,
   );
 }
 
@@ -207,6 +284,7 @@ export function keyRefusal(
   return new UnauthorizedException({
     error: found ? "api-key-invalid" : "api-key-required",
     message: found ? "This API key is unknown or revoked." : whenMissing,
+    portal: DEVELOPER_PORTAL_URL,
     terms: DATA_TERMS_URL,
   });
 }
@@ -224,7 +302,7 @@ export async function checkAllowedPark(
   if (!key.allowedParkIds) return;
   const path = requestedParkPath(request, options.verify === true);
   if (!path) {
-    if (options.verify) return;
+    if (options.verify || options.parkRequired === false) return;
     throw new ForbiddenException({
       error: "api-key-park-required",
       message:
@@ -284,22 +362,65 @@ export function parkIdResolver(moduleRef: ModuleRef): ParkIdResolver {
  * controller, test modules included; a constructor dependency would make each
  * of those provide the store, though none of them ever runs the check.
  */
-export function apiKeyStore(moduleRef: ModuleRef): ApiKeyService {
-  return moduleRef.get(ApiKeyService, { strict: false });
+export function apiKeyStore(moduleRef: ModuleRef): ApiKeyStore {
+  const store = () => moduleRef.get(ApiKeyService, { strict: false });
+  // Asked for when a request presents a key, not before: a keyless read of
+  // the wait times needs no store, so a module without one can serve it.
+  return {
+    lookup: (presented, now) => store().lookup(presented, now),
+    countRequest: (key, now) => store().countRequest(key, now),
+  };
 }
 
-/** Puts a whole route behind a data key; see `authorizeForecastRequest`. */
+/** What the check needs of the key store. */
+export type ApiKeyStore = Pick<ApiKeyService, "lookup" | "countRequest">;
+
+/** The metadata `@ApiPermission` leaves on a route for the guard. */
+export const API_PERMISSION_METADATA = "apiPermission";
+
+/** What `@ApiPermission` stores. */
+export interface ApiPermissionMetadata {
+  permission: RoutePermission;
+  parkRequired: boolean;
+}
+
+/** A route's permission, on the handler first, then on its controller. */
+function routePermission(
+  context: ExecutionContext,
+): ApiPermissionMetadata | undefined {
+  for (const target of [context.getHandler?.(), context.getClass?.()]) {
+    if (!target) continue;
+    const found = Reflect.getMetadata(API_PERMISSION_METADATA, target) as
+      ApiPermissionMetadata | undefined;
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Puts a route behind its permission (`@ApiPermission`); see
+ * `authorizeApiRequest`. A route that carries the guard without the metadata
+ * is a forecast route, as before permissions existed.
+ */
 @Injectable()
 export class ForecastAccessGuard implements CanActivate {
   constructor(private readonly moduleRef: ModuleRef) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
-    await authorizeForecastRequest(
+    const route = routePermission(context) ?? {
+      permission: "forecasts.crowd",
+      parkRequired: true,
+    };
+    await authorizeApiRequest(
       apiKeyStore(this.moduleRef),
       http.getRequest<ForecastRequest>(),
       http.getResponse<Response>(),
-      { resolveParkId: parkIdResolver(this.moduleRef) },
+      {
+        permission: route.permission,
+        parkRequired: route.parkRequired,
+        resolveParkId: parkIdResolver(this.moduleRef),
+      },
     );
     return true;
   }

@@ -14,6 +14,7 @@ import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { QueryInt } from "../common/pipes/query-int.pipe";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /** `Number()` rather than `parseFloat`, so `48.1abc` is rejected, not cut to 48.1. */
 function parseCoordinate(value: unknown, max: number): number | null {
@@ -44,6 +45,7 @@ export class LocationController {
    * Otherwise, returns up to 5 nearest parks.
    */
   @Get("nearby")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new NoCdnCacheInterceptor()) // Response depends on client IP (GeoIP) – must not be CDN-cached
   @ApiOperation({
     summary: "Find nearby parks or rides",

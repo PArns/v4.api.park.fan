@@ -16,15 +16,20 @@ undecorated endpoints need any valid session. An endpoint marked `@AdminTokenOnl
 `/v1/mcp`) takes an API token instead and nothing else; every other endpoint refuses API tokens
 ([below](#api-tokens-and-oauth-grants)).
 
-| Role     | May                                                                                                                             |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `owner`  | everything, including accounts and destructive maintenance (merges, retirements, repair, a full cache reset); keep at least two |
-| `editor` | curated content (names, seasons, heights, ride profiles), job triggers                                                          |
-| `author` | blog posts and media metadata, not park data                                                                                    |
-| `viewer` | dashboards; writes nothing                                                                                                      |
+| Role        | May                                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`     | everything, including accounts and destructive maintenance (merges, retirements, repair, a full cache reset); keep at least two |
+| `editor`    | curated content (names, seasons, heights, ride profiles), job triggers                                                          |
+| `author`    | blog posts and media metadata, not park data                                                                                    |
+| `viewer`    | dashboards; writes nothing                                                                                                      |
+| `developer` | not staff: an outside developer's own data keys and key requests, nothing of the admin                                          |
 
-Roles are ranked (`owner > editor > author > viewer`), so "editor or above" keeps meaning that when a
-role is added between them.
+Roles are ranked (`owner > editor > author > viewer > developer`), so "editor or above" keeps meaning
+that when a role is added between them. `developer` sits below `viewer`, the default minimum of an
+undecorated endpoint, so it reaches only the handlers that name it: its own session, password and
+second factor, and `/v1/developer/*`. It registers itself on the developer portal, owes no
+mandatory TOTP and never gets MCP or a token
+([data API keys](../frontend/api-keys.md#developer-accounts-and-requests)).
 
 ## Sessions: opaque tokens in Redis
 

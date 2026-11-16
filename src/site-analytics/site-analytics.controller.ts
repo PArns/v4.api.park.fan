@@ -74,6 +74,7 @@ import {
   SiteUncoveredDto,
   SiteUncoveredQueryDto,
 } from "./dto/site-analytics.dto";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /** What every report answers when it is bounded; the body's `reason` says which. */
 const REPORT_BUSY =
@@ -102,6 +103,7 @@ export class SiteAnalyticsCollectController {
   constructor(private readonly collector: SiteAnalyticsCollectService) {}
 
   @Post("collect")
+  @OpenRoute("the site statistic's beacon; it records, never answers data")
   @HttpCode(HttpStatus.NO_CONTENT)
   @Header("Cross-Origin-Resource-Policy", BEACON_RESOURCE_POLICY)
   @UseInterceptors(new NoCdnCacheInterceptor())

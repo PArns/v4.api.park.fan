@@ -6,6 +6,7 @@ import { MLDashboardService } from "../services/ml-dashboard.service";
 import { MLModelService } from "../services/ml-model.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
 import { HttpExceptionFilter } from "../../common/filters/http-exception.filter";
+import { ForecastAccessGuard } from "../../api-keys/forecast-access.guard";
 
 /**
  * `limit` on `models/metrics-history` and `days` on `accuracy/system` had no
@@ -48,7 +49,12 @@ describe("MLController › query parameters are bounded", () => {
           },
         },
       ],
-    }).compile();
+    })
+      // Query validation is what these cases test; who may call the route is
+      // the access guard's own spec (api-permission.guard.spec.ts).
+      .overrideGuard(ForecastAccessGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication({ logger: false });
     app.setGlobalPrefix("v1");

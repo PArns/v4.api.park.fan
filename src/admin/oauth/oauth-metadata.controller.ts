@@ -2,6 +2,7 @@ import { Controller, Get } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { getApiPublicUrl, getMcpResourceUrl } from "../../config/oauth.config";
 import { ADMIN_TOKEN_SCOPE_NAMES } from "../auth/admin-api-token.constants";
+import { OpenRoute } from "../../api-keys/api-permission.decorator";
 
 /**
  * Discovery documents, at the host root (excluded from the `/v1` prefix in
@@ -10,6 +11,7 @@ import { ADMIN_TOKEN_SCOPE_NAMES } from "../auth/admin-api-token.constants";
  * knows every endpoint it needs.
  */
 @ApiTags("oauth")
+@OpenRoute("OAuth discovery metadata for the admin MCP, no data")
 @Controller(".well-known")
 export class OAuthMetadataController {
   @Get("oauth-protected-resource")

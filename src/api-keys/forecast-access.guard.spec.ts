@@ -312,6 +312,7 @@ describe("ForecastAccessGuard", () => {
         usage: "commercial" as const,
         requestsPerHour: null,
         allowedParkIds: ["mk-id"],
+        permissions: null,
         expiresAt: null,
       };
       const options = {

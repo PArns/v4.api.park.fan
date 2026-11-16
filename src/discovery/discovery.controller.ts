@@ -21,6 +21,7 @@ import { BreadcrumbDto } from "../common/dto/breadcrumb.dto";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { ParkEnrichmentService } from "../parks/services/park-enrichment.service";
 import { CountrySummaryDto } from "./dto/country-summary.dto";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 /**
  * Discovery Controller
@@ -46,6 +47,7 @@ export class DiscoveryController {
    * Cached for 5 minutes (HTTP + Redis) to include live statistics.
    */
   @Get("geo")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get complete geo structure",
@@ -110,6 +112,7 @@ export class DiscoveryController {
    * Returns all continents with nested data.
    */
   @Get("continents")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "List all continents",
@@ -132,6 +135,7 @@ export class DiscoveryController {
    * Returns countries in a specific continent.
    */
   @Get("continents/:continentSlug")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get countries in continent",
@@ -200,6 +204,7 @@ export class DiscoveryController {
    * Returns cities in a specific country.
    */
   @Get("continents/:continentSlug/:countrySlug")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get cities in country",
@@ -278,6 +283,7 @@ export class DiscoveryController {
    * Cached for 24 hours.
    */
   @Get("continents/:continent/:country/summary")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
   @ApiOperation({
     summary: "Get country summary for landing page",
@@ -314,6 +320,7 @@ export class DiscoveryController {
    * Returns list of hydrated park objects for a country
    */
   @Get(":continent/:country")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live stats
   @ApiOperation({
     summary: "Get hydrated parks in country",

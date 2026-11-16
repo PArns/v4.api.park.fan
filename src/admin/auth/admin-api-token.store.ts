@@ -411,7 +411,7 @@ export class AdminApiTokenStore {
       legacy: false,
       ip,
       mustChangePassword: row.must_change_password,
-      mustEnrolTotp: isTotpRequired() && !row.totp_enabled,
+      mustEnrolTotp: isTotpRequired(row.role) && !row.totp_enabled,
       apiToken: {
         id: row.id,
         kind: row.kind,

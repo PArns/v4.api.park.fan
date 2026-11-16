@@ -66,6 +66,9 @@ import {
 // takes — so the whole controller refuses it and the two handlers that must
 // keep working for a legacy caller say so themselves.
 @AdminLegacyAccess(false)
+// The handlers about the caller's own session, password and second factor name
+// `developer` as their minimum: a developer account signs in here like staff,
+// and below `viewer` it would otherwise be refused its own logout.
 export class AdminAuthController {
   private readonly logger = new Logger(AdminAuthController.name);
 
@@ -206,6 +209,7 @@ export class AdminAuthController {
   }
 
   @Post("logout")
+  @AdminMinRole("developer")
   @AdminAllowPendingPassword()
   @AdminLegacyAccess(true)
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -215,6 +219,7 @@ export class AdminAuthController {
   }
 
   @Get("me")
+  @AdminMinRole("developer")
   @AdminAllowPendingPassword()
   @AdminLegacyAccess(true)
   @ApiOperation({
@@ -246,6 +251,7 @@ export class AdminAuthController {
   }
 
   @Post("change-password")
+  @AdminMinRole("developer")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -283,6 +289,7 @@ export class AdminAuthController {
   // ── sessions ──────────────────────────────────────────────────────────────
 
   @Get("sessions")
+  @AdminMinRole("developer")
   @ApiOperation({ summary: "Where this account is currently signed in" })
   async listSessions(@CurrentAdmin() admin: AdminPrincipal) {
     if (!admin.userId) return { sessions: [] };
@@ -304,6 +311,7 @@ export class AdminAuthController {
   }
 
   @Delete("sessions/:id")
+  @AdminMinRole("developer")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Revoke one of your sessions" })
   async revokeSession(
@@ -315,6 +323,7 @@ export class AdminAuthController {
   }
 
   @Post("sessions/revoke-all")
+  @AdminMinRole("developer")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Sign out everywhere, including here",
@@ -340,6 +349,7 @@ export class AdminAuthController {
   // ── two-factor ────────────────────────────────────────────────────────────
 
   @Post("totp/begin")
+  @AdminMinRole("developer")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -360,6 +370,7 @@ export class AdminAuthController {
   }
 
   @Post("totp/confirm")
+  @AdminMinRole("developer")
   @AdminAllowPendingPassword()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: "Confirm and enable two-factor" })
@@ -379,6 +390,7 @@ export class AdminAuthController {
   }
 
   @Post("totp/disable")
+  @AdminMinRole("developer")
   @HttpCode(HttpStatus.NO_CONTENT)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOperation({

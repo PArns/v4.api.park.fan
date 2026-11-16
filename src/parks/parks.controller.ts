@@ -1,4 +1,7 @@
-import { RequiresApiKey } from "../api-keys/requires-api-key.decorator";
+import {
+  ApiPermission,
+  PermissionFields,
+} from "../api-keys/api-permission.decorator";
 import { cachedJson } from "../common/cache/redis-json-cache";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { ForecastFields } from "../api-keys/forecast-fields.interceptor";
@@ -147,6 +150,7 @@ export class ParksController {
    * Now supports pagination with default limit of 10 items.
    */
   @Get()
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List all parks",
@@ -209,6 +213,7 @@ export class ParksController {
    * @returns Parks with incomplete geocoding data
    */
   @Get("debug/missing-geocode")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "List parks with missing geocode",
     description: "Debug endpoint for identifying data issues.",
@@ -257,6 +262,7 @@ export class ParksController {
    * cache prewarm uses to prioritize parks.
    */
   @Get("popular")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(60))
   @ApiOperation({
     summary: "Get most-requested parks",
@@ -308,6 +314,7 @@ export class ParksController {
    * @throws NotFoundException if continent not found
    */
   @Get(":continent")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "Get parks by continent",
@@ -350,6 +357,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List parks in country",
@@ -386,6 +394,7 @@ export class ParksController {
    * @throws NotFoundException if no parks found
    */
   @Get(":continent/:country/:city")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({
     summary: "List parks in city",
@@ -441,7 +450,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid or range > 90 days
    */
   @Get(":continent/:country/:city/:parkSlug/calendar")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd")
   @ApiOperation({
     summary: "Get integrated calendar (geographic path)",
     description:
@@ -746,7 +755,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid or range > 90 days
    */
   @Get(":continent/:country/:city/:parkSlug/best-days")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd")
   @ApiOperation({
     summary: "Get precomputed best-days projection (geo)",
     description:
@@ -854,6 +863,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/weather/forecast")
+  @ApiPermission("live.weather")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get weather forecast (geo)",
@@ -922,6 +932,7 @@ export class ParksController {
    * Cache: until `nextUpdateAt`, the next quarter-hour mark.
    */
   @Get(":continent/:country/:city/:parkSlug/weather/nowcast")
+  @ApiPermission("live.weather")
   @ApiOperation({
     summary: "Get short-term weather nowcast (geo)",
     description:
@@ -1019,6 +1030,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":continent/:country/:city/:parkSlug/weather")
+  @ApiPermission("live.weather")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get weather history/forecast (geo)",
@@ -1133,6 +1145,7 @@ export class ParksController {
    * @throws BadRequestException if date format invalid
    */
   @Get(":continent/:country/:city/:parkSlug/schedule")
+  @ApiPermission("live.schedule")
   @UseInterceptors(new HttpCacheInterceptor(60 * 60)) // 1 hour HTTP cache
   @ApiOperation({
     summary: "Get schedule range (geo)",
@@ -1277,6 +1290,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/wait-times")
+  @ApiPermission("live.waits")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
     summary: "Get wait times (geo)",
@@ -1367,6 +1381,7 @@ export class ParksController {
    * Cached 24 hours — data changes only as new days are added.
    */
   @Get(":continent/:country/:city/:parkSlug/stats")
+  @ApiPermission("stats.history")
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
   @ApiOperation({
     summary: "Get historical park statistics",
@@ -1455,6 +1470,7 @@ export class ParksController {
    * and a day-old copy of "today" is the one thing this route must never serve.
    */
   @Get(":continent/:country/:city/:parkSlug/stats/day")
+  @ApiPermission("stats.history")
   @ForecastFields("forecast", "predicted", "forecastError")
   @UseInterceptors(new HttpCacheInterceptor(5 * 60))
   @ApiOperation({
@@ -1530,7 +1546,7 @@ export class ParksController {
    * further down.
    */
   @Get(":continent/:country/:city/:parkSlug/plan/day")
-  @RequiresApiKey()
+  @ApiPermission("planner.day")
   @UseInterceptors(
     // 15 minutes, except a day that says a dependency failed: its "try again
     // shortly" must not outlive the fault at the edge.
@@ -1616,6 +1632,7 @@ export class ParksController {
    * their relative order does not matter.
    */
   @Get(":continent/:country/:city/:parkSlug/stats/hourly")
+  @ApiPermission("stats.history")
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24 hours
   @ApiOperation({
     summary: "Get the park's hourly wait-time profile",
@@ -1718,7 +1735,7 @@ export class ParksController {
    * Returns yearly crowd predictions via geographic path.
    */
   @Get(":continent/:country/:city/:parkSlug/predictions/yearly")
-  @RequiresApiKey()
+  @ApiPermission("forecasts.crowd")
   // 24 hours, except an answer built while the forecast could not be read:
   // that one is `no-store`, so the edge does not keep an outage for a day.
   @UseInterceptors(
@@ -1867,6 +1884,7 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
+  @ApiPermission("rides.details")
   // 5 minutes. Not for live wait times — this route carries none (see below) —
   // but the catalog it does serve changes on a curation write, and this is the
   // freshness window a correction waits out. The wait is longer than the
@@ -2047,6 +2065,8 @@ export class ParksController {
    * @throws NotFoundException if park or attraction not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions/:attractionSlug")
+  @ApiPermission("rides.details")
+  @PermissionFields("ride")
   @ForecastFields("hourlyForecast", "bestVisitTimes", "predictionAccuracy")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
   @ApiOperation({
@@ -2170,6 +2190,8 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug")
+  @ApiPermission("parks.details")
+  @PermissionFields("park")
   @ForecastFields("attractions[].bestVisitTimes")
   @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live park status
   @ApiOperation({

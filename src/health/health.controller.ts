@@ -18,6 +18,7 @@ import { Inject } from "@nestjs/common";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import * as packageJson from "../../package.json";
 import axios from "axios";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 interface HealthStatus {
   status: "ok" | "degraded" | "error";
@@ -81,6 +82,7 @@ export const HEALTH_COUNT_KEYS = {
 } as const;
 
 @ApiTags("health")
+@OpenRoute("health checks for the deploy and the status page")
 @Controller("health")
 @SkipThrottle() // monitoring/uptime probes must never be rate limited
 export class HealthController {

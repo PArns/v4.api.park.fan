@@ -9,6 +9,7 @@ import { ApiTags, ApiOperation, ApiQuery } from "@nestjs/swagger";
 import { MLAlertService } from "../services/ml-alert.service";
 import { MLAnomalyDetectionService } from "../services/ml-anomaly-detection.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
+import { ApiPermission } from "../../api-keys/api-permission.decorator";
 
 /**
  * ML Monitoring Controller
@@ -34,6 +35,7 @@ export class MLMonitoringController {
    * Get active alerts
    */
   @Get("alerts")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Get active ML alerts",
     description: "Returns all active alerts for model performance issues",
@@ -48,6 +50,7 @@ export class MLMonitoringController {
    * Get anomaly statistics
    */
   @Get("anomalies/stats")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Get anomaly statistics",
     description: "Returns aggregated statistics about detected anomalies",
@@ -73,6 +76,7 @@ export class MLMonitoringController {
    * P90, so the admin can see TFT quality per attraction alongside CatBoost.
    */
   @Get("tft/performers")
+  @ApiPermission("internal")
   @ApiOperation({
     summary: "Get best/worst TFT daily-forecast performers per attraction",
     description:

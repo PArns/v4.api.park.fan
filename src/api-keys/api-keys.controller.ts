@@ -1,4 +1,4 @@
-import { Controller, Get, Req, Res } from "@nestjs/common";
+import { Controller, Get, Req, Res, UseInterceptors } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import {
   ApiOperation,
@@ -17,6 +17,14 @@ import {
   type ForecastRequest,
 } from "./forecast-access.guard";
 import { keepResponsePrivate } from "./private-cache";
+import { OpenRoute } from "./api-permission.decorator";
+import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import {
+  API_PERMISSION_DESCRIPTIONS,
+  API_PERMISSION_GROUPS,
+  KEYLESS_PERMISSIONS,
+  effectivePermissions,
+} from "./permissions";
 
 /**
  * Lets a holder, or park.fan's own MCP server on a holder's behalf, check a
@@ -35,11 +43,12 @@ export class ApiKeysController {
   ) {}
 
   @Get("verify")
+  @OpenRoute("checks exactly the key it is sent")
   @ApiSecurity("api-key")
   @ApiOperation({
     summary: "Check a data API key",
     description:
-      "200 when the key in `X-API-Key` is active, 401 otherwise (`api-key-expired` past its end date). With `park`, 403 when the key does not cover that park. `allParks` says whether the key covers every park; otherwise `allowedParkIds` lists them. `expiresAt` is the end date, absent for a key that does not expire.",
+      "200 when the key in `X-API-Key` is active, 401 otherwise (`api-key-expired` past its end date). With `park`, 403 when the key does not cover that park. `allParks` says whether the key covers every park; otherwise `allowedParkIds` lists them. `permissions` lists what the key may read (`GET /v1/api-keys/permissions`). `expiresAt` is the end date, absent for a key that does not expire.",
   })
   @ApiQuery({
     name: "park",
@@ -50,7 +59,7 @@ export class ApiKeysController {
   @ApiResponse({
     status: 200,
     description:
-      "`{ valid: true, usage, allParks, allowedParkIds, expiresAt? }`",
+      "`{ valid: true, usage, allParks, allowedParkIds, permissions, expiresAt? }`",
   })
   async verify(
     @Req() request: ForecastRequest,
@@ -73,7 +82,32 @@ export class ApiKeysController {
       usage: key.usage,
       allParks: key.allowedParkIds === null,
       allowedParkIds: key.allowedParkIds ?? [],
+      permissions: [...effectivePermissions(key)].filter(
+        (permission) => permission !== "internal",
+      ),
       ...(key.expiresAt && { expiresAt: key.expiresAt }),
+    };
+  }
+
+  @Get("permissions")
+  @OpenRoute("the catalog of permissions a key can carry")
+  @UseInterceptors(new HttpCacheInterceptor(3600))
+  @ApiOperation({
+    summary: "What a data key can be allowed to read",
+    description:
+      "The permissions in their groups, what each opens, and `keyless`: what a caller without a key may read. Request a key with the permissions a project needs at https://park.fan/en/developers.",
+  })
+  permissions() {
+    return {
+      keyless: KEYLESS_PERMISSIONS,
+      groups: API_PERMISSION_GROUPS.map((group) => ({
+        id: group.id,
+        label: group.label,
+        permissions: group.permissions.map((id) => ({
+          id,
+          description: API_PERMISSION_DESCRIPTIONS[id],
+        })),
+      })),
     };
   }
 }

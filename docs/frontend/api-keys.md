@@ -1,35 +1,68 @@
 # Data API keys
 
-Which routes need a data key, how a client sends one, and how park.fan's own frontend gets
-through without one. Open it before adding a route that returns a forecast, or a forecast field
-to a route that has none. The terms behind it are on park.fan:
-<https://park.fan/en/impressum#data-use>.
+Which routes need a data key and which permission, how a client sends one, how a developer gets
+one, and how park.fan's own frontend gets through. Open it before adding a public route, or a
+field to a route that mixes data of several kinds. The terms behind it are on park.fan:
+<https://park.fan/en/impressum#data-use>; the developer portal, where keys are requested and
+their holders manage them, is <https://park.fan/en/developers>.
 
 ## The rule
 
-Every forecast the ML stack produces leaves the API only to park.fan's own frontend or to the
-holder of a data key. Live and historical data stay open without a key.
+Without a key a caller reads the live wait times and nothing else
+(`GET /v1/parks/{…}/{park}/wait-times`, `KEYLESS_PERMISSIONS` in `src/api-keys/permissions.ts`).
+Every other public route needs a data key that carries the route's permission. A key carries a
+list of permissions, granted one by one or a group at a time:
 
-| Route                                      | Without a key                                                                     | With a key                      |
-| ------------------------------------------ | --------------------------------------------------------------------------------- | ------------------------------- |
-| `…/{park}/calendar`, `/best-days`          | 401                                                                               | the full answer                 |
-| `…/{park}/predictions/yearly`, `/plan/day` | 401                                                                               | the full answer                 |
-| `/v1/trip-regions/…/calendar`, `/plan`     | 401                                                                               | the full answer                 |
-| `…/{park}/plan/optimize` (POST)            | 401                                                                               | the full answer, `no-store`     |
-| `…/{park}` (park detail)                   | the answer without `attractions[].bestVisitTimes`                                 | all of it with `?forecast=true` |
-| `…/{park}/attractions/{slug}`              | without `hourlyForecast`, `bestVisitTimes`, `predictionAccuracy`                  | all of it with `?forecast=true` |
-| `…/{park}/stats/day`                       | without `forecast`, `predicted`, `forecastError`                                  | all of it with `?forecast=true` |
-| `/v1/favorites`                            | without the attractions' `hourlyForecast`, `bestVisitTimes`, `predictionAccuracy` | all of it with `?forecast=true` |
+| Group     | Permission             | Opens                                                                                                         |
+| --------- | ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| live      | `live.waits`           | `/wait-times`; open without a key                                                                             |
+| live      | `live.schedule`        | `/schedule`; `schedule`, show times and opening hours in the park and ride detail                             |
+| live      | `live.weather`         | `/weather`, `/weather/forecast`, `/weather/nowcast`; `weather` in the park detail                             |
+| parks     | `parks.directory`      | `/v1/parks` lists, `/popular`, `/v1/discovery/**`, `/v1/search`, `/v1/sitemap/attractions`                    |
+| parks     | `parks.details`        | the park detail `…/{park}`, `/v1/favorites`                                                                   |
+| parks     | `parks.seasons`        | `…/{park}/seasons`; the season and maintenance fields of the park and ride detail                             |
+| rides     | `rides.details`        | `…/{park}/attractions`, the ride detail; heights, single rider, virtual queue, coordinates in the park detail |
+| rides     | `rides.profiles`       | `rideProfile` (manufacturer, figures, elements); `/v1/glossary/terms/**`                                      |
+| stats     | `stats.live`           | crowd level, occupancy, trend, the comparison with a typical day                                              |
+| stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, typical waits, rope drop, downtime                          |
+| stats     | `stats.platform`       | `/v1/analytics/{realtime,geo-live,ticker,best-times}`, `/v1/page-views/top`                                   |
+| stats     | `stats.accuracy`       | `/v1/ml/accuracy/system`, `/v1/trip-regions/{region}/accuracy`, `predictionAccuracy`                          |
+| forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`; a region's `/calendar`, `/best-days`, `/when`               |
+| forecasts | `forecasts.waits`      | `?forecast=true`: `bestVisitTimes`, `hourlyForecast`, the forecast in a day curve                             |
+| planner   | `planner.day`          | `/plan/day`, `POST /plan/optimize`                                                                            |
+| planner   | `planner.trip`         | a region's `/plan` and `/plan/ideas`                                                                          |
+| travel    | `travel.regions`       | `/v1/trip-regions`, `/v1/trip-regions/{region}`                                                               |
+| travel    | `travel.tickets`       | a region's `/tickets`                                                                                         |
+| travel    | `travel.school-breaks` | a region's `/school-breaks`                                                                                   |
 
-`?forecast=true` without a key is a 401, not a silent omission. The mixed routes take the flag
-rather than reacting to the key alone because Cloudflare caches by URL and ignores `X-API-Key`:
-one URL answered two ways would hand a keyed caller the stripped copy, or a keyless caller the
-full one.
+`GET /v1/api-keys/permissions` serves the catalog with a description of each, and
+`GET /v1/api-keys/verify` names the permissions of the key it checks.
 
-Not counted as forecasts: the weather forecast (Open-Meteo), `forecasts[]` on a ride
-(ThemeParks.wiki's own field), `typicalWaits` and `ropeDrop` (historical), `/v1/ml/*` (accuracy
-and model metadata). Parky's chat (`/v1/assistant/chat`) and the admin MCP call the forecast
-services directly and are guarded by their own session and token.
+- **Each route names its permission.** `@ApiPermission("…")` (`api-permission.decorator.ts`)
+  puts the guard on the route and the security entry in Swagger; `@OpenRoute("why")` marks a route
+  that serves no licensed data (health, push, trips, Parky, the site statistic's beacon, OAuth,
+  the key check and the catalog). `api-permission.coverage.spec.ts` imports every controller and
+  fails on a route that is neither behind the admin's guard nor classified, and on a second route
+  open without a key.
+- **The two mixed answers lose what the caller may not read.** The park and the ride detail need
+  `parks.details` and `rides.details`; `@PermissionFields("park" | "ride")` then drops each field
+  whose permission the caller lacks (`PERMISSION_FIELDS`), on a copy, never on the cached object.
+- **Refusals.** Without a key on any route but `/wait-times`: 401 `api-key-required`, naming the
+  permission and the portal. A key without the permission: 403 `api-key-permission-missing` with
+  `requiredPermission`, before the request counts against the allowance. A key that is unknown,
+  revoked or past its end date is refused on `/wait-times` too.
+- **Legacy keys.** A key issued before permissions has `permissions = null` and reads every
+  permission (`LEGACY_KEY_PERMISSIONS`), so no key lost a route on the day permissions arrived. The
+  admin shows it as legacy until it gets a list.
+- **`internal`.** park.fan's own key (`usage: internal`) holds every permission whatever its list
+  says, plus `internal`, which the ML monitoring routes and `/v1/parks/debug/missing-geocode`
+  need and nobody else gets. The throttle bypass key counts as the same while it still opens data
+  routes (`FORECAST_BYPASS_KEY` not `off`).
+- **Counting.** Every keyed request a route lets through counts against the key's hourly allowance
+  and in its statistics, not only forecasts as before.
+- **Caching.** A keyless answer on `/wait-times` keeps its public policy. Every keyed answer, and
+  every refusal, is private (or varies on the key with `FORECAST_SHARED_CACHE=vary`, below), so
+  Cloudflare never hands one caller's copy to another.
 
 ## Sending a key
 
@@ -165,6 +198,7 @@ If the last line ever shows a `HIT`, unset `FORECAST_SHARED_CACHE` and purge the
 
 ## Without a key
 
+A keyless caller reaches only `/wait-times` now (above). The throttle below still counts it.
 Public data reads (`/v1/parks/**`, `/v1/discovery/**` except `nearby`, `/v1/search`, the public
 `/v1/analytics/*` reads, `/v1/glossary/**`, `/v1/sitemap/**`, `/v1/page-views/top`, `/v1/ml/**`)
 from a caller without an active data key are limited to `THROTTLE_ANON_LIMIT` per minute
@@ -179,8 +213,8 @@ key counts as none. `isAnonymousDataRequest` and `CfThrottlerGuard.handleRequest
 `/v1/admin/api-keys` (owner only, audited as `api-key.create`, `api-key.update`,
 `api-key.revoke`, `api-key.rotate`, `api-key.previous.revoke` and `api-key.delete`): `GET` lists
 every key, active first, with `requestsThisHour`;
-`POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt? }` returns `{ key, item }` with the key in
-clear exactly once; `PATCH /:id { requestsPerHour?, allowedParkIds?, expiresAt? }` changes any of them from the next request on
+`POST { name, contact?, usage?, note?, requestsPerHour?, allowedParkIds?, expiresAt?, permissions? }` returns `{ key, item }` with the key in
+clear exactly once (without `permissions` the key reads every permission, as a legacy key does); `PATCH /:id { requestsPerHour?, allowedParkIds?, expiresAt?, permissions? }` changes any of them from the next request on
 (an unknown park id is a 400); `DELETE /:id` revokes; rotation is below. The table `api_keys`
 stores the SHA-256 of the key and its first ten characters. `ApiKeyService.lookup` caches a found
 key in Redis for five minutes and an unknown one for one minute, and stores only where nothing is
@@ -233,11 +267,49 @@ The four columns are nullable and were added by `synchronize`
 ([the entities are the schema](../rules/the-entities-are-the-schema.md)); a key that was never
 rotated has them null and behaves as before.
 
-## Adding a forecast
+## Developer accounts and requests
 
-- A route whose whole answer is a forecast: `@RequiresApiKey()`.
-- A forecast field on a route that has other data: `@ForecastFields("path.to.field")` on the
-  route, with the field's path in `omitPaths` syntax (`attractions[].bestVisitTimes`). A route
-  that validates its query with a DTO under `forbidNonWhitelisted` needs `forecast` on the DTO,
-  as `FavoritesQueryDto` has.
+A developer registers on the portal and gets an account in `admin_users` with the role
+`developer`, ranked below `viewer` (`ADMIN_ROLE_RANK`). Every admin route's minimum is `viewer` or
+above, so the account reaches only the handlers that name `developer`: its own `me`, logout,
+password, sessions and second factor in `AdminAuthController`, and `DeveloperController`. It sees
+no MCP tool and cannot mint a token or approve an OAuth grant; `developer-role.spec.ts` lists
+exactly the handlers it reaches. `ADMIN_REQUIRE_TOTP` does not apply to it.
+
+- `POST /v1/developer/register { email, displayName?, password, turnstileToken? }`: creates the
+  account and signs it in, with the login's answer. Turnstile as at the login; 409
+  `account-exists` for a taken address. Audited as `developer.register`.
+- `GET /v1/developer/overview`: the caller's keys (with `requestsThisHour` and `stats`) and
+  requests.
+- `POST /v1/developer/requests`: a key request (`CreateApiKeyRequestDto`: project, website,
+  kind, platforms, languages, description, open source with repository and licence, revenue,
+  permissions, endpoints, volume, parks, server-side key, caching, the page with the backlink,
+  message, locale, terms). `tier` is `free` only for open source that earns nothing but donations
+  (`requestTier`), `paid` otherwise. At most three undecided at once. `DELETE …/requests/:id`
+  withdraws an undecided one.
+- `POST /v1/developer/keys/:id/rotate { graceHours }`, `DELETE …/keys/:id/previous`,
+  `DELETE …/keys/:id`: the admin's rotation, end of grace and revocation, on the caller's own keys
+  only (`ApiKeyService.findOwned`); another account's key id is a 404.
+
+Every request is decided by hand, by the owner, at `/v1/admin/api-key-requests`: `GET` lists
+them with the applicant, `POST /:id/approve { permissions, name?, usage?, requestsPerHour?,
+allowedParkIds?, expiresAt?, note?, message? }` issues a key bound to the applicant
+(`owner_user_id`, `request_id`) with `revealed_at` null, `POST /:id/reject { reason? }`,
+`POST /:id/reopen` and `DELETE /:id`. Audited as `api-key-request.*`. Nobody sees an approved
+key's first secret: its holder picks it up on the dashboard, which is a rotation with
+`graceHours: 0` and sets `revealed_at`. The API sends no mail; the dashboard shows the decision
+and the owner's message.
+
+## Adding a route
+
+- A public route names its permission: `@ApiPermission("parks.directory")`, or
+  `@ApiPermission("forecasts.crowd", { parkRequired: true })` where a route without a park could
+  reach any park's data and a key limited to some parks must be refused. A route that licenses no
+  data is `@OpenRoute("why")`.
+- A new permission goes into `API_PERMISSIONS`, a group, `API_PERMISSION_DESCRIPTIONS` and the
+  frontend's mirror (`lib/developers/permissions.ts` in park.fan) in the same change.
+- A field of a new kind on the park or ride detail goes into `PERMISSION_FIELDS` under its
+  permission; a forecast field stays with `@ForecastFields("path.to.field")`, whose
+  `?forecast=true` asks for `forecasts.waits`. A route that validates its query with a DTO under
+  `forbidNonWhitelisted` needs `forecast` on the DTO, as `FavoritesQueryDto` has.
 - Add the row to the table above.

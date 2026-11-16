@@ -30,6 +30,7 @@ import {
   PushSubscribeDto,
   PushUnsubscribeDto,
 } from "./dto/push.dto";
+import { OpenRoute } from "../api-keys/api-permission.decorator";
 
 /**
  * Web-push subscriptions.
@@ -45,6 +46,7 @@ import {
  * answer.
  */
 @ApiTags("push")
+@OpenRoute("park.fan's web push; the push endpoint is the identity")
 @Controller("push")
 @UseInterceptors(new NoCdnCacheInterceptor())
 export class PushController {

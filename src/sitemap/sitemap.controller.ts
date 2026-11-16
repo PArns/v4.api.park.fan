@@ -2,6 +2,7 @@ import { Controller, Get, UseInterceptors } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { SitemapService, AttractionSitemapItem } from "./sitemap.service";
 import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
+import { ApiPermission } from "../api-keys/api-permission.decorator";
 
 @ApiTags("sitemap")
 @Controller("sitemap")
@@ -16,6 +17,7 @@ export class SitemapController {
    * No analytics, no status — only url and slug.
    */
   @Get("attractions")
+  @ApiPermission("parks.directory")
   @UseInterceptors(new HttpCacheInterceptor(24 * 60 * 60)) // 24h HTTP cache
   @ApiOperation({
     summary: "Get sitemap entries for all attractions",
