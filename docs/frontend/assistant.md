@@ -14,6 +14,7 @@ park.fan's `docs/features/assistant.md`.
 | `POST /v1/assistant/chat`                           | browser           | one question, answered as server-sent events                 |
 | `POST /v1/assistant/rating`                         | browser           | 👍/👎 for one answer                                         |
 | `POST /v1/assistant/feedback`                       | browser           | feedback about the site                                      |
+| `GET /v1/parks/…/parky-tip`                         | park.fan's server | Parky's one sentence on a calendar day (see below)           |
 | `GET/PUT /v1/admin/assistant/settings`              | admin, PUT owner  | switch, share, daily token budget, key (stored, never shown) |
 | `POST /v1/admin/assistant/settings/test`            | owner             | a one-token request with the stored key                      |
 | `GET /v1/admin/assistant/stats`                     | admin             | 30 days of chats, tokens, cost, ratings, open feedback       |
@@ -1130,6 +1131,31 @@ one card an answer, never one the visitor turned down or one already offered. Th
 with the card „Im Chat“ draws and applies it through the planner, with an undo.
 A day past `scheduleCoverage.to` reads `UNKNOWN` without hours, whatever the calendar's gap-fill
 says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` summary only.
+
+## Parky's tip for a calendar day
+
+`GET /v1/parks/:continent/:country/:city/:parkSlug/parky-tip?date=YYYY-MM-DD&locale=de`, behind a
+data key like `/calendar`, answers the calendar's day dialog:
+
+```json
+{ "date": "2026-12-05", "verdict": "good", "text": "…", "promptVersion": 1 }
+```
+
+- **`verdict`** is a rule, not the model's: the day's `crowdLevel`, `very_low`/`low` → `good`,
+  `moderate` → `meh`, `high`/`very_high`/`extreme` → `bad` (`parkyVerdict`).
+- **`text`** is one sentence of at most 160 characters in Parky's voice, in `locale` (one of
+  `ASSISTANT_LOCALES`), written by `ASSISTANT_MODEL` from the calendar's entries for the day and up
+  to three days on each side (crowd level, hours in park time, holidays, school holidays, events,
+  forecast weather). A sentence with a line break, a link or Markdown, or over the cap is not
+  served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+- **204** when there is nothing to say: a closed day or one without a forecast (`unknown`), a date
+  before today or more than 90 days ahead in park time, Parky switched off, no key, the day's token
+  budget spent, a refused sentence or a failed call. A bad `date` or `locale` is a 400.
+- **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{date}:{locale}` for 12 hours, a refused
+  sentence and a closed day included (as nothing), so one model call per day and language;
+  concurrent misses share one call. The answer leaves with
+  `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, private like every
+  forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget; no chat row is stored.
 
 ## Limits and cost
 
