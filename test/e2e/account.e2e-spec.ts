@@ -19,6 +19,7 @@ describe("Visitor accounts (e2e)", () => {
   let address = 0;
 
   beforeAll(async () => {
+    process.env.ACCOUNT_REGISTRATION = "open";
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -37,6 +38,7 @@ describe("Visitor accounts (e2e)", () => {
   });
 
   afterAll(async () => {
+    delete process.env.ACCOUNT_REGISTRATION;
     await app.close();
   });
 
@@ -54,6 +56,18 @@ describe("Visitor accounts (e2e)", () => {
 
   const PARK = "e119ba74-0e0e-49f2-bf33-d4db83722b32";
   const RIDE = "0b6f5c1e-2a8d-4d7e-9a43-5d3c8f1e2b10";
+
+  it("refuses a registration while registration is closed", async () => {
+    delete process.env.ACCOUNT_REGISTRATION;
+    try {
+      const refused = await call("post", "/v1/account/register")
+        .send({ email: "early@e2e.test", password: "a-long-enough-password" })
+        .expect(403);
+      expect(refused.body.error).toBe("registration-closed");
+    } finally {
+      process.env.ACCOUNT_REGISTRATION = "open";
+    }
+  });
 
   it("registers, syncs its own state, reaches nothing else and deletes itself", async () => {
     const registered = await call("post", "/v1/account/register")

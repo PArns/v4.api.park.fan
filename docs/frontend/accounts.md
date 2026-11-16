@@ -32,6 +32,9 @@ subscription, so neither moves into the account.
   `/v1/admin/auth/change-password`, `…/sessions`, `…/sessions/:id`, `…/sessions/revoke-all` and
   `…/totp/{begin,confirm,disable}`, which name `user` as their minimum. Changing the address and a
   forgotten password need mail, which this API does not send; neither exists yet.
+- **Registration is closed by default:** `POST /v1/account/register` answers 403
+  `registration-closed` until `ACCOUNT_REGISTRATION=open` is set. Accounts that exist sign in and
+  manage themselves either way.
 - **Deletion:** `AccountService` registers with `AdminAuthService.onAccountDeletion`, so deleting an
   account, by its owner or by an owner on `/admin/users`, removes its row
   ([authentication](../admin/authentication.md#deleting-an-account)). Audited as

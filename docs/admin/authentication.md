@@ -253,6 +253,7 @@ token (`pfo_…`), never with a session. They are a third way into the guard, de
 | `TURNSTILE_SECRET_KEY`                                   | Turnstile secret, shared with the frontend                               |
 | `ADMIN_TURNSTILE_TIMEOUT_MS`                             | siteverify timeout, default 5000                                         |
 | `ADMIN_LOGIN_TURNSTILE`                                  | `false` switches the check off                                           |
+| `ACCOUNT_REGISTRATION`                                   | `open` lets visitors create accounts; closed otherwise                   |
 | `THROTTLE_BYPASS_KEYS`                                   | the frontend's key; exempts it from the throttler and Turnstile          |
 | `API_PUBLIC_URL`, `FRONTEND_URL`, `OAUTH_REDIRECT_HOSTS` | the admin MCP's OAuth server ([admin MCP](mcp.md#environment))           |
 

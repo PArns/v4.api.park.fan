@@ -167,3 +167,11 @@ export function isAdminLoginTurnstileEnforced(): boolean {
   if (!getAdminTurnstileSecret()) return false;
   return getThrottleBypassKeys().length > 0;
 }
+
+/**
+ * Whether visitors may make their own account. Closed unless `ACCOUNT_REGISTRATION=open`, so
+ * the visitor accounts can ship before anybody can sign up; existing accounts sign in either way.
+ */
+export function isAccountRegistrationOpen(): boolean {
+  return process.env.ACCOUNT_REGISTRATION === "open";
+}
