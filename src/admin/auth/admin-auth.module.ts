@@ -16,6 +16,7 @@ import { AdminLoginRateLimitService } from "./admin-login-rate-limit.service";
 import { AdminAuthGuard } from "./admin-auth.guard";
 import { AdminAuthController } from "./admin-auth.controller";
 import { AdminAuditInterceptor } from "./admin-audit.interceptor";
+import { AuthAttemptsService } from "./auth-attempts.service";
 import { SelfRegistrationService } from "./self-registration.service";
 
 /**
@@ -49,6 +50,7 @@ import { SelfRegistrationService } from "./self-registration.service";
     AdminAuthGuard,
     AdminAuditInterceptor,
     SelfRegistrationService,
+    AuthAttemptsService,
   ],
   exports: [
     AdminAuthService,
@@ -61,6 +63,7 @@ import { SelfRegistrationService } from "./self-registration.service";
     AdminAuthGuard,
     AdminAuditInterceptor,
     SelfRegistrationService,
+    AuthAttemptsService,
   ],
 })
 export class AdminAuthModule {}

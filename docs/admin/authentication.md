@@ -99,6 +99,22 @@ login would fail. Once on, nothing is waved through: a missing secret, a rejecte
 siteverify all refuse. `ADMIN_TURNSTILE_TIMEOUT_MS` (5000) caps the siteverify call;
 `ADMIN_LOGIN_TURNSTILE=false` switches it off while the secret stays set.
 
+## Counting attempts
+
+`AuthAttemptsService` counts every sign-in and every self-registration per UTC day and outcome in
+Redis (`auth:attempts:<date>`, kept 90 days), so an owner sees how many try, including at a
+registration that is closed. `GET /v1/admin/auth/attempts?days=30` (owner) answers the days with
+their counts, keyed `<kind>:<outcome>`:
+
+| Kind                                  | Outcomes                                                                                                                                 |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `login`                               | `success-staff`, `success-developer`, `success-user`, `wrong-credentials`, `totp-required`, `locked`, `rate-limited`, `turnstile-failed` |
+| `register-user`, `register-developer` | `created`, `closed`, `exists`, `turnstile-failed`, `failed`                                                                              |
+
+Only numbers: no address, account or network, because a stranger's request writes them. Our
+frontend checks Turnstile before it forwards, so a challenge it refuses never reaches the count;
+`turnstile-failed` counts direct callers.
+
 ## TOTP
 
 Implemented here (HMAC and base32, `totp.util.ts`) rather than as a dependency in the login's trust path.

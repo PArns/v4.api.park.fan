@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -44,7 +43,6 @@ import {
 import { RegisterAccountDto } from "../admin/auth/dto/auth.dto";
 import { SelfRegistrationService } from "../admin/auth/self-registration.service";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
-import { isAccountRegistrationOpen } from "../config/admin-auth.config";
 import { AccountService } from "./account.service";
 import type { Response } from "express";
 import {
@@ -107,12 +105,6 @@ export class AccountController {
   })
   @ApiResponse({ status: 409, description: "That address has an account" })
   register(@Body() body: RegisterAccountDto, @Req() request: RequestWithAdmin) {
-    if (!isAccountRegistrationOpen()) {
-      throw new ForbiddenException({
-        error: "registration-closed",
-        message: "Visitor accounts cannot be created yet",
-      });
-    }
     return this.registration.register("user", body, request);
   }
 

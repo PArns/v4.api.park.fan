@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from "@nestjs/common";
 import request from "supertest";
 import { DataSource } from "typeorm";
 import { AppModule } from "../../src/app.module";
+import { AuthAttemptsService } from "../../src/admin/auth/auth-attempts.service";
 import {
   GLOBAL_PREFIX,
   GLOBAL_PREFIX_OPTIONS,
@@ -64,6 +65,8 @@ describe("Visitor accounts (e2e)", () => {
         .send({ email: "early@e2e.test", password: "a-long-enough-password" })
         .expect(403);
       expect(refused.body.error).toBe("registration-closed");
+      const [today] = await app.get(AuthAttemptsService).lastDays(1);
+      expect(today.counts["register-user:closed"]).toBeGreaterThanOrEqual(1);
     } finally {
       process.env.ACCOUNT_REGISTRATION = "open";
     }

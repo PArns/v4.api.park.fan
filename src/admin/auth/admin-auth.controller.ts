@@ -10,6 +10,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -20,6 +21,8 @@ import { CanonicalUuidPipe } from "../../common/utils/uuid-param.util";
 import { AdminAuthService, toPublicUser } from "./admin-auth.service";
 import { AdminSessionStore } from "./admin-session.store";
 import { AdminAuditService } from "./admin-audit.service";
+import { AuthAttemptsService } from "./auth-attempts.service";
+import { isSelfServiceRole } from "./entities/admin-user.entity";
 import { AdminTurnstileService } from "./admin-turnstile.service";
 import { AdminAuthGuard, clientIp } from "./admin-auth.guard";
 import { carriesThrottleBypassKey } from "../../common/throttler/throttler.config";
@@ -81,6 +84,7 @@ export class AdminAuthController {
     private readonly sessions: AdminSessionStore,
     private readonly audit: AdminAuditService,
     private readonly turnstile: AdminTurnstileService,
+    private readonly attempts: AuthAttemptsService,
   ) {}
 
   @Post("login")
@@ -147,6 +151,7 @@ export class AdminAuthController {
         this.logger.warn(
           `Turnstile refused an admin login: ${verdict.reason ?? "no reason given"}`,
         );
+        await this.attempts.count("login", "turnstile-failed");
         throw new ForbiddenException({
           error: "turnstile-failed",
           message: "A solved Turnstile token is required to sign in.",
@@ -155,14 +160,24 @@ export class AdminAuthController {
     }
 
     const userAgent = request.headers?.["user-agent"];
-    const result = await this.auth.login({
-      email: body.email,
-      password: body.password,
-      totpCode: body.totpCode,
-      ip: clientIp(request),
-      userAgent: typeof userAgent === "string" ? userAgent : null,
-    });
+    const result = await this.auth
+      .login({
+        email: body.email,
+        password: body.password,
+        totpCode: body.totpCode,
+        ip: clientIp(request),
+        userAgent: typeof userAgent === "string" ? userAgent : null,
+      })
+      .catch(async (error: unknown) => {
+        if (error instanceof UnauthorizedException) {
+          await this.attempts.count("login", "wrong-credentials");
+        }
+        throw error;
+      });
 
+    if (result.outcome !== "ok") {
+      await this.attempts.count("login", result.outcome);
+    }
     if (result.outcome === "totp-required") {
       return { status: "totp-required" as const };
     }
@@ -179,6 +194,12 @@ export class AdminAuthController {
       };
     }
 
+    await this.attempts.count(
+      "login",
+      isSelfServiceRole(result.session.role)
+        ? `success-${result.session.role}`
+        : "success-staff",
+    );
     await this.audit.record({
       actor: principalFromSession(result.session, clientIp(request), null),
       action: "auth.login",
@@ -395,6 +416,17 @@ export class AdminAuthController {
   }
 
   // ── accounts (owner only) ─────────────────────────────────────────────────
+
+  @Get("attempts")
+  @AdminMinRole("owner")
+  @ApiOperation({
+    summary: "Sign-in and registration attempts per day",
+    description:
+      "Counts per UTC day, keyed `<kind>:<outcome>`: `login:success-staff|success-developer|success-user|wrong-credentials|totp-required|locked|rate-limited|turnstile-failed`, `register-user:…` and `register-developer:…` with `created|closed|exists|turnstile-failed|failed`. Numbers only; kept 90 days. `days` defaults to 30.",
+  })
+  async listAttempts(@Query("days") days?: string) {
+    return { days: await this.attempts.lastDays(Number(days) || 30) };
+  }
 
   @Get("users")
   @AdminMinRole("owner")
