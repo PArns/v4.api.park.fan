@@ -83,6 +83,9 @@ export const IMPORT_REQUEST_KEY = "search-console:import:requested";
 
 /** Rows a report lists at most. */
 export const MAX_REPORT_LIMIT = 200;
+
+/** Keywords the weekly report monitors unless asked for another number. */
+export const DEFAULT_KEYWORD_LIMIT = 100;
 export const DEFAULT_REPORT_LIMIT = 50;
 
 /** The series steps Search Console's daily data supports. */

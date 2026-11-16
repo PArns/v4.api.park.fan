@@ -23,6 +23,7 @@ import {
 } from "../../site-analytics/site-analytics.constants";
 import { DAY_PATTERN } from "../../site-analytics/site-analytics.query";
 import {
+  DEFAULT_KEYWORD_LIMIT,
   DEFAULT_REPORT_LIMIT,
   GSC_DEVICES,
   GSC_INTERVALS,
@@ -144,6 +145,42 @@ export class SearchConsoleQueriesQueryDto extends SearchConsoleWindowDto {
     minimum: 1,
     maximum: MAX_REPORT_LIMIT,
     default: DEFAULT_REPORT_LIMIT,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_REPORT_LIMIT)
+  limit?: number;
+}
+
+/** The query of `GET /v1/admin/search-console/keywords`. */
+export class SearchConsoleKeywordsQueryDto {
+  @ApiPropertyOptional({
+    example: "2026-11-04",
+    description:
+      "Any day of the week to report, Monday to Sunday. Default: the last complete week Search Console has.",
+  })
+  @IsOptional()
+  @Matches(DAY_PATTERN)
+  week?: string;
+
+  @ApiPropertyOptional(COUNTRY_FILTER)
+  @IsOptional()
+  @Matches(/^[a-zA-Z]{3}$/)
+  country?: string;
+
+  @ApiPropertyOptional(DEVICE_FILTER)
+  @IsOptional()
+  @IsIn(GSC_DEVICES)
+  device?: (typeof GSC_DEVICES)[number];
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: MAX_REPORT_LIMIT,
+    default: DEFAULT_KEYWORD_LIMIT,
+    description:
+      "How many keywords to monitor: those with the most impressions over both weeks.",
   })
   @IsOptional()
   @Type(() => Number)
