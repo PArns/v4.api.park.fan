@@ -2,8 +2,9 @@
 
 The single-day trip planner's optimizer runs here: park.fan's planner and Parky send the day as the
 planner holds it and get the order with the least queueing back. It used to run in the browser
-(`lib/planner/optimize.ts` and `fit.ts` in park.fan); the engine moved over unchanged, so both
-callers get one answer and no forecast leaves the API to be searched over.
+(`lib/planner/optimize.ts` and `fit.ts` in park.fan) and moved over unchanged, so both callers get
+one answer and no forecast leaves the API to be searched over. Since then it has changed here only
+(see [the schedule](#the-schedule)).
 
 ```
 POST /v1/parks/:continent/:country/:city/:parkSlug/plan/optimize
@@ -46,6 +47,26 @@ starts at `nowMinute` (snapped up to the quarter hour), or at the server's park-
 none is sent; an entry whose start the clock has passed is fixed. A past date is refused before the
 day is loaded.
 
+## The schedule
+
+What a plan is made of, and what the search weighs:
+
+- **Starts sit on a five-minute step** (`START_STEP_MIN`): a stop starts at the first step after
+  the one before it is over and walked from. The floors stay on the quarter hour (`SNAP_MIN_FINE`):
+  today's plan starts at the next quarter hour, and a ride's soft floor is snapped up to one.
+- **A stop occupies its expected queue**, the band excluded, with no minimum; the ride itself and
+  leaving the station are in the transfer (`EXIT_MIN` + `RIDE_DURATION_MIN`, then the walk).
+- **The cost is `wait + 0.5 × idle + 0.2 × walk`** (`IDLE_WEIGHT`, `WALK_WEIGHT`), after the
+  overflow tiers and before the clock. The walk is the minutes on foot between two stops that
+  happen, at park pace with the detour factor. Walking is priced so a day stops crossing the park
+  for a queue a minute shorter, and low enough that a queue five minutes shorter still beats a
+  kilometre more of walking.
+
+Until PAR-1364 every start was rounded up to the quarter hour, a queue occupied at least fifteen
+minutes and walking cost nothing. On 23 park-days (six parks, four dates, every headliner) that
+left 23.7 minutes between the end of one queue and the start of the next; it is 15.7 now, with 23 %
+less walking and the last queue left about an hour earlier.
+
 ## The modes
 
 - **`day`** re-orders the rides the day holds. Ticked-off rides, free blocks, shows, entries under
@@ -74,8 +95,8 @@ As on every public route, a field whose value is `null` is left out of the JSON
 | `add`               | slugs offered on top of the entries                                                                           |
 | `skippedHeadliners` | `headliners`: headliners this party cannot ride                                                               |
 | `movable`           | entries the optimizer may move                                                                                |
-| `before`, `after`   | `{ totalWaitMinutes, idleMinutes, endMinute, overflow, clashes }` for the day as sent and as planned          |
-| `plan`              | `optimized`: `stops[]` in plan order plus the totals and `capped`                                             |
+| `before`, `after`   | `{ totalWaitMinutes, idleMinutes, walkMinutes, endMinute, overflow, clashes }` for the day as sent and as planned |
+| `plan`              | `optimized`: `stops[]` in plan order plus the totals (`walkMinutes` among them) and `capped`                  |
 | `entries`           | the day as the answer leaves it, in start order; an added ride has `id: null` and `added: true`               |
 | `fit`               | `needs-fit` and `fit`: the assistant's answer (below)                                                         |
 
@@ -87,7 +108,10 @@ mints the ids for added rides; a caller without such a store can write `entries`
 
 `before` and `after` cover the same rides, so their difference is what a press saves; `clashes`
 counts the places where the next thing starts before the one before it is over and walked from.
-The waits are raw minutes, not rounded to five.
+The waits are raw minutes, not rounded to five. A press can save walking and no queueing: the
+search weighs both, so `after.totalWaitMinutes` may sit a few minutes above `before`'s when
+`after.walkMinutes` is well below it.
+
 
 ### `fit`
 
@@ -115,14 +139,17 @@ by default two, or one on a two-core machine) with a queue of 64 and 20 seconds 
 ts-jest and ts-node, where there is no compiled worker, it runs inline. A full queue or a job past its time answers
 **503**; a caller offers a retry.
 
-## Parity with the browser
+## Checks
 
 `src/planner/day-optimizer/optimize.vectors.spec.ts` and `fit.vectors.spec.ts` are park.fan's
-`test-planner-optimize.mjs` and `test-planner-fit.mjs`, vectors unchanged.
-`browser-parity.spec.ts` replays 66 recorded cases (three real `/plan/day` days, eighteen seeded
-synthetic ones) through the port and the request layer and expects the browser engine's orders,
-start minutes, scores and levers exactly; `__fixtures__/record-browser-parity.mjs` beside the
-fixture says how it was recorded.
+`test-planner-optimize.mjs` and `test-planner-fit.mjs`. PAR-1364 resized the fixtures whose
+arithmetic assumed the quarter-hour step, so each still pins the one rule it was written for; the
+rules themselves are unchanged. `browser-parity.spec.ts` replays 66 recorded cases (three real
+`/plan/day` days, eighteen seeded synthetic ones) through the engine and the request layer and
+expects the recorded orders, start minutes, scores and levers exactly. The inputs and the first
+answers came from the browser engine (`__fixtures__/record-browser-parity.mjs` says how); a change
+meant to move answers re-records them with `RECORD_PARITY=1 pnpm test -- browser-parity`, as
+PAR-1364 did, and the fixture's diff is the change.
 
 ## Related
 

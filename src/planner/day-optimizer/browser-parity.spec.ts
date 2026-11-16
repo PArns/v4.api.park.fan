@@ -1,6 +1,6 @@
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { gunzipSync } from "zlib";
+import { gunzipSync, gzipSync } from "zlib";
 import { noRoomForRide, requestedRideChoice } from "./add-ride-fit";
 import { gridForDay, withEarlyEntry } from "./day-grid";
 import { runDayOptimizer, type FitResultView } from "./engine";
@@ -32,13 +32,18 @@ import type {
 } from "./types";
 
 /**
- * The port against the engine it was ported from.
+ * The engine against answers recorded from it, over the cases the browser engine was ported with.
  *
- * `__fixtures__/browser-parity.json.gz` holds what park.fan's browser optimizer answered for three
- * real `/plan/day` days and eighteen seeded synthetic ones (slots, early entry, works, past
- * midnight, unreadable parks), through the call shapes its buttons, fit assistant and "add to plan"
- * button used. Every answer here has to be the same: the same orders, start minutes, scores,
- * levers and refusals. `__fixtures__/record-browser-parity.mjs` says how the fixture was made.
+ * `__fixtures__/browser-parity.json.gz` holds three real `/plan/day` days and eighteen seeded
+ * synthetic ones (slots, early entry, works, past midnight, unreadable parks), with the call shapes
+ * the planner's buttons, fit assistant and "add to plan" button use. The inputs and the first
+ * answers are what park.fan's browser optimizer produced (`__fixtures__/record-browser-parity.mjs`
+ * says how). A change to the engine that is meant to move answers re-records them from this file:
+ *
+ *     RECORD_PARITY=1 pnpm test -- browser-parity
+ *
+ * The diff of the fixture is then the change, and every other run holds it to the same orders,
+ * start minutes, scores, levers and refusals.
  */
 
 interface Choice {
@@ -59,14 +64,13 @@ interface Scenario {
   expect: Record<string, any>;
 }
 
+const FIXTURE = join(__dirname, "__fixtures__", "browser-parity.json.gz");
+
 const fixture: {
+  generatedFrom?: string;
   days: Record<string, OptimizerDay>;
   scenarios: Scenario[];
-} = JSON.parse(
-  gunzipSync(
-    readFileSync(join(__dirname, "__fixtures__", "browser-parity.json.gz")),
-  ).toString("utf8"),
-);
+} = JSON.parse(gunzipSync(readFileSync(FIXTURE)).toString("utf8"));
 
 /** The answer as it would leave in JSON, which is how the browser's was recorded. */
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
@@ -122,7 +126,75 @@ function viewAnswer(view: FitResultView | null) {
   });
 }
 
-describe("day optimizer: parity with the browser engine", () => {
+/** Every answer a scenario records, computed the way the planner asks for it. */
+function answersFor(scenario: Scenario): Record<string, any> {
+  const payload = fixture.days[scenario.dayId];
+  const { entries, clock, prefs } = scenario;
+  const day = withEarlyEntry(payload, prefs.earlyEntry);
+  const grid = gridForDay(day);
+  const got: Record<string, any> = {
+    canOptimize: canOptimize(day, grid),
+    movable: movableEntries(entries, clock, day).map((e) => e.id),
+  };
+  // Refused before any search: a walked day, or a day nothing can be ordered on.
+  if (!got.canOptimize || clock.phase === "past" || !grid) return got;
+
+  const headliners = headlinersToAdd(day, entries, prefs);
+  got.headliners = headliners.map((r) => r.attractionSlug);
+  got.skipped = headlinersSkipped(day, entries, prefs);
+  const base = { day, grid, entries, clock };
+  got.scoreCurrent = plain(scoreCurrent(base));
+  got.clashCount = clashCount(day, entries, clock);
+  got.optimizeDay = plain(optimizeDay(base));
+  if (headliners.length > 0) {
+    got.optimizeHeadliners = plain(optimizeDay({ ...base, add: headliners }));
+  }
+
+  for (const mode of ["day", "headliners"] as const) {
+    const add = mode === "headliners" ? headliners : [];
+    if (mode === "headliners" && add.length === 0) continue;
+    const input: FitInput = {
+      day,
+      grid,
+      entries,
+      wishes: fitWishes(day, entries, add, clock),
+      blocks: fitBlocks(entries),
+      clock,
+    };
+    const all = fitChoiceAll();
+    const needsFit = input.wishes.length > 0 && needsFitHelp(input, all);
+    got[`press_${mode}`] = {
+      needsFit,
+      ...(needsFit && { fit: fitAnswer(input, all) }),
+    };
+    const choice = scenario[`choice_${mode}`];
+    if (choice) got[`fit_${mode}`] = fitAnswer(input, asChoice(choice));
+  }
+
+  const requested = scenario.requested as string;
+  const conflict = noRoomForRide({
+    day: payload,
+    entries,
+    attractionSlug: requested,
+    clock,
+    earlyEntry: prefs.earlyEntry,
+  });
+  got.noRoom = conflict !== null;
+  if (conflict) {
+    got.requestedFit = fitAnswer(conflict, requestedRideChoice(requested));
+  }
+  return got;
+}
+
+if (process.env.RECORD_PARITY) {
+  for (const scenario of fixture.scenarios) {
+    scenario.expect = answersFor(scenario);
+  }
+  fixture.generatedFrom = "v4.api.park.fan src/planner/day-optimizer";
+  writeFileSync(FIXTURE, gzipSync(JSON.stringify(fixture), { level: 9 }));
+}
+
+describe("day optimizer: recorded answers", () => {
   it("covers the cases worth comparing", () => {
     const ran = fixture.scenarios.filter((s) => "optimizeDay" in s.expect);
     expect(fixture.scenarios.length).toBeGreaterThanOrEqual(60);
@@ -141,55 +213,24 @@ describe("day optimizer: parity with the browser engine", () => {
     (_name, scenario) => {
       const payload = fixture.days[scenario.dayId];
       const { entries, clock, prefs, expect: want } = scenario;
-      const day = withEarlyEntry(payload, prefs.earlyEntry);
-      const grid = gridForDay(day);
-
-      expect(canOptimize(day, grid)).toBe(want.canOptimize);
-      expect(movableEntries(entries, clock, day).map((e) => e.id)).toEqual(
-        want.movable,
-      );
+      const got = answersFor(scenario);
+      for (const key of new Set([...Object.keys(want), ...Object.keys(got)])) {
+        expect([key, got[key]]).toEqual([key, want[key]]);
+      }
 
       const asked = (mode: "day" | "headliners" | "fit", extra: object = {}) =>
         runDayOptimizer(payload, { mode, entries, prefs, ...extra }, clock);
 
       if (!("optimizeDay" in want)) {
-        // Refused before any search: a walked day, or a day nothing can be ordered on.
         expect(asked("day").status).toBe("refused");
         return;
       }
-      if (!grid) throw new Error("a day the browser planned has an axis");
 
-      const headliners = headlinersToAdd(day, entries, prefs);
-      expect(headliners.map((r) => r.attractionSlug)).toEqual(want.headliners);
-      expect(headlinersSkipped(day, entries, prefs)).toBe(want.skipped);
-
-      const base = { day, grid, entries, clock };
-      expect(plain(scoreCurrent(base))).toEqual(want.scoreCurrent);
-      expect(clashCount(day, entries, clock)).toBe(want.clashCount);
-      expect(plain(optimizeDay(base))).toEqual(want.optimizeDay);
-      if (headliners.length > 0) {
-        expect(plain(optimizeDay({ ...base, add: headliners }))).toEqual(
-          want.optimizeHeadliners,
-        );
-      }
-
+      const headliners = want.headliners as string[];
       for (const mode of ["day", "headliners"] as const) {
         const add = mode === "headliners" ? headliners : [];
         if (mode === "headliners" && add.length === 0) continue;
-        const input: FitInput = {
-          day,
-          grid,
-          entries,
-          wishes: fitWishes(day, entries, add, clock),
-          blocks: fitBlocks(entries),
-          clock,
-        };
         const press = want[`press_${mode}`];
-        const all = fitChoiceAll();
-        expect(input.wishes.length > 0 && needsFitHelp(input, all)).toBe(
-          press.needsFit,
-        );
-        if (press.needsFit) expect(fitAnswer(input, all)).toEqual(press.fit);
 
         // The same press through the request the endpoint answers.
         const answer = asked(mode);
@@ -213,32 +254,14 @@ describe("day optimizer: parity with the browser engine", () => {
 
         const choice = scenario[`choice_${mode}`];
         if (choice) {
-          expect(fitAnswer(input, asChoice(choice))).toEqual(
-            want[`fit_${mode}`],
-          );
-          const fit = asked("fit", {
-            add: add.map((r) => r.attractionSlug),
-            choice,
-            levers: true,
-          });
+          const fit = asked("fit", { add, choice, levers: true });
           expect(fit.status).toBe("fit");
           expect(viewAnswer(fit.fit)).toEqual(want[`fit_${mode}`]);
         }
       }
 
       const requested = scenario.requested as string;
-      const conflict = noRoomForRide({
-        day: payload,
-        entries,
-        attractionSlug: requested,
-        clock,
-        earlyEntry: prefs.earlyEntry,
-      });
-      expect(conflict !== null).toBe(want.noRoom);
       const opening = requestedRideChoice(requested);
-      if (conflict) {
-        expect(fitAnswer(conflict, opening)).toEqual(want.requestedFit);
-      }
       // The button's two requests: is there room, and the answer the assistant opens on.
       const probe = asked("fit", { add: [requested] });
       expect(probe.fit && probe.fit.fitted.length < probe.fit.wanted).toBe(

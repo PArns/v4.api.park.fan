@@ -29,7 +29,7 @@ All routes live under **`/v1`**. Parks are addressed by their geographic path,
 | 🎡 **Parks** | `GET /parks` · `/parks/{continent}[/{country}[/{city}]]` · `/parks/popular` | Park lists by region, most-requested parks |
 | 🏰 **One park** | `GET /parks/…/{park}` | Status, opening hours, live crowd level, weather, every attraction, show and restaurant |
 | ⏱️ **Live** | `…/{park}/wait-times` | Current queues per attraction |
-| 📅 **Calendar** | `…/{park}/calendar` 🔑 · `/best-days` 🔑 · `/schedule` · `/seasons` · `/predictions/yearly` 🔑 | Opening hours, day status, crowd forecast per day, holidays, named seasons |
+| 📅 **Calendar** | `…/{park}/calendar` 🔑 · `/best-days` 🔑 · `/schedule` · `/seasons` · `/predictions/yearly` 🔑 · `/parky-tip` 🔑 | Opening hours, day status, crowd forecast per day, holidays, named seasons, Parky's tip for a day |
 | 🗓️ **Trip planning** | `…/{park}/plan/day` 🔑 | One day, ride by ride: hourly waits with source and expected error |
 | 📊 **Statistics** | `…/{park}/stats` · `/stats/hourly` · `/stats/day` | Historical park stats, the park's hourly profile, one ride's day curve |
 | 🎢 **Attractions** | `…/{park}/attractions[/{attraction}]` | Catalog list; detail with live state, forecast, typical/busy waits, ride profile |

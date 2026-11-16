@@ -225,8 +225,8 @@ const names = (input: any, keys: any) => {
 
 const FIVE = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 50));
 
-/** The same five with an hour of queue each, where half a break is not enough. */
-const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
+/** The same five with 65 minutes of queue each, where half a break is not enough. */
+const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 65));
 
 {
   const payload = day(FIVE);
@@ -639,7 +639,7 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
 // ── Early entry: the hour before the gates is room the assistant can use (PAR-199)
 
 {
-  const rides = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 70));
+  const rides = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 85));
   const early = { hasEarlyEntry: true, earlyEntryMinutesPeak: 60 };
   const run = (context: any) => {
     const payload = day(rides, context);
@@ -650,7 +650,7 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
   const off = run(early);
   const on = run({ ...early, earlyEntry: true });
   check(
-    "EE1 five 70-minute headliners do not all fit a six-hour day",
+    "EE1 five 85-minute headliners do not all fit a six-hour day",
     off.outcome.fitted.length < 5,
     `${off.outcome.fitted.length}`,
   );
@@ -904,10 +904,12 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
 //
 // The same day twice, once with the show located 1.5 km from the rides and once
 // with the show carrying no coordinates, which is the normal case and must be
-// what it always was. Everything else is identical: five 55-minute headliners
+// what it always was. Everything else is identical: five 70-minute headliners
 // in a six-hour day, a half-hour show as the first block of the morning.
 
 {
+  /** One queue, sized so a show's walk decides whether the fifth ride fits. */
+  const QUEUE = 70;
   const SHOW_SLUG = "sh";
   const showEntry = {
     id: "s",
@@ -917,7 +919,7 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
   };
   const withShow = (lat: any) => {
     const payload = day(
-      ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 55)),
+      ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, QUEUE)),
     );
     payload.shows = [
       {
@@ -977,7 +979,8 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
   check(
     "14d the same walk holds the other way round, in front of the show",
     (() => {
-      const early = { ...showEntry, startMinute: 11 * 60 };
+      // Late enough for one queue and the walk in front of the show.
+      const early = { ...showEntry, startMinute: 11 * 60 + 15 };
       const payload = withShow(50.8135);
       const input = inputFor(
         payload,
@@ -995,7 +998,8 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
       );
       const last = before[before.length - 1];
       return (
-        last !== undefined && last.startMinute + 55 + walk <= early.startMinute
+        last !== undefined &&
+        last.startMinute + QUEUE + walk <= early.startMinute
       );
     })(),
   );
@@ -1009,10 +1013,10 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
   );
 
   // The clash count reads the same walk: fifteen minutes between the end of a
-  // 55-minute queue and the show is enough with no position and not enough with one.
+  // queue and the show is enough with no position and not enough with one.
   const ten = [
     { id: "ea", attractionSlug: "a", attractionName: "a", startMinute: 540 },
-    { ...showEntry, startMinute: 610 },
+    { ...showEntry, startMinute: 540 + QUEUE + 15 },
   ];
   check(
     "14f a show fifteen minutes after the end of a queue is a clash with the walk and none without it",
@@ -1032,13 +1036,13 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
     "14j a ride in front of a show with no position pays exit and ride, to the minute",
     clashCount(
       withShow(null),
-      beforeShow(595 + EXIT_MIN + RIDE_DURATION_MIN - 1),
+      beforeShow(540 + QUEUE + EXIT_MIN + RIDE_DURATION_MIN - 1),
     ) === 1 &&
       clashCount(
         withShow(null),
-        beforeShow(595 + EXIT_MIN + RIDE_DURATION_MIN),
+        beforeShow(540 + QUEUE + EXIT_MIN + RIDE_DURATION_MIN),
       ) === 0,
-    `${clashCount(withShow(null), beforeShow(602))} / ${clashCount(withShow(null), beforeShow(603))}`,
+    `${clashCount(withShow(null), beforeShow(540 + QUEUE + 7))} / ${clashCount(withShow(null), beforeShow(540 + QUEUE + 8))}`,
   );
   check(
     "14k the optimiser leaves the same eight minutes in front of that show",
@@ -1059,7 +1063,7 @@ const FIVE_LONG = ["a", "b", "c", "d", "e"].map((slug: any) => ride(slug, 60));
       const last = before[before.length - 1];
       return (
         last !== undefined &&
-        last.startMinute + 55 + EXIT_MIN + RIDE_DURATION_MIN <=
+        last.startMinute + QUEUE + EXIT_MIN + RIDE_DURATION_MIN <=
           early.startMinute
       );
     })(),

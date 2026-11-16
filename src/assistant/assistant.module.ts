@@ -16,6 +16,8 @@ import { AssistantMessage } from "./entities/assistant-message.entity";
 import { SiteFeedback } from "./entities/site-feedback.entity";
 import { AssistantKnowledge } from "./entities/assistant-knowledge.entity";
 import { AssistantKnowledgeService } from "./assistant-knowledge.service";
+import { ParkyTipController } from "./parky-tip.controller";
+import { ParkyTipService } from "./parky-tip.service";
 import { ASSISTANT_TOOLS } from "./tools/assistant-tools";
 import { TRIP_REGIONS } from "../trip-regions/regions";
 
@@ -36,7 +38,11 @@ import { TRIP_REGIONS } from "../trip-regions/regions";
     ]),
     RedisModule,
   ],
-  controllers: [AssistantController, AdminAssistantController],
+  controllers: [
+    AssistantController,
+    AdminAssistantController,
+    ParkyTipController,
+  ],
   providers: [
     AssistantSettingsService,
     AssistantChatService,
@@ -46,6 +52,7 @@ import { TRIP_REGIONS } from "../trip-regions/regions";
     AssistantChallengeService,
     AssistantPostsClient,
     AssistantKnowledgeService,
+    ParkyTipService,
   ],
   exports: [
     AssistantRecordsService,

@@ -775,6 +775,24 @@ function snapshotDay(
   );
 }
 
+/**
+ * What a press of plan_optimize would save, in the model's words. The optimizer weighs walking
+ * too, so a saving on foot is named beside the queueing, and only where there is one.
+ */
+function sortingSaves(
+  before: { totalWaitMinutes: number; walkMinutes: number },
+  after: { totalWaitMinutes: number; walkMinutes: number },
+): string {
+  const queueing = Math.max(
+    0,
+    Math.round(before.totalWaitMinutes - after.totalWaitMinutes),
+  );
+  const walking = Math.round(before.walkMinutes - after.walkMinutes);
+  return walking > 0
+    ? `plan_optimize would save about ${queueing} min of queueing and ${walking} min of walking`
+    : `plan_optimize would save about ${queueing} min of queueing`;
+}
+
 /** The entries by id, in the order asked; an id the plan does not hold is refused, never guessed. */
 function plannedEntries(day: PlannerDay, ids: readonly string[]) {
   return ids.map((id) => {
@@ -5945,7 +5963,7 @@ export const ASSISTANT_TOOLS = [
               }),
               ...(before.clashes > 0 && { clashes: before.clashes }),
               sortingSaves: after
-                ? `plan_optimize would save about ${Math.max(0, Math.round(before.totalWaitMinutes - after.totalWaitMinutes))} min of queueing`
+                ? sortingSaves(before, after)
                 : "the order is as good as it gets",
             }
           : {
