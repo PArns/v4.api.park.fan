@@ -9,7 +9,9 @@ subscription, so neither moves into the account.
 | Route                                     | What it does                                                                                                    |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `POST /v1/account/register`               | `{ email, displayName?, password, turnstileToken? }`; creates the account and signs it in, 409 `account-exists` |
-| `GET /v1/account`                         | the caller's `account` (email, name, role) and `data`                                                           |
+| `GET /v1/account`                         | the caller's `account` (email, name, role, `totpEnabled`, `createdAt`, `lastLoginAt`) and `data`                |
+| `PATCH /v1/account/profile`               | `{ displayName }`; renames the account and its live sessions                                                    |
+| `GET /v1/account/export`                  | everything stored about the account (account, synced state, every stored value) as a JSON download              |
 | `PUT /v1/account/data`                    | `{ favorites?, riddenRides?, temperatureUnit? }`; replaces each named field, keeps the others                   |
 | `DELETE /v1/account`                      | `{ password }`; deletes a visitor's or developer's own account with everything on it                            |
 | `GET /v1/account/storage`                 | the keys of the member's own storage, newest first, with their size                                             |
@@ -26,6 +28,10 @@ subscription, so neither moves into the account.
 - **Access:** `AdminAuthGuard` at `user`, `@AdminLegacyAccess(false)`, never cached
   (`NoCdnCacheInterceptor`). Every handler reads and writes only the caller's row. Staff accounts
   reach it too; a staff account cannot delete itself (403), an owner deletes it.
+- **Password, sessions, second factor:** the account uses the session endpoints every account has,
+  `/v1/admin/auth/change-password`, `…/sessions`, `…/sessions/:id`, `…/sessions/revoke-all` and
+  `…/totp/{begin,confirm,disable}`, which name `user` as their minimum. Changing the address and a
+  forgotten password need mail, which this API does not send; neither exists yet.
 - **Deletion:** `AccountService` registers with `AdminAuthService.onAccountDeletion`, so deleting an
   account, by its owner or by an owner on `/admin/users`, removes its row
   ([authentication](../admin/authentication.md#deleting-an-account)). Audited as

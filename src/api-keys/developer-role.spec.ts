@@ -66,10 +66,12 @@ async function adminHandlers() {
 /** What every account reaches: its own session, password, second factor and account. */
 const OWN_ACCOUNT_HANDLERS = [
   "AccountController.deleteStorage",
+  "AccountController.export",
   "AccountController.listStorage",
   "AccountController.read",
   "AccountController.readStorage",
   "AccountController.remove",
+  "AccountController.updateProfile",
   "AccountController.write",
   "AccountController.writeStorage",
   "AdminAuthController.beginTotp",

@@ -41,7 +41,7 @@ describe("Visitor accounts (e2e)", () => {
   });
 
   function call(
-    method: "get" | "post" | "put" | "delete",
+    method: "get" | "post" | "put" | "patch" | "delete",
     path: string,
     session?: string,
   ) {
@@ -184,5 +184,66 @@ describe("Visitor accounts (e2e)", () => {
       .send({ password: "a-long-enough-password" })
       .expect(200);
     expect(deleted.body.erased).toMatchObject({ accountStorage: 1 });
+  });
+
+  it("manages its own account: name, export, password, sessions", async () => {
+    const registered = await call("post", "/v1/account/register")
+      .send({ email: "manage@e2e.test", password: "a-long-enough-password" })
+      .expect(201);
+    const session = registered.body.token as string;
+
+    const renamed = await call("patch", "/v1/account/profile", session)
+      .send({ displayName: "  Coaster Fan  " })
+      .expect(200);
+    expect(renamed.body.account.displayName).toBe("Coaster Fan");
+    const me = await call("get", "/v1/account", session).expect(200);
+    expect(me.body.account).toMatchObject({
+      displayName: "Coaster Fan",
+      totpEnabled: false,
+    });
+    await call("patch", "/v1/account/profile", session)
+      .send({ displayName: "" })
+      .expect(400);
+
+    await call("put", "/v1/account/storage/notes", session)
+      .send({ value: { text: "Taron first" } })
+      .expect(200);
+    const exported = await call("get", "/v1/account/export", session).expect(
+      200,
+    );
+    expect(exported.headers["content-disposition"]).toContain("attachment");
+    expect(exported.body.account.email).toBe("manage@e2e.test");
+    expect(exported.body.storage).toEqual([
+      expect.objectContaining({ key: "notes", value: { text: "Taron first" } }),
+    ]);
+
+    await call("post", "/v1/admin/auth/change-password", session)
+      .send({
+        currentPassword: "wrong-password-here",
+        newPassword: "another-long-password",
+      })
+      .expect(401);
+    const changed = await call(
+      "post",
+      "/v1/admin/auth/change-password",
+      session,
+    )
+      .send({
+        currentPassword: "a-long-enough-password",
+        newPassword: "another-long-password",
+      })
+      .expect(200);
+    const current = (changed.body.token as string | undefined) ?? session;
+
+    const listed = await call("get", "/v1/admin/auth/sessions", current).expect(
+      200,
+    );
+    expect(
+      listed.body.sessions.some((s: { current: boolean }) => s.current),
+    ).toBe(true);
+    await call("post", "/v1/admin/auth/sessions/revoke-all", current).expect(
+      200,
+    );
+    await call("get", "/v1/account", current).expect(401);
   });
 });

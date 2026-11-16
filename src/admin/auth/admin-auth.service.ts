@@ -546,6 +546,25 @@ export class AdminAuthService implements OnModuleInit {
     }
   }
 
+  /**
+   * Renames one's own account. The live sessions carry the name too, so they
+   * are patched at once rather than at the next sign-in.
+   */
+  async updateOwnProfile(
+    id: string,
+    patch: { displayName: string },
+  ): Promise<PublicAdminUser> {
+    const displayName = patch.displayName.trim();
+    if (displayName.length === 0) {
+      throw new BadRequestException("A name cannot be empty");
+    }
+    await this.users.update({ id }, { displayName });
+    await this.sessions.patchUserSessions(id, { displayName });
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException("No such account");
+    return toPublicUser(user);
+  }
+
   async findById(id: string): Promise<AdminUser | null> {
     return this.users.findOne({ where: { id } });
   }

@@ -107,6 +107,21 @@ export class AccountService implements OnModuleInit {
     return this.read(userId);
   }
 
+  /** Every stored key with its value, oldest first, for the data export. */
+  async exportStorage(
+    userId: string,
+  ): Promise<{ key: string; value: unknown; updatedAt: string }[]> {
+    const rows = await this.storage.find({
+      where: { userId },
+      order: { updatedAt: "ASC" },
+    });
+    return rows.map((row) => ({
+      key: row.key,
+      value: row.value,
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+  }
+
   /** The account's storage keys, newest first, with their size; not the values. */
   async listStorage(
     userId: string,

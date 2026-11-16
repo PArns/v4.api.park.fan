@@ -9,6 +9,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  MinLength,
   ValidateNested,
 } from "class-validator";
 
@@ -82,4 +83,13 @@ export class PutAccountStorageDto {
   @ApiPropertyOptional({ description: "Any JSON value, at most 64 KB." })
   @IsDefined()
   value: unknown;
+}
+
+/** The body of `PATCH /v1/account/profile`. */
+export class UpdateAccountProfileDto {
+  @ApiPropertyOptional({ description: "The name the account shows." })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  displayName: string;
 }
