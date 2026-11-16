@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -19,17 +18,12 @@ import {
 } from "../admin/auth/admin-auth.decorators";
 import { AdminAuditService } from "../admin/auth/admin-audit.service";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import { isCanonicalUuid } from "../common/utils/uuid-param.util";
+import { CanonicalUuidPipe } from "../common/utils/uuid-param.util";
 import { ApiKeyRequestService } from "./api-key-request.service";
 import {
   ApproveApiKeyRequestDto,
   RejectApiKeyRequestDto,
 } from "./dto/api-key-request.dto";
-
-function requestId(id: string): string {
-  if (!isCanonicalUuid(id)) throw new BadRequestException("id must be a uuid");
-  return id;
-}
 
 /**
  * The key requests developers file on their dashboard, for the admin's API
@@ -67,11 +61,11 @@ export class AdminApiKeyRequestsController {
   })
   async approve(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: ApproveApiKeyRequestDto,
   ) {
     const { request, key } = await this.requests.approve(
-      requestId(id),
+      id,
       {
         name: body.name,
         permissions: body.permissions,
@@ -112,14 +106,10 @@ export class AdminApiKeyRequestsController {
   })
   async reject(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: RejectApiKeyRequestDto,
   ) {
-    const request = await this.requests.reject(
-      requestId(id),
-      body.reason,
-      admin.email,
-    );
+    const request = await this.requests.reject(id, body.reason, admin.email);
     await this.audit.record({
       actor: admin,
       action: "api-key-request.reject",
@@ -134,8 +124,11 @@ export class AdminApiKeyRequestsController {
   @Post(":id/reopen")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Put a rejected request back into the queue" })
-  async reopen(@CurrentAdmin() admin: AdminPrincipal, @Param("id") id: string) {
-    const request = await this.requests.reopen(requestId(id));
+  async reopen(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id", CanonicalUuidPipe) id: string,
+  ) {
+    const request = await this.requests.reopen(id);
     await this.audit.record({
       actor: admin,
       action: "api-key-request.reopen",
@@ -154,9 +147,9 @@ export class AdminApiKeyRequestsController {
   })
   async remove(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
-    const request = await this.requests.remove(requestId(id));
+    const request = await this.requests.remove(id);
     await this.audit.record({
       actor: admin,
       action: "api-key-request.delete",

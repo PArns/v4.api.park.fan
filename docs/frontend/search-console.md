@@ -368,9 +368,37 @@ Search Console's URL Inspection for the page and the API records the click.
   `requestsLast24h` counts the last 24 hours against `dailyLimit` (10, about what Google accepts a
   day per property); the admin warns past it and still records.
 
+## Keyword report
+
+`GET /v1/admin/search-console/keywords` (any role, like the other reports) is a weekly rank report
+built from the stored query rows, so it needs neither a SERP API nor a hand-kept keyword list.
+
+- **Which week:** the last complete week, Monday to Sunday in Search Console's Pacific days, against
+  the week before. `week` picks an earlier one by any day in it.
+- **Which keywords:** the `limit` queries (100) with the most impressions over both weeks, so a
+  keyword lost this week still shows.
+- **Per keyword:**
+  - each week's clicks, impressions and position (impression-weighted over pages, countries and
+    devices);
+  - `change` in places, positive is up;
+  - `trend`: `up` or `down` from one place on, otherwise `same`, plus `new` and `lost`;
+  - the page with the most impressions.
+- **`summary`:**
+  - **visibility:** the clicks the keywords would get by a common click-through curve (28 % at 1, 2 %
+    at 10, 1 % on page two), as a share of what they would get at position 1, each keyword weighted
+    by its impressions over both weeks so the weeks compare;
+  - the top 3 and top 10 counts;
+  - risers and fallers with the places they moved;
+  - new and lost keywords.
+- **`movers`:** the ten biggest moves each way.
+- **Filters:** `country` and `device`.
+
+The arithmetic is in `search-console-keywords.ts`. Competitors' positions would need a SERP API and
+are not included.
+
 ## MCP tools
 
-`gsc_status`, `gsc_queries`, `gsc_pages`, `gsc_series` (read-only, any role; all but the status take
+`gsc_status`, `gsc_queries`, `gsc_pages`, `gsc_series`, `gsc_keywords` (read-only, any role; all but the status take
 `type`) and `gsc_inspect_url`, one file each in
 `src/mcp/tools/`, [listed with the others](../admin/mcp.md#tools). They wrap `SearchConsoleService`,
 and everything Google or a searcher wrote (queries, paths, Google's error message) comes back under

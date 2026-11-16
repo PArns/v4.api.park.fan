@@ -45,6 +45,7 @@ import { seoTrendsTool } from "./seo-trends.tool";
 import { seoNotFoundTool } from "./seo-not-found.tool";
 import { seoUncoveredTool } from "./seo-uncovered.tool";
 import { gscStatusTool } from "./gsc-status.tool";
+import { gscKeywordsTool } from "./gsc-keywords.tool";
 import { gscQueriesTool } from "./gsc-queries.tool";
 import { gscPagesTool } from "./gsc-pages.tool";
 import { gscSeriesTool } from "./gsc-series.tool";
@@ -146,6 +147,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   seoUncoveredTool,
   gscStatusTool,
   gscQueriesTool,
+  gscKeywordsTool,
   gscPagesTool,
   gscSeriesTool,
   gscInspectUrlTool,

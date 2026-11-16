@@ -31,6 +31,7 @@ import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.inter
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getSearchConsoleSetup } from "../config/search-console.config";
 import {
+  SearchConsoleKeywordsQueryDto,
   SearchConsoleReindexRequestDto,
   SearchConsolePagesDto,
   SearchConsolePagesQueryDto,
@@ -157,6 +158,23 @@ export class AdminSearchConsoleController {
     @Query() query: SearchConsolePagesQueryDto,
   ): Promise<SearchConsolePagesDto> {
     return this.reports.pages(query);
+  }
+
+  @Get("keywords")
+  @ApiOperation({
+    summary: "The weekly keyword report",
+    description:
+      "The last complete week (Monday to Sunday) against the week before, for the `limit` " +
+      "queries with the most impressions over both weeks: each with its position, clicks and " +
+      "impressions in both weeks, the places it moved (`change`, positive is up), its `trend` " +
+      "(up, down, same, new, lost) and the page that ranks. `summary` has the visibility (the " +
+      "share of the clicks the keywords would get at position 1, weighted by impressions), the " +
+      "top 3 and top 10 counts, risers and fallers with the places moved, new and lost; " +
+      "`movers` the ten biggest moves each way. `week` picks an earlier week by any day in it; " +
+      "`country` and `device` narrow it.",
+  })
+  keywords(@Query() query: SearchConsoleKeywordsQueryDto) {
+    return this.reports.keywords(query);
   }
 
   @Get("series")

@@ -26,7 +26,7 @@ import {
 } from "../admin/auth/admin-auth.decorators";
 import { AdminAuditService } from "../admin/auth/admin-audit.service";
 import type { AdminPrincipal } from "../admin/auth/admin-principal";
-import { isCanonicalUuid } from "../common/utils/uuid-param.util";
+import { CanonicalUuidPipe } from "../common/utils/uuid-param.util";
 import { stripInvisibleCharacters } from "../common/utils/visible-text.util";
 import { ApiKeyService } from "./api-key.service";
 import {
@@ -124,11 +124,9 @@ export class AdminApiKeysController {
   @ApiResponse({ status: 404, description: "No such active key" })
   async update(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: UpdateApiKeyDto,
   ) {
-    if (!isCanonicalUuid(id))
-      throw new BadRequestException("id must be a uuid");
     const changed = await this.apiKeys.update(id, {
       requestsPerHour: body.requestsPerHour,
       allowedParkIds: body.allowedParkIds,
@@ -163,11 +161,9 @@ export class AdminApiKeysController {
   })
   async rotate(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
     @Body() body: RotateApiKeyDto,
   ) {
-    if (!isCanonicalUuid(id))
-      throw new BadRequestException("id must be a uuid");
     const rotated = await this.apiKeys.rotate(id, body.graceHours);
     if (!rotated) throw new NotFoundException("No such key");
     await this.audit.record({
@@ -199,10 +195,8 @@ export class AdminApiKeysController {
   })
   async revokePrevious(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
-    if (!isCanonicalUuid(id))
-      throw new BadRequestException("id must be a uuid");
     const ended = await this.apiKeys.revokePrevious(id);
     if (!ended) {
       throw new NotFoundException(
@@ -231,10 +225,8 @@ export class AdminApiKeysController {
   @ApiResponse({ status: 409, description: "The key is not revoked" })
   async remove(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
-    if (!isCanonicalUuid(id))
-      throw new BadRequestException("id must be a uuid");
     const deleted = await this.apiKeys.deleteRevoked(id);
     if (!deleted) throw new NotFoundException("No such key");
     await this.audit.record({
@@ -258,10 +250,8 @@ export class AdminApiKeysController {
   @ApiResponse({ status: 404, description: "No such active key" })
   async revoke(
     @CurrentAdmin() admin: AdminPrincipal,
-    @Param("id") id: string,
+    @Param("id", CanonicalUuidPipe) id: string,
   ): Promise<void> {
-    if (!isCanonicalUuid(id))
-      throw new BadRequestException("id must be a uuid");
     const revoked = await this.apiKeys.revoke(id);
     if (!revoked) throw new NotFoundException("No such active key");
     await this.audit.record({

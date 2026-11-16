@@ -20,6 +20,7 @@ import {
 import { getSearchConsoleSetup } from "../config/search-console.config";
 import {
   BATCH_FORMAT,
+  DEFAULT_KEYWORD_LIMIT,
   DEFAULT_REPORT_LIMIT,
   DEFAULT_SEARCH_TYPE,
   GSC_SEARCH_TYPES,
@@ -32,6 +33,15 @@ import {
 import { currentBatches, lastDataDay } from "./search-console-batches";
 import { anchorRollingWindow } from "./search-console-window";
 import { pagePath } from "./search-console-url.util";
+import {
+  keywordMove,
+  keywordMovers,
+  keywordSummary,
+  keywordWeeks,
+  type KeywordRow,
+  type KeywordSummary,
+  type KeywordWeek,
+} from "./search-console-keywords";
 import type {
   SearchConsolePagesDto,
   SearchConsoleQueriesDto,
@@ -152,6 +162,38 @@ export function assertAnswerable(
 type Row = Record<string, Count | string>;
 
 /** The window of a report once it knows which days have data. */
+/** What the keyword report is asked: a week, a country and device, how many keywords. */
+export interface KeywordReportQuery {
+  week?: string | null;
+  country?: string | null;
+  device?: string | null;
+  limit?: number | null;
+}
+
+type Weeks = ReturnType<typeof keywordWeeks>;
+
+/** The weekly keyword report, see `SearchConsoleService.keywords`. */
+export interface KeywordReport {
+  current: Weeks["current"] | null;
+  previous: Weeks["previous"] | null;
+  /** Whether Search Console has every day of the week; false only for a week that has not ended. */
+  complete: boolean;
+  summary: KeywordSummary;
+  movers: { risers: KeywordRow[]; fallers: KeywordRow[] };
+  items: KeywordRow[];
+}
+
+function emptyKeywordReport(weeks: Weeks | null): KeywordReport {
+  return {
+    current: weeks?.current ?? null,
+    previous: weeks?.previous ?? null,
+    complete: false,
+    summary: keywordSummary([]),
+    movers: { risers: [], fallers: [] },
+    items: [],
+  };
+}
+
 interface Resolved {
   window: SiteAnalyticsWindow;
   from: string;
@@ -380,6 +422,94 @@ export class SearchConsoleService {
         };
       }),
     };
+  }
+
+  /**
+   * The weekly keyword report: the queries with the most impressions over the last complete
+   * week and the one before, each with both weeks' position, its move and the page that ranks,
+   * and a summary (visibility, top 3 and top 10, risers and fallers). The keywords are chosen by
+   * the data, not kept by hand.
+   */
+  async keywords(
+    query: KeywordReportQuery,
+    now = new Date(),
+  ): Promise<KeywordReport> {
+    const last = await lastDataDay(this.db, BATCH_FORMAT, DEFAULT_SEARCH_TYPE);
+    if (!last) return emptyKeywordReport(null);
+    const weeks = keywordWeeks(last, query.week);
+    const resolved = await this.resolve(
+      { from: weeks.current.from, to: weeks.current.to },
+      now,
+    );
+    if (!resolved.dataTo) return emptyKeywordReport(weeks);
+    const filters = this.filters(query);
+    const params = new SqlParams();
+    const where = this.rowsWhere(params, resolved, "query", filters);
+    const cur = `r.day >= ${params.add(weeks.current.from)}::date AND r.day <= ${params.add(weeks.current.to)}::date`;
+    const prev = `r.day >= ${params.add(weeks.previous.from)}::date AND r.day <= ${params.add(weeks.previous.to)}::date`;
+    const rows: Row[] = await this.db.query(
+      `SELECT * FROM (
+         SELECT r.query AS item_key, ${sumsSelect("c", cur)}, ${sumsSelect("p", prev)}
+           FROM search_console_rows r
+          WHERE ${where}
+          GROUP BY r.query
+       ) t
+       WHERE t.c_impressions + t.p_impressions > 0
+       ORDER BY t.c_impressions + t.p_impressions DESC, t.item_key ASC
+       LIMIT ${params.add(query.limit ?? DEFAULT_KEYWORD_LIMIT)}`,
+      params.values,
+    );
+    const keys = rows.map((row) => String(row.item_key));
+    const pages = await this.keywordPages(resolved, filters, keys);
+    const items = rows.map((row): KeywordRow => {
+      const week = (prefix: string): KeywordWeek => {
+        const sums = sumsOf(row, prefix);
+        return {
+          clicks: sums.clicks,
+          impressions: sums.impressions,
+          position: positionOf(sums),
+        };
+      };
+      const current = week("c");
+      const previous = week("p");
+      const key = String(row.item_key);
+      return {
+        query: key,
+        page: pages.get(key) ?? null,
+        current,
+        previous,
+        ...keywordMove(current, previous),
+      };
+    });
+    return {
+      ...weeks,
+      complete: resolved.dataTo === weeks.current.to,
+      summary: keywordSummary(items),
+      movers: keywordMovers(items),
+      items,
+    };
+  }
+
+  /** The page with the most impressions per keyword, this week first, then over both. */
+  private async keywordPages(
+    resolved: Resolved,
+    filters: Array<[string, string]>,
+    keys: string[],
+  ): Promise<Map<string, string>> {
+    if (keys.length === 0) return new Map();
+    const params = new SqlParams();
+    const where = this.rowsWhere(params, resolved, "query", filters);
+    const rows: Array<{ item_key: string; page: string }> = await this.db.query(
+      `SELECT DISTINCT ON (r.query) r.query AS item_key, r.page
+         FROM search_console_rows r
+        WHERE ${where} AND r.query = ANY(${params.add(keys)}::text[])
+        GROUP BY r.query, r.page
+        ORDER BY r.query,
+                 SUM(r.impressions) FILTER (WHERE r.day >= ${params.add(resolved.from)}::date) DESC NULLS LAST,
+                 SUM(r.impressions) DESC`,
+      params.values,
+    );
+    return new Map(rows.map((row) => [row.item_key, row.page]));
   }
 
   /**

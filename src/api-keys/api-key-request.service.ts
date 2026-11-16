@@ -16,6 +16,8 @@ import type { ApiKeyUsage } from "./api-key.constants";
 import type { CreateApiKeyRequestDto } from "./dto/api-key-request.dto";
 import { ApiKeyRequest } from "./entities/api-key-request.entity";
 import { sortPermissions } from "./permissions";
+import { accountsByIds } from "../admin/auth/accounts-by-ids.util";
+import type { ApiKeyRequestStatus } from "./entities/api-key-request.entity";
 
 /** A request as the admin list shows it: with the account that asked. */
 export interface ApiKeyRequestItem extends ApiKeyRequest {
@@ -125,108 +127,148 @@ export class ApiKeyRequestService {
       .addOrderBy("r.created_at", "DESC")
       .getMany();
     if (rows.length === 0) return [];
-    const accounts = (await this.requests.query(
-      `SELECT id, email, display_name FROM admin_users WHERE id = ANY($1::uuid[])`,
-      [[...new Set(rows.map((row) => row.userId))]],
-    )) as { id: string; email: string; display_name: string }[];
-    const byId = new Map(accounts.map((a) => [a.id, a]));
-    return rows.map((row) => {
-      const account = byId.get(row.userId);
-      return {
-        ...row,
-        applicant: account
-          ? { email: account.email, displayName: account.display_name }
-          : null,
-      };
-    });
+    const accounts = await accountsByIds(
+      this.requests,
+      rows.map((row) => row.userId),
+    );
+    return rows.map((row) => ({
+      ...row,
+      applicant: accounts.get(row.userId) ?? null,
+    }));
+  }
+
+  /**
+   * Moves a request from one state to another in a single conditional UPDATE, so two clicks at
+   * once cannot both pass the check: the second finds nothing in `from` and gets the 409 (or the
+   * 404 when there is no such request at all). Returns the row as it stands afterwards.
+   */
+  private async transition(
+    where: { id: string; userId?: string },
+    from: ApiKeyRequestStatus,
+    changes: Partial<ApiKeyRequest>,
+    refusal: string,
+  ): Promise<ApiKeyRequest> {
+    const result = await this.requests.update(
+      { ...where, status: from },
+      changes,
+    );
+    if (!result.affected) {
+      const exists = await this.requests.exists({ where });
+      if (!exists) throw new NotFoundException("No such request");
+      throw new ConflictException(refusal);
+    }
+    return this.requests.findOneOrFail({ where: { id: where.id } });
   }
 
   /** Withdraws a developer's own undecided request. */
-  async withdraw(id: string, userId: string): Promise<ApiKeyRequest> {
-    const row = await this.requests.findOne({ where: { id, userId } });
-    if (!row) throw new NotFoundException("No such request");
-    if (row.status !== "pending") {
-      throw new ConflictException("Only an undecided request can be withdrawn");
-    }
-    row.status = "withdrawn";
-    row.decidedAt = new Date();
-    return this.requests.save(row);
+  withdraw(id: string, userId: string): Promise<ApiKeyRequest> {
+    return this.transition(
+      { id, userId },
+      "pending",
+      { status: "withdrawn", decidedAt: new Date() },
+      "Only an undecided request can be withdrawn",
+    );
   }
 
   /**
    * Approves an undecided request: issues its key, bound to the developer's
    * account and unrevealed, so the developer picks up the first secret on
    * the dashboard. The admin names the key's permissions; the request's only
-   * suggest them.
+   * suggest them. The request is claimed before the key exists, so a second
+   * approval at the same moment cannot issue a second key; if issuing fails,
+   * the request goes back to undecided.
    */
   async approve(
     id: string,
     input: ApprovalInput,
     decidedBy: { userId: string | null; email: string },
   ): Promise<{ request: ApiKeyRequest; key: ApiKeyItem }> {
-    const row = await this.requests.findOne({ where: { id } });
-    if (!row) throw new NotFoundException("No such request");
-    if (row.status !== "pending") {
-      throw new ConflictException("Only an undecided request can be approved");
-    }
-    const account = (await this.requests.query(
-      `SELECT email FROM admin_users WHERE id = $1::uuid`,
-      [row.userId],
-    )) as { email: string }[];
-    const created = await this.apiKeys.create(
+    const row = await this.transition(
+      { id },
+      "pending",
       {
-        name: clean(input.name) ?? row.projectName,
-        contact: account[0]?.email ?? null,
-        usage: input.usage ?? "non-commercial",
-        note: clean(input.note),
-        requestsPerHour: input.requestsPerHour,
-        allowedParkIds: input.allowedParkIds,
-        expiresAt: input.expiresAt,
-        permissions: input.permissions,
-        ownerUserId: row.userId,
-        requestId: row.id,
-        revealed: false,
+        status: "approved",
+        decidedAt: new Date(),
+        decidedBy: decidedBy.email,
+        decisionNote: clean(input.message),
       },
-      decidedBy.userId,
+      "Only an undecided request can be approved",
     );
-    row.status = "approved";
-    row.decidedAt = new Date();
-    row.decidedBy = decidedBy.email;
-    row.decisionNote = clean(input.message);
-    row.keyId = created.item.id;
-    return { request: await this.requests.save(row), key: created.item };
+    let created: Awaited<ReturnType<ApiKeyService["create"]>>;
+    try {
+      const account = (await accountsByIds(this.requests, [row.userId])).get(
+        row.userId,
+      );
+      created = await this.apiKeys.create(
+        {
+          name: clean(input.name) ?? row.projectName,
+          contact: account?.email ?? null,
+          usage: input.usage ?? "non-commercial",
+          note: clean(input.note),
+          requestsPerHour: input.requestsPerHour,
+          allowedParkIds: input.allowedParkIds,
+          expiresAt: input.expiresAt,
+          permissions: input.permissions,
+          ownerUserId: row.userId,
+          requestId: row.id,
+          revealed: false,
+        },
+        decidedBy.userId,
+      );
+    } catch (error) {
+      await this.requests.update(
+        { id, status: "approved" },
+        {
+          status: "pending",
+          decidedAt: null,
+          decidedBy: null,
+          decisionNote: null,
+        },
+      );
+      throw error;
+    }
+    await this.requests.update({ id }, { keyId: created.item.id });
+    return { request: { ...row, keyId: created.item.id }, key: created.item };
   }
 
   /** Turns down an undecided request; the reason is what the developer reads. */
-  async reject(
+  reject(
     id: string,
     reason: string | undefined,
     decidedBy: string,
   ): Promise<ApiKeyRequest> {
-    const row = await this.requests.findOne({ where: { id } });
-    if (!row) throw new NotFoundException("No such request");
-    if (row.status !== "pending") {
-      throw new ConflictException("Only an undecided request can be rejected");
-    }
-    row.status = "rejected";
-    row.decidedAt = new Date();
-    row.decidedBy = decidedBy;
-    row.decisionNote = clean(reason);
-    return this.requests.save(row);
+    return this.transition(
+      { id },
+      "pending",
+      {
+        status: "rejected",
+        decidedAt: new Date(),
+        decidedBy,
+        decisionNote: clean(reason),
+      },
+      "Only an undecided request can be rejected",
+    );
   }
 
   /** Puts a rejected request back into the queue, for a decision taken by mistake. */
-  async reopen(id: string): Promise<ApiKeyRequest> {
-    const row = await this.requests.findOne({ where: { id } });
-    if (!row) throw new NotFoundException("No such request");
-    if (row.status !== "rejected") {
-      throw new ConflictException("Only a rejected request can be reopened");
-    }
-    row.status = "pending";
-    row.decidedAt = null;
-    row.decidedBy = null;
-    row.decisionNote = null;
-    return this.requests.save(row);
+  reopen(id: string): Promise<ApiKeyRequest> {
+    return this.transition(
+      { id },
+      "rejected",
+      {
+        status: "pending",
+        decidedAt: null,
+        decidedBy: null,
+        decisionNote: null,
+      },
+      "Only a rejected request can be reopened",
+    );
+  }
+
+  /** Deletes every request of an account, whatever its state; returns how many. */
+  async removeAllForUser(userId: string): Promise<number> {
+    const result = await this.requests.delete({ userId });
+    return result.affected ?? 0;
   }
 
   /** Deletes a request for good; a key issued for it stays. */
