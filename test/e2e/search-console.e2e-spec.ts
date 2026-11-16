@@ -541,6 +541,46 @@ describe("Search Console (e2e)", () => {
     expect(total).toBe(16 + 16 + 32 + 48);
   });
 
+  it("reports the last complete week's keywords against the week before", async () => {
+    seedGoogle();
+    await importService.run("cron");
+    const viewer = await account("gsc-keywords@example.invalid", "viewer");
+
+    // Which days fall into the last complete week depends on today's weekday, so
+    // this pins the shape and the SQL, and the order by impressions over both weeks.
+    const report = await get(
+      "/v1/admin/search-console/keywords",
+      viewer.session,
+    ).expect(200);
+    const { current, previous, items, summary } = report.body;
+    expect(new Date(`${current.to}T00:00:00Z`).getUTCDay()).toBe(0);
+    expect(current.to <= d(2)).toBe(true);
+    expect(addIsoDays(current.from, 6)).toBe(current.to);
+    expect(addIsoDays(previous.to, 7)).toBe(current.to);
+    expect(summary.keywords).toBe(items.length);
+    const weight = (item: {
+      current: { impressions: number };
+      previous: { impressions: number };
+    }) => item.current.impressions + item.previous.impressions;
+    for (const [index, item] of items.entries()) {
+      expect(["up", "down", "same", "new", "lost"]).toContain(item.trend);
+      expect(typeof item.page).toBe("string");
+      expect(weight(item)).toBeGreaterThan(0);
+      if (index > 0)
+        expect(weight(items[index - 1])).toBeGreaterThanOrEqual(weight(item));
+    }
+
+    // Filters narrow it; a bad one is refused.
+    await get(
+      "/v1/admin/search-console/keywords?country=deu&device=mobile&limit=5",
+      viewer.session,
+    ).expect(200);
+    await get(
+      "/v1/admin/search-console/keywords?device=toaster",
+      viewer.session,
+    ).expect(400);
+  });
+
   it("answers a country or device filter from the complete country and device rows, and marks the page list", async () => {
     seedGoogle();
     await importService.run("cron");
@@ -1049,6 +1089,7 @@ describe("Search Console (e2e)", () => {
         "gsc_queries",
         "gsc_pages",
         "gsc_series",
+        "gsc_keywords",
         "gsc_inspect_url",
       ]),
     );
