@@ -230,6 +230,12 @@ export class ApiKeyRequestService {
   }
 
   /** Deletes a request for good; a key issued for it stays. */
+  /** Deletes every request of an account, whatever its state; returns how many. */
+  async removeAllForUser(userId: string): Promise<number> {
+    const result = await this.requests.delete({ userId });
+    return result.affected ?? 0;
+  }
+
   async remove(id: string): Promise<ApiKeyRequest> {
     const row = await this.requests.findOne({ where: { id } });
     if (!row) throw new NotFoundException("No such request");

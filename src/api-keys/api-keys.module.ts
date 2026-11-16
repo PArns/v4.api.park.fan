@@ -12,6 +12,7 @@ import { ForecastAccessGuard } from "./forecast-access.guard";
 import { ForecastFieldsInterceptor } from "./forecast-fields.interceptor";
 import { PermissionFieldsInterceptor } from "./permission-fields.interceptor";
 import { ApiKeysController } from "./api-keys.controller";
+import { ApiKeyAccountDeletion } from "./account-deletion";
 
 /**
  * Data API keys: the table, the admin endpoints and the guard every public data
@@ -30,6 +31,7 @@ import { ApiKeysController } from "./api-keys.controller";
   providers: [
     ApiKeyService,
     ApiKeyRequestService,
+    ApiKeyAccountDeletion,
     ForecastAccessGuard,
     ForecastFieldsInterceptor,
     PermissionFieldsInterceptor,

@@ -169,6 +169,17 @@ first three groups of an IPv6 address and never the whole address.
 The network is deleted after 90 days. The rest of the entry stays, so that a change can still be traced
 and, where possible, undone.
 
+## Deleting an account
+
+`DELETE /v1/admin/auth/users/:id` (owner only) deletes an account for good: its sessions, its API
+tokens with their secrets, and whatever the modules that registered with
+`AdminAuthService.onAccountDeletion` hold for it, today a developer's API keys (with their
+counters) and key requests. The answer and the audit entry `user.delete` name what went. Nobody
+deletes their own account, and the last active owner cannot be deleted, for the same reason
+`PATCH` refuses to demote it; both checks lock the other owners' rows, because Postgres refuses
+`FOR UPDATE` on a count. The audit log keeps the account's history under its address.
+Deactivating (`PATCH … { isActive: false }`) stays the reversible way.
+
 ## The bootstrap account
 
 `ADMIN_BOOTSTRAP_EMAIL` + `ADMIN_BOOTSTRAP_PASSWORD` create the first owner **only when `admin_users` is

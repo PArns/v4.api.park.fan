@@ -478,6 +478,32 @@ export class AdminAuthController {
     return user;
   }
 
+  @Delete("users/:id")
+  @AdminMinRole("owner")
+  @ApiOperation({
+    summary: "Delete an account for good",
+    description:
+      "Removes the account with its sessions and tokens, and for a developer " +
+      "its API keys (with their counters) and key requests. Not one's own " +
+      "account, and not the last active owner. The audit log keeps the history.",
+  })
+  async deleteUser(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Param("id") id: string,
+  ) {
+    const { user, erased } = await this.auth.remove(id, requireAccount(admin));
+    await this.audit.record({
+      actor: admin,
+      action: "user.delete",
+      entityType: "admin_user",
+      entityId: id,
+      entityLabel: user.email,
+      before: { email: user.email, role: user.role },
+      after: erased,
+    });
+    return { user, erased };
+  }
+
   @Post("users/:id/reset-totp")
   @AdminMinRole("owner")
   @HttpCode(HttpStatus.NO_CONTENT)
