@@ -110,20 +110,21 @@ describe("CacheWarmupService › trip-region parks", () => {
     await warm(service, p);
     expect(built.slice(0, 15)).toEqual(months(-1, 13));
     expect(store.get(CacheKeys.tripForecastUntil(p.id))).toBe(forecastEnd);
-    // Every day from today on reads the same weekday a year back (PAR-1319):
-    // a year's search reaches back twelve months.
-    for (const ym of months(-12, -1)) {
+    // Every day from today on reads its reference day a year back (PAR-1319),
+    // up to three weeks before 52 weeks back (PAR-1377): a year's search
+    // reaches back thirteen months.
+    for (const ym of months(-13, -1)) {
       const snapshot = JSON.parse(
         store.get(CacheKeys.tripLastYearMonth(p.id, ym)) ?? "null",
       );
       expect(snapshot[`${ym}-01`]).toEqual({ c: "moderate", w: 40 });
     }
-    expect(built.slice(15)).toEqual(months(-12, -1));
+    expect(built.slice(15)).toEqual(months(-13, -1));
   });
 
   it("leaves a past month that is already kept alone", async () => {
     const p = park("winter-haven", "legoland-florida");
-    const kept = months(-12, -1).map((ym) =>
+    const kept = months(-13, -1).map((ym) =>
       CacheKeys.tripLastYearMonth(p.id, ym),
     );
     const { service, built } = setup(kept);

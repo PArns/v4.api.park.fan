@@ -151,6 +151,12 @@ import {
 } from "../../trip-regions/trip-calendar.util";
 import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { HolidaysService } from "../../holidays/holidays.service";
+import {
+  lastYearReferenceDay,
+  lastYearSeasonsFrom,
+  loadLastYearDayFacts,
+} from "../../trip-regions/last-year-reference";
 import { TripWhenService } from "../../trip-regions/trip-when.service";
 import { normalizeWhenQuery } from "../../trip-regions/trip-when.assembly";
 import {
@@ -1212,6 +1218,32 @@ async function dayCard(
       }),
     },
   );
+}
+
+/**
+ * The day a year back `get_park_history` compares `day` with: the park's
+ * reference day (`lastYearReferenceDay`), the same holiday or the nearest day
+ * of the same weekday in the same holiday situation. A park without a country
+ * or readable holidays gets 52 weeks back.
+ */
+async function comparableDayLastYear(
+  ctx: AssistantToolContext,
+  park: Park,
+  day: string,
+  today: string,
+): Promise<string> {
+  const facts = await loadLastYearDayFacts(
+    ctx.get(HolidaysService),
+    park,
+    day,
+    day,
+  ).catch(() => null);
+  if (!facts) return lastYearDays(day).sameWeekday;
+  const seasons = await ctx
+    .get(ParkSeasonService)
+    .forParkInRange(park.id, lastYearSeasonsFrom(day), day)
+    .catch(() => []);
+  return lastYearReferenceDay(day, facts, { before: today, seasons });
 }
 
 /** One past day for `get_park_history` as the calendar serves it, or null without one. */
@@ -2361,9 +2393,11 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "How a park's day went one year earlier, as park.fan's calendar recorded it: the same " +
-      "date last year and the nearest day of the same weekday (weekday matters more), each " +
-      "with its hours, crowd level (unknown when nothing was measured), the headliners' " +
-      "recorded peak wait, holidays and events; null for a day park.fan has nothing on. For " +
+      "date last year and the comparable day (comparableDayLastYear, which matters more: the " +
+      "same holiday last year, else the nearest day of the same weekday in the same holiday " +
+      "or school-break situation), each with its hours, crowd level (unknown when nothing " +
+      "was measured), the headliners' recorded peak wait, holidays and events; null for a " +
+      "day park.fan has nothing on. For " +
       '"how busy was it on this date last year". For "last Halloween" give this year\'s ' +
       'Halloween as date. With on instead, that one past day itself ("last Saturday", ' +
       '"on 3 August"), up to a year back. Never the days ahead.',
@@ -2403,29 +2437,42 @@ export const ASSISTANT_TOOLS = [
         };
       }
       const day = date ?? today;
-      const { sameDate, sameWeekday } = lastYearDays(day);
+      const { sameDate } = lastYearDays(day);
       if (sameDate >= today) {
         throw new McpToolError("That day a year back has not happened yet");
       }
-      const past = [sameDate, sameWeekday].filter((d) => d < today).sort();
-      const [from, to] = [past[0], past[past.length - 1]];
-      // The calendar's own history path: a handful of past days, each cached for a day.
-      const { fromDate, toDate } = parseDateRange(from, to, {
-        timezone: found.timezone,
-      });
-      const calendar = await ctx
-        .get(CalendarService)
-        .buildCalendarResponse(found, fromDate, toDate, "none");
+      const comparable = await comparableDayLastYear(ctx, found, day, today);
+      const past = [...new Set([sameDate, comparable])]
+        .filter((d) => d < today)
+        .sort();
+      // The calendar's own history path, each past day cached for a day. A
+      // moved holiday can sit weeks from the date: then each is read alone.
+      const spans =
+        isoDaysBetween(past[0], past[past.length - 1]) > 7
+          ? past.map((d) => [d, d])
+          : [[past[0], past[past.length - 1]]];
+      const read = await Promise.all(
+        spans.map(([from, to]) => {
+          const { fromDate, toDate } = parseDateRange(from, to, {
+            timezone: found.timezone,
+          });
+          return ctx
+            .get(CalendarService)
+            .buildCalendarResponse(found, fromDate, toDate, "none");
+        }),
+      );
       const days = new Map(
-        calendar.days.map((d) => [d.date, compactDay(d, found.timezone)]),
+        read
+          .flatMap((calendar) => calendar.days)
+          .map((d) => [d.date, compactDay(d, found.timezone)]),
       );
       return {
         park: found.name,
         askedAbout: day,
         sameDateLastYear: pastDay(days.get(sameDate)),
-        ...(sameWeekday !== sameDate &&
-          sameWeekday < today && {
-            sameWeekdayLastYear: pastDay(days.get(sameWeekday)),
+        ...(comparable !== sameDate &&
+          comparable < today && {
+            comparableDayLastYear: pastDay(days.get(comparable)),
           }),
       };
     },

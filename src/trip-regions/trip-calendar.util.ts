@@ -2,7 +2,7 @@
  * How one park's day in the region calendar is read from what the API already
  * has: the calendar day (status, crowd level, headliner forecast, weather), the
  * park's schedule rows for that date (the before-opening and evening slots), the
- * curated seasons, and the same weekday a year back.
+ * curated seasons, and the matching day a year back.
  *
  * Pure: the service gathers the inputs, these functions decide. Every rule here
  * is a rule of the contract (docs/frontend/trip-regions.md), and the specs pin
@@ -49,7 +49,7 @@ export interface TripParkDay {
    * The figure every trip surface ranks and shows, on the measured scale
    * (`basis` says which): within the TFT horizon (`SERVING_TFT_DAYS`, 60
    * days) the forecast times its lead factor ({@link forecastLeadFactor}),
-   * past it the same weekday a year back as measured.
+   * past it the matching day a year back as measured.
    */
   headlinerWait?: number;
   basis: TripBasis;
@@ -58,7 +58,7 @@ export interface TripParkDay {
    * there is one. It differs from `headlinerWait` on every forecast day.
    */
   forecastWait?: number;
-  /** The same weekday a year back as measured, where there is one, from today on. */
+  /** The matching day a year back as measured, where there is one, from today on. */
   lastYearWait?: number;
   seasons?: string[];
   /** The curated closure season that makes the day CLOSED. */
@@ -204,7 +204,10 @@ const asDate = (value: Date | string | null): Date | null =>
   value == null ? null : typeof value === "string" ? new Date(value) : value;
 
 /** Whether a curated season runs on a date: its `dates` when listed, else the range. */
-export function seasonCovers(season: SeasonLike, date: string): boolean {
+export function seasonCovers(
+  season: Pick<SeasonLike, "startDate" | "endDate" | "dates">,
+  date: string,
+): boolean {
   if (season.dates && season.dates.length > 0) {
     return season.dates.includes(date);
   }
@@ -225,7 +228,7 @@ export function seasonsOn<T extends SeasonLike>(
 }
 
 /** A season that states something: not last year's pattern, not called off. */
-const isStatement = (season: SeasonLike): boolean =>
+export const isStatement = (season: Pick<SeasonLike, "status">): boolean =>
   season.status === "confirmed" || season.status === "announced";
 
 /**
@@ -431,13 +434,20 @@ export interface ParkDayInput {
   earlyKind: EarlyKind;
   /** Days ahead past which the forecast is the long-range model's. */
   longRangeAfterDays: number;
-  /** The same weekday a year back, from the last-year snapshot. */
+  /** The reference day a year back (`lastYearDateFor`), from the last-year snapshot. */
   lastYear?: LastYearEntry;
 }
 
-/** The day a year back that `last_year` reads for a date (lastYearDays' weekday). */
-export function lastYearDateFor(date: string): string {
-  return lastYearDays(date).sameWeekday;
+/**
+ * The day a year back that `last_year` reads for a date: the park's reference
+ * day where the caller resolved one (`lastYearReferenceDays`), else 52 weeks
+ * back.
+ */
+export function lastYearDateFor(
+  date: string,
+  references?: ReadonlyMap<string, string>,
+): string {
+  return references?.get(date) ?? lastYearDays(date).sameWeekday;
 }
 
 /** One park's day for the region calendar. */
@@ -507,7 +517,7 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
 
   // Both figures sit side by side; one of them is the day's, on the measured
   // scale. Within TFT's reach that is the forecast times its lead factor; past
-  // it, the same weekday a year back as measured, because the long-range level
+  // it, the matching day a year back as measured, because the long-range level
   // reads about 40 % low and nearly flat against it (PAR-1319); the long-range
   // forecast stands in only where nothing was measured a year back.
   const forecast =

@@ -46,12 +46,14 @@ const CALENDAR_MONTHS_AHEAD = 3;
 const REGION_CALENDAR_MONTHS_AHEAD = 13;
 /**
  * And their past months, back to this one, are kept as last-year snapshots:
- * every day of the region calendar from today on reads the same weekday a
- * year earlier, ranked on it past TFT's 60 days and shown beside the forecast
- * within them, so a year's search reads months -12 … 0. The snapshots cover
- * -12 … -1; the running month is built on read, as it never stops changing.
+ * every day of the region calendar from today on reads its reference day a
+ * year earlier (`lastYearReferenceDay`, up to three weeks before 52 weeks back
+ * and further for a moving holiday), ranked on it past TFT's 60 days and
+ * shown beside the forecast within them, so a year's search reads months
+ * -13 … 0. The snapshots cover -13 … -1; the running month is built on read,
+ * as it never stops changing.
  */
-const REGION_LAST_YEAR_MONTHS_BACK = 12;
+const REGION_LAST_YEAR_MONTHS_BACK = 13;
 
 /**
  * Cache Warmup Service
@@ -373,8 +375,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * The two things a trip region's calendar reads besides the month caches:
    * the last day this park's calendar carries a forecast (`forecastUntil`,
    * read off what the warm months actually returned, not a constant), and the
-   * last-year snapshots of the past months its days read the same weekday a
-   * year back from. A snapshot that exists is left alone: a passed month does
+   * last-year snapshots of the past months its days read their reference day
+   * a year back from. A snapshot that exists is left alone: a passed month does
    * not change, and it lives a week (`TRIP_LAST_YEAR_TTL`).
    */
   private async warmTripRegionPark(
