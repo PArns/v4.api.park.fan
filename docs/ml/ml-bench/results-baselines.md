@@ -106,6 +106,10 @@ settle it: one origin-constant pass over the existing `parts/` with a non-autumn
 On **all rides** the TFT level survives only d0–d1 in the headline window, nothing on the full
 period, and is significantly worse than climatology from d14.
 
+These gates are TFT's. A [season-level](../season-level.md) row is a measured level, not a
+forecast, and `/plan/day` scales every ride by it at every lead; no run here measured that
+([slots and H5](../../frontend/plan-day/slots-and-h5.md#on-a-day-of-a-running-park-season)).
+
 ### H5 beats the weekday median everywhere
 
 `h5` beats `wt_med` at every lead d0–d90 in all three passes (all rides −0.14 … −0.06, busy

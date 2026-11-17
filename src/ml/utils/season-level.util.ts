@@ -7,9 +7,9 @@ import {
   type HolidayLocation,
 } from "../../common/utils/holiday.utils";
 import type { RegionInfluence } from "../../common/region-influences";
-import { addIsoDays, isoDateWeekday } from "../../common/utils/date.util";
+import { addIsoDays } from "../../common/utils/date.util";
 import { median } from "../../common/utils/stats.util";
-import { getWeekendDaysForCountry } from "../../date-features/constants/weekend-rules.constant";
+import { isCountryWeekendDate } from "../../date-features/constants/weekend-rules.constant";
 import type { HolidayRow } from "../../holidays/holidays.service";
 
 /**
@@ -103,15 +103,20 @@ export interface SeasonReference {
 /** What a row the season level replaced carries after its model's own label. */
 export const SEASON_LEVEL_SUFFIX = "+season";
 
+/** Where a served daily level came from: {@link servedLevelSource}. */
+export type ServedLevelSource = "tft" | "catboost" | "season";
+
 /**
  * Which source a served daily row came from, for the readers that keep the
- * served level's error apart per source (lead snapshots, forward archive). A
+ * served level's error apart per source (lead snapshots, forward archive) and
+ * for `/plan/day`'s H5 composer, which routes each source its own way. A
  * season-level row is its own source: filed under the model it replaced, it
- * would be scored as that model.
+ * would be scored as that model, and a `modelVersion === "tft"` test misses
+ * it (`tft+season`).
  */
 export function servedLevelSource(
   modelVersion: string | null | undefined,
-): "tft" | "catboost" | "season" {
+): ServedLevelSource {
   if (modelVersion?.endsWith(SEASON_LEVEL_SUFFIX)) return "season";
   return modelVersion === "tft" ? "tft" : "catboost";
 }
@@ -179,7 +184,6 @@ export function seasonDayTypes(
   park: SeasonPark,
   schoolThrough: string | null,
 ): SeasonDayTypes {
-  const weekend = getWeekendDaysForCountry(park.countryCode);
   const withNextDays = [
     ...new Set(dates.flatMap((day) => [day, addIsoDays(day, 1)])),
   ];
@@ -194,7 +198,7 @@ export function seasonDayTypes(
   const kindOf = (day: string): "off" | "unknown" | "working" => {
     const flag = flags.get(day);
     if (
-      weekend.includes(isoDateWeekday(day)) ||
+      isCountryWeekendDate(day, park.countryCode) ||
       neighbourDaysOff.has(day) ||
       (!!flag && (flag.isHoliday || flag.isSchoolVacation || flag.isBridgeDay))
     ) {

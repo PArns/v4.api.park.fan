@@ -911,6 +911,15 @@ describe("review fixes", () => {
     expect(composed.rd).toBe(1);
   });
 
+  it("files a season-scaled H5 slot under its own source and the season level", () => {
+    const scaled = score([planCurve({ levelSource: "season", sources: "e" })]);
+    expect(sumsOf(scaled, "EU|UC3|d2|composed_h5_season|all").n).toBe(4);
+    expect(sumsOf(scaled, "EU|UC3|d2|level_season|all").n).toBe(4);
+    // The plain profile uses no level, on a season day as on any other.
+    const plain = score([planCurve({ levelSource: "season", sources: "h" })]);
+    expect(sumsOf(plain, "EU|UC3|d2|level_season|all").n).toBeUndefined();
+  });
+
   it("a flat ride-day counts for regret, not for the hit rates", () => {
     const c = (i: number, pred: number, truthValue: number) => ({
       slot: T0 + i * SLOT,

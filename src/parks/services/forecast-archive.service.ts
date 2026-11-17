@@ -13,6 +13,7 @@ import {
   ARCHIVE_ORIGIN_KINDS,
   ARCHIVE_SURFACES,
   ArchiveOriginKind,
+  ArchiveSourceCode,
   ForecastArchiveCurve,
 } from "../../ml/entities/forecast-archive-curve.entity";
 import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-day.entity";
@@ -50,6 +51,18 @@ import {
 } from "../../common/utils/statement-limits.util";
 
 const SLOT_MS = 15 * 60_000;
+
+/**
+ * A composed number's source code per composer, so the board scores each
+ * composition apart: the season-scaled H5 curve is not TFT's (`t`) and not
+ * the plain profile (`h`).
+ */
+const PLAN_COMPOSER_CODES: Record<PlanDayComposer, ArchiveSourceCode> = {
+  peak_scaled: "k",
+  h5: "h",
+  h5_tft: "t",
+  h5_season: "e",
+};
 
 /** Parks captured side by side; the shared DB budget caps the sum anyway. */
 const BATCH_SIZE = 3;
@@ -1180,7 +1193,7 @@ export class ForecastArchiveService {
       case "measured":
         return "m";
       case "composed":
-        return composer === "h5_tft" ? "t" : composer === "h5" ? "h" : "k";
+        return PLAN_COMPOSER_CODES[composer ?? "peak_scaled"];
       case "climatology":
         return "l";
       case "observed":

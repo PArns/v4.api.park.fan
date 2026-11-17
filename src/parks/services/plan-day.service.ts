@@ -33,6 +33,8 @@ import {
 } from "../../common/utils/h5-profile.util";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { H5ProfileService } from "./h5-profile.service";
+import { servedLevelSource } from "../../ml/utils/season-level.util";
+import { isCountryWeekendDate } from "../../date-features/constants/weekend-rules.constant";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import {
@@ -1199,16 +1201,17 @@ export class PlanDayService {
     // the old composer's and stays: a ride the model said nothing about for
     // this date is not composed by either, so the tier ladder below is
     // unchanged. Whether a level scales the profile is `h5LevelFor`'s routing
-    // (TFT only, busy rides only, d0–d2 only — the benchmark's horizon table);
-    // everywhere else the plain profile is served. A ride without an H5
-    // profile keeps the old composer's hours.
+    // by the served level's source: TFT on busy rides at d0–d2 (the
+    // benchmark's horizon table), the season level on every ride and lead,
+    // CatBoost never. Everywhere else the plain profile is served. A ride
+    // without an H5 profile keeps the old composer's hours.
     const h5Slots = new Map<string, Map<number, number>>();
     const composerOf = new Map<string, PlanDayComposer>();
     const h5Days = new Map<string, number>();
     // The plain profile per ride, for the shadow archive only.
     const h5Plain = new Map<string, Map<number, number>>();
     if (h5Profiles) {
-      const weekend = isWeekendDate(dateStr);
+      const weekend = isCountryWeekendDate(dateStr, park.countryCode);
       for (const attraction of plannable) {
         const level = dayLevels.get(attraction.id);
         const profileOfRide: H5RideProfile | undefined = h5Profiles.get(
@@ -1222,20 +1225,30 @@ export class PlanDayService {
           alignToSchedule: window.published,
           weekend,
         };
+        // By the served row's source, not its model: a season row is
+        // `tft+season` or `catboost+season`, and its level is the one the
+        // calendar shows for the day.
+        const routed = h5LevelFor(profileOfRide, leadDays, {
+          level: level.predictedWaitTime,
+          source: servedLevelSource(level.modelVersion),
+        });
         const { slots, levelApplied } = composeH5Day({
           ...day,
-          level: h5LevelFor(
-            profileOfRide,
-            leadDays,
-            level.modelVersion === "tft" ? level.predictedWaitTime : null,
-          ),
+          level: routed?.level ?? null,
         });
         if (slots.length === 0) continue;
         h5Slots.set(
           attraction.id,
           new Map(slots.map((s) => [s.minute, s.wait])),
         );
-        composerOf.set(attraction.id, levelApplied ? "h5_tft" : "h5");
+        composerOf.set(
+          attraction.id,
+          !levelApplied
+            ? "h5"
+            : routed?.source === "season"
+              ? "h5_season"
+              : "h5_tft",
+        );
         h5Days.set(attraction.id, profileOfRide.days);
         if (shadow) {
           h5Plain.set(
@@ -1336,14 +1349,17 @@ export class PlanDayService {
       // the ride's own opening — so the board compares like with like. The
       // old composer's hour is repeated across its four quarters, which is
       // what a visitor reading it at 15 minutes gets. Measured hours play no
-      // part: this compares composers, not the hourly model.
+      // part: this compares composers, not the hourly model. "Routed" is
+      // TFT's routing only, the `tfth5` column the `planner_h5_slots`
+      // decision is judged on: a season-scaled ride writes no routed row, so
+      // that column measures TFT's routing and nothing else.
       if (shadow) {
         const old = composed.get(attractionId);
         const plain = h5Plain.get(attractionId);
-        const routed = h5Slots.get(attractionId);
+        const tftRouted = composerOf.get(attractionId) === "h5_tft";
+        const routed = tftRouted ? h5Slots.get(attractionId) : plain;
         if (old && plain && routed) {
-          const routedCode =
-            composerOf.get(attractionId) === "h5_tft" ? "t" : "h";
+          const routedCode = tftRouted ? "t" : "h";
           const curves: Record<
             PlanDayShadowCurve["composer"],
             PlanDaySlotShadow[]
@@ -1497,7 +1513,7 @@ export class PlanDayService {
         // known", and the H5 window's day count would quietly switch it off.
         sampleDays: sampleDays.get(attractionId) ?? 0,
         // The H5 window days behind an H5 curve, in a field of its own.
-        ...(composer === "h5" || composer === "h5_tft"
+        ...(composer !== undefined && composer !== "peak_scaled"
           ? { profileDays: h5Days.get(attractionId) }
           : {}),
         ...(cell ? { expectedError: cell.mae } : {}),

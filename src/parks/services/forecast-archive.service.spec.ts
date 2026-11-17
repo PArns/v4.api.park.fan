@@ -2,6 +2,7 @@ import { ForecastArchiveService } from "./forecast-archive.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PlanDayDto, PlanDayShadowCurve } from "../dto/plan-day.dto";
 import { Park } from "../entities/park.entity";
+import { ARCHIVE_SOURCE_CODES } from "../../ml/entities/forecast-archive-curve.entity";
 import {
   CHRONOS_LAST_RUN_KEY,
   ChronosResponse,
@@ -310,6 +311,29 @@ describe("ForecastArchiveService.curvesFromPlanDay", () => {
     expect(rows[0].sources).toBe("hhhhh");
     // 10:00 CEST, resolved from the hour because no slot starts there.
     expect(rows[0].slotStart.toISOString()).toBe("2026-10-08T08:00:00.000Z");
+  });
+
+  it("codes a curve scaled by the season level apart from TFT's", () => {
+    const rows = ForecastArchiveService.curvesFromPlanDay(
+      plan("composed", [
+        {
+          attractionSlug: "taron",
+          hours: [{ hour: 11, wait: 40 }],
+          slots: [
+            { minute: 660, start: "2026-10-08T09:00:00.000Z", wait: 38 },
+            { minute: 675, start: "2026-10-08T09:15:00.000Z", wait: 42 },
+          ],
+          composer: "h5_season",
+          dayPeak: 55,
+        },
+      ] as unknown as PlanDayDto["rides"]),
+      new Map([["taron", "id-taron"]]),
+      TZ,
+      "2026-10-08",
+      9,
+    );
+    expect(rows[0].sources).toBe("ee");
+    expect(ARCHIVE_SOURCE_CODES.e).toBe("composed_h5_season");
   });
 });
 

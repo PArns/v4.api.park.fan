@@ -98,11 +98,13 @@ export class PlanDayHourDto {
  * - `peak_scaled` — the year's hourly P50 profile stretched so its maximum is
  *   the day level (`composeDayCurve`). Hourly only.
  * - `h5` — the H5 hybrid profile of the ride's last 56 days, 15-minute, plain:
- *   no TFT level was available for the day.
+ *   no level `h5LevelFor` routes was available for the day.
  * - `h5_tft` — the same profile scaled by the RATIO of the TFT day level to the
  *   ride's median daily P90 over those 56 days; the rope-drop hour unscaled.
+ * - `h5_season` — the same, scaled by the season level (PAR-1343) on a day of
+ *   a running park season.
  */
-export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft";
+export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft" | "h5_season";
 
 /** One quarter-hour of a shadow curve. Internal, never serialised. */
 export interface PlanDaySlotShadow {
@@ -217,7 +219,7 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     required: false,
-    enum: ["peak_scaled", "h5", "h5_tft"],
+    enum: ["peak_scaled", "h5", "h5_tft", "h5_season"],
     description:
       "Which composition produced this ride's COMPOSED numbers; absent when " +
       "none of its numbers were composed (all measured, or another tier). " +
@@ -364,7 +366,8 @@ export class PlanDayRideDto {
     required: false,
     example: 49,
     description:
-      "Present on an H5-composed ride (`composer` `h5` / `h5_tft`): the days " +
+      "Present on an H5-composed ride (`composer` `h5`, `h5_tft` or " +
+      "`h5_season`): the days " +
       "of the 56-day window that had readings for this ride. Diagnostic; not a " +
       "replacement for `sampleDays`.",
   })
