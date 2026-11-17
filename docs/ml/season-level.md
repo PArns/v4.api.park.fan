@@ -23,13 +23,20 @@ research of PAR-1342; this rule is what serves until then.
 |---|---|
 | Which seasons | kind `halloween`, `christmas`, `winter`, `summer_nights` or `special_event`; status `confirmed` or `announced` (`expected` is a projection, `cancelled` is not happening); today, park-local, inside its bounds |
 | Which days | the season's listed `dates` when it has them, else every day from `start_date` to `end_date` |
-| What is served | per ride, the **median of its measured daily P90** on the season's days already over: of the same day type (Saturday/Sunday or weekday) once that has 3 days, else of all its days once those are 3 |
+| What is served | per ride, the **median of its measured daily P90** on the season's days already over, of the same day type (Saturday/Sunday or weekday), once that day type has 3 days |
 | Otherwise | the model's number, unchanged |
+
+There is no level from all of a season's days together. A season's first days are mostly its
+opening weekend, so their median is a weekend's: on 2026-11-17, with Saturday, Sunday and Monday
+of Phantasialand's Wintertraum measured, that median set every day of the season to "high" with
+a 45-minute headliner peak, every Tuesday included, after the Monday had measured 25 minutes
+(PAR-1375). A day type waits for its own three days instead: in a season that starts on a
+Saturday, weekdays from the first Thursday and weekends from the second Sunday.
 
 The measured day value is TFT's target statistic (`nf-service` `fetch_daily_peak_panel`): the P90
 of the day's OPERATING STANDBY waits of at least 5 minutes, without heartbeat rows, from at least
 three readings. Today is never a reference day. The two reads are in
-`src/ml/utils/season-level.query.ts`, cached per park for six hours (`ml:season-level:v1:{parkId}`);
+`src/ml/utils/season-level.query.ts`, cached per park for six hours (`ml:season-level:v2:{parkId}`);
 a failed read costs the season level, never the response.
 
 A row the rule replaced is rounded like every served wait, carries `crowdLevel: "unknown"` (the

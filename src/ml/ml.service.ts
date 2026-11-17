@@ -1361,7 +1361,7 @@ export class MLService {
           })
         )?.timezone ??
         "UTC";
-      const cacheKey = `ml:season-level:v1:${parkId}`;
+      const cacheKey = `ml:season-level:v2:${parkId}`;
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)

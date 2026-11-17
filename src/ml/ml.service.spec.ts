@@ -1469,7 +1469,7 @@ describe("MLService", () => {
           {
             seasonId: "s1",
             attractionId: "attr-1",
-            weekend: null,
+            weekend: false,
             days: 5,
             level: 58,
           },
@@ -1481,7 +1481,7 @@ describe("MLService", () => {
           timezone: "UTC",
         });
         mockRedis.get.mockImplementation(async (key: string) =>
-          key === `ml:season-level:v1:${parkId}`
+          key === `ml:season-level:v2:${parkId}`
             ? JSON.stringify(inputs)
             : null,
         );

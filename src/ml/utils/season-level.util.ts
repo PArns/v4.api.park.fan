@@ -14,9 +14,13 @@ import { PARK_SEASON_BINDING_KINDS } from "../../parks/entities/park-season.enti
  *
  * What it is: the weekday average, restricted to the season. The reference is
  * the median of the ride's measured daily P90 (TFT's own target statistic)
- * over the season's days already observed — of the same day type (weekend or
- * weekday) when that has {@link MIN_SEASON_DAYS} days, else of all its days.
- * Fewer than that and the model's number stays.
+ * over the season's days already observed of the same day type (weekend or
+ * weekday), once that has {@link MIN_SEASON_DAYS} days. Fewer than that and
+ * the model's number stays.
+ *
+ * Never all of the season's days together: a season's first days are mostly
+ * its opening weekend, so their median is a weekend's, and it would set every
+ * weekday of the season to it.
  *
  * shortcut: a season's first days have no reference, because only the running
  * edition is read; read the previous edition of the same season once past
@@ -43,8 +47,8 @@ export interface RunningSeason {
 export interface SeasonReference {
   seasonId: string;
   attractionId: string;
-  /** true / false = that day type; null = all of the season's observed days. */
-  weekend: boolean | null;
+  /** The day type the reference was measured on: Saturday/Sunday or not. */
+  weekend: boolean;
   /** Observed days behind `level`. */
   days: number;
   level: number;
@@ -87,8 +91,8 @@ export function isWeekend(day: string): boolean {
 const referenceKey = (
   seasonId: string,
   attractionId: string,
-  weekend: boolean | null,
-) => `${seasonId}|${attractionId}|${weekend === null ? "all" : weekend}`;
+  weekend: boolean,
+) => `${seasonId}|${attractionId}|${weekend}`;
 
 /**
  * `predictions` with the season level on the rows it applies to; every other
@@ -119,10 +123,9 @@ export function applySeasonLevel<
     const day = dayOf(prediction);
     const season = seasonOn(seasons, day);
     if (!season) return prediction;
-    const reference =
-      byKey.get(
-        referenceKey(season.id, prediction.attractionId, isWeekend(day)),
-      ) ?? byKey.get(referenceKey(season.id, prediction.attractionId, null));
+    const reference = byKey.get(
+      referenceKey(season.id, prediction.attractionId, isWeekend(day)),
+    );
     if (!reference) return prediction;
     return {
       ...prediction,

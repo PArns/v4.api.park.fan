@@ -29,7 +29,7 @@ describe("season level (PAR-1343)", () => {
   });
   const dayOf = (p: { predictedTime: string }) => p.predictedTime.slice(0, 10);
   const ref = (
-    weekend: boolean | null,
+    weekend: boolean,
     level: number,
     days = 3,
     attractionId = "taron",
@@ -57,7 +57,7 @@ describe("season level (PAR-1343)", () => {
     const out = applySeasonLevel(
       [row("taron", "2026-11-28", 15), row("taron", "2026-12-01", 10)],
       [wintertraum],
-      [ref(true, 62), ref(false, 33), ref(null, 41)],
+      [ref(true, 62), ref(false, 33)],
       dayOf,
     );
     // Half-up to 5, like every served wait.
@@ -66,14 +66,30 @@ describe("season level (PAR-1343)", () => {
     expect(out[0].crowdLevel).toBe("unknown");
   });
 
-  it("falls back to all of the season's days while a day type is thin", () => {
+  it("never serves one day type what the other measured", () => {
+    // The opening weekend and a Monday: three days in all, none of them
+    // enough for its own day type.
+    const rows = [
+      row("taron", "2026-11-28", 15),
+      row("taron", "2026-12-01", 10),
+    ];
+    expect(
+      applySeasonLevel(
+        rows,
+        [wintertraum],
+        [ref(true, 55, 2), ref(false, 25, 1)],
+        dayOf,
+      ),
+    ).toEqual(rows);
+
+    // A full weekday reference leaves the Saturday to the model.
     const out = applySeasonLevel(
-      [row("taron", "2026-11-28", 15)],
+      rows,
       [wintertraum],
-      [ref(true, 62, 2), ref(null, 41)],
+      [ref(true, 55, 2), ref(false, 25)],
       dayOf,
     );
-    expect(out[0].predictedWaitTime).toBe(40);
+    expect(out.map((p) => p.predictedWaitTime)).toEqual([15, 25]);
   });
 
   it("leaves the model's number where nothing was measured yet", () => {
@@ -85,7 +101,7 @@ describe("season level (PAR-1343)", () => {
     const out = applySeasonLevel(
       rows,
       [wintertraum],
-      [ref(true, 62, 2), ref(null, 41, 2)],
+      [ref(true, 62, 2), ref(false, 41)],
       dayOf,
     );
     expect(out).toEqual(rows);
@@ -93,6 +109,6 @@ describe("season level (PAR-1343)", () => {
 
   it("returns the list untouched without a running season", () => {
     const rows = [row("taron", "2026-11-28", 15)];
-    expect(applySeasonLevel(rows, [], [ref(null, 41)], dayOf)).toBe(rows);
+    expect(applySeasonLevel(rows, [], [ref(false, 41)], dayOf)).toBe(rows);
   });
 });

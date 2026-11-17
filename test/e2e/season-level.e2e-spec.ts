@@ -131,7 +131,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
     ]);
   });
 
-  it("takes the median of the season's past days, by day type and overall", async () => {
+  it("takes the median of the season's past days by day type", async () => {
     const [{ id }] = await season(
       "winter",
       "confirmed",
@@ -155,7 +155,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
     );
 
     const weekendDays = days.filter(isWeekend).length;
-    const level = (weekend: boolean | null) =>
+    const level = (weekend: boolean) =>
       references.find((r) => r.weekend === weekend);
     expect(level(false)).toMatchObject({
       seasonId: id,
@@ -164,10 +164,10 @@ describe("season level reads the running season's measured days (e2e)", () => {
       level: 30,
     });
     expect(level(true)).toMatchObject({ days: weekendDays, level: 60 });
-    expect(level(null)).toMatchObject({ days: 9, level: 30 });
+    expect(references).toHaveLength(2);
 
     // The whole chain: next Saturday is served the season's weekend level
-    // once three weekend days are in, the overall level before that.
+    // once three weekend days are in, the model's number before that.
     let saturday = await localDay(1);
     for (let i = 2; !isWeekend(saturday); i++) saturday = await localDay(i);
     const [served] = applySeasonLevel(
@@ -183,10 +183,11 @@ describe("season level reads the running season's measured days (e2e)", () => {
       references,
       (p) => p.predictedTime.slice(0, 10),
     );
-    expect(served).toMatchObject({
-      predictedWaitTime: weekendDays >= 3 ? 60 : 30,
-      modelVersion: "tft+season",
-    });
+    expect(served).toMatchObject(
+      weekendDays >= 3
+        ? { predictedWaitTime: 60, modelVersion: "tft+season" }
+        : { predictedWaitTime: 15, modelVersion: "tft" },
+    );
   });
 
   it("counts a listed season's own days only", async () => {
@@ -205,10 +206,8 @@ describe("season level reads the running season's measured days (e2e)", () => {
 
     const { references } = await loadSeasonLevelInputs(dataSource, parkId, TZ);
 
-    expect(references.find((r) => r.weekend === null)).toMatchObject({
-      days: 2,
-      level: 80,
-    });
+    expect(references.reduce((sum, r) => sum + r.days, 0)).toBe(2);
+    expect(references.every((r) => r.level === 80)).toBe(true);
   });
 
   it("answers with nothing for a park without a running season", async () => {

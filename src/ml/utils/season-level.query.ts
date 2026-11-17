@@ -49,7 +49,7 @@ export async function loadSeasonLevelInputs(
     Array<{
       seasonId: string;
       attractionId: string;
-      weekend: boolean | null;
+      weekend: boolean;
       days: number;
       level: number;
     }>
@@ -91,12 +91,7 @@ export async function loadSeasonLevelInputs(
      SELECT season_id AS "seasonId", attraction_id AS "attractionId", weekend,
             count(*)::int AS days,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY peak)::float AS level
-       FROM measured GROUP BY 1, 2, 3
-     UNION ALL
-     SELECT season_id, attraction_id, NULL::boolean,
-            count(*)::int,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY peak)::float
-       FROM measured GROUP BY 1, 2`,
+       FROM measured GROUP BY 1, 2, 3`,
     [seasons.map((s) => s.id), parkId, timezone],
     LIMITS,
   );
