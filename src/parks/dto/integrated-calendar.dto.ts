@@ -149,6 +149,38 @@ export class WeatherSummary {
 
   @ApiProperty({
     required: false,
+    description: "The day's strongest gust, in km/h.",
+  })
+  windGustsMax?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "The highest chance of precipitation in any hour of the day, 0-100 (%). " +
+      "Absent for a climate normal and where the forecast gives none.",
+  })
+  precipitationProbability?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Hours of the day with precipitation.",
+  })
+  precipitationHours?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "The day's highest UV index.",
+  })
+  uvIndexMax?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "Hours of sunshine over the day.",
+  })
+  sunshineHours?: number;
+
+  @ApiProperty({
+    required: false,
     description: "Relative humidity (%), when available (live/today).",
   })
   humidity?: number;

@@ -595,6 +595,8 @@ export class WeatherService {
           snowfall: h.snowfall,
           weatherCode: h.weatherCode,
           windSpeed: h.windSpeed,
+          precipitationProbability: h.precipitationProbability ?? null,
+          windGusts: h.windGusts ?? null,
         }),
       );
 
@@ -709,6 +711,11 @@ export class WeatherService {
       snowfallSum: day.snowfallSum,
       weatherCode: day.weatherCode,
       windSpeedMax: day.windSpeedMax,
+      windGustsMax: day.windGustsMax ?? null,
+      precipitationProbabilityMax: day.precipitationProbabilityMax ?? null,
+      precipitationHours: day.precipitationHours ?? null,
+      uvIndexMax: day.uvIndexMax ?? null,
+      sunshineHours: day.sunshineHours ?? null,
       ...liveFields,
     }));
 

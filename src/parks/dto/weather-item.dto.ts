@@ -75,6 +75,42 @@ export class WeatherItemDto {
   })
   windSpeedMax: number | null;
 
+  @ApiProperty({
+    description: "The day's strongest gust (km/h)",
+    required: false,
+    nullable: true,
+  })
+  windGustsMax: number | null;
+
+  @ApiProperty({
+    description:
+      "The highest chance of precipitation in any hour of the day (0-100)",
+    required: false,
+    nullable: true,
+  })
+  precipitationProbabilityMax: number | null;
+
+  @ApiProperty({
+    description: "Hours of the day with precipitation",
+    required: false,
+    nullable: true,
+  })
+  precipitationHours: number | null;
+
+  @ApiProperty({
+    description: "The day's highest UV index",
+    required: false,
+    nullable: true,
+  })
+  uvIndexMax: number | null;
+
+  @ApiProperty({
+    description: "Hours of sunshine over the day",
+    required: false,
+    nullable: true,
+  })
+  sunshineHours: number | null;
+
   static fromEntity(weatherData: {
     date: Date | string;
     dataType: "historical" | "current" | "forecast";
@@ -85,6 +121,11 @@ export class WeatherItemDto {
     snowfallSum: number | null;
     weatherCode: number | null;
     windSpeedMax: number | null;
+    windGustsMax?: number | null;
+    precipitationProbabilityMax?: number | null;
+    precipitationHours?: number | null;
+    uvIndexMax?: number | null;
+    sunshineHours?: number | null;
   }): WeatherItemDto {
     const dto = new WeatherItemDto();
     // Handle both Date objects and string dates
@@ -104,6 +145,12 @@ export class WeatherItemDto {
         ? getWeatherDescription(weatherData.weatherCode)
         : null;
     dto.windSpeedMax = weatherData.windSpeedMax;
+    dto.windGustsMax = weatherData.windGustsMax ?? null;
+    dto.precipitationProbabilityMax =
+      weatherData.precipitationProbabilityMax ?? null;
+    dto.precipitationHours = weatherData.precipitationHours ?? null;
+    dto.uvIndexMax = weatherData.uvIndexMax ?? null;
+    dto.sunshineHours = weatherData.sunshineHours ?? null;
     return dto;
   }
 }

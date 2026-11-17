@@ -148,6 +148,34 @@ describe("parkyTipInput", () => {
     expect(input).not.toContain("%");
   });
 
+  it("adds the chance of rain, its hours and the gusts where the forecast has them", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-20",
+      [
+        day("2026-11-20", {
+          weather: {
+            basis: "forecast",
+            condition: "Rain showers, moderate intensity",
+            icon: 81,
+            tempMin: 7,
+            tempMax: 9.8,
+            rainChance: 47.5,
+            precipitationMm: 47.5,
+            precipitationProbability: 96,
+            precipitationHours: 14,
+            windGustsMax: 61.2,
+          },
+        } as Partial<CalendarDay>),
+      ],
+    );
+    expect(input).toContain(
+      "47.5 mm precipitation over the day, 96 % chance of rain, 14 hours with precipitation, gusts up to 61 km/h",
+    );
+  });
+
   it("says nothing about rain when no precipitation was measured", () => {
     const input = parkyTipInput(
       "Phantasialand",
@@ -170,9 +198,9 @@ describe("parkyTipInput", () => {
     expect(input).toMatch(/weather Overcast, 2-6 °C$/m);
   });
 
-  it("tells the model precipitation is millimetres, not a percentage", () => {
+  it("tells the model millimetres are an amount and only the chance is a percentage", () => {
     expect(parkyTipSystemPrompt("de")).toMatch(
-      /precipitation is how much falls over the whole day, in millimetres, never a chance of rain/,
+      /never turn millimetres into a percentage; the chance may be said as given/,
     );
   });
 

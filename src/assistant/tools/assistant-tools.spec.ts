@@ -449,6 +449,8 @@ import {
   CHAT_END_COOLDOWN_MINUTES,
 } from "./assistant-tools";
 import { PlanDayService } from "../../parks/services/plan-day.service";
+import { WeatherService } from "../../parks/weather.service";
+import { WeatherWarningsService } from "../../parks/weather-warnings.service";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import { HolidaysService } from "../../holidays/holidays.service";
@@ -3441,6 +3443,127 @@ describe("reopenSearchFrom", () => {
   });
 });
 
+describe("get_park_weather", () => {
+  beforeEach(() => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-07T08:00:00Z"));
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  const providers = (warnings: () => Promise<unknown[]>) =>
+    new Map<unknown, unknown>([
+      [ParksService, { findById: jest.fn(async () => ({ ...park })) }],
+      [
+        WeatherService,
+        {
+          getNowcast: jest.fn(async () => ({
+            currentTemperatureC: 6,
+            currentApparentTemperatureC: 2,
+            currentHumidity: 91,
+            currentlyRaining: true,
+            currentRainIntensity: "moderate",
+            rainStartsAt: null,
+            rainEndsAt: "2026-11-07T10:15:00+01:00",
+            thunderstormStartsAt: null,
+            thunderstormEndsAt: null,
+            hailStartsAt: null,
+            hailEndsAt: null,
+            stormStartsAt: "2026-11-07T13:00:00+01:00",
+            stormEndsAt: null,
+            currentWindSpeedKmh: 28,
+            currentWindGustsKmh: 52,
+            peakWindGustsKmh: 74,
+            temperatureMinC: 4,
+            temperatureMaxC: 9,
+          })),
+          getHourlyForecast: jest.fn(async () => [
+            {
+              time: "2026-11-07T06:00:00.000Z",
+              temperature: 5,
+              precipitation: 0.4,
+              weatherCode: 61,
+              windSpeed: 20,
+              precipitationProbability: 70,
+              windGusts: 45,
+            },
+            {
+              time: "2026-11-07T09:00:00.000Z",
+              temperature: 6,
+              precipitation: 1.2,
+              weatherCode: 63,
+              windSpeed: 30,
+              precipitationProbability: 90,
+              windGusts: 74,
+            },
+          ]),
+        },
+      ],
+      [WeatherWarningsService, { getActiveWarnings: jest.fn(warnings) }],
+    ]);
+
+  it("gives wind, gusts, the warnings in force and each hour's chance of rain", async () => {
+    const { json } = await run(
+      "get_park_weather",
+      { park: PARK_ID },
+      providers(async () => [
+        {
+          event: "STURMBÖEN",
+          eventEn: "storm gusts",
+          severity: "Moderate",
+          onset: "2026-11-07T12:00:00.000Z",
+          expires: "2026-11-07T20:00:00.000Z",
+          headline: "Amtliche WARNUNG vor STURMBÖEN",
+          headlineEn: "Official WARNING of STORM GUSTS",
+          instruction: null,
+          instructionEn: null,
+        },
+      ]),
+    );
+    expect(json.now).toMatchObject({
+      humidityPercent: 91,
+      rainIntensity: "moderate",
+      // Park time, as every instant Parky reads.
+      stormStartsAt: "2026-11-07 13:00",
+      windKmh: 28,
+      windGustsKmh: 52,
+      peakWindGustsKmh: 74,
+    });
+    expect(json.warnings).toEqual([
+      {
+        event: "storm gusts",
+        severity: "Moderate",
+        from: "2026-11-07 13:00",
+        until: "2026-11-07 21:00",
+        headline: "Official WARNING of STORM GUSTS",
+        instruction: null,
+      },
+    ]);
+    // The hour that has passed is left out, the next one kept.
+    expect(json.nextHours).toEqual([
+      {
+        time: "2026-11-07 10:00",
+        temperatureC: 6,
+        precipitationMm: 1.2,
+        precipitationChancePercent: 90,
+        weatherCode: 63,
+        windKmh: 30,
+        windGustsKmh: 74,
+      },
+    ]);
+  });
+
+  it("answers with the weather when the warnings cannot be read", async () => {
+    const { json } = await run(
+      "get_park_weather",
+      { park: PARK_ID },
+      providers(async () => {
+        throw new Error("warnings down");
+      }),
+    );
+    expect(json.warnings).toEqual([]);
+    expect(json.now.temperatureC).toBe(6);
+  });
+});
+
 describe("get_ride › today / get_park_day", () => {
   // The fixture is 7 November 2026, and `planDate` refuses a day more than two days back, so the
   // clock is the fixture's: a fixed date in the input stops being valid two days after it is written.
@@ -3529,6 +3652,48 @@ describe("get_ride › today / get_park_day", () => {
     });
     expect(json.reopening).toBeUndefined();
     expect(json.bestVisitTimesToday).toBeUndefined();
+  });
+
+  it("gives the day's weather with its units, never the legacy rainChance", async () => {
+    const wet = {
+      ...plan,
+      context: {
+        ...plan.context,
+        weather: {
+          basis: "forecast",
+          condition: "Drizzle, dense intensity",
+          icon: 55,
+          tempMin: -1.5,
+          tempMax: 2.6,
+          rainChance: 12.6,
+          precipitationMm: 12.6,
+          precipitationProbability: 85,
+          precipitationHours: 11,
+          windMax: 24,
+          windGustsMax: 48,
+        },
+      },
+    };
+    const { json } = await run(
+      "get_park_day",
+      { park: PARK_ID, date: "2026-11-07" },
+      new Map<unknown, unknown>([
+        ...providers(),
+        [PlanDayService, { buildPlanDay: jest.fn(async () => wet) }],
+      ]),
+    );
+    expect(json.weather).toEqual({
+      basis: "forecast",
+      condition: "Drizzle, dense intensity",
+      weatherCode: 55,
+      tempMin: -1.5,
+      tempMax: 2.6,
+      precipitationMm: 12.6,
+      precipitationChancePercent: 85,
+      precipitationHours: 11,
+      windMaxKmh: 24,
+      windGustsMaxKmh: 48,
+    });
   });
 
   it("names the rides a maintenance window shuts that day", async () => {

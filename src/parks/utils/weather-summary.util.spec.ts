@@ -1,6 +1,7 @@
 import {
   toClimateNormalSummary,
   toWeatherSummary,
+  weatherView,
 } from "./weather-summary.util";
 
 /**
@@ -148,5 +149,76 @@ describe("weather basis", () => {
         temperatureMax: null,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("the extra daily fields", () => {
+  const row = {
+    temperatureMin: "7.00",
+    temperatureMax: "9.80",
+    precipitationSum: "47.50",
+    windSpeedMax: "32.00",
+    windGustsMax: "61.20",
+    precipitationProbabilityMax: 96,
+    precipitationHours: "14.0",
+    uvIndexMax: "0.85",
+    sunshineHours: "1.5",
+    weatherCode: 81,
+  };
+
+  it("carries the chance of rain, its hours, the gusts, UV and sunshine as numbers", () => {
+    expect(toWeatherSummary(row)).toMatchObject({
+      precipitationMm: 47.5,
+      precipitationProbability: 96,
+      precipitationHours: 14,
+      windMax: 32,
+      windGustsMax: 61.2,
+      uvIndexMax: 0.85,
+      sunshineHours: 1.5,
+    });
+  });
+
+  it("leaves them out of a row stored before they were fetched", () => {
+    const summary = toWeatherSummary({
+      temperatureMin: 7,
+      temperatureMax: 9.8,
+      precipitationSum: 2,
+    });
+    expect(summary).not.toHaveProperty("precipitationProbability", 0);
+    expect(summary?.precipitationProbability).toBeUndefined();
+    expect(summary?.windGustsMax).toBeUndefined();
+  });
+});
+
+describe("weatherView", () => {
+  it("names every figure with its unit and drops the legacy rainChance", () => {
+    const view = weatherView(
+      toWeatherSummary({
+        temperatureMin: 7,
+        temperatureMax: 9.8,
+        precipitationSum: 12.6,
+        windSpeedMax: 32,
+        windGustsMax: 61.2,
+        precipitationProbabilityMax: 80,
+        precipitationHours: 9,
+        weatherCode: 53,
+      }),
+    );
+    expect(view).toMatchObject({
+      basis: "forecast",
+      weatherCode: 53,
+      precipitationMm: 12.6,
+      precipitationChancePercent: 80,
+      precipitationHours: 9,
+      windMaxKmh: 32,
+      windGustsMaxKmh: 61.2,
+    });
+    expect(view).not.toHaveProperty("rainChance");
+    expect(JSON.stringify(view)).not.toContain("uvIndexMax");
+  });
+
+  it("passes no weather through as none", () => {
+    expect(weatherView(undefined)).toBeUndefined();
+    expect(weatherView(null)).toBeNull();
   });
 });

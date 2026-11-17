@@ -20,8 +20,15 @@ the licence requires it.
 ```jsonc
 { "date": "2026-10-27", "dataType": "current", "temperatureMax": 14.2, "temperatureMin": 6.1,
   "precipitationSum": 0.4, "rainSum": 0.4, "snowfallSum": 0, "weatherCode": 61,
-  "weatherDescription": "Rain, slight intensity", "windSpeedMax": 18.0 }
+  "weatherDescription": "Rain, slight intensity", "windSpeedMax": 18.0,
+  "windGustsMax": 41.4, "precipitationProbabilityMax": 65, "precipitationHours": 3,
+  "uvIndexMax": 1.2, "sunshineHours": 2.4 }
 ```
+
+- `precipitationProbabilityMax` is the highest chance of precipitation in any hour of the day (%),
+  `precipitationHours` how many hours have some, `windGustsMax` the strongest gust (km/h),
+  `sunshineHours` the sunshine over the day. All five are `null` on a row stored before they were
+  fetched (PAR-1393).
 
 - `dataType`: `historical` for past days, `current` for the park's today, `forecast` after it. Units:
   °C, mm, cm, km/h; `weatherCode` is WMO.

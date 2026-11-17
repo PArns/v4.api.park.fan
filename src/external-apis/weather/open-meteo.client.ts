@@ -42,8 +42,10 @@ function errorMessage(error: unknown): unknown {
  * Daily Variables:
  * - temperature_2m_max, temperature_2m_min
  * - precipitation_sum, rain_sum, snowfall_sum
+ * - precipitation_probability_max, precipitation_hours
  * - weathercode (WMO code)
- * - windspeed_10m_max
+ * - windspeed_10m_max, wind_gusts_10m_max
+ * - uv_index_max, sunshine_duration
  */
 /**
  * The daily arrays, as rows — minus the days the model had nothing for.
@@ -59,6 +61,11 @@ function errorMessage(error: unknown): unknown {
  * at all is not a forecast, and storing it as one only creates something for a
  * later reader to misread.
  */
+/** Open-Meteo's sunshine duration, seconds, as hours to one decimal. */
+function hoursOf(seconds: number | null | undefined): number | null {
+  return seconds == null ? null : Math.round(seconds / 360) / 10;
+}
+
 export function toDailyWeather(daily: OpenMeteoDaily): DailyWeather[] {
   return daily.time
     .map((date, index) => ({
@@ -70,6 +77,12 @@ export function toDailyWeather(daily: OpenMeteoDaily): DailyWeather[] {
       snowfallSum: daily.snowfall_sum?.[index] ?? null,
       weatherCode: daily.weathercode?.[index] ?? null,
       windSpeedMax: daily.windspeed_10m_max?.[index] ?? null,
+      precipitationProbabilityMax:
+        daily.precipitation_probability_max?.[index] ?? null,
+      precipitationHours: daily.precipitation_hours?.[index] ?? null,
+      windGustsMax: daily.wind_gusts_10m_max?.[index] ?? null,
+      uvIndexMax: daily.uv_index_max?.[index] ?? null,
+      sunshineHours: hoursOf(daily.sunshine_duration?.[index]),
     }))
     .filter(
       (day) => day.temperatureMax !== null || day.temperatureMin !== null,
@@ -329,6 +342,11 @@ export class OpenMeteoClient {
                 "snowfall_sum",
                 "weathercode",
                 "windspeed_10m_max",
+                "precipitation_probability_max",
+                "precipitation_hours",
+                "wind_gusts_10m_max",
+                "uv_index_max",
+                "sunshine_duration",
               ].join(","),
               current: [
                 "temperature_2m",
@@ -496,6 +514,8 @@ export class OpenMeteoClient {
                 "snowfall",
                 "weathercode",
                 "windspeed_10m",
+                "precipitation_probability",
+                "wind_gusts_10m",
               ].join(","),
               // GMT, not "auto" (PAR-818). With "auto" Open-Meteo shifts every
               // hour by ONE utc_offset_seconds — the offset in force at request
@@ -764,6 +784,9 @@ export class OpenMeteoClient {
       snowfall: hourly.snowfall?.[index] ?? null,
       weatherCode: hourly.weathercode?.[index] ?? null,
       windSpeed: hourly.windspeed_10m?.[index] ?? null,
+      precipitationProbability:
+        hourly.precipitation_probability?.[index] ?? null,
+      windGusts: hourly.wind_gusts_10m?.[index] ?? null,
     }));
 
     return { hours };
@@ -783,6 +806,12 @@ interface OpenMeteoDaily {
   snowfall_sum?: (number | null)[];
   weathercode?: (number | null)[];
   windspeed_10m_max?: (number | null)[];
+  precipitation_probability_max?: (number | null)[];
+  precipitation_hours?: (number | null)[];
+  wind_gusts_10m_max?: (number | null)[];
+  uv_index_max?: (number | null)[];
+  /** Seconds of sunshine over the day. */
+  sunshine_duration?: (number | null)[];
 }
 
 interface OpenMeteoResponse {
@@ -820,6 +849,8 @@ interface OpenMeteoResponse {
     snowfall?: (number | null)[];
     weathercode?: (number | null)[];
     windspeed_10m?: (number | null)[];
+    precipitation_probability?: (number | null)[];
+    wind_gusts_10m?: (number | null)[];
   };
 }
 
@@ -835,6 +866,15 @@ export interface DailyWeather {
   snowfallSum: number | null;
   weatherCode: number | null;
   windSpeedMax: number | null;
+  // Optional: a response cached before these were asked carries none of them.
+  /** The highest chance of precipitation in any hour of the day, 0-100. */
+  precipitationProbabilityMax?: number | null;
+  /** Hours of the day with precipitation. */
+  precipitationHours?: number | null;
+  /** The day's strongest gust, km/h. */
+  windGustsMax?: number | null;
+  uvIndexMax?: number | null;
+  sunshineHours?: number | null;
 }
 
 export interface CurrentConditions {
@@ -867,6 +907,10 @@ export interface HourlyWeather {
   snowfall: number | null;
   weatherCode: number | null;
   windSpeed: number | null;
+  /** Chance of precipitation in the hour, 0-100; absent on a response cached before it was asked. */
+  precipitationProbability?: number | null;
+  /** Gusts in the hour, km/h. */
+  windGusts?: number | null;
 }
 
 export interface HourlyWeatherResponse {

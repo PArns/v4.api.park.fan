@@ -16,6 +16,10 @@ import { ParkSeasonService } from "../../parks/services/park-season.service";
 import type { ParkSeason } from "../../parks/entities/park-season.entity";
 import { seasonsOn } from "../../trip-regions/trip-calendar.util";
 import { seasonDayView } from "./trip-season.inputs";
+import {
+  WEATHER_VIEW_FIELDS,
+  weatherView,
+} from "../../parks/utils/weather-summary.util";
 
 const LOCAL_ISO = "yyyy-MM-dd'T'HH:mmxxx";
 const HEADLINERS = 5;
@@ -75,15 +79,7 @@ export function compactDay(
     // The day-peak the level is rated on; absent for a closed day.
     expectedPeakWaitMinutes: day.headlinerForecast?.avgWait,
     forecastIsActual: day.headlinerForecast?.actual || undefined,
-    weather: weather && {
-      basis: weather.basis,
-      condition: weather.condition,
-      // The WMO code, as get_park_weather names it.
-      weatherCode: weather.icon ?? null,
-      tempMin: weather.tempMin,
-      tempMax: weather.tempMax,
-      precipitationMm: weather.precipitationMm ?? weather.rainChance,
-    },
+    weather: weatherView(weather),
     holiday: day.isHoliday || undefined,
     schoolVacation: day.isSchoolVacation || undefined,
     bridgeDay: day.isBridgeDay || undefined,
@@ -102,7 +98,8 @@ export const parkForecastTool = defineMcpTool({
     "What park.fan shows a visitor about the days ahead for one park: per day in the park's " +
     "timezone the opening hours (or closed), the crowd level as the calendar rates it (the day's " +
     "peak against a typical day's peak), the expected peak wait of the headliners, weather " +
-    "(`basis: climate_normal` is the long-run average, not a forecast) and holidays, school " +
+    `(${WEATHER_VIEW_FIELDS}; \`basis: climate_normal\` is the long-run average, not a ` +
+    "forecast) and holidays, school " +
     "breaks and bridge days, the rides a maintenance or works window shuts that day " +
     "(ridesInMaintenance, by name), the park's curated seasons running that day (seasons: kind, " +
     "name, status where not confirmed, separateTicket); today's hourly forecast (expected level and wait per hour) and " +

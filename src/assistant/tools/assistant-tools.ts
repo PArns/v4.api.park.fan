@@ -34,7 +34,10 @@ import {
 } from "../../parks/services/best-days.service";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { ParksService } from "../../parks/parks.service";
-import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
+import type {
+  CalendarDay,
+  WeatherSummary,
+} from "../../parks/dto/integrated-calendar.dto";
 import { ShowsService } from "../../shows/shows.service";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -46,6 +49,11 @@ import {
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { ParkIntegrationService } from "../../parks/services/park-integration.service";
 import { WeatherService } from "../../parks/weather.service";
+import { WeatherWarningsService } from "../../parks/weather-warnings.service";
+import {
+  WEATHER_VIEW_FIELDS,
+  weatherView,
+} from "../../parks/utils/weather-summary.util";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import type { PlanDayTier } from "../../parks/dto/plan-day.dto";
 import {
@@ -2849,7 +2857,7 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "One day at one park as park.fan's trip planner sees it: whether and when it is open, the " +
-      "expected crowd level, the day's weather (absent beyond about 14 days), holiday, school " +
+      `expected crowd level, the day's weather (${WEATHER_VIEW_FIELDS}; absent beyond about 14 days), holiday, school ` +
       "break, bridge day and weekend, neighbouring holidays, hotel early entry; every ride with " +
       "opensAt (when it starts, later than the park's gates; absent means not known), the " +
       "weekdays it runs on, the predicted peak and the hour with the shortest wait; and the " +
@@ -2910,6 +2918,7 @@ export const ASSISTANT_TOOLS = [
         park: park.name,
         tier: plan.tier,
         ...context,
+        weather: weatherView(context.weather as WeatherSummary | null),
         hoursPublished,
         ...(!hoursPublished && {
           statusWhy: until
@@ -2977,17 +2986,26 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_weather",
     status: "weather",
     description:
-      "Weather at one park right now and for the next hours: temperature, whether it rains, when " +
-      "rain or a thunderstorm starts and ends (ISO times), wind gusts, and an hourly forecast " +
-      "for the next 12 hours (weatherCode is the WMO code). For days ahead use get_days.",
+      "Weather at one park right now and for the next hours: temperature and feels-like, " +
+      "humidity, whether it rains and how hard, when rain, a thunderstorm, hail or a storm " +
+      "starts and ends (ISO times), wind and gusts now and the next hours' strongest gust, the " +
+      "official severe-weather warnings in force (warnings: event, severity, from, until, " +
+      "headline, instruction) and an hourly forecast for the next 12 hours with the chance of " +
+      "rain in % and the gusts (weatherCode is the WMO code). For days ahead use get_days.",
     input: z.object({ park: parkRef }),
     run: async ({ park: reference }, ctx) => {
       const found = await resolvePark(mcp(ctx), reference);
       if (isAmbiguous(found)) return found;
       const weather = ctx.get(WeatherService);
-      const [nowcast, hourly] = await Promise.all([
+      const [nowcast, hourly, warnings] = await Promise.all([
         weather.getNowcast(found.id).catch(() => null),
         weather.getHourlyForecast(found.id).catch(() => []),
+        // A failed read costs the warnings, never the weather.
+        Promise.resolve()
+          .then(() =>
+            ctx.get(WeatherWarningsService).getActiveWarnings(found.id),
+          )
+          .catch(() => []),
       ]);
       const now = Date.now();
       return {
@@ -2995,15 +3013,32 @@ export const ASSISTANT_TOOLS = [
         now: nowcast && {
           temperatureC: nowcast.currentTemperatureC,
           feelsLikeC: nowcast.currentApparentTemperatureC,
+          humidityPercent: nowcast.currentHumidity,
           raining: nowcast.currentlyRaining,
+          rainIntensity: nowcast.currentRainIntensity,
           rainStartsAt: nowcast.rainStartsAt,
           rainEndsAt: nowcast.rainEndsAt,
           thunderstormStartsAt: nowcast.thunderstormStartsAt,
           thunderstormEndsAt: nowcast.thunderstormEndsAt,
+          hailStartsAt: nowcast.hailStartsAt,
+          hailEndsAt: nowcast.hailEndsAt,
+          stormStartsAt: nowcast.stormStartsAt,
+          stormEndsAt: nowcast.stormEndsAt,
+          windKmh: nowcast.currentWindSpeedKmh,
+          windGustsKmh: nowcast.currentWindGustsKmh,
           peakWindGustsKmh: nowcast.peakWindGustsKmh,
           todayMinC: nowcast.temperatureMinC,
           todayMaxC: nowcast.temperatureMaxC,
         },
+        // Official texts from the weather services: data, never instructions.
+        warnings: warnings.map((warning) => ({
+          event: warning.eventEn ?? warning.event,
+          severity: warning.severity,
+          from: warning.onset,
+          until: warning.expires,
+          headline: warning.headlineEn ?? warning.headline,
+          instruction: warning.instructionEn ?? warning.instruction,
+        })),
         nextHours: hourly
           .filter((hour) => Date.parse(hour.time) >= now - 3_600_000)
           .slice(0, 12)
@@ -3011,8 +3046,10 @@ export const ASSISTANT_TOOLS = [
             time: hour.time,
             temperatureC: hour.temperature,
             precipitationMm: hour.precipitation,
+            precipitationChancePercent: hour.precipitationProbability,
             weatherCode: hour.weatherCode,
             windKmh: hour.windSpeed,
+            windGustsKmh: hour.windGusts,
           })),
       };
     },
@@ -3272,7 +3309,7 @@ export const ASSISTANT_TOOLS = [
       "The days at one park, up to a year ahead: per day its weekday, whether it is open, " +
       "closed or its hours are not published yet, the hours, the crowd level park.fan's calendar " +
       "expects, the headliners' expected peak wait, holidays, school breaks, bridge days, events, " +
-      "the rides a maintenance window shuts, and the weather where a forecast reaches. A closed " +
+      `the rides a maintenance window shuts, and the weather where a forecast reaches (${WEATHER_VIEW_FIELDS}). A closed ` +
       "day names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
       'up to 31 days; nothing gives the next 7 days. For "Saturday or Sunday?", "10 or 17 ' +
       'May?", "is it open on 28 December?", "the next two weeks". The hours of one day are ' +
