@@ -33,7 +33,10 @@ describe("TripRegionService › the day a year back", () => {
     isNationwide: true,
   });
 
-  function setup(getHolidays: HolidaysService["getHolidays"]) {
+  function setup(
+    getHolidays: HolidaysService["getHolidays"],
+    closed: readonly string[] = [],
+  ) {
     const config = ORLANDO.parks.find((p) => p.slug === "magic-kingdom-park");
     const park = {
       id: "00000000-0000-4000-8000-000000000001",
@@ -60,6 +63,10 @@ describe("TripRegionService › the day a year back", () => {
           d = addIsoDays(d, 1)
         ) {
           const past = d < TODAY;
+          if (closed.includes(d)) {
+            days.push({ date: d, status: "CLOSED", crowdLevel: "closed" });
+            continue;
+          }
           days.push({
             date: d,
             status: "OPERATING",
@@ -141,6 +148,17 @@ describe("TripRegionService › the day a year back", () => {
       addIsoDays(FROM, -364 - 21),
       TO,
     );
+  });
+
+  it("passes over a day the park was closed a year back (PAR-1386)", async () => {
+    const { service } = setup(
+      async () => [memorialDay("2026-05-25"), memorialDay("2027-05-31")],
+      ["2026-05-18"],
+    );
+    const waits = await lastYearWaits(service);
+    // Not Monday 18 May 2026, shut: the next plain Monday, 1 June.
+    expect(waits["2027-05-24"]).toBe(55);
+    expect(waits["2027-05-31"]).toBe(90);
   });
 
   it("reads 52 weeks back when the holidays cannot be read", async () => {

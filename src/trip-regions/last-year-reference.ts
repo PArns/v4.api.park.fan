@@ -6,8 +6,10 @@
  * 52 weeks back keeps the weekday and lets every moving holiday slip: Easter
  * Monday 2027 (29 March) read Monday 30 March 2026, an ordinary Monday, and
  * Monday 5 April 2027 read Easter Monday 2026. So the day is picked by what it
- * is ({@link lastYearReferenceDay}). Pure but for {@link loadLastYearDayFacts},
- * which reads the holiday table. Contract: docs/frontend/trip-regions.md.
+ * is ({@link lastYearReferenceDay}), among the days the park was open and
+ * measured on. Pure but for {@link loadLastYearDayFacts}, which reads the
+ * holiday table, and the reads {@link lastYearReferenceDayReading} is given.
+ * Contract: docs/frontend/trip-regions.md.
  */
 import {
   addIsoDays,
@@ -22,6 +24,7 @@ import {
   type HolidayLocation,
 } from "../common/utils/holiday.utils";
 import type { HolidayRow, HolidaysService } from "../holidays/holidays.service";
+import { monthOf } from "./last-year-snapshot";
 import {
   isStatement,
   seasonCovers,
@@ -61,6 +64,12 @@ export interface LastYearReferenceOptions {
   before?: string;
   /** The park's curated seasons on the days and a year before them. */
   seasons?: readonly LastYearSeason[];
+  /**
+   * Whether the park was open on a past day and something was measured. A day
+   * it says no to is never the reference day: each step goes on to the next
+   * day it allows. Absent: every day counts.
+   */
+  measuredOpen?: (day: string) => boolean;
 }
 
 type DayKind = "holiday" | "bridge" | "school" | "plain";
@@ -96,7 +105,7 @@ function sameHoliday(
   date: string,
   names: readonly string[],
   facts: ReadonlyMap<string, LastYearDayFacts>,
-  measured: (day: string) => boolean,
+  usable: (day: string) => boolean,
 ): string | undefined {
   const centre = lastYearDays(date).sameWeekday;
   for (let off = 0; off <= LAST_YEAR_HOLIDAY_REACH_DAYS; off++) {
@@ -104,7 +113,7 @@ function sameHoliday(
       addIsoDays(centre, -off),
       addIsoDays(centre, off),
     ])) {
-      if (!measured(day)) continue;
+      if (!usable(day)) continue;
       if (facts.get(day)?.holidayNames?.some((n) => names.includes(n))) {
         return day;
       }
@@ -157,10 +166,12 @@ function lastEditionTests(
  *    neither a holiday, a bridge day nor a break day, else the nearest such day
  *    of the same weekday at most three weeks off; failing that, 52 weeks back.
  *
- * A day whose school break is not known (`schoolVacationUnknown`) tells no
- * break day from a plain one a year back. Inside a stated season with an
- * edition a year earlier, a day of that edition goes first among the days
- * found in step 2 or 3. A day without facts reads 52 weeks back.
+ * Each step skips a day the park was closed or nothing was measured
+ * (`measuredOpen`) and one not measured yet (`before`). A day whose school
+ * break is not known (`schoolVacationUnknown`) tells no break day from a plain
+ * one a year back. Inside a stated season with an edition a year earlier, a
+ * day of that edition goes first among the days found in step 2 or 3. A day
+ * without facts reads 52 weeks back.
  */
 export function lastYearReferenceDay(
   date: string,
@@ -170,16 +181,17 @@ export function lastYearReferenceDay(
   const plain = lastYearDays(date).sameWeekday;
   const day = facts.get(date);
   if (!day) return plain;
-  const { before } = options;
-  const measured = (d: string) => !before || d < before;
+  const { before, measuredOpen } = options;
+  const usable = (d: string) =>
+    (!before || d < before) && (!measuredOpen || measuredOpen(d));
 
   if (day.holidayNames?.length) {
-    const same = sameHoliday(date, day.holidayNames, facts, measured);
+    const same = sameHoliday(date, day.holidayNames, facts, usable);
     if (same) return same;
   }
 
   const inEdition = lastEditionTests(date, options.seasons ?? []);
-  const candidates = sameWeekdays(date).filter(measured);
+  const candidates = sameWeekdays(date).filter(usable);
   const schoolKnown = !day.schoolVacationUnknown;
   for (const wanted of READS[kindOf(day, true)]) {
     const found = candidates.filter((d) => {
@@ -191,6 +203,29 @@ export function lastYearReferenceDay(
     }
   }
   return plain;
+}
+
+/**
+ * {@link lastYearReferenceDay} for a caller that learns whether the park was
+ * open and measured on a day only by reading it: the day picked is read, and
+ * one `measuredOpen` says no to is left out and the day picked again, until
+ * one passes or none is left. Only the days picked are read, mostly one.
+ */
+export async function lastYearReferenceDayReading(
+  date: string,
+  facts: ReadonlyMap<string, LastYearDayFacts>,
+  options: Omit<LastYearReferenceOptions, "measuredOpen">,
+  measuredOpen: (day: string) => Promise<boolean>,
+): Promise<string> {
+  const rejected = new Set<string>();
+  for (;;) {
+    const day = lastYearReferenceDay(date, facts, {
+      ...options,
+      measuredOpen: (d) => !rejected.has(d),
+    });
+    if (rejected.has(day) || (await measuredOpen(day))) return day;
+    rejected.add(day);
+  }
 }
 
 /** {@link lastYearReferenceDay} for each of `dates`. */
@@ -218,6 +253,26 @@ export function lastYearFactDays(from: string, to: string): string[] {
     addIsoDays(lastYearDays(to).sameWeekday, reach),
   );
   return [...new Set([...back, ...eachIsoDate(from, to)])].sort();
+}
+
+/**
+ * The past months, `YYYY-MM`, a reference day of the days `from` to `to` can
+ * sit in: those of {@link lastYearFactDays} before `today`, the days from
+ * today on only. A caller that skips the days the park was closed or nothing
+ * was measured (`measuredOpen`) needs all of them, as the next day may lie in
+ * another month.
+ */
+export function lastYearReferenceMonths(
+  from: string,
+  to: string,
+  today: string,
+): string[] {
+  const first = from > today ? from : today;
+  if (first > to) return [];
+  const months = lastYearFactDays(first, to)
+    .filter((day) => day < today)
+    .map(monthOf);
+  return [...new Set(months)].sort();
 }
 
 /**

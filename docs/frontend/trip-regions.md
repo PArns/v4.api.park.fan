@@ -493,8 +493,8 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     ([long-range forecasting §9](../ml/long-range-forecasting.md)), so a day ranked on it won on its
     basis, not its date (PAR-1319);
   - past it with nothing measured a year back (`basis: "long_range"`: the park was closed, or not
-    yet measured, that day a year back; USJ before 20 April 2026), the long-range forecast, unscaled,
-    as the one figure there is.
+    yet measured, on the matching day and on every day it may move to; USJ before 20 April 2026),
+    the long-range forecast, unscaled, as the one figure there is.
 
   Call it "the big rides' wait at their busiest"; it is not a total, not the wait at every hour and
   not the longest single queue. An hourly curve of the same day (`/plan/day`) runs lower for most
@@ -514,8 +514,8 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     `SERVING_TFT_DAYS`), its `headlinerWait` times the lead factor above, its `crowdLevel` the
     calendar's predicted level.
   - `last_year`: a day past 60 days, or one the forecast does not cover (past `forecastUntil`, or a
-    gap in it), that was not CLOSED a year back reads the matching day a year earlier
-    ([which day](#the-matching-day-a-year-back)). Its `crowdLevel` is the level the calendar
+    gap in it), reads the matching day a year earlier
+    ([which day](#the-matching-day-a-year-back)), a day the park was open and measured on. Its `crowdLevel` is the level the calendar
     measured that day (the typical-day-peak rating of `calculateCrowdLevelForDate`), its
     `headlinerWait` the calendar's recorded `headlinerForecast.avgWait` for it (`actual: true`): the
     mean over the park's headliners of each ride's day-P90 standby wait, rounded to five. It is an
@@ -523,7 +523,8 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   - `long_range`: a day past 60 days with nothing measured a year back: the calendar's long-range
     forecast (CatBoost's long tail), unscaled; reads low and flat
     ([long-range forecasting §9](../ml/long-range-forecasting.md)).
-  - `none`: nothing to say. A day that was closed last year and has no forecast gives no figure.
+  - `none`: nothing to say. A day with no open, measured day a year back and no forecast gives no
+    figure.
 - **`meta.forecastUntil`** is the last day any of the region's parks carries a forecast, as the
   calendar warmup last read it off the warm months (not a constant; CatBoost reaches about six
   months, as far as a park's published schedule). Absent until the warmup has run once.
@@ -599,6 +600,19 @@ on another date. So `last_year` and `lastYearWait` read the day picked by what t
    where that was neither a public holiday, a bridge day nor a school-break day; otherwise the
    nearest day of the same weekday at most three weeks off that was none of them; otherwise 52 weeks
    back. Monday 5 April 2027 reads 30 March 2026.
+
+**A day the park was closed, or on which nothing was measured**, is never the reference day: each
+step passes over it and takes the next day it allows, in the same order and within the same reach
+(PAR-1386). The test is the one a trip day reads last year by (`lastYearMeasured`: not `closed`,
+and a level or the headliners' wait recorded), on the last-year snapshots, so the calendar reads
+every past month a reference day can sit in (`lastYearReferenceMonths`), not only the month of
+the day it picks. Phantasialand's Wednesday 23 December 2026, a break day it is open on, read Wednesday
+24 December 2025, a break day it was shut on (its winter opened on the 26th), and now reads
+Wednesday 31 December 2025; with no open break Wednesday within three weeks it would read the
+nearest open plain one. Only when the park was open on none of the days does the day read 52 weeks
+back, and then nothing (`long_range` or `none`). Parky's `get_park_history` applies the same test
+to the calendar days it reads ([assistant](assistant.md)), one candidate at a time
+(`lastYearReferenceDayReading`), mostly the first.
 
 The flags are the calendar's own (`dayHolidayFlags`, the park's region only, from
 `HolidaysService.getHolidays`, whose years are cached); parks at one location share one read per

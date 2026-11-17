@@ -404,6 +404,22 @@ export function closesEarly(
   return closeMinute(date, closesAt) <= usual - CLOSES_EARLY_MINUTES;
 }
 
+/**
+ * Whether a day a year back says anything: the park was open and the day was
+ * measured, a level or the headliners' wait. A trip day reads nothing from any
+ * other (`buildParkDay`), and the year-back lookup passes over it
+ * (`lastYearReferenceDay`'s `measuredOpen`).
+ */
+export function lastYearMeasured(
+  entry: LastYearEntry | undefined,
+): entry is LastYearEntry {
+  return (
+    !!entry &&
+    entry.c !== "closed" &&
+    (entry.w != null || entry.c !== "unknown")
+  );
+}
+
 /** A past calendar day reduced to what `last_year` needs. */
 export function toLastYearEntry(day: CalendarDayLike): LastYearEntry {
   if (day.status === "CLOSED" || day.crowdLevel === "closed") {
@@ -526,12 +542,9 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
       : undefined;
   const level = day?.crowdLevel;
   const rated = !!level && level !== "unknown" && level !== "closed";
-  const lastYear =
-    input.lastYear &&
-    input.lastYear.c !== "closed" &&
-    (input.lastYear.w != null || input.lastYear.c !== "unknown")
-      ? input.lastYear
-      : undefined;
+  const lastYear = lastYearMeasured(input.lastYear)
+    ? input.lastYear
+    : undefined;
   const future = date >= today;
   if (future && forecast) {
     out.forecastWait = round5(forecast.avgWait);

@@ -27,7 +27,6 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import { toPublicSeason } from "../parks/park-seasons.controller";
 import type { Park } from "../parks/entities/park.entity";
-import type { ParkSeason } from "../parks/entities/park-season.entity";
 import {
   findRegion,
   TRIP_REGIONS,
@@ -35,14 +34,16 @@ import {
   type RegionParkConfig,
 } from "./regions";
 import { MAX_TRIP_DAYS } from "./trip-optimizer";
-import type { ScheduleRowLike } from "./trip-calendar.util";
+import { lastYearMeasured, type ScheduleRowLike } from "./trip-calendar.util";
 import {
+  monthOf,
   readLastYearMonths,
   writeLastYearMonth,
   type LastYearMonth,
 } from "./last-year-snapshot";
 import {
   lastYearReferenceDays,
+  lastYearReferenceMonths,
   lastYearSeasonsFrom,
   loadLastYearDayFacts,
   type LastYearDayFacts,
@@ -50,7 +51,6 @@ import {
 import {
   assembleRegionCalendar,
   describeRegion,
-  lastYearMonthsNeeded,
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
@@ -312,7 +312,7 @@ export class TripRegionService {
     const sources: ParkCalendarSource[] = await mapWithDbBudget(
       parks,
       async (rp) => {
-        const [calendar, rows, lastYearReferences] = await Promise.all([
+        const [calendar, rows, lastYear, dayFacts] = await Promise.all([
           this.calendarService.buildCalendarResponse(
             rp.park,
             fromDate,
@@ -327,22 +327,22 @@ export class TripRegionService {
               );
               return [];
             }),
-          this.lastYearReferencesFor(
+          this.lastYearFor(
             rp.park,
-            { from, to, today },
-            seasonRows.filter((s) => s.parkId === rp.park.id),
-            facts,
-          ),
-        ]);
-        const lastYear = await this.lastYearFor(
-          rp.park,
-          lastYearMonthsNeeded(
-            calendar.days.filter((d) => d.date >= from && d.date <= to),
+            lastYearReferenceMonths(from, to, today),
             today,
-            lastYearReferences,
           ),
-          today,
-        );
+          this.lastYearFactsFor(rp.park, from, to, facts),
+        ]);
+        // Without holidays the park's days read 52 weeks back.
+        const lastYearReferences = dayFacts
+          ? lastYearReferenceDays(eachIsoDate(from, to), dayFacts, {
+              before: today,
+              seasons: seasonRows.filter((s) => s.parkId === rp.park.id),
+              measuredOpen: (day) =>
+                lastYearMeasured(lastYear.get(monthOf(day))?.[day]),
+            })
+          : new Map<string, string>();
         return {
           park: toRecord(rp),
           calendar,
@@ -371,25 +371,25 @@ export class TripRegionService {
   }
 
   /**
-   * One park's reference day a year back for each day of the window
-   * (`lastYearReferenceDays`). Empty where the park has no country or its
-   * holidays cannot be read: its days then read 52 weeks back. Parks at one
-   * location share a holiday read through `facts`.
+   * One park's holiday facts for its reference days a year back
+   * (`loadLastYearDayFacts`). Null where the park has no country or its
+   * holidays cannot be read. Parks at one location share a read through
+   * `facts`.
    */
-  private async lastYearReferencesFor(
+  private lastYearFactsFor(
     park: Park,
-    window: { from: string; to: string; today: string },
-    seasons: ParkSeason[],
+    from: string,
+    to: string,
     facts: Map<string, Promise<Map<string, LastYearDayFacts> | null>>,
-  ): Promise<Map<string, string>> {
+  ): Promise<Map<string, LastYearDayFacts> | null> {
     const key = [park.countryCode, park.regionCode, park.timezone].join("|");
     let pending = facts.get(key);
     if (!pending) {
       pending = loadLastYearDayFacts(
         this.holidaysService,
         park,
-        window.from,
-        window.to,
+        from,
+        to,
       ).catch((err: Error) => {
         this.logger.warn(
           `Holidays unavailable for ${park.slug}, last year reads 52 weeks back: ${err.message}`,
@@ -398,12 +398,7 @@ export class TripRegionService {
       });
       facts.set(key, pending);
     }
-    const loaded = await pending;
-    if (!loaded) return new Map();
-    return lastYearReferenceDays(eachIsoDate(window.from, window.to), loaded, {
-      before: window.today,
-      seasons,
-    });
+    return pending;
   }
 
   /**
