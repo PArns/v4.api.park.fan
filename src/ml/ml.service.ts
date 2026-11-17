@@ -14,7 +14,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../common/utils/date.util";
-import { schoolCoverageThrough } from "../common/utils/holiday.utils";
+import { SEASON_LEVEL_INPUTS_TTL } from "../common/cache/cache-ttl";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
@@ -54,6 +54,7 @@ import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.en
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
 import {
   applySeasonLevel,
+  seasonSchoolCoverage,
   type SeasonLevelMode,
 } from "./utils/season-level.util";
 import {
@@ -1351,18 +1352,27 @@ export class MLService {
     return process.env.SEASON_LEVEL === "true";
   }
 
-  /** `SEASON_LEVEL_MODE`, read per call: `level`, or `ratio` for anything else. */
+  /**
+   * `SEASON_LEVEL_MODE`, read per call: `ratio`, or `level` for anything else.
+   * The level is the default because the ratio is not measured: it scales a
+   * forecast by what earlier forecasts missed, bounded but unscored.
+   */
   static seasonLevelMode(): SeasonLevelMode {
-    return process.env.SEASON_LEVEL_MODE === "level" ? "level" : "ratio";
+    return process.env.SEASON_LEVEL_MODE === "ratio" ? "ratio" : "level";
   }
 
   /**
    * The served daily rows with the season level on the days of a running park
-   * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
-   * move once a night, so they are cached for six hours under the park-local
-   * date, which a new day's measurement joins; a failed read costs the season
-   * level, never the response. They hold the level and the ratio both, so a
-   * changed `SEASON_LEVEL_MODE` applies on the next call.
+   * season (PAR-1343, `season-level.util.ts`).
+   *
+   * The inputs are kept under a key without a date until the calendar warmup
+   * evicts them (`CacheKeys.seasonLevelInputs`), so a level moves only with a
+   * warmup, whose forecast ring tells the frontend. A dated key would move it
+   * at the park's midnight on `/plan/day` and in Parky while the frontend's
+   * calendar kept the old one until the next ring. A read that finds no key,
+   * after a failed warmup, recomputes them unannounced. A failed read costs
+   * the season level, never the response. The inputs hold the level and the
+   * ratio both, so a changed `SEASON_LEVEL_MODE` applies on the next call.
    */
   private async withSeasonLevel(
     parkId: string,
@@ -1381,27 +1391,26 @@ export class MLService {
         }));
       const tz = park?.timezone || "UTC";
       const countryCode = park?.countryCode;
-      const regionCode = park?.regionCode ?? null;
-      const influencingRegions = park?.influencingRegions ?? [];
-      const cacheKey = `ml:season-level:v3:${parkId}:${getCurrentDateInTimezone(tz)}`;
+      const seasonPark = {
+        id: parkId,
+        timezone: tz,
+        countryCode: countryCode ?? "",
+        regionCode: park?.regionCode ?? null,
+        influencingRegions: park?.influencingRegions ?? [],
+      };
+      const cacheKey = CacheKeys.seasonLevelInputs(parkId);
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)
         : await loadSeasonLevelInputs(
             this.parkRepository.manager.connection,
-            {
-              id: parkId,
-              timezone: tz,
-              countryCode: countryCode ?? "",
-              regionCode,
-              influencingRegions,
-            },
+            seasonPark,
             {
               holidays: async (from, to) => {
                 const countries = new Set(
                   [
                     countryCode,
-                    ...influencingRegions.map((r) => r.countryCode),
+                    ...seasonPark.influencingRegions.map((r) => r.countryCode),
                   ].filter((c): c is string => !!c),
                 );
                 const rows = await Promise.all(
@@ -1411,19 +1420,16 @@ export class MLService {
                 );
                 return rows.flat();
               },
-              schoolThrough: async () =>
-                countryCode
-                  ? schoolCoverageThrough(
-                      await this.holidaysService.getSchoolHolidayCoverage(),
-                      countryCode,
-                      regionCode,
-                    )
-                  : null,
+              schoolCoverage: async () =>
+                seasonSchoolCoverage(
+                  await this.holidaysService.getSchoolHolidayCoverage(),
+                  seasonPark,
+                ),
             },
           );
       if (!cached) {
         await this.redis
-          .set(cacheKey, JSON.stringify(inputs), "EX", 6 * 60 * 60)
+          .set(cacheKey, JSON.stringify(inputs), "EX", SEASON_LEVEL_INPUTS_TTL)
           .catch(() => undefined);
       }
       const predictions = applySeasonLevel(

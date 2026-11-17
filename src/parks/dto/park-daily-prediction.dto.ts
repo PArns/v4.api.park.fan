@@ -34,10 +34,15 @@ export class ParkDailyPredictionDto {
     | "closed";
 
   @ApiProperty({
-    description: "Confidence percentage of the prediction",
+    description:
+      "Confidence percentage of the prediction: the mean over the day's rows " +
+      "that carry one. Null where none does, as on a day the season level " +
+      "serves every headliner (docs/ml/season-level.md).",
     example: 85.5,
+    type: Number,
+    nullable: true,
   })
-  confidencePercentage: number;
+  confidencePercentage: number | null;
 
   @ApiProperty({
     description:

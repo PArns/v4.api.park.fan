@@ -43,6 +43,13 @@ export const CacheKeys = {
     dateStr: string,
   ): string => `ml:park:${parkId}:${predictionType}:${dateStr}`,
 
+  /**
+   * The season level's inputs of a park (`loadSeasonLevelInputs`). No date:
+   * they change when the calendar warmup evicts them, whose forecast ring
+   * reaches the frontend, and not at the park's midnight, which nothing rings.
+   */
+  seasonLevelInputs: (parkId: string): string => `ml:season-level:v4:${parkId}`,
+
   /** Today's schedule (dateStr = park-local YYYY-MM-DD). */
   scheduleToday: (parkId: string, dateStr: string): string =>
     `schedule:today:${parkId}:${dateStr}`,

@@ -59,8 +59,10 @@ The code default stays off, so a local run and the specs see the old composer un
      wins only on busy rides, and only at d0–d2 on the full period (PAR-901,
      `ml-bench/results/20261009-baselines-v2/summary.md`; see
      [ml-bench results](../../ml/ml-bench/results-baselines.md#the-tft-level-on-busy-rides)).
-   - **The season level, on every ride at every lead** (`composer: "h5_season"`,
-     [below](#on-a-day-of-a-running-park-season)).
+   - **A measured season level, on every ride at every lead** (`composer: "h5_season"`,
+     [below](#on-a-day-of-a-running-park-season)). A season **ratio** row
+     (`tft+season-ratio`) is TFT's forecast × a ratio and takes the TFT gates
+     above; where it passes them the composer is `h5_season` too.
    - **CatBoost's daily level is never applied** — it made the benchmark worse
      (+2.6 min MAE, bias −5.7).
 
@@ -93,31 +95,46 @@ The code default stays off, so a local run and the specs see the old composer un
 ## On a day of a running park season
 
 On a day the [season level](../../ml/season-level.md) serves, the day's row is
-`tft+season` or `catboost+season`, and its level is the one the calendar shows
-for that day and the one `dayPeak` carries. The H5 composer scales by it like
-by a TFT level (ratio to the ride's 56-day reference, rope-drop hour unscaled),
-on every ride and at every lead H5 is served to (`PLAN_DAY_H5_MAX_LEAD_DAYS`).
+`tft+season` or `catboost+season` (a measured level, a floor included) or, with
+`SEASON_LEVEL_MODE=ratio`, `tft+season-ratio`. Its level is the one the calendar
+shows for that day and the one `dayPeak` carries. The H5 composer scales by it
+like by a TFT level (ratio to the ride's 56-day reference, rope-drop hour
+unscaled), and `h5LevelFor` routes it by what it is:
 
-Why neither TFT gate: both were measured on TFT's forecast, and past d2, or on a
-ride that is not busy, its error cost more than the level added. The season
-level is no forecast. It is the median of the ride's measured daily
-P90 on this season's days of the same day type (day off or working day), the
-same number three days out as three weeks out, and the same kind of number as
-the profile's own reference. It replaces the model's number because the history
-behind the models misses the season, and H5's 56-day window is that history: on
-the first days of Phantasialand's Wintertraum nearly all of it lies before the
-season. Served plain, the curve shows those weeks while the calendar beside it
-shows the season: two answers for one park-day.
+- **A measured level** (`+season`): on every ride and at every lead H5 is
+  served to (`PLAN_DAY_H5_MAX_LEAD_DAYS`).
+- **A ratio row** (`+season-ratio`): through the TFT gates, a busy ride
+  (`BUSY_Q90_MINUTES`) at a lead of 0–2 days (`TFT_LEVEL_MAX_LEAD_DAYS`), the
+  plain profile elsewhere.
 
-Its day types also carry what H5 cannot: a public holiday or a school-break
-weekday is a day off for the season level, so on such a day the working-day
-profile is scaled to the season's day-off level. The shape stays the working
-day's ([known limits](#known-limits)).
+Why neither TFT gate for a measured level: both were measured on TFT's
+forecast, and past d2, or on a ride that is not busy, its error cost more than
+the level added. A measured level is no forecast. It is the median of the
+ride's measured daily P90 on this season's days of the same day type, or of a
+quieter type as a floor, the same number three days out as three weeks out,
+and the same kind of number as the profile's own reference. It replaces the
+model's number because the history behind the models misses the season, and
+H5's 56-day window is that history: on the first days of Phantasialand's
+Wintertraum nearly all of it lies before the season. Served plain, the curve
+shows those weeks while the calendar beside it shows the season: two answers
+for one park-day.
 
-Nothing has measured it against the plain profile yet. The forward archive
-scores it from the first capture: the served slots are coded `e` (`composed_h5_season`) and filed
-under `level_season`, and the plain profile of the same ride-days is the
-`shadow_h5` row (see [the composer A/B](#the-composer-ab-in-the-forward-archive)).
+A ratio row is a forecast: TFT's number for the day times what the ride
+measured over TFT's earlier forecasts. It carries TFT's error at every lead,
+which is what the gates were measured on, so they hold for it, and nothing has
+measured it against the plain profile either. Past the gates the curve is the
+plain profile while `dayPeak` is the scaled level, as on a TFT day past d2.
+
+The season level's day types carry what H5 cannot: a public holiday or a
+school-break weekday of the park's own region is a day off for the season
+level, so on such a day the working-day profile is scaled to the season's
+day-off level. The shape stays the working day's ([known limits](#known-limits)).
+
+Nothing has measured either against the plain profile yet. The forward archive
+scores them from the first capture: the served slots are coded `e`
+(`composed_h5_season`) and filed under `level_season`, both kinds alike, and the
+plain profile of the same ride-days is the `shadow_h5` row (see
+[the composer A/B](#the-composer-ab-in-the-forward-archive)).
 
 ## Opening hours nobody published
 

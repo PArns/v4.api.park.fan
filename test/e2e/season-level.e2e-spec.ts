@@ -25,9 +25,9 @@ describe("season level reads the running season's measured days (e2e)", () => {
   let rideId: string;
 
   /**
-   * The park as the season level reads it: no holidays unless given, and
-   * school breaks known far past the season unless `schoolThrough` says when
-   * they stop.
+   * The park as the season level reads it: no holidays unless given, school
+   * breaks known far past the season unless `schoolThrough` says when they
+   * stop, and no neighbour that stores any.
    */
   const load = (
     holidays: HolidayRow[] = [],
@@ -39,7 +39,10 @@ describe("season level reads the running season's measured days (e2e)", () => {
       {
         holidays: async (from, to) =>
           holidays.filter((h) => h.date >= from && h.date <= to),
-        schoolThrough: async () => schoolThrough,
+        schoolCoverage: async () => ({
+          park: schoolThrough,
+          neighbours: null,
+        }),
       },
     );
 
@@ -189,7 +192,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
     const eve = (day: string) => !dayOff(day) && dayOff(addIsoDays(day, 1));
     const typeOf = (day: string): SeasonDayType =>
       dayOff(day) ? "off" : eve(day) ? "eve" : "working";
-    const value = { off: 60, eve: 45, working: 30 };
+    const value = { off: 60, neighbour: 50, eve: 45, working: 30 };
     for (const day of days) await measuredDay(day, value[typeOf(day)]);
     // Not the season's: the day before it began, and today (a running day).
     await measuredDay(await localDay(-10), 200);
@@ -212,6 +215,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
       expect.arrayContaining(days.filter(dayOff)),
     );
     expect(dayTypes.eves).toEqual(expect.arrayContaining(days.filter(eve)));
+    expect(dayTypes.neighbourDays).toEqual([]);
     expect(dayTypes.unknownDays).toEqual([]);
     const count = (type: SeasonDayType) =>
       Math.min(days.filter((d) => typeOf(d) === type).length, 6);
@@ -225,6 +229,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
       dayType: "working",
       days: count("working"),
       level: 30,
+      maxPeak: 30,
       ratioDays: count("working"),
       ratio: 2,
     });
@@ -238,7 +243,8 @@ describe("season level reads the running season's measured days (e2e)", () => {
     expect(references).toHaveLength(3);
 
     // The whole chain: next Saturday is served the season's days-off level,
-    // which nine days with two weekend days and the break day reach.
+    // which nine days with two weekend days and the break day reach; with no
+    // forecast behind it, a measured level in ratio mode too.
     expect(count("off")).toBeGreaterThanOrEqual(3);
     let saturday = await localDay(1);
     for (let i = 2; !isWeekendDate(saturday); i++) saturday = await localDay(i);
@@ -301,7 +307,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
   it("answers with nothing for a park without a running season", async () => {
     await expect(load()).resolves.toEqual({
       seasons: [],
-      dayTypes: { daysOff: [], eves: [], unknownDays: [] },
+      dayTypes: { daysOff: [], neighbourDays: [], eves: [], unknownDays: [] },
       references: [],
     });
   });

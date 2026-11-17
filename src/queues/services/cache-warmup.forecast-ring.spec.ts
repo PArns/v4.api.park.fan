@@ -51,7 +51,7 @@ describe("CacheWarmupService › forecast ring", () => {
       {} as never,
       queue as never,
     );
-    return { service, revalidationService, queue };
+    return { service, revalidationService, queue, redis, calendarService };
   }
 
   it("rings best-days and the calendar at once, and again after the CDN window", async () => {
@@ -71,6 +71,29 @@ describe("CacheWarmupService › forecast ring", () => {
       "revalidate-tags",
       { tags },
       expect.objectContaining({ delay: CDN_SETTLE_MS }),
+    );
+  });
+
+  it("evicts the season level's inputs before it rebuilds, so the ring covers a new level", async () => {
+    const { service, redis, calendarService, revalidationService } =
+      setup("phantasialand");
+
+    await service.warmupCalendarForAllParks();
+
+    const seasonKey = `ml:season-level:v4:${park.id}`;
+    const eviction = redis.del.mock.calls.findIndex((keys: unknown[]) =>
+      keys.includes(seasonKey),
+    );
+    expect(eviction).toBeGreaterThanOrEqual(0);
+    // No date in the key: the park's midnight starts no new inputs, which
+    // no ring would announce.
+    expect(seasonKey).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    const evictedAt = redis.del.mock.invocationCallOrder[eviction];
+    expect(evictedAt).toBeLessThan(
+      calendarService.buildCalendarResponse.mock.invocationCallOrder[0],
+    );
+    expect(evictedAt).toBeLessThan(
+      revalidationService.revalidateTags.mock.invocationCallOrder[0],
     );
   });
 

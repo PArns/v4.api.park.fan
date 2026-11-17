@@ -33,7 +33,10 @@ import {
 } from "../../common/utils/h5-profile.util";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { H5ProfileService } from "./h5-profile.service";
-import { servedLevelSource } from "../../ml/utils/season-level.util";
+import {
+  isSeasonRatioRow,
+  servedLevelSource,
+} from "../../ml/utils/season-level.util";
 import { isCountryWeekendDate } from "../../date-features/constants/weekend-rules.constant";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
@@ -1201,10 +1204,10 @@ export class PlanDayService {
     // the old composer's and stays: a ride the model said nothing about for
     // this date is not composed by either, so the tier ladder below is
     // unchanged. Whether a level scales the profile is `h5LevelFor`'s routing
-    // by the served level's source: TFT on busy rides at d0–d2 (the
-    // benchmark's horizon table), the season level on every ride and lead,
-    // CatBoost never. Everywhere else the plain profile is served. A ride
-    // without an H5 profile keeps the old composer's hours.
+    // by the served level's source: TFT and a season ratio row on busy rides
+    // at d0–d2 (the benchmark's horizon table), a measured season level on
+    // every ride and lead, CatBoost never. Everywhere else the plain profile
+    // is served. A ride without an H5 profile keeps the old composer's hours.
     const h5Slots = new Map<string, Map<number, number>>();
     const composerOf = new Map<string, PlanDayComposer>();
     const h5Days = new Map<string, number>();
@@ -1226,11 +1229,12 @@ export class PlanDayService {
           weekend,
         };
         // By the served row's source, not its model: a season row is
-        // `tft+season` or `catboost+season`, and its level is the one the
-        // calendar shows for the day.
+        // `tft+season`, `catboost+season` or `tft+season-ratio`, and its level
+        // is the one the calendar shows for the day.
         const routed = h5LevelFor(profileOfRide, leadDays, {
           level: level.predictedWaitTime,
           source: servedLevelSource(level.modelVersion),
+          seasonRatio: isSeasonRatioRow(level.modelVersion),
         });
         const { slots, levelApplied } = composeH5Day({
           ...day,

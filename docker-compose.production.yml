@@ -326,11 +326,11 @@ services:
       # Season level (PAR-1343): on a day of a running, published park season a
       # ride's served daily level follows what it measured on that season's latest
       # days of the same day type (3 needed) — no model reads park_seasons.
-      # SEASON_LEVEL_MODE=ratio scales TFT's number by measured ÷ forecast,
-      # level serves the measured median (PAR-1376). Rollback:
-      # SEASON_LEVEL_MODE=level, or SEASON_LEVEL=false. docs/ml/season-level.md
+      # SEASON_LEVEL_MODE=level serves the measured median; ratio scales TFT's
+      # number by measured ÷ forecast, bounded and unmeasured (PAR-1383).
+      # Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
       - SEASON_LEVEL=${SEASON_LEVEL:-true}
-      - SEASON_LEVEL_MODE=${SEASON_LEVEL_MODE:-ratio}
+      - SEASON_LEVEL_MODE=${SEASON_LEVEL_MODE:-level}
       # Calendar and yearly view: leave a headliner out of the days its season
       # rules out (PAR-1326) — River Quest, paused for Wintertraum, counted in
       # every Wintertraum day with a forecast of ~10 minutes.
