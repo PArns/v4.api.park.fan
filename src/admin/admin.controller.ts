@@ -168,6 +168,7 @@ export class AdminController {
     @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("park-enrichment") private parkEnrichmentQueue: Queue,
     @InjectQueue("ml-training") private mlTrainingQueue: Queue,
+    @InjectQueue("nf-training") private nfTrainingQueue: Queue,
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
     @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue,
@@ -946,6 +947,69 @@ export class AdminController {
       message: "ML training job queued",
       jobId: job.id.toString(),
     };
+  }
+
+  /**
+   * Queues a TFT training (`nf-training` / `train-nf`), as the 03:00 UTC cron does. The job skips
+   * itself while a training is in flight, so a second click starts nothing.
+   */
+  @Post("train-nf")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger TFT training",
+    description:
+      "Queues a TFT (nf-service) training run, about 40–50 minutes; skipped while one is in flight",
+  })
+  @ApiResponse({ status: 202, description: "TFT training job queued" })
+  async triggerTftTraining(): Promise<{ message: string; jobId: string }> {
+    const job = await this.nfTrainingQueue.add(
+      "train-nf",
+      {},
+      // One attempt, as the cron: a retry would stack a second training on the shared host.
+      { priority: 10, attempts: 1 },
+    );
+    return { message: "TFT training job queued", jobId: job.id.toString() };
+  }
+
+  /**
+   * Queues the calendar warmup (`park-metadata` / `warmup-calendar-daily`), as the 08:00 and
+   * 20:00 UTC cron does: it evicts and rebuilds every park's forecast months and best-days, then
+   * rings the frontend. Needed after a deploy or training that changes served forecasts
+   * (docs/deployment/coolify.md). Two warmups at once saturate the database's disk, so while one
+   * is running or waiting this answers with that job instead of queueing another.
+   */
+  @Post("warmup-calendar")
+  @AdminMinRole("editor")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Trigger calendar warmup",
+    description:
+      "Queues the calendar warmup and forecast ring; returns the running one instead while a warmup is active or waiting",
+  })
+  @ApiResponse({
+    status: 202,
+    description: "Calendar warmup queued or already queued",
+  })
+  async triggerCalendarWarmup(): Promise<{
+    message: string;
+    jobId: string;
+  }> {
+    const pending = (
+      await this.parkMetadataQueue.getJobs(["active", "waiting"])
+    ).find((job) => job?.name === "warmup-calendar-daily");
+    if (pending) {
+      return {
+        message: "Calendar warmup already running or waiting",
+        jobId: pending.id.toString(),
+      };
+    }
+    const job = await this.parkMetadataQueue.add(
+      "warmup-calendar-daily",
+      {},
+      { priority: 10 },
+    );
+    return { message: "Calendar warmup queued", jobId: job.id.toString() };
   }
 
   /**
