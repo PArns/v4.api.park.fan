@@ -12,12 +12,14 @@
 export type DisplaySurface =
   /** `/calendar` (`includeHourly=none`): the grid, the day dialog, the month page summary. */
   | "calendar"
-  /** The same day's `predictedCrowdLevel`, which the frontend rates the cells on. */
-  | "calendar_predicted"
   /** The same response's `todayCrowdLevel`: today measured so far. */
   | "calendar_so_far"
   /** `/best-days`, the snapshot the month calendar paints from. */
   | "best_days"
+  /** park.fan's `/api/parks/<geo>/calendar` relay for a month, as its edge serves it now. */
+  | "calendar_relay"
+  /** park.fan's `/api/parks/<geo>/best-days` relay, as its edge serves it now. */
+  | "best_days_relay"
   /** `/plan/day`, the trip planner's day, through its 15-minute cache. */
   | "plan_day"
   /** `/v1/trip-regions/:region/calendar`, a forecast day (`basis` forecast or long_range). */
@@ -35,11 +37,7 @@ export type DisplaySurface =
   /** Parky's chat tool `get_days`. */
   | "parky_get_days"
   /** Parky's chat tool `get_park_day`, which builds the day without the `/plan/day` cache. */
-  | "parky_get_park_day"
-  /** The stamp Parky's day tip would be written with now. */
-  | "parky_tip"
-  /** The stamp of each tip served now, per locale, from its 12-hour cache. */
-  | "parky_tip_served";
+  | "parky_get_park_day";
 
 /** What a value is. */
 export type DisplayMeasure =
@@ -48,9 +46,19 @@ export type DisplayMeasure =
   /** The headliners' expected peak wait for the day, in minutes. */
   | "headliner_wait"
   /** One ride's expected peak wait for the day, in minutes; keyed by the ride's id. */
-  | "ride_wait"
-  /** Parky's stamp: good, meh or bad. */
-  | "verdict";
+  | "ride_wait";
+
+/** What a relay's response said about the copy it was served from, where it said so. */
+export interface RelayCopy {
+  /** The `age` header: seconds the cache that answered had kept the copy. */
+  age?: number;
+  /** The `date` header. */
+  date?: string;
+  /** `cf-cache-status`: HIT, MISS, EXPIRED, … at Cloudflare. */
+  cloudflare?: string;
+  /** `x-vercel-cache`: HIT, MISS, STALE, … at Vercel, when Cloudflare filled its copy. */
+  vercel?: string;
+}
 
 /** One value one surface shows for one park-day. */
 export interface SurfaceValue {
@@ -60,10 +68,12 @@ export interface SurfaceValue {
   measure: DisplayMeasure;
   /** As the surface serves it; null or `unknown` when it shows none. */
   value: string | number | null;
-  /** Tells apart several values of one surface and measure: a ride id, a locale. */
+  /** Tells apart several values of one surface and measure: a ride id. */
   key?: string;
   /** When the surface computed the value, where it says so. */
   asOf?: string;
+  /** For a relay: the copy of park.fan's edge the value was read from. */
+  copy?: RelayCopy;
 }
 
 /** Two surfaces, and whether they must show the same value. */
@@ -75,8 +85,6 @@ export interface SurfacePair {
   rule: "equal" | "may_differ";
   /** For `equal` the one statistic both carry; for `may_differ` what each carries. */
   statistic: string;
-  /** A field that ignores the day's status: `closed` on either side is not compared. */
-  ignoreClosed?: boolean;
   /** Minutes compared on the calendar's five-minute grid, which only one side rounds to. */
   roundTo5?: boolean;
 }
@@ -86,15 +94,11 @@ const DAY_LEVEL =
 const HEADLINER_WAIT =
   "the mean predicted headliner day peak, rounded to 5 (CalendarService.buildHeadlinerForecasts, headlinerForecast.avgWait)";
 
+/** What a relay adds to the API's answer: an edge copy, kept until the forecast ring and an hour at Cloudflare. */
+const RELAY_COPY =
+  "park.fan's relay passes the API's answer on unchanged, so a difference is the age of the edge copy it was served from";
+
 export const SURFACE_PAIRS: readonly SurfacePair[] = [
-  {
-    a: "calendar",
-    b: "calendar_predicted",
-    measure: "crowd_level",
-    rule: "equal",
-    statistic: `${DAY_LEVEL}; crowdLevel is predictedCrowdLevel on a day that is not closed (buildCalendarDay)`,
-    ignoreClosed: true,
-  },
   {
     a: "calendar",
     b: "best_days",
@@ -162,19 +166,17 @@ export const SURFACE_PAIRS: readonly SurfacePair[] = [
   },
   {
     a: "calendar",
-    b: "parky_tip",
-    measure: "verdict",
+    b: "calendar_relay",
+    measure: "crowd_level",
     rule: "equal",
-    statistic:
-      "Parky's stamp of the day's forecast level (parkyVerdict of the calendar day, dayVerdict)",
+    statistic: `${DAY_LEVEL}; ${RELAY_COPY} (/calendar, includeHourly=none)`,
   },
   {
-    a: "parky_tip",
-    b: "parky_tip_served",
-    measure: "verdict",
+    a: "calendar_relay",
+    b: "best_days_relay",
+    measure: "crowd_level",
     rule: "equal",
-    statistic:
-      "Parky's stamp of the day's forecast level; a served tip keeps the stamp it was written with for 12 hours",
+    statistic: `${DAY_LEVEL}; the grid and its day dialog beside „Prognose heute" and the best-days section on one page, each from its own edge copy, the snapshot being calendar.days.map(projectDay)`,
   },
   {
     a: "calendar",
@@ -196,6 +198,13 @@ export const SURFACE_PAIRS: readonly SurfacePair[] = [
     measure: "headliner_wait",
     rule: "equal",
     statistic: `${HEADLINER_WAIT}; the region calendar's forecastWait`,
+  },
+  {
+    a: "calendar",
+    b: "calendar_relay",
+    measure: "headliner_wait",
+    rule: "equal",
+    statistic: `${HEADLINER_WAIT}; ${RELAY_COPY}`,
   },
   {
     a: "calendar",
@@ -253,6 +262,7 @@ export interface PairSide {
   surface: DisplaySurface;
   value: string | number;
   asOf?: string;
+  copy?: RelayCopy;
 }
 
 /** Two surfaces that showed different values for one park-day. */
@@ -304,6 +314,7 @@ function side(value: SurfaceValue & { value: string | number }): PairSide {
     surface: value.surface,
     value: value.value,
     ...(value.asOf && { asOf: value.asOf }),
+    ...(value.copy && { copy: value.copy }),
   };
 }
 
@@ -335,8 +346,6 @@ export function compareSurfaces(
     for (const a of left) {
       for (const b of right) {
         if (a.date !== b.date || !keysMeet(a.key, b.key)) continue;
-        if (pair.ignoreClosed && (a.value === "closed" || b.value === "closed"))
-          continue;
         result.compared++;
         if (sameValue(a.value, b.value, pair.roundTo5 === true)) continue;
         const key = a.key ?? b.key;

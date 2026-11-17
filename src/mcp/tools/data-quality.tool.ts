@@ -10,8 +10,9 @@ export const dataQualityTool = defineMcpTool({
     "one park that all fell silent on the same day (a dropped feed or a seasonal closure — a " +
     "human decides), jobs that keep failing, rides retired for absence that nobody gave a season, " +
     "and retired rides with a younger live ride right beside them (possibly re-issued under a new " +
-    "name), and how many mismatches the last daily display-consistency run found per park " +
-    "(display_consistency has them). Each list is cut to `limit` with its full size in `total`.",
+    "name), and how many mismatches and unreadable surfaces the last display-consistency run " +
+    "found per park (display_consistency has them). Each list is cut to `limit` with its full " +
+    "size in `total`.",
   input: {
     windowDays: z
       .number()
@@ -36,13 +37,16 @@ export const dataQualityTool = defineMcpTool({
       failingJobs: capped(report.failingJobs, limit),
       absenceRetiredUnreviewed: capped(report.absenceRetiredUnreviewed, limit),
       reissueCandidates: capped(report.reissueCandidates, limit),
-      // The last daily display-consistency run; display_consistency has the details.
+      // The last display-consistency run; display_consistency has the details.
       displayConsistency: report.displayConsistency && {
         checkedAt: report.displayConsistency.checkedAt,
         parksChecked: report.displayConsistency.parks.length,
         mismatches: report.displayConsistency.mismatches,
-        parksWithMismatches: capped(
-          report.displayConsistency.parks.filter((park) => park.mismatches > 0),
+        failures: report.displayConsistency.failures,
+        parksFlagged: capped(
+          report.displayConsistency.parks.filter(
+            (park) => park.mismatches > 0 || park.failures > 0,
+          ),
           limit,
         ),
       },

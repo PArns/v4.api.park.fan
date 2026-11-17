@@ -94,10 +94,9 @@ describe("compareSurfaces", () => {
     ]);
   });
 
-  it("reads closed against a level as a mismatch, except on a field that ignores the status", () => {
+  it("reads closed against a level as a mismatch", () => {
     const result = compareSurfaces([
       level("calendar", "closed"),
-      level("calendar_predicted", "high"),
       level("trip_region", "high"),
     ]);
     expect(result.mismatches.map((m) => m.b.surface)).toEqual(["trip_region"]);
@@ -134,32 +133,45 @@ describe("compareSurfaces", () => {
         key: "chiapas",
         value: 40,
       },
-      { date: DAY, surface: "parky_tip", measure: "verdict", value: "good" },
       {
         date: DAY,
-        surface: "parky_tip_served",
-        measure: "verdict",
-        key: "de",
-        value: "bad",
-      },
-      {
-        date: DAY,
-        surface: "parky_tip_served",
-        measure: "verdict",
-        key: "en",
-        value: "good",
+        surface: "calendar",
+        measure: "ride_wait",
+        key: "chiapas",
+        value: 30,
       },
     ]);
-    // 23 minutes lies on the calendar's 25 once rounded to its grid; Chiapas has no calendar row.
+    // 23 minutes lies on the calendar's 25 once rounded to its grid; Chiapas's 40 does not.
     expect(result.mismatches).toEqual([
       expect.objectContaining({
-        measure: "verdict",
-        key: "de",
-        a: { surface: "parky_tip", value: "good" },
-        b: { surface: "parky_tip_served", value: "bad" },
+        measure: "ride_wait",
+        key: "chiapas",
+        a: { surface: "calendar", value: 30 },
+        b: { surface: "plan_day", value: 40 },
       }),
     ]);
-    expect(result.compared).toBe(3);
+    expect(result.compared).toBe(2);
+  });
+
+  it("names the edge copy a relay's value came from", () => {
+    const copy = { age: 3300, cloudflare: "HIT", vercel: "HIT" };
+    const result = compareSurfaces([
+      level("calendar", "very_low"),
+      level("calendar_relay", "high", { copy }),
+      level("best_days_relay", "high", {
+        asOf: "2026-11-16T20:05:00.000Z",
+        copy: { age: 120 },
+      }),
+    ]);
+    expect(result.mismatches).toEqual([
+      expect.objectContaining({
+        a: { surface: "calendar", value: "very_low" },
+        b: { surface: "calendar_relay", value: "high", copy },
+        statistic: expect.stringContaining("edge copy"),
+      }),
+    ]);
+    // The two relays agree with each other: one stale copy, not two.
+    expect(result.compared).toBe(2);
   });
 
   it("compares minutes exactly where neither side rounds differently", () => {
@@ -209,6 +221,29 @@ describe("SURFACE_PAIRS", () => {
       expect(seen.has(id)).toBe(false);
       seen.add(id);
     }
+  });
+
+  it("compares no surface with a copy of itself", () => {
+    const surfaces = new Set(SURFACE_PAIRS.flatMap((pair) => [pair.a, pair.b]));
+    for (const gone of [
+      "calendar_predicted",
+      "parky_tip",
+      "parky_tip_served",
+    ]) {
+      expect(surfaces.has(gone as never)).toBe(false);
+    }
+    expect(SURFACE_PAIRS.map((pair) => pair.measure)).not.toContain("verdict");
+  });
+
+  it("checks the relays against the API and against each other, as the page shows them", () => {
+    const relayPairs = SURFACE_PAIRS.filter(
+      (pair) => pair.a.endsWith("_relay") || pair.b.endsWith("_relay"),
+    ).map((pair) => [pair.a, pair.b, pair.measure, pair.rule]);
+    expect(relayPairs).toEqual([
+      ["calendar", "calendar_relay", "crowd_level", "equal"],
+      ["calendar_relay", "best_days_relay", "crowd_level", "equal"],
+      ["calendar", "calendar_relay", "headliner_wait", "equal"],
+    ]);
   });
 
   it("keeps the live level and the day's forecast apart", () => {

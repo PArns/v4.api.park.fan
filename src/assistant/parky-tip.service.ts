@@ -4,7 +4,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { cachedJson } from "../common/cache/redis-json-cache";
-import { safeJsonParse } from "../common/utils/json.util";
 import { parseDateRange } from "../common/utils/date-parsing.util";
 import {
   addIsoDays,
@@ -16,7 +15,7 @@ import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
 import { CalendarService } from "../parks/services/calendar.service";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
-import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
+import type { AssistantLocale } from "./assistant-locales";
 import {
   PARKY_TIP_MAX_CHARS,
   PARKY_TIP_PROMPT_VERSION,
@@ -185,32 +184,6 @@ export class ParkyTipService {
       days,
       verdict: dayVerdict(days.find((d) => d.date === date)),
     };
-  }
-
-  /**
-   * The stamps of the tips served now for `date`, per locale, from the cache; a locale without
-   * a kept tip is left out. A tip is kept under the day's level, so only the tips written for the
-   * level the calendar shows now can be served. Writes nothing and asks no model.
-   */
-  async servedVerdicts(
-    park: Park,
-    date: string,
-  ): Promise<Partial<Record<AssistantLocale, ParkyVerdict>>> {
-    const today = getCurrentDateInTimezone(park.timezone);
-    const days = await this.daysAround(park, today, date);
-    const rating = rateDay(days.find((d) => d.date === date));
-    if (!rating) return {};
-    const kept = await this.redis.mget(
-      ...ASSISTANT_LOCALES.map((locale) =>
-        tipKey(park.id, today, date, rating.crowdLevel, locale),
-      ),
-    );
-    const out: Partial<Record<AssistantLocale, ParkyVerdict>> = {};
-    ASSISTANT_LOCALES.forEach((locale, i) => {
-      const tip = safeJsonParse<ParkyTip | false>(kept[i]);
-      if (tip) out[locale] = tip.verdict;
-    });
-    return out;
   }
 
   /** The calendar's days around `date` that the prompt sees, from today on. */

@@ -34,7 +34,7 @@ its `docs/architecture/caching-strategy.md`.
 | `search:index:v1:*`, `search:fuzzy:v2:{type}:{limit}:{q}` | 2 h, 5 min | [Search](search.md) |
 | `weather:*` | per surface | [Weather](weather.md#call-cadence-per-surface) |
 | `popularity:parks`, `popularity:attractions` | sorted sets, decayed daily | `ZINCRBY` from `PopularityInterceptor` on successful GETs; feeds warmup priority |
-| `display-consistency:v1:park:{parkId}`, `display-consistency:v1:summary` | 2 days | State, not cache: the daily [display-consistency](../analytics/display-consistency.md) run's result per park and its summary, which the admin and the data-quality report read |
+| `display-consistency:v1:park:{parkId}`, `display-consistency:v1:summary` | 2 days | State, not cache: the last [display-consistency](../analytics/display-consistency.md) run's result per park and its summary, which the admin and the data-quality report read |
 | `site-analytics:*` | buffers `buf:*` none (parked ones 7 days); a visit until the flush ends it, at most 40 min after its last hit, and its place in `visits:open` at most 2 h; caps to the end of the UTC day + 1 min; day visitors, also by country, device, browser, OS and channel, to its end + 1 h; guard sets and drop counts to the end of the next day; realtime and live view minutes 35 min | State, not cache, and never flushed: the [site statistic](../frontend/site-analytics.md#privacy)'s counts until the flusher writes them, its visits, caps, guards, HyperLogLogs and the live view's minutes. Keys standing for a reader are HMACs under the UTC day's key |
 
 Everything park-scoped is evicted together by `invalidateParkCaches(redis, parkId, attractionIds)`
