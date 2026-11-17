@@ -248,19 +248,6 @@ describe("ParkyTipService", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("reads the stamps of the tips served now, per locale, and writes none", async () => {
-    await service.tip(park, date, "de");
-    store.set(
-      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:fr`,
-      "false",
-    );
-    const writes = (redis.set as jest.Mock).mock.calls.length;
-
-    expect(await service.servedVerdicts(park, date)).toEqual({ de: "good" });
-    expect(redis.set).toHaveBeenCalledTimes(writes);
-    expect(create).toHaveBeenCalledTimes(1);
-  });
-
   it("does not cache a spent budget", async () => {
     settings.budgetSpent.mockResolvedValue(true);
     expect(await service.tip(park, date, "de")).toBeNull();

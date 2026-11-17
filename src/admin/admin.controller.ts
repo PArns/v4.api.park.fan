@@ -360,25 +360,22 @@ export class AdminController {
   }
 
   /**
-   * The last daily display-consistency run: per park the mismatches between
-   * surfaces that must show the same value, and each flagged park's details.
-   * docs/analytics/display-consistency.md.
+   * The last display-consistency run: per park the mismatches between surfaces
+   * that must show the same value and the surfaces it could not read, and each
+   * flagged park's details. docs/analytics/display-consistency.md.
    */
   @Get("display-consistency")
   @ApiOperation({
     summary:
-      "The last daily display-consistency run: parks whose surfaces disagree about a park-day",
+      "The last display-consistency run: parks whose surfaces disagree about a park-day, or could not be read",
   })
   async getDisplayConsistency() {
-    const summary = await this.displayConsistency.latestSummary();
-    if (!summary) return { summary: null, parks: [] };
-    const flagged = summary.parks.filter(
-      (park) => park.mismatches > 0 || park.failures > 0,
+    return (
+      (await this.displayConsistency.latestRun()) ?? {
+        summary: null,
+        parks: [],
+      }
     );
-    const parks = await Promise.all(
-      flagged.map((park) => this.displayConsistency.latestForPark(park.id)),
-    );
-    return { summary, parks: parks.filter((park) => park !== null) };
   }
 
   /**
@@ -389,7 +386,7 @@ export class AdminController {
   @Get("display-consistency/check")
   @ApiOperation({
     summary:
-      "Compare what every surface shows for a park's next days (calendar, best-days, /plan/day, trip region, park payload, Parky)",
+      "Compare what every surface shows for a park's next days (calendar, best-days, /plan/day, trip region, park payload, Parky, park.fan's calendar and best-days relays)",
   })
   @ApiQuery({
     name: "park",

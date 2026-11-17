@@ -21,7 +21,6 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { TripRegionService } from "../../trip-regions/trip-region.service";
 import { regionOfPark } from "../../trip-regions/regions";
-import { ParkyTipService, dayVerdict } from "../../assistant/parky-tip.service";
 import {
   ASSISTANT_TOOLS,
   type AssistantToolContext,
@@ -30,13 +29,16 @@ import { PageViewsService } from "../../page-views/page-views.service";
 import { parksWithRunningSeason } from "../../ml/utils/season-level.query";
 import type { AdminPrincipal } from "../../admin/auth/admin-principal";
 import { resolvePark, type AmbiguousPark } from "../../mcp/tools/park-ref";
+import type { CalendarDay } from "../../parks/dto/integrated-calendar.dto";
 import {
   compareSurfaces,
   type DisplayDifference,
   type DisplayMeasure,
   type DisplaySurface,
+  type RelayCopy,
   type SurfaceValue,
 } from "./display-consistency.rules";
+import { readRelay, relayUrls } from "./display-consistency.relays";
 
 /** Today, tomorrow and the seven days after. */
 export const DISPLAY_CONSISTENCY_DEFAULT_DAYS = 9;
@@ -61,12 +63,11 @@ export interface SurfaceFailure {
   error: string;
 }
 
-/** One day as every surface showed it: crowd levels, headliner waits and stamps by surface. */
+/** One day as every surface showed it: crowd levels and headliner waits by surface. */
 export interface DisplayDayView {
   date: string;
   crowdLevel: Record<string, string | number>;
   headlinerWait: Record<string, string | number>;
-  verdict: Record<string, string | number>;
 }
 
 export interface DisplayConsistencyResult {
@@ -86,12 +87,23 @@ export interface DisplayConsistencySummary {
   checkedAt: string;
   days: number;
   mismatches: number;
+  /** Surfaces that could not be read, over every park; a park whose check threw counts once. */
+  failures: number;
   parks: Array<{
     id: string;
     name: string;
     mismatches: number;
     failures: number;
+    /** Why the park's check threw; it then has no result of its own. */
+    error?: string;
   }>;
+}
+
+/** The last run's summary and the result of each park it flagged, as the admin and MCP show it. */
+export interface DisplayConsistencyLastRun {
+  summary: DisplayConsistencySummary;
+  /** The parks with a mismatch or a failure, in the summary's order. */
+  parks: DisplayConsistencyResult[];
 }
 
 const message = (error: unknown) =>
@@ -102,33 +114,94 @@ function dayViews(
   dates: readonly string[],
   values: readonly SurfaceValue[],
 ): DisplayDayView[] {
-  const columns: Partial<Record<DisplayMeasure, keyof DisplayDayView>> = {
+  const columns: Partial<
+    Record<DisplayMeasure, "crowdLevel" | "headlinerWait">
+  > = {
     crowd_level: "crowdLevel",
     headliner_wait: "headlinerWait",
-    verdict: "verdict",
   };
   return dates.map((date) => {
-    const view: DisplayDayView = {
-      date,
-      crowdLevel: {},
-      headlinerWait: {},
-      verdict: {},
-    };
+    const view: DisplayDayView = { date, crowdLevel: {}, headlinerWait: {} };
     for (const v of values) {
       const column = columns[v.measure];
       if (v.date !== date || !column || v.value === null) continue;
       const name = v.key ? `${v.surface}:${v.key}` : v.surface;
-      (view[column] as Record<string, string | number>)[name] = v.value;
+      view[column][name] = v.value;
     }
     return view;
   });
 }
 
+/** The fields of a calendar day the check reads, as the API or a relay of it serves them. */
+type CalendarDayFields = Partial<
+  Pick<CalendarDay, "date" | "crowdLevel" | "headlinerForecast">
+>;
+
+/**
+ * A calendar day's crowd level and, on a forecast day, its headliner wait. A
+ * relay's body is read the same way, so a field of another type counts as absent.
+ */
+function calendarDayValues(
+  day: CalendarDayFields,
+  surface: "calendar" | "calendar_relay",
+  copy?: RelayCopy,
+): SurfaceValue[] {
+  if (typeof day.date !== "string") return [];
+  const at = { date: day.date, surface, ...(copy && { copy }) };
+  const forecast = day.headlinerForecast;
+  return [
+    {
+      ...at,
+      measure: "crowd_level",
+      value: typeof day.crowdLevel === "string" ? day.crowdLevel : null,
+    },
+    ...(forecast && !forecast.actual && typeof forecast.avgWait === "number"
+      ? [{ ...at, measure: "headliner_wait" as const, value: forecast.avgWait }]
+      : []),
+  ];
+}
+
+/** The calendar relay's months as the grid and its day dialog read them, the checked days only. */
+async function calendarRelayValues(
+  urls: readonly string[],
+  page: string,
+  dates: readonly string[],
+): Promise<SurfaceValue[]> {
+  const months = await Promise.all(urls.map((url) => readRelay(url, page)));
+  return months.flatMap(({ body, copy }) =>
+    (body.days as CalendarDayFields[])
+      .filter((day) => dates.includes(day.date as string))
+      .flatMap((day) => calendarDayValues(day, "calendar_relay", copy)),
+  );
+}
+
+/** The best-days relay's snapshot as „Prognose heute" and the best-days section read it. */
+async function bestDaysRelayValues(
+  url: string,
+  page: string,
+  dates: readonly string[],
+): Promise<SurfaceValue[]> {
+  const { body, copy } = await readRelay(url, page);
+  const asOf = body.meta?.computedAt;
+  return (body.days as CalendarDayFields[])
+    .filter((day) => dates.includes(day.date as string))
+    .map((day) => ({
+      date: day.date as string,
+      surface: "best_days_relay" as const,
+      measure: "crowd_level" as const,
+      value: typeof day.crowdLevel === "string" ? day.crowdLevel : null,
+      ...(typeof asOf === "string" && { asOf }),
+      copy,
+    }));
+}
+
 /**
  * Reads one park-day as every surface would show it right now, each through the
- * method its endpoint or tool calls, and compares the pairs that must agree
+ * method its endpoint or tool calls, and through park.fan's own relays as a
+ * visitor's browser asks for them, and compares the pairs that must agree
  * (`display-consistency.rules.ts`). Reads only: the caches it touches are the
- * ones those endpoints fill on a miss. docs/analytics/display-consistency.md.
+ * ones those endpoints and relays fill on a miss.
+ * docs/analytics/display-consistency.md.
  */
 @Injectable()
 export class DisplayConsistencyService {
@@ -176,8 +249,9 @@ export class DisplayConsistencyService {
         },
       );
 
+    const relays = relayUrls(park, dates);
     await Promise.all([
-      read(["calendar", "calendar_predicted", "calendar_so_far"], () =>
+      read(["calendar", "calendar_so_far"], () =>
         this.calendarValues(park, dates),
       ),
       read(["best_days"], () => this.bestDaysValues(park, dates)),
@@ -191,12 +265,19 @@ export class DisplayConsistencyService {
         this.parkyLiveValues(park, today),
       ),
       read(["parky_get_days"], () => this.parkyDaysValues(park, dates)),
-      read(["parky_tip", "parky_tip_served"], () =>
-        this.tipValues(park, dates),
-      ),
       read(["plan_day", "parky_get_park_day"], () =>
         this.dayPlanValues(park, dates),
       ),
+      ...(relays
+        ? [
+            read(["calendar_relay"], () =>
+              calendarRelayValues(relays.calendar, relays.page, dates),
+            ),
+            read(["best_days_relay"], () =>
+              bestDaysRelayValues(relays.bestDays, relays.page, dates),
+            ),
+          ]
+        : []),
     ]);
 
     const comparison = compareSurfaces(values);
@@ -226,6 +307,7 @@ export class DisplayConsistencyService {
       checkedAt,
       days: DISPLAY_CONSISTENCY_DEFAULT_DAYS,
       mismatches: 0,
+      failures: 0,
       parks: [],
     };
     for (const id of parkIds) {
@@ -246,13 +328,21 @@ export class DisplayConsistencyService {
           failures: result.failures.length,
         });
         summary.mismatches += result.mismatches.length;
+        summary.failures += result.failures.length;
       } catch (error) {
-        this.logger.warn(
-          `Display consistency failed for ${park.slug}: ${message(error)}`,
-        );
+        summary.parks.push({
+          id: park.id,
+          name: park.name,
+          mismatches: 0,
+          failures: 1,
+          error: message(error),
+        });
+        summary.failures++;
       }
     }
-    summary.parks.sort((a, b) => b.mismatches - a.mismatches);
+    summary.parks.sort(
+      (a, b) => b.mismatches - a.mismatches || b.failures - a.failures,
+    );
     await this.redis.set(
       SUMMARY_KEY,
       JSON.stringify(summary),
@@ -276,6 +366,19 @@ export class DisplayConsistencyService {
     return safeJsonParse<DisplayConsistencyResult>(
       await this.redis.get(parkKey(parkId)),
     );
+  }
+
+  /** The last run with the result of each park it flagged, or null when none is kept. */
+  async latestRun(): Promise<DisplayConsistencyLastRun | null> {
+    const summary = await this.latestSummary();
+    if (!summary) return null;
+    const flagged = summary.parks.filter(
+      (park) => park.mismatches > 0 || park.failures > 0,
+    );
+    const parks = await Promise.all(
+      flagged.map((park) => this.latestForPark(park.id)),
+    );
+    return { summary, parks: parks.filter((park) => park !== null) };
   }
 
   /** The parks in a running season first, then the most read park pages of the week. */
@@ -321,40 +424,14 @@ export class DisplayConsistencyService {
     for (const day of calendar.days) {
       if (!dates.includes(day.date)) continue;
       const date = day.date;
-      out.push(
-        {
-          date,
-          surface: "calendar",
-          measure: "crowd_level",
-          value: day.crowdLevel,
-        },
-        {
-          date,
-          surface: "calendar_predicted",
-          measure: "crowd_level",
-          value: day.predictedCrowdLevel ?? null,
-        },
-        {
-          date,
-          surface: "calendar_so_far",
-          measure: "crowd_level",
-          value: day.todayCrowdLevel ?? null,
-        },
-        {
-          date,
-          surface: "calendar",
-          measure: "verdict",
-          value: dayVerdict(day),
-        },
-      );
+      out.push(...calendarDayValues(day, "calendar"), {
+        date,
+        surface: "calendar_so_far",
+        measure: "crowd_level",
+        value: day.todayCrowdLevel ?? null,
+      });
       const forecast = day.headlinerForecast;
       if (!forecast || forecast.actual) continue;
-      out.push({
-        date,
-        surface: "calendar",
-        measure: "headliner_wait",
-        value: forecast.avgWait,
-      });
       for (const ride of forecast.rides) {
         out.push({
           date,
@@ -522,38 +599,6 @@ export class DisplayConsistencyService {
         value: row.expectedPeakWaitMinutes ?? null,
       },
     ]);
-  }
-
-  /** The stamp a tip would be written with now, and the stamps of the tips served now. */
-  private async tipValues(
-    park: Park,
-    dates: readonly string[],
-  ): Promise<SurfaceValue[]> {
-    const tips = this.get(ParkyTipService);
-    const perDay = await Promise.all(
-      dates.map(async (date) => {
-        const [{ verdict }, served] = await Promise.all([
-          tips.readDay(park, date),
-          tips.servedVerdicts(park, date),
-        ]);
-        return [
-          {
-            date,
-            surface: "parky_tip" as const,
-            measure: "verdict" as const,
-            value: verdict,
-          },
-          ...Object.entries(served).map(([locale, stamp]) => ({
-            date,
-            surface: "parky_tip_served" as const,
-            measure: "verdict" as const,
-            key: locale,
-            value: stamp,
-          })),
-        ];
-      }),
-    );
-    return perDay.flat();
   }
 
   /**

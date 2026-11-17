@@ -39,20 +39,41 @@ function services() {
       differences: [],
       failures: [],
     })),
-    latestSummary: jest.fn(async () => ({
-      checkedAt: "2026-11-17T09:40:00.000Z",
-      days: 9,
-      mismatches: 2,
+    latestRun: jest.fn(async () => ({
+      summary: {
+        checkedAt: "2026-11-17T23:40:00.000Z",
+        days: 9,
+        mismatches: 2,
+        failures: 2,
+        parks: [
+          { id: PARK, name: "Phantasialand", mismatches: 2, failures: 1 },
+          {
+            id: "gone",
+            name: "Efteling",
+            mismatches: 0,
+            failures: 1,
+            error: "Invalid time zone",
+          },
+          { id: "other", name: "Toverland", mismatches: 0, failures: 0 },
+        ],
+      },
       parks: [
-        { id: PARK, name: "Phantasialand", mismatches: 2, failures: 0 },
-        { id: "other", name: "Efteling", mismatches: 0, failures: 0 },
+        {
+          park: { id: PARK, name: "Phantasialand" },
+          checkedAt: "2026-11-17T23:40:00.000Z",
+          days: [],
+          compared: 30,
+          mismatches: [mismatch, mismatch],
+          differences: [],
+          failures: [
+            {
+              surface: "calendar_relay",
+              error:
+                "/api/parks/…/calendar?from=2026-11-01&to=2026-11-30: Cloudflare challenge (403)",
+            },
+          ],
+        },
       ],
-    })),
-    latestForPark: jest.fn(async (id: string) => ({
-      park: { id, name: "Phantasialand" },
-      checkedAt: "2026-11-17T09:40:00.000Z",
-      mismatches: [mismatch, mismatch],
-      failures: [],
     })),
   };
 }
@@ -94,23 +115,29 @@ describe("display_consistency", () => {
     expect(fake.check).toHaveBeenCalledWith(expect.anything(), 9);
   });
 
-  it("without a park, answers with the last daily run and the flagged parks only", async () => {
-    const { answer, fake } = await run({});
+  it("without a park, answers with the last run, its failures and the flagged parks only", async () => {
+    const { answer, fake } = await run({ limit: 1 });
     expect(fake.check).not.toHaveBeenCalled();
-    expect(fake.latestForPark).toHaveBeenCalledTimes(1);
     expect(answer).toEqual({
       lastRun: {
-        checkedAt: "2026-11-17T09:40:00.000Z",
+        checkedAt: "2026-11-17T23:40:00.000Z",
         days: 9,
-        parksChecked: 2,
+        parksChecked: 3,
         mismatches: 2,
+        failures: 2,
+        parksFailed: [
+          { id: "gone", name: "Efteling", error: "Invalid time zone" },
+        ],
       },
       parks: {
         total: 1,
         items: [
-          expect.objectContaining({
+          {
             park: { id: PARK, name: "Phantasialand" },
-          }),
+            checkedAt: "2026-11-17T23:40:00.000Z",
+            mismatches: [expect.objectContaining({ date: "2026-11-17" })],
+            failures: [expect.objectContaining({ surface: "calendar_relay" })],
+          },
         ],
       },
     });
@@ -118,12 +145,12 @@ describe("display_consistency", () => {
 
   it("says so when no run is kept", async () => {
     const fake = services();
-    fake.latestSummary.mockResolvedValue(null as never);
+    fake.latestRun.mockResolvedValue(null as never);
     const ctx = { admin: {}, get: () => fake } as unknown as McpToolContext;
     const input = z.object(displayConsistencyTool.input).parse({});
     expect(await displayConsistencyTool.handler(input as never, ctx)).toEqual({
       lastRun: null,
-      note: "no daily run in the last two days",
+      note: "no run in the last two days",
     });
   });
 

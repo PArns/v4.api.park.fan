@@ -1534,14 +1534,15 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Display consistency: every surface's value of a park-day, compared where
-    // they must agree. After the morning calendar warmup (08:00), which
-    // publishes the night's forecasts into the calendar and best-days caches,
-    // and clear of the night batch (01:00–09:30) and of the :00–:10 crons.
+    // they must agree. 09:40 follows the morning calendar warmup (08:00) and its
+    // ring, when every copy should agree; 23:40 follows midnight in Europe, when
+    // "today" has moved on under copies made the evening before. Both clear of
+    // the night batch (01:00–09:30) and of the :00–:10 crons.
     if (
       !(await this.hasRepeatableJob(
         this.analyticsQueue,
         "display-consistency-cron",
-        "40 9 * * *",
+        "40 9,23 * * *",
         "UTC",
       ))
     ) {
@@ -1549,7 +1550,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         CHECK_DISPLAY_CONSISTENCY_JOB,
         {},
         {
-          repeat: { cron: "40 9 * * *", tz: "UTC" },
+          repeat: { cron: "40 9,23 * * *", tz: "UTC" },
           jobId: "display-consistency-cron",
           removeOnComplete: 100,
         },
