@@ -39,6 +39,12 @@ export interface ParkyTip {
   verdict: ParkyVerdict;
   /** The day's crowd level the sentence was written for; a level that moves gets a new one. */
   crowdLevel: CrowdLevel;
+  /**
+   * On the tip for today only, the level so far the sentence was written from, so a client can
+   * hide a sentence that says another morning than the „bisher" it shows. Absent on other days and
+   * where today has none yet.
+   */
+  todayCrowdLevel?: CrowdLevel;
   text: string;
   promptVersion: number;
 }
@@ -63,17 +69,29 @@ export function parkyVerdict(
 interface DayRating {
   crowdLevel: CrowdLevel;
   verdict: ParkyVerdict;
+  todayCrowdLevel?: CrowdLevel;
 }
 
-/** A day's crowd level and Parky's verdict on it; null for a closed or unrated day. */
+/**
+ * A day's crowd level and Parky's verdict on it, with the level so far where the tip for `date`
+ * reads one (`soFarToday`); null for a closed or unrated day.
+ */
 function rateDay(
-  day: Pick<CalendarDay, "status" | "crowdLevel"> | undefined,
+  day: CalendarDay | undefined,
+  date: string,
+  today: string,
 ): DayRating | null {
   if (!day || day.status === "CLOSED" || day.crowdLevel === "closed") {
     return null;
   }
   const verdict = parkyVerdict(day.crowdLevel);
-  return verdict ? { crowdLevel: day.crowdLevel, verdict } : null;
+  if (!verdict) return null;
+  const soFar = soFarToday(day, date, today);
+  return {
+    crowdLevel: day.crowdLevel,
+    verdict,
+    ...(soFar && { todayCrowdLevel: soFar }),
+  };
 }
 
 /** Whether a tip is written for `date`: from the park's today to the horizon. */
@@ -195,7 +213,11 @@ export class ParkyTipService {
     if (!(await this.settings.publicConfig()).enabled) return null;
     try {
       const days = await this.daysAround(park, today, date);
-      const rating = rateDay(days.find((d) => d.date === date));
+      const rating = rateDay(
+        days.find((d) => d.date === date),
+        date,
+        today,
+      );
       if (!rating) return null;
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,

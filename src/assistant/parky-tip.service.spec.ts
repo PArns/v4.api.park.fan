@@ -347,16 +347,50 @@ describe("ParkyTipService", () => {
       ],
     });
     buildCalendarResponse.mockResolvedValue(day("very_low"));
-    await service.tip(park, today, "de");
+    const first = await service.tip(park, today, "de");
     const [request] = create.mock.calls[0] as [
       { messages: { content: string }[] },
     ];
     expect(request.messages[0].content).toContain("so far today: very low");
+    expect(first?.todayCrowdLevel).toBe("very_low");
 
     buildCalendarResponse.mockResolvedValue(day("high"));
-    await service.tip(park, today, "de");
+    const moved = await service.tip(park, today, "de");
 
     expect(create).toHaveBeenCalledTimes(2);
+    expect(moved?.todayCrowdLevel).toBe("high");
+    // Kept with the sentence, so a cache hit names the level it was written from too.
+    expect((await service.tip(park, today, "de"))?.todayCrowdLevel).toBe(
+      "high",
+    );
+  });
+
+  it("names no level so far on another day's tip, nor on today's before it has one", async () => {
+    const tomorrow = addIsoDays(today, 1);
+    buildCalendarResponse.mockResolvedValue({
+      days: [
+        {
+          date: today,
+          status: "OPERATING",
+          crowdLevel: "high",
+          todayCrowdLevel: "low",
+        },
+        { date: tomorrow, status: "OPERATING", crowdLevel: "low" },
+      ],
+    });
+    const other = await service.tip(park, tomorrow, "de");
+    expect(other).not.toBeNull();
+    expect(other).not.toHaveProperty("todayCrowdLevel");
+
+    buildCalendarResponse.mockResolvedValue({
+      days: [{ date: today, status: "OPERATING", crowdLevel: "high" }],
+    });
+    const early = await service.tip(park, today, "de");
+    expect(early).not.toBeNull();
+    expect(early).not.toHaveProperty("todayCrowdLevel");
+    expect(JSON.parse([...store.values()].pop()!)).not.toHaveProperty(
+      "todayCrowdLevel",
+    );
   });
 
   it("keeps the tip of a day around today when only today's level so far moves", async () => {

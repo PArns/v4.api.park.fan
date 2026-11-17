@@ -1166,6 +1166,10 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
 - **`crowdLevel`** is that level, as `/calendar` has it for the day when the tip is asked for: the
   sentence was written for it, and park.fan's dialog shows the tip only where this is the level its
   own crowd panel shows. Never `closed` or `unknown`, which get a 204.
+- **`todayCrowdLevel`** (optional) is on the tip for today only (`date` is the park's today): the
+  level so far the sentence was written from, kept with it in the cache. park.fan's dialog shows
+  the tip only where this is also the „bisher heute" beside it; the field is absent on any other
+  day and on today before the day has a level so far, never `null`.
 - **`text`** is one sentence of at most 160 characters in Parky's voice, in `locale` (one of
   `ASSISTANT_LOCALES`), written by `ASSISTANT_MODEL` from the calendar's entries for the day and up
   to three days on each side (crowd level, hours in park time, holidays, school holidays, events,
