@@ -143,7 +143,7 @@ type CalendarDayFields = Partial<
  */
 function calendarDayValues(
   day: CalendarDayFields,
-  surface: "calendar" | "calendar_relay",
+  surface: "calendar" | "calendar_relay" | "today_relay",
   copy?: RelayCopy,
 ): SurfaceValue[] {
   if (typeof day.date !== "string") return [];
@@ -161,17 +161,21 @@ function calendarDayValues(
   ];
 }
 
-/** The calendar relay's months as the grid and its day dialog read them, the checked days only. */
+/**
+ * The calendar relay's answers, the checked days only: the months as the grid and its day dialog
+ * read them, or today alone as the today panel's dialog does.
+ */
 async function calendarRelayValues(
   urls: readonly string[],
   page: string,
   dates: readonly string[],
+  surface: "calendar_relay" | "today_relay",
 ): Promise<SurfaceValue[]> {
-  const months = await Promise.all(urls.map((url) => readRelay(url, page)));
-  return months.flatMap(({ body, copy }) =>
+  const answers = await Promise.all(urls.map((url) => readRelay(url, page)));
+  return answers.flatMap(({ body, copy }) =>
     (body.days as CalendarDayFields[])
       .filter((day) => dates.includes(day.date as string))
-      .flatMap((day) => calendarDayValues(day, "calendar_relay", copy)),
+      .flatMap((day) => calendarDayValues(day, surface, copy)),
   );
 }
 
@@ -249,7 +253,7 @@ export class DisplayConsistencyService {
         },
       );
 
-    const relays = relayUrls(park, dates);
+    const relays = relayUrls(park, today, dates);
     await Promise.all([
       read(["calendar", "calendar_so_far"], () =>
         this.calendarValues(park, dates),
@@ -271,7 +275,20 @@ export class DisplayConsistencyService {
       ...(relays
         ? [
             read(["calendar_relay"], () =>
-              calendarRelayValues(relays.calendar, relays.page, dates),
+              calendarRelayValues(
+                relays.calendar,
+                relays.page,
+                dates,
+                "calendar_relay",
+              ),
+            ),
+            read(["today_relay"], () =>
+              calendarRelayValues(
+                [relays.today],
+                relays.page,
+                [today],
+                "today_relay",
+              ),
             ),
             read(["best_days_relay"], () =>
               bestDaysRelayValues(relays.bestDays, relays.page, dates),

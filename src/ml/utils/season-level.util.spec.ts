@@ -351,15 +351,21 @@ describe("season level (PAR-1343)", () => {
   });
 
   describe("seasonSchoolCoverage", () => {
+    const today = "2026-11-17";
     const coverage = buildSchoolCoverage([
       { country: "DE", region: "DE-NW", through: "2027-07-20" },
       { country: "DE", region: "DE-NI", through: "2027-07-01" },
       { country: "NL", region: "NL-LI", through: "2027-06-15" },
       { country: "BE", region: null, through: "2027-06-30" },
+      // Stored as measured on 2026-10-24 (school-holiday-coverage.md).
+      { country: "MX", region: null, through: "2026-07-15" },
+      { country: "IE", region: null, through: "2026-04-12" },
+      { country: "US", region: "US-TX", through: "2027-06-04" },
+      { country: "US", region: "US-OK", through: "2027-05-21" },
     ]);
 
     it("reads the park's own edge and the earliest of its neighbours'", () => {
-      expect(seasonSchoolCoverage(coverage, phantasialand)).toEqual({
+      expect(seasonSchoolCoverage(coverage, phantasialand, today)).toEqual({
         park: "2027-07-20",
         neighbours: "2027-06-15",
       });
@@ -367,20 +373,75 @@ describe("season level (PAR-1343)", () => {
 
     it("leaves out a neighbour that stores no school break at all", () => {
       expect(
-        seasonSchoolCoverage(coverage, {
-          ...phantasialand,
-          influencingRegions: [
-            { countryCode: "SE", regionCode: null },
-            { countryCode: "BE", regionCode: null },
-          ],
-        }),
+        seasonSchoolCoverage(
+          coverage,
+          {
+            ...phantasialand,
+            influencingRegions: [
+              { countryCode: "SE", regionCode: null },
+              { countryCode: "BE", regionCode: null },
+            ],
+          },
+          today,
+        ),
       ).toEqual({ park: "2027-07-20", neighbours: "2027-06-30" });
       expect(
-        seasonSchoolCoverage(coverage, {
-          ...phantasialand,
-          influencingRegions: [{ countryCode: "SE", regionCode: null }],
-        }),
+        seasonSchoolCoverage(
+          coverage,
+          {
+            ...phantasialand,
+            influencingRegions: [{ countryCode: "SE", regionCode: null }],
+          },
+          today,
+        ),
       ).toEqual({ park: "2027-07-20", neighbours: null });
+    });
+
+    it("leaves out a neighbour whose school data ended before the park's today, and keeps one that reaches it", () => {
+      const withIreland = {
+        ...phantasialand,
+        influencingRegions: [
+          { countryCode: "IE", regionCode: null },
+          { countryCode: "NL", regionCode: "NL-LI" },
+        ],
+      };
+      expect(seasonSchoolCoverage(coverage, withIreland, today)).toEqual({
+        park: "2027-07-20",
+        neighbours: "2027-06-15",
+      });
+      // On Ireland's last stored day its edge still bounds the others.
+      expect(seasonSchoolCoverage(coverage, withIreland, "2026-04-12")).toEqual(
+        { park: "2027-07-20", neighbours: "2026-04-12" },
+      );
+    });
+
+    it("types a US park's working days although Mexico's school data ended in July", () => {
+      // A park in Texas, two of whose influencing regions are Oklahoma and Mexico.
+      const texas = {
+        countryCode: "US",
+        regionCode: "US-TX",
+        timezone: "America/Chicago",
+        influencingRegions: [
+          { countryCode: "US", regionCode: "US-OK" },
+          { countryCode: "MX", regionCode: null },
+        ],
+      };
+      const edges = seasonSchoolCoverage(coverage, texas, "2026-11-20");
+      expect(edges).toEqual({ park: "2027-06-04", neighbours: "2027-05-21" });
+
+      // Holiday in the Park from Saturday 21 November.
+      const types = seasonDayTypes(
+        eachIsoDate("2026-11-21", "2026-12-04"),
+        [],
+        texas,
+        edges,
+      );
+      expect(types).toEqual({
+        daysOff: ["2026-11-21", "2026-11-22", "2026-11-28", "2026-11-29"],
+        neighbourDays: [],
+        eves: ["2026-11-27", "2026-12-04"],
+        unknownDays: [],
+      });
     });
   });
 

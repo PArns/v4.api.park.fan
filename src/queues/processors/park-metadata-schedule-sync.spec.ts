@@ -30,6 +30,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
   let parksService: any;
   let themeParksClient: any;
   let revalidationService: any;
+  let bestDaysService: any;
   let parkRepository: any;
   let warnings: string[];
   let processor: ParkMetadataProcessor;
@@ -75,6 +76,11 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     revalidationService = {
       revalidateTags: jest.fn().mockResolvedValue(undefined),
     };
+    bestDaysService = {
+      precomputeForPark: jest.fn((p: { slug: string }) =>
+        Promise.resolve(p.slug),
+      ),
+    };
     parkRepository = {
       find: jest.fn().mockResolvedValue([FULL, EMPTY, THROTTLED]),
     };
@@ -95,6 +101,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
       {} as any,
       {} as any,
       {} as any,
+      bestDaysService,
     );
 
     const logger: any = (processor as any).logger;
@@ -185,6 +192,40 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     const [tags] = revalidationService.revalidateTags.mock.calls[0];
     expect(tags).toHaveLength(6);
     expect(tags).toContain("park:europe/germany/bruehl/full");
+    expect(tags).toContain("park-calendar:europe/germany/bruehl/full");
+  });
+
+  it("rebuilds and rings the best-days snapshot of a park whose schedule changed, and of no other", async () => {
+    // Full's sync wrote a changed day; the throttled park's gap fill did too,
+    // but its snapshot fails to rebuild and keeps the old one.
+    parksService.recordScheduleVersions.mockImplementation((id: string) =>
+      Promise.resolve(id === EMPTY.id ? 0 : 3),
+    );
+    bestDaysService.precomputeForPark.mockImplementation(
+      (p: { id: string; slug: string }) =>
+        Promise.resolve(p.id === THROTTLED.id ? null : p.slug),
+    );
+
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    expect(
+      bestDaysService.precomputeForPark.mock.calls.map(
+        ([p]: [{ id: string }]) => p.id,
+      ),
+    ).toEqual([FULL.id, THROTTLED.id]);
+    // After the months it is built from were evicted.
+    expect(
+      bestDaysService.precomputeForPark.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      Math.max(
+        ...parksService.invalidateCalendarMonthCache.mock.invocationCallOrder,
+      ),
+    );
+    expect(revalidationService.revalidateTags).toHaveBeenCalledTimes(1);
+    const [tags] = revalidationService.revalidateTags.mock.calls[0];
+    expect(tags.filter((t: string) => t.startsWith("best-days:"))).toEqual([
+      "best-days:full",
+    ]);
     expect(tags).toContain("park-calendar:europe/germany/bruehl/full");
   });
 

@@ -63,8 +63,9 @@ A day is **unknown** when its type rests on a school break nobody has stored (PA
   is not a day off anyway, and the working day before one, whose eve depends on it. In a country
   without stored school breaks every weekday that is not a holiday is unknown, and only the days
   off get a season level;
-- a day past an influencing region's last stored school-break row that no stored neighbour row
-  makes a neighbour day, since a break there would ([below](#neighbour-regions)).
+- a day past the last stored school-break row of an influencing region whose rows reach the park's
+  today, when no stored neighbour row makes it a neighbour day, since a break there would
+  ([below](#neighbour-regions)).
 
 An unknown day is measured into no reference and served the model's number, without a floor.
 Counted as a working day, a break week past the data would have pulled every later working day up
@@ -96,10 +97,16 @@ Rhineland-Palatinate, Hesse, Lower Saxony, Limburg, Gelderland and Belgium.
 - **Coverage** (`seasonSchoolCoverage`): each influencing region's last stored school-break row,
   by `schoolCoverageThrough`, and the earliest of them is the neighbours' edge. Past it, a day no
   stored neighbour row makes a neighbour day is unknown: a break nobody has published could fall
-  on it. A day a stored row already makes a neighbour day stays one. An influencing region that
-  stores no school break at all is left out of the edge. Its breaks are never read, so it never
-  makes a neighbour day by one, and counted, it would make every working day of every season
-  unknown; its public holidays still count.
+  on it. A day a stored row already makes a neighbour day stays one.
+- **Only regions whose data reaches today** (park-local, on the day the inputs are read) bound the
+  edge. One that stores no school break at all, or whose last stored row lies before today, is
+  left out, as a neighbour without school data: counted, its edge lies before every day of a
+  running season and makes every working day unknown. Mexico's rows end on 2026-07-15
+  ([school-holiday coverage](../architecture/school-holiday-coverage.md)), and Mexico influences
+  the parks in California and Texas and every US park in a state without an entry of its own in
+  `REGION_INFLUENCES`, so until PAR-1387 none of them typed a working day or an eve in a season.
+  Such a region's stored breaks and its public holidays still make neighbour days; a break it has
+  not published reads as none ([known limits](#known-limits)).
 
 A park whose region has no entry in `REGION_INFLUENCES` gets the first three countries of
 `COUNTRY_INFLUENCES` as whole countries (park enrichment), so every region's break in those
@@ -220,8 +227,9 @@ sets the mode. Rollback: `SEASON_LEVEL=false` for the models' own numbers.
 
 **The inputs change with the calendar warmup only.** They live under `ml:season-level:v4:{parkId}`
 (`CacheKeys.seasonLevelInputs`), a key without a date. `warmup-calendar-daily` (08:00 and 20:00
-UTC, [job queues](../architecture/job-queues.md#schedule-utc)) evicts it with the park's daily ML
-cache and month caches, and the run's first build reads them again; the
+UTC, [job queues](../architecture/job-queues.md#schedule-utc)) evicts it with the park's daily and
+yearly ML caches, the yearly route's answer and the month caches, and the run's first build reads
+them again; the
 [forecast ring](../architecture/caching-strategy.md#the-forecast-ring) after the run then tells the
 frontend's calendar, best-days and Parky's tip at once. A key with the park-local date picked up a
 new day at midnight: a type could reach its third day then and move every day of that type, and
@@ -233,6 +241,20 @@ built from it, so a late warmup finds the months cold before the inputs. Past th
 failed, and the next read recomputes the inputs on demand: that change is **not rung**, and until
 the next warmup the frontend's calendar can show the old level beside `/plan/day`'s new one. A
 failed read costs the season level, never the response.
+
+**A failed load is remembered for five minutes** (`ml:season-level:v4:{parkId}:failed`,
+`SEASON_LEVEL_FAILURE_TTL`). The usual failure is a read running into its 20-second statement
+timeout on a loaded database; without the marker every serving read of the park ran the reads
+again, 20 seconds each, and logged a line each time. Now the failure is logged once as a WARN with
+the park's name and id, and for five minutes the served rows go without the level. The warmup
+evicts the marker with the inputs, so its run tries again at once.
+
+A month the warmup builds while the load fails holds no season level for its 13 hours, until the
+next warmup, and so does the best-days snapshot built from it. Once the five minutes are over, the
+next serving read that loads the inputs serves the level to `/plan/day` and Parky, unrung, beside
+that calendar. Giving such a month a short life instead would let the API's calendar take the level
+on its next build while its best-days snapshot and park.fan's copies, which nothing rings until
+the next warmup, kept the month without it.
 
 A row the rule replaced carries `crowdLevel: "unknown"` (the calendar rates the day), no band, no
 confidence, and `modelVersion` `<model>+season` for a measured level or a floor, `tft+season-ratio`
@@ -318,7 +340,8 @@ recommendation while it is shut.
   a measured level and a gated ratio row; the served `plan_day` row does not say which.
 - **Known limit:** the inputs move only with the calendar warmup, so a day's measurement joins its
   type up to half a day late. A failed warmup leaves them to expire and be recomputed on the next
-  read, which the frontend is not told of.
+  read, which the frontend is not told of. A month the warmup built while the load failed has no
+  level until the next warmup ([reads and cache](#reads-and-cache)).
 - **Known limit:** a season that runs on weekends only but is stored as a plain range counts its
   weekdays too. Listing its `dates` fixes it.
 - **Known limit:** an evening event with its own ticket (`separate_ticket`, `opens_at`) is treated
@@ -326,7 +349,17 @@ recommendation while it is shut.
 - **Known limit:** a weekday of the park's own school break and a Saturday outside one share one
   type. A break week can queue above an ordinary Saturday; the ratio mode keeps TFT's holiday
   structure inside the type, the level mode does not.
-- **Known limit:** the neighbours' edge is the earliest among them, so one influencing region whose
-  school data ends early makes every later working day unknown, though the others are known.
+- **Known limit:** the neighbours' edge is the earliest among the influencing regions whose school
+  data reaches today, so one whose data ends inside a season makes every later working day of it
+  unknown, though the others are known.
+- **Known limit:** an influencing region whose school data ended before today is read as having no
+  break past its data: a break it has not published yet types its day as a working day or an eve,
+  not as a neighbour day. On 2026-10-24 that was Mexico for the US parks it influences, Ireland for
+  English parks, Italy for Swiss ones and the Austrian ones it influences, Spain for Portuguese ones
+  and Hungary for Romanian ones ([school-holiday coverage](../architecture/school-holiday-coverage.md#why)).
+- **Known limit:** a park's own region is not left out like a neighbour. In a country whose own
+  school data ends before the season (ES, IT, HU, MX and IE as measured on 2026-10-24) or that has
+  none (SE, SG), every weekday that is not a holiday is unknown and stays on the model's number;
+  only its days off get a season level.
 - **Known limit:** a park without a region code in a country whose school breaks are regional
   reads only nationwide rows, so its break days are working days.

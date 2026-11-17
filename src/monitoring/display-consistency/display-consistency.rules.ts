@@ -18,6 +18,8 @@ export type DisplaySurface =
   | "best_days"
   /** park.fan's `/api/parks/<geo>/calendar` relay for a month, as its edge serves it now. */
   | "calendar_relay"
+  /** The same relay for today alone, the day dialog the today panel opens, as its edge serves it now. */
+  | "today_relay"
   /** park.fan's `/api/parks/<geo>/best-days` relay, as its edge serves it now. */
   | "best_days_relay"
   /** `/plan/day`, the trip planner's day, through its 15-minute cache. */
@@ -172,6 +174,13 @@ export const SURFACE_PAIRS: readonly SurfacePair[] = [
     statistic: `${DAY_LEVEL}; ${RELAY_COPY} (/calendar, includeHourly=none)`,
   },
   {
+    a: "calendar",
+    b: "today_relay",
+    measure: "crowd_level",
+    rule: "equal",
+    statistic: `${DAY_LEVEL}; ${RELAY_COPY} (/calendar?from=<today>&to=<today>, the today panel's day dialog, an edge copy of its own)`,
+  },
+  {
     a: "calendar_relay",
     b: "best_days_relay",
     measure: "crowd_level",
@@ -205,6 +214,13 @@ export const SURFACE_PAIRS: readonly SurfacePair[] = [
     measure: "headliner_wait",
     rule: "equal",
     statistic: `${HEADLINER_WAIT}; ${RELAY_COPY}`,
+  },
+  {
+    a: "calendar",
+    b: "today_relay",
+    measure: "headliner_wait",
+    rule: "equal",
+    statistic: `${HEADLINER_WAIT}; ${RELAY_COPY} (the today panel's day dialog)`,
   },
   {
     a: "calendar",

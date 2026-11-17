@@ -228,9 +228,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
    * Called from warmupCalendarForAllParks (background warmup every 12h).
    *
-   * @param force When true, evict the daily serving-prediction cache and the calendar
-   *   month caches first, so the rebuild regenerates fresh predictions instead of just
-   *   reading the still-warm cache. This is how the 12h background refresh actually
+   * @param force When true, evict the daily and yearly serving-prediction caches, the
+   *   season level's inputs and the calendar month caches first, so the rebuild
+   *   regenerates fresh predictions instead of just reading the still-warm cache.
+   *   This is how the 12h background refresh actually
    *   refreshes the data (weather/model) while keeping users off the ~15s cold path.
    * @returns the park slug when the best-days snapshot was materialized (for batched
    *   frontend revalidation), or null on failure / when the calendar build was skipped.
@@ -282,17 +283,19 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // Evict the cold-path daily ML cache + the calendar month caches in range so the
         // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
         // the still-warm month cache and the 12h refresh would be a no-op).
-        // The yearly ML cache is intentionally NOT evicted: only the read path
-        // (getParkPredictionsYearly) rebuilds it, so evicting it here just left
-        // it cold until the next visitor paid the ~15s cold path. It refreshes
-        // via its own TTL instead.
-        // The season level's inputs go with them: this is the one place they
-        // change, so the forecast ring after the run announces every new
-        // season level (`MLService.withSeasonLevel`).
+        // The season level's inputs go with them, and a remembered failure to
+        // load them: this is the one place they change, so the forecast ring
+        // after the run announces every new season level
+        // (`MLService.withSeasonLevel`). The yearly view's served rows and its
+        // route answer carry that level too, and kept, they showed the old one
+        // for half a day; their rebuild reads the daily rows this run warms.
         await this.redis
           .del(
             CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
+            CacheKeys.mlParkPredictions(park.id, "yearly", todayStr),
+            CacheKeys.predictionsYearlyResponse(park.id, todayStr),
             CacheKeys.seasonLevelInputs(park.id),
+            CacheKeys.seasonLevelInputsFailed(park.id),
             ...monthKeys,
           )
           .catch(() => undefined);
