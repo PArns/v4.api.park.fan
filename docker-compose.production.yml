@@ -323,11 +323,14 @@ services:
       # 30-minute Redis answer again (PAR-1330). A run that took 10 minutes or more
       # makes the next one read the cache, so the job cannot fall behind its cadence.
       - GENERATE_HOURLY_FRESH=${GENERATE_HOURLY_FRESH:-true}
-      # Season level (PAR-1343): on a day of a running, published park season the
-      # served daily level of a ride is the median of what it measured on that
-      # season's days so far (3 days needed), not the model's number — no model
-      # reads park_seasons. Rollback: SEASON_LEVEL=false. docs/ml/season-level.md
+      # Season level (PAR-1343): on a day of a running, published park season a
+      # ride's served daily level follows what it measured on that season's latest
+      # days of the same day type (3 needed) — no model reads park_seasons.
+      # SEASON_LEVEL_MODE=ratio scales TFT's number by measured ÷ forecast,
+      # level serves the measured median (PAR-1376). Rollback:
+      # SEASON_LEVEL_MODE=level, or SEASON_LEVEL=false. docs/ml/season-level.md
       - SEASON_LEVEL=${SEASON_LEVEL:-true}
+      - SEASON_LEVEL_MODE=${SEASON_LEVEL_MODE:-ratio}
       # Calendar and yearly view: leave a headliner out of the days its season
       # rules out (PAR-1326) — River Quest, paused for Wintertraum, counted in
       # every Wintertraum day with a forecast of ~10 minutes.

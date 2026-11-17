@@ -3,6 +3,7 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
 import type { HolidayRow } from "../../holidays/holidays.service";
 import { normalizeRegionCode } from "./region.util";
+import type { RegionInfluence } from "../region-influences";
 
 /**
  * Holiday Calculation Utilities
@@ -399,6 +400,40 @@ function localHolidayTest(
       byRegion.set(h.region, local);
     }
     return local;
+  };
+}
+
+/**
+ * Whether a holiday row falls in one of a park's `influencingRegions`, as a
+ * test to run over many rows. An entry without a region matches every row of
+ * its country, as the calendar's neighbour marker reads it. An entry with one
+ * matches its region and its country's nationwide rows, as TFT and CatBoost
+ * read it: Limburg has Koningsdag, which is stored for NL without a region.
+ * Each distinct row region is normalised once, as in {@link localHolidayTest}.
+ */
+export function influencingHolidayTest(
+  regions: readonly RegionInfluence[],
+): (h: Pick<HolidayRow, "country" | "region" | "isNationwide">) => boolean {
+  const countries = new Set(regions.map((r) => r.countryCode));
+  const wholeCountries = new Set<string>();
+  const regional = new Set<string>();
+  for (const r of regions) {
+    const code = normalizeRegionCode(r.regionCode);
+    if (code) regional.add(`${r.countryCode}|${code}`);
+    else wholeCountries.add(r.countryCode);
+  }
+  const byRegion = new Map<string, string | null>();
+  return (h) => {
+    if (!countries.has(h.country)) return false;
+    if (wholeCountries.has(h.country) || h.isNationwide || !h.region) {
+      return true;
+    }
+    let code = byRegion.get(h.region);
+    if (code === undefined) {
+      code = normalizeRegionCode(h.region);
+      byRegion.set(h.region, code);
+    }
+    return regional.has(`${h.country}|${code}`);
   };
 }
 

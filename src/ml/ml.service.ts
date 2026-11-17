@@ -52,7 +52,10 @@ import {
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
-import { applySeasonLevel } from "./utils/season-level.util";
+import {
+  applySeasonLevel,
+  type SeasonLevelMode,
+} from "./utils/season-level.util";
 import {
   loadSeasonLevelInputs,
   type SeasonLevelInputs,
@@ -210,13 +213,15 @@ export function storedPredictionsCreatedAtCutoff(
 
 /**
  * The park fields the serving merge and the season level read: the timezone
- * for park-local days, the country and region for its days off.
+ * for park-local days, the country, region and influencing regions for its
+ * days off.
  */
 const SEASON_PARK_FIELDS = {
   id: true,
   timezone: true,
   countryCode: true,
   regionCode: true,
+  influencingRegions: true,
 } as const;
 
 @Injectable()
@@ -1346,12 +1351,18 @@ export class MLService {
     return process.env.SEASON_LEVEL === "true";
   }
 
+  /** `SEASON_LEVEL_MODE`, read per call: `level`, or `ratio` for anything else. */
+  static seasonLevelMode(): SeasonLevelMode {
+    return process.env.SEASON_LEVEL_MODE === "level" ? "level" : "ratio";
+  }
+
   /**
    * The served daily rows with the season level on the days of a running park
    * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
    * move once a night, so they are cached for six hours under the park-local
    * date, which a new day's measurement joins; a failed read costs the season
-   * level, never the response.
+   * level, never the response. They hold the level and the ratio both, so a
+   * changed `SEASON_LEVEL_MODE` applies on the next call.
    */
   private async withSeasonLevel(
     parkId: string,
@@ -1371,7 +1382,8 @@ export class MLService {
       const tz = park?.timezone || "UTC";
       const countryCode = park?.countryCode;
       const regionCode = park?.regionCode ?? null;
-      const cacheKey = `ml:season-level:v2:${parkId}:${getCurrentDateInTimezone(tz)}`;
+      const influencingRegions = park?.influencingRegions ?? [];
+      const cacheKey = `ml:season-level:v3:${parkId}:${getCurrentDateInTimezone(tz)}`;
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)
@@ -1382,12 +1394,23 @@ export class MLService {
               timezone: tz,
               countryCode: countryCode ?? "",
               regionCode,
+              influencingRegions,
             },
             {
-              holidays: async (from, to) =>
-                countryCode
-                  ? this.holidaysService.getHolidays(countryCode, from, to)
-                  : [],
+              holidays: async (from, to) => {
+                const countries = new Set(
+                  [
+                    countryCode,
+                    ...influencingRegions.map((r) => r.countryCode),
+                  ].filter((c): c is string => !!c),
+                );
+                const rows = await Promise.all(
+                  [...countries].map((c) =>
+                    this.holidaysService.getHolidays(c, from, to),
+                  ),
+                );
+                return rows.flat();
+              },
               schoolThrough: async () =>
                 countryCode
                   ? schoolCoverageThrough(
@@ -1409,6 +1432,7 @@ export class MLService {
         inputs.references,
         inputs.dayTypes,
         (p) => MLService.localDateOf(p.predictedTime, tz),
+        MLService.seasonLevelMode(),
       );
       return { ...served, predictions };
     } catch (e: unknown) {

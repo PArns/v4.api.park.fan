@@ -3,6 +3,7 @@ import {
   buildLocalHolidayMap,
   buildSchoolCoverage,
   dayHolidayFlags,
+  influencingHolidayTest,
   isLocalHoliday,
   markUnknownSchoolVacation,
   schoolCoverageThrough,
@@ -120,6 +121,27 @@ describe("holiday.utils › local holidays", () => {
           park,
         ),
       ).toBe(false);
+    });
+  });
+
+  describe("influencingHolidayTest", () => {
+    const isNeighbours = influencingHolidayTest([
+      { countryCode: "DE", regionCode: "NDS" },
+      { countryCode: "NL", regionCode: "NL-LI" },
+      { countryCode: "BE", regionCode: null },
+    ]);
+
+    it("takes a region through its alias, and its country's nationwide rows", () => {
+      expect(isNeighbours(row({ region: "DE-NI" }))).toBe(true);
+      expect(
+        isNeighbours(row({ country: "NL", region: null, isNationwide: true })),
+      ).toBe(true);
+      expect(isNeighbours(row({ country: "NL", region: "NL-NH" }))).toBe(false);
+    });
+
+    it("takes every region of a country given without one", () => {
+      expect(isNeighbours(row({ country: "BE", region: "BE-WAL" }))).toBe(true);
+      expect(isNeighbours(row({ country: "FR", region: null }))).toBe(false);
     });
   });
 
