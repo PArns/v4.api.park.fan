@@ -74,7 +74,7 @@ same columns for serving.
 | Group | Features |
 |---|---|
 | ids | `parkId`, `attractionId` (categorical) |
-| time (14) | `hour`, `day_of_week`, `month`, sin/cos of hour, weekday, month and day of year, `season`, `is_weekend` (region-aware: Fri/Sat in the Middle East), `is_peak_season` |
+| time (14) | `hour`, `day_of_week`, `month`, sin/cos of hour, weekday, month and day of year, `season`, `is_weekend` (the park country's weekend, see below), `is_peak_season` |
 | weather (12) | `temperature_avg`, `temperature_deviation` (vs the monthly mean), `precipitation`, `precipitation_last_3h`, `windSpeedMax`, `snowfallSum`, `weatherCode` (categorical), `is_raining`, `is_rain_starting`, `is_rain_stopping`, `is_temp_extreme`, `is_wind_extreme` (> P90 of the last 14 days) |
 | holidays (13) | `is_holiday_primary`, `is_school_holiday_primary`, `is_holiday_neighbor_1/2/3`, `holiday_count_total`, `school_holiday_count_total`, `neighbor_school_holiday_count`, `is_school_holiday_any`, `is_bridge_day`, `days_until_next_holiday`, `days_since_last_holiday`, `is_long_weekend` |
 | schedule (5) | `is_park_open`, `time_since_park_open_mins`, `park_has_schedule`, `has_special_event` (ticketed or private event), `has_extra_hours` |
@@ -85,6 +85,14 @@ same columns for serving.
 
 Definitions that are not obvious from the name:
 
+- **`is_weekend`** is the park country's weekend: Friday + Saturday in Saudi Arabia, Qatar,
+  Bahrain, Kuwait, Oman and Israel, Saturday + Sunday where the table lists nothing (the UAE since
+  2022). The table is `ml-service/weekend_rules.py`, a copy of the API's `CUSTOM_WEEKEND_RULES`
+  (`tests/test_weekend_rules.py` compares them), vendored byte-identical into nf-service and
+  pcn-service. The weekday/weekend rolling features split on the same days (parity table). A model
+  trained before PAR-1379 learned a Gulf park's `rolling_avg_weekend` and `volatility_weekend` over
+  Saturday + Sunday and is served the Friday + Saturday values until the next nightly training
+  replaces it.
 - **`trend_7d`** = `avg_wait_last_24h − rolling_avg_7d` (momentum), not a regression slope.
 - **`volatility_*`** = `log1p(std)` of the window, capped at `log1p(VOLATILITY_CAP_STD_MINUTES)` =
   `log1p(30)`. The weekday/weekend split exists because a mixed 7-day std told the model a ride
@@ -108,7 +116,7 @@ Definitions that are not obvious from the name:
 - **Downtime:** training counts DOWN readings over the earlier hours of the local day
   (`downtime_count_before`), so the model can learn the queue spike after a reopening.
 
-### One definition per feature on both paths (PAR-1030, PAR-1032, PAR-1039, PAR-1045, PAR-1052)
+### One definition per feature on both paths (PAR-1030, PAR-1032, PAR-1039, PAR-1045, PAR-1052, PAR-1379)
 
 Training (`features.py`) is the definition; serving (`predict.create_prediction_features`)
 reproduces it. `tests/test_train_serve_feature_parity.py` computes each of these through both
@@ -120,7 +128,8 @@ paths on one fixture.
 | `wait_time_velocity` | (x[t−1h] − x[t−7h]) / 6 on the hourly series; serving takes the live wait as x[t−1h], ≤ 3 h, 0 beyond | (now − 30 min ago) / 6, a twelfth of the scale, on every row |
 | `time_since_park_open_mins` | minutes since the opening of the window the row is in (its own day, or the previous day's for a slot past midnight), 0 without a window | today's opening for every row, 0 when unknown |
 | `is_bridge_day` | per park-local date from the holidays (`add_bridge_day_feature`), computed before the holiday-distance features | one flag for today (`featureContext.isBridgeDay`, no longer sent) |
-| `rolling_avg_weekday/_weekend`, `volatility_weekday/_weekend` | Mon–Fri vs Sat–Sun on the **park-local** weekday | UTC weekday, on both paths |
+| `rolling_avg_weekday/_weekend`, `volatility_weekday/_weekend` | weekday vs weekend on the **park-local** weekday | UTC weekday, on both paths |
+| the weekend of the split (PAR-1379) | the days `is_weekend` marks, so Friday + Saturday for a Saudi park: training splits on the row's `is_weekend`, `fetch_recent_rolling_stats` on `weekend_rules.weekend_sql`; the far-row `avg_wait_last_1h`, the origin hold-out and the holiday dropout pick the weekend or weekday mean by `is_weekend` | Saturday + Sunday for every park on both paths, while `is_weekend` said Friday + Saturday |
 | `park_occupancy_pct` (training) | the park's mean wait at that hour **without the row's own wait** (the target); a ride alone at its hour reads 100 | the mean included the target |
 | interaction features | recomputed after training dropout | computed before it, so a dropped-out row kept the real occupancy inside them |
 | `is_park_open` (PAR-1045) | 0 before opening and after close on a day with a published window, 1 inside it | stayed 1 outside the window (only `status` turned CLOSED) |

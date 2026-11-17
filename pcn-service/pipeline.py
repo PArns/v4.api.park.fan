@@ -16,10 +16,16 @@ settings = get_settings()
 
 
 def park_timezone(park_id: str) -> str | None:
+    return park_timezone_and_country(park_id)[0]
+
+
+def park_timezone_and_country(park_id: str) -> tuple[str | None, str | None]:
+    """The park's timezone and ISO country code; (None, None) without attractions."""
     meta = db.fetch_attraction_meta([park_id])
     if meta.empty:
-        return None
-    return meta["timezone"].iloc[0]
+        return None, None
+    country = meta["country"].iloc[0]
+    return meta["timezone"].iloc[0], country if isinstance(country, str) else None
 
 
 def build_park_tensor(
@@ -29,7 +35,7 @@ def build_park_tensor(
     explicit override — the forecast tick passes its short inference window), or None
     if the park has no attractions / no queue data in the window. `in_force` overrides
     PCN_TARGET_MODE (forecast.py passes the loaded checkpoint's own mode)."""
-    tz = park_timezone(park_id)
+    tz, country = park_timezone_and_country(park_id)
     if tz is None:
         logger.warning("park %s: no attractions", park_id)
         return None
@@ -50,6 +56,7 @@ def build_park_tensor(
         panel, park_id=park_id, freq=settings.slot_freq,
         min_rides_open=settings.PCN_MIN_RIDES_OPEN,
         readings=readings, windows=windows, min_wait=settings.PCN_MIN_WAIT,
+        country=country,
     )
 
 
