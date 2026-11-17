@@ -154,8 +154,8 @@ by the key guard). It answers 400 for:
   hold (`plan.unplaced`), so a window that drops a chosen park ranks behind every window that keeps
   it. **Every day is on the measured scale**
   ([the day's figure](./trip-regions.md#the-days-get-v1trip-regionsorlandocalendarfromto)):
-  within 60 days the forecast times its lead factor, past them the same weekday a year back as
-  measured, never the long-range forecast, which read 42 % low and almost flat against 2026
+  within 60 days the forecast times its lead factor, past them the matching day a year back as
+  measured ([which day](./trip-regions.md#the-matching-day-a-year-back)), never the long-range forecast, which read 42 % low and almost flat against 2026
   (PAR-1319). It includes extreme heat and the storm season
   ([how a day is priced](./trip-regions.md#how-a-day-is-priced)), and the storm peak's window term
   ([below](#how-the-storm-peak-ranks)). Windows are compared by that sum per visit, and **windows

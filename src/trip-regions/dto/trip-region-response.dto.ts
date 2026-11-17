@@ -419,7 +419,7 @@ export class TripParkDayDto {
   @ApiProperty({ example: "low" }) crowdLevel: string;
   @ApiPropertyOptional({
     description:
-      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the same weekday a year back as measured. What every trip surface ranks by.",
+      "The headliners' mean day peak on the measured scale, rounded to 5: within 60 days the forecast times its lead factor, past them the matching day a year back as measured. What every trip surface ranks by.",
   })
   headlinerWait?: number;
   @ApiProperty({ enum: ["forecast", "long_range", "last_year", "none"] })
@@ -431,7 +431,7 @@ export class TripParkDayDto {
   forecastWait?: number;
   @ApiPropertyOptional({
     description:
-      "The same weekday a year back as measured, rounded to 5, from today on.",
+      "The matching day a year back as measured, rounded to 5, from today on: the same public holiday, else the nearest day of the same weekday (at most three weeks from 52 weeks back) in the same holiday or school-break situation.",
   })
   lastYearWait?: number;
   @ApiPropertyOptional({ type: [String] }) seasons?: string[];

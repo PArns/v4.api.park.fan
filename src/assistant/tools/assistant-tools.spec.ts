@@ -450,6 +450,8 @@ import {
 } from "./assistant-tools";
 import { PlanDayService } from "../../parks/services/plan-day.service";
 import { CalendarService } from "../../parks/services/calendar.service";
+import { ParkSeasonService } from "../../parks/services/park-season.service";
+import { HolidaysService } from "../../holidays/holidays.service";
 import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
@@ -493,13 +495,83 @@ describe("the same day last year", () => {
       providers,
     );
     expect(json.sameDateLastYear).toBeNull();
-    expect(json.sameWeekdayLastYear).toMatchObject({
+    // A park without a country reads 52 weeks back.
+    expect(json.comparableDayLastYear).toMatchObject({
       date: "2025-11-08",
       weekday: "Saturday",
       crowdLevel: "high",
       headlinerPeakWaitMinutes: 55,
       schoolVacation: true,
     });
+  });
+
+  it("compares a holiday with the same holiday last year (PAR-1377)", async () => {
+    const easterMonday = (date: string) => ({
+      date,
+      name: "Easter Monday",
+      localName: "Ostermontag",
+      country: "DE",
+      region: null,
+      holidayType: "public",
+      isNationwide: true,
+    });
+    const buildCalendarResponse = jest.fn(
+      async (_park: unknown, fromDate: Date) => {
+        const date = formatInTimeZone(fromDate, "Europe/Berlin", "yyyy-MM-dd");
+        return {
+          days: [
+            {
+              date,
+              status: "OPERATING",
+              crowdLevel: date === "2026-04-06" ? "very_high" : "low",
+              isHoliday: date === "2026-04-06",
+              isBridgeDay: false,
+              isSchoolVacation: false,
+              headlinerForecast: { avgWait: 30, rides: [], actual: true },
+            },
+          ],
+        };
+      },
+    );
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            countryCode: "DE",
+            regionCode: "NRW",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [CalendarService, { buildCalendarResponse }],
+      [
+        HolidaysService,
+        {
+          getHolidays: jest.fn(async () => [
+            easterMonday("2026-04-06"),
+            easterMonday("2027-03-29"),
+          ]),
+          getSchoolHolidayCoverage: jest.fn(async () => null),
+        },
+      ],
+      [ParkSeasonService, { forParkInRange: jest.fn(async () => []) }],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, date: "2027-03-29" },
+      providers,
+    );
+    // 52 weeks back is Monday 30 March 2026, an ordinary Monday.
+    expect(json.comparableDayLastYear).toMatchObject({
+      date: "2026-04-06",
+      weekday: "Monday",
+      crowdLevel: "very_high",
+    });
+    expect(json.sameDateLastYear).toMatchObject({ date: "2026-03-29" });
+    // Eight days apart: each is read on its own.
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(2);
   });
 
   it("reads a past day's level unknown where nothing was measured, not the stored forecast", async () => {

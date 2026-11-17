@@ -243,6 +243,7 @@ function setup(
     parks as unknown as ParksService,
     {} as CalendarService,
     {} as ParkSeasonService,
+    {} as HolidaysService,
     redis,
   );
   jest.spyOn(regions, "resolveParks").mockResolvedValue(regionParks as never);
