@@ -1138,7 +1138,7 @@ says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` 
 data key like `/calendar`, answers the calendar's day dialog:
 
 ```json
-{ "date": "2026-12-05", "verdict": "good", "text": "…", "promptVersion": 1 }
+{ "date": "2026-12-05", "verdict": "good", "text": "…", "promptVersion": 2 }
 ```
 
 - **`verdict`** is a rule, not the model's: the day's `crowdLevel`, `very_low`/`low` → `good`,
@@ -1146,15 +1146,20 @@ data key like `/calendar`, answers the calendar's day dialog:
 - **`text`** is one sentence of at most 160 characters in Parky's voice, in `locale` (one of
   `ASSISTANT_LOCALES`), written by `ASSISTANT_MODEL` from the calendar's entries for the day and up
   to three days on each side (crowd level, hours in park time, holidays, school holidays, events,
-  forecast weather). A sentence with a line break, a link or Markdown, or over the cap is not
-  served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+  forecast weather). The input opens with the park's today, and the sentence names days the way a
+  friend would, counted from it: today, tomorrow, the weekday within six days, "next weekend",
+  further out the weekday with day and month (prompt version 2). A sentence with a line break, a
+  link or Markdown, or over the cap is not served. The prompt is `parky-tip-prompt.ts`, versioned
+  on its own (`PARKY_TIP_PROMPT_VERSION`).
 - **204** when there is nothing to say: a closed day or one without a forecast (`unknown`), a date
   before today or more than 90 days ahead in park time, Parky switched off, no key, the day's token
   budget spent, a refused sentence or a failed call. A bad `date` or `locale` is a 400.
-- **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{date}:{locale}` for 12 hours, a refused
-  sentence and a closed day included (as nothing), so one model call per day and language;
-  concurrent misses share one call. The answer leaves with
-  `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, private like every
+- **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{today}:{date}:{locale}` for 12 hours,
+  `today` being the park's: a tip that says "tomorrow" is written again once that day has come. A
+  refused sentence and a closed day are kept too (as nothing), so one model call per day and
+  language; concurrent misses share one call. The answer leaves with
+  `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, cut to the seconds left
+  until park-local midnight and then without a stale window (`tipCacheControl`), private like every
   forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget; no chat row is stored.
 
 ## Limits and cost

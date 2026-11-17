@@ -4,7 +4,7 @@ import request from "supertest";
 import { ParksService } from "../parks/parks.service";
 import { ForecastAccessGuard } from "../api-keys/forecast-access.guard";
 import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
-import { ParkyTipController } from "./parky-tip.controller";
+import { ParkyTipController, tipCacheControl } from "./parky-tip.controller";
 import { ParkyTipService } from "./parky-tip.service";
 
 /** The pipes, the 204 and the header run through the real HTTP pipeline. */
@@ -52,9 +52,18 @@ describe("ParkyTipController", () => {
       .query({ date: "2026-12-05", locale: "de" })
       .expect(200);
     expect(res.body).toEqual(body);
-    expect(res.headers["cache-control"]).toBe(
+    // The window depends on how much of Berlin's day is left: tipCacheControl below.
+    expect(res.headers["cache-control"]).toMatch(
+      /^public, max-age=(\d+), s-maxage=\1(, stale-while-revalidate=3600)?$/,
+    );
+  });
+
+  it("keeps a tip six hours, never past the park's midnight", () => {
+    expect(tipCacheControl(30_000)).toBe(
       "public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600",
     );
+    // At 23:00 a tip that says "tomorrow" lives one hour, and is never served stale.
+    expect(tipCacheControl(3_600)).toBe("public, max-age=3600, s-maxage=3600");
   });
 
   it("answers 204 when there is nothing to say", async () => {
