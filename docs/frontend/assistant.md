@@ -338,10 +338,12 @@ visitor's clock), and season. `status` and `durationMinutes` come only from the 
 reading today (`findCurrentStatusByPark`); without one they are null, never a guessed "closed".
 
 `get_park_history` answers "how busy was it on this date last year": the same date a year back
-(29 February becomes the 28th) and the nearest day of the same weekday, at most three days off
-(`lastYearDays`, `src/common/utils/date.util.ts`). Both come from the calendar's own history path
-(`CalendarService.buildCalendarResponse` over at most four past days, each crowd level cached for a
-day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
+(29 February becomes the 28th, `lastYearDays`) and `comparableDayLastYear`, the day the trip
+surfaces read for it ([the matching day a year back](trip-regions.md#the-matching-day-a-year-back)):
+the same holiday last year, else the nearest day of the same weekday in the same holiday or
+school-break situation, 52 weeks back for a park without a country or readable holidays. Both come
+from the calendar's own history path (`CalendarService.buildCalendarResponse`, one read for days
+within a week of each other and one per day further apart, each crowd level cached for a day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
 headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
 events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
 instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
