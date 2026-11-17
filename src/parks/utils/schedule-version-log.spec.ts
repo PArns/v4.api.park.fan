@@ -100,7 +100,7 @@ describe("recordScheduleDayVersions", () => {
       }),
     };
     const manager = {
-      transaction: (cb: (t: typeof tx) => Promise<number>) => cb(tx),
+      transaction: (cb: (t: typeof tx) => Promise<string[]>) => cb(tx),
     };
     return { manager: manager as never, writes };
   };
@@ -110,9 +110,9 @@ describe("recordScheduleDayVersions", () => {
       [],
       [{ ...day("2026-11-01"), last_updated: "2026-10-01T03:00:00Z" }],
     );
-    expect(await recordScheduleDayVersions(manager, "p1", "themeparks")).toBe(
-      1,
-    );
+    expect(
+      await recordScheduleDayVersions(manager, "p1", "themeparks"),
+    ).toEqual(["2026-11-01"]);
     expect(writes).toHaveLength(1);
     expect(writes[0].sql).toContain("INSERT INTO schedule_day_versions");
     // $3 = firstLog → known_from = max(updatedAt), source 'backfill', NOT exact.
@@ -124,9 +124,9 @@ describe("recordScheduleDayVersions", () => {
       [day("2026-11-01")],
       [day("2026-11-01")],
     );
-    expect(await recordScheduleDayVersions(manager, "p1", "themeparks")).toBe(
-      0,
-    );
+    expect(
+      await recordScheduleDayVersions(manager, "p1", "themeparks"),
+    ).toEqual([]);
     expect(writes).toEqual([]);
   });
 
@@ -142,7 +142,9 @@ describe("recordScheduleDayVersions", () => {
         }),
       ],
     );
-    await recordScheduleDayVersions(manager, "p1", "gap_fill");
+    expect(await recordScheduleDayVersions(manager, "p1", "gap_fill")).toEqual([
+      "2026-11-01",
+    ]);
     expect(writes.map((w) => w.sql.trim().split(/\s+/)[0])).toEqual([
       "UPDATE",
       "INSERT",

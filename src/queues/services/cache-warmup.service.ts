@@ -62,6 +62,14 @@ const REGION_CALENDAR_MONTHS_AHEAD = 13;
 const REGION_LAST_YEAR_MONTHS_BACK = 13;
 
 /**
+ * The pause after one park's calendar build before the next park's. A single force-refreshed
+ * build is already heavy (five months of per-ride-day CTEs over queue_data and a cold daily ML
+ * call), and the pause lets the user queries queued behind it drain. The schedule sync's best-days
+ * rebuilds, each a 90-day calendar build, keep the same distance.
+ */
+export const CALENDAR_WARMUP_PARK_PAUSE_MS = 2500;
+
+/**
  * Cache Warmup Service
  *
  * Prepopulates Redis cache for parks and attractions to eliminate cold start delays.
@@ -466,12 +474,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         return 0;
       }
 
-      // Serial (batch 1) with a 2.5s pause: a single force-refreshed park build is
-      // already heavy (5 months of per-ride-day CTEs over queue_data + a cold daily
-      // ML call), and two of them in parallel saturated disk IO — every concurrent
-      // query stalled uniformly for 24-48s in the 08:00/20:00 warmup windows
-      // (slow-query log 2026-06-11). Serializing halves the peak IO pressure and
-      // the pause lets queued user queries drain between parks; the only cost is
+      // Serial (batch 1), with CALENDAR_WARMUP_PARK_PAUSE_MS between parks: two
+      // park builds in parallel saturated disk IO — every concurrent query stalled
+      // uniformly for 24-48s in the 08:00/20:00 warmup windows (slow-query log
+      // 2026-06-11). Serializing halves the peak IO pressure; the only cost is
       // wall time on a 2×/day background job.
       const rebuilt: Park[] = [];
       const warmedCount = await this.processBatch(
@@ -489,7 +495,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
           if (await this.warmupCalendarForPark(park, true)) rebuilt.push(park);
           return true;
         },
-        2500,
+        CALENDAR_WARMUP_PARK_PAUSE_MS,
       );
 
       if (rebuilt.length > 0) await this.announceForecast(rebuilt);

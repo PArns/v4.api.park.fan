@@ -5,6 +5,7 @@ import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { SingleFlight } from "../../common/utils/single-flight.util";
 import {
+  addIsoDays,
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
@@ -22,6 +23,20 @@ import {
 
 /** Rolling window length, in days, from "today" (park timezone). */
 export const BEST_DAYS_WINDOW = 90;
+
+/**
+ * Whether any of these park-local days (`YYYY-MM-DD`) lies in the window a snapshot built now
+ * covers: the park's today to today + {@link BEST_DAYS_WINDOW}, both included. A change to a day
+ * outside it leaves the snapshot as it is.
+ */
+export function touchesBestDaysWindow(
+  park: Pick<Park, "timezone">,
+  days: readonly string[],
+): boolean {
+  const from = getCurrentDateInTimezone(park.timezone || "UTC");
+  const to = addIsoDays(from, BEST_DAYS_WINDOW);
+  return days.some((day) => day >= from && day <= to);
+}
 
 /**
  * Snapshot TTL, and the invariant is that a PROJECTION may not outlive its
