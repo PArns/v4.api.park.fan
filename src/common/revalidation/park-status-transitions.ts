@@ -47,16 +47,22 @@ export function parkCalendarCacheTag(park: TaggablePark): string | null {
 }
 
 /**
- * The tags a forecast warmup sends for one park: its best-days snapshot (`best-days:<slug>`, the
- * tag the frontend's best-days reads carry) and its calendar, in the same call, so the calendar
- * grid, a month page's summary and best-days move to the new forecast together.
+ * The frontend's cache tag for ONE park's best-days snapshot: its server read and its relay, which
+ * „Prognose heute" and the best-days section read. Null for a park without a slug.
+ */
+export function bestDaysCacheTag(park: TaggablePark): string | null {
+  return park.slug ? `best-days:${park.slug}` : null;
+}
+
+/**
+ * The tags a forecast warmup sends for one park: its best-days snapshot ({@link bestDaysCacheTag})
+ * and its calendar, in the same call, so the calendar grid, a month page's summary and best-days
+ * move to the new forecast together.
  */
 export function forecastCacheTags(park: TaggablePark): string[] {
-  const calendar = parkCalendarCacheTag(park);
-  return [
-    ...(park.slug ? [`best-days:${park.slug}`] : []),
-    ...(calendar ? [calendar] : []),
-  ];
+  return [bestDaysCacheTag(park), parkCalendarCacheTag(park)].filter(
+    (tag): tag is string => tag !== null,
+  );
 }
 
 /**

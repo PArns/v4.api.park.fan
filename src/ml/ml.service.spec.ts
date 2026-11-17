@@ -1497,6 +1497,8 @@ describe("MLService", () => {
       // No date: the inputs change with the calendar warmup, never at the
       // park's midnight.
       const cacheKey = `ml:season-level:v4:${parkId}`;
+      /** What a test's `redis.set` stored, read back by the next serve. */
+      const stored = new Map<string, string>();
       const serve = async (cached = true) => {
         mockParkRepository.findOne.mockResolvedValue({
           id: parkId,
@@ -1509,7 +1511,9 @@ describe("MLService", () => {
           ],
         });
         mockRedis.get.mockImplementation(async (key: string) =>
-          cached && key === cacheKey ? JSON.stringify(inputs) : null,
+          cached && key === cacheKey
+            ? JSON.stringify(inputs)
+            : (stored.get(key) ?? null),
         );
         jest.spyOn(service, "getParkPredictions").mockResolvedValue({
           predictions: [
@@ -1576,7 +1580,26 @@ describe("MLService", () => {
               },
             ]
           : [];
+      /** Pins the park's today (UTC here), which bounds the neighbours' school edge. */
+      const onDay = (day: string) =>
+        jest.useFakeTimers({
+          now: new Date(`${day}T12:00:00Z`),
+          doNotFake: [
+            "nextTick",
+            "queueMicrotask",
+            "setImmediate",
+            "clearImmediate",
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+            "hrtime",
+            "performance",
+          ],
+        });
       afterEach(() => {
+        jest.useRealTimers();
+        stored.clear();
         delete process.env.SEASON_LEVEL;
         delete process.env.SEASON_LEVEL_MODE;
         delete (mockParkRepository as any).manager;
@@ -1699,6 +1722,7 @@ describe("MLService", () => {
 
       it("measures no working day past a neighbour's school data", async () => {
         process.env.SEASON_LEVEL = "true";
+        onDay("2026-05-20");
         sqlReads();
         mockHolidaysService.getHolidays.mockResolvedValue([]);
         // Belgium's breaks are stored to Wednesday 20 May only: a Belgian
@@ -1726,25 +1750,69 @@ describe("MLService", () => {
         );
       });
 
-      it("serves the models' numbers and caches nothing when the holidays cannot be read", async () => {
+      it("ignores a neighbour whose school data ended before the park's today", async () => {
         process.env.SEASON_LEVEL = "true";
+        // The same Belgian edge as above, read five days after it.
+        onDay("2026-05-25");
         sqlReads();
-        mockHolidaysService.getHolidays.mockRejectedValue(
-          new Error("holidays down"),
+        mockHolidaysService.getHolidays.mockResolvedValue([]);
+        mockHolidaysService.getSchoolHolidayCoverage.mockResolvedValue(
+          buildSchoolCoverage([
+            { country: "DE", region: "DE-NW", through: "2027-07-20" },
+            { country: "BE", region: null, through: "2026-05-20" },
+          ]),
         );
+        mockRedis.set.mockResolvedValue("OK");
 
         const byKey = await serve(false);
 
-        expect(mockHolidaysService.getHolidays).toHaveBeenCalled();
         expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
-          predictedWaitTime: 15,
-          modelVersion: "tft",
+          predictedWaitTime: 60,
+          modelVersion: "tft+season",
         });
-        expect(mockRedis.set).not.toHaveBeenCalledWith(
-          expect.stringMatching(/^ml:season-level:/),
-          expect.anything(),
-          expect.anything(),
-          expect.anything(),
+      });
+
+      it("serves the models' numbers when the inputs cannot be read, and remembers the failure for five minutes", async () => {
+        process.env.SEASON_LEVEL = "true";
+        const query = sqlReads();
+        mockHolidaysService.getHolidays.mockRejectedValue(
+          new Error("holidays down"),
+        );
+        mockRedis.set.mockImplementation(async (key: string, value: string) => {
+          stored.set(key, value);
+          return "OK";
+        });
+        const warn = jest
+          .spyOn((service as any).logger, "warn")
+          .mockImplementation(() => undefined);
+
+        const first = await serve(false);
+        const second = await serve(false);
+
+        for (const byKey of [first, second]) {
+          expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+            predictedWaitTime: 15,
+            modelVersion: "tft",
+          });
+        }
+        // The second read runs nothing and logs nothing.
+        expect(
+          query.mock.calls.filter(([sql]) =>
+            String(sql).includes("FROM park_seasons"),
+          ),
+        ).toHaveLength(1);
+        const warned = warn.mock.calls.filter(([line]) =>
+          String(line).includes("Season level inputs"),
+        );
+        expect(warned).toEqual([
+          [expect.stringMatching(/park-123.*5 min: holidays down/)],
+        ]);
+        expect(mockRedis.set).toHaveBeenCalledTimes(1);
+        expect(mockRedis.set).toHaveBeenCalledWith(
+          `${cacheKey}:failed`,
+          "holidays down",
+          "EX",
+          5 * 60,
         );
       });
 

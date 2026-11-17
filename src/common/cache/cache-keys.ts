@@ -50,6 +50,14 @@ export const CacheKeys = {
    */
   seasonLevelInputs: (parkId: string): string => `ml:season-level:v4:${parkId}`,
 
+  /**
+   * Set for a few minutes after the season level's inputs failed to load
+   * (`SEASON_LEVEL_FAILURE_TTL`), so the serving reads in between go without
+   * the level instead of each running the reads that just failed.
+   */
+  seasonLevelInputsFailed: (parkId: string): string =>
+    `ml:season-level:v4:${parkId}:failed`,
+
   /** Today's schedule (dateStr = park-local YYYY-MM-DD). */
   scheduleToday: (parkId: string, dateStr: string): string =>
     `schedule:today:${parkId}:${dateStr}`,

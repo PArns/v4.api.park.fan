@@ -1,5 +1,6 @@
 import { CacheWarmupService } from "./cache-warmup.service";
 import { CDN_SETTLE_MS } from "../../common/revalidation/revalidation.service";
+import { getCurrentDateInTimezone } from "../../common/utils/date.util";
 
 /**
  * After the forecast warmup the frontend hears about every rebuilt park once, best-days and the
@@ -94,6 +95,27 @@ describe("CacheWarmupService › forecast ring", () => {
     );
     expect(evictedAt).toBeLessThan(
       revalidationService.revalidateTags.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("evicts with them the yearly outlook, which carries the season level, and a remembered load failure", async () => {
+    const { service, redis, calendarService } = setup("phantasialand");
+
+    await service.warmupCalendarForAllParks();
+
+    const today = getCurrentDateInTimezone(park.timezone);
+    const eviction = redis.del.mock.calls.findIndex((keys: unknown[]) =>
+      keys.includes(`ml:park:${park.id}:daily:${today}`),
+    );
+    expect(redis.del.mock.calls[eviction]).toEqual(
+      expect.arrayContaining([
+        `ml:park:${park.id}:yearly:${today}`,
+        `predictions-yearly:resp:v1:${park.id}:${today}`,
+        `ml:season-level:v4:${park.id}:failed`,
+      ]),
+    );
+    expect(redis.del.mock.invocationCallOrder[eviction]).toBeLessThan(
+      calendarService.buildCalendarResponse.mock.invocationCallOrder[0],
     );
   });
 

@@ -4,7 +4,9 @@
  * The browser never asks this API for a calendar day: it asks park.fan's
  * `/api/parks/<geo>/calendar` and `/best-days`, which Vercel keeps until the
  * forecast ring and Cloudflare for an hour more. A copy there can say what the
- * API no longer does, and only a request through the same URL sees it.
+ * API no longer does, and only a request through the same URL sees it: the
+ * query string is part of the edge's cache key, so the today panel's single
+ * day is a copy of its own beside the grid's month.
  * docs/analytics/display-consistency.md#the-relays.
  */
 import { getFrontendUrl } from "../../config/oauth.config";
@@ -32,6 +34,11 @@ export interface RelayUrls {
   page: string;
   /** One per month the dates touch, first to last day, as the calendar grid asks for one. */
   calendar: string[];
+  /**
+   * Today alone, `from` and `to` both today, as the today panel asks for the day dialog it opens
+   * (park.fan's `components/parks/park-today-panel.tsx`, `useCalendarData`).
+   */
+  today: string;
   bestDays: string;
 }
 
@@ -43,24 +50,28 @@ export function monthRanges(
 }
 
 /**
- * The relays to read for these dates, or null where there are none to read: a
- * park without a geo path has no page, and an API that does not ring the
- * frontend (`REVALIDATE_SECRET` unset: dev, CI) is not the API behind its
- * relays, so they would be compared with another API's figures.
+ * The relays to read for `today` (park-local) and these dates, or null where
+ * there are none to read: a park without a geo path has no page, and an API
+ * that does not ring the frontend (`REVALIDATE_SECRET` unset: dev, CI) is not
+ * the API behind its relays, so they would be compared with another API's
+ * figures.
  */
 export function relayUrls(
   park: GeocodedEntity,
+  today: string,
   dates: readonly string[],
 ): RelayUrls | null {
   const path = frontendParkPath(park);
   if (!path || !isRevalidationEnabled()) return null;
   const site = getFrontendUrl();
+  const calendar = (from: string, to: string) =>
+    `${site}/api${path}/calendar?from=${from}&to=${to}`;
   return {
     page: `${site}${path}`,
-    calendar: monthRanges(dates).map(
-      ({ first, last }) =>
-        `${site}/api${path}/calendar?from=${first}&to=${last}`,
+    calendar: monthRanges(dates).map(({ first, last }) =>
+      calendar(first, last),
     ),
+    today: calendar(today, today),
     bestDays: `${site}/api${path}/best-days`,
   };
 }

@@ -356,7 +356,10 @@ describe("DisplayConsistencyService", () => {
       });
     /** What the relays answer; by default the copy of what the API serves now. */
     let calendarRelay: () => Promise<Response>;
+    let todayRelay: () => Promise<Response>;
     let bestDaysRelay: () => Promise<Response>;
+    /** The today panel's single day, as park.fan's `useCalendarData` asks for it. */
+    const todayUrl = `${RELAY}/calendar?from=${today}&to=${today}`;
     let fetchMock: jest.SpyInstance;
     const months = new Set([today, tomorrow].map((date) => date.slice(0, 7)));
 
@@ -371,6 +374,10 @@ describe("DisplayConsistencyService", () => {
               calendarDay(tomorrow, "high", 45),
             ],
           }),
+        );
+      todayRelay = () =>
+        Promise.resolve(
+          json({ meta: {}, days: [calendarDay(today, "very_low", 20)] }),
         );
       bestDaysRelay = () =>
         Promise.resolve(
@@ -387,7 +394,9 @@ describe("DisplayConsistencyService", () => {
         .mockImplementation((input) =>
           String(input).endsWith("/best-days")
             ? bestDaysRelay()
-            : calendarRelay(),
+            : String(input) === todayUrl
+              ? todayRelay()
+              : calendarRelay(),
         );
     });
 
@@ -396,16 +405,17 @@ describe("DisplayConsistencyService", () => {
       fetchMock.mockRestore();
     });
 
-    it("reads each month as the grid asks for it and the best-days snapshot, as the park page does", async () => {
+    it("reads each month as the grid asks for it, today as the today panel does and the best-days snapshot, as the park page does", async () => {
       const result = await service.check(park, 2);
 
       const urls = fetchMock.mock.calls.map(([url]) => String(url));
-      expect(urls).toHaveLength(months.size + 1);
+      expect(urls).toHaveLength(months.size + 2);
       expect(urls[0]).toMatch(
         new RegExp(
           `^${RELAY}/calendar\\?from=${today.slice(0, 7)}-01&to=${today.slice(0, 7)}-(28|29|30|31)$`,
         ),
       );
+      expect(urls).toContain(todayUrl);
       expect(urls).toContain(`${RELAY}/best-days`);
       const init = fetchMock.mock.calls[0][1] as RequestInit;
       expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -417,9 +427,38 @@ describe("DisplayConsistencyService", () => {
       expect(result.mismatches).toEqual([]);
       expect(result.days[0].crowdLevel).toMatchObject({
         calendar_relay: "very_low",
+        today_relay: "very_low",
         best_days_relay: "very_low",
       });
+      expect(result.days[0].headlinerWait.today_relay).toBe(20);
       expect(result.days[1].headlinerWait.calendar_relay).toBe(45);
+      expect(result.days[1].crowdLevel).not.toHaveProperty("today_relay");
+    });
+
+    it("names the today panel's stale day apart from the grid's month, with its age", async () => {
+      todayRelay = () =>
+        Promise.resolve(
+          json(
+            { meta: {}, days: [calendarDay(today, "high", 45)] },
+            { age: "1800", "cf-cache-status": "HIT" },
+          ),
+        );
+
+      const { mismatches } = await service.check(park, 1);
+
+      const copy = { age: 1800, cloudflare: "HIT" };
+      expect(mismatches).toEqual([
+        expect.objectContaining({
+          measure: "crowd_level",
+          a: { surface: "calendar", value: "very_low" },
+          b: { surface: "today_relay", value: "high", copy },
+        }),
+        expect.objectContaining({
+          measure: "headliner_wait",
+          a: { surface: "calendar", value: 20 },
+          b: { surface: "today_relay", value: 45, copy },
+        }),
+      ]);
     });
 
     it("names a stale edge copy against the API and against its neighbour on the page, with its age", async () => {
@@ -518,14 +557,19 @@ describe("DisplayConsistencyService", () => {
       "lists a relay it cannot read as a failure, never a mismatch: %s",
       async (_case, answer, error) => {
         calendarRelay = answer;
+        todayRelay = answer;
         bestDaysRelay = answer;
 
         const result = await service.check(park, 2);
 
-        expect(result.failures).toHaveLength(2);
+        expect(result.failures).toHaveLength(3);
         expect(result.failures).toEqual(
           expect.arrayContaining([
             { surface: "calendar_relay", error: expect.stringMatching(error) },
+            {
+              surface: "today_relay",
+              error: expect.stringContaining(`from=${today}&to=${today}`),
+            },
             {
               surface: "best_days_relay",
               error: expect.stringContaining("/best-days"),

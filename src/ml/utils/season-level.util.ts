@@ -218,25 +218,31 @@ export interface SeasonSchoolCoverage {
   /** The park's own region (`schoolCoverageThrough`); null for none. */
   park: string | null;
   /**
-   * The earliest edge among the influencing regions that store any school
-   * break (`schoolCoverageThrough` each); null when none does.
+   * The earliest edge among the influencing regions whose stored school
+   * breaks reach the park's today (`schoolCoverageThrough` each); null when
+   * none does.
    */
   neighbours: string | null;
 }
 
 /**
- * {@link SeasonSchoolCoverage} of a park. An influencing region without any
- * stored school break is left out: none of its breaks is ever read, and
- * counted, its missing edge would make every working day of every season
- * unknown.
+ * {@link SeasonSchoolCoverage} of a park on its park-local `today`. An
+ * influencing region whose stored school breaks end before today is left out,
+ * as one that stores none: counted, its edge would make every working day of
+ * every running season unknown, as Mexico's (2026-07-15) did at the US parks
+ * it influences. Its stored breaks still make neighbour days; one it has not
+ * published reads as no break.
  */
 export function seasonSchoolCoverage(
   coverage: SchoolCoverage,
   park: Pick<SeasonPark, "countryCode" | "regionCode" | "influencingRegions">,
+  today: string,
 ): SeasonSchoolCoverage {
   const neighbours = (park.influencingRegions ?? [])
     .map((r) => schoolCoverageThrough(coverage, r.countryCode, r.regionCode))
-    .filter((through): through is string => through !== null)
+    .filter(
+      (through): through is string => through !== null && through >= today,
+    )
     .sort();
   return {
     park: park.countryCode

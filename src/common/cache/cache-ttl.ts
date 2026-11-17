@@ -28,6 +28,16 @@ export const CALENDAR_WARMUP_MONTH_TTL = 13 * 60 * 60;
 export const SEASON_LEVEL_INPUTS_TTL = CALENDAR_WARMUP_MONTH_TTL + 60 * 60;
 
 /**
+ * How long a failed load of the season level's inputs is remembered
+ * (`CacheKeys.seasonLevelInputsFailed`). The usual failure is a read running
+ * into its 20-second statement timeout on a loaded database; run again by
+ * every serving read, it adds those 20 seconds to each and load to the
+ * database that caused it. Five minutes, so a passing slowdown costs the
+ * level for minutes, not until the next warmup.
+ */
+export const SEASON_LEVEL_FAILURE_TTL = 5 * 60;
+
+/**
  * The CURRENT month is the exception and keeps its own, much shorter life: its
  * data still moves intraday (today's live level, today's forecast) and it is
  * what somebody checks right after a deploy, so it must not freeze for a whole

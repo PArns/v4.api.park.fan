@@ -241,8 +241,10 @@ describe("SURFACE_PAIRS", () => {
     ).map((pair) => [pair.a, pair.b, pair.measure, pair.rule]);
     expect(relayPairs).toEqual([
       ["calendar", "calendar_relay", "crowd_level", "equal"],
+      ["calendar", "today_relay", "crowd_level", "equal"],
       ["calendar_relay", "best_days_relay", "crowd_level", "equal"],
       ["calendar", "calendar_relay", "headliner_wait", "equal"],
+      ["calendar", "today_relay", "headliner_wait", "equal"],
     ]);
   });
 
