@@ -25,6 +25,8 @@ import { repeatsLastQuestion, sameText } from "./assistant-junk";
 import { RepliesTextGuard } from "./assistant-replies-text";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
+import { ParkyTipService } from "./parky-tip.service";
+import { ParksService } from "../parks/parks.service";
 import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
@@ -269,10 +271,14 @@ export class AssistantChatService {
       },
       answer,
     };
-    const [pageSubject, digest, knowledgeIndex] = await Promise.all([
+    const [pageSubject, digest, knowledgeIndex, dayTip] = await Promise.all([
       this.pages.subject(request.pagePath, request.locale),
       this.tripDigestOf(toolContext, pickTrip(trips)),
       this.knowledge.promptIndex(),
+      // Like the greeting, the tapped tip speaks to the chat's first question only.
+      chat.history.length === 0 && request.dayTip
+        ? this.dayTipContext(request.dayTip)
+        : null,
     ]);
     const system: Anthropic.TextBlockParam[] = [
       {
@@ -293,6 +299,7 @@ export class AssistantChatService {
           tripDigest: digest,
           // Only the first question of a chat answers the greeting.
           opener: chat.history.length === 0 ? (request.opener ?? null) : null,
+          dayTip,
           liveRegions: request.liveRegions ?? null,
           interview: request.interview ?? null,
           alerts: request.alerts,
@@ -459,6 +466,33 @@ export class AssistantChatService {
    * Parky's unasked hints read. Null without such a trip, past the budget or on a refusal; the
    * trip's own line in "This chat" says then to read it with get_trip_plan.
    */
+  /**
+   * What Parky needs about the day tip the chat was opened from: the park's name, the sentence the
+   * dialog showed and the day's facts as the tip reads them (`ParkyTipService.dayFacts`), read
+   * here rather than taken from the browser. Null when the park or the day cannot be read; the
+   * chat goes on without it.
+   */
+  private async dayTipContext(
+    tip: NonNullable<ChatRequest["dayTip"]>,
+  ): Promise<{ park: string; text: string; facts: string } | null> {
+    try {
+      const [continent, country, city, slug] = tip.park.split("/");
+      const park = await this.moduleRef
+        .get(ParksService, { strict: false })
+        .findByGeographicPath(continent, country, city, slug);
+      if (!park) return null;
+      const facts = await this.moduleRef
+        .get(ParkyTipService, { strict: false })
+        .dayFacts(park, tip.date);
+      return facts ? { park: park.name, text: tip.text, facts } : null;
+    } catch (error) {
+      this.logger.warn(
+        `Day tip context skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
   private async tripDigestOf(
     ctx: AssistantToolContext,
     trip: VisitorTrip | null,

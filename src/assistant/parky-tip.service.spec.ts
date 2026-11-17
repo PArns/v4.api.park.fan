@@ -152,6 +152,14 @@ describe("ParkyTipService", () => {
     ]);
   });
 
+  it("hands the chat the facts the tip reads, from the park's today on", async () => {
+    const facts = await service.dayFacts(park, date);
+    expect(facts).toContain(`TODAY at the park:`);
+    expect(facts).toContain(`CHOSEN DAY`);
+    expect(create).not.toHaveBeenCalled();
+    expect(await service.dayFacts(park, addIsoDays(today, -1))).toBeNull();
+  });
+
   it("makes one model call for concurrent requests", async () => {
     await Promise.all([
       service.tip(park, date, "de"),
