@@ -1597,6 +1597,41 @@ export const EVAL_CASES: EvalCase[] = [
       },
     ],
   },
+  {
+    // Parky read the legacy rainChance (mm) as a chance of rain: "12,6 % Regenwahrscheinlichkeit" (PAR-1393).
+    id: "rain-amount-is-no-chance-de",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    message: "Wie wird das Wetter am Samstag, regnet es?",
+    want: [{ tool: ["get_days", "get_park_day"] }],
+    results: {
+      get_days: {
+        park: { id: PHL_ID, name: "Phantasialand" },
+        days: [
+          {
+            date: "2026-11-14",
+            weekday: "Saturday",
+            status: "OPERATING",
+            crowdLevel: "moderate",
+            weather: {
+              basis: "forecast",
+              condition: "Drizzle, dense intensity",
+              weatherCode: 55,
+              tempMin: -1,
+              tempMax: 3,
+              precipitationMm: 12.6,
+              precipitationChancePercent: 40,
+              precipitationHours: 6,
+              windMaxKmh: 22,
+              windGustsMaxKmh: 38,
+            },
+          },
+        ],
+      },
+    },
+    answer: [{ must: "^(?![\\s\\S]*12[,.]6\\s?%)" }],
+  },
   ...PLAN_CASES,
   ...BUDDY_CASES,
   ...REGION_CASES,

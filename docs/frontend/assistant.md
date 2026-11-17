@@ -266,6 +266,12 @@ Version 61 (PAR-1392) says the figures of his earlier answers stand: he never ta
 says he gave it without a lookup, and only a new lookup of the very same fact is worth a word, as
 news. A reply chip never only announces an answer to come ("I'll name the park"), and the
 park-day interview's chip is a real park by its name.
+Version 62 (PAR-1393) reads the whole weather: a day's from `get_days` or `get_park_day`, both through
+`weatherView` (condition, °C, feels-like today, precipitation in mm with its highest hourly chance in
+% and its hours, snow, wind and gusts, UV, sunshine; never the legacy `rainChance`, which is mm and
+which he once read as "12,6 %"), the hours ahead and the warnings from `get_park_weather`. He never
+says the amount as the chance or the other way round, and stormy gusts, a thunderstorm or a storm
+warning "can" stop tall rides and outdoor shows, never "will": the park decides.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -275,7 +281,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 103 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 104 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -321,7 +327,9 @@ server's handlers with Parky's own descriptions: `search_parks`, `get_park_live`
 `closedForMaintenance` with the window), `get_park_day` (one day as the planner builds it: hours,
 crowd, weather, holidays, early entry, each ride's opening, peak and shortest hour, the shows, and
 `ridesInMaintenance`: the rides a window shuts that day, which the plan leaves out of `rides`,
-from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now, rain and storm times, 12 hours), `get_best_days`,
+from `PlanDayService.ridesInMaintenance`), `get_days` and `get_hours` (below), `get_park_weather` (now with wind, gusts and humidity; rain,
+thunderstorm, hail and storm times; the official warnings in force from `WeatherWarningsService`;
+the next 12 hours with each hour's chance of rain and gusts), `get_best_days`,
 `look_up_glossary` (park.fan's glossary, through the frontend's `/api/glossary-search`, each term
 with the canonical page the route names, `/de/glossar/…`; a route without `url` gets the
 `/glossary/` path, which redirects),
@@ -1200,6 +1208,9 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
   languages with every move. The weather line gives the day's precipitation as
   `… mm precipitation over the day` from `precipitationMm`, and nothing where none was measured;
   the prompt says to put it in words, never as a number or a percentage (version 5, PAR-1392).
+  Version 6 (PAR-1393) adds the chance of rain in %, the hours with precipitation and the gusts
+  where the forecast has them; the chance may be said as given, millimetres never as a percentage,
+  and wind only when the gusts are stormy (60 km/h and more).
   Before, it wrote the legacy `rainChance`, which is millimetres too, with `% rain` behind it, and
   the tips read 47.5 mm as "47,5 % Regenchance". A sentence with a line break, a link or Markdown,
   or over the cap is not served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).

@@ -35,6 +35,16 @@ Entity `src/parks/entities/weather-data.entity.ts`, primary key `(parkId, date)`
 (°C), `precipitationSum`, `rainSum` (mm), `snowfallSum` (cm), `weatherCode` (WMO), `windSpeedMax`
 (km/h); live columns, nullable: `temperatureCurrent`, `apparentTemperature`, `humidity`, `isDay`.
 
+Since PAR-1393 the daily request also asks for `precipitation_probability_max`,
+`precipitation_hours`, `wind_gusts_10m_max`, `uv_index_max` and `sunshine_duration`, stored as
+`precipitationProbabilityMax` (%, the highest hourly chance of the day), `precipitationHours`,
+`windGustsMax` (km/h), `uvIndexMax` and `sunshineHours` (the seconds as hours). All five are
+nullable: rows written before stay empty until the next full sync reaches them, and the calendar
+leaves a missing one out rather than serving 0. Twelve daily and six current variables make each
+forecast call count as about two calls against Open-Meteo's free allowance, where it was about one
+and a half. The hourly request (`getHourlyForecast`, the ML service's weather and Parky's next
+hours) adds `precipitation_probability` and `wind_gusts_10m`; the ML service's model reads neither.
+
 **Dates are stored as noon UTC** (`new Date(`${day.date}T12:00:00Z`)`) and queried by plain
 date-string comparison (`weather.date >= :start`). Two bugs taught this
 ([park timezone](../rules/park-timezone.md)):
@@ -82,7 +92,12 @@ takes it for a forecast.
 | Fetching | background, after a calendar window reaches past the forecast; at most `CLIMATE_WARM_BUDGET_PER_DAY` parks a day, a failed park not retried for an hour, own block key `ratelimit:openmeteo-archive:blocked`; ~180 units of the daily allowance per park. Cached 30 days; the calendar reads the cache only, so the first request after a miss has no normals |
 
 Every calendar weather block carries `basis: "forecast" | "climate_normal"`, a normal also
-`normalPeriod: "2015-2024"`. A normal never fills a day that has a forecast row, never feeds the day's
+`normalPeriod: "2015-2024"`. A forecast block adds, where the row has them, `precipitationProbability`
+(%), `precipitationHours`, `windGustsMax` (km/h), `uvIndexMax` and `sunshineHours` beside
+`precipitationMm`, `snowMm`, `windMax`, `humidity` and `apparentTemp`; a normal has none of the
+five. The legacy `rainChance` is the precipitation in mm, not a chance. What Parky and the admin MCP
+read is `weatherView` (`src/parks/utils/weather-summary.util.ts`): every figure named with its unit
+(`precipitationChancePercent`, `windGustsMaxKmh`, …) and `rainChance` left out. A normal never fills a day that has a forecast row, never feeds the day's
 `recommendation`, and `/plan/day` does not use it.
 
 **Walled off from the wait-time model**, which cannot tell "the mean of this date" from "what to expect

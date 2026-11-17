@@ -21,6 +21,29 @@ describe("toDailyWeather", () => {
     expect(days[0]).toMatchObject({ date: "2026-09-10", temperatureMax: 22 });
   });
 
+  it("maps the chance of rain, its hours, the gusts, UV and sunshine", () => {
+    const [day] = toDailyWeather({
+      time: ["2026-11-20"],
+      temperature_2m_max: [9.8],
+      temperature_2m_min: [7],
+      precipitation_sum: [47.5],
+      precipitation_probability_max: [96],
+      precipitation_hours: [14],
+      wind_gusts_10m_max: [61.2],
+      uv_index_max: [0.85],
+      sunshine_duration: [5400],
+    });
+
+    expect(day).toMatchObject({
+      precipitationSum: 47.5,
+      precipitationProbabilityMax: 96,
+      precipitationHours: 14,
+      windGustsMax: 61.2,
+      uvIndexMax: 0.85,
+      sunshineHours: 1.5,
+    });
+  });
+
   it("drops the trailing day the arrays have no numbers for", () => {
     const days = toDailyWeather({
       time: ["2026-09-11", "2026-09-12"],

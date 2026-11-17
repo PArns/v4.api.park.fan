@@ -29,6 +29,11 @@ interface WeatherRow {
   precipitationSum?: number | string | null;
   snowfallSum?: number | string | null;
   windSpeedMax?: number | string | null;
+  windGustsMax?: number | string | null;
+  precipitationProbabilityMax?: number | string | null;
+  precipitationHours?: number | string | null;
+  uvIndexMax?: number | string | null;
+  sunshineHours?: number | string | null;
   humidity?: number | string | null;
   apparentTemperature?: number | string | null;
   weatherCode?: number | null;
@@ -75,9 +80,47 @@ export function toWeatherSummary(
     precipitationMm: num(weather.precipitationSum),
     snowMm: num(weather.snowfallSum),
     windMax: num(weather.windSpeedMax),
+    windGustsMax: num(weather.windGustsMax),
+    precipitationProbability: num(weather.precipitationProbabilityMax),
+    precipitationHours: num(weather.precipitationHours),
+    uvIndexMax: num(weather.uvIndexMax),
+    sunshineHours: num(weather.sunshineHours),
     humidity: num(weather.humidity),
     apparentTemp: num(weather.apparentTemperature),
     icon: weather.weatherCode ?? 0,
+  };
+}
+
+/** What {@link weatherView} holds, as the tools that return it describe it. */
+export const WEATHER_VIEW_FIELDS =
+  "condition, °C (feelsLikeC today), precipitation in mm with its highest hourly chance in % " +
+  "and its hours, snow in cm, wind and gusts in km/h, UV index, sunshine hours";
+
+/**
+ * A day's weather as Parky and the admin MCP read it: every figure the calendar
+ * has, each named with its unit, and the legacy `rainChance` left out — it holds
+ * millimetres under a name that reads as a percentage, and a model reading it
+ * said "12,6 % chance of rain" for 12.6 mm. Absent fields stay absent.
+ */
+export function weatherView(weather: WeatherSummary | null | undefined) {
+  if (!weather) return weather;
+  return {
+    basis: weather.basis,
+    condition: weather.condition,
+    // The WMO code, as get_park_weather names it.
+    weatherCode: weather.icon ?? null,
+    tempMin: weather.tempMin,
+    tempMax: weather.tempMax,
+    feelsLikeC: weather.apparentTemp,
+    precipitationMm: weather.precipitationMm ?? weather.rainChance,
+    precipitationChancePercent: weather.precipitationProbability,
+    precipitationHours: weather.precipitationHours,
+    snowCm: weather.snowMm,
+    windMaxKmh: weather.windMax,
+    windGustsMaxKmh: weather.windGustsMax,
+    uvIndexMax: weather.uvIndexMax,
+    sunshineHours: weather.sunshineHours,
+    humidityPercent: weather.humidity,
   };
 }
 
