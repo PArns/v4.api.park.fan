@@ -2,7 +2,7 @@ import type { HolidayRow } from "../../holidays/holidays.service";
 import { eachIsoDate } from "../../common/utils/date.util";
 import {
   applySeasonLevel,
-  seasonDaysOff,
+  seasonDayTypes,
   seasonOn,
   type RunningSeason,
   type SeasonReference,
@@ -44,12 +44,15 @@ describe("season level (PAR-1343)", () => {
   const christmasBreak = eachIsoDate("2026-12-23", "2027-01-06").map((d) =>
     holiday(d),
   );
+  // North Rhine-Westphalia's school breaks are stored into 2027's summer.
+  const nrwThrough = "2027-07-20";
   // Saturday 28 November, and Wednesday 23 December, the first day of the
   // break; Tuesday 1 December is a working day.
-  const daysOff = seasonDaysOff(
+  const dayTypes = seasonDayTypes(
     wintertraum.dates!,
     christmasBreak,
     phantasialand,
+    nrwThrough,
   );
 
   const row = (attractionId: string, day: string, wait: number) => ({
@@ -80,9 +83,12 @@ describe("season level (PAR-1343)", () => {
     expect(seasonOn([range], "2026-11-02")).toBeUndefined();
   });
 
-  describe("seasonDaysOff", () => {
+  describe("seasonDayTypes", () => {
     it("counts the weekend and a school-break weekday as days off", () => {
-      expect(daysOff).toEqual(["2026-11-28", "2026-12-23", "2026-12-26"]);
+      expect(dayTypes).toEqual({
+        daysOff: ["2026-11-28", "2026-12-23", "2026-12-26"],
+        unknownDays: [],
+      });
     });
 
     it("counts a public holiday and the bridge day after it", () => {
@@ -94,19 +100,25 @@ describe("season level (PAR-1343)", () => {
         isNationwide: true,
       });
       expect(
-        seasonDaysOff(
+        seasonDayTypes(
           ["2026-05-13", "2026-05-14", "2026-05-15"],
           [ascension],
           phantasialand,
-        ),
+          nrwThrough,
+        ).daysOff,
       ).toEqual(["2026-05-14", "2026-05-15"]);
     });
 
     it("leaves a neighbouring region's break a working day", () => {
       const lowerSaxony = holiday("2026-12-01", { region: "DE-NI" });
       expect(
-        seasonDaysOff(["2026-12-01"], [lowerSaxony], phantasialand),
-      ).toEqual([]);
+        seasonDayTypes(
+          ["2026-12-01"],
+          [lowerSaxony],
+          phantasialand,
+          nrwThrough,
+        ),
+      ).toEqual({ daysOff: [], unknownDays: [] });
     });
 
     it("reads the country's own weekend", () => {
@@ -115,10 +127,30 @@ describe("season level (PAR-1343)", () => {
         regionCode: null,
         timezone: "Asia/Riyadh",
       };
-      // Friday and Saturday off, Sunday a working day.
+      // Friday and Saturday off. Sunday is a working day only where school
+      // breaks are known, and none are stored for Saudi Arabia.
       expect(
-        seasonDaysOff(["2026-11-27", "2026-11-28", "2026-11-29"], [], riyadh),
-      ).toEqual(["2026-11-27", "2026-11-28"]);
+        seasonDayTypes(
+          ["2026-11-27", "2026-11-28", "2026-11-29"],
+          [],
+          riyadh,
+          null,
+        ),
+      ).toEqual({
+        daysOff: ["2026-11-27", "2026-11-28"],
+        unknownDays: ["2026-11-29"],
+      });
+    });
+
+    it("leaves a weekday past the school data unknown, never a working day", () => {
+      expect(
+        seasonDayTypes(
+          ["2027-08-03", "2027-08-07"],
+          [],
+          phantasialand,
+          nrwThrough,
+        ),
+      ).toEqual({ daysOff: ["2027-08-07"], unknownDays: ["2027-08-03"] });
     });
   });
 
@@ -131,7 +163,7 @@ describe("season level (PAR-1343)", () => {
       ],
       [wintertraum],
       [ref(true, 62), ref(false, 33)],
-      daysOff,
+      dayTypes,
       dayOf,
     );
     // Half-up to 5, like every served wait. The Wednesday of the break is
@@ -153,7 +185,7 @@ describe("season level (PAR-1343)", () => {
         rows,
         [wintertraum],
         [ref(true, 55, 2), ref(false, 25, 1)],
-        daysOff,
+        dayTypes,
         dayOf,
       ),
     ).toEqual(rows);
@@ -163,7 +195,7 @@ describe("season level (PAR-1343)", () => {
       rows,
       [wintertraum],
       [ref(true, 55, 2), ref(false, 25)],
-      daysOff,
+      dayTypes,
       dayOf,
     );
     expect(out.map((p) => p.predictedWaitTime)).toEqual([15, 25]);
@@ -179,7 +211,7 @@ describe("season level (PAR-1343)", () => {
       rows,
       [wintertraum],
       [ref(true, 62, 2), ref(false, 41)],
-      daysOff,
+      dayTypes,
       dayOf,
     );
     expect(out).toEqual(rows);
@@ -187,6 +219,27 @@ describe("season level (PAR-1343)", () => {
 
   it("returns the list untouched without a running season", () => {
     const rows = [row("taron", "2026-11-28", 15)];
-    expect(applySeasonLevel(rows, [], [ref(false, 41)], [], dayOf)).toBe(rows);
+    expect(
+      applySeasonLevel(
+        rows,
+        [],
+        [ref(false, 41)],
+        { daysOff: [], unknownDays: [] },
+        dayOf,
+      ),
+    ).toBe(rows);
+  });
+
+  it("serves an unknown day the model's number whatever was measured", () => {
+    const rows = [row("taron", "2026-12-01", 10)];
+    expect(
+      applySeasonLevel(
+        rows,
+        [wintertraum],
+        [ref(true, 62), ref(false, 33)],
+        { daysOff: [], unknownDays: ["2026-12-01"] },
+        dayOf,
+      ),
+    ).toEqual(rows);
   });
 });

@@ -20,13 +20,23 @@ describe("season level reads the running season's measured days (e2e)", () => {
   let parkId: string;
   let rideId: string;
 
-  /** The park as the season level reads it, with no holidays unless given. */
-  const load = (holidays: HolidayRow[] = []) =>
+  /**
+   * The park as the season level reads it: no holidays unless given, and
+   * school breaks known far past the season unless `schoolThrough` says when
+   * they stop.
+   */
+  const load = (
+    holidays: HolidayRow[] = [],
+    schoolThrough: string | null = "2099-12-31",
+  ) =>
     loadSeasonLevelInputs(
       dataSource,
       { id: parkId, timezone: TZ, countryCode: "DE", regionCode: "NRW" },
-      async (from, to) =>
-        holidays.filter((h) => h.date >= from && h.date <= to),
+      {
+        holidays: async (from, to) =>
+          holidays.filter((h) => h.date >= from && h.date <= to),
+        schoolThrough: async () => schoolThrough,
+      },
     );
 
   /** A North Rhine-Westphalian school-break day. */
@@ -170,10 +180,13 @@ describe("season level reads the running season's measured days (e2e)", () => {
     // A heartbeat copy is not a reading.
     await measuredDay(days[0], 200, true);
 
-    const { seasons, daysOff, references } = await load([breakDay(onBreak)]);
+    const { seasons, dayTypes, references } = await load([breakDay(onBreak)]);
 
     const offDays = days.filter(dayOff).length;
-    expect(daysOff).toEqual(expect.arrayContaining(days.filter(dayOff)));
+    expect(dayTypes.daysOff).toEqual(
+      expect.arrayContaining(days.filter(dayOff)),
+    );
+    expect(dayTypes.unknownDays).toEqual([]);
     const level = (off: boolean) => references.find((r) => r.dayOff === off);
     expect(level(false)).toMatchObject({
       seasonId: id,
@@ -184,8 +197,9 @@ describe("season level reads the running season's measured days (e2e)", () => {
     expect(level(true)).toMatchObject({ days: offDays, level: 60 });
     expect(references).toHaveLength(2);
 
-    // The whole chain: next Saturday is served the season's days-off level
-    // once three days off are in, the model's number before that.
+    // The whole chain: next Saturday is served the season's days-off level.
+    // Nine days hold at least two weekend days, and the break day makes three.
+    expect(offDays).toBeGreaterThanOrEqual(3);
     let saturday = await localDay(1);
     for (let i = 2; !isWeekendDate(saturday); i++) saturday = await localDay(i);
     const [served] = applySeasonLevel(
@@ -199,14 +213,28 @@ describe("season level reads the running season's measured days (e2e)", () => {
       ],
       seasons,
       references,
-      daysOff,
+      dayTypes,
       (p) => p.predictedTime.slice(0, 10),
     );
-    expect(served).toMatchObject(
-      offDays >= 3
-        ? { predictedWaitTime: 60, modelVersion: "tft+season" }
-        : { predictedWaitTime: 15, modelVersion: "tft" },
-    );
+    expect(served).toMatchObject({
+      predictedWaitTime: 60,
+      modelVersion: "tft+season",
+    });
+  });
+
+  it("measures no weekday past the park's school data", async () => {
+    await season("winter", "confirmed", await localDay(-9), await localDay(30));
+    const days: string[] = [];
+    for (let back = 9; back >= 1; back--) days.push(await localDay(-back));
+    for (const day of days) await measuredDay(day, 40);
+
+    // The school data ends before the season began.
+    const { dayTypes, references } = await load([], await localDay(-20));
+
+    const weekdays = days.filter((day) => !isWeekendDate(day));
+    expect(dayTypes.unknownDays).toEqual(expect.arrayContaining(weekdays));
+    expect(references.map((r) => r.dayOff)).toEqual([true]);
+    expect(references[0].days).toBe(days.length - weekdays.length);
   });
 
   it("counts a listed season's own days only", async () => {

@@ -14,6 +14,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../common/utils/date.util";
+import { schoolCoverageThrough } from "../common/utils/holiday.utils";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
@@ -1348,8 +1349,9 @@ export class MLService {
   /**
    * The served daily rows with the season level on the days of a running park
    * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
-   * move once a night, so they are cached for six hours; a failed read costs
-   * the season level, never the response.
+   * move once a night, so they are cached for six hours under the park-local
+   * date, which a new day's measurement joins; a failed read costs the season
+   * level, never the response.
    */
   private async withSeasonLevel(
     parkId: string,
@@ -1368,7 +1370,8 @@ export class MLService {
         }));
       const tz = park?.timezone || "UTC";
       const countryCode = park?.countryCode;
-      const cacheKey = `ml:season-level:v2:${parkId}`;
+      const regionCode = park?.regionCode ?? null;
+      const cacheKey = `ml:season-level:v2:${parkId}:${getCurrentDateInTimezone(tz)}`;
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)
@@ -1378,12 +1381,22 @@ export class MLService {
               id: parkId,
               timezone: tz,
               countryCode: countryCode ?? "",
-              regionCode: park?.regionCode ?? null,
+              regionCode,
             },
-            async (from, to) =>
-              countryCode
-                ? this.holidaysService.getHolidays(countryCode, from, to)
-                : [],
+            {
+              holidays: async (from, to) =>
+                countryCode
+                  ? this.holidaysService.getHolidays(countryCode, from, to)
+                  : [],
+              schoolThrough: async () =>
+                countryCode
+                  ? schoolCoverageThrough(
+                      await this.holidaysService.getSchoolHolidayCoverage(),
+                      countryCode,
+                      regionCode,
+                    )
+                  : null,
+            },
           );
       if (!cached) {
         await this.redis
@@ -1394,7 +1407,7 @@ export class MLService {
         served.predictions,
         inputs.seasons,
         inputs.references,
-        inputs.daysOff,
+        inputs.dayTypes,
         (p) => MLService.localDateOf(p.predictedTime, tz),
       );
       return { ...served, predictions };

@@ -6,8 +6,9 @@ import type { HolidayRow } from "../../holidays/holidays.service";
 import {
   SEASON_LEVEL_KINDS,
   SEASON_LEVEL_STATUSES,
-  seasonDaysOff,
+  seasonDayTypes,
   type RunningSeason,
+  type SeasonDayTypes,
   type SeasonReference,
 } from "./season-level.util";
 
@@ -16,9 +17,17 @@ const LIMITS = { statementTimeoutMs: 20_000, lockTimeoutMs: 2_000 };
 
 export interface SeasonLevelInputs {
   seasons: RunningSeason[];
-  /** The days off over every running season's days (`seasonDaysOff`). */
-  daysOff: string[];
+  /** The types of every running season's days (`seasonDayTypes`). */
+  dayTypes: SeasonDayTypes;
   references: SeasonReference[];
+}
+
+/** What the season level reads about the park's holidays. */
+export interface SeasonHolidaySource {
+  /** The park country's holiday rows from `from` to `to`, both included. */
+  holidays(from: string, to: string): Promise<HolidayRow[]>;
+  /** The last day the park's school breaks are stored for; null for none. */
+  schoolThrough(): Promise<string | null>;
 }
 
 /**
@@ -31,14 +40,14 @@ export interface SeasonLevelInputs {
  * heartbeat rows, at least three readings. Today is left out: a running day's
  * P90 is not a day's P90.
  *
- * `holidaysBetween` reads the park country's holiday rows; a failed read
- * fails the whole load, because without it every holiday would count as a
- * working day.
+ * A day of unknown type (`SeasonDayTypes.unknownDays`) is measured into no
+ * reference. A failed holiday read fails the whole load, because without it
+ * every holiday would count as a working day.
  */
 export async function loadSeasonLevelInputs(
   dataSource: DataSource,
   park: HolidayLocation & { id: string },
-  holidaysBetween: (from: string, to: string) => Promise<HolidayRow[]>,
+  holidaySource: SeasonHolidaySource,
 ): Promise<SeasonLevelInputs> {
   const { id: parkId, timezone } = park;
   const seasons = await queryWithLimits<RunningSeason[]>(
@@ -54,16 +63,23 @@ export async function loadSeasonLevelInputs(
     [parkId, [...SEASON_LEVEL_KINDS], [...SEASON_LEVEL_STATUSES], timezone],
     LIMITS,
   );
-  if (seasons.length === 0) return { seasons, daysOff: [], references: [] };
+  if (seasons.length === 0) {
+    return {
+      seasons,
+      dayTypes: { daysOff: [], unknownDays: [] },
+      references: [],
+    };
+  }
 
   const bounds = seasons
     .flatMap((s) => [s.startDate, s.endDate, ...(s.dates ?? [])])
     .sort();
   const [first, last] = [bounds[0], bounds[bounds.length - 1]];
-  const daysOff = seasonDaysOff(
+  const dayTypes = seasonDayTypes(
     eachIsoDate(first, last),
-    await holidaysBetween(addIsoDays(first, -3), addIsoDays(last, 3)),
+    await holidaySource.holidays(addIsoDays(first, -3), addIsoDays(last, 3)),
     park,
+    await holidaySource.schoolThrough(),
   );
 
   const rows = await queryWithLimits<
@@ -88,6 +104,7 @@ export async function loadSeasonLevelInputs(
         ) AS days
         WHERE s.id = ANY($1::uuid[])
           AND d::date < (now() AT TIME ZONE $3)::date
+          AND NOT d::date = ANY($5::date[])
      ), peaks AS (
        SELECT qd."attractionId" AS attraction_id,
               (qd.timestamp AT TIME ZONE $3)::date AS day,
@@ -114,12 +131,18 @@ export async function loadSeasonLevelInputs(
             count(*)::int AS days,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY peak)::float AS level
        FROM measured GROUP BY 1, 2, 3`,
-    [seasons.map((s) => s.id), parkId, timezone, daysOff],
+    [
+      seasons.map((s) => s.id),
+      parkId,
+      timezone,
+      dayTypes.daysOff,
+      dayTypes.unknownDays,
+    ],
     LIMITS,
   );
   return {
     seasons,
-    daysOff,
+    dayTypes,
     references: rows.map((r) => ({ ...r, level: Number(r.level) })),
   };
 }

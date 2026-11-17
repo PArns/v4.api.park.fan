@@ -30,11 +30,6 @@ export const CUSTOM_WEEKEND_RULES: WeekendRule[] = [
     weekendDays: [5, 6], // Friday + Saturday
   },
   {
-    countryCode: "AE",
-    countryName: "United Arab Emirates",
-    weekendDays: [5, 6], // Friday + Saturday
-  },
-  {
     countryCode: "KW",
     countryName: "Kuwait",
     weekendDays: [5, 6], // Friday + Saturday
