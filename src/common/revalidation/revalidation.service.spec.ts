@@ -1,14 +1,30 @@
 import axios from "axios";
 import { RevalidationService } from "./revalidation.service";
+import { forecastCacheTags } from "./park-status-transitions";
 
 jest.mock("axios");
 const mockedPost = axios.post as jest.Mock;
 
 /**
  * The revalidation webhook must be inert unless a secret is configured (so dev
- * / test / CI never ping the production frontend) and must map park slugs to
- * the `best-days:<slug>` tags the frontend reads.
+ * / test / CI never ping the production frontend), and a forecast warmup rings
+ * each park's best-days snapshot and calendar together.
  */
+const PHANTASIALAND = {
+  id: "p1",
+  slug: "phantasialand",
+  continentSlug: "europe",
+  countrySlug: "germany",
+  citySlug: "bruehl",
+};
+const EFTELING = {
+  id: "p2",
+  slug: "efteling",
+  continentSlug: "europe",
+  countrySlug: "netherlands",
+  citySlug: "kaatsheuvel",
+};
+
 describe("RevalidationService", () => {
   const ORIGINAL_ENV = process.env;
   let service: RevalidationService;
@@ -26,7 +42,7 @@ describe("RevalidationService", () => {
   it("is a no-op (no POST) when REVALIDATE_SECRET is unset", async () => {
     delete process.env.REVALIDATE_SECRET;
 
-    const ok = await service.revalidateBestDays(["phantasialand"]);
+    const ok = await service.revalidateTags(forecastCacheTags(PHANTASIALAND));
 
     expect(ok).toBe(false);
     expect(mockedPost).not.toHaveBeenCalled();
@@ -41,19 +57,28 @@ describe("RevalidationService", () => {
     expect(mockedPost).not.toHaveBeenCalled();
   });
 
-  it("POSTs best-days tags with a Bearer auth header when configured", async () => {
+  it("POSTs a park's forecast tags with a Bearer auth header when configured", async () => {
     process.env.REVALIDATE_SECRET = "s3cret";
     process.env.REVALIDATE_URL = "https://park.fan/api/revalidate";
     mockedPost.mockResolvedValue({ status: 200 });
 
-    const ok = await service.revalidateBestDays(["phantasialand", "efteling"]);
+    const ok = await service.revalidateTags(
+      [PHANTASIALAND, EFTELING].flatMap(forecastCacheTags),
+      { immediate: true },
+    );
 
     expect(ok).toBe(true);
     expect(mockedPost).toHaveBeenCalledTimes(1);
     const [url, body, config] = mockedPost.mock.calls[0];
     expect(url).toBe("https://park.fan/api/revalidate");
     expect(body).toEqual({
-      tags: ["best-days:phantasialand", "best-days:efteling"],
+      tags: [
+        "best-days:phantasialand",
+        "park-calendar:europe/germany/bruehl/phantasialand",
+        "best-days:efteling",
+        "park-calendar:europe/netherlands/kaatsheuvel/efteling",
+      ],
+      expire: 0,
     });
     // Frontend expects `Authorization: Bearer <secret>` (not a custom header).
     expect(config.headers.Authorization).toBe("Bearer s3cret");
@@ -114,7 +139,7 @@ describe("RevalidationService", () => {
     process.env.REVALIDATE_SECRET = "s3cret";
     mockedPost.mockRejectedValue(new Error("frontend down"));
 
-    const ok = await service.revalidateBestDays(["phantasialand"]);
+    const ok = await service.revalidateTags(forecastCacheTags(PHANTASIALAND));
 
     expect(ok).toBe(false); // did not throw
   });

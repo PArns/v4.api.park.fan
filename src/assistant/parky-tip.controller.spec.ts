@@ -43,6 +43,7 @@ describe("ParkyTipController", () => {
     const body = {
       date: "2026-12-05",
       verdict: "good",
+      crowdLevel: "low",
       text: "Ruhiger Tag!",
       promptVersion: 1,
     };

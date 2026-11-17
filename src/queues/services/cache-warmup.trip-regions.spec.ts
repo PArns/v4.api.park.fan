@@ -69,6 +69,7 @@ describe("CacheWarmupService › trip-region parks", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     return { service, redis, store, built };
   }

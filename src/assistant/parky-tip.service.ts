@@ -12,6 +12,7 @@ import {
 import type { CrowdLevel } from "../common/types/crowd-level.type";
 import type { Park } from "../parks/entities/park.entity";
 import { CalendarService } from "../parks/services/calendar.service";
+import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
 import type { AssistantLocale } from "./assistant-locales";
@@ -33,6 +34,8 @@ export type ParkyVerdict = "good" | "meh" | "bad";
 export interface ParkyTip {
   date: string;
   verdict: ParkyVerdict;
+  /** The day's crowd level the sentence was written for; a level that moves gets a new one. */
+  crowdLevel: CrowdLevel;
   text: string;
   promptVersion: number;
 }
@@ -53,6 +56,21 @@ export function parkyVerdict(
   return VERDICTS[level] ?? null;
 }
 
+/** What Parky writes about, and the stamp he gives it. */
+interface DayRating {
+  crowdLevel: CrowdLevel;
+  verdict: ParkyVerdict;
+}
+
+/** A day's crowd level and Parky's verdict on it; null for a closed or unrated day. */
+function rateDay(day: CalendarDay | undefined): DayRating | null {
+  if (!day || day.status === "CLOSED" || day.crowdLevel === "closed") {
+    return null;
+  }
+  const verdict = parkyVerdict(day.crowdLevel);
+  return verdict ? { crowdLevel: day.crowdLevel, verdict } : null;
+}
+
 /** The model's sentence as served, or null when it is not one plain line within the cap. */
 export function validParkyTip(raw: string): string | null {
   const text = raw.trim().replace(/^["„“«]+|["“”»]+$/g, "");
@@ -64,8 +82,9 @@ export function validParkyTip(raw: string): string | null {
 
 /**
  * Parky's one-sentence tip for a day of the crowd calendar. One model call per park, park-local
- * today, date, locale and prompt version every 12 hours; a sentence that fails the checks is kept
- * as `false` for as long, so a bad answer is not asked again on every request.
+ * today, date, the day's crowd level, locale and prompt version every 12 hours; a sentence that
+ * fails the checks is kept as `false` for as long, so a bad answer is not asked again on every
+ * request.
  */
 @Injectable()
 export class ParkyTipService {
@@ -90,12 +109,21 @@ export class ParkyTipService {
     // Off, keyless or past the day's budget: no tip, cached ones included.
     if (!(await this.settings.publicConfig()).enabled) return null;
     try {
+      // Read before the cache, because the level is part of the key. The days come from the
+      // month caches the calendar serves (`calendar:month:v2`), which the warmup keeps for this
+      // horizon, so a tip already written costs one MGET of one or two months; a current month
+      // past its two warm hours is rebuilt first, as for any calendar read.
+      const days = await this.daysAround(park, today, date);
+      const rating = rateDay(days.find((d) => d.date === date));
+      if (!rating) return null;
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,
-        // Today in the key: the sentence says "tomorrow" or "on Saturday" counted from it.
-        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${today}:${date}:${locale}`,
+        // Today in the key: the sentence says "tomorrow" or "on Saturday" counted from it. The
+        // level too: once the forecast moves the day, the sentence about it is written again
+        // instead of saying the old level under the new one.
+        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${today}:${date}:${rating.crowdLevel}:${locale}`,
         CACHE_TTL_SECONDS,
-        () => this.write(park, today, date, locale),
+        () => this.write(park, today, date, locale, rating, days),
       );
       return tip || null;
     } catch (error) {
@@ -106,13 +134,12 @@ export class ParkyTipService {
     }
   }
 
-  /** `false` is kept in the cache, null is not. */
-  private async write(
+  /** The calendar's days around `date` that the prompt sees, from today on. */
+  private async daysAround(
     park: Park,
     today: string,
     date: string,
-    locale: AssistantLocale,
-  ): Promise<ParkyTip | false | null> {
+  ): Promise<CalendarDay[]> {
     const from = addIsoDays(date, -NEIGHBOUR_DAYS);
     const { fromDate, toDate } = parseDateRange(
       from < today ? today : from,
@@ -122,11 +149,18 @@ export class ParkyTipService {
     const calendar = await this.moduleRef
       .get(CalendarService, { strict: false })
       .buildCalendarResponse(park, fromDate, toDate, "none");
-    const day = calendar.days.find((d) => d.date === date);
-    const verdict =
-      day && day.status !== "CLOSED" ? parkyVerdict(day.crowdLevel) : null;
-    if (!verdict) return false;
+    return calendar.days;
+  }
 
+  /** `false` is kept in the cache, null is not. */
+  private async write(
+    park: Park,
+    today: string,
+    date: string,
+    locale: AssistantLocale,
+    rating: DayRating,
+    days: CalendarDay[],
+  ): Promise<ParkyTip | false | null> {
     const apiKey = await this.settings.apiKey();
     if (!apiKey || (await this.settings.budgetSpent())) return null;
     const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 20_000 });
@@ -138,13 +172,7 @@ export class ParkyTipService {
       messages: [
         {
           role: "user",
-          content: parkyTipInput(
-            park.name,
-            park.timezone,
-            today,
-            date,
-            calendar.days,
-          ),
+          content: parkyTipInput(park.name, park.timezone, today, date, days),
         },
       ],
     });
@@ -168,6 +196,6 @@ export class ParkyTipService {
       );
       return false;
     }
-    return { date, verdict, text, promptVersion: PARKY_TIP_PROMPT_VERSION };
+    return { date, ...rating, text, promptVersion: PARKY_TIP_PROMPT_VERSION };
   }
 }

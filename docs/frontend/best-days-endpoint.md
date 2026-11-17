@@ -78,8 +78,10 @@ request from ML:
 ## On-change revalidation
 
 After each warmup batch the API fires one batched `POST {REVALIDATE_URL}` with
-`{ "tags": ["best-days:<slug>", …] }` for every recomputed park, so park.fan drops
-its day-long best-days cache at once (`RevalidationService`).
+`{ "tags": ["best-days:<slug>", "park-calendar:<continent>/<country>/<city>/<slug>", …], "expire": 0 }`
+for every recomputed park, so park.fan drops its best-days and calendar copies at the same
+moment, and the same tags again after `CDN_SETTLE_MS`
+([the forecast ring](../architecture/caching-strategy.md#the-forecast-ring)).
 
 | Env                 | Default                           | Notes                                                                 |
 | ------------------- | --------------------------------- | --------------------------------------------------------------------- |
