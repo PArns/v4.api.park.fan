@@ -1,4 +1,4 @@
-import { cachedJson } from "./redis-json-cache";
+import { cachedJson, readCachedJson } from "./redis-json-cache";
 
 function redis() {
   const store = new Map<string, string>();
@@ -62,5 +62,23 @@ describe("cachedJson under load", () => {
     const r = redis();
     r.store.set("k", "{not json");
     expect(await cachedJson(r as never, "k", 60, async () => 3)).toBe(3);
+  });
+});
+
+describe("readCachedJson", () => {
+  it("answers what the key holds and never writes", async () => {
+    const r = redis();
+    r.store.set("k", JSON.stringify({ n: 1 }));
+    expect(await readCachedJson(r as never, "k")).toEqual({ n: 1 });
+    expect(await readCachedJson(r as never, "missing")).toBeNull();
+    expect(r.set).not.toHaveBeenCalled();
+  });
+
+  it("is a miss when Redis fails or the entry does not parse", async () => {
+    const r = redis();
+    r.get.mockRejectedValueOnce(new Error("down"));
+    expect(await readCachedJson(r as never, "k")).toBeNull();
+    r.store.set("k", "{not json");
+    expect(await readCachedJson(r as never, "k")).toBeNull();
   });
 });

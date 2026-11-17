@@ -2,8 +2,11 @@ import type { ModuleRef } from "@nestjs/core";
 import type { Redis } from "ioredis";
 import {
   addIsoDays,
+  eachIsoDate,
+  formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import { monthBounds, monthOf } from "../trip-regions/last-year-snapshot";
 import type { Park } from "../parks/entities/park.entity";
 import type { AssistantSettingsService } from "./assistant-settings.service";
 import {
@@ -88,6 +91,18 @@ describe("parkyTipInput", () => {
     );
     expect(input).toMatch(/^Wednesday 2026-11-18; crowd level high$/m);
     expect(input.match(/so far today/g)).toHaveLength(1);
+  });
+
+  it("leaves today's level so far out of the tip for another day", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-19",
+      [day("2026-11-17", { todayCrowdLevel: "very_low" }), day("2026-11-19")],
+    );
+    expect(input).toMatch(/^Tuesday 2026-11-17; crowd level high$/m);
+    expect(input).not.toContain("so far");
   });
 
   it("says nothing so far on a closed today", () => {
@@ -344,7 +359,73 @@ describe("ParkyTipService", () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("hands the chat the sentence it serves and the facts it read, from one calendar read", async () => {
+  it("keeps the tip of a day around today when only today's level so far moves", async () => {
+    const tomorrow = addIsoDays(today, 1);
+    const days = (soFar: string) => ({
+      days: [
+        {
+          date: today,
+          status: "OPERATING",
+          crowdLevel: "high",
+          todayCrowdLevel: soFar,
+        },
+        { date: tomorrow, status: "OPERATING", crowdLevel: "low" },
+      ],
+    });
+    buildCalendarResponse.mockResolvedValue(days("very_low"));
+    await service.tip(park, tomorrow, "de");
+    const [request] = create.mock.calls[0] as [
+      { messages: { content: string }[] },
+    ];
+    expect(request.messages[0].content).not.toContain("so far");
+
+    buildCalendarResponse.mockResolvedValue(days("high"));
+    await service.tip(park, tomorrow, "de");
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the whole months around the days it sees and keeps only those days", async () => {
+    // The last day of a month: its window ends in the next one, so both months, whole.
+    const late = monthBounds(monthOf(addIsoDays(today, 40))).last;
+    const { first } = monthBounds(monthOf(late));
+    const { last } = monthBounds(monthOf(addIsoDays(late, 1)));
+    buildCalendarResponse.mockResolvedValue({
+      days: eachIsoDate(first, last).map((d) => ({
+        date: d,
+        status: "OPERATING",
+        crowdLevel: "low",
+      })),
+    });
+
+    await service.tip(park, late, "de");
+
+    const [, fromDate, toDate, includeHourly] = buildCalendarResponse.mock
+      .calls[0] as [Park, Date, Date, string];
+    expect(formatInParkTimezone(fromDate, park.timezone)).toBe(first);
+    expect(formatInParkTimezone(toDate, park.timezone)).toBe(last);
+    expect(includeHourly).toBe("none");
+    const [request] = create.mock.calls[0] as [
+      { messages: { content: string }[] },
+    ];
+    const lines = request.messages[0].content
+      .split("\n")
+      .filter((line) => /\d{4}-\d{2}-\d{2}; /.test(line));
+    expect(lines.map((line) => /(\d{4}-\d{2}-\d{2});/.exec(line)?.[1])).toEqual(
+      [-3, -2, -1, 0, 1, 2, 3].map((n) => addIsoDays(late, n)),
+    );
+  });
+
+  it("reads from the month of today on when the window would start before it", async () => {
+    await service.tip(park, today, "de");
+
+    const [, fromDate] = buildCalendarResponse.mock.calls[0] as [Park, Date];
+    expect(formatInParkTimezone(fromDate, park.timezone)).toBe(
+      `${today.slice(0, 7)}-01`,
+    );
+  });
+
+  it("hands the chat the sentence it keeps and the facts it read, from one calendar read", async () => {
     const shown = await service.tip(park, date, "de");
     buildCalendarResponse.mockClear();
 
@@ -359,19 +440,40 @@ describe("ParkyTipService", () => {
     expect(buildCalendarResponse).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the chat the facts without a sentence where none is served", async () => {
-    settings.budgetSpent.mockResolvedValue(true);
+  it("never writes a tip for the chat: a miss hands it the facts without a sentence", async () => {
     expect(await service.dayTip(park, date, "fr")).toEqual({
       text: null,
       facts: expect.stringContaining("CHOSEN DAY"),
     });
+    expect(create).not.toHaveBeenCalled();
+    expect(settings.apiKey).not.toHaveBeenCalled();
+    expect(settings.budgetSpent).not.toHaveBeenCalled();
+    expect(settings.addTokens).not.toHaveBeenCalled();
+    expect(store.size).toBe(0);
+  });
+
+  it("hands the chat no sentence for a refused tip, while switched off or outside the horizon", async () => {
+    create.mockResolvedValue({
+      stop_reason: "end_turn",
+      usage: { input_tokens: 300, output_tokens: 40 },
+      content: [{ type: "text", text: "Mehr auf **park.fan**" }],
+    });
+    expect(await service.tip(park, date, "de")).toBeNull();
+    expect((await service.dayTip(park, date, "de"))?.text).toBeNull();
+
+    create.mockResolvedValue({
+      stop_reason: "end_turn",
+      usage: { input_tokens: 300, output_tokens: 40 },
+      content: [{ type: "text", text: "Ruhiger Tag!" }],
+    });
+    await service.tip(park, date, "fr");
     settings.publicConfig.mockResolvedValue({
       enabled: false,
       rolloutPercent: 0,
     });
-    expect((await service.dayTip(park, date, "de"))?.text).toBeNull();
+    expect((await service.dayTip(park, date, "fr"))?.text).toBeNull();
     expect(await service.dayTip(park, addIsoDays(today, -1), "de")).toBeNull();
-    expect(create).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("makes one model call for concurrent requests", async () => {

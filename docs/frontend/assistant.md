@@ -51,13 +51,18 @@ how yesterday's went, and a bare „ja" may answer it. One line, at most 300 cha
 `dayTip` is the day tip the visitor tapped to open the chat (`park` as
 `continent/country/city/slug`, `date`, and `text`, the sentence the dialog showed), sent with that
 first question only. The API resolves the park and reads both the sentence and the day's facts
-itself (`ParkyTipService.dayTip`): the tip it serves now in the chat's `locale`, through the same
-cache as the route below, and the lines that tip is written from, the day and up to three on each
-side, from the park's today. "This chat" gives Parky that sentence as his own words, quoted as
-data, and the facts. `text` is accepted because park.fan sends it, and never used: a sentence the
-browser made up would otherwise be one Parky defends as his. Where no tip is served now (the day's
-budget, Parky off), he gets the facts and is told not to stand by the sentence the question quotes.
-A park or day it cannot read drops the context, never the question.
+itself (`ParkyTipService.dayTip`): the tip kept in the cache of the route below for the chat's
+`locale` and the days as they stand now, and the lines that tip is written from, the day and up to
+three on each side, from the park's today. The chat only reads that cache: it never writes a tip,
+so the question waits for no model call and spends no budget on one, and Parky is never handed a
+sentence written for the question instead of the one the visitor was shown. "This chat" gives
+Parky the kept sentence as his own words, quoted as data, and the facts; if the question quotes a
+different sentence, his forecast has moved since and he says what changed. `text` is accepted
+because park.fan sends it, and never used: a sentence the browser made up would otherwise be one
+Parky defends as his. Where no tip is kept (its key moved since the visitor saw it, none was
+written yet, Parky off), he gets the facts and is told that he cannot see the tip the visitor was
+shown, so he neither stands by nor takes back the sentence the question quotes and answers from
+the facts. A park or day it cannot read drops the context, never the question.
 
 The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, `wait-times`,
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
@@ -1153,7 +1158,7 @@ says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` 
 behind a data key like `/calendar`, answers the calendar's day dialog:
 
 ```json
-{ "date": "2026-12-05", "verdict": "good", "crowdLevel": "low", "text": "…", "promptVersion": 3 }
+{ "date": "2026-12-05", "verdict": "good", "crowdLevel": "low", "text": "…", "promptVersion": 4 }
 ```
 
 - **`verdict`** is a rule, not the model's: the day's `crowdLevel`, `very_low`/`low` → `good`,
@@ -1166,11 +1171,13 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
   to three days on each side (crowd level, hours in park time, holidays, school holidays, events,
   forecast weather). The input opens with the park's today, and the sentence names days the way a
   friend would, counted from it: today, tomorrow, the weekday within six days, "next weekend",
-  further out the weekday with day and month. Today's line also carries the level measured so far
-  (`todayCrowdLevel`, "so far today: very low"), the „bisher" the dialog shows under the forecast;
-  where the two differ on a tip for today, the sentence says both instead of the forecast alone
-  (prompt version 3). A sentence with a line break, a link or Markdown, or over the cap is not
-  served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+  further out the weekday with day and month. On the tip for today, today's line also carries the
+  level measured so far (`todayCrowdLevel`, "so far today: very low"), the „bisher" the dialog
+  shows under the forecast; where the two differ, the sentence says both instead of the forecast
+  alone. The tips of the days around today leave it out (`soFarToday`, prompt version 4): it moves
+  during the day, and in their input and key it would have up to four dates written again in six
+  languages with every move. A sentence with a line break, a link or Markdown, or over the cap is
+  not served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
 - **`today`** (optional) is the park's today as the caller counts it, for a caller that keys its
   own cache by it, as park.fan's relay does. One that is not the park's today answers 204 with
   `no-store`, before the calendar or the cache is read: a browser clock past the park's midnight
@@ -1181,22 +1188,26 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
   `public, max-age=300, s-maxage=300` (`TIP_NONE_CACHE_CONTROL`), since most of these pass within
   the day. A bad `date`, `today` or `locale` is a 400.
 - **Tapped:** the dialog opens the chat with the park and the day (`dayTip` on the chat request,
-  above), and the chat reads the sentence and the day's facts through `ParkyTipService.dayTip`, so
-  Parky argues from the tip he wrote and what it was written from.
+  above), and the chat reads the kept sentence and the day's facts through
+  `ParkyTipService.dayTip`, so Parky argues from the tip he wrote and what it was written from.
+  It never writes one: no model call, no budget.
 - **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{today}:{date}:{days}:{locale}` for
   12 hours, `today` being the park's: a tip that says "tomorrow" is written again once that day has
   come. `{days}` is a digest of every day the prompt reads: its date, status and crowd level, and on
-  today the level so far (`daysDigest`). The sentence names a quieter neighbour ("go on Friday"),
+  the tip for today the level so far (`daysDigest`). The sentence names a quieter neighbour ("go on Friday"),
   so once the forecast moves the chosen day or any day around it, it is written again for what the
   calendar shows now. Weather is left out of the digest: it changes with every forecast run and
   would have the sentence written again for a cloud. A refused sentence is kept too (as nothing),
   so one model call per day, set of levels and language; concurrent misses share one call. The days
-  are read before the cache, from the calendar's days around the date (`buildCalendarResponse` over
-  the date ± 3 days, the window the prompt sees): those come from the `calendar:month:v2` month
-  caches the warmup keeps for −1…+3 months, so a tip already written costs one `MGET` of one or two
-  months and no query; only a current month past its two warm hours is rebuilt first, the same
-  build any calendar read pays then, which is also how often today's level so far can move the
-  key. A closed or unrated day answers 204 from that read, without a cache entry. The answer leaves
+  are read before the cache, as the whole month or two that hold the window the prompt sees (the
+  date ± 3 days, from today on), cut to that window after the read (`daysAround`). Whole months,
+  because the calendar keeps only whole months (`calendar:month:v2`, warmed for −1…+3 months):
+  a tip already written costs one `MGET` of one or two months and one `GET`, and a month not
+  cached (the current month past its two warm hours, a month past +3) is built once and kept for
+  the next tip and the grid, the build any calendar read pays then. A week asked for on its own
+  would be built from the database on every request and kept nowhere. How often that build runs
+  is also how often today's level so far can move the key of today's tip. A closed or unrated day
+  answers 204 from that read, without a cache entry. The answer leaves
   with `public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600`, cut to the seconds
   left until park-local midnight and then without a stale window (`tipCacheControl`), private like
   every forecast route unless `FORECAST_SHARED_CACHE=vary`. Its tokens count into the daily budget;

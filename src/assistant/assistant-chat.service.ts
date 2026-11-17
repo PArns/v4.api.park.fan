@@ -464,10 +464,11 @@ export class AssistantChatService {
 
   /**
    * What Parky needs about the day tip the chat was opened from: the park's name, his sentence for
-   * the day in the chat's language and the day's facts as the tip reads them
-   * (`ParkyTipService.dayTip`). Both are read here: the browser names the park and the day, and
-   * the text it sends is never handed to Parky as his own words, which he would defend. Null when
-   * the park or the day cannot be read; the chat goes on without it.
+   * the day in the chat's language as the cache keeps it, and the day's facts as the tip reads them
+   * (`ParkyTipService.dayTip`, which never writes a tip, so the answer waits for no model call).
+   * Both are read here: the browser names the park and the day, and the text it sends is never
+   * handed to Parky as his own words, which he would defend. Null when the park or the day cannot
+   * be read; the chat goes on without it.
    */
   private async dayTipContext(
     tip: NonNullable<ChatRequest["dayTip"]>,
