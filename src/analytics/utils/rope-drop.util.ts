@@ -220,14 +220,17 @@ function bucketLevels(
 /**
  * Compute the rope-drop recommendation for one attraction.
  *
- * @param days       all available operating-day slot data for the attraction
- * @param windowStart park-local YYYY-MM-DD; days >= this feed the level layer
- * @param thresholds tuning knobs (defaults validated against live data)
+ * @param days        all available operating-day slot data for the attraction
+ * @param windowStart  park-local YYYY-MM-DD; days >= this feed the level layer
+ * @param weekendDays  the park country's weekend (`getWeekendDaysForCountry`),
+ *                     0 = Sunday like `RopeDropDayInput.dow`
+ * @param thresholds   tuning knobs (defaults validated against live data)
  * @returns the computation result, or null if there is no usable data
  */
 export function computeRopeDrop(
   days: RopeDropDayInput[],
   windowStart: string,
+  weekendDays: ReadonlySet<number>,
   thresholds: RopeDropThresholds = DEFAULT_ROPE_DROP_THRESHOLDS,
 ): RopeDropComputeResult | null {
   if (days.length === 0) return null;
@@ -302,11 +305,11 @@ export function computeRopeDrop(
   // --- Level layer: absolute minutes on the trailing window ---
   const windowDays = guardedDays.filter((d) => d.date >= windowStart);
   const weekend = bucketLevels(
-    windowDays.filter((d) => d.dow === 0 || d.dow === 6),
+    windowDays.filter((d) => weekendDays.has(d.dow)),
     thresholds,
   );
   const weekday = bucketLevels(
-    windowDays.filter((d) => d.dow >= 1 && d.dow <= 5),
+    windowDays.filter((d) => !weekendDays.has(d.dow)),
     thresholds,
   );
 

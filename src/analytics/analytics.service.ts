@@ -64,6 +64,7 @@ import {
   TYPICAL_WAITS_WINDOW_DAYS,
 } from "./utils/typical-waits.util";
 import {
+  addIsoDays,
   getStartOfDayInTimezone,
   getCurrentDateInTimezone,
   getCurrentTimeInTimezone,
@@ -1365,45 +1366,6 @@ export class AnalyticsService {
       return this.getCurrentParkPeakWait(parkId, undefined, next, 0);
     }
     return null;
-  }
-
-  /**
-   * Calculate 95th percentile of wait times for specific hour/weekday over last 2 years
-   */
-  private async calculate95thPercentile(
-    parkId: string,
-    hour: number,
-    dayOfWeek: number,
-  ): Promise<number> {
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-
-    // Query to get all wait times for this hour/weekday
-    const waitTimes = await this.queueDataRepository
-      .createQueryBuilder("qd")
-      .select("qd.waitTime", "waitTime")
-      .innerJoin("qd.attraction", "attraction")
-      .where("attraction.parkId = :parkId", { parkId })
-      .andWhere("qd.timestamp >= :twoYearsAgo", { twoYearsAgo })
-      .andWhere("EXTRACT(HOUR FROM qd.timestamp) = :hour", { hour })
-      .andWhere("EXTRACT(DOW FROM qd.timestamp) = :dayOfWeek", { dayOfWeek })
-      .andWhere("qd.status = :status", { status: "OPERATING" })
-      .andWhere("qd.waitTime IS NOT NULL")
-      .andWhere("qd.waitTime >= 10")
-      .andWhere("qd.queueType = 'STANDBY'")
-      .getRawMany();
-
-    if (waitTimes.length === 0) {
-      return 0;
-    }
-
-    // Calculate 95th percentile
-    const sortedWaitTimes = waitTimes
-      .map((wt) => parseFloat(wt.waitTime))
-      .sort((a, b) => a - b);
-
-    const percentileIndex = Math.ceil(sortedWaitTimes.length * 0.95) - 1;
-    return sortedWaitTimes[percentileIndex];
   }
 
   /**
@@ -6232,7 +6194,9 @@ export class AnalyticsService {
   async computeRopeDropForPark(
     parkId: string,
     timezone: string,
+    countryCode: string,
   ): Promise<Map<string, RopeDropComputeResult>> {
+    const today = getCurrentDateInTimezone(timezone);
     // Slot timestamps are park-local "HH:MM"; opening time is a UTC instant.
     // Resolve both to local minutes-of-day and subtract → minutes-after-open.
     const rows: Array<{
@@ -6273,9 +6237,9 @@ export class AnalyticsService {
       JOIN sched ON sched.date = ahh.date
       CROSS JOIN LATERAL jsonb_array_elements(ahh.slots) AS s
       WHERE ahh."parkId" = $1::uuid
-        AND ahh.date >= (CURRENT_DATE - 800)
+        AND ahh.date >= $3::date
       `,
-      [parkId, timezone],
+      [parkId, timezone, addIsoDays(today, -800)],
     );
 
     // Group rows → per attraction → per date → slots.
@@ -6300,16 +6264,19 @@ export class AnalyticsService {
       day.slots.push({ minutesAfterOpen: mao, p90 });
     }
 
-    // Trailing-window cutoff in park-local date terms.
-    const windowStart = formatInTimeZone(
-      subDays(new Date(), DEFAULT_ROPE_DROP_THRESHOLDS.windowDays),
-      timezone,
-      "yyyy-MM-dd",
+    const windowStart = addIsoDays(
+      today,
+      -DEFAULT_ROPE_DROP_THRESHOLDS.windowDays,
     );
+    const weekendDays = new Set(getWeekendDaysForCountry(countryCode));
 
     const result = new Map<string, RopeDropComputeResult>();
     for (const [attractionId, dates] of byAttraction.entries()) {
-      const computed = computeRopeDrop(Array.from(dates.values()), windowStart);
+      const computed = computeRopeDrop(
+        Array.from(dates.values()),
+        windowStart,
+        weekendDays,
+      );
       if (computed) result.set(attractionId, computed);
     }
     return result;
