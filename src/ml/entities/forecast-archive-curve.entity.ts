@@ -81,6 +81,8 @@ export const ARCHIVE_SOURCE_CODES = {
   h: "composed_h5",
   /** Composed by H5 scaled by the TFT level ÷ the ride's 56-day P90. */
   t: "composed_h5_tft",
+  /** Composed by H5 scaled by the season level (PAR-1343) ÷ the same P90. */
+  e: "composed_h5_season",
   l: "climatology",
   o: "observed",
   /** Chronos-2 shadow, bench variant `chronos2` (PAR-852). */

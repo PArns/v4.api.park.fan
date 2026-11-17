@@ -23,9 +23,15 @@
  *   interpolated between hour centres onto the quarter-hours.
  * - fallback where the hour has too few days: the 15-minute wall-clock median.
  *
- * Every median is over the ride's own last {@link H5_WINDOW_DAYS} days, split by
- * weekday/weekend where that split has enough days (≥ {@link MIN_DAYS_DAYTYPE}),
- * else over all days (≥ {@link MIN_DAYS_ALL}).
+ * Every median is over the ride's own last {@link H5_WINDOW_DAYS} days, split
+ * into the country's working days and weekend days where that split has
+ * enough days (≥ {@link MIN_DAYS_DAYTYPE}), else over all days
+ * (≥ {@link MIN_DAYS_ALL}). The benchmark splits Saturday and Sunday for every
+ * park, which is the same split everywhere but in a Friday–Saturday country.
+ * A public holiday or a school-break day is typed by its weekday: the
+ * benchmark has no holiday typing, and neither has this port while it is the
+ * profile the `planner_h5_slots` decision judges (see the endpoint doc's known
+ * limits).
  *
  * LEVEL. With a day-level forecast the profile is scaled by a RATIO —
  * `level ÷ the ride's median daily P90 over the same window` — never by putting
@@ -37,11 +43,12 @@
  * second, exactly as the benchmark's `lvlh5_tft` does (`p15o`/`p60` and `dl`
  * d1 coalesced to d2) — pinned by `h5-profile.util.spec.ts`' golden test.
  *
- * WHEN A LEVEL IS APPLIED is a routing decision, {@link h5LevelFor}: only a TFT
- * level (CatBoost's made the benchmark worse: +2.6 min MAE, bias −5.7), only
- * for an ex-ante BUSY ride, and only up to {@link TFT_LEVEL_MAX_LEAD_DAYS}.
- * Everywhere else the plain profile is served — see that function for the
- * numbers.
+ * WHEN A LEVEL IS APPLIED is a routing decision, {@link h5LevelFor}: a TFT
+ * level only for an ex-ante BUSY ride and only up to
+ * {@link TFT_LEVEL_MAX_LEAD_DAYS}; a season level (PAR-1343) on every ride and
+ * at every lead; CatBoost's never (it made the benchmark worse: +2.6 min MAE,
+ * bias −5.7). Everywhere else the plain profile is served — see that function
+ * for the numbers and the reasons.
  *
  * MINUTES ARE WALL-CLOCK MINUTES OF THE SERVICE DAY, unfolded past midnight:
  * 600 is 10:00, 1440 the midnight that ends the day, 1500 its 01:00 — the same
@@ -50,9 +57,9 @@
  * speaks. It differs from elapsed time only across a DST switch inside the open
  * window (02:00–03:00), where no park we track is open.
  */
-import { addIsoDays, isWeekendDate } from "./date.util";
-
-export { isWeekendDate };
+import { addIsoDays } from "./date.util";
+import { isCountryWeekendDate } from "../../date-features/constants/weekend-rules.constant";
+import type { ServedLevelSource } from "../../ml/utils/season-level.util";
 
 /** Days of history the profile is built from, before today. */
 export const H5_WINDOW_DAYS = 56;
@@ -95,11 +102,11 @@ export const BUSY_Q90_MINUTES = 45;
  */
 export const TFT_LEVEL_MAX_LEAD_DAYS = 2;
 
-/** Median per index, for weekdays, weekends and all days. Thresholded. */
+/** Median per index, for working days, weekend days and all days. Thresholded. */
 export interface H5Split {
-  /** Monday–Friday. */
+  /** The country's working days. */
   wd: Record<number, number>;
-  /** Saturday and Sunday. */
+  /** The country's weekend (`getWeekendDaysForCountry`). */
   we: Record<number, number>;
   all: Record<number, number>;
 }
@@ -128,7 +135,7 @@ export interface H5RideProfile {
 
 /** One service day of one ride, as read from `attraction_hourly_history`. */
 export interface H5HistoryDay {
-  /** Saturday or Sunday. */
+  /** On the park's country's weekend. */
   weekend: boolean;
   /** Published opening, wall-clock minutes of the service day. */
   openMin: number;
@@ -197,10 +204,12 @@ export function truthSlotsOf(
  *
  * @param rows date → that date's readings, `minute` counted from that date's own midnight
  * @param windows date → published window, wall-clock minutes of that date (close unfolded)
+ * @param countryCode the park's country, whose weekend types the days
  */
 export function historyDaysOf(
   rows: ReadonlyMap<string, ReadonlyArray<{ minute: number; wait: number }>>,
   windows: ReadonlyMap<string, { openMin: number; closeMin: number }>,
+  countryCode: string,
 ): H5HistoryDay[] {
   const out: H5HistoryDay[] = [];
   for (const [date, window] of windows) {
@@ -213,7 +222,7 @@ export function historyDaysOf(
     }
     if (readings.length === 0) continue;
     out.push({
-      weekend: isWeekendDate(date),
+      weekend: isCountryWeekendDate(date, countryCode),
       openMin: window.openMin,
       closeMin: window.closeMin,
       readings,
@@ -279,24 +288,50 @@ export function buildH5Profile(
   };
 }
 
+/** A day level the profile is scaled by, and which rule let it through. */
+export interface H5Level {
+  level: number;
+  source: "tft" | "season";
+}
+
 /**
  * The level the H5 profile is scaled by for one ride and day, or null for the
- * plain profile. The routing measured in the benchmark
- * (`horizon_curve_mae.csv`, UC3 against the weekday median): scaling every
- * ride by the TFT level LOSES at every lead, plain H5 WINS at every lead, and
- * the level only pays on busy rides at d0–d2 (full-period pass). So: a TFT level, a ride whose
- * window q90 is ≥ {@link BUSY_Q90_MINUTES}, a lead ≤
- * {@link TFT_LEVEL_MAX_LEAD_DAYS} — all three, or no level.
+ * plain profile. `dayLevel` is the ride's served daily level and its source
+ * (`servedLevelSource`).
+ *
+ * TFT: the routing measured in the benchmark (`horizon_curve_mae.csv`, UC3
+ * against the weekday median): scaling every ride by the TFT level LOSES at
+ * every lead, plain H5 WINS at every lead, and the level only pays on busy
+ * rides at d0–d2 (full-period pass). So: a ride whose window q90 is
+ * ≥ {@link BUSY_Q90_MINUTES} and a lead ≤ {@link TFT_LEVEL_MAX_LEAD_DAYS}, or
+ * no level.
+ *
+ * Season level (PAR-1343): every ride, every lead. Both gates were measured on
+ * TFT's forecast: past d2, and on rides that are not busy, its error cost more
+ * than the level added. The season level is no forecast: it is the median of the
+ * ride's measured daily P90 on this season's days of the same day type, the
+ * same number for a day three days out as for one three weeks out, and of the
+ * same kind as the profile's own reference level. It replaces the model's
+ * number because the history behind the models misses the season, and the
+ * profile's 56-day window is that history: left plain, a season day's curve
+ * shows the weeks before the season while the calendar and `dayPeak` show the
+ * season. Not measured against the plain profile.
+ *
+ * CatBoost's level: never (+2.6 min MAE in the benchmark).
  */
 export function h5LevelFor(
   profile: H5RideProfile,
   leadDays: number,
-  tftLevel: number | null,
-): number | null {
-  if (tftLevel === null || !Number.isFinite(tftLevel)) return null;
+  dayLevel: { level: number; source: ServedLevelSource } | null,
+): H5Level | null {
+  if (dayLevel === null || !Number.isFinite(dayLevel.level)) return null;
+  if (dayLevel.source === "season") {
+    return { level: dayLevel.level, source: "season" };
+  }
+  if (dayLevel.source !== "tft") return null;
   if (leadDays > TFT_LEVEL_MAX_LEAD_DAYS) return null;
   if (profile.q90 === null || profile.q90 < BUSY_Q90_MINUTES) return null;
-  return tftLevel;
+  return { level: dayLevel.level, source: "tft" };
 }
 
 export interface ComposeH5Options {
@@ -314,10 +349,11 @@ export interface ComposeH5Options {
    * published schedules, so it is not claimed where there is none.
    */
   alignToSchedule: boolean;
+  /** The day is on the park's country's weekend. */
   weekend: boolean;
   /**
-   * The day level to scale by (a daily P90 forecast), or null for the plain
-   * profile. Callers pass {@link h5LevelFor}'s answer, never a raw level.
+   * The day level to scale by (a daily P90), or null for the plain profile.
+   * Callers pass {@link h5LevelFor}'s answer, never a raw level.
    */
   level: number | null;
 }
@@ -331,7 +367,7 @@ export interface H5Slot {
 
 export interface H5Composition {
   slots: H5Slot[];
-  /** Whether the TFT level was applied (`h5_tft`) or the plain profile (`h5`). */
+  /** Whether the level was applied, or the plain profile served (`h5`). */
   levelApplied: boolean;
 }
 

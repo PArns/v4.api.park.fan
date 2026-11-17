@@ -9,7 +9,6 @@ import {
   h5LevelFor,
   H5RideProfile,
   historyDaysOf,
-  isWeekendDate,
   quantile,
   TFT_LEVEL_MAX_LEAD_DAYS,
   truthSlotsOf,
@@ -136,6 +135,7 @@ describe("h5-profile.util", () => {
           ["2026-10-17", [{ minute: 15, wait: 50 }]],
         ]),
         new Map([["2026-10-16", { openMin: 1080, closeMin: 1500 }]]),
+        "DE",
       );
       expect(days).toHaveLength(1);
       expect(days[0].weekend).toBe(false);
@@ -155,6 +155,7 @@ describe("h5-profile.util", () => {
           ["2026-10-17", [{ minute: 15, wait: 50 }]],
         ]),
         new Map([["2026-10-16", { openMin: 600, closeMin: 1080 }]]),
+        "DE",
       );
       expect(days[0].readings).toEqual([{ minute: 600, wait: 30 }]);
     });
@@ -164,14 +165,23 @@ describe("h5-profile.util", () => {
         historyDaysOf(
           new Map([["2026-10-16", [{ minute: 600, wait: 30 }]]]),
           new Map(),
+          "DE",
         ),
       ).toEqual([]);
     });
 
-    it("knows a weekend from the date string alone", () => {
-      expect(isWeekendDate("2026-10-17")).toBe(true); // Saturday
-      expect(isWeekendDate("2026-10-18")).toBe(true); // Sunday
-      expect(isWeekendDate("2026-10-19")).toBe(false);
+    it("types a day by the park's country's weekend", () => {
+      // Thursday 15 to Sunday 18 October 2026.
+      const dates = ["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"];
+      const typed = (countryCode: string) =>
+        historyDaysOf(
+          new Map(dates.map((d) => [d, [{ minute: 600, wait: 30 }]])),
+          new Map(dates.map((d) => [d, { openMin: 600, closeMin: 1080 }])),
+          countryCode,
+        ).map((d) => d.weekend);
+      expect(typed("DE")).toEqual([false, false, true, true]);
+      // Saudi Arabia's weekend is Friday and Saturday: Sunday is a working day.
+      expect(typed("SA")).toEqual([false, true, true, false]);
     });
   });
 
@@ -419,23 +429,45 @@ describe("h5-profile.util", () => {
   });
 
   describe("h5LevelFor (the benchmark's routing)", () => {
+    const tft = { level: 70, source: "tft" as const };
+    const season = { level: 70, source: "season" as const };
+
     it("applies a TFT level only to a busy ride within two days", () => {
       // The full-period bench supports d0–d2 only (d3 −0.267 [−0.553, +0.002]).
       expect(TFT_LEVEL_MAX_LEAD_DAYS).toBe(2);
       const busy = profile({ q90: BUSY_Q90_MINUTES });
-      expect(h5LevelFor(busy, 0, 70)).toBe(70);
-      expect(h5LevelFor(busy, 2, 70)).toBe(70);
-      expect(h5LevelFor(busy, 3, 70)).toBeNull();
-      expect(h5LevelFor(busy, 6, 70)).toBeNull();
-      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS, 70)).toBe(70);
-      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS + 1, 70)).toBeNull();
+      const applied = { level: 70, source: "tft" };
+      expect(h5LevelFor(busy, 0, tft)).toEqual(applied);
+      expect(h5LevelFor(busy, 2, tft)).toEqual(applied);
+      expect(h5LevelFor(busy, 3, tft)).toBeNull();
+      expect(h5LevelFor(busy, 6, tft)).toBeNull();
+      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS, tft)).toEqual(applied);
+      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS + 1, tft)).toBeNull();
       expect(h5LevelFor(busy, 1, null)).toBeNull();
     });
 
     it("serves a quiet ride the plain profile at every lead", () => {
       const quiet = profile({ q90: BUSY_Q90_MINUTES - 0.1 });
-      expect(h5LevelFor(quiet, 1, 70)).toBeNull();
-      expect(h5LevelFor(profile({ q90: null }), 1, 70)).toBeNull();
+      expect(h5LevelFor(quiet, 1, tft)).toBeNull();
+      expect(h5LevelFor(profile({ q90: null }), 1, tft)).toBeNull();
+    });
+
+    it("never applies a CatBoost level", () => {
+      expect(
+        h5LevelFor(profile(), 0, { level: 70, source: "catboost" }),
+      ).toBeNull();
+    });
+
+    it("applies a season level to every ride at every lead", () => {
+      const applied = { level: 70, source: "season" };
+      for (const q90 of [BUSY_Q90_MINUTES, BUSY_Q90_MINUTES - 0.1, null]) {
+        for (const lead of [0, TFT_LEVEL_MAX_LEAD_DAYS + 1, 21, 90]) {
+          expect(h5LevelFor(profile({ q90 }), lead, season)).toEqual(applied);
+        }
+      }
+      expect(
+        h5LevelFor(profile(), 0, { level: NaN, source: "season" }),
+      ).toBeNull();
     });
   });
 
@@ -485,7 +517,8 @@ describe("h5-profile.util", () => {
             }),
           ]),
         );
-        const p = buildH5Profile(historyDaysOf(rows, windows))!;
+        // The bench splits Saturday and Sunday for every park.
+        const p = buildH5Profile(historyDaysOf(rows, windows, "DE"))!;
         for (const [date, [openMin, closeMin, weekend]] of Object.entries(
           s.targets,
         )) {

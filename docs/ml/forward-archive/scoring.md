@@ -62,7 +62,7 @@ whole date's insert.
   `crowdLevel` where the calendar had a forecast), `plan_day_live` (d0, live-overridden),
   `fallback` (no calendar forecast — `unknown` since PAR-1028, counted in `unknownPred`; older rows
   hold the ML crowd or a placeholder `moderate`). Never scored as a forecast. The `predicted`
-  bucket is written again under `level_<tft|catboost|climatology|mixed|none>`, the park-day's
+  bucket is written again under `level_<tft|catboost|season|climatology|mixed|none>`, the park-day's
   `level_source`, so a model change at the d60 boundary can be told apart; `mixed` is a park-day
   whose rides were levelled by more than one model. These rows repeat `predicted`, never add to
   it, and their cross-park pairs compare only parks with the same level source. Park-days written
@@ -73,10 +73,10 @@ whole date's insert.
   `expectedError` vs realised |dayPeak error| on the same ride-days, and the share of ride-days
   carrying each field.
 - **Level-source split.** UC3, D6 and D9 rows are also written under
-  `source = level_<tft|catboost|climatology|mixed|none>`, but only for numbers that come from the
-  level (composed / climatology hours, dayPeak and the calendar's crowd bucket); a measured hour
-  is the hourly model's.
-  `composed_h5_tft` counts as level-derived, `composed_h5` does not.
+  `source = level_<tft|catboost|season|climatology|mixed|none>`, but only for numbers that come
+  from the level (composed / climatology hours, dayPeak and the calendar's crowd bucket); a
+  measured hour is the hourly model's.
+  `composed_h5_tft` and `composed_h5_season` count as level-derived, `composed_h5` does not.
 - **Unpaired board, rounding.** The per-source MAEs in `forecast_archive_scores`
   (`ScoreAccumulator`) are unrounded; the paired rows round both arms (see
   [model-comparison.md](model-comparison.md)). They are not the matrix's figures.

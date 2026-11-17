@@ -75,8 +75,14 @@ A season-level row is its own source, `season` (`servedLevelSource`):
   paired on season days**. That is the right population — on those days a replacement for TFT
   would not be served either — but a park in a long season contributes fewer paired days, which
   matters for the decisions dated December 2026.
-- `/plan/day`'s H5 composer scales a busy ride by the TFT level at leads 0–2; a season-level row
-  is not a TFT level, so such a ride gets the plain H5 profile.
+- **`/plan/day`** reads the row's source with `servedLevelSource`, never `modelVersion === "tft"`:
+  `dayPeak` is the season level and the H5 composer scales every ride's 56-day profile by it, at
+  every lead it serves (`composer: "h5_season"`, archive code `e`, scored under `level_season`).
+  The TFT gates (busy rides, d0–d2) were measured on TFT's forecast error and do not apply to a
+  measured level; why, and what stays unmeasured, is in
+  [slots and H5](../frontend/plan-day/slots-and-h5.md#on-a-day-of-a-running-park-season). The
+  routed shadow stays TFT's routing: on a season day it is the plain profile, so the `tfth5`
+  column of `planner_h5_slots` never scores the season level.
 
 ## A ride the season pauses
 

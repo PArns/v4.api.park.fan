@@ -19,6 +19,7 @@ import { join } from "path";
 import { H5ProfileService } from "./h5-profile.service";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
+import { isoDateWeekday } from "../../common/utils/date.util";
 
 // The failure paths below would otherwise append to ./logs on every run.
 jest.mock("../../common/utils/file-logger.util", () => ({
@@ -3622,6 +3623,9 @@ describe("PlanDayService", () => {
       days: 42,
     });
 
+    /** The first lead the TFT level no longer scales. */
+    const TFT_PAST_LEAD = 3;
+
     /** A composed day with a level of 60 from the given model. */
     const composedDay = (modelVersion: string | null, date = farDate()) => {
       calendarDay = {
@@ -3745,6 +3749,90 @@ describe("PlanDayService", () => {
       expect(taron.composer).toBe("h5");
       expect(taron.slots!.find((s) => s.minute === 600)!.wait).toBe(26);
       expect(taron.dayPeak).toBe(60);
+    });
+
+    describe("on a day of a running park season", () => {
+      // The served row carries the season level (PAR-1343) and the model it
+      // replaced: `tft+season` or `catboost+season`. Its level is the one the
+      // calendar shows for the day, so the curve has to follow it.
+      const at600 = (plan: {
+        rides: Array<{ slots?: Array<{ minute: number; wait: number }> }>;
+      }) => plan.rides[0].slots!.find((s) => s.minute === 600)!.wait;
+
+      it("scales the profile by the season level, the ramp unscaled", async () => {
+        const date = composedDay("tft+season", dayFromToday(2));
+
+        const plan = await service.buildPlanDay(park, date);
+
+        const taron = plan.rides[0];
+        expect(taron.composer).toBe("h5_season");
+        expect(taron.slots!.slice(0, 4).map((s) => s.wait)).toEqual([
+          5, 10, 20, 30,
+        ]);
+        // 10:00: the plain 26.25 × 60/40, as with a TFT level.
+        expect(at600(plan)).toBe(Math.round(26.25 * 1.5));
+        expect(taron.dayPeak).toBe(60);
+        expect(taron.profileDays).toBe(42);
+      });
+
+      it("at every lead, on a quiet ride, whichever model it replaced", async () => {
+        const cases: Array<[string, number, number | null]> = [
+          ["tft+season", 3, 50],
+          ["tft+season", 21, 50],
+          ["catboost+season", 10, 50],
+          ["tft+season", 1, 30],
+          ["catboost+season", 5, null],
+        ];
+        for (const [modelVersion, lead, q90] of cases) {
+          const date = composedDay(modelVersion, dayFromToday(lead));
+          h5Profiles = new Map([["a-taron", { ...h5(), q90 }]]);
+
+          const plan = await service.buildPlanDay(park, date);
+
+          expect([modelVersion, lead, plan.rides[0].composer]).toEqual([
+            modelVersion,
+            lead,
+            "h5_season",
+          ]);
+          expect(at600(plan)).toBe(39);
+        }
+      });
+
+      it("hands the archive no routed row: the routed curve is TFT's", async () => {
+        const date = composedDay("tft+season", dayFromToday(2));
+
+        const { plan, shadow } = await service.buildPlanDayWithShadow(
+          park,
+          date,
+        );
+
+        expect(plan.rides[0].composer).toBe("h5_season");
+        expect(shadow.map((c) => c.composer)).toEqual(["peak_scaled", "h5"]);
+        expect(shadow[1].slots.find((s) => s.minute === 600)!.wait).toBe(26);
+      });
+    });
+
+    it("reads the profile of the park's own weekend", async () => {
+      // A Friday past the TFT lead: a working day in Germany, the weekend in
+      // Saudi Arabia.
+      let lead = TFT_PAST_LEAD;
+      while (isoDateWeekday(dayFromToday(lead)) !== 5) lead++;
+      const date = composedDay(null, dayFromToday(lead));
+      const split = h5();
+      split.hourly = {
+        wd: { 9: 20, 10: 30, 11: 40 },
+        we: { 9: 40, 10: 60, 11: 80 },
+        all: {},
+      };
+      h5Profiles = new Map([["a-taron", split]]);
+      const wait600 = async (countryCode: string) =>
+        (
+          await service.buildPlanDay({ ...park, countryCode } as Park, date)
+        ).rides[0].slots!.find((s) => s.minute === 600)!.wait;
+
+      // 10:00 leans 22.5/60 toward 09:00.
+      expect(await wait600("DE")).toBe(Math.round(30 - 0.375 * 10));
+      expect(await wait600("SA")).toBe(Math.round(60 - 0.375 * 20));
     });
 
     it("serves exactly what it served before with the flag off", async () => {

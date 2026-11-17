@@ -66,7 +66,7 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 ## Parts
 
 - [tiers.md](./tiers.md) — `tier`, `climatology`, the per-hour `source`, `dayPeak`, observed opening hours
-- [slots-and-h5.md](./slots-and-h5.md) — 15-minute `slots[]` and the H5 composer behind `PLAN_DAY_H5_COMPOSER`
+- [slots-and-h5.md](./slots-and-h5.md) — 15-minute `slots[]`, the H5 composer behind `PLAN_DAY_H5_COMPOSER` and the TFT or season level that scales it
 - [midnight.md](./midnight.md) — a day that runs past midnight
 - [rides.md](./rides.md) — the ride object, which rides a day carries, `minimumHeight`/`mayGetWet`
 - [availability.md](./availability.md) — rides out of season or in a works period, and `ridesUnavailable`

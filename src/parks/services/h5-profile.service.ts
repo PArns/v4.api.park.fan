@@ -29,10 +29,11 @@ const READ_LIMITS: StatementLimits = {
 /**
  * Six hours, not a day: the rollup writes yesterday's row in the early
  * morning, and a profile cached before it would otherwise miss that day until
- * tomorrow. Bumping the version prefix invalidates every cached profile.
+ * tomorrow. Bumping the version prefix invalidates every cached profile; v3
+ * types the days by the country's weekend (PAR-1378).
  */
 const CACHE_TTL_SECONDS = 6 * 3600;
-const CACHE_PREFIX = "plan-day:h5:v2";
+const CACHE_PREFIX = "plan-day:h5:v3";
 
 /**
  * How long a failed build (an error, a statement timeout) is remembered, in
@@ -206,7 +207,9 @@ export class H5ProfileService {
 
     const out = new Map<string, H5RideProfile>();
     for (const [rideId, days] of byRide) {
-      const profile = buildH5Profile(historyDaysOf(days, windows));
+      const profile = buildH5Profile(
+        historyDaysOf(days, windows, park.countryCode),
+      );
       if (profile) out.set(rideId, profile);
     }
     this.logger.debug(
