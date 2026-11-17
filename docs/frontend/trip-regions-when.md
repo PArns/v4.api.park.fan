@@ -372,7 +372,9 @@ trips to all of them, so every region offers every country below; only "today" i
   `/when` resolves `within` through this list, one source. A region's periods are its own rows and
   the country's nationwide ones, merged into runs of consecutive days (a break ending on a Friday
   and one starting the Monday after are one run), each widened over the weekend before and after
-  it, since there is no school on either. A period is named by the name most of its days carry.
+  it, since there is no school on either. The weekend is the country's (`isCountryWeekendDate`):
+  an Israeli break from Sunday to Thursday takes in the Friday and Saturday on either side. A
+  period is named by the name most of its days carry.
 - **The regions offered**, by country (the names are the regions' own):
   - DE: the 16 states, `DE-BW` … `DE-TH`.
   - AT: the 9 states as OpenHolidays codes them: `AT-BL`, `AT-KÄ`, `AT-NÖ`, `AT-OÖ`, `AT-SB`,

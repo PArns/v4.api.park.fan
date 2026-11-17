@@ -351,11 +351,14 @@ reading today (`findCurrentStatusByPark`); without one they are null, never a gu
 (29 February becomes the 28th, `lastYearDays`) and `comparableDayLastYear`, the day the trip
 surfaces read for it ([the matching day a year back](trip-regions.md#the-matching-day-a-year-back)):
 the same holiday last year, else the nearest day of the same weekday in the same holiday or
-school-break situation, 52 weeks back for a park without a country or readable holidays. Both come
-from the calendar's own history path (`CalendarService.buildCalendarResponse`, one read for days
-within a week of each other and one per day further apart, each crowd level cached for a day): hours, the calendar's typical-day-peak level (`unknown` when nothing was measured), the
-headliners' recorded day peak (only where `headlinerForecast.actual`), holidays, school breaks and
-events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
+school-break situation, on which the park was open and measured, 52 weeks back for a park without
+a country or readable holidays. The tool learns whether the park was open by reading the day it
+picks and picks again when it was not (`lastYearReferenceDayReading`): Phantasialand's 23 December
+2026 reads 31 December 2025, as 24 December 2025 was shut. Every day comes from the calendar's own
+history path (`CalendarService.buildCalendarResponse`, one read per day, each read once, each crowd
+level cached for a day): hours, the calendar's typical-day-peak level (`unknown` when nothing was
+measured), the headliners' recorded day peak (only where `headlinerForecast.actual`), holidays,
+school breaks and events. A day the calendar has nothing on is `null`. No new query on `queue_data`. With `on`
 instead of `date` it reads that one past day itself ("last Saturday"), up to a year back
 (`HISTORY_DAYS`), by the same path and with the same rule: a level counts only where it was
 measured.

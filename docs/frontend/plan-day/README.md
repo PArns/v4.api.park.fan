@@ -48,7 +48,7 @@ Code: `src/parks/services/plan-day.service.ts`, DTO `src/parks/dto/plan-day.dto.
 | `weather`                              | absent past the forecast's reach (~14 days); no climate normal is substituted                                                                               |
 | `isHoliday`, `isBridgeDay`, `isSchoolVacation` | as on the calendar                                                                                                                                  |
 | `schoolVacationUnknown`                | `true` when the park's school-holiday data ends before this day, so `isSchoolVacation: false` means unknown; absent otherwise                                |
-| `isWeekend`                            | Saturday or Sunday in the park's timezone                                                                                                                   |
+| `isWeekend`                            | the park country's weekend (`isCountryWeekendDate`): Friday and Saturday in Saudi Arabia or Israel, Saturday and Sunday elsewhere and without a country     |
 | `neighborHolidays`                     | holidays in neighbouring regions whose day-trippers raise local crowds                                                                                      |
 | `liveWaitTimes`                        | the curated readability flag, repeated here because a planner never fetches the park payload — see [live-wait-times-availability](../live-wait-times-availability.md) |
 | `hasEarlyEntry`                        | only ever `true`: a human confirmed hotel guests get in early. Absent means "no" and "nobody checked" alike. It covers the park's headliners                  |

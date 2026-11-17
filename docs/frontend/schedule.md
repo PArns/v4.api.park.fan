@@ -65,7 +65,8 @@ A park that publishes hours gets its rows as stored.
 - A bridge day is either worked out from the public holidays around it (a Friday after a Thursday
   holiday, a Monday before a Tuesday one, a day between two: `calculateHolidayInfo`) or named by
   Nager.Date in a long weekend's `bridgeDays`. Those are stored as `nager-bridge:<country>:<day>`,
-  and each sync replaces a year's set (`saveLongWeekendsFromApi`); a failed fetch leaves it alone.
+  less any day of the country's weekend (`bridgeDaysOf`, `isCountryWeekendDate`), and each sync
+  replaces a year's set (`saveLongWeekendsFromApi`); a failed fetch leaves it alone.
 - **`isPublicHoliday` and `isSchoolHoliday` are always `false` here** and `holidayType` is never sent:
   no type is stored with a row, and these two are derived from it. `influencingHolidays` is always
   `[]`. Read holidays from the calendar, which computes them at request time.

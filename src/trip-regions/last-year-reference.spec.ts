@@ -4,6 +4,8 @@ import {
   lastYearDayFacts,
   lastYearFactDays,
   lastYearReferenceDay,
+  lastYearReferenceDayReading,
+  lastYearReferenceMonths,
   lastYearSeasonsFrom,
   loadLastYearDayFacts,
   type LastYearReferenceOptions,
@@ -175,6 +177,100 @@ describe("lastYearReferenceDay", () => {
       // 2 and 16 October 2026 were nights but no break days; 9 October was a break day.
       expect(refer("2027-10-08", rows, { seasons })).toBe("2026-10-09");
     });
+  });
+});
+
+describe("the days the park was closed or nothing was measured", () => {
+  /** NRW's Christmas breaks, a school row on every day. */
+  const christmasBreak = (from: string, to: string): HolidayRow[] =>
+    schoolBreak(from, to).map((row) => ({
+      ...row,
+      name: "Christmas Holidays",
+      localName: "Weihnachtsferien",
+    }));
+  const CHRISTMAS = [
+    ...christmasBreak("2025-12-22", "2026-01-06"),
+    ...christmasBreak("2026-12-23", "2027-01-06"),
+    holiday("2025-12-25", "Christmas Day"),
+    holiday("2025-12-26", "St. Stephen's Day"),
+    holiday("2026-01-01", "New Year's Day"),
+    holiday("2026-12-25", "Christmas Day"),
+    holiday("2026-12-26", "St. Stephen's Day"),
+    holiday("2027-01-01", "New Year's Day"),
+  ];
+  /** Phantasialand's winter 2025/26: shut until Christmas, and on New Year's Day. */
+  const phantasialandOpen = (day: string) =>
+    day >= "2025-12-26" && day !== "2026-01-01";
+
+  it("passes over a break day the park was shut on for the next break day", () => {
+    // Wednesday 23 December 2026, a break day: 52 weeks back is Wednesday 24 December 2025.
+    expect(refer("2026-12-23", CHRISTMAS)).toBe("2025-12-24");
+    expect(
+      refer("2026-12-23", CHRISTMAS, { measuredOpen: phantasialandOpen }),
+    ).toBe("2025-12-31");
+  });
+
+  it("goes on to the next kind of day when none of its own was open", () => {
+    const measuredOpen = (day: string) =>
+      phantasialandOpen(day) && day !== "2025-12-31";
+    // No open break Wednesday within three weeks: the plain Wednesday nearest.
+    expect(refer("2026-12-23", CHRISTMAS, { measuredOpen })).toBe("2026-01-07");
+  });
+
+  it("passes over a holiday's namesake the park was shut on", () => {
+    // Christmas Day 2025 was shut: the holiday of the same weekday nearest
+    // 52 weeks back, St. Stephen's Day.
+    expect(refer("2026-12-25", CHRISTMAS)).toBe("2025-12-25");
+    expect(
+      refer("2026-12-25", CHRISTMAS, { measuredOpen: phantasialandOpen }),
+    ).toBe("2025-12-26");
+  });
+
+  it("reads 52 weeks back when the park was open on none of the days", () => {
+    expect(refer("2026-12-23", CHRISTMAS, { measuredOpen: () => false })).toBe(
+      "2025-12-24",
+    );
+  });
+
+  it("reads only the days it picks when it learns by reading", async () => {
+    const facts = lastYearDayFacts(
+      lastYearFactDays("2026-12-23", "2026-12-23"),
+      CHRISTMAS,
+      park,
+      "2027-07-20",
+    );
+    const read = jest.fn(async (day: string) => phantasialandOpen(day));
+    await expect(
+      lastYearReferenceDayReading("2026-12-23", facts, {}, read),
+    ).resolves.toBe("2025-12-31");
+    expect(read.mock.calls.map(([day]) => day)).toEqual([
+      "2025-12-24",
+      "2025-12-31",
+    ]);
+
+    // Nothing open: each day picked is read once, then 52 weeks back.
+    const shut = jest.fn(async (_day: string) => false);
+    await expect(
+      lastYearReferenceDayReading("2026-12-23", facts, {}, shut),
+    ).resolves.toBe("2025-12-24");
+    const days = shut.mock.calls.map(([day]) => day);
+    expect(new Set(days).size).toBe(days.length);
+  });
+});
+
+describe("lastYearReferenceMonths", () => {
+  it("lists every past month a reference day can sit in, from today on", () => {
+    // 52 weeks before 1 and 31 March 2027, 36 days either side.
+    expect(
+      lastYearReferenceMonths("2027-03-01", "2027-03-31", "2026-11-17"),
+    ).toEqual(["2026-01", "2026-02", "2026-03", "2026-04", "2026-05"]);
+    // Nothing a year back has been measured yet past today.
+    expect(
+      lastYearReferenceMonths("2027-11-10", "2027-11-20", "2026-11-17"),
+    ).toEqual(["2026-10", "2026-11"]);
+    expect(
+      lastYearReferenceMonths("2026-11-20", "2026-11-10", "2026-11-17"),
+    ).toEqual([]);
   });
 });
 

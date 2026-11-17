@@ -456,7 +456,7 @@ import { FavoritesService } from "../../favorites/favorites.service";
 import { AssistantRateLimitService } from "../assistant-rate-limit.service";
 import { ShowsService } from "../../shows/shows.service";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import { addIsoDays } from "../../common/utils/date.util";
+import { addIsoDays, eachIsoDate } from "../../common/utils/date.util";
 import type { Show } from "../../shows/entities/show.entity";
 import type { ShowLiveData } from "../../shows/entities/show-live-data.entity";
 
@@ -570,8 +570,82 @@ describe("the same day last year", () => {
       crowdLevel: "very_high",
     });
     expect(json.sameDateLastYear).toMatchObject({ date: "2026-03-29" });
-    // Eight days apart: each is read on its own.
+    // Each day is read on its own, once.
     expect(buildCalendarResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes over a day the park was closed a year back (PAR-1386)", async () => {
+    // NRW's Christmas breaks; Phantasialand opened its winter on 26 December 2025.
+    const breakDays = (from: string, to: string) =>
+      eachIsoDate(from, to).map((date) => ({
+        date,
+        name: "Christmas Holidays",
+        localName: "Weihnachtsferien",
+        country: "DE",
+        region: "DE-NW",
+        holidayType: "school",
+        isNationwide: false,
+      }));
+    const buildCalendarResponse = jest.fn(
+      async (_park: unknown, fromDate: Date) => {
+        const date = formatInTimeZone(fromDate, "Europe/Berlin", "yyyy-MM-dd");
+        const open = date >= "2025-12-26";
+        return {
+          days: [
+            {
+              date,
+              status: open ? "OPERATING" : "CLOSED",
+              crowdLevel: open ? "high" : "closed",
+              isHoliday: false,
+              isBridgeDay: false,
+              isSchoolVacation: date >= "2025-12-22",
+              ...(open && {
+                headlinerForecast: { avgWait: 55, rides: [], actual: true },
+              }),
+            },
+          ],
+        };
+      },
+    );
+    const providers = new Map<unknown, unknown>([
+      [
+        ParksService,
+        {
+          findById: jest.fn(async () => ({
+            ...park,
+            countryCode: "DE",
+            regionCode: "NRW",
+            timezone: "Europe/Berlin",
+          })),
+        },
+      ],
+      [CalendarService, { buildCalendarResponse }],
+      [
+        HolidaysService,
+        {
+          getHolidays: jest.fn(async () => [
+            ...breakDays("2025-12-22", "2026-01-06"),
+            ...breakDays("2026-12-23", "2027-01-06"),
+          ]),
+          getSchoolHolidayCoverage: jest.fn(async () => null),
+        },
+      ],
+      [ParkSeasonService, { forParkInRange: jest.fn(async () => []) }],
+    ]);
+    const { json } = await run(
+      "get_park_history",
+      { park: PARK_ID, date: "2026-12-23" },
+      providers,
+    );
+    // 52 weeks back, Wednesday 24 December 2025, was a break day too, and closed.
+    expect(json.comparableDayLastYear).toMatchObject({
+      date: "2025-12-31",
+      weekday: "Wednesday",
+      crowdLevel: "high",
+      headlinerPeakWaitMinutes: 55,
+    });
+    // The two days picked, then the same date.
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(3);
   });
 
   it("reads a past day's level unknown where nothing was measured, not the stored forecast", async () => {

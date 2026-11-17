@@ -146,14 +146,16 @@ import {
   closeMinute,
   closesEarly,
   isoInZone,
+  lastYearMeasured,
   readDaySlots,
   scheduleRowDate,
+  toLastYearEntry,
 } from "../../trip-regions/trip-calendar.util";
 import { usualDay } from "../../trip-regions/trip-region.assembly";
 import { ParkSeasonService } from "../../parks/services/park-season.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import {
-  lastYearReferenceDay,
+  lastYearReferenceDayReading,
   lastYearSeasonsFrom,
   loadLastYearDayFacts,
 } from "../../trip-regions/last-year-reference";
@@ -1220,17 +1222,42 @@ async function dayCard(
   );
 }
 
+/** A past day of a park as the calendar's history path serves it, each day read once. */
+function pastDayReader(
+  ctx: AssistantToolContext,
+  park: Park,
+): (day: string) => Promise<CalendarDay | undefined> {
+  const reads = new Map<string, Promise<CalendarDay | undefined>>();
+  return (day) => {
+    let read = reads.get(day);
+    if (!read) {
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: park.timezone,
+      });
+      read = ctx
+        .get(CalendarService)
+        .buildCalendarResponse(park, fromDate, toDate, "none")
+        .then((calendar) => calendar.days.find((d) => d.date === day));
+      reads.set(day, read);
+    }
+    return read;
+  };
+}
+
 /**
  * The day a year back `get_park_history` compares `day` with: the park's
- * reference day (`lastYearReferenceDay`), the same holiday or the nearest day
- * of the same weekday in the same holiday situation. A park without a country
- * or readable holidays gets 52 weeks back.
+ * reference day (`lastYearReferenceDayReading`), the same holiday or the
+ * nearest day of the same weekday in the same holiday situation, on which the
+ * park was open and measured by the rule the trip surfaces apply
+ * (`lastYearMeasured`). A park without a country or readable holidays gets 52
+ * weeks back.
  */
 async function comparableDayLastYear(
   ctx: AssistantToolContext,
   park: Park,
   day: string,
   today: string,
+  read: (day: string) => Promise<CalendarDay | undefined>,
 ): Promise<string> {
   const facts = await loadLastYearDayFacts(
     ctx.get(HolidaysService),
@@ -1243,7 +1270,15 @@ async function comparableDayLastYear(
     .get(ParkSeasonService)
     .forParkInRange(park.id, lastYearSeasonsFrom(day), day)
     .catch(() => []);
-  return lastYearReferenceDay(day, facts, { before: today, seasons });
+  return lastYearReferenceDayReading(
+    day,
+    facts,
+    { before: today, seasons },
+    async (candidate) => {
+      const past = await read(candidate);
+      return !!past && lastYearMeasured(toLastYearEntry(past));
+    },
+  );
 }
 
 /** One past day for `get_park_history` as the calendar serves it, or null without one. */
@@ -2424,13 +2459,7 @@ export const ASSISTANT_TOOLS = [
             `Pick a past day from ${addIsoDays(today, -HISTORY_DAYS)} to yesterday`,
           );
         }
-        const { fromDate, toDate } = parseDateRange(on, on, {
-          timezone: found.timezone,
-        });
-        const calendar = await ctx
-          .get(CalendarService)
-          .buildCalendarResponse(found, fromDate, toDate, "none");
-        const day = calendar.days.find((d) => d.date === on);
+        const day = await pastDayReader(ctx, found)(on);
         return {
           park: found.name,
           day: pastDay(day && compactDay(day, found.timezone)),
@@ -2441,38 +2470,25 @@ export const ASSISTANT_TOOLS = [
       if (sameDate >= today) {
         throw new McpToolError("That day a year back has not happened yet");
       }
-      const comparable = await comparableDayLastYear(ctx, found, day, today);
-      const past = [...new Set([sameDate, comparable])]
-        .filter((d) => d < today)
-        .sort();
-      // The calendar's own history path, each past day cached for a day. A
-      // moved holiday can sit weeks from the date: then each is read alone.
-      const spans =
-        isoDaysBetween(past[0], past[past.length - 1]) > 7
-          ? past.map((d) => [d, d])
-          : [[past[0], past[past.length - 1]]];
-      const read = await Promise.all(
-        spans.map(([from, to]) => {
-          const { fromDate, toDate } = parseDateRange(from, to, {
-            timezone: found.timezone,
-          });
-          return ctx
-            .get(CalendarService)
-            .buildCalendarResponse(found, fromDate, toDate, "none");
-        }),
+      const read = pastDayReader(ctx, found);
+      const comparable = await comparableDayLastYear(
+        ctx,
+        found,
+        day,
+        today,
+        read,
       );
-      const days = new Map(
-        read
-          .flatMap((calendar) => calendar.days)
-          .map((d) => [d.date, compactDay(d, found.timezone)]),
-      );
+      const shown = async (d: string) => {
+        const past = await read(d);
+        return pastDay(past && compactDay(past, found.timezone));
+      };
       return {
         park: found.name,
         askedAbout: day,
-        sameDateLastYear: pastDay(days.get(sameDate)),
+        sameDateLastYear: await shown(sameDate),
         ...(comparable !== sameDate &&
           comparable < today && {
-            comparableDayLastYear: pastDay(days.get(comparable)),
+            comparableDayLastYear: await shown(comparable),
           }),
       };
     },

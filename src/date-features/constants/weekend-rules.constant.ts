@@ -137,10 +137,9 @@ export function getWeekendDaysForCountry(countryCode: string): number[] {
 
 /**
  * Whether a `YYYY-MM-DD` falls on the country's weekend, read from the date
- * string itself (a park-local date needs no timezone). `isWeekendDate` is the
- * Saturday-and-Sunday answer for every country; a Friday in Riyadh is a
- * weekend day here and a working day there. Without a country code the
- * default weekend applies.
+ * string itself (a park-local date needs no timezone). The one weekend test
+ * for a date: a Friday in Riyadh is a weekend day and a Sunday a working day.
+ * Without a country code the default weekend applies.
  */
 export function isCountryWeekendDate(
   date: string,
