@@ -286,9 +286,13 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // (getParkPredictionsYearly) rebuilds it, so evicting it here just left
         // it cold until the next visitor paid the ~15s cold path. It refreshes
         // via its own TTL instead.
+        // The season level's inputs go with them: this is the one place they
+        // change, so the forecast ring after the run announces every new
+        // season level (`MLService.withSeasonLevel`).
         await this.redis
           .del(
             CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
+            CacheKeys.seasonLevelInputs(park.id),
             ...monthKeys,
           )
           .catch(() => undefined);

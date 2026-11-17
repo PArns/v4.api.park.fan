@@ -44,11 +44,11 @@
  * d1 coalesced to d2) — pinned by `h5-profile.util.spec.ts`' golden test.
  *
  * WHEN A LEVEL IS APPLIED is a routing decision, {@link h5LevelFor}: a TFT
- * level only for an ex-ante BUSY ride and only up to
- * {@link TFT_LEVEL_MAX_LEAD_DAYS}; a season level (PAR-1343) on every ride and
- * at every lead; CatBoost's never (it made the benchmark worse: +2.6 min MAE,
- * bias −5.7). Everywhere else the plain profile is served — see that function
- * for the numbers and the reasons.
+ * level, or TFT's number scaled by the season ratio, only for an ex-ante BUSY
+ * ride and only up to {@link TFT_LEVEL_MAX_LEAD_DAYS}; a measured season level
+ * (PAR-1343) on every ride and at every lead; CatBoost's never (it made the
+ * benchmark worse: +2.6 min MAE, bias −5.7). Everywhere else the plain profile
+ * is served — see that function for the numbers and the reasons.
  *
  * MINUTES ARE WALL-CLOCK MINUTES OF THE SERVICE DAY, unfolded past midnight:
  * 600 is 10:00, 1440 the midnight that ends the day, 1500 its 01:00 — the same
@@ -294,44 +294,60 @@ export interface H5Level {
   source: "tft" | "season";
 }
 
+/** A ride's served day level, as {@link h5LevelFor} routes it. */
+export interface H5DayLevel {
+  level: number;
+  /** `servedLevelSource` of the served row. */
+  source: ServedLevelSource;
+  /**
+   * A season row that is TFT's number × the season ratio (`isSeasonRatioRow`),
+   * not a measured level.
+   */
+  seasonRatio?: boolean;
+}
+
 /**
  * The level the H5 profile is scaled by for one ride and day, or null for the
- * plain profile. `dayLevel` is the ride's served daily level and its source
- * (`servedLevelSource`).
+ * plain profile. `dayLevel` is the ride's served daily level and where it came
+ * from.
  *
  * TFT: the routing measured in the benchmark (`horizon_curve_mae.csv`, UC3
  * against the weekday median): scaling every ride by the TFT level LOSES at
  * every lead, plain H5 WINS at every lead, and the level only pays on busy
  * rides at d0–d2 (full-period pass). So: a ride whose window q90 is
  * ≥ {@link BUSY_Q90_MINUTES} and a lead ≤ {@link TFT_LEVEL_MAX_LEAD_DAYS}, or
- * no level.
+ * no level. A season ratio row is routed the same way, under `season`: it is
+ * TFT's forecast times a ratio, so it carries TFT's error at every lead, and
+ * nothing has measured it either.
  *
- * Season level (PAR-1343): every ride, every lead. Both gates were measured on
- * TFT's forecast: past d2, and on rides that are not busy, its error cost more
- * than the level added. The season level is no forecast: it is the median of the
- * ride's measured daily P90 on this season's days of the same day type, the
- * same number for a day three days out as for one three weeks out, and of the
- * same kind as the profile's own reference level. It replaces the model's
- * number because the history behind the models misses the season, and the
- * profile's 56-day window is that history: left plain, a season day's curve
- * shows the weeks before the season while the calendar and `dayPeak` show the
- * season. Not measured against the plain profile.
+ * Measured season level (PAR-1343, `+season`): every ride, every lead. Both
+ * gates were measured on TFT's forecast: past d2, and on rides that are not
+ * busy, its error cost more than the level added. The measured level is no
+ * forecast: it is the median of the ride's measured daily P90 on this season's
+ * days of the same day type, or of a quieter type as a floor, the same number
+ * for a day three days out as for one three weeks out, and of the same kind as
+ * the profile's own reference level. It replaces the model's number because
+ * the history behind the models misses the season, and the profile's 56-day
+ * window is that history: left plain, a season day's curve shows the weeks
+ * before the season while the calendar and `dayPeak` show the season. Not
+ * measured against the plain profile.
  *
  * CatBoost's level: never (+2.6 min MAE in the benchmark).
  */
 export function h5LevelFor(
   profile: H5RideProfile,
   leadDays: number,
-  dayLevel: { level: number; source: ServedLevelSource } | null,
+  dayLevel: H5DayLevel | null,
 ): H5Level | null {
   if (dayLevel === null || !Number.isFinite(dayLevel.level)) return null;
-  if (dayLevel.source === "season") {
-    return { level: dayLevel.level, source: "season" };
+  const { level, source } = dayLevel;
+  if (source === "season" && !dayLevel.seasonRatio) {
+    return { level, source: "season" };
   }
-  if (dayLevel.source !== "tft") return null;
+  if (source === "catboost") return null;
   if (leadDays > TFT_LEVEL_MAX_LEAD_DAYS) return null;
   if (profile.q90 === null || profile.q90 < BUSY_Q90_MINUTES) return null;
-  return { level: dayLevel.level, source: "tft" };
+  return { level, source };
 }
 
 export interface ComposeH5Options {

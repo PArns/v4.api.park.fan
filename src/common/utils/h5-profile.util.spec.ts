@@ -458,11 +458,32 @@ describe("h5-profile.util", () => {
       ).toBeNull();
     });
 
-    it("applies a season level to every ride at every lead", () => {
+    it("routes a season ratio row like TFT, under the season's name", () => {
+      // TFT's forecast × the season ratio carries TFT's error, so its gates.
+      const ratio = { level: 70, source: "season" as const, seasonRatio: true };
+      const applied = { level: 70, source: "season" };
+      const busy = profile({ q90: BUSY_Q90_MINUTES });
+      expect(h5LevelFor(busy, 0, ratio)).toEqual(applied);
+      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS, ratio)).toEqual(applied);
+      expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS + 1, ratio)).toBeNull();
+      expect(h5LevelFor(busy, 21, ratio)).toBeNull();
+      expect(
+        h5LevelFor(profile({ q90: BUSY_Q90_MINUTES - 0.1 }), 1, ratio),
+      ).toBeNull();
+      expect(h5LevelFor(profile({ q90: null }), 1, ratio)).toBeNull();
+    });
+
+    it("applies a measured season level to every ride at every lead", () => {
       const applied = { level: 70, source: "season" };
       for (const q90 of [BUSY_Q90_MINUTES, BUSY_Q90_MINUTES - 0.1, null]) {
         for (const lead of [0, TFT_LEVEL_MAX_LEAD_DAYS + 1, 21, 90]) {
           expect(h5LevelFor(profile({ q90 }), lead, season)).toEqual(applied);
+          expect(
+            h5LevelFor(profile({ q90 }), lead, {
+              ...season,
+              seasonRatio: false,
+            }),
+          ).toEqual(applied);
         }
       }
       expect(

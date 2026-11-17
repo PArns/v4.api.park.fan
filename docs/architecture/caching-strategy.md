@@ -21,6 +21,7 @@ its `docs/architecture/caching-strategy.md`.
 | `trip-regions:last-year:v1:{parkId}:{YYYY-MM}` | 7 days plus up to a day of spread (`TRIP_LAST_YEAR_TTL`) | A passed month's measured crowd level and headliner day peak per day, for the `last_year` days; written by the calendar warmup or on a miss, and not evicted by a schedule sync |
 | `trip-regions:forecast-until:v1:{parkId}` | 13 h | The last day a region park's warm months carry a forecast (`meta.forecastUntil`) |
 | `ml:park:{parkId}:{type}:{date}` | hourly 30 min, daily 13 h | Same single-flight guard as the park payload |
+| `ml:season-level:v4:{parkId}` | 14 h (`SEASON_LEVEL_INPUTS_TTL`, an hour past the warmed months) | The [season level](../ml/season-level.md#reads-and-cache)'s inputs. No date in the key: the calendar warmup evicts them, so a level changes only with a run the forecast ring announces. A key that ran out after a failed warmup is recomputed on the next read, unrung |
 | `ml:tft-daily:{parkId}:{days}:{today}` | 13 h | Evicted (`ml:tft-daily:*`) when `train-nf` completes (PAR-1053); caches built on it still run out on their own TTLs |
 | `ml:hourly-fresh:{attractionId}` | 30 min | Freshness marker of the diff-written hourly predictions ([schema](../database/schema.md#write-path-par-874)) |
 | `park:statistics:{parkId}`, `park:occupancy:{parkId}` | 5 min | Occupancy is ratio-vs-P50 ([crowd levels](../rules/crowd-levels.md)) |
@@ -82,14 +83,16 @@ to refresh), popular CLOSED parks (top 50 by `PopularityService`), then the rest
 | --- | --- |
 | `live-cache-warmup`, after every wait-times run | parks, top 1000 attractions (`warmupTopAttractions`: user traffic plus the rides with the most `queue_data` rows in 7 days), occupancy, geo discovery, global and park statistics ([job queues](job-queues.md#the-wait-times-run-and-its-warmup)) |
 | `generate-hourly` predictions | parks opening in the next 12 h (`warmupUpcomingParks`) |
-| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −13…−1 where missing ([below](#what-the-trip-regions-add)). Ends with [the forecast ring](#the-forecast-ring) |
+| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches and the season level's inputs, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −13…−1 where missing ([below](#what-the-trip-regions-add)). Ends with [the forecast ring](#the-forecast-ring) |
 
 ### The forecast ring
 
 The frontend shows one park-day on several surfaces: the calendar grid and its day dialog, a month
 page's summary, best-days with „Prognose heute", and Parky's day tip. Each is cached there for a
 day or more, so once a warmup moves the forecast they have to be told at the same moment, or the
-page contradicts itself. `CacheWarmupService.announceForecast` posts, for every park whose
+page contradicts itself. Nothing rings a change between two runs, so the
+[season level](../ml/season-level.md#reads-and-cache)'s inputs, which can move every day of a type
+at once, change only in the run. `CacheWarmupService.announceForecast` posts, for every park whose
 best-days snapshot the run rebuilt, both of its forecast tags (`forecastCacheTags` in
 `src/common/revalidation/park-status-transitions.ts`):
 

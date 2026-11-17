@@ -4,7 +4,9 @@ import {
   dayHolidayFlags,
   holidayDay,
   influencingHolidayTest,
+  schoolCoverageThrough,
   type HolidayLocation,
+  type SchoolCoverage,
 } from "../../common/utils/holiday.utils";
 import type { RegionInfluence } from "../../common/region-influences";
 import { addIsoDays } from "../../common/utils/date.util";
@@ -27,8 +29,9 @@ import type { HolidayRow } from "../../holidays/holidays.service";
  * and type, the type's most recent measured days give a level, the median of
  * the measured daily P90 (TFT's own target statistic), and a ratio, the median
  * of that P90 over TFT's forecast of the day; {@link applySeasonLevel} says
- * which row is served which. A type needs this many measured days of its own,
- * and fewer leave the model's number.
+ * which row is served which. A type needs this many measured days of its own;
+ * with fewer, the row is the model's number, raised at most to a quieter
+ * type's level ({@link SEASON_FLOOR_TYPES}).
  *
  * Never all of the season's days together: a season's first days are mostly
  * its opening weekend, so their median is a day off's, and it would set every
@@ -55,6 +58,16 @@ export const SEASON_RECENT_DAYS = 6;
 export const MIN_RATIO_FORECAST = 5;
 
 /**
+ * The bounds a served ratio is held to. The ratio is measured on forecasts
+ * TFT made before it had seen the season and applied to its later, informed
+ * runs, and nothing has scored it: unbounded, a ride TFT forecast at 6 that
+ * measured 30 carried 5 into every day of its type, 160 minutes on a Saturday
+ * TFT put at 32.
+ */
+export const SEASON_RATIO_MIN = 0.5;
+export const SEASON_RATIO_MAX = 3;
+
+/**
  * The kinds that count and the statuses that are facts. `expected` is a
  * projection from last year and `cancelled` is not happening.
  */
@@ -71,13 +84,29 @@ export interface RunningSeason {
 }
 
 /** A season day's type, {@link seasonDayTypes}. */
-export type SeasonDayType = "off" | "eve" | "working";
+export type SeasonDayType = "off" | "neighbour" | "eve" | "working";
 
 /**
- * How a season row is served (`SEASON_LEVEL_MODE`). `ratio` scales a TFT row
- * by what the ride measured against TFT's forecasts, which keeps TFT's
- * day-to-day structure (weekday, holidays, weather); `level` serves every row
- * the measured median, one number per type.
+ * The types that floor a type without a reference of its own: its row is
+ * raised to the highest of their levels, never lowered. Each queues below the
+ * type it floors, so a floor says "at least this", never "like this", and no
+ * day is served a busier type's level.
+ */
+export const SEASON_FLOOR_TYPES: Readonly<
+  Record<SeasonDayType, readonly SeasonDayType[]>
+> = {
+  off: ["eve", "neighbour", "working"],
+  neighbour: ["working"],
+  eve: ["working"],
+  working: [],
+};
+
+/**
+ * How a season row is served (`SEASON_LEVEL_MODE`). `level`, the default,
+ * serves every row the measured median, one number per type; `ratio` scales a
+ * TFT row by what the ride measured against TFT's forecasts, held to
+ * {@link SEASON_RATIO_MIN}–{@link SEASON_RATIO_MAX} and to the highest P90 the
+ * type measured.
  */
 export type SeasonLevelMode = "ratio" | "level";
 
@@ -89,19 +118,35 @@ export interface SeasonReference {
   days: number;
   level: number;
   /**
+   * The highest measured P90 among the days behind `level` and `ratio`; a
+   * ratio row is served no more.
+   */
+  maxPeak: number;
+  /**
    * Days behind `ratio`: the type's latest measured days with a TFT forecast
    * of at least {@link MIN_RATIO_FORECAST}, at most {@link SEASON_RECENT_DAYS}.
    */
   ratioDays: number;
   /**
    * Median of the measured P90 over TFT's freshest forecast made before the
-   * day; null where no day has one.
+   * day, as measured: the bounds apply where it is served. Null where no day
+   * has one.
    */
   ratio: number | null;
 }
 
-/** What a row the season level replaced carries after its model's own label. */
+/**
+ * What a row served a measured level carries after its model's own label:
+ * its type's level, or a quieter type's as a floor.
+ */
 export const SEASON_LEVEL_SUFFIX = "+season";
+
+/**
+ * What a TFT row scaled by the season ratio carries instead. It is a forecast
+ * times a ratio, not a measured level, so `/plan/day` gates it like TFT
+ * (`h5LevelFor`) and the evaluation keeps it apart.
+ */
+export const SEASON_RATIO_SUFFIX = "+season-ratio";
 
 /** Where a served daily level came from: {@link servedLevelSource}. */
 export type ServedLevelSource = "tft" | "catboost" | "season";
@@ -110,15 +155,28 @@ export type ServedLevelSource = "tft" | "catboost" | "season";
  * Which source a served daily row came from, for the readers that keep the
  * served level's error apart per source (lead snapshots, forward archive) and
  * for `/plan/day`'s H5 composer, which routes each source its own way. A
- * season-level row is its own source: filed under the model it replaced, it
- * would be scored as that model, and a `modelVersion === "tft"` test misses
- * it (`tft+season`).
+ * season row is its own source, a ratio row included: filed under the model it
+ * replaced, it would be scored as that model, and a `modelVersion === "tft"`
+ * test misses it (`tft+season`). Which kind of season row:
+ * {@link isSeasonRatioRow}.
  */
 export function servedLevelSource(
   modelVersion: string | null | undefined,
 ): ServedLevelSource {
-  if (modelVersion?.endsWith(SEASON_LEVEL_SUFFIX)) return "season";
+  if (
+    modelVersion?.endsWith(SEASON_LEVEL_SUFFIX) ||
+    isSeasonRatioRow(modelVersion)
+  ) {
+    return "season";
+  }
   return modelVersion === "tft" ? "tft" : "catboost";
+}
+
+/** Whether a served daily row is TFT's number scaled by the season ratio. */
+export function isSeasonRatioRow(
+  modelVersion: string | null | undefined,
+): boolean {
+  return modelVersion?.endsWith(SEASON_RATIO_SUFFIX) ?? false;
 }
 
 /** The first running season that counts `day`, or undefined. */
@@ -136,12 +194,16 @@ export function seasonOn(
 /** A season's days by type; every day in none of the lists is a working day. */
 export interface SeasonDayTypes {
   daysOff: string[];
-  /** Working days whose next calendar day is a day off. */
+  /**
+   * Working days on which only an influencing region has a public holiday or
+   * a school break.
+   */
+  neighbourDays: string[];
+  /** Working days whose next calendar day is one of the park's own days off. */
   eves: string[];
   /**
-   * Weekdays past the park's school-holiday data that no other rule makes a
-   * day off, and the working day before one: a break there is not known
-   * (PAR-1049), so the day is neither measured into a reference nor served one.
+   * Days whose type rests on a school break nobody has stored yet (PAR-1049;
+   * {@link seasonDayTypes}): measured into no reference and served none.
    */
   unknownDays: string[];
 }
@@ -151,27 +213,69 @@ export type SeasonPark = HolidayLocation & {
   influencingRegions?: readonly RegionInfluence[] | null;
 };
 
-/** A neighbour's row that makes a day off: a public holiday or a school break. */
-const NEIGHBOUR_DAY_OFF_TYPES: ReadonlySet<HolidayRow["holidayType"]> = new Set(
-  ["public", "bank", "school"],
-);
+/** How far the school breaks behind a park's day types are stored. */
+export interface SeasonSchoolCoverage {
+  /** The park's own region (`schoolCoverageThrough`); null for none. */
+  park: string | null;
+  /**
+   * The earliest edge among the influencing regions that store any school
+   * break (`schoolCoverageThrough` each); null when none does.
+   */
+  neighbours: string | null;
+}
 
 /**
- * The types of `dates` (park-local `YYYY-MM-DD`).
+ * {@link SeasonSchoolCoverage} of a park. An influencing region without any
+ * stored school break is left out: none of its breaks is ever read, and
+ * counted, its missing edge would make every working day of every season
+ * unknown.
+ */
+export function seasonSchoolCoverage(
+  coverage: SchoolCoverage,
+  park: Pick<SeasonPark, "countryCode" | "regionCode" | "influencingRegions">,
+): SeasonSchoolCoverage {
+  const neighbours = (park.influencingRegions ?? [])
+    .map((r) => schoolCoverageThrough(coverage, r.countryCode, r.regionCode))
+    .filter((through): through is string => through !== null)
+    .sort();
+  return {
+    park: park.countryCode
+      ? schoolCoverageThrough(coverage, park.countryCode, park.regionCode)
+      : null,
+    neighbours: neighbours[0] ?? null,
+  };
+}
+
+/** A neighbour's row that makes a neighbour day: a public holiday or a school break. */
+const NEIGHBOUR_DAY_TYPES: ReadonlySet<HolidayRow["holidayType"]> = new Set([
+  "public",
+  "bank",
+  "school",
+]);
+
+/**
+ * The types of `dates` (park-local `YYYY-MM-DD`), the first that matches:
  *
- * - A **day off** is the country's weekend (`getWeekendDaysForCountry`), a
- *   public holiday, school-break day or bridge day by the calendar's own rule
- *   ({@link dayHolidayFlags}), or a public holiday or school-break day in one
- *   of the park's influencing regions ({@link influencingHolidayTest}): NL and
- *   BE carry Phantasialand, and TFT and CatBoost read their holidays too.
- * - An **eve** is a working day whose next calendar day is a day off: Friday
- *   before a Saturday–Sunday weekend, Thursday before a Friday–Saturday one,
- *   the day before a holiday or a break. Evening-driven seasons queue higher
- *   on it than on the rest of the week.
- * - A **working day** is every other day up to `schoolThrough`, the last day
- *   the park's own school breaks are stored for (`schoolCoverageThrough`, null
- *   for none). A weekday past it is unknown, and so is a working day before
- *   one, whose type depends on that unknown day.
+ * 1. A **day off** is the park's own: the country's weekend
+ *    (`getWeekendDaysForCountry`), or a public holiday, school-break day or
+ *    bridge day of its own region by the calendar's rule
+ *    ({@link dayHolidayFlags}).
+ * 2. A **neighbour day** has a public holiday or a school break in one of the
+ *    park's influencing regions only ({@link influencingHolidayTest}). It
+ *    lifts a day by about a fifth (docs/ml/level-drivers.md §3), not to a
+ *    weekend's level, and at Phantasialand 25 of the 30 weekdays from
+ *    28 September to 6 November 2026 have an own or a neighbour's break:
+ *    pooled with the days off, a Halloween season there would have one type.
+ * 3. An **eve** is a working day whose next calendar day is an own day off:
+ *    Friday before a Saturday–Sunday weekend, Thursday before a
+ *    Friday–Saturday one, the day before a holiday or a break.
+ * 4. A **working day** is every other day.
+ *
+ * A day whose type rests on a break nobody has stored is **unknown**: past
+ * the park's own school data (`coverage.park`) and not a day off anyway; past
+ * an influencing region's (`coverage.neighbours`) with no stored neighbour row
+ * that makes it a neighbour day; and the working day before a day past the
+ * park's own data, whose eve depends on it.
  *
  * `holidays` holds the rows of the park's country and of every influencing
  * country, from three days before the first date to four past the last:
@@ -182,47 +286,44 @@ export function seasonDayTypes(
   dates: readonly string[],
   holidays: HolidayRow[],
   park: SeasonPark,
-  schoolThrough: string | null,
+  coverage: SeasonSchoolCoverage,
 ): SeasonDayTypes {
   const withNextDays = [
     ...new Set(dates.flatMap((day) => [day, addIsoDays(day, 1)])),
   ];
   const flags = dayHolidayFlags(withNextDays, holidays, park);
   const isNeighbours = influencingHolidayTest(park.influencingRegions ?? []);
-  const neighbourDaysOff = new Set(
+  const neighbourHolidays = new Set(
     holidays
-      .filter((h) => NEIGHBOUR_DAY_OFF_TYPES.has(h.holidayType))
+      .filter((h) => NEIGHBOUR_DAY_TYPES.has(h.holidayType))
       .filter(isNeighbours)
       .map(holidayDay),
   );
-  const kindOf = (day: string): "off" | "unknown" | "working" => {
+  const ownDayOff = (day: string): boolean => {
     const flag = flags.get(day);
-    if (
+    return (
       isCountryWeekendDate(day, park.countryCode) ||
-      neighbourDaysOff.has(day) ||
       (!!flag && (flag.isHoliday || flag.isSchoolVacation || flag.isBridgeDay))
-    ) {
-      return "off";
-    }
-    return schoolThrough === null || day > schoolThrough
-      ? "unknown"
-      : "working";
+    );
   };
+  const pastOwnData = (day: string): boolean =>
+    coverage.park === null || day > coverage.park;
 
-  const types: SeasonDayTypes = { daysOff: [], eves: [], unknownDays: [] };
+  const types: SeasonDayTypes = {
+    daysOff: [],
+    neighbourDays: [],
+    eves: [],
+    unknownDays: [],
+  };
   for (const day of dates) {
-    const kind = kindOf(day);
-    if (kind === "off") {
-      types.daysOff.push(day);
-      continue;
-    }
-    if (kind === "unknown") {
+    const next = addIsoDays(day, 1);
+    if (ownDayOff(day)) types.daysOff.push(day);
+    else if (pastOwnData(day)) types.unknownDays.push(day);
+    else if (neighbourHolidays.has(day)) types.neighbourDays.push(day);
+    else if (coverage.neighbours !== null && day > coverage.neighbours) {
       types.unknownDays.push(day);
-      continue;
-    }
-    const next = kindOf(addIsoDays(day, 1));
-    if (next === "off") types.eves.push(day);
-    else if (next === "unknown") types.unknownDays.push(day);
+    } else if (ownDayOff(next)) types.eves.push(day);
+    else if (pastOwnData(next)) types.unknownDays.push(day);
   }
   return types;
 }
@@ -231,17 +332,16 @@ export function seasonDayTypes(
 function seasonDayTypeOf(
   dayTypes: SeasonDayTypes,
 ): (day: string) => SeasonDayType | null {
-  const off = new Set(dayTypes.daysOff);
-  const eves = new Set(dayTypes.eves);
-  const unknown = new Set(dayTypes.unknownDays);
-  return (day) =>
-    off.has(day)
-      ? "off"
-      : eves.has(day)
-        ? "eve"
-        : unknown.has(day)
-          ? null
-          : "working";
+  const byDay = new Map<string, SeasonDayType | null>([
+    ...dayTypes.unknownDays.map((day) => [day, null] as const),
+    ...dayTypes.eves.map((day) => [day, "eve"] as const),
+    ...dayTypes.neighbourDays.map((day) => [day, "neighbour"] as const),
+    ...dayTypes.daysOff.map((day) => [day, "off"] as const),
+  ]);
+  return (day) => {
+    const type = byDay.get(day);
+    return type === undefined ? "working" : type;
+  };
 }
 
 const referenceKey = (
@@ -297,33 +397,39 @@ export function seasonReferences(
   return [...groups.values()].map(({ days, ...key }) => {
     const latest = [...days].sort((a, b) => b.day.localeCompare(a.day));
     const levelDays = latest.slice(0, SEASON_RECENT_DAYS);
-    const ratios = latest
-      .flatMap((m) =>
-        m.forecast !== null && m.forecast >= MIN_RATIO_FORECAST
-          ? [m.peak / m.forecast]
-          : [],
-      )
+    const ratioDays = latest
+      .filter((m) => m.forecast !== null && m.forecast >= MIN_RATIO_FORECAST)
       .slice(0, SEASON_RECENT_DAYS);
     return {
       ...key,
       days: levelDays.length,
       level: median(levelDays.map((m) => m.peak)) ?? 0,
-      ratioDays: ratios.length,
-      ratio: median(ratios) ?? null,
+      maxPeak: Math.max(...[...levelDays, ...ratioDays].map((m) => m.peak)),
+      ratioDays: ratioDays.length,
+      ratio: median(ratioDays.map((m) => m.peak / m.forecast!)) ?? null,
     };
   });
 }
 
 /**
  * `predictions` with the season level on the rows it applies to; every other
- * row is returned as it came.
+ * row is returned as it came. Only references of the day's own season and
+ * ride with {@link MIN_SEASON_DAYS} days are read.
  *
- * In `ratio` mode a TFT row is served its own number times the reference's
- * ratio, once the ratio has {@link MIN_SEASON_DAYS} days. Every other row is
- * served the reference's level: a CatBoost row (days 61+, rides TFT has no row
- * for), whose number the ratio was not measured against; a TFT row whose ratio
- * is short of days; every row in `level` mode. Only the reference of the day's
- * own type is read.
+ * - **The day's type has a reference:** the row is served its level
+ *   (`+season`). In `ratio` mode a TFT row whose ratio has
+ *   {@link MIN_SEASON_DAYS} days is served its own number × the ratio
+ *   instead, the ratio held to {@link SEASON_RATIO_MIN}–{@link SEASON_RATIO_MAX}
+ *   and the product to the reference's `maxPeak` (`+season-ratio`). A
+ *   CatBoost row (days 61+, rides TFT has no row for) gets the level in either
+ *   mode: its number was never measured against.
+ * - **It has none:** the row is raised to the highest level of the types
+ *   that floor it ({@link SEASON_FLOOR_TYPES}) where that is above the
+ *   model's number (`+season`), and stays the model's otherwise.
+ * - **An unknown day** stays the model's number.
+ *
+ * A replaced row has no band and no confidence: both describe the model's own
+ * number, and nothing has measured the one served in its place.
  *
  * @param dayTypes - The season's day types ({@link seasonDayTypes}).
  * @param dayOf - The row's park-local `YYYY-MM-DD`.
@@ -334,6 +440,8 @@ export function applySeasonLevel<
     predictedWaitTime: number;
     modelVersion?: string;
     crowdLevel?: unknown;
+    confidence?: number | null;
+    uncertaintyMinutes?: number | null;
   },
 >(
   predictions: T[],
@@ -350,29 +458,52 @@ export function applySeasonLevel<
       .map((r) => [referenceKey(r.seasonId, r.attractionId, r.dayType), r]),
   );
   const typeOf = seasonDayTypeOf(dayTypes);
+  const replaced = (prediction: T, wait: number, suffix: string): T => ({
+    ...prediction,
+    predictedWaitTime: roundServedWait(wait),
+    // A measured level rates nothing by itself; the calendar rates the day.
+    crowdLevel: "unknown",
+    uncertaintyMinutes: null,
+    confidence: null,
+    modelVersion: `${prediction.modelVersion ?? "catboost"}${suffix}`,
+  });
   return predictions.map((prediction) => {
     const day = dayOf(prediction);
     const season = seasonOn(seasons, day);
     const dayType = season ? typeOf(day) : null;
     if (!season || !dayType) return prediction;
-    const reference = byKey.get(
-      referenceKey(season.id, prediction.attractionId, dayType),
-    );
-    if (!reference) return prediction;
-    const ratio =
-      mode === "ratio" &&
-      servedLevelSource(prediction.modelVersion) === "tft" &&
-      reference.ratioDays >= MIN_SEASON_DAYS
-        ? reference.ratio
-        : null;
-    return {
-      ...prediction,
-      predictedWaitTime: roundServedWait(
-        ratio !== null ? prediction.predictedWaitTime * ratio : reference.level,
-      ),
-      // A measured level rates nothing by itself; the calendar rates the day.
-      crowdLevel: "unknown",
-      modelVersion: `${prediction.modelVersion ?? "catboost"}${SEASON_LEVEL_SUFFIX}`,
-    };
+    const referenceOf = (type: SeasonDayType) =>
+      byKey.get(referenceKey(season.id, prediction.attractionId, type));
+
+    const own = referenceOf(dayType);
+    if (own) {
+      if (
+        mode === "ratio" &&
+        servedLevelSource(prediction.modelVersion) === "tft" &&
+        own.ratio !== null &&
+        own.ratioDays >= MIN_SEASON_DAYS
+      ) {
+        const ratio = Math.min(
+          SEASON_RATIO_MAX,
+          Math.max(SEASON_RATIO_MIN, own.ratio),
+        );
+        return replaced(
+          prediction,
+          Math.min(prediction.predictedWaitTime * ratio, own.maxPeak),
+          SEASON_RATIO_SUFFIX,
+        );
+      }
+      return replaced(prediction, own.level, SEASON_LEVEL_SUFFIX);
+    }
+
+    const floors = SEASON_FLOOR_TYPES[dayType].flatMap((type) => {
+      const reference = referenceOf(type);
+      return reference ? [reference.level] : [];
+    });
+    if (floors.length === 0) return prediction;
+    const floor = Math.max(...floors);
+    return roundServedWait(floor) > prediction.predictedWaitTime
+      ? replaced(prediction, floor, SEASON_LEVEL_SUFFIX)
+      : prediction;
   });
 }

@@ -12,6 +12,7 @@ import {
   type SeasonDayTypes,
   type SeasonPark,
   type SeasonReference,
+  type SeasonSchoolCoverage,
 } from "./season-level.util";
 
 /** One read each; a slow one costs the season level, never the response. */
@@ -31,26 +32,13 @@ export interface SeasonHolidaySource {
    * influencing regions, from `from` to `to`, both included.
    */
   holidays(from: string, to: string): Promise<HolidayRow[]>;
-  /** The last day the park's own school breaks are stored for; null for none. */
-  schoolThrough(): Promise<string | null>;
+  /**
+   * How far the school breaks of the park's region and of its influencing
+   * regions are stored (`seasonSchoolCoverage`).
+   */
+  schoolCoverage(): Promise<SeasonSchoolCoverage>;
 }
 
-/**
- * The park's running seasons, the types of their days and, per ride and day
- * type, what the ride measured on their latest days — the inputs of
- * `applySeasonLevel`.
- *
- * A season runs when today (park-local) lies inside its bounds. The measured
- * day value is TFT's target statistic (`nf-service` `fetch_daily_peak_panel`):
- * the P90 of the day's OPERATING STANDBY waits of at least 5 minutes, no
- * heartbeat rows, at least three readings. Today is left out: a running day's
- * P90 is not a day's P90. Beside it, TFT's freshest forecast of the day with a
- * `forecast_date` before it, one lookup on the primary key of `tft_forecasts`
- * per measured day; `seasonReferences` turns both into the references.
- *
- * A failed holiday read fails the whole load, because without it every
- * holiday would count as a working day.
- */
 /**
  * The live parks with a season of the season level running on their own today, the same
  * definition {@link loadSeasonLevelInputs} reads for one park.
@@ -74,6 +62,24 @@ export async function parksWithRunningSeason(
   return rows.map((row) => row.parkId);
 }
 
+/**
+ * The park's running seasons, the types of their days and, per ride and day
+ * type, what the ride measured on their latest days — the inputs of
+ * `applySeasonLevel`.
+ *
+ * A season runs when today (park-local) lies inside its bounds on the day of
+ * the read; the caller keeps the inputs from one calendar warmup to the next.
+ * The measured day value is TFT's target statistic (`nf-service`
+ * `fetch_daily_peak_panel`): the P90 of the day's OPERATING STANDBY waits of
+ * at least 5 minutes, no heartbeat rows, at least three readings. Today is
+ * left out: a running day's P90 is not a day's P90. Beside it, TFT's freshest
+ * forecast of the day with a `forecast_date` before it, one lookup on the
+ * primary key of `tft_forecasts` per measured day; `seasonReferences` turns
+ * both into the references.
+ *
+ * A failed holiday read fails the whole load, because without it every
+ * holiday would count as a working day.
+ */
 export async function loadSeasonLevelInputs(
   dataSource: DataSource,
   park: SeasonPark & { id: string },
@@ -96,7 +102,7 @@ export async function loadSeasonLevelInputs(
   if (seasons.length === 0) {
     return {
       seasons,
-      dayTypes: { daysOff: [], eves: [], unknownDays: [] },
+      dayTypes: { daysOff: [], neighbourDays: [], eves: [], unknownDays: [] },
       references: [],
     };
   }
@@ -109,7 +115,7 @@ export async function loadSeasonLevelInputs(
     eachIsoDate(first, last),
     await holidaySource.holidays(addIsoDays(first, -3), addIsoDays(last, 4)),
     park,
-    await holidaySource.schoolThrough(),
+    await holidaySource.schoolCoverage(),
   );
 
   const rows = await queryWithLimits<MeasuredSeasonDay[]>(

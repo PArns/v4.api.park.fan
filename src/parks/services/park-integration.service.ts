@@ -1934,9 +1934,15 @@ export class ParkIntegrationService {
         crowdLevel = "unknown";
       }
 
+      // Over the rows that carry one: a season-level row has none, and read
+      // as 0 it would sink the day's figure for a number nobody measured.
+      const confidences = dailyPreds.flatMap((p) =>
+        p.confidence != null ? [p.confidence] : [],
+      );
       const avgConfidence =
-        dailyPreds.reduce((s, p) => s + (p.confidence || 0), 0) /
-        dailyPreds.length;
+        confidences.length > 0
+          ? confidences.reduce((s, c) => s + c, 0) / confidences.length
+          : null;
 
       // Recommendation score: crowd level base + contextual penalties
       // Uses holiday flags from ML prediction features when available

@@ -3753,8 +3753,9 @@ describe("PlanDayService", () => {
 
     describe("on a day of a running park season", () => {
       // The served row carries the season level (PAR-1343) and the model it
-      // replaced: `tft+season` or `catboost+season`. Its level is the one the
-      // calendar shows for the day, so the curve has to follow it.
+      // replaced: `tft+season` or `catboost+season` for a measured level,
+      // `tft+season-ratio` for TFT's number × the season ratio. Its level is
+      // the one the calendar shows for the day, so the curve has to follow it.
       const at600 = (plan: {
         rides: Array<{ slots?: Array<{ minute: number; wait: number }> }>;
       }) => plan.rides[0].slots!.find((s) => s.minute === 600)!.wait;
@@ -3798,6 +3799,34 @@ describe("PlanDayService", () => {
         }
       });
 
+      it("gates a season ratio row like TFT: a busy ride, leads 0 to 2", async () => {
+        // TFT's forecast × the season ratio is a forecast, with TFT's error
+        // at every lead, so the benchmark's TFT gates hold for it.
+        const cases: Array<[number, number | null, string, number]> = [
+          [0, 50, "h5_season", 39],
+          [2, 50, "h5_season", 39],
+          [3, 50, "h5", 26],
+          [21, 50, "h5", 26],
+          [1, 30, "h5", 26],
+          [1, null, "h5", 26],
+        ];
+        for (const [lead, q90, composer, wait] of cases) {
+          const date = composedDay("tft+season-ratio", dayFromToday(lead));
+          h5Profiles = new Map([["a-taron", { ...h5(), q90 }]]);
+
+          const plan = await service.buildPlanDay(park, date);
+
+          expect([lead, q90, plan.rides[0].composer, at600(plan)]).toEqual([
+            lead,
+            q90,
+            composer,
+            wait,
+          ]);
+          // `dayPeak` is the served row's level whether or not it scaled.
+          expect(plan.rides[0].dayPeak).toBe(60);
+        }
+      });
+
       it("hands the archive no routed row: the routed curve is TFT's", async () => {
         const date = composedDay("tft+season", dayFromToday(2));
 
@@ -3809,6 +3838,15 @@ describe("PlanDayService", () => {
         expect(plan.rides[0].composer).toBe("h5_season");
         expect(shadow.map((c) => c.composer)).toEqual(["peak_scaled", "h5"]);
         expect(shadow[1].slots.find((s) => s.minute === 600)!.wait).toBe(26);
+
+        // Nor does a season ratio row that passed TFT's gates.
+        const ratioDate = composedDay("tft+season-ratio", dayFromToday(1));
+        const ratio = await service.buildPlanDayWithShadow(park, ratioDate);
+        expect(ratio.plan.rides[0].composer).toBe("h5_season");
+        expect(ratio.shadow.map((c) => c.composer)).toEqual([
+          "peak_scaled",
+          "h5",
+        ]);
       });
     });
 
