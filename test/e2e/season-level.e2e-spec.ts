@@ -5,13 +5,17 @@ import { AppModule } from "../../src/app.module";
 import { Park } from "../../src/parks/entities/park.entity";
 import { Attraction } from "../../src/attractions/entities/attraction.entity";
 import { loadSeasonLevelInputs } from "../../src/ml/utils/season-level.query";
-import { applySeasonLevel } from "../../src/ml/utils/season-level.util";
+import {
+  applySeasonLevel,
+  type SeasonDayType,
+} from "../../src/ml/utils/season-level.util";
 import type { HolidayRow } from "../../src/holidays/holidays.service";
-import { isWeekendDate } from "../../src/common/utils/date.util";
+import { addIsoDays, isWeekendDate } from "../../src/common/utils/date.util";
 
 /**
  * The season level's two reads against the real schema (PAR-1343): which
- * seasons run, and what each ride measured on their days so far.
+ * seasons run, and what each ride measured on their days so far, with TFT's
+ * forecasts of those days (PAR-1376).
  */
 describe("season level reads the running season's measured days (e2e)", () => {
   const TZ = "Europe/Berlin";
@@ -84,6 +88,15 @@ describe("season level reads the running season's measured days (e2e)", () => {
       [rideId, wait, day, TZ, heartbeat],
     );
   };
+
+  /** TFT's forecast of `day`, made `offset` days from it. */
+  const forecast = (day: string, offset: number, peak: number) =>
+    dataSource.query(
+      `INSERT INTO tft_forecasts
+         (attraction_id, target_date, forecast_date, predicted_peak, model_version)
+       VALUES ($1, $2::date, $2::date + $3::int, $4, 'e2e')`,
+      [rideId, day, offset, peak],
+    );
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -160,46 +173,73 @@ describe("season level reads the running season's measured days (e2e)", () => {
     ]);
   });
 
-  it("takes the median of the season's past days by day type", async () => {
+  it("reads each day type's measured days and TFT's forecasts of them", async () => {
     const [{ id }] = await season(
       "winter",
       "confirmed",
       await localDay(-9),
       await localDay(30),
     );
-    // Nine past days of the season: days off read 60, working days 30. The
-    // first weekday among them is a school-break day, a day off.
+    // Nine past days of the season: days off read 60, eves 45, working days
+    // 30. The first weekday among them is a school-break day, a day off.
     const days: string[] = [];
     for (let back = 9; back >= 1; back--) days.push(await localDay(-back));
     const onBreak = days.find((day) => !isWeekendDate(day))!;
     const dayOff = (day: string) => isWeekendDate(day) || day === onBreak;
-    for (const day of days) await measuredDay(day, dayOff(day) ? 60 : 30);
+    const eve = (day: string) => !dayOff(day) && dayOff(addIsoDays(day, 1));
+    const typeOf = (day: string): SeasonDayType =>
+      dayOff(day) ? "off" : eve(day) ? "eve" : "working";
+    const value = { off: 60, eve: 45, working: 30 };
+    for (const day of days) await measuredDay(day, value[typeOf(day)]);
     // Not the season's: the day before it began, and today (a running day).
     await measuredDay(await localDay(-10), 200);
     await measuredDay(await localDay(0), 200);
     // A heartbeat copy is not a reading.
     await measuredDay(days[0], 200, true);
+    // TFT's forecasts of the working days: the freshest made before the day
+    // is 15, so each ratio is 2; an older one and one made on the day are
+    // not read. An eve's forecast of 4 is under the floor.
+    for (const day of days.filter((d) => typeOf(d) === "working")) {
+      await forecast(day, -3, 60);
+      await forecast(day, -1, 15);
+      await forecast(day, 0, 100);
+    }
+    for (const day of days.filter(eve)) await forecast(day, -1, 4);
 
     const { seasons, dayTypes, references } = await load([breakDay(onBreak)]);
 
-    const offDays = days.filter(dayOff).length;
     expect(dayTypes.daysOff).toEqual(
       expect.arrayContaining(days.filter(dayOff)),
     );
+    expect(dayTypes.eves).toEqual(expect.arrayContaining(days.filter(eve)));
     expect(dayTypes.unknownDays).toEqual([]);
-    const level = (off: boolean) => references.find((r) => r.dayOff === off);
-    expect(level(false)).toMatchObject({
+    const count = (type: SeasonDayType) =>
+      Math.min(days.filter((d) => typeOf(d) === type).length, 6);
+    const reference = (type: SeasonDayType) =>
+      references.find((r) => r.dayType === type);
+    // Nine consecutive days hold a working day, a Friday that is not the
+    // break day, and two weekend days.
+    expect(reference("working")).toEqual({
       seasonId: id,
       attractionId: rideId,
-      days: 9 - offDays,
+      dayType: "working",
+      days: count("working"),
       level: 30,
+      ratioDays: count("working"),
+      ratio: 2,
     });
-    expect(level(true)).toMatchObject({ days: offDays, level: 60 });
-    expect(references).toHaveLength(2);
+    expect(reference("eve")).toMatchObject({
+      days: count("eve"),
+      level: 45,
+      ratioDays: 0,
+      ratio: null,
+    });
+    expect(reference("off")).toMatchObject({ days: count("off"), level: 60 });
+    expect(references).toHaveLength(3);
 
-    // The whole chain: next Saturday is served the season's days-off level.
-    // Nine days hold at least two weekend days, and the break day makes three.
-    expect(offDays).toBeGreaterThanOrEqual(3);
+    // The whole chain: next Saturday is served the season's days-off level,
+    // which nine days with two weekend days and the break day reach.
+    expect(count("off")).toBeGreaterThanOrEqual(3);
     let saturday = await localDay(1);
     for (let i = 2; !isWeekendDate(saturday); i++) saturday = await localDay(i);
     const [served] = applySeasonLevel(
@@ -215,6 +255,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
       references,
       dayTypes,
       (p) => p.predictedTime.slice(0, 10),
+      "ratio",
     );
     expect(served).toMatchObject({
       predictedWaitTime: 60,
@@ -233,7 +274,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
 
     const weekdays = days.filter((day) => !isWeekendDate(day));
     expect(dayTypes.unknownDays).toEqual(expect.arrayContaining(weekdays));
-    expect(references.map((r) => r.dayOff)).toEqual([true]);
+    expect(references.map((r) => r.dayType)).toEqual(["off"]);
     expect(references[0].days).toBe(days.length - weekdays.length);
   });
 
@@ -260,7 +301,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
   it("answers with nothing for a park without a running season", async () => {
     await expect(load()).resolves.toEqual({
       seasons: [],
-      daysOff: [],
+      dayTypes: { daysOff: [], eves: [], unknownDays: [] },
       references: [],
     });
   });

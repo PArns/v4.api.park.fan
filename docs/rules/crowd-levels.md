@@ -17,7 +17,8 @@ the calibration are in [Crowd levels](../analytics/crowd-levels.md).
   `CALENDAR_SEASON_FILTER=true` (PAR-1326; off in the code, on in production) neither is a headliner that a park season pauses, or whose season months
   or bound park season rule the day out (`withoutRidesOutOfSeason`, the rule `/plan/day` applies).
   On a day of a running park season the predicted wait of a ride is its
-  [season level](../ml/season-level.md), not the model's number (`SEASON_LEVEL`, PAR-1343).
+  [season level](../ml/season-level.md): TFT's number scaled by what the ride measured against it
+  on the season's days, or the measured level itself (`SEASON_LEVEL`, PAR-1343; PAR-1376).
 - **Point-in-time and live signals use ratio-vs-P50.** `calculateParkOccupancy` is
   `Σ latest_wait ÷ Σ attraction_p50 × 100` over headliners reporting in the last 60 min
   (`getHeadlinerLoad`), falling back to `avg(latest) ÷ park_p50` without per-ride baselines. The
