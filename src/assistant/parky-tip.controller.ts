@@ -19,6 +19,7 @@ import {
 import type { Response } from "express";
 import { ApiPermission } from "../api-keys/api-permission.decorator";
 import {
+  getCurrentDateInTimezone,
   isRealIsoDate,
   secondsUntilEndOfDayInTimezone,
 } from "../common/utils/date.util";
@@ -30,9 +31,15 @@ import {
   type ParkyTip,
 } from "./parky-tip.service";
 
-/** Six hours at the edge; the Redis copy lives twelve. */
 /** Six hours, the tip's own window, where the park's day lasts that long. */
 const TIP_MAX_AGE_SECONDS = 21_600;
+
+/**
+ * Nothing to say, for a few minutes: most of the 204s pass on their own (the day's budget, a failed
+ * or refused call, Parky switched back on), and a dialog kept empty for hours would hide the tip
+ * long after it could be written. A closed day costs the same calendar read again, no model call.
+ */
+export const TIP_NONE_CACHE_CONTROL = "public, max-age=300, s-maxage=300";
 
 /**
  * The tip counts its day from the park's today ("tomorrow", "on Saturday"), so a cached copy must
@@ -62,12 +69,14 @@ export class ParkyTipController {
       "One sentence in Parky's voice about the day, written by Claude from the calendar's " +
       "entries for the day and three days on each side, a verdict from the day's crowd " +
       "level (very_low/low good, moderate meh, high and above bad), and that level " +
-      "(`crowdLevel`), as the calendar has it now: once the forecast moves the day, the " +
-      "sentence is written again for the new level. 204 when there is nothing " +
-      `to say: a closed day, no forecast, a date before today or more than ${PARKY_TIP_HORIZON_DAYS} ` +
-      "days ahead in park time, Parky switched off or the day's token budget spent. The " +
-      "sentence names days counted from the park's today (today, tomorrow, Saturday). " +
-      "Cache: public, max-age=21600, stale-while-revalidate=3600, cut to park-local midnight.",
+      "(`crowdLevel`), as the calendar has it now: once the forecast moves the day or one of " +
+      "the days around it, the sentence is written again. 204 when " +
+      `there is nothing to say: a closed day, no forecast, a date before today or more than ${PARKY_TIP_HORIZON_DAYS} ` +
+      "days ahead in park time, Parky switched off or the day's token budget spent; " +
+      "cached five minutes. The sentence names days counted from the park's today (today, " +
+      "tomorrow, Saturday): a `today` that is not the park's answers 204 with no-store and " +
+      "writes nothing. Cache: public, max-age=21600, stale-while-revalidate=3600, cut to " +
+      "park-local midnight.",
   })
   @ApiParam({ name: "continent", example: "europe" })
   @ApiParam({ name: "country", example: "germany" })
@@ -80,13 +89,21 @@ export class ParkyTipController {
     example: "2026-12-05",
   })
   @ApiQuery({ name: "locale", required: true, enum: ASSISTANT_LOCALES })
+  @ApiQuery({
+    name: "today",
+    required: false,
+    description:
+      "The park's today (YYYY-MM-DD) as the caller counts it, where the caller keys its own " +
+      "cache by it. Any other day than the park's answers 204 with no-store.",
+    example: "2026-11-17",
+  })
   @ApiResponse({
     status: 200,
     description:
       "`{ date, verdict: good|meh|bad, crowdLevel: very_low|low|moderate|high|very_high|extreme, text, promptVersion }`",
   })
   @ApiResponse({ status: 204, description: "Nothing to say for this day" })
-  @ApiResponse({ status: 400, description: "Invalid date or locale" })
+  @ApiResponse({ status: 400, description: "Invalid date, today or locale" })
   @ApiResponse({ status: 404, description: "Park not found" })
   async tip(
     @Param("continent") continent: string,
@@ -104,10 +121,14 @@ export class ParkyTipController {
       }),
     )
     locale: AssistantLocale,
+    @Query("today") asked: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<ParkyTip | undefined> {
     if (!isRealIsoDate(date)) {
       throw new BadRequestException("date must be a real YYYY-MM-DD day");
+    }
+    if (asked !== undefined && !isRealIsoDate(asked)) {
+      throw new BadRequestException("today must be a real YYYY-MM-DD day");
     }
     const park = await this.moduleRef
       .get(ParksService, { strict: false })
@@ -117,9 +138,18 @@ export class ParkyTipController {
         `Park with slug "${parkSlug}" not found in ${city}, ${country}, ${continent}`,
       );
     }
-    const tip = await this.tips.tip(park, date, locale);
+    const today = getCurrentDateInTimezone(park.timezone);
+    // A caller whose clock is already past the park's midnight, or not there yet, would keep a
+    // sentence counted from one day ("tomorrow …") under the other day's key.
+    if (asked !== undefined && asked !== today) {
+      res.status(204);
+      res.setHeader("Cache-Control", "no-store");
+      return undefined;
+    }
+    const tip = await this.tips.tip(park, date, locale, today);
     if (!tip) {
       res.status(204);
+      res.setHeader("Cache-Control", TIP_NONE_CACHE_CONTROL);
       return undefined;
     }
     res.setHeader(

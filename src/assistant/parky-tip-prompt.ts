@@ -11,7 +11,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { isoDateWeekday } from "../common/utils/date.util";
 
 /** Bumped whenever the text below changes; part of the cache key and the response. */
-export const PARKY_TIP_PROMPT_VERSION = 2;
+export const PARKY_TIP_PROMPT_VERSION = 3;
 
 /** The longest tip served; a longer one is refused, not cut. */
 export const PARKY_TIP_MAX_CHARS = 160;
@@ -34,6 +34,7 @@ Write ONE sentence of at most ${PARKY_TIP_MAX_CHARS} characters about the visito
 - Use only facts in the input: crowd level, opening hours, holidays, school holidays, events, weather. Never add a number, a ride, an event or a reason the input does not hold.
 - Name a day the way a friend would, counted from TODAY in the input: today, tomorrow, the weekday within the next six days ("on Saturday"), "next weekend" for the Saturday or Sunday after the coming one; further out, the weekday with the day and month ("Saturday, 5 December"). Never the year-month-day form and never "the chosen day".
 - When a neighbouring day in the input is clearly quieter (at least one crowd level lower and open), name it the same way.
+- TODAY's line may also say how busy the day has been so far; its crowd level is your forecast for the whole day. When the chosen day is today and the two differ, say both honestly, never the forecast alone.
 - Be funny at most a little, with at most one emoji.
 - Plain text only: no Markdown, no links, no quotes around the sentence, no line breaks.
 - Write in ${languageName(locale)}. ${languageAddress(locale)}`;
@@ -41,7 +42,8 @@ Write ONE sentence of at most ${PARKY_TIP_MAX_CHARS} characters about the visito
 
 /**
  * The input: the park, its today (park-local, the day "today" and "tomorrow" count from), the
- * chosen day and its neighbours, one line each.
+ * chosen day and its neighbours, one line each. Today's line adds the level measured so far, which
+ * the day dialog shows under the forecast.
  */
 export function parkyTipInput(
   parkName: string,
@@ -52,20 +54,24 @@ export function parkyTipInput(
 ): string {
   const lines = days.map(
     (day) =>
-      `${day.date === date ? "CHOSEN DAY " : ""}${dayLine(day, timezone)}`,
+      `${day.date === date ? "CHOSEN DAY " : ""}${dayLine(day, timezone, today)}`,
   );
   return `Park: ${parkName}\nTODAY at the park: ${WEEKDAYS[isoDateWeekday(today)]} ${today}\n${lines.join("\n")}`;
 }
 
-function dayLine(day: CalendarDay, timezone: string): string {
+const levelWords = (level: string) => level.replace("_", " ");
+
+function dayLine(day: CalendarDay, timezone: string, today: string): string {
   const clock = (instant: string) =>
     formatInTimeZone(new Date(instant), timezone, "HH:mm");
+  const closed = day.status === "CLOSED" || day.crowdLevel === "closed";
   const facts = [
     `${WEEKDAYS[isoDateWeekday(day.date)]} ${day.date}`,
-    day.status === "CLOSED" || day.crowdLevel === "closed"
-      ? "closed"
-      : `crowd level ${day.crowdLevel.replace("_", " ")}`,
+    closed ? "closed" : `crowd level ${levelWords(day.crowdLevel)}`,
   ];
+  if (!closed && day.date === today && day.todayCrowdLevel) {
+    facts.push(`so far today: ${levelWords(day.todayCrowdLevel)}`);
+  }
   if (day.hours?.openingTime && day.hours.closingTime) {
     facts.push(
       `open ${clock(day.hours.openingTime)}-${clock(day.hours.closingTime)}`,
