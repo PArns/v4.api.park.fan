@@ -48,6 +48,13 @@ two decimals here; it is never stored or logged. `opener` is the greeting the wi
 sent with a chat's first question only: a greeting can name the visitor's next planned day or ask
 how yesterday's went, and a bare „ja" may answer it. One line, at most 300 characters, quoted in
 "This chat" as the page's line (data, not instructions), and only while the chat has no history.
+`dayTip` is the day tip the visitor tapped to open the chat (`park` as
+`continent/country/city/slug`, `date`, and `text`, the sentence the dialog showed, at most 400
+characters), sent with that first question only. The API resolves the park and reads the day's
+facts itself (`ParkyTipService.dayFacts`: the same lines the tip is written from, the day and up to
+three on each side, from the park's today), and "This chat" gives Parky both: the sentence as his
+own words, quoted as data, and the facts. Nothing about the day is taken from the browser; a park
+or day it cannot read drops the context, never the question.
 
 The stream sends `start` (the chat id), `status` (a lookup is running: `parks`, `wait-times`,
 `rides`, `forecast`, `posts`, `planner`, `location`, `weather`), `action` (something for the widget
@@ -1154,6 +1161,9 @@ data key like `/calendar`, answers the calendar's day dialog:
 - **204** when there is nothing to say: a closed day or one without a forecast (`unknown`), a date
   before today or more than 90 days ahead in park time, Parky switched off, no key, the day's token
   budget spent, a refused sentence or a failed call. A bad `date` or `locale` is a 400.
+- **Tapped:** the dialog opens the chat with the sentence and the day (`dayTip` on the chat
+  request, above), and the chat reads the day's facts through the same `dayFacts`, so Parky argues
+  from what the tip was written from.
 - **Cache:** Redis `parky-tip:v{promptVersion}:{parkId}:{today}:{date}:{locale}` for 12 hours,
   `today` being the park's: a tip that says "tomorrow" is written again once that day has come. A
   refused sentence and a closed day are kept too (as nothing), so one model call per day and

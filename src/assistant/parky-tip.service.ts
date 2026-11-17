@@ -106,6 +106,33 @@ export class ParkyTipService {
     }
   }
 
+  /**
+   * The day's facts as the tip reads them (`parkyTipInput`): the chosen day and up to
+   * {@link NEIGHBOUR_DAYS} on each side from the park's today, fresh from the calendar. The chat
+   * reads the same lines when a visitor taps the tip, so Parky argues from what he wrote from.
+   * Null outside the days a tip is written for.
+   */
+  async dayFacts(park: Park, date: string): Promise<string | null> {
+    const today = getCurrentDateInTimezone(park.timezone);
+    if (date < today || date > addIsoDays(today, PARKY_TIP_HORIZON_DAYS)) {
+      return null;
+    }
+    const { days } = await this.calendarAround(park, today, date);
+    return parkyTipInput(park.name, park.timezone, today, date, days);
+  }
+
+  private async calendarAround(park: Park, today: string, date: string) {
+    const from = addIsoDays(date, -NEIGHBOUR_DAYS);
+    const { fromDate, toDate } = parseDateRange(
+      from < today ? today : from,
+      addIsoDays(date, NEIGHBOUR_DAYS),
+      { timezone: park.timezone },
+    );
+    return this.moduleRef
+      .get(CalendarService, { strict: false })
+      .buildCalendarResponse(park, fromDate, toDate, "none");
+  }
+
   /** `false` is kept in the cache, null is not. */
   private async write(
     park: Park,
@@ -113,15 +140,7 @@ export class ParkyTipService {
     date: string,
     locale: AssistantLocale,
   ): Promise<ParkyTip | false | null> {
-    const from = addIsoDays(date, -NEIGHBOUR_DAYS);
-    const { fromDate, toDate } = parseDateRange(
-      from < today ? today : from,
-      addIsoDays(date, NEIGHBOUR_DAYS),
-      { timezone: park.timezone },
-    );
-    const calendar = await this.moduleRef
-      .get(CalendarService, { strict: false })
-      .buildCalendarResponse(park, fromDate, toDate, "none");
+    const calendar = await this.calendarAround(park, today, date);
     const day = calendar.days.find((d) => d.date === date);
     const verdict =
       day && day.status !== "CLOSED" ? parkyVerdict(day.crowdLevel) : null;
