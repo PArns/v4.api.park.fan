@@ -27,6 +27,22 @@ describe("run_job", () => {
     ]);
   });
 
+  it("starts the calendar warmup and a TFT training, audited as their routes", async () => {
+    const triggerCalendarWarmup = jest.fn(async () => queued);
+    const triggerTftTraining = jest.fn(async () => queued);
+    const { ctx, audit } = adminContext("editor", [
+      [AdminController, { triggerCalendarWarmup, triggerTftTraining }],
+    ]);
+    await runJobTool.handler({ job: "warmup-calendar" }, ctx);
+    await runJobTool.handler({ job: "train-nf" }, ctx);
+    expect(triggerCalendarWarmup).toHaveBeenCalled();
+    expect(triggerTftTraining).toHaveBeenCalled();
+    expect(audit.map(({ action }) => action)).toEqual([
+      "job.warmup-calendar",
+      "job.train-nf",
+    ]);
+  });
+
   it("reaches the Search Console import through its own controller", async () => {
     const importNow = jest.fn(async () => ({ queued: true }));
     const { ctx, audit } = adminContext("editor", [

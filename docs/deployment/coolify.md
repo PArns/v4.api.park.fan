@@ -156,16 +156,18 @@ Until then a park page shows a day at one level in the calendar and at another i
 and in Parky's answers. So after such a deploy:
 
 1. Wait for the new `api` container: `GET /v1/health/ready` answers 200.
-2. **Run the calendar warmup.** It has no admin route and no `run_job` entry: in Bull Board add a
-   `warmup-calendar-daily` job to `park-metadata`, data `{}`. It is done when the API logs
+2. **Run the calendar warmup:** `POST /v1/admin/warmup-calendar` (editor; `run_job`
+   `warmup-calendar` in the admin MCP). It is done when the API logs
    `✅ Calendar warmup complete: … parks in …s (best-days: …)`, after which it rings the frontend.
 3. **Then deploy the frontend.** Its deploy purges Cloudflare, which no ring reaches (park.fan's
    `docs/architecture/cdn-caching.md#a-deploy-purges-cloudflare`): after the ring, the purge clears
    the hour of old copies Cloudflare still holds; before it, Cloudflare refills from the old ones.
 
-Start the warmup outside the scheduled runs (from 08:00 and 20:00 UTC to their completion line):
-nothing stops two warmups at once, and two park builds in parallel saturated the database's disk
-([cache warmup](../architecture/caching-strategy.md#cache-warmup)). Keep it out of 05:50–07:30
+Start the warmup outside the scheduled runs (from 08:00 and 20:00 UTC to their completion line).
+The route answers with the warmup already running or waiting instead of queueing a second, since two
+park builds in parallel saturated the database's disk
+([cache warmup](../architecture/caching-strategy.md#cache-warmup)), but it cannot see a run that is
+about to start from the cron. Keep it out of 05:50–07:30
 too, while CatBoost trains.
 
 ### A deploy that changes what a model input means
@@ -180,8 +182,8 @@ Bahrain, Kuwait, Oman, Israel) CatBoost's weekday/weekend rolling features and T
 Saturday and Sunday for the UAE (PAR-1375). After such a deploy, train all three by hand once the
 new containers are up, one after the other:
 
-1. **TFT:** there is no admin route; in Bull Board add a `train-nf` job to `nf-training`
-   (about 40–50 minutes, [TFT](../ml/tft.md)). Then run the calendar warmup
+1. **TFT:** `POST /v1/admin/train-nf` (editor; `run_job` `train-nf`), about 40–50 minutes
+   ([TFT](../ml/tft.md)). Then run the calendar warmup
    ([above](#a-deploy-that-changes-a-served-forecast)): `train-nf` evicts `ml:tft-daily:*` when it
    completes and rings nothing, so `/plan/day` and Parky read the new forecast at once while the
    calendar and best-days keep the old one.
