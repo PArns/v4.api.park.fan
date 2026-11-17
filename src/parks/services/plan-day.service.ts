@@ -33,6 +33,12 @@ import {
 } from "../../common/utils/h5-profile.util";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { H5ProfileService } from "./h5-profile.service";
+import { ParkSeasonService } from "./park-season.service";
+import {
+  PARK_SEASON_BINDING_KINDS,
+  type ParkSeason,
+} from "../entities/park-season.entity";
+import { seasonsOn } from "../../trip-regions/trip-calendar.util";
 import {
   isSeasonRatioRow,
   servedLevelSource,
@@ -289,6 +295,8 @@ export class PlanDayService {
     // Optional so a module graph without it (the specs, a partial E2E module)
     // serves exactly what it served before: no H5, no slots.
     @Optional() private readonly h5ProfileService?: H5ProfileService,
+    // Optional for the same reason: without it no projection is held back at a season's edge.
+    @Optional() private readonly parkSeasonService?: ParkSeasonService,
   ) {}
 
   /**
@@ -868,13 +876,15 @@ export class PlanDayService {
     // the pattern column is written by the former and read here by the latter.
     const weekday = isoDateWeekday(dateStr);
 
-    const [scheduled, patterns] = await Promise.all([
+    const today = this.today(park);
+    const [scheduled, patterns, seasons] = await Promise.all([
       this.showsService
         .getShowtimesOnDate(park.id, park.timezone, dateStr)
         .catch(() => new Map<string, string[]>()),
       this.showsService
         .getSchedulePatterns(park.id, weekday)
         .catch(() => new Map<string, ShowSchedulePattern>()),
+      this.programmeSeasons(park, today, dateStr),
     ]);
 
     const out: PlanDayShowDto[] = [];
@@ -901,8 +911,14 @@ export class PlanDayService {
       // about is far away. Measuring against the target would reject every
       // date more than four weeks out — which is most of what a planner asks.
       if (
-        isoDaysBetween(pattern.lastObservedOn, this.today(park)) >
+        isoDaysBetween(pattern.lastObservedOn, today) >
         PlanDayService.MAX_PATTERN_AGE_DAYS
+      ) {
+        continue;
+      }
+      if (
+        PlanDayService.programmeOn(seasons, pattern.lastObservedOn) !==
+        PlanDayService.programmeOn(seasons, dateStr)
       ) {
         continue;
       }
@@ -933,6 +949,57 @@ export class PlanDayService {
     return out.sort(
       (a, b) => key(a) - key(b) || a.showName.localeCompare(b.showName),
     );
+  }
+
+  /**
+   * The park's curated programme seasons (Halloween, Christmas, winter, summer
+   * nights, a special event) from the oldest pattern a projection may still
+   * use to the day asked about. A failed read holds nothing back, as before.
+   */
+  private async programmeSeasons(
+    park: Park,
+    today: string,
+    dateStr: string,
+  ): Promise<ParkSeason[]> {
+    if (!this.parkSeasonService) return [];
+    const days = [
+      addIsoDays(today, -PlanDayService.MAX_PATTERN_AGE_DAYS),
+      today,
+      dateStr,
+    ].sort();
+    try {
+      const seasons = await this.parkSeasonService.forParkInRange(
+        park.id,
+        days[0],
+        days[days.length - 1],
+      );
+      return seasons.filter((season) =>
+        (PARK_SEASON_BINDING_KINDS as readonly string[]).includes(season.kind),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Plan day: seasons unavailable for ${park.slug}: ${(err as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Which programme seasons run on a day, as one comparable key.
+   *
+   * A show's pattern is its last same weekday, and a season can end in
+   * between: the parade of the last Halloween Sunday must not be promised for
+   * the first Sunday of the winter season. A projection carries over only
+   * when the day it was seen on and the day asked about run the same seasons.
+   */
+  private static programmeOn(
+    seasons: readonly ParkSeason[],
+    date: string,
+  ): string {
+    return seasonsOn(seasons, date)
+      .map((season) => season.id)
+      .sort()
+      .join(",");
   }
 
   /**

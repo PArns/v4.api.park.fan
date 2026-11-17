@@ -11,7 +11,10 @@
 
 import { execFileSync } from "node:child_process";
 import Anthropic from "@anthropic-ai/sdk";
-import { ASSISTANT_MODEL } from "./assistant-chat.service";
+import {
+  ASSISTANT_MAX_TOKENS,
+  ASSISTANT_MODEL,
+} from "./assistant-chat.service";
 import { chatContext, fillKnowledge, SYSTEM_PROMPT } from "./system-prompt";
 import { KNOWLEDGE_SEED, knowledgeIndex } from "./knowledge";
 import { visitorTrips } from "./tools/assistant-plans";
@@ -136,6 +139,7 @@ async function run(
         alerts: testCase.alerts,
         favorites: testCase.favorites,
         liveRegions: testCase.liveRegions ?? null,
+        earlierLookups: testCase.earlierLookups,
       }),
     },
   ];
@@ -156,7 +160,7 @@ async function run(
   for (let round = 0; round < rounds; round++) {
     const response = await client.messages.create({
       model: ASSISTANT_MODEL,
-      max_tokens: 2048,
+      max_tokens: ASSISTANT_MAX_TOKENS,
       output_config: { effort: "low" },
       system,
       tools: ASSISTANT_TOOL_PARAMS,

@@ -660,6 +660,12 @@ describe("the interview", () => {
     expect(line).toContain("mark that step answered too");
   });
 
+  it("offers a real park as the park day's chip, never a stand-in for typing one", () => {
+    const line = interviewLine(interview({ kind: "day", step: "day" }), null);
+    expect(line).toContain("a real park by its name");
+    expect(line).not.toContain("a park by name");
+  });
+
   it("asks in a region with bases how a hotel change should go, with the luggage courier", () => {
     const [japan] = visitorTrips([
       { region: "japan", query: "from=2027-04-01&to=2027-04-10" },

@@ -122,6 +122,60 @@ describe("parkyTipInput", () => {
     expect(input).not.toContain("so far");
   });
 
+  it("gives the day's precipitation in millimetres, never as a chance of rain", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-20",
+      [
+        day("2026-11-20", {
+          weather: {
+            basis: "forecast",
+            condition: "Rain showers, moderate intensity",
+            icon: 81,
+            tempMin: 7,
+            tempMax: 9.8,
+            rainChance: 47.5,
+            precipitationMm: 47.5,
+          },
+        } as Partial<CalendarDay>),
+      ],
+    );
+    expect(input).toContain(
+      "weather Rain showers, moderate intensity, 7-10 °C, 47.5 mm precipitation over the day",
+    );
+    expect(input).not.toContain("%");
+  });
+
+  it("says nothing about rain when no precipitation was measured", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-20",
+      [
+        day("2026-11-20", {
+          weather: {
+            basis: "forecast",
+            condition: "Overcast",
+            icon: 3,
+            tempMin: 2,
+            tempMax: 6,
+            rainChance: 0,
+          },
+        } as Partial<CalendarDay>),
+      ],
+    );
+    expect(input).toMatch(/weather Overcast, 2-6 °C$/m);
+  });
+
+  it("tells the model precipitation is millimetres, not a percentage", () => {
+    expect(parkyTipSystemPrompt("de")).toMatch(
+      /precipitation is how much falls over the whole day, in millimetres, never a chance of rain/,
+    );
+  });
+
   it("asks for both levels when today so far and its forecast differ", () => {
     expect(parkyTipSystemPrompt("de")).toMatch(
       /so far.*When the chosen day is today and the two differ, say both honestly/,

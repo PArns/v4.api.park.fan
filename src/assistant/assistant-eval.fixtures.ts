@@ -25,6 +25,8 @@ export interface EvalCase {
   liveRegions?: string[];
   /** Earlier turns, oldest first. */
   history?: Array<["user" | "assistant", string]>;
+  /** The tools behind each earlier answer, as "This chat" lists them. */
+  earlierLookups?: string[][];
   message: string;
   /** The first calls, in order; `tool` may list alternatives, input is matched as a subset. */
   want?: Array<{ tool: string | string[]; input?: Record<string, unknown> }>;
@@ -1542,6 +1544,56 @@ export const EVAL_CASES: EvalCase[] = [
     want: [
       {
         tool: ["plan_vacation", "get_days", "compare_parks", "get_best_days"],
+      },
+    ],
+  },
+  {
+    // Parky took back the Ultimate's 80 € for F.L.Y. once Taron's 12 € came in (PAR-1392).
+    id: "earlier-price-stands-de",
+    locale: "de",
+    pagePath: PHL_PAGE,
+    pageSubject: PHL_SUBJECT,
+    history: [
+      ["user", "Wie lange ist die Wartezeit bei Fly, kann ich da abkürzen?"],
+      [
+        "assistant",
+        "**F.L.Y.** hat gerade **15 Minuten**. Abkürzen geht nur mit dem **QUICK Pass Ultimate** für 80 €, der gilt für alle Quick-Pass-Eingänge und einmal F.L.Y.",
+      ],
+    ],
+    earlierLookups: [["get_ride"]],
+    message: "Und bei Taron?",
+    want: [{ tool: ["get_ride", "show_card"] }],
+    results: {
+      get_ride: {
+        name: "Taron",
+        status: "OPERATING",
+        queues: [{ type: "STANDBY", waitMinutes: 40 }],
+        facts: {
+          hasSingleRider: true,
+          fastPass: { name: "QUICK Pass", price: 12, currency: "EUR" },
+        },
+      },
+    },
+    answer: [{ must: "^(?![\\s\\S]*(zu unrecht|korrigier|korrektur|falsch))" }],
+  },
+  {
+    // Parky said he had given the weekend's figures "without looking", after get_days (PAR-1392).
+    id: "earlier-days-stand-es",
+    locale: "es",
+    pagePath:
+      "/es/parks/europe/spain/san-martin-de-la-vega/parque-warner-madrid",
+    history: [
+      ["user", "EL FINDE DEL 12 DE DICIEMBRE"],
+      [
+        "assistant",
+        "El sábado 12 de diciembre tendrá una afluencia alta, con una espera máxima prevista de unos 40 minutos. El domingo 13 se espera tranquilo, con picos de unos 25 minutos.",
+      ],
+    ],
+    earlierLookups: [["get_days"]],
+    message: "ES DESPUES DEL PUENTE, HAY MENOR AFLUENCIA POR ESO",
+    answer: [
+      {
+        must: "^(?![\\s\\S]*(sin mirar|me adelant|no las había|no lo había))",
       },
     ],
   },
