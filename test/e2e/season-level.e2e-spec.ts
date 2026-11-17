@@ -10,7 +10,8 @@ import {
   type SeasonDayType,
 } from "../../src/ml/utils/season-level.util";
 import type { HolidayRow } from "../../src/holidays/holidays.service";
-import { addIsoDays, isWeekendDate } from "../../src/common/utils/date.util";
+import { addIsoDays } from "../../src/common/utils/date.util";
+import { isCountryWeekendDate } from "../../src/date-features/constants/weekend-rules.constant";
 
 /**
  * The season level's two reads against the real schema (PAR-1343): which
@@ -19,6 +20,8 @@ import { addIsoDays, isWeekendDate } from "../../src/common/utils/date.util";
  */
 describe("season level reads the running season's measured days (e2e)", () => {
   const TZ = "Europe/Berlin";
+  /** The test park's weekend, Germany's. */
+  const isParkWeekend = (day: string) => isCountryWeekendDate(day, "DE");
   let app: INestApplication;
   let dataSource: DataSource;
   let parkId: string;
@@ -184,8 +187,8 @@ describe("season level reads the running season's measured days (e2e)", () => {
     // 30. The first weekday among them is a school-break day, a day off.
     const days: string[] = [];
     for (let back = 9; back >= 1; back--) days.push(await localDay(-back));
-    const onBreak = days.find((day) => !isWeekendDate(day))!;
-    const dayOff = (day: string) => isWeekendDate(day) || day === onBreak;
+    const onBreak = days.find((day) => !isParkWeekend(day))!;
+    const dayOff = (day: string) => isParkWeekend(day) || day === onBreak;
     const eve = (day: string) => !dayOff(day) && dayOff(addIsoDays(day, 1));
     const typeOf = (day: string): SeasonDayType =>
       dayOff(day) ? "off" : eve(day) ? "eve" : "working";
@@ -241,7 +244,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
     // which nine days with two weekend days and the break day reach.
     expect(count("off")).toBeGreaterThanOrEqual(3);
     let saturday = await localDay(1);
-    for (let i = 2; !isWeekendDate(saturday); i++) saturday = await localDay(i);
+    for (let i = 2; !isParkWeekend(saturday); i++) saturday = await localDay(i);
     const [served] = applySeasonLevel(
       [
         {
@@ -272,7 +275,7 @@ describe("season level reads the running season's measured days (e2e)", () => {
     // The school data ends before the season began.
     const { dayTypes, references } = await load([], await localDay(-20));
 
-    const weekdays = days.filter((day) => !isWeekendDate(day));
+    const weekdays = days.filter((day) => !isParkWeekend(day));
     expect(dayTypes.unknownDays).toEqual(expect.arrayContaining(weekdays));
     expect(references.map((r) => r.dayType)).toEqual(["off"]);
     expect(references[0].days).toBe(days.length - weekdays.length);

@@ -42,7 +42,6 @@ import {
   formatInParkTimezone,
   isoDateWeekday,
   isoDaysBetween,
-  isWeekendDate,
 } from "../../common/utils/date.util";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
@@ -485,7 +484,7 @@ export class PlanDayService {
       ...(theDay?.schoolVacationUnknown ? { schoolVacationUnknown: true } : {}),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
-      isWeekend: isWeekendDate(dateStr),
+      isWeekend: isCountryWeekendDate(dateStr, park.countryCode),
       neighborHolidays: (theDay?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,

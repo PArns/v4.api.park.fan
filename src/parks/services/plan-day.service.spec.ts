@@ -550,6 +550,20 @@ describe("PlanDayService", () => {
     expect(monday.context.isWeekend).toBe(false);
   });
 
+  it("reads isWeekend off the park's country, as the H5 composer does", async () => {
+    const riyadh = { ...park, countryCode: "SA" } as Park;
+    const weekendOf = async (p: Park, date: string) => {
+      calendarDay = { ...calendarDay!, date };
+      return (await service.buildPlanDay(p, date)).context.isWeekend;
+    };
+    // Friday 16 October 2026: a working day in Germany, the weekend in Saudi Arabia.
+    expect(await weekendOf(park, "2026-10-16")).toBe(false);
+    expect(await weekendOf(riyadh, "2026-10-16")).toBe(true);
+    // Sunday 18 October: the other way round.
+    expect(await weekendOf(park, "2026-10-18")).toBe(true);
+    expect(await weekendOf(riyadh, "2026-10-18")).toBe(false);
+  });
+
   it("carries whether the park's wait times are readable at all", async () => {
     // A planner holds this payload and nothing else — it never fetches the park
     // — and an empty `rides` on a drawn axis is exactly what a park with no

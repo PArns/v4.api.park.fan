@@ -600,9 +600,11 @@ export class PlanDayContextDto {
   @ApiProperty({
     example: true,
     description:
-      "Saturday or Sunday in the park's own timezone. Derived here because " +
-      "the calendar carries no such field and every surface was deriving it " +
-      "separately.",
+      "The date (the park's own) falls on the weekend of the park's country: " +
+      "Friday and Saturday in Saudi Arabia or Israel, Saturday and Sunday " +
+      "where no other rule is listed or the park has no country. Derived here " +
+      "because the calendar carries no such field and every surface was " +
+      "deriving it separately.",
   })
   isWeekend: boolean;
 

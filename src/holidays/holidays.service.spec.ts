@@ -517,7 +517,7 @@ describe("HolidaysService", () => {
     ];
 
     it("keeps only the days Nager names, never the holiday or the weekend around them", () => {
-      expect(bridgeDaysOf(france2026, 2026)).toEqual([
+      expect(bridgeDaysOf(france2026, 2026, "FR")).toEqual([
         "2026-01-02",
         "2026-05-15",
         "2026-07-13",
@@ -532,8 +532,16 @@ describe("HolidaysService", () => {
             { bridgeDays: ["2026-01-02", "2026-01-03", "not-a-day"] },
           ],
           2026,
+          "FR",
         ),
       ).toEqual(["2026-01-02"]);
+    });
+
+    it("reads the weekend of the country asked for", () => {
+      // Friday 2 and Sunday 4 January 2026.
+      const named = [{ bridgeDays: ["2026-01-02", "2026-01-04"] }];
+      expect(bridgeDaysOf(named, 2026, "FR")).toEqual(["2026-01-02"]);
+      expect(bridgeDaysOf(named, 2026, "IL")).toEqual(["2026-01-04"]);
     });
 
     it("replaces the year's stored bridge days with exactly those", async () => {
