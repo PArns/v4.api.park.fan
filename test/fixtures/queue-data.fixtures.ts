@@ -4,9 +4,18 @@ import {
   LiveStatus,
 } from "../../src/external-apis/themeparks/themeparks.types";
 
+/**
+ * `waitTime` is a nullable column typed `number` on the entity: a queue without
+ * a wait (a closed ride, a return-time queue) stores NULL, which a fixture has
+ * to be able to say.
+ */
+type QueueDataOverrides = Partial<Omit<QueueData, "waitTime">> & {
+  waitTime?: number | null;
+};
+
 export const createTestQueueData = (
   attractionId: string,
-  overrides?: Partial<QueueData>,
+  overrides?: QueueDataOverrides,
 ): QueueData => {
   const queueData = new QueueData();
   queueData.attractionId = attractionId;
