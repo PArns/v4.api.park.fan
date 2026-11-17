@@ -47,6 +47,16 @@ be promised every Thursday), and within the last 28 days **measured against toda
 not the date asked about (`MAX_PATTERN_AGE_DAYS`). Patterns come from a 56-day window
 (`PATTERN_WINDOW_DAYS`, `rebuildSchedulePatterns`).
 
+**A season's edge stops a projection.** A pattern is the show's last same weekday,
+and a season can end in between: on 29 November 2026, the second day of Europa-Park's
+Winterzauber, the Sunday before was still HALLOWinter, and `/plan/day` promised its
+Halloween parade (PAR-1392). A projection now carries over only when the park's
+curated programme seasons (`PARK_SEASON_BINDING_KINDS`: Halloween, Christmas, winter,
+summer nights, a special event) running on `observedOn` are the ones running on the
+date asked about. A maintenance window, a closure or the opening season changes no
+programme. A park without seasons on file, or a failed season read, projects as
+before.
+
 **A day with the wrong offset is skipped.** From 2026-09-07 to 09-27 ThemeParks.wiki
 served Universal Studios Japan's programme nine hours early (12:10 as `03:10+09:00`),
 and those days seeded "02:00" patterns. The rebuild now leaves out a park day on which
@@ -57,7 +67,7 @@ held at most 10 times before 06:00 (Halloween nights), never the majority.
 **No month filter.** A projection is not filtered by `shows.season_months`: no sync
 field supplies it (on 2026-10-02 none of 1,414 seasonal shows carried months,
 PAR-645). A show's season is the pattern window — a Halloween show drops out 28 days
-after its last sighting. A `scheduled` time is never filtered.
+after its last sighting, or at the curated season's end where the park has one. A `scheduled` time is never filtered.
 
 ## How far ahead showtimes are genuinely known
 

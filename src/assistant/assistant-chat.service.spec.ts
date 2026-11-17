@@ -64,6 +64,7 @@ jest.mock("@anthropic-ai/sdk", () => {
 import {
   AssistantChatService,
   answersOffer,
+  earlierLookups,
   historyOf,
   lookedUpIds,
   type ChatEvent,
@@ -300,6 +301,82 @@ describe("historyOf", () => {
       { role: "user", content: "Wie voll?" },
       { role: "assistant", content: "Ziemlich." },
     ]);
+  });
+});
+
+describe("earlierLookups", () => {
+  it("lists each kept answer's lookups, oldest first, in the history's own count", () => {
+    expect(
+      earlierLookups([
+        // Dropped from the history, so it is no answer here either.
+        {
+          role: "assistant",
+          text: "orphan",
+          toolCalls: [{ name: "get_days", input: {} }],
+        },
+        { role: "user", text: "Wartezeit bei F.L.Y.?", toolCalls: null },
+        {
+          role: "assistant",
+          text: "15 Minuten, der QUICK Pass Ultimate kostet 80 €.",
+          toolCalls: [
+            { name: "get_park_live", input: { park: "phantasialand" } },
+            { name: "get_ride", input: { ride: "F.L.Y." } },
+            { name: "get_ride", input: { ride: "F.L.Y." } },
+            { name: "suggest_replies", input: { replies: ["Taron?"] } },
+          ],
+        },
+        { role: "user", text: "Wie geht's?", toolCalls: null },
+        { role: "assistant", text: "Bestens!", toolCalls: null },
+        { role: "user", text: "Und Taron?", toolCalls: null },
+        {
+          role: "assistant",
+          text: "40 Minuten.",
+          toolCalls: [
+            { name: "get_ride", input: { ride: "Taron" }, error: true },
+            { name: "interview", input: { op: "answered" } },
+            { name: "show_card", input: { kind: "ride" } },
+          ],
+        },
+        { role: "user", text: "Und Raik?", toolCalls: null },
+        {
+          role: "assistant",
+          text: "",
+          toolCalls: [{ name: "get_ride", input: {} }],
+        },
+      ]),
+    ).toEqual([["get_park_live", "get_ride"], [], ["show_card"]]);
+  });
+
+  it("goes into the uncached chat block, numbered as the answers stand", () => {
+    const context = chatContext({
+      locale: "de",
+      now: "2026-11-17 12:00",
+      timeZone: "Europe/Berlin",
+      pagePath: "/de",
+      earlierLookups: [["get_days"], [], ["get_ride", "get_hours"]],
+    });
+    expect(context).toContain("the lookups each was written from");
+    expect(context).toMatch(/^- answer 1: get_days$/m);
+    expect(context).toMatch(/^- answer 3: get_ride, get_hours$/m);
+    expect(context).not.toContain("answer 2");
+    expect(SYSTEM_PROMPT).not.toContain("- answer 1:");
+  });
+
+  it("says nothing when no earlier answer looked anything up", () => {
+    const context = chatContext({
+      locale: "de",
+      now: "2026-11-17 12:00",
+      timeZone: "Europe/Berlin",
+      pagePath: "/de",
+      earlierLookups: [[], []],
+    });
+    expect(context).not.toContain("lookups each was written from");
+  });
+
+  it("tells Parky his earlier figures stand", () => {
+    expect(SYSTEM_PROMPT).toContain(
+      "never say you gave one without looking it up",
+    );
   });
 });
 

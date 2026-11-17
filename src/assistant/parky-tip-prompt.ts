@@ -15,7 +15,7 @@ import { isoDateWeekday } from "../common/utils/date.util";
  * Bumped whenever the text below or the facts the input carries change; part of the cache key and
  * the response.
  */
-export const PARKY_TIP_PROMPT_VERSION = 4;
+export const PARKY_TIP_PROMPT_VERSION = 5;
 
 /** The longest tip served; a longer one is refused, not cut. */
 export const PARKY_TIP_MAX_CHARS = 160;
@@ -36,6 +36,7 @@ Your character: warm, cheerful, a bit cheeky, a theme-park nerd who wants nobody
 
 Write ONE sentence of at most ${PARKY_TIP_MAX_CHARS} characters about the visitor's chosen day at this park: is it a good day to go, and why.
 - Use only facts in the input: crowd level, opening hours, holidays, school holidays, events, weather. Never add a number, a ride, an event or a reason the input does not hold.
+- The weather's precipitation is how much falls over the whole day, in millimetres, never a chance of rain: say it in words (dry, a few drops, a wet day), never as a number or a percentage.
 - Name a day the way a friend would, counted from TODAY in the input: today, tomorrow, the weekday within the next six days ("on Saturday"), "next weekend" for the Saturday or Sunday after the coming one; further out, the weekday with the day and month ("Saturday, 5 December"). Never the year-month-day form and never "the chosen day".
 - When a neighbouring day in the input is clearly quieter (at least one crowd level lower and open), name it the same way.
 - TODAY's line may also say how busy the day has been so far; its crowd level is your forecast for the whole day. When the chosen day is today and the two differ, say both honestly, never the forecast alone.
@@ -111,8 +112,11 @@ function dayLine(
     );
   }
   if (day.weather?.basis === "forecast") {
+    // `rainChance` is the day's precipitation in mm despite its name; the honest field beside it
+    // is absent where nothing was measured, and then the line says nothing about rain.
+    const mm = day.weather.precipitationMm;
     facts.push(
-      `weather ${day.weather.condition}, ${Math.round(day.weather.tempMin)}-${Math.round(day.weather.tempMax)} °C, ${day.weather.rainChance}% rain`,
+      `weather ${day.weather.condition}, ${Math.round(day.weather.tempMin)}-${Math.round(day.weather.tempMax)} °C${mm == null ? "" : `, ${Math.round(mm * 10) / 10} mm precipitation over the day`}`,
     );
   }
   return facts.join("; ");

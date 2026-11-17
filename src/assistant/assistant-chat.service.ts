@@ -52,8 +52,12 @@ export const ASSISTANT_MODEL = "claude-haiku-5-5";
 const MAX_ROUNDS = 4;
 /** Earlier messages sent along: five questions and their answers. */
 const HISTORY_MESSAGES = 10;
-/** Thinking counts against it too; an answer is meant to be a few sentences. */
-const MAX_TOKENS = 2048;
+/**
+ * An answer's ceiling, thinking included. The answer itself is a few sentences, but the thinking
+ * of a day with several lookups can fill most of a tight cap, and a cap it reaches cuts the
+ * visible answer off mid-sentence. The eval asks with the same ceiling.
+ */
+export const ASSISTANT_MAX_TOKENS = 8192;
 /** Parks and rides of earlier answers named in "This chat", newest first. */
 const MAX_LOOKED_UP = 8;
 /**
@@ -112,6 +116,8 @@ export interface PreparedChat {
   history: Anthropic.MessageParam[];
   /** Park and ride ids earlier answers of this chat used, newest first. */
   lookedUp?: LookedUpId[];
+  /** The lookups behind each earlier answer the history holds, oldest first ({@link earlierLookups}). */
+  earlierLookups?: string[][];
   request: ChatRequest;
   /** The session's id, which the feedback limits are counted under. */
   session: string;
@@ -174,6 +180,7 @@ export class AssistantChatService {
     let conversation: AssistantConversation | null;
     let history: Anthropic.MessageParam[] = [];
     let lookedUp: LookedUpId[] = [];
+    let lookups: string[][] = [];
     let offered = false;
     if (request.conversationId) {
       conversation = await this.conversations.findOneBy({
@@ -194,6 +201,7 @@ export class AssistantChatService {
         return "junk";
       }
       history = historyOf(earlier);
+      lookups = earlierLookups(earlier);
       lookedUp = lookedUpIds(earlier);
       offered = answersOffer(request.message, earlier);
     } else {
@@ -211,6 +219,7 @@ export class AssistantChatService {
       conversation,
       history,
       lookedUp,
+      earlierLookups: lookups,
       request,
       session,
       sessionHash,
@@ -307,6 +316,7 @@ export class AssistantChatService {
           favorites: request.favorites,
           riddenCount: request.ridden?.length ?? 0,
           lookedUp: await this.namesOf(chat.lookedUp ?? []),
+          earlierLookups: chat.earlierLookups,
         }),
       },
     ];
@@ -353,7 +363,7 @@ export class AssistantChatService {
         const stream = client.messages.stream(
           {
             model: ASSISTANT_MODEL,
-            max_tokens: MAX_TOKENS,
+            max_tokens: ASSISTANT_MAX_TOKENS,
             output_config: { effort: "low" },
             system,
             tools: ASSISTANT_TOOL_PARAMS,
@@ -385,6 +395,11 @@ export class AssistantChatService {
         const reply = await stream.finalMessage();
         partial = null;
         addUsage(usage, reply.usage);
+        if (reply.stop_reason === "max_tokens") {
+          this.logger.warn(
+            `Answer cut at ${ASSISTANT_MAX_TOKENS} tokens in round ${round}`,
+          );
+        }
 
         const calls = reply.content.filter(
           (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
@@ -635,23 +650,55 @@ export function moveCacheBreakpoint(
 }
 
 /**
- * Stored messages as the API takes them: an answer that failed (empty text) is dropped with the
+ * The stored messages the history keeps: an answer that failed (empty text) is dropped with the
  * question before it, since an empty assistant turn would be refused and break the chat; the
  * history starts with a question.
  */
+function keptMessages<T extends Pick<AssistantMessage, "role" | "text">>(
+  messages: readonly T[],
+): T[] {
+  const kept: T[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && !message.text.trim()) {
+      if (kept[kept.length - 1]?.role === "user") kept.pop();
+      continue;
+    }
+    kept.push(message);
+  }
+  while (kept[0]?.role === "assistant") kept.shift();
+  return kept;
+}
+
+/** Stored messages as the API takes them ({@link keptMessages}). */
 export function historyOf(
   messages: Array<Pick<AssistantMessage, "role" | "text">>,
 ): Anthropic.MessageParam[] {
-  const history: Anthropic.MessageParam[] = [];
-  for (const message of messages) {
-    if (message.role === "assistant" && !message.text.trim()) {
-      if (history[history.length - 1]?.role === "user") history.pop();
-      continue;
-    }
-    history.push({ role: message.role, content: message.text });
-  }
-  while (history[0]?.role === "assistant") history.shift();
-  return history;
+  return keptMessages(messages).map((message) => ({
+    role: message.role,
+    content: message.text,
+  }));
+}
+
+/** Calls that look nothing up: the reply chips and the interview's bookkeeping. */
+const NOT_LOOKUPS = new Set([REPLIES_TOOL, "interview"]);
+
+/**
+ * The tools each earlier answer in the history called, one list per answer, oldest first, failed
+ * calls left out. The history carries the answers' text only, so without these Parky finds no
+ * source for his own figures and takes them back.
+ */
+export function earlierLookups(
+  messages: Array<Pick<AssistantMessage, "role" | "text" | "toolCalls">>,
+): string[][] {
+  return keptMessages(messages)
+    .filter((message) => message.role === "assistant")
+    .map((message) => [
+      ...new Set(
+        (message.toolCalls ?? [])
+          .filter((call) => !call.error && !NOT_LOOKUPS.has(call.name))
+          .map((call) => call.name),
+      ),
+    ]);
 }
 
 /** A park or ride id an earlier answer used. */

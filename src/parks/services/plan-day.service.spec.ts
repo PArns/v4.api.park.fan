@@ -17,6 +17,7 @@ import { Logger } from "@nestjs/common";
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { H5ProfileService } from "./h5-profile.service";
+import { ParkSeasonService } from "./park-season.service";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
 import { isoDateWeekday } from "../../common/utils/date.util";
@@ -92,6 +93,10 @@ describe("PlanDayService", () => {
   }>;
   let scheduledTimes: Map<string, string[]>;
   let patterns: Map<string, unknown>;
+  /** The park's curated seasons, as `forParkInRange` returns them. */
+  let parkSeasons: Array<Record<string, unknown>>;
+  /** Whether the season read throws rather than answering. */
+  let seasonsFail: boolean;
   /** The H5 profiles the composer reads (PAR-834); only read with the flag on. */
   let h5Profiles: Map<string, H5RideProfile>;
   let h5Fails: boolean;
@@ -242,6 +247,15 @@ describe("PlanDayService", () => {
         },
         { provide: H5ProfileService, useValue: { getProfiles: h5Mock } },
         {
+          provide: ParkSeasonService,
+          useValue: {
+            forParkInRange: jest.fn().mockImplementation(async () => {
+              if (seasonsFail) throw new Error("seasons down");
+              return parkSeasons;
+            }),
+          },
+        },
+        {
           provide: ShowsService,
           useValue: {
             findByParkId: jest.fn().mockImplementation(async () => parkShows),
@@ -264,6 +278,8 @@ describe("PlanDayService", () => {
     ];
     downRows = [];
     liveRows = [];
+    parkSeasons = [];
+    seasonsFail = false;
     feedLastReading = new Date();
     feedQueryFails = false;
     headlinerIds = new Set<string>();
@@ -2081,6 +2097,91 @@ describe("PlanDayService", () => {
 
       expect(plan.shows).toHaveLength(1);
       expect(plan.shows[0].source).toBe("projected");
+    });
+
+    describe("park seasons", () => {
+      const season = (
+        id: string,
+        kind: string,
+        startDate: string,
+        endDate: string,
+      ) => ({ id, kind, status: "confirmed", startDate, endDate, dates: null });
+
+      it("does not carry a show over a season's edge", async () => {
+        // The last Halloween Sunday's parade is no promise for the first
+        // Sunday of the winter season.
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        parkSeasons = [
+          season("halloween", "halloween", todayMinus(40), todayMinus(2)),
+          season("winter", "winter", todayMinus(1), dayFromToday(60)),
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(7) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([]);
+      });
+
+      it("does not carry a regular show into a season that starts later", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        parkSeasons = [
+          season("christmas", "christmas", dayFromToday(20), dayFromToday(40)),
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(7) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([]);
+      });
+
+      it("keeps projecting inside the season the show was seen in", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        parkSeasons = [
+          season("winter", "winter", todayMinus(20), dayFromToday(60)),
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(7) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
+      });
+
+      it("reads a maintenance window as no change of programme", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        parkSeasons = [
+          season("works", "maintenance", dayFromToday(25), dayFromToday(35)),
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(7) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
+      });
+
+      it("projects as before when the seasons cannot be read", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        seasonsFail = true;
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(7) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
+      });
     });
 
     it("prefers the operator's answer over its own projection", async () => {

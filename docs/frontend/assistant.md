@@ -43,6 +43,11 @@ cache breakpoint lists the parks and rides earlier answers looked up, newest fir
 each with its name and id (`lookedUpIds` reads the ids off the stored tool inputs — `park`,
 `parkId`, `parks`, `rideId`, `rideIds`, failed calls and slugs skipped — and two primary-key reads
 name them). Parky reuses the id instead of calling `search_parks` again on every turn.
+Below them it lists the tools behind each earlier answer, counted oldest first as the history
+counts its answers (`earlierLookups`, off the stored tool calls; failed calls, the reply chips and
+the interview left out). Without that list Parky found no source for his own figures in a later
+turn and took them back: the QUICK Pass Ultimate's 80 € for F.L.Y. once Taron's 12 € came in, a
+weekend's waits he called given "without looking" after `get_days` (PAR-1392).
 `location` is sent only after the visitor pressed „Standort teilen" in the chat and is rounded to
 two decimals here; it is never stored or logged. `opener` is the greeting the window opened with,
 sent with a chat's first question only: a greeting can name the visitor's next planned day or ask
@@ -120,8 +125,10 @@ those not over yet (`bookableHours`). The cards carry their times with the park'
 ## The answer loop
 
 `AssistantChatService.answer` streams Claude Haiku 5.5 (`ASSISTANT_MODEL`) with effort `low`, at
-most 2,048 tokens per round and four rounds; the last round may not call a tool, so it has to
-answer. The system prompt (`system-prompt.ts`, versioned) is cached together with the tool list;
+most `ASSISTANT_MAX_TOKENS` (8,192) per round and four rounds; the last round may not call a tool,
+so it has to answer. The thinking counts against that ceiling: at 2,048 it took most of a round with
+several lookups and cut the visible answer off mid-sentence. A round that still reaches it logs
+`Answer cut at …`. The system prompt (`system-prompt.ts`, versioned) is cached together with the tool list;
 date, page and language follow after the cache breakpoint. A second breakpoint moves with the
 conversation (`moveCacheBreakpoint`): each round marks its last block, the question or the newest
 tool results, so the next round reads the history and every earlier result from the cache at a
@@ -255,6 +262,10 @@ Version 56 renames "# Replies" to "# Calling suggest_replies" and says the chips
 call, never as a line, heading or list in the text; the interview line hands its ideas to the call
 instead of listing them after "Replies:", and a request to plan step by step starts the interview
 unless "This chat" shows one running ([reply chips](#reply-chips)).
+Version 61 (PAR-1392) says the figures of his earlier answers stand: he never takes one back or
+says he gave it without a lookup, and only a new lookup of the very same fact is worth a word, as
+news. A reply chip never only announces an answer to come ("I'll name the park"), and the
+park-day interview's chip is a real park by its name.
 
 The prompt runs in one order: who Parky is (park.fan itself), his story and park.fan's craft, his
 life, his character, how an answer reads, language, facts and sources, the
@@ -264,7 +275,7 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 101 short chats (`assistant-eval.fixtures.ts`: page, planner,
+`src/assistant/assistant-eval.ts` sends 103 short chats (`assistant-eval.fixtures.ts`: page, planner,
 trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
@@ -1158,7 +1169,13 @@ says ([absent facts](../rules/absent-facts.md)). The model gets a short `shown` 
 behind a data key like `/calendar`, answers the calendar's day dialog:
 
 ```json
-{ "date": "2026-12-05", "verdict": "good", "crowdLevel": "low", "text": "…", "promptVersion": 4 }
+{
+  "date": "2026-12-05",
+  "verdict": "good",
+  "crowdLevel": "low",
+  "text": "…",
+  "promptVersion": 4
+}
 ```
 
 - **`verdict`** is a rule, not the model's: the day's `crowdLevel`, `very_low`/`low` → `good`,
@@ -1180,8 +1197,12 @@ behind a data key like `/calendar`, answers the calendar's day dialog:
   shows under the forecast; where the two differ, the sentence says both instead of the forecast
   alone. The tips of the days around today leave it out (`soFarToday`, prompt version 4): it moves
   during the day, and in their input and key it would have up to four dates written again in six
-  languages with every move. A sentence with a line break, a link or Markdown, or over the cap is
-  not served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
+  languages with every move. The weather line gives the day's precipitation as
+  `… mm precipitation over the day` from `precipitationMm`, and nothing where none was measured;
+  the prompt says to put it in words, never as a number or a percentage (version 5, PAR-1392).
+  Before, it wrote the legacy `rainChance`, which is millimetres too, with `% rain` behind it, and
+  the tips read 47.5 mm as "47,5 % Regenchance". A sentence with a line break, a link or Markdown,
+  or over the cap is not served. The prompt is `parky-tip-prompt.ts`, versioned on its own (`PARKY_TIP_PROMPT_VERSION`).
 - **`today`** (optional) is the park's today as the caller counts it, for a caller that keys its
   own cache by it, as park.fan's relay does. One that is not the park's today answers 204 with
   `no-store`, before the calendar or the cache is read: a browser clock past the park's midnight
