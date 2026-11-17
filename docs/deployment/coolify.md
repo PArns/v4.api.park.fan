@@ -143,3 +143,27 @@ constant `GLOBAL_PREFIX = "v1"` (`src/common/swagger/swagger-config.ts`).
 - Do not deploy on Sunday between 19:10 and 20:05 UTC: a pcn-service restart during the weekly
   `REINDEX` of `pcn_forecasts_pkey` stalls PCN writes
   ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#weekly-reindex-of-the-pcn-primary-key)).
+
+### A deploy that changes what a model input means
+
+A trained model keeps the meaning it learned an input with. When a deploy changes what an existing
+input means, the models are served the new values with the old meaning until their next nightly
+training: CatBoost (06:00 UTC) and PCN (08:30) through their saved models, TFT (03:00) through the
+forecast its last run persisted, fitted on the old inputs. The release of 2026-11-17 is such a
+deploy: for parks in countries whose weekend is not Saturday and Sunday (Saudi Arabia, Qatar,
+Bahrain, Kuwait, Oman, Israel) CatBoost's weekday/weekend rolling features and TFT's and PCN's
+`is_weekend` now split on the country's weekend (PAR-1379), and CatBoost's `is_weekend` reads
+Saturday and Sunday for the UAE (PAR-1375). After such a deploy, train all three by hand once the
+new containers are up, one after the other:
+
+1. **TFT:** there is no admin route; in Bull Board add a `train-nf` job to `nf-training`
+   (about 40–50 minutes, [TFT](../ml/tft.md)).
+2. **CatBoost:** `POST /v1/admin/train-ml-model` (editor; `run_job` `train-ml-model` in the admin
+   MCP), 35–70 minutes ([CatBoost training](../ml/catboost-training.md)).
+3. **PCN:** `POST /v1/admin/pcn/train` (editor; `run_job` `pcn-train`), [PCN](../ml/pcn.md).
+
+Start each only when the one before has finished: Bull Board shows the job, and the rows `tft`,
+`catboost` and `pcn` of `GET /v1/admin/ml-overview` read each service's `/train/status`
+([ML overview](../ml/ml-overview.md)). Two trainings at once, or one next to a nightly
+training or the Linear runner (09:45, 13:45, 17:45 and 21:45 UTC), exceed the host's memory
+([container memory limits](container-memory-limits.md)), so pick a gap that fits all three.
