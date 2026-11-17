@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { cachedJson } from "../common/cache/redis-json-cache";
+import { safeJsonParse } from "../common/utils/json.util";
 import { parseDateRange } from "../common/utils/date-parsing.util";
 import {
   addIsoDays,
@@ -11,11 +12,11 @@ import {
 } from "../common/utils/date.util";
 import type { CrowdLevel } from "../common/types/crowd-level.type";
 import type { Park } from "../parks/entities/park.entity";
-import { CalendarService } from "../parks/services/calendar.service";
 import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
+import { CalendarService } from "../parks/services/calendar.service";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
-import type { AssistantLocale } from "./assistant-locales";
+import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
 import {
   PARKY_TIP_MAX_CHARS,
   PARKY_TIP_PROMPT_VERSION,
@@ -63,12 +64,36 @@ interface DayRating {
 }
 
 /** A day's crowd level and Parky's verdict on it; null for a closed or unrated day. */
-function rateDay(day: CalendarDay | undefined): DayRating | null {
+function rateDay(
+  day: Pick<CalendarDay, "status" | "crowdLevel"> | undefined,
+): DayRating | null {
   if (!day || day.status === "CLOSED" || day.crowdLevel === "closed") {
     return null;
   }
   const verdict = parkyVerdict(day.crowdLevel);
   return verdict ? { crowdLevel: day.crowdLevel, verdict } : null;
+}
+
+/** The stamp a calendar day gives its tip: none on a closed day, nor for `unknown`. */
+export function dayVerdict(
+  day: Pick<CalendarDay, "status" | "crowdLevel"> | undefined,
+): ParkyVerdict | null {
+  return rateDay(day)?.verdict ?? null;
+}
+
+/**
+ * Where a tip is kept. Today is in it: the sentence says "tomorrow" or "on Saturday" counted from
+ * it. The level too: once the forecast moves the day, the sentence about it is written again
+ * instead of saying the old level under the new one.
+ */
+function tipKey(
+  parkId: string,
+  today: string,
+  date: string,
+  crowdLevel: CrowdLevel,
+  locale: AssistantLocale,
+): string {
+  return `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${parkId}:${today}:${date}:${crowdLevel}:${locale}`;
 }
 
 /** The model's sentence as served, or null when it is not one plain line within the cap. */
@@ -118,10 +143,7 @@ export class ParkyTipService {
       if (!rating) return null;
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,
-        // Today in the key: the sentence says "tomorrow" or "on Saturday" counted from it. The
-        // level too: once the forecast moves the day, the sentence about it is written again
-        // instead of saying the old level under the new one.
-        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${today}:${date}:${rating.crowdLevel}:${locale}`,
+        tipKey(park.id, today, date, rating.crowdLevel, locale),
         CACHE_TTL_SECONDS,
         () => this.write(park, today, date, locale, rating, days),
       );
@@ -147,6 +169,48 @@ export class ParkyTipService {
     }
     const days = await this.daysAround(park, today, date);
     return parkyTipInput(park.name, park.timezone, today, date, days);
+  }
+
+  /**
+   * The days a tip for `date` is written from and the stamp it gets: what a tip asked for now
+   * would say. Reads the calendar only, never the model.
+   */
+  async readDay(
+    park: Park,
+    date: string,
+    today: string = getCurrentDateInTimezone(park.timezone),
+  ): Promise<{ days: CalendarDay[]; verdict: ParkyVerdict | null }> {
+    const days = await this.daysAround(park, today, date);
+    return {
+      days,
+      verdict: dayVerdict(days.find((d) => d.date === date)),
+    };
+  }
+
+  /**
+   * The stamps of the tips served now for `date`, per locale, from the cache; a locale without
+   * a kept tip is left out. A tip is kept under the day's level, so only the tips written for the
+   * level the calendar shows now can be served. Writes nothing and asks no model.
+   */
+  async servedVerdicts(
+    park: Park,
+    date: string,
+  ): Promise<Partial<Record<AssistantLocale, ParkyVerdict>>> {
+    const today = getCurrentDateInTimezone(park.timezone);
+    const days = await this.daysAround(park, today, date);
+    const rating = rateDay(days.find((d) => d.date === date));
+    if (!rating) return {};
+    const kept = await this.redis.mget(
+      ...ASSISTANT_LOCALES.map((locale) =>
+        tipKey(park.id, today, date, rating.crowdLevel, locale),
+      ),
+    );
+    const out: Partial<Record<AssistantLocale, ParkyVerdict>> = {};
+    ASSISTANT_LOCALES.forEach((locale, i) => {
+      const tip = safeJsonParse<ParkyTip | false>(kept[i]);
+      if (tip) out[locale] = tip.verdict;
+    });
+    return out;
   }
 
   /** The calendar's days around `date` that the prompt sees, from today on. */

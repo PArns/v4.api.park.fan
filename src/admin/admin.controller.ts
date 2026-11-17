@@ -10,6 +10,7 @@ import {
   Query,
   HttpException,
   BadRequestException,
+  NotFoundException,
   Logger,
   UseGuards,
   UseInterceptors,
@@ -61,9 +62,16 @@ import { MlOverviewService } from "./ml-overview.service";
 import { AdminQueueStatusService } from "./admin-queue-status.service";
 import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
-import { AdminMinRole } from "./auth/admin-auth.decorators";
+import { AdminMinRole, CurrentAdmin } from "./auth/admin-auth.decorators";
+import type { AdminPrincipal } from "./auth/admin-principal";
+import { McpToolError } from "../mcp/mcp-tool";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
+import {
+  DISPLAY_CONSISTENCY_DEFAULT_DAYS,
+  DISPLAY_CONSISTENCY_MAX_DAYS,
+  DisplayConsistencyService,
+} from "../monitoring/display-consistency/display-consistency.service";
 import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
 import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { ISO_DATE_PATTERN } from "../common/utils/date.util";
@@ -186,6 +194,7 @@ export class AdminController {
     private readonly modelComparison: ModelComparisonService,
     private readonly mlOverview: MlOverviewService,
     private readonly queueStatus: AdminQueueStatusService,
+    private readonly displayConsistency: DisplayConsistencyService,
   ) {}
 
   /**
@@ -348,6 +357,70 @@ export class AdminController {
   async getDataQuality(@Query("windowDays") windowDays?: string) {
     const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
     return this.dataQualityMonitor.report(days);
+  }
+
+  /**
+   * The last daily display-consistency run: per park the mismatches between
+   * surfaces that must show the same value, and each flagged park's details.
+   * docs/analytics/display-consistency.md.
+   */
+  @Get("display-consistency")
+  @ApiOperation({
+    summary:
+      "The last daily display-consistency run: parks whose surfaces disagree about a park-day",
+  })
+  async getDisplayConsistency() {
+    const summary = await this.displayConsistency.latestSummary();
+    if (!summary) return { summary: null, parks: [] };
+    const flagged = summary.parks.filter(
+      (park) => park.mismatches > 0 || park.failures > 0,
+    );
+    const parks = await Promise.all(
+      flagged.map((park) => this.displayConsistency.latestForPark(park.id)),
+    );
+    return { summary, parks: parks.filter((park) => park !== null) };
+  }
+
+  /**
+   * Reads one park's days as every surface shows them now and compares them.
+   * Writes nothing: the caches it reads through are the ones the public
+   * endpoints fill on a miss.
+   */
+  @Get("display-consistency/check")
+  @ApiOperation({
+    summary:
+      "Compare what every surface shows for a park's next days (calendar, best-days, /plan/day, trip region, park payload, Parky)",
+  })
+  @ApiQuery({
+    name: "park",
+    required: true,
+    description: "Park id, slug or name",
+  })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    description: `Days from today, today included (1–${DISPLAY_CONSISTENCY_MAX_DAYS}, default ${DISPLAY_CONSISTENCY_DEFAULT_DAYS})`,
+  })
+  async checkDisplayConsistency(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Query("park") reference?: string,
+    @Query("days") days?: string,
+  ) {
+    if (!reference?.trim()) throw new BadRequestException("park is required");
+    const span = Math.min(
+      Math.max(Math.trunc(Number(days)) || DISPLAY_CONSISTENCY_DEFAULT_DAYS, 1),
+      DISPLAY_CONSISTENCY_MAX_DAYS,
+    );
+    const found = await this.displayConsistency
+      .findPark(reference, admin)
+      .catch((error: unknown) => {
+        if (error instanceof McpToolError) {
+          throw new NotFoundException(`No park "${reference}"`);
+        }
+        throw error;
+      });
+    if ("ambiguous" in found) return found;
+    return this.displayConsistency.check(found, span);
   }
 
   /**

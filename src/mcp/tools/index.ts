@@ -15,6 +15,7 @@ import {
 } from "./model-comparison.tool";
 import { parkForecastTool } from "./park-forecast.tool";
 import { dataQualityTool } from "./data-quality.tool";
+import { displayConsistencyTool } from "./display-consistency.tool";
 import { duplicatesTool } from "./duplicates.tool";
 import { retirementCandidatesTool } from "./retirement-candidates.tool";
 import { auditLogTool } from "./audit-log.tool";
@@ -120,6 +121,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   modelComparisonTool,
   modelComparisonDayTool,
   dataQualityTool,
+  displayConsistencyTool,
   duplicatesTool,
   retirementCandidatesTool,
   auditLogTool,
