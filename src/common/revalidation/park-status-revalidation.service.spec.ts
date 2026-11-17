@@ -3,7 +3,10 @@ import { ParkStatusRevalidationService } from "./park-status-revalidation.servic
 import { RevalidationService } from "./revalidation.service";
 import {
   diffParkStatuses,
+  forecastCacheTags,
   parkCacheTag,
+  parkCalendarCacheTag,
+  scheduleCacheTags,
   type ParkOperatingStatus,
   type TaggablePark,
 } from "./park-status-transitions";
@@ -62,6 +65,30 @@ describe("parkCacheTag", () => {
 
   it("returns null for a park whose geocoding never completed (it has no frontend URL either)", () => {
     expect(parkCacheTag({ ...PHANTASIALAND, citySlug: null })).toBeNull();
+  });
+});
+
+describe("the calendar's tags", () => {
+  it("is the geo path under its own prefix, byte-identical to the frontend's twin", () => {
+    expect(parkCalendarCacheTag(PHANTASIALAND)).toBe(
+      "park-calendar:europe/germany/bruehl/phantasialand",
+    );
+    expect(parkCalendarCacheTag({ ...PHANTASIALAND, slug: null })).toBeNull();
+  });
+
+  it("rings best-days and the calendar together after a forecast warmup", () => {
+    expect(forecastCacheTags(DISNEYLAND_PARIS)).toEqual([
+      "best-days:disneyland-park",
+      "park-calendar:europe/france/paris/disneyland-park",
+    ]);
+  });
+
+  it("rings the park and its calendar after a schedule correction", () => {
+    expect(scheduleCacheTags(PHANTASIALAND)).toEqual([
+      "park:europe/germany/bruehl/phantasialand",
+      "park-calendar:europe/germany/bruehl/phantasialand",
+    ]);
+    expect(scheduleCacheTags({ ...PHANTASIALAND, citySlug: null })).toEqual([]);
   });
 });
 

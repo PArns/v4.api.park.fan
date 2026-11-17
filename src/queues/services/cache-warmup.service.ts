@@ -5,6 +5,8 @@ import {
   OnApplicationBootstrap,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
@@ -16,7 +18,11 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { BestDaysService } from "../../parks/services/best-days.service";
-import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import {
+  CDN_SETTLE_MS,
+  RevalidationService,
+} from "../../common/revalidation/revalidation.service";
+import { forecastCacheTags } from "../../common/revalidation/park-status-transitions";
 import { ParkStatusRevalidationService } from "../../common/revalidation/park-status-revalidation.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
@@ -102,6 +108,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     private readonly discoveryService: DiscoveryService,
     private readonly searchService: SearchService,
     private readonly popularityService: PopularityService,
+    @InjectQueue("manual-metadata") private readonly revalidateQueue: Queue,
   ) {}
 
   /**
@@ -459,7 +466,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // (slow-query log 2026-06-11). Serializing halves the peak IO pressure and
       // the pause lets queued user queries drain between parks; the only cost is
       // wall time on a 2×/day background job.
-      const revalidatedSlugs: string[] = [];
+      const rebuilt: Park[] = [];
       const warmedCount = await this.processBatch(
         parkIds,
         1,
@@ -472,37 +479,65 @@ export class CacheWarmupService implements OnApplicationBootstrap {
             },
           });
           if (!park) return false;
-          const slug = await this.warmupCalendarForPark(park, true);
-          if (slug) revalidatedSlugs.push(slug);
+          if (await this.warmupCalendarForPark(park, true)) rebuilt.push(park);
           return true;
         },
         2500,
       );
 
-      // One batched revalidation for every park whose best-days snapshot was just
-      // refreshed — the frontend drops its (day-long) best-days cache immediately
-      // instead of waiting out the TTL. No-op unless the webhook is configured.
-      if (revalidatedSlugs.length > 0) {
-        await this.revalidationService
-          .revalidateBestDays(revalidatedSlugs)
-          .catch((err) =>
-            this.logger.warn(
-              `Best-days revalidation failed: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            ),
-          );
-      }
+      if (rebuilt.length > 0) await this.announceForecast(rebuilt);
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s (best-days: ${revalidatedSlugs.length})`,
+        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s (best-days: ${rebuilt.length})`,
       );
       return warmedCount;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Calendar warmup failed: ${msg}`);
       return 0;
+    }
+  }
+
+  /**
+   * Tells the frontend the forecast moved, for every park whose best-days snapshot was just
+   * rebuilt: one batched call with each park's best-days and calendar tags (`forecastCacheTags`),
+   * so the calendar grid, a month page's summary, best-days and Parky's tip take the new forecast
+   * at the same moment rather than each at the end of its own window.
+   *
+   * `immediate`, because the calendar relays sit under an hour at Cloudflare, which no tag
+   * reaches: an old answer Vercel served once more after the ring would be kept there for that
+   * hour. Sent again after `CDN_SETTLE_MS` (docs/rules/publish-outside-in.md). No-op unless the
+   * webhook is configured.
+   */
+  private async announceForecast(parks: Park[]): Promise<void> {
+    const tags = parks.flatMap(forecastCacheTags);
+    await this.revalidationService
+      .revalidateTags(tags, { immediate: true })
+      .catch((err) =>
+        this.logger.warn(
+          `Forecast revalidation failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+    try {
+      await this.revalidateQueue.add(
+        "revalidate-tags",
+        { tags },
+        {
+          delay: CDN_SETTLE_MS,
+          removeOnComplete: true,
+          removeOnFail: true,
+          jobId: `revalidate-forecast-${Math.floor(Date.now() / 60_000)}`,
+        },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not schedule the post-CDN forecast revalidation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 

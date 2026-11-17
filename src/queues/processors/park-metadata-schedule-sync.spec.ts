@@ -178,13 +178,14 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     }
   });
 
-  it("revalidates each park's frontend tag once, in one call", async () => {
+  it("revalidates each park's page and calendar once, in one call", async () => {
     await processor.handleSyncSchedulesOnly({} as any);
 
     expect(revalidationService.revalidateTags).toHaveBeenCalledTimes(1);
     const [tags] = revalidationService.revalidateTags.mock.calls[0];
-    expect(tags).toHaveLength(3);
+    expect(tags).toHaveLength(6);
     expect(tags).toContain("park:europe/germany/bruehl/full");
+    expect(tags).toContain("park-calendar:europe/germany/bruehl/full");
   });
 
   it("skips a park without the Wiki source without asking the client", async () => {

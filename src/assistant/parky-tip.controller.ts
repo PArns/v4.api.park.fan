@@ -60,8 +60,10 @@ export class ParkyTipController {
     summary: "Parky's tip for one calendar day (geo)",
     description:
       "One sentence in Parky's voice about the day, written by Claude from the calendar's " +
-      "entries for the day and three days on each side, and a verdict from the day's crowd " +
-      "level (very_low/low good, moderate meh, high and above bad). 204 when there is nothing " +
+      "entries for the day and three days on each side, a verdict from the day's crowd " +
+      "level (very_low/low good, moderate meh, high and above bad), and that level " +
+      "(`crowdLevel`), as the calendar has it now: once the forecast moves the day, the " +
+      "sentence is written again for the new level. 204 when there is nothing " +
       `to say: a closed day, no forecast, a date before today or more than ${PARKY_TIP_HORIZON_DAYS} ` +
       "days ahead in park time, Parky switched off or the day's token budget spent. The " +
       "sentence names days counted from the park's today (today, tomorrow, Saturday). " +
@@ -80,7 +82,8 @@ export class ParkyTipController {
   @ApiQuery({ name: "locale", required: true, enum: ASSISTANT_LOCALES })
   @ApiResponse({
     status: 200,
-    description: "`{ date, verdict: good|meh|bad, text, promptVersion }`",
+    description:
+      "`{ date, verdict: good|meh|bad, crowdLevel: very_low|low|moderate|high|very_high|extreme, text, promptVersion }`",
   })
   @ApiResponse({ status: 204, description: "Nothing to say for this day" })
   @ApiResponse({ status: 400, description: "Invalid date or locale" })

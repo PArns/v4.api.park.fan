@@ -126,6 +126,7 @@ describe("ParkyTipService", () => {
     expect(first).toEqual({
       date,
       verdict: "good",
+      crowdLevel: "low",
       text: "Ruhiger Tag, perfekt für Taron! 🎢",
       promptVersion: PARKY_TIP_PROMPT_VERSION,
     });
@@ -134,7 +135,29 @@ describe("ParkyTipService", () => {
     const second = await service.tip(park, date, "de");
     expect(second).toEqual(first);
     expect(create).toHaveBeenCalledTimes(1);
-    expect(buildCalendarResponse).toHaveBeenCalledTimes(1);
+    // The calendar is read on every request: the day's level picks the cache entry.
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes a new sentence once the forecast moves the day's level", async () => {
+    await service.tip(park, date, "de");
+    buildCalendarResponse.mockResolvedValue({
+      days: [{ date, status: "OPERATING", crowdLevel: "very_low" }],
+    });
+    create.mockResolvedValue({
+      stop_reason: "end_turn",
+      usage: { input_tokens: 300, output_tokens: 40 },
+      content: [{ type: "text", text: "Fast leer, Taron ohne Anstehen!" }],
+    });
+
+    const moved = await service.tip(park, date, "de");
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(moved).toMatchObject({
+      verdict: "good",
+      crowdLevel: "very_low",
+      text: "Fast leer, Taron ohne Anstehen!",
+    });
   });
 
   it("counts the day from the park's today, which keys the cache", async () => {
@@ -148,7 +171,7 @@ describe("ParkyTipService", () => {
     );
     expect(request.system).toContain("tomorrow");
     expect([...store.keys()]).toEqual([
-      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:de`,
+      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:low:de`,
     ]);
   });
 
@@ -181,11 +204,16 @@ describe("ParkyTipService", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("says nothing on a closed day, past the horizon or while switched off", async () => {
+  it("says nothing on a closed or unrated day, past the horizon or while switched off", async () => {
     buildCalendarResponse.mockResolvedValue({
       days: [{ date, status: "CLOSED", crowdLevel: "closed" }],
     });
     expect(await service.tip(park, date, "de")).toBeNull();
+    buildCalendarResponse.mockResolvedValue({
+      days: [{ date, status: "OPERATING", crowdLevel: "unknown" }],
+    });
+    expect(await service.tip(park, date, "de")).toBeNull();
+    expect(store.size).toBe(0);
     expect(await service.tip(park, addIsoDays(today, -1), "de")).toBeNull();
     expect(await service.tip(park, addIsoDays(today, 91), "de")).toBeNull();
     settings.publicConfig.mockResolvedValue({

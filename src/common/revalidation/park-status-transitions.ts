@@ -1,5 +1,5 @@
 /**
- * Which parks just opened or closed, and the frontend cache tag for each.
+ * Which parks just opened or closed, and the frontend's cache tags for one park.
  *
  * Pure so it can be tested without Redis or a webhook; the service around it supplies the
  * previous snapshot and posts the tags.
@@ -28,9 +28,51 @@ export interface TaggablePark {
  * there is nothing to revalidate.
  */
 export function parkCacheTag(park: TaggablePark): string | null {
+  const geo = geoPath(park);
+  return geo && `park:${geo}`;
+}
+
+/**
+ * The frontend's cache tag for ONE park's calendar: the `/calendar` relay at Vercel's edge, a
+ * month page's summary and Parky's day tip relay. A tag of its own rather than `parkCacheTag`,
+ * which also drops the park's structure fetch that every park page reads, and goes out every 15
+ * minutes while a park is open.
+ *
+ * Hand-written twin of `parkCalendarCacheTag()` in the frontend (`lib/api/integrated-calendar.ts`).
+ * Null where `parkCacheTag` is.
+ */
+export function parkCalendarCacheTag(park: TaggablePark): string | null {
+  const geo = geoPath(park);
+  return geo && `park-calendar:${geo}`;
+}
+
+/**
+ * The tags a forecast warmup sends for one park: its best-days snapshot (`best-days:<slug>`, the
+ * tag the frontend's best-days reads carry) and its calendar, in the same call, so the calendar
+ * grid, a month page's summary and best-days move to the new forecast together.
+ */
+export function forecastCacheTags(park: TaggablePark): string[] {
+  const calendar = parkCalendarCacheTag(park);
+  return [
+    ...(park.slug ? [`best-days:${park.slug}`] : []),
+    ...(calendar ? [calendar] : []),
+  ];
+}
+
+/**
+ * The tags a schedule correction sends for one park: the park's own (today's hours on its page)
+ * and its calendar (the month grid and summary).
+ */
+export function scheduleCacheTags(park: TaggablePark): string[] {
+  return [parkCacheTag(park), parkCalendarCacheTag(park)].filter(
+    (tag): tag is string => tag !== null,
+  );
+}
+
+function geoPath(park: TaggablePark): string | null {
   const { continentSlug, countrySlug, citySlug, slug } = park;
   if (!continentSlug || !countrySlug || !citySlug || !slug) return null;
-  return `park:${continentSlug}/${countrySlug}/${citySlug}/${slug}`;
+  return `${continentSlug}/${countrySlug}/${citySlug}/${slug}`;
 }
 
 export interface ParkStatusDiff {

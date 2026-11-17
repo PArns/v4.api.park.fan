@@ -81,7 +81,30 @@ to refresh), popular CLOSED parks (top 50 by `PopularityService`), then the rest
 | --- | --- |
 | `live-cache-warmup`, after every wait-times run | parks, top 1000 attractions (`warmupTopAttractions`: user traffic plus the rides with the most `queue_data` rows in 7 days), occupancy, geo discovery, global and park statistics ([job queues](job-queues.md#the-wait-times-run-and-its-warmup)) |
 | `generate-hourly` predictions | parks opening in the next 12 h (`warmupUpcomingParks`) |
-| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −13…−1 where missing ([below](#what-the-trip-regions-add)) |
+| `warmup-calendar-daily`, twice a day ([schedule](job-queues.md#schedule-utc)) | calendar months −1…+3 (the `none` variant the frontend reads) for every park, after evicting the daily ML and month caches, and the `/best-days` snapshot; the morning run follows the CatBoost training so the calendar serves fresh predictions without the ~15 s cold path. A trip region's parks get −1…+13, their last forecast day, and the last-year snapshots of −13…−1 where missing ([below](#what-the-trip-regions-add)). Ends with [the forecast ring](#the-forecast-ring) |
+
+### The forecast ring
+
+The frontend shows one park-day on several surfaces: the calendar grid and its day dialog, a month
+page's summary, best-days with „Prognose heute", and Parky's day tip. Each is cached there for a
+day or more, so once a warmup moves the forecast they have to be told at the same moment, or the
+page contradicts itself. `CacheWarmupService.announceForecast` posts, for every park whose
+best-days snapshot the run rebuilt, both of its forecast tags (`forecastCacheTags` in
+`src/common/revalidation/park-status-transitions.ts`):
+
+- `best-days:<slug>`, the best-days snapshot's server read and its relay;
+- `park-calendar:<continent>/<country>/<city>/<slug>` (`parkCalendarCacheTag`), the `/calendar`
+  relay, a month page's summary and the tip relay. A tag of its own, because the park's own tag
+  (`parkCacheTag`) also drops the park's structure fetch that every park page reads.
+
+They go in one batched call (50 tags a POST, so some 400 tags for ~200 parks are eight POSTs) with
+`"expire": 0`, because the frontend keeps these relays an hour at Cloudflare, which no tag
+reaches: an old answer served once more at Vercel after the ring would stay at Cloudflare for that
+hour. The same tags go out again after `CDN_SETTLE_MS` through the `revalidate-tags` job
+([publish outside-in](../rules/publish-outside-in.md)). `sync-schedules-only` sends
+`park-calendar:` beside each park's own tag (`scheduleCacheTags`), since a schedule correction
+rewrites the same months. What each frontend surface does with the ring, and what it costs there:
+park.fan's `docs/architecture/caching-strategy.md#one-park-day-on-several-surfaces`.
 
 ### What the trip regions add
 

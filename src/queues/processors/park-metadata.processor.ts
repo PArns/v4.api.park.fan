@@ -22,7 +22,7 @@ import {
   captureParkPath,
 } from "../../parks/services/park-rename.service";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
-import { parkCacheTag } from "../../common/revalidation/park-status-transitions";
+import { scheduleCacheTags } from "../../common/revalidation/park-status-transitions";
 
 /**
  * Park Metadata Processor (Multi-Source)
@@ -1104,9 +1104,10 @@ export class ParkMetadataProcessor {
      * it is not survivable now that the calendar is cached for a day at every layer, because the
      * expiry would be the only thing that ever surfaced the correction.
      *
-     * So the job posts the same per-park tag the status-flip wire already uses. Collected here
-     * and sent once at the end rather than per park: 213 POSTs in a loop against one is a
-     * difference the frontend notices and this job does not.
+     * So the job posts the same per-park tag the status-flip wire already uses, and the park's
+     * calendar tag, which the calendar relay and the month summary carry. Collected here and sent
+     * once at the end rather than per park: 213 POSTs in a loop against one is a difference the
+     * frontend notices and this job does not.
      */
     const revalidatedTags: string[] = [];
 
@@ -1172,8 +1173,7 @@ export class ParkMetadataProcessor {
         await this.parksService.recordScheduleVersions(park.id, "themeparks");
         await this.parksService.invalidateCalendarMonthCache(park.id);
 
-        const tag = parkCacheTag(park);
-        if (tag) revalidatedTags.push(tag);
+        revalidatedTags.push(...scheduleCacheTags(park));
       } catch (error) {
         if (error instanceof ThemeParksRateLimitError) {
           // Never an error line: nothing is broken and nothing was lost. The
@@ -1192,8 +1192,7 @@ export class ParkMetadataProcessor {
             await this.parksService.fillScheduleGaps(park.id);
             await this.parksService.recordScheduleVersions(park.id, "gap_fill");
             await this.parksService.invalidateCalendarMonthCache(park.id);
-            const tag = parkCacheTag(park);
-            if (tag) revalidatedTags.push(tag);
+            revalidatedTags.push(...scheduleCacheTags(park));
           } catch (gapError) {
             this.logger.warn(
               `Gap fill after a throttled fetch failed for ${park.name}: ${gapError}`,
