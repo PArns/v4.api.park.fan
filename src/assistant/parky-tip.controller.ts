@@ -100,7 +100,8 @@ export class ParkyTipController {
   @ApiResponse({
     status: 200,
     description:
-      "`{ date, verdict: good|meh|bad, crowdLevel: very_low|low|moderate|high|very_high|extreme, text, promptVersion }`",
+      "`{ date, verdict: good|meh|bad, crowdLevel: very_low|low|moderate|high|very_high|extreme, todayCrowdLevel?, text, promptVersion }`; " +
+      "`todayCrowdLevel` only on the tip for today, the level so far its sentence was written from.",
   })
   @ApiResponse({ status: 204, description: "Nothing to say for this day" })
   @ApiResponse({ status: 400, description: "Invalid date, today or locale" })

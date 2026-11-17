@@ -259,6 +259,9 @@ describe("system prompt", () => {
       "CHOSEN DAY Wednesday 2026-11-18; crowd level low",
     );
     expect(context).toContain("Stand by this tip");
+    expect(context).toContain(
+      "If their question quotes a different sentence, your forecast has moved since",
+    );
     const withoutTip = chatContext({
       locale: "de",
       now: "2026-11-17 11:10",
@@ -270,9 +273,13 @@ describe("system prompt", () => {
         facts: "CHOSEN DAY Wednesday 2026-11-18; crowd level low",
       },
     });
-    expect(withoutTip).toContain("no tip for that day right now");
+    expect(withoutTip).toContain(
+      "You cannot see the tip they were shown, so you cannot check the sentence their question quotes: neither stand by it nor take it back.",
+    );
     expect(withoutTip).toContain("CHOSEN DAY Wednesday 2026-11-18");
+    expect(withoutTip).toContain("Answer from these facts");
     expect(withoutTip).not.toContain("Stand by");
+    expect(withoutTip).not.toContain("forecast has moved");
     expect(
       chatContext({
         locale: "de",

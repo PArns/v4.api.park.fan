@@ -5,13 +5,17 @@
  */
 
 import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
+import type { CrowdLevel } from "../common/types/crowd-level.type";
 import type { AssistantLocale } from "./assistant-locales";
 import { languageAddress, languageName } from "./system-prompt";
 import { formatInTimeZone } from "date-fns-tz";
 import { isoDateWeekday } from "../common/utils/date.util";
 
-/** Bumped whenever the text below changes; part of the cache key and the response. */
-export const PARKY_TIP_PROMPT_VERSION = 3;
+/**
+ * Bumped whenever the text below or the facts the input carries change; part of the cache key and
+ * the response.
+ */
+export const PARKY_TIP_PROMPT_VERSION = 4;
 
 /** The longest tip served; a longer one is refused, not cut. */
 export const PARKY_TIP_MAX_CHARS = 160;
@@ -41,9 +45,22 @@ Write ONE sentence of at most ${PARKY_TIP_MAX_CHARS} characters about the visito
 }
 
 /**
+ * Today's level measured so far, as the tip for `date` reads it: only the tip for today itself.
+ * The level moves during the day, and in the tips of the days around today it would have each of
+ * them written again in every language with every move.
+ */
+export function soFarToday(
+  day: CalendarDay,
+  date: string,
+  today: string,
+): CrowdLevel | undefined {
+  return date === today && day.date === today ? day.todayCrowdLevel : undefined;
+}
+
+/**
  * The input: the park, its today (park-local, the day "today" and "tomorrow" count from), the
- * chosen day and its neighbours, one line each. Today's line adds the level measured so far, which
- * the day dialog shows under the forecast.
+ * chosen day and its neighbours, one line each. On the tip for today, today's line adds the level
+ * measured so far, which the day dialog shows under the forecast (`soFarToday`).
  */
 export function parkyTipInput(
   parkName: string,
@@ -54,14 +71,18 @@ export function parkyTipInput(
 ): string {
   const lines = days.map(
     (day) =>
-      `${day.date === date ? "CHOSEN DAY " : ""}${dayLine(day, timezone, today)}`,
+      `${day.date === date ? "CHOSEN DAY " : ""}${dayLine(day, timezone, soFarToday(day, date, today))}`,
   );
   return `Park: ${parkName}\nTODAY at the park: ${WEEKDAYS[isoDateWeekday(today)]} ${today}\n${lines.join("\n")}`;
 }
 
 const levelWords = (level: string) => level.replace("_", " ");
 
-function dayLine(day: CalendarDay, timezone: string, today: string): string {
+function dayLine(
+  day: CalendarDay,
+  timezone: string,
+  soFar: CrowdLevel | undefined,
+): string {
   const clock = (instant: string) =>
     formatInTimeZone(new Date(instant), timezone, "HH:mm");
   const closed = day.status === "CLOSED" || day.crowdLevel === "closed";
@@ -69,8 +90,8 @@ function dayLine(day: CalendarDay, timezone: string, today: string): string {
     `${WEEKDAYS[isoDateWeekday(day.date)]} ${day.date}`,
     closed ? "closed" : `crowd level ${levelWords(day.crowdLevel)}`,
   ];
-  if (!closed && day.date === today && day.todayCrowdLevel) {
-    facts.push(`so far today: ${levelWords(day.todayCrowdLevel)}`);
+  if (!closed && soFar) {
+    facts.push(`so far today: ${levelWords(soFar)}`);
   }
   if (day.hours?.openingTime && day.hours.closingTime) {
     facts.push(
