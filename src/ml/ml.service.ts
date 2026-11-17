@@ -207,6 +207,17 @@ export function storedPredictionsCreatedAtCutoff(
   );
 }
 
+/**
+ * The park fields the serving merge and the season level read: the timezone
+ * for park-local days, the country and region for its days off.
+ */
+const SEASON_PARK_FIELDS = {
+  id: true,
+  timezone: true,
+  countryCode: true,
+  regionCode: true,
+} as const;
+
 @Injectable()
 export class MLService {
   private readonly logger = new Logger(MLService.name);
@@ -1309,10 +1320,7 @@ export class MLService {
       // local day, CatBoost an instant whose UTC date can be the day after.
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: {
-          id: true,
-          timezone: true,
-        },
+        select: SEASON_PARK_FIELDS,
       });
       const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
@@ -1327,7 +1335,7 @@ export class MLService {
           count: merged.length,
           modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
         },
-        tz,
+        park,
       );
     });
   }
@@ -1346,29 +1354,36 @@ export class MLService {
   private async withSeasonLevel(
     parkId: string,
     served: BulkPredictionResponseDto,
-    timezone?: string,
+    loaded?: Pick<Park, keyof typeof SEASON_PARK_FIELDS> | null,
   ): Promise<BulkPredictionResponseDto> {
     if (!MLService.seasonLevelEnabled() || served.predictions.length === 0) {
       return served;
     }
     try {
-      const tz =
-        timezone ??
-        (
-          await this.parkRepository.findOne({
-            where: { id: parkId },
-            select: { id: true, timezone: true },
-          })
-        )?.timezone ??
-        "UTC";
+      const park =
+        loaded ??
+        (await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: SEASON_PARK_FIELDS,
+        }));
+      const tz = park?.timezone || "UTC";
+      const countryCode = park?.countryCode;
       const cacheKey = `ml:season-level:v2:${parkId}`;
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)
         : await loadSeasonLevelInputs(
             this.parkRepository.manager.connection,
-            parkId,
-            tz,
+            {
+              id: parkId,
+              timezone: tz,
+              countryCode: countryCode ?? "",
+              regionCode: park?.regionCode ?? null,
+            },
+            async (from, to) =>
+              countryCode
+                ? this.holidaysService.getHolidays(countryCode, from, to)
+                : [],
           );
       if (!cached) {
         await this.redis
@@ -1379,6 +1394,7 @@ export class MLService {
         served.predictions,
         inputs.seasons,
         inputs.references,
+        inputs.daysOff,
         (p) => MLService.localDateOf(p.predictedTime, tz),
       );
       return { ...served, predictions };

@@ -1465,11 +1465,13 @@ describe("MLService", () => {
             dates: null,
           },
         ],
+        // 25 May 2026 is a Monday: a working day.
+        daysOff: [],
         references: [
           {
             seasonId: "s1",
             attractionId: "attr-1",
-            weekend: false,
+            dayOff: false,
             days: 5,
             level: 58,
           },
