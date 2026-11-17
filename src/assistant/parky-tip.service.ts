@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import Anthropic from "@anthropic-ai/sdk";
@@ -73,26 +74,40 @@ function rateDay(
   return verdict ? { crowdLevel: day.crowdLevel, verdict } : null;
 }
 
-/** The stamp a calendar day gives its tip: none on a closed day, nor for `unknown`. */
-export function dayVerdict(
-  day: Pick<CalendarDay, "status" | "crowdLevel"> | undefined,
-): ParkyVerdict | null {
-  return rateDay(day)?.verdict ?? null;
+/** Whether a tip is written for `date`: from the park's today to the horizon. */
+function inHorizon(today: string, date: string): boolean {
+  return date >= today && date <= addIsoDays(today, PARKY_TIP_HORIZON_DAYS);
+}
+
+/**
+ * What the sentence may say about each day it reads: the day's status and crowd level, and on
+ * today the level so far. The sentence names a quieter neighbour, so a neighbour that moves must
+ * move the key as well as the chosen day. Weather stays out: it changes with every forecast run,
+ * and a sentence written again for each cloud would cost a model call each time.
+ */
+function daysDigest(days: CalendarDay[]): string {
+  const facts = days
+    .map(
+      (day) =>
+        `${day.date} ${day.status} ${day.crowdLevel} ${day.todayCrowdLevel ?? "-"}`,
+    )
+    .join("\n");
+  return createHash("sha256").update(facts).digest("base64url").slice(0, 16);
 }
 
 /**
  * Where a tip is kept. Today is in it: the sentence says "tomorrow" or "on Saturday" counted from
- * it. The level too: once the forecast moves the day, the sentence about it is written again
- * instead of saying the old level under the new one.
+ * it. The days it reads too (`daysDigest`): once the forecast moves one of them, the sentence is
+ * written again instead of standing for twelve hours over days that say something else.
  */
 function tipKey(
   parkId: string,
   today: string,
   date: string,
-  crowdLevel: CrowdLevel,
+  days: CalendarDay[],
   locale: AssistantLocale,
 ): string {
-  return `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${parkId}:${today}:${date}:${crowdLevel}:${locale}`;
+  return `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${parkId}:${today}:${date}:${daysDigest(days)}:${locale}`;
 }
 
 /** The model's sentence as served, or null when it is not one plain line within the cap. */
@@ -106,9 +121,9 @@ export function validParkyTip(raw: string): string | null {
 
 /**
  * Parky's one-sentence tip for a day of the crowd calendar. One model call per park, park-local
- * today, date, the day's crowd level, locale and prompt version every 12 hours; a sentence that
- * fails the checks is kept as `false` for as long, so a bad answer is not asked again on every
- * request.
+ * today, date, the levels of the days it reads, locale and prompt version every 12 hours; a
+ * sentence that fails the checks is kept as `false` for as long, so a bad answer is not asked
+ * again on every request.
  */
 @Injectable()
 export class ParkyTipService {
@@ -120,31 +135,67 @@ export class ParkyTipService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
-  /** Null when there is nothing to say: see the route's 204. */
+  /**
+   * Null when there is nothing to say: see the route's 204. `today` is the park's, read once by
+   * the caller that also compares it with the one the request names.
+   */
   async tip(
     park: Park,
     date: string,
     locale: AssistantLocale,
+    today: string = getCurrentDateInTimezone(park.timezone),
   ): Promise<ParkyTip | null> {
+    if (!inHorizon(today, date)) return null;
+    return this.served(park, today, date, locale);
+  }
+
+  /**
+   * What the chat gets when a visitor taps the tip: the sentence served now in `locale`, read
+   * through the cache like any request, and the day's facts as the tip reads them
+   * (`parkyTipInput`), from one read of the calendar. The sentence is the server's, never the one
+   * the browser says it showed; null where no tip is served now. Null outside the days a tip is
+   * written for.
+   */
+  async dayTip(
+    park: Park,
+    date: string,
+    locale: AssistantLocale,
+  ): Promise<{ text: string | null; facts: string } | null> {
     const today = getCurrentDateInTimezone(park.timezone);
-    if (date < today || date > addIsoDays(today, PARKY_TIP_HORIZON_DAYS)) {
-      return null;
-    }
+    if (!inHorizon(today, date)) return null;
+    const days = await this.daysAround(park, today, date);
+    const tip = await this.served(park, today, date, locale, days);
+    return {
+      text: tip?.text ?? null,
+      facts: parkyTipInput(park.name, park.timezone, today, date, days),
+    };
+  }
+
+  /**
+   * The tip kept for these days, written on a miss. The days are read before the cache because
+   * they are part of the key. They come from the month caches the calendar serves
+   * (`calendar:month:v2`), which the warmup keeps for this horizon, so a tip already written costs
+   * one MGET of one or two months; a current month past its two warm hours is rebuilt first, as
+   * for any calendar read.
+   */
+  private async served(
+    park: Park,
+    today: string,
+    date: string,
+    locale: AssistantLocale,
+    days?: CalendarDay[],
+  ): Promise<ParkyTip | null> {
     // Off, keyless or past the day's budget: no tip, cached ones included.
     if (!(await this.settings.publicConfig()).enabled) return null;
     try {
-      // Read before the cache, because the level is part of the key. The days come from the
-      // month caches the calendar serves (`calendar:month:v2`), which the warmup keeps for this
-      // horizon, so a tip already written costs one MGET of one or two months; a current month
-      // past its two warm hours is rebuilt first, as for any calendar read.
-      const days = await this.daysAround(park, today, date);
-      const rating = rateDay(days.find((d) => d.date === date));
+      const around = days ?? (await this.daysAround(park, today, date));
+      const rating = rateDay(around.find((d) => d.date === date));
       if (!rating) return null;
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,
-        tipKey(park.id, today, date, rating.crowdLevel, locale),
+        tipKey(park.id, today, date, around, locale),
         CACHE_TTL_SECONDS,
-        () => this.write(park, today, date, locale, rating, days),
+        () => this.write(park, today, date, locale, rating, around),
       );
       return tip || null;
     } catch (error) {
@@ -153,37 +204,6 @@ export class ParkyTipService {
       );
       return null;
     }
-  }
-
-  /**
-   * The day's facts as the tip reads them (`parkyTipInput`): the chosen day and up to
-   * {@link NEIGHBOUR_DAYS} on each side from the park's today, fresh from the calendar. The chat
-   * reads the same lines when a visitor taps the tip, so Parky argues from what he wrote from.
-   * Null outside the days a tip is written for.
-   */
-  async dayFacts(park: Park, date: string): Promise<string | null> {
-    const today = getCurrentDateInTimezone(park.timezone);
-    if (date < today || date > addIsoDays(today, PARKY_TIP_HORIZON_DAYS)) {
-      return null;
-    }
-    const days = await this.daysAround(park, today, date);
-    return parkyTipInput(park.name, park.timezone, today, date, days);
-  }
-
-  /**
-   * The days a tip for `date` is written from and the stamp it gets: what a tip asked for now
-   * would say. Reads the calendar only, never the model.
-   */
-  async readDay(
-    park: Park,
-    date: string,
-    today: string = getCurrentDateInTimezone(park.timezone),
-  ): Promise<{ days: CalendarDay[]; verdict: ParkyVerdict | null }> {
-    const days = await this.daysAround(park, today, date);
-    return {
-      days,
-      verdict: dayVerdict(days.find((d) => d.date === date)),
-    };
   }
 
   /** The calendar's days around `date` that the prompt sees, from today on. */

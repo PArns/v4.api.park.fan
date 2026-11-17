@@ -8,11 +8,15 @@ import type { Park } from "../parks/entities/park.entity";
 import type { AssistantSettingsService } from "./assistant-settings.service";
 import {
   ParkyTipService,
-  dayVerdict,
   parkyVerdict,
   validParkyTip,
 } from "./parky-tip.service";
-import { PARKY_TIP_PROMPT_VERSION } from "./parky-tip-prompt";
+import {
+  PARKY_TIP_PROMPT_VERSION,
+  parkyTipInput,
+  parkyTipSystemPrompt,
+} from "./parky-tip-prompt";
+import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
 
 const create = jest.fn();
 jest.mock("@anthropic-ai/sdk", () => {
@@ -37,18 +41,6 @@ describe("parkyVerdict", () => {
   });
 });
 
-describe("dayVerdict", () => {
-  it("stamps an open day by its level and gives a closed day none", () => {
-    expect(dayVerdict({ status: "OPERATING", crowdLevel: "high" })).toBe("bad");
-    expect(dayVerdict({ status: "UNKNOWN", crowdLevel: "low" })).toBe("good");
-    expect(dayVerdict({ status: "CLOSED", crowdLevel: "low" })).toBeNull();
-    expect(dayVerdict({ status: "OPERATING", crowdLevel: "unknown" })).toBe(
-      null,
-    );
-    expect(dayVerdict(undefined)).toBeNull();
-  });
-});
-
 describe("validParkyTip", () => {
   it("keeps one plain sentence and drops wrapping quotes", () => {
     expect(
@@ -68,6 +60,57 @@ describe("validParkyTip", () => {
 
   it("counts an emoji as one character", () => {
     expect(validParkyTip(`${"a".repeat(159)}🎢`)).not.toBeNull();
+  });
+});
+
+describe("parkyTipInput", () => {
+  const day = (date: string, extra: Partial<CalendarDay> = {}) =>
+    ({
+      date,
+      status: "OPERATING",
+      crowdLevel: "high",
+      ...extra,
+    }) as CalendarDay;
+
+  it("tells today's level so far beside its forecast, on today's line only", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-17",
+      [
+        day("2026-11-17", { todayCrowdLevel: "very_low" }),
+        day("2026-11-18", { todayCrowdLevel: "low" }),
+      ],
+    );
+    expect(input).toContain(
+      "CHOSEN DAY Tuesday 2026-11-17; crowd level high; so far today: very low",
+    );
+    expect(input).toMatch(/^Wednesday 2026-11-18; crowd level high$/m);
+    expect(input.match(/so far today/g)).toHaveLength(1);
+  });
+
+  it("says nothing so far on a closed today", () => {
+    const input = parkyTipInput(
+      "Phantasialand",
+      "Europe/Berlin",
+      "2026-11-17",
+      "2026-11-18",
+      [
+        day("2026-11-17", {
+          status: "CLOSED",
+          crowdLevel: "closed",
+          todayCrowdLevel: "low",
+        }),
+      ],
+    );
+    expect(input).not.toContain("so far");
+  });
+
+  it("asks for both levels when today so far and its forecast differ", () => {
+    expect(parkyTipSystemPrompt("de")).toMatch(
+      /so far.*When the chosen day is today and the two differ, say both honestly/,
+    );
   });
 });
 
@@ -187,16 +230,148 @@ describe("ParkyTipService", () => {
     );
     expect(request.system).toContain("tomorrow");
     expect([...store.keys()]).toEqual([
-      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:low:de`,
+      expect.stringMatching(
+        new RegExp(
+          `^parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:[\\w-]{16}:de$`,
+        ),
+      ),
     ]);
   });
 
-  it("hands the chat the facts the tip reads, from the park's today on", async () => {
-    const facts = await service.dayFacts(park, date);
-    expect(facts).toContain(`TODAY at the park:`);
-    expect(facts).toContain(`CHOSEN DAY`);
+  it("writes from the today its caller read", async () => {
+    const tomorrow = addIsoDays(today, 1);
+    await service.tip(park, date, "de", tomorrow);
+
+    const [request] = create.mock.calls[0] as [
+      { messages: { content: string }[] },
+    ];
+    expect(request.messages[0].content).toMatch(
+      new RegExp(`^TODAY at the park: [A-Z][a-z]+day ${tomorrow}$`, "m"),
+    );
+    expect([...store.keys()][0]).toContain(`:${tomorrow}:${date}:`);
+  });
+
+  it("writes a new sentence once a neighbouring day it reads moves", async () => {
+    await service.tip(park, date, "de");
+    // The day after went from busy to quiet: a sentence steering away from it is wrong now.
+    buildCalendarResponse.mockResolvedValue({
+      days: [
+        { date, status: "OPERATING", crowdLevel: "low" },
+        {
+          date: addIsoDays(date, 1),
+          status: "OPERATING",
+          crowdLevel: "very_low",
+        },
+      ],
+    });
+
+    await service.tip(park, date, "de");
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(store.size).toBe(2);
+  });
+
+  it("writes a new sentence once a neighbour closes or opens", async () => {
+    await service.tip(park, date, "de");
+    buildCalendarResponse.mockResolvedValue({
+      days: [
+        { date, status: "OPERATING", crowdLevel: "low" },
+        { date: addIsoDays(date, 1), status: "CLOSED", crowdLevel: "closed" },
+      ],
+    });
+
+    await service.tip(park, date, "de");
+
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the sentence when only the weather moves", async () => {
+    const weather = (condition: string) => ({
+      basis: "forecast",
+      condition,
+      tempMin: 3,
+      tempMax: 9,
+      rainChance: 20,
+    });
+    buildCalendarResponse.mockResolvedValue({
+      days: [
+        {
+          date,
+          status: "OPERATING",
+          crowdLevel: "low",
+          weather: weather("cloudy"),
+        },
+      ],
+    });
+    await service.tip(park, date, "de");
+    buildCalendarResponse.mockResolvedValue({
+      days: [
+        {
+          date,
+          status: "OPERATING",
+          crowdLevel: "low",
+          weather: weather("rain"),
+        },
+      ],
+    });
+
+    await service.tip(park, date, "de");
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes today's sentence again once the level so far moves", async () => {
+    const day = (soFar: string) => ({
+      days: [
+        {
+          date: today,
+          status: "OPERATING",
+          crowdLevel: "high",
+          todayCrowdLevel: soFar,
+        },
+      ],
+    });
+    buildCalendarResponse.mockResolvedValue(day("very_low"));
+    await service.tip(park, today, "de");
+    const [request] = create.mock.calls[0] as [
+      { messages: { content: string }[] },
+    ];
+    expect(request.messages[0].content).toContain("so far today: very low");
+
+    buildCalendarResponse.mockResolvedValue(day("high"));
+    await service.tip(park, today, "de");
+
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands the chat the sentence it serves and the facts it read, from one calendar read", async () => {
+    const shown = await service.tip(park, date, "de");
+    buildCalendarResponse.mockClear();
+
+    const day = await service.dayTip(park, date, "de");
+
+    expect(day).toEqual({
+      text: shown?.text,
+      facts: expect.stringContaining("CHOSEN DAY"),
+    });
+    expect(day?.facts).toContain("TODAY at the park:");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(buildCalendarResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the chat the facts without a sentence where none is served", async () => {
+    settings.budgetSpent.mockResolvedValue(true);
+    expect(await service.dayTip(park, date, "fr")).toEqual({
+      text: null,
+      facts: expect.stringContaining("CHOSEN DAY"),
+    });
+    settings.publicConfig.mockResolvedValue({
+      enabled: false,
+      rolloutPercent: 0,
+    });
+    expect((await service.dayTip(park, date, "de"))?.text).toBeNull();
+    expect(await service.dayTip(park, addIsoDays(today, -1), "de")).toBeNull();
     expect(create).not.toHaveBeenCalled();
-    expect(await service.dayFacts(park, addIsoDays(today, -1))).toBeNull();
   });
 
   it("makes one model call for concurrent requests", async () => {
@@ -237,14 +412,6 @@ describe("ParkyTipService", () => {
       rolloutPercent: 0,
     });
     expect(await service.tip(park, addIsoDays(today, 2), "de")).toBeNull();
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("reads the stamp a tip would get now without asking the model", async () => {
-    expect(await service.readDay(park, addIsoDays(date, 1))).toEqual({
-      days: expect.any(Array),
-      verdict: "bad",
-    });
     expect(create).not.toHaveBeenCalled();
   });
 

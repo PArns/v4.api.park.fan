@@ -41,9 +41,9 @@ Today, tomorrow and the seven days after by default (`days`, 1–14), park-local
 The reads touch only the caches those endpoints and relays fill on a miss; nothing else is written.
 Parky's tools run in English.
 
-Parky's day tip is not read. Its stamp is `dayVerdict` of the calendar day, and since PAR-1380 a tip is
-kept under the day's level, so a tip read here can only repeat the calendar read beside it. Where a tip
-and its day dialog disagree is in park.fan's copies, and the tip's relay is not probed (below).
+Parky's day tip is not read. Its stamp comes from the calendar day, and a tip is kept under the levels
+of every day it reads (PAR-1384), so a tip read here can only repeat the calendar read beside it. Where a
+tip and its day dialog disagree is in park.fan's copies, and the tip's relay is not probed (below).
 
 ## The pairs and their rule
 

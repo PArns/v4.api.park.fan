@@ -343,8 +343,9 @@ export const chatRequestSchema = z.strictObject({
   trips: tripsSnapshotSchema.optional(),
   /**
    * The day tip the visitor tapped to open the chat, sent with that first question only: the park
-   * (its geographic path), the day and the sentence the dialog showed. Data, at most 400
-   * characters of it; the day's facts are read here, never taken from the browser.
+   * (its geographic path), the day and the sentence the dialog showed. The sentence is accepted,
+   * since park.fan sends it, and not used: the chat reads Parky's sentence and the day's facts
+   * itself, so nothing the browser sends becomes words he stands by.
    */
   dayTip: lenient(
     z.strictObject({
