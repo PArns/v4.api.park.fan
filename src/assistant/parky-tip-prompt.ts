@@ -11,7 +11,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { isoDateWeekday } from "../common/utils/date.util";
 
 /** Bumped whenever the text below changes; part of the cache key and the response. */
-export const PARKY_TIP_PROMPT_VERSION = 1;
+export const PARKY_TIP_PROMPT_VERSION = 2;
 
 /** The longest tip served; a longer one is refused, not cut. */
 export const PARKY_TIP_MAX_CHARS = 160;
@@ -32,16 +32,21 @@ Your character: warm, cheerful, a bit cheeky, a theme-park nerd who wants nobody
 
 Write ONE sentence of at most ${PARKY_TIP_MAX_CHARS} characters about the visitor's chosen day at this park: is it a good day to go, and why.
 - Use only facts in the input: crowd level, opening hours, holidays, school holidays, events, weather. Never add a number, a ride, an event or a reason the input does not hold.
-- When a neighbouring day in the input is clearly quieter (at least one crowd level lower and open), name it by its weekday.
+- Name a day the way a friend would, counted from TODAY in the input: today, tomorrow, the weekday within the next six days ("on Saturday"), "next weekend" for the Saturday or Sunday after the coming one; further out, the weekday with the day and month ("Saturday, 5 December"). Never the year-month-day form and never "the chosen day".
+- When a neighbouring day in the input is clearly quieter (at least one crowd level lower and open), name it the same way.
 - Be funny at most a little, with at most one emoji.
 - Plain text only: no Markdown, no links, no quotes around the sentence, no line breaks.
 - Write in ${languageName(locale)}. ${languageAddress(locale)}`;
 }
 
-/** The input: the park, the chosen day and its neighbours, one line each. */
+/**
+ * The input: the park, its today (park-local, the day "today" and "tomorrow" count from), the
+ * chosen day and its neighbours, one line each.
+ */
 export function parkyTipInput(
   parkName: string,
   timezone: string,
+  today: string,
   date: string,
   days: CalendarDay[],
 ): string {
@@ -49,7 +54,7 @@ export function parkyTipInput(
     (day) =>
       `${day.date === date ? "CHOSEN DAY " : ""}${dayLine(day, timezone)}`,
   );
-  return `Park: ${parkName}\n${lines.join("\n")}`;
+  return `Park: ${parkName}\nTODAY at the park: ${WEEKDAYS[isoDateWeekday(today)]} ${today}\n${lines.join("\n")}`;
 }
 
 function dayLine(day: CalendarDay, timezone: string): string {

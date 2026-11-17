@@ -137,6 +137,21 @@ describe("ParkyTipService", () => {
     expect(buildCalendarResponse).toHaveBeenCalledTimes(1);
   });
 
+  it("counts the day from the park's today, which keys the cache", async () => {
+    await service.tip(park, date, "de");
+
+    const [request] = create.mock.calls[0] as [
+      { system: string; messages: { content: string }[] },
+    ];
+    expect(request.messages[0].content).toMatch(
+      new RegExp(`^TODAY at the park: [A-Z][a-z]+day ${today}$`, "m"),
+    );
+    expect(request.system).toContain("tomorrow");
+    expect([...store.keys()]).toEqual([
+      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:de`,
+    ]);
+  });
+
   it("makes one model call for concurrent requests", async () => {
     await Promise.all([
       service.tip(park, date, "de"),

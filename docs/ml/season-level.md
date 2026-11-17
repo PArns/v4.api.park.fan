@@ -23,14 +23,39 @@ research of PAR-1342; this rule is what serves until then.
 |---|---|
 | Which seasons | kind `halloween`, `christmas`, `winter`, `summer_nights` or `special_event`; status `confirmed` or `announced` (`expected` is a projection, `cancelled` is not happening); today, park-local, inside its bounds |
 | Which days | the season's listed `dates` when it has them, else every day from `start_date` to `end_date` |
-| What is served | per ride, the **median of its measured daily P90** on the season's days already over: of the same day type (Saturday/Sunday or weekday) once that has 3 days, else of all its days once those are 3 |
-| Otherwise | the model's number, unchanged |
+| Which day types | a **day off** — the country's weekend (`getWeekendDaysForCountry`), a public holiday, a school-break day or a bridge day, by the calendar's own rule (`dayHolidayFlags`) — and a **working day**, every other day up to the park's last stored school-break row (`seasonDayTypes`) |
+| What is served | per ride, the **median of its measured daily P90** on the season's days already over, of the same day type, once that day type has 3 days |
+| Otherwise | the model's number, unchanged; always on an **unknown** day, a weekday past the school-break data that no other rule makes a day off |
+
+Holidays count with the weekend because that is how a season queues: a Tuesday of the Christmas
+break is a Saturday at Phantasialand, not a Tuesday in November. The holidays are the park's own
+(its country, nationwide or its region), the ones the calendar marks on a day; a neighbouring
+region's break is the calendar's `neighborHolidays`, a separate signal, and stays a working day
+here. Without the holiday rows the season level is not served at all, rather than serve every
+holiday a working day's level.
+
+A weekday past the region's last stored school-break row (`schoolCoverageThrough`, PAR-1049) could
+be a break day nobody has published yet, so it is unknown: it is measured into no reference and
+served the model's number. Counted as a working day, a break week past the data would have pulled
+every later working day of the season up to break level. In a country without stored school
+breaks every weekday that is not a public holiday is unknown, and only the days off get a season
+level.
+
+There is no level from all of a season's days together. A season's first days are mostly its
+opening weekend, so their median is a day off's: on 2026-11-17, with Saturday, Sunday and Monday
+of Phantasialand's Wintertraum measured, that median set every day of the season to "high" with
+a 45-minute headliner peak, every Tuesday included, after the Monday had measured 25 minutes
+(PAR-1375). A day type waits for its own three days instead: in a season that starts on a
+Saturday outside the school breaks, working days from the first Thursday and days off from the
+second Sunday.
 
 The measured day value is TFT's target statistic (`nf-service` `fetch_daily_peak_panel`): the P90
 of the day's OPERATING STANDBY waits of at least 5 minutes, without heartbeat rows, from at least
-three readings. Today is never a reference day. The two reads are in
-`src/ml/utils/season-level.query.ts`, cached per park for six hours (`ml:season-level:v1:{parkId}`);
-a failed read costs the season level, never the response.
+three readings. Today is never a reference day. The reads are in
+`src/ml/utils/season-level.query.ts` (the running seasons, the country's holiday rows from the
+first season day to the last, the school-break coverage, the measured days), cached per park and
+park-local date for six hours (`ml:season-level:v2:{parkId}:{date}`), so a new day's measurement
+is read on that day; a failed read costs the season level, never the response.
 
 A row the rule replaced is rounded like every served wait, carries `crowdLevel: "unknown"` (the
 calendar rates the day) and `modelVersion` `<model>+season`.
@@ -71,5 +96,18 @@ recommendation while it is shut.
   weekdays too. Listing its `dates` fixes it.
 - **Known limit:** an evening event with its own ticket (`separate_ticket`, `opens_at`) is treated
   like an all-day season.
+- **Known limit:** a weekday of a school break and a Saturday outside one share one level. A break
+  week can queue above an ordinary Saturday; telling the two apart needs three measured days of
+  each, more than most seasons have before their break starts.
+- **Known limit:** Friday is a working day. In an evening-driven season (Wintertraum, Halloween)
+  Fridays queue above Monday to Thursday, so a Friday is served the working days' median, which
+  reads it low. A third day type would need three measured Fridays first.
+- **Known limit:** every working day of a season carries one number and every day off another,
+  the median over all of the season's days of that type so far, so the level is flat within a
+  type and lags a season that builds (Advent): November's days outvote December's for weeks.
+  Scaling the model's own number by the measured-to-forecast ratio on the same type would keep
+  the model's day-to-day structure; it is not measured (PAR-1376).
+- **Known limit:** a park without a region code in a country whose school breaks are regional
+  reads only nationwide rows, so its break days are working days.
 - Not measured against the models; `scripts/ml-review/park-season-coverage.sql` and the `season`
   rows of the lead snapshots are where to read it.

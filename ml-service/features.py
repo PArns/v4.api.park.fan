@@ -111,8 +111,9 @@ def add_weekend_feature(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.Da
     """
     # No need for copy - adding simple column
 
-    # Middle East countries use Friday+Saturday as weekend
-    middle_east_countries = ["SA", "AE", "BH", "KW", "OM", "QA", "IL"]
+    # Middle East countries use Friday+Saturday as weekend. The UAE moved to
+    # Saturday+Sunday in 2022.
+    middle_east_countries = ["SA", "BH", "KW", "OM", "QA", "IL"]
 
     # Initialize is_weekend column
     df["is_weekend"] = 0

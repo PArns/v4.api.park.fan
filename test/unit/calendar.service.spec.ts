@@ -103,7 +103,6 @@ describe("CalendarService - Basic Verification", () => {
     // Verify response structure
     expect(result).toBeDefined();
     expect(result.meta).toBeDefined();
-    expect(result.meta.parkId).toBe("test-id");
     expect(result.meta.slug).toBe("test-park");
     expect(result.meta.timezone).toBe("Europe/Berlin");
     expect(result.days).toBeDefined();

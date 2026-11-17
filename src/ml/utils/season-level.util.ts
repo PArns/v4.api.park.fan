@@ -1,5 +1,12 @@
 import { roundServedWait } from "../pcn-serving.constants";
 import { PARK_SEASON_BINDING_KINDS } from "../../parks/entities/park-season.entity";
+import {
+  dayHolidayFlags,
+  type HolidayLocation,
+} from "../../common/utils/holiday.utils";
+import { isoDateWeekday } from "../../common/utils/date.util";
+import { getWeekendDaysForCountry } from "../../date-features/constants/weekend-rules.constant";
+import type { HolidayRow } from "../../holidays/holidays.service";
 
 /**
  * The season level (PAR-1343): on a day of a park season that is running, a
@@ -14,9 +21,18 @@ import { PARK_SEASON_BINDING_KINDS } from "../../parks/entities/park-season.enti
  *
  * What it is: the weekday average, restricted to the season. The reference is
  * the median of the ride's measured daily P90 (TFT's own target statistic)
- * over the season's days already observed — of the same day type (weekend or
- * weekday) when that has {@link MIN_SEASON_DAYS} days, else of all its days.
- * Fewer than that and the model's number stays.
+ * over the season's days already observed of the same day type, once that has
+ * {@link MIN_SEASON_DAYS} days. Fewer than that and the model's number stays.
+ *
+ * The two day types are a day off and a working day ({@link seasonDayTypes}):
+ * the country's weekend, a public holiday, a school-break day and a bridge
+ * day are days off. A Tuesday of the Christmas break queues like a Saturday,
+ * not like a Tuesday in November. A weekday past the park's school-holiday
+ * data is neither: it could be a break day.
+ *
+ * Never all of the season's days together: a season's first days are mostly
+ * its opening weekend, so their median is a day off's, and it would set every
+ * working day of the season to it.
  *
  * shortcut: a season's first days have no reference, because only the running
  * edition is read; read the previous edition of the same season once past
@@ -43,8 +59,8 @@ export interface RunningSeason {
 export interface SeasonReference {
   seasonId: string;
   attractionId: string;
-  /** true / false = that day type; null = all of the season's observed days. */
-  weekend: boolean | null;
+  /** Measured on days off (true) or on working days (false), {@link seasonDayTypes}. */
+  dayOff: boolean;
   /** Observed days behind `level`. */
   days: number;
   level: number;
@@ -78,22 +94,60 @@ export function seasonOn(
   );
 }
 
-/** Saturday or Sunday of a `YYYY-MM-DD`, read at noon UTC. */
-export function isWeekend(day: string): boolean {
-  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
-  return dow === 0 || dow === 6;
+/** A season's days by type; every day in neither list is a working day. */
+export interface SeasonDayTypes {
+  daysOff: string[];
+  /**
+   * Weekdays past the park's school-holiday data that no other rule makes a
+   * day off: a break there is not known (PAR-1049), so the day is neither
+   * measured into a reference nor served one.
+   */
+  unknownDays: string[];
+}
+
+/**
+ * The types of `dates` (park-local `YYYY-MM-DD`). Days off are the country's
+ * weekend (`getWeekendDaysForCountry`) and every public holiday, school-break
+ * day and bridge day by the calendar's own rule ({@link dayHolidayFlags}), so
+ * a season day is a day off exactly where the calendar marks one. `holidays`
+ * must reach three days past both ends of `dates`, as `dayHolidayFlags` reads
+ * them. `schoolThrough` is the last day the park's school breaks are stored
+ * for (`schoolCoverageThrough`), null when they are stored for none.
+ */
+export function seasonDayTypes(
+  dates: readonly string[],
+  holidays: HolidayRow[],
+  park: HolidayLocation,
+  schoolThrough: string | null,
+): SeasonDayTypes {
+  const weekend = getWeekendDaysForCountry(park.countryCode);
+  const flags = dayHolidayFlags([...dates], holidays, park);
+  const types: SeasonDayTypes = { daysOff: [], unknownDays: [] };
+  for (const day of dates) {
+    const flag = flags.get(day);
+    if (
+      weekend.includes(isoDateWeekday(day)) ||
+      (!!flag && (flag.isHoliday || flag.isSchoolVacation || flag.isBridgeDay))
+    ) {
+      types.daysOff.push(day);
+    } else if (schoolThrough === null || day > schoolThrough) {
+      types.unknownDays.push(day);
+    }
+  }
+  return types;
 }
 
 const referenceKey = (
   seasonId: string,
   attractionId: string,
-  weekend: boolean | null,
-) => `${seasonId}|${attractionId}|${weekend === null ? "all" : weekend}`;
+  dayOff: boolean,
+) => `${seasonId}|${attractionId}|${dayOff}`;
 
 /**
  * `predictions` with the season level on the rows it applies to; every other
  * row is returned as it came.
  *
+ * @param dayTypes - The season's days off and unknown days ({@link seasonDayTypes}).
  * @param dayOf - The row's park-local `YYYY-MM-DD`.
  */
 export function applySeasonLevel<
@@ -107,22 +161,24 @@ export function applySeasonLevel<
   predictions: T[],
   seasons: readonly RunningSeason[],
   references: readonly SeasonReference[],
+  dayTypes: SeasonDayTypes,
   dayOf: (prediction: T) => string,
 ): T[] {
   if (seasons.length === 0 || references.length === 0) return predictions;
   const byKey = new Map(
     references
       .filter((r) => r.days >= MIN_SEASON_DAYS)
-      .map((r) => [referenceKey(r.seasonId, r.attractionId, r.weekend), r]),
+      .map((r) => [referenceKey(r.seasonId, r.attractionId, r.dayOff), r]),
   );
+  const off = new Set(dayTypes.daysOff);
+  const unknown = new Set(dayTypes.unknownDays);
   return predictions.map((prediction) => {
     const day = dayOf(prediction);
     const season = seasonOn(seasons, day);
-    if (!season) return prediction;
-    const reference =
-      byKey.get(
-        referenceKey(season.id, prediction.attractionId, isWeekend(day)),
-      ) ?? byKey.get(referenceKey(season.id, prediction.attractionId, null));
+    if (!season || unknown.has(day)) return prediction;
+    const reference = byKey.get(
+      referenceKey(season.id, prediction.attractionId, off.has(day)),
+    );
     if (!reference) return prediction;
     return {
       ...prediction,

@@ -63,9 +63,9 @@ export function validParkyTip(raw: string): string | null {
 }
 
 /**
- * Parky's one-sentence tip for a day of the crowd calendar. One model call per park, date,
- * locale and prompt version every 12 hours; a sentence that fails the checks is kept as `false`
- * for as long, so a bad answer is not asked again on every request.
+ * Parky's one-sentence tip for a day of the crowd calendar. One model call per park, park-local
+ * today, date, locale and prompt version every 12 hours; a sentence that fails the checks is kept
+ * as `false` for as long, so a bad answer is not asked again on every request.
  */
 @Injectable()
 export class ParkyTipService {
@@ -92,7 +92,8 @@ export class ParkyTipService {
     try {
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,
-        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${date}:${locale}`,
+        // Today in the key: the sentence says "tomorrow" or "on Saturday" counted from it.
+        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${today}:${date}:${locale}`,
         CACHE_TTL_SECONDS,
         () => this.write(park, today, date, locale),
       );
@@ -137,7 +138,13 @@ export class ParkyTipService {
       messages: [
         {
           role: "user",
-          content: parkyTipInput(park.name, park.timezone, date, calendar.days),
+          content: parkyTipInput(
+            park.name,
+            park.timezone,
+            today,
+            date,
+            calendar.days,
+          ),
         },
       ],
     });

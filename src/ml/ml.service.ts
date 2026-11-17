@@ -14,6 +14,7 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../common/utils/date.util";
+import { schoolCoverageThrough } from "../common/utils/holiday.utils";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
@@ -206,6 +207,17 @@ export function storedPredictionsCreatedAtCutoff(
     now - (predictionType === "hourly" ? HOURLY_LOOKBACK_MS : 26 * 3_600_000),
   );
 }
+
+/**
+ * The park fields the serving merge and the season level read: the timezone
+ * for park-local days, the country and region for its days off.
+ */
+const SEASON_PARK_FIELDS = {
+  id: true,
+  timezone: true,
+  countryCode: true,
+  regionCode: true,
+} as const;
 
 @Injectable()
 export class MLService {
@@ -1309,10 +1321,7 @@ export class MLService {
       // local day, CatBoost an instant whose UTC date can be the day after.
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: {
-          id: true,
-          timezone: true,
-        },
+        select: SEASON_PARK_FIELDS,
       });
       const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
@@ -1327,7 +1336,7 @@ export class MLService {
           count: merged.length,
           modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
         },
-        tz,
+        park,
       );
     });
   }
@@ -1340,35 +1349,54 @@ export class MLService {
   /**
    * The served daily rows with the season level on the days of a running park
    * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
-   * move once a night, so they are cached for six hours; a failed read costs
-   * the season level, never the response.
+   * move once a night, so they are cached for six hours under the park-local
+   * date, which a new day's measurement joins; a failed read costs the season
+   * level, never the response.
    */
   private async withSeasonLevel(
     parkId: string,
     served: BulkPredictionResponseDto,
-    timezone?: string,
+    loaded?: Pick<Park, keyof typeof SEASON_PARK_FIELDS> | null,
   ): Promise<BulkPredictionResponseDto> {
     if (!MLService.seasonLevelEnabled() || served.predictions.length === 0) {
       return served;
     }
     try {
-      const tz =
-        timezone ??
-        (
-          await this.parkRepository.findOne({
-            where: { id: parkId },
-            select: { id: true, timezone: true },
-          })
-        )?.timezone ??
-        "UTC";
-      const cacheKey = `ml:season-level:v1:${parkId}`;
+      const park =
+        loaded ??
+        (await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: SEASON_PARK_FIELDS,
+        }));
+      const tz = park?.timezone || "UTC";
+      const countryCode = park?.countryCode;
+      const regionCode = park?.regionCode ?? null;
+      const cacheKey = `ml:season-level:v2:${parkId}:${getCurrentDateInTimezone(tz)}`;
       const cached = await this.redis.get(cacheKey);
       const inputs: SeasonLevelInputs = cached
         ? JSON.parse(cached)
         : await loadSeasonLevelInputs(
             this.parkRepository.manager.connection,
-            parkId,
-            tz,
+            {
+              id: parkId,
+              timezone: tz,
+              countryCode: countryCode ?? "",
+              regionCode,
+            },
+            {
+              holidays: async (from, to) =>
+                countryCode
+                  ? this.holidaysService.getHolidays(countryCode, from, to)
+                  : [],
+              schoolThrough: async () =>
+                countryCode
+                  ? schoolCoverageThrough(
+                      await this.holidaysService.getSchoolHolidayCoverage(),
+                      countryCode,
+                      regionCode,
+                    )
+                  : null,
+            },
           );
       if (!cached) {
         await this.redis
@@ -1379,6 +1407,7 @@ export class MLService {
         served.predictions,
         inputs.seasons,
         inputs.references,
+        inputs.dayTypes,
         (p) => MLService.localDateOf(p.predictedTime, tz),
       );
       return { ...served, predictions };

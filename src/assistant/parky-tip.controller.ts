@@ -18,7 +18,10 @@ import {
 } from "@nestjs/swagger";
 import type { Response } from "express";
 import { ApiPermission } from "../api-keys/api-permission.decorator";
-import { isRealIsoDate } from "../common/utils/date.util";
+import {
+  isRealIsoDate,
+  secondsUntilEndOfDayInTimezone,
+} from "../common/utils/date.util";
 import { ParksService } from "../parks/parks.service";
 import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
 import {
@@ -28,8 +31,19 @@ import {
 } from "./parky-tip.service";
 
 /** Six hours at the edge; the Redis copy lives twelve. */
-const TIP_CACHE_CONTROL =
-  "public, max-age=21600, s-maxage=21600, stale-while-revalidate=3600";
+/** Six hours, the tip's own window, where the park's day lasts that long. */
+const TIP_MAX_AGE_SECONDS = 21_600;
+
+/**
+ * The tip counts its day from the park's today ("tomorrow", "on Saturday"), so a cached copy must
+ * not outlive park-local midnight; only a window that ends before it may be served stale.
+ */
+export function tipCacheControl(secondsLeftToday: number): string {
+  const seconds = Math.min(TIP_MAX_AGE_SECONDS, secondsLeftToday);
+  return seconds < TIP_MAX_AGE_SECONDS
+    ? `public, max-age=${seconds}, s-maxage=${seconds}`
+    : `public, max-age=${seconds}, s-maxage=${seconds}, stale-while-revalidate=3600`;
+}
 
 /** Parky's tip for one day of a park's crowd calendar (docs/frontend/assistant.md). */
 @ApiTags("parks")
@@ -49,8 +63,9 @@ export class ParkyTipController {
       "entries for the day and three days on each side, and a verdict from the day's crowd " +
       "level (very_low/low good, moderate meh, high and above bad). 204 when there is nothing " +
       `to say: a closed day, no forecast, a date before today or more than ${PARKY_TIP_HORIZON_DAYS} ` +
-      "days ahead in park time, Parky switched off or the day's token budget spent. " +
-      "Cache: public, max-age=21600, stale-while-revalidate=3600.",
+      "days ahead in park time, Parky switched off or the day's token budget spent. The " +
+      "sentence names days counted from the park's today (today, tomorrow, Saturday). " +
+      "Cache: public, max-age=21600, stale-while-revalidate=3600, cut to park-local midnight.",
   })
   @ApiParam({ name: "continent", example: "europe" })
   @ApiParam({ name: "country", example: "germany" })
@@ -104,7 +119,10 @@ export class ParkyTipController {
       res.status(204);
       return undefined;
     }
-    res.setHeader("Cache-Control", TIP_CACHE_CONTROL);
+    res.setHeader(
+      "Cache-Control",
+      tipCacheControl(secondsUntilEndOfDayInTimezone(park.timezone)),
+    );
     return tip;
   }
 }

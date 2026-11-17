@@ -299,6 +299,7 @@ async function seasonsFor(
       opensAt: row.opensAt ?? null,
       closesAt: row.closesAt ?? null,
       attractionIds: null,
+      pausedAttractionIds: null,
       url: row.url ?? null,
       sourceUrl: row.sourceUrl ?? null,
       confirmedAt: null,
