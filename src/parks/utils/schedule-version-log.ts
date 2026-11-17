@@ -113,13 +113,14 @@ const DERIVE_SQL = `
  * A park's first call is the backfill: its versions take `known_from =
  * max(updatedAt)` of the day's rows and `asof_exact = false`, the conservative
  * proxy the design names (it can hide a window that was known earlier, never
- * show one that was not). Returns the number of versions written.
+ * show one that was not). Returns the park-local days it wrote a version for,
+ * so a caller can tell a change inside its own window from one outside it.
  */
 export async function recordScheduleDayVersions(
   manager: EntityManager,
   parkId: string,
   source: ScheduleVersionSource,
-): Promise<number> {
+): Promise<string[]> {
   return manager.transaction(async (tx) => {
     // One writer per park at a time, or two syncs both insert an open version.
     await tx.query(
@@ -143,7 +144,7 @@ export async function recordScheduleDayVersions(
       ).length === 0;
     const current: DerivedDay[] = await tx.query(DERIVE_SQL, [parkId]);
     const { changed, closeDays } = diffScheduleDays(open, current);
-    if (changed.length === 0) return 0;
+    if (changed.length === 0) return [];
 
     if (closeDays.length > 0) {
       await tx.query(
@@ -168,6 +169,6 @@ export async function recordScheduleDayVersions(
               last_updated timestamptz)`,
       [parkId, JSON.stringify(changed), firstLog, source],
     );
-    return changed.length;
+    return changed.map((c) => c.day);
   });
 }

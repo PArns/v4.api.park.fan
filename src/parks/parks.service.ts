@@ -2545,15 +2545,16 @@ export class ParksService {
   }
 
   /**
-   * Append the park's changed days to `schedule_day_versions` (PAR-1061).
-   * Call after the last schedule writer of a sync is done with the park.
-   * Never throws: the log is write-only, and a failed write must not fail the
-   * sync that served the schedule.
+   * Append the park's changed days to `schedule_day_versions` (PAR-1061) and
+   * answer those days (park-local `YYYY-MM-DD`). Call after the last schedule
+   * writer of a sync is done with the park. Never throws: the log is
+   * write-only, and a failed write must not fail the sync that served the
+   * schedule, so a failure answers no days.
    */
   async recordScheduleVersions(
     parkId: string,
     source: ScheduleVersionSource,
-  ): Promise<number> {
+  ): Promise<string[]> {
     try {
       return await recordScheduleDayVersions(
         this.scheduleRepository.manager,
@@ -2564,7 +2565,7 @@ export class ParksService {
       this.logger.warn(
         `Schedule version log not written for park ${parkId}: ${error}`,
       );
-      return 0;
+      return [];
     }
   }
 

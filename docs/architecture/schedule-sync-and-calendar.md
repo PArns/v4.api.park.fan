@@ -85,7 +85,9 @@ A cache hit carries no `RateLimit-*` header and never reaches the limiter. Rules
 - **Version log** (PAR-1061): after the last writer of a sync is done with a park (Wiki save + gap fill,
   the global gap fill, Wartezeiten, the live fallback) `ParksService.recordScheduleVersions(parkId,
   source)` appends changed park-days to `schedule_day_versions`; a withdrawn day becomes a `NONE`
-  version. Write-only ([covariate source](covariate-source.md)).
+  version. Write-only ([covariate source](covariate-source.md)). It answers the days it wrote, and
+  the Wiki sync rebuilds a park's best-days snapshot only when one lies in the snapshot's window
+  ([the forecast ring](caching-strategy.md#the-forecast-ring)).
 
 ### A silent park does not announce future operating days
 

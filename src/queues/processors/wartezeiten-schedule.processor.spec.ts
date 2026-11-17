@@ -17,7 +17,7 @@ describe("WartezeitenScheduleProcessor — Wiki-park fallback", () => {
     const parksService = {
       getTodaySchedule: jest.fn().mockResolvedValue(todayRows),
       saveScheduleData: jest.fn().mockResolvedValue(1),
-      recordScheduleVersions: jest.fn().mockResolvedValue(0),
+      recordScheduleVersions: jest.fn().mockResolvedValue([]),
     };
     const client = {
       getOpeningTimes: jest.fn().mockResolvedValue([

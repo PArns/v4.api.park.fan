@@ -110,13 +110,16 @@ hour. The same tags go out again after `CDN_SETTLE_MS` through the `revalidate-t
 
 `sync-schedules-only` (and the schedule step of `sync-all-parks`) sends `park-calendar:` beside each
 park's own tag (`scheduleCacheTags`), since a schedule correction rewrites the same months. The
-best-days snapshot is built from those months but kept apart from them, so for each park whose
-schedule the run changed (a day version written, `recordScheduleVersions`) the sync rebuilds the
-snapshot after the months are evicted and sends `best-days:<slug>` with the other tags; a park
-whose rebuild fails keeps its snapshot and is not rung for it. Rung without the rebuild, the
-frontend would fetch the same snapshot again, and „Prognose heute" kept forecasting a day the grid
-showed closed until the evening warmup. Each rebuild is a 90-day calendar build, so parks whose
-schedule did not change are left alone.
+best-days snapshot is built from those months but kept apart from them, so for each park where
+the run changed a day the snapshot covers (a day version written, `recordScheduleVersions`, for a
+day from the park's today to `BEST_DAYS_WINDOW` days on) the sync rebuilds the snapshot after the
+months are evicted and sends `best-days:<slug>` with the other tags; a park whose rebuild fails
+keeps its snapshot and is not rung for it. Rung without the rebuild, the frontend would fetch the
+same snapshot again, and „Prognose heute" kept forecasting a day the grid showed closed until the
+evening warmup. Each rebuild is a 90-day calendar build, so a change outside the window is left
+alone: the gap fill writes a version every day for the placeholder it adds half a year out, which
+sent nearly every park through a cold build, one after the other, at 03:00 and 15:00. Between two
+rebuilds the sync keeps the calendar warmup's pause between parks (`CALENDAR_WARMUP_PARK_PAUSE_MS`).
 
 What each frontend surface does with the ring, and what it costs there:
 park.fan's `docs/architecture/caching-strategy.md#one-park-day-on-several-surfaces`.
