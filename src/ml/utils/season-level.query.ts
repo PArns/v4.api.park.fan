@@ -44,6 +44,29 @@ export interface SeasonHolidaySource {
  * reference. A failed holiday read fails the whole load, because without it
  * every holiday would count as a working day.
  */
+/**
+ * The live parks with a season of the season level running on their own today, the same
+ * definition {@link loadSeasonLevelInputs} reads for one park.
+ */
+export async function parksWithRunningSeason(
+  dataSource: DataSource,
+): Promise<string[]> {
+  const rows = await queryWithLimits<Array<{ parkId: string }>>(
+    dataSource,
+    `SELECT DISTINCT s.park_id AS "parkId"
+       FROM park_seasons s
+       JOIN parks p ON p.id = s.park_id
+      WHERE s.kind = ANY($1::text[])
+        AND s.status = ANY($2::text[])
+        AND p.retired_at IS NULL
+        AND s.start_date <= (now() AT TIME ZONE p.timezone)::date
+        AND s.end_date >= (now() AT TIME ZONE p.timezone)::date`,
+    [[...SEASON_LEVEL_KINDS], [...SEASON_LEVEL_STATUSES]],
+    LIMITS,
+  );
+  return rows.map((row) => row.parkId);
+}
+
 export async function loadSeasonLevelInputs(
   dataSource: DataSource,
   park: HolidayLocation & { id: string },

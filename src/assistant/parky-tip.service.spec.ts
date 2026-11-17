@@ -8,6 +8,7 @@ import type { Park } from "../parks/entities/park.entity";
 import type { AssistantSettingsService } from "./assistant-settings.service";
 import {
   ParkyTipService,
+  dayVerdict,
   parkyVerdict,
   validParkyTip,
 } from "./parky-tip.service";
@@ -33,6 +34,18 @@ describe("parkyVerdict", () => {
     ["closed", null],
   ] as const)("%s is %s", (level, verdict) => {
     expect(parkyVerdict(level)).toBe(verdict);
+  });
+});
+
+describe("dayVerdict", () => {
+  it("stamps an open day by its level and gives a closed day none", () => {
+    expect(dayVerdict({ status: "OPERATING", crowdLevel: "high" })).toBe("bad");
+    expect(dayVerdict({ status: "UNKNOWN", crowdLevel: "low" })).toBe("good");
+    expect(dayVerdict({ status: "CLOSED", crowdLevel: "low" })).toBeNull();
+    expect(dayVerdict({ status: "OPERATING", crowdLevel: "unknown" })).toBe(
+      null,
+    );
+    expect(dayVerdict(undefined)).toBeNull();
   });
 });
 
@@ -91,6 +104,9 @@ describe("ParkyTipService", () => {
         store.set(key, value);
         return Promise.resolve("OK");
       }),
+      mget: jest.fn((...keys: string[]) =>
+        Promise.resolve(keys.map((key) => store.get(key) ?? null)),
+      ),
     } as unknown as Redis;
     settings = {
       publicConfig: jest
@@ -186,6 +202,27 @@ describe("ParkyTipService", () => {
     });
     expect(await service.tip(park, addIsoDays(today, 2), "de")).toBeNull();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("reads the stamp a tip would get now without asking the model", async () => {
+    expect(await service.readDay(park, addIsoDays(date, 1))).toEqual({
+      days: expect.any(Array),
+      verdict: "bad",
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("reads the stamps of the tips served now, per locale, and writes none", async () => {
+    await service.tip(park, date, "de");
+    store.set(
+      `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:park-1:${today}:${date}:fr`,
+      "false",
+    );
+    const writes = (redis.set as jest.Mock).mock.calls.length;
+
+    expect(await service.servedVerdicts(park, date)).toEqual({ de: "good" });
+    expect(redis.set).toHaveBeenCalledTimes(writes);
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache a spent budget", async () => {

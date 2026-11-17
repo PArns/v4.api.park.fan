@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { cachedJson } from "../common/cache/redis-json-cache";
+import { safeJsonParse } from "../common/utils/json.util";
 import { parseDateRange } from "../common/utils/date-parsing.util";
 import {
   addIsoDays,
@@ -11,10 +12,11 @@ import {
 } from "../common/utils/date.util";
 import type { CrowdLevel } from "../common/types/crowd-level.type";
 import type { Park } from "../parks/entities/park.entity";
+import type { CalendarDay } from "../parks/dto/integrated-calendar.dto";
 import { CalendarService } from "../parks/services/calendar.service";
 import { AssistantSettingsService } from "./assistant-settings.service";
 import { ASSISTANT_MODEL } from "./assistant-chat.service";
-import type { AssistantLocale } from "./assistant-locales";
+import { ASSISTANT_LOCALES, type AssistantLocale } from "./assistant-locales";
 import {
   PARKY_TIP_MAX_CHARS,
   PARKY_TIP_PROMPT_VERSION,
@@ -51,6 +53,23 @@ export function parkyVerdict(
   level: CrowdLevel | "closed",
 ): ParkyVerdict | null {
   return VERDICTS[level] ?? null;
+}
+
+/** The stamp a calendar day gives its tip: none on a closed day, nor for `unknown`. */
+export function dayVerdict(
+  day: Pick<CalendarDay, "status" | "crowdLevel"> | undefined,
+): ParkyVerdict | null {
+  return day && day.status !== "CLOSED" ? parkyVerdict(day.crowdLevel) : null;
+}
+
+/** Where a tip is kept. Today is in it: the sentence says "tomorrow" or "on Saturday" counted from it. */
+function tipKey(
+  parkId: string,
+  today: string,
+  date: string,
+  locale: AssistantLocale,
+): string {
+  return `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${parkId}:${today}:${date}:${locale}`;
 }
 
 /** The model's sentence as served, or null when it is not one plain line within the cap. */
@@ -92,8 +111,7 @@ export class ParkyTipService {
     try {
       const tip = await cachedJson<ParkyTip | false | null>(
         this.redis,
-        // Today in the key: the sentence says "tomorrow" or "on Saturday" counted from it.
-        `parky-tip:v${PARKY_TIP_PROMPT_VERSION}:${park.id}:${today}:${date}:${locale}`,
+        tipKey(park.id, today, date, locale),
         CACHE_TTL_SECONDS,
         () => this.write(park, today, date, locale),
       );
@@ -106,13 +124,15 @@ export class ParkyTipService {
     }
   }
 
-  /** `false` is kept in the cache, null is not. */
-  private async write(
+  /**
+   * The days a tip for `date` is written from and the stamp it gets: what a tip asked for now
+   * would say. Reads the calendar only, never the model.
+   */
+  async readDay(
     park: Park,
-    today: string,
     date: string,
-    locale: AssistantLocale,
-  ): Promise<ParkyTip | false | null> {
+    today: string = getCurrentDateInTimezone(park.timezone),
+  ): Promise<{ days: CalendarDay[]; verdict: ParkyVerdict | null }> {
     const from = addIsoDays(date, -NEIGHBOUR_DAYS);
     const { fromDate, toDate } = parseDateRange(
       from < today ? today : from,
@@ -122,9 +142,42 @@ export class ParkyTipService {
     const calendar = await this.moduleRef
       .get(CalendarService, { strict: false })
       .buildCalendarResponse(park, fromDate, toDate, "none");
-    const day = calendar.days.find((d) => d.date === date);
-    const verdict =
-      day && day.status !== "CLOSED" ? parkyVerdict(day.crowdLevel) : null;
+    return {
+      days: calendar.days,
+      verdict: dayVerdict(calendar.days.find((d) => d.date === date)),
+    };
+  }
+
+  /**
+   * The stamps of the tips served now for `date`, per locale, from the cache; a locale without
+   * a kept tip is left out. Writes nothing and asks no model.
+   */
+  async servedVerdicts(
+    park: Park,
+    date: string,
+  ): Promise<Partial<Record<AssistantLocale, ParkyVerdict>>> {
+    const today = getCurrentDateInTimezone(park.timezone);
+    const kept = await this.redis.mget(
+      ...ASSISTANT_LOCALES.map((locale) =>
+        tipKey(park.id, today, date, locale),
+      ),
+    );
+    const out: Partial<Record<AssistantLocale, ParkyVerdict>> = {};
+    ASSISTANT_LOCALES.forEach((locale, i) => {
+      const tip = safeJsonParse<ParkyTip | false>(kept[i]);
+      if (tip) out[locale] = tip.verdict;
+    });
+    return out;
+  }
+
+  /** `false` is kept in the cache, null is not. */
+  private async write(
+    park: Park,
+    today: string,
+    date: string,
+    locale: AssistantLocale,
+  ): Promise<ParkyTip | false | null> {
+    const { days, verdict } = await this.readDay(park, date, today);
     if (!verdict) return false;
 
     const apiKey = await this.settings.apiKey();
@@ -138,13 +191,7 @@ export class ParkyTipService {
       messages: [
         {
           role: "user",
-          content: parkyTipInput(
-            park.name,
-            park.timezone,
-            today,
-            date,
-            calendar.days,
-          ),
+          content: parkyTipInput(park.name, park.timezone, today, date, days),
         },
       ],
     });

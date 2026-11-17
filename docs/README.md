@@ -42,6 +42,7 @@ One line each in [CLAUDE.md](../CLAUDE.md#applies-to-every-change); every rule h
 ## Analytics
 
 - [crowd-levels](analytics/crowd-levels.md) — Crowd-level mechanism: formulas per surface, thresholds, baselines, jobs, ratability gate, calibration checks
+- [display-consistency](analytics/display-consistency.md) — Whether every surface showing a park-day agrees: the surfaces, the must-be-equal pairs, the daily run, reading a mismatch
 - [headliner-logic](analytics/headliner-logic.md) — How headliners are chosen (tiers, data filters, tier-1 cap) and what to check when a crowd level looks wrong
 - [sparklines](analytics/sparklines.md) — Today's per-ride wait-time arrays: content, which batch function to call, per-park effective start time
 - [smart-gaps](analytics/smart-gaps.md) — Opening hours and open/closed inferred from ride activity for parks without a schedule; isEstimated flags
