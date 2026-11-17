@@ -22,6 +22,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from weekend_rules import is_weekend
+
 # Feature channels stacked on the last axis of `features` [R, T, C], in this order.
 # wait_ffill = forward-filled context level (mirrors the nf backtest's y.ffill().fillna(0));
 # obs_mask   = 1 where a real operating wait existed (the loss target mask);
@@ -30,7 +32,8 @@ import pandas as pd
 # park_occ   = the SCALAR cross-ride busyness baseline (what the STGNN must beat);
 # dow sin·cos + is_weekend = day-of-week (docs/ml/pcn.md#tensor-channels-tensorchannels,
 #   known-future: weekday vs
-#   weekend day-shapes differ and a 2-day context can't tell Fri→Sat from Mon→Tue).
+#   weekend day-shapes differ and a 2-day context can't tell Fri→Sat from Mon→Tue);
+#   is_weekend is the park country's weekend (weekend_rules, Fri+Sat in the Gulf).
 #
 # EVOLUTION CONTRACT: only APPEND new channels. Checkpoints store the channel list
 # they were trained on and predict paths select those by name (TorchSeqModel.
@@ -170,9 +173,12 @@ def regularize(
     return pd.concat(out, ignore_index=True)
 
 
-def _slot_time_features(slots: pd.DatetimeIndex) -> dict[str, np.ndarray]:
+def _slot_time_features(
+    slots: pd.DatetimeIndex, country: str | None = None
+) -> dict[str, np.ndarray]:
     """Cyclic time-of-day at slot (96/day) and hour granularity, plus day-of-week —
-    same for every ride at a given slot, broadcast across nodes in the tensor."""
+    same for every ride at a given slot, broadcast across nodes in the tensor.
+    `country` is the park's ISO code; it decides which days are the weekend."""
     slot_of_day = slots.hour * 4 + slots.minute // 15  # 0..95
     h = slots.hour.to_numpy().astype(float)
     dow = slots.dayofweek.to_numpy().astype(float)     # 0=Mon .. 6=Sun
@@ -183,7 +189,7 @@ def _slot_time_features(slots: pd.DatetimeIndex) -> dict[str, np.ndarray]:
         "hour_cos": np.cos(2 * np.pi * h / 24),
         "dow_sin": np.sin(2 * np.pi * dow / 7),
         "dow_cos": np.cos(2 * np.pi * dow / 7),
-        "is_weekend": (dow >= 5).astype(float),
+        "is_weekend": is_weekend(dow, country).astype(float),
     }
 
 
@@ -195,9 +201,10 @@ def assemble_tensor(
     windows: pd.DataFrame | None = None,
     freq: str = "15min",
     min_wait: float = 5,
+    country: str | None = None,
 ) -> CrossRideTensor:
     """Pivot a regularized long panel into aligned [R, T] matrices + the [R, T, C]
-    feature tensor.
+    feature tensor. `country` (the park's ISO code) sets the weekend channel.
 
     `park_open[t]` heuristic (mirrors ml-service's operating-day rule at slot
     granularity): the park is open in slot t if at least `min_rides_open` rides report
@@ -249,7 +256,7 @@ def assemble_tensor(
         masked.sum(axis=0), den, out=np.zeros(T), where=den > 0
     )
 
-    tfeat = _slot_time_features(slots)
+    tfeat = _slot_time_features(slots, country)
     occ_bcast = np.broadcast_to(park_occ, (R, T))
     ch = {
         "wait_ffill": wait_ffill,
@@ -294,6 +301,7 @@ def build(
     readings: pd.DataFrame | None = None,
     windows: pd.DataFrame | None = None,
     min_wait: float = 5,
+    country: str | None = None,
 ) -> CrossRideTensor:
     """Convenience: regularize a raw park panel and assemble the tensor in one call.
     `readings`/`windows` switch the targets to the in-force truth (see assemble_tensor)."""
@@ -305,6 +313,7 @@ def build(
         windows=windows,
         freq=freq,
         min_wait=min_wait,
+        country=country,
     )
 
 

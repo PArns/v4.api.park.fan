@@ -38,6 +38,7 @@ from holiday_features import (
     holiday_fetch_window,
     parse_influencing_regions,
 )
+from weekend_rules import weekend_sql
 
 settings = get_settings()
 
@@ -288,8 +289,10 @@ def fetch_recent_rolling_stats(
     Mirrors features.add_historical_features, which the model is trained on:
     the series is one MEDIAN wait per UTC hour, each window is time-based and
     left-closed ([t - N days, t)), weekday/weekend split on the park-LOCAL
-    weekday (Mon-Fri vs Sat-Sun; it was the UTC one on both sides until PAR-1032) and the std is the sample std (pandas ddof=1, NULL
-    below two values — training's min_periods=2). Columns: attractionName,
+    weekday (it was the UTC one on both sides until PAR-1032) by the park
+    country's weekend, `weekend_rules` as in training's is_weekend (PAR-1379),
+    and the std is the sample std (pandas ddof=1, NULL below two values —
+    training's min_periods=2). Columns: attractionName,
     rolling_avg_7d/_weekday/_weekend/_28d/_90d, rolling_std_7d/_weekday/_weekend.
     A window with no data yields NaN; the caller applies its fallbacks.
     """
@@ -299,6 +302,8 @@ def fetch_recent_rolling_stats(
     query_end_time = _bucket_end_time(end_time)
     cache_key = f"{','.join(sorted(attraction_ids))}:{query_end_time}"
 
+    weekend = weekend_sql("country", "EXTRACT(DOW FROM ts AT TIME ZONE tz)")
+
     def read() -> pd.DataFrame:
         query = text(
             f"""
@@ -307,6 +312,7 @@ def fetch_recent_rolling_stats(
                     qd."attractionId"::text AS "attractionId",
                     a.name AS name,
                     p.timezone AS tz,
+                    p."countryCode" AS country,
                     DATE_TRUNC('hour', qd.timestamp) AS ts,
                     PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS w
                 FROM queue_data qd
@@ -319,7 +325,7 @@ def fetch_recent_rolling_stats(
                 WHERE {_SERVING_QUEUE_FILTER}
                     AND qd.timestamp >= CAST(:end_time AS timestamptz) - :days * INTERVAL '1 day'
                     AND qd.timestamp < :end_time
-                GROUP BY 1, 2, 3, 4
+                GROUP BY 1, 2, 3, 4, 5
             ),
             tagged AS (
                 SELECT
@@ -328,7 +334,7 @@ def fetch_recent_rolling_stats(
                     w,
                     ts >= CAST(:end_time AS timestamptz) - INTERVAL '7 days' AS in_7d,
                     ts >= CAST(:end_time AS timestamptz) - INTERVAL '28 days' AS in_28d,
-                    EXTRACT(ISODOW FROM ts AT TIME ZONE tz) >= 6 AS is_weekend
+                    {weekend} AS is_weekend
                 FROM hourly
             )
             SELECT
@@ -1796,7 +1802,9 @@ def create_prediction_features(
                     if len(future_indices) > 0:
                         ts_local_future = ts_local[beyond_live]
                         row_hours = ts_local_future.dt.hour.values
-                        row_is_weekends = (ts_local_future.dt.dayofweek >= 5).values
+                        row_is_weekends = (
+                            df.loc[future_indices, "is_weekend"].to_numpy() == 1
+                        )
 
                         # Start with default weekday/weekend rolling averages
                         hour_hists = np.where(

@@ -208,6 +208,125 @@ def test_rolling_weekday_split_uses_the_park_local_weekday():
     assert out["rolling_avg_weekday"].tolist()[1] == 0  # empty window -> 0
 
 
+# --- the country's weekend (PAR-1379) ----------------------------------------
+
+SA_PARK = "33333333-3333-3333-3333-333333333333"
+SA_RIDE = "44444444-4444-4444-4444-444444444444"
+SA_TZ = "Asia/Riyadh"  # UTC+3, no DST
+SA_METADATA = pd.concat(
+    [
+        PARKS_METADATA,
+        PARKS_METADATA.assign(
+            park_id=SA_PARK,
+            name="Fixture Park Riyadh",
+            country="SA",
+            region_code=None,
+            timezone=SA_TZ,
+        ),
+    ],
+    ignore_index=True,
+)
+SA_BASE = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)  # Thu 11:00 in Riyadh
+SA_TIMESTAMPS = [SA_BASE + timedelta(hours=h) for h in range(1, 49)]
+
+
+def _sa_rolling_stats():
+    return pd.DataFrame(
+        {
+            "attractionName": ["Fixture Coaster Riyadh"],
+            "rolling_avg_7d": [40.0],
+            "rolling_avg_weekday": [20.0],
+            "rolling_avg_weekend": [60.0],
+            "rolling_avg_28d": [40.0],
+            "rolling_avg_90d": [40.0],
+            "rolling_std_7d": [5.0],
+            "rolling_std_weekday": [4.0],
+            "rolling_std_weekend": [6.0],
+        },
+        index=pd.Index([SA_RIDE], name="attractionId"),
+    )
+
+
+@pytest.fixture
+def sa_served(monkeypatch):
+    _patch_serving(monkeypatch)
+    monkeypatch.setattr(predict, "fetch_parks_metadata", lambda: SA_METADATA)
+    monkeypatch.setattr(predict, "fetch_recent_wait_times", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(
+        predict, "fetch_recent_rolling_stats", lambda *a, **k: _sa_rolling_stats()
+    )
+    df = predict.create_prediction_features(
+        [SA_RIDE], [SA_PARK], SA_TIMESTAMPS, SA_BASE, feature_context={"baseTime": SA_BASE}
+    )
+    df["lead_h"] = (
+        pd.to_datetime(df["timestamp"], utc=True) - pd.Timestamp(SA_BASE)
+    ) / pd.Timedelta(hours=1)
+    return df
+
+
+def test_saudi_weekend_is_friday_and_saturday_on_both_paths(sa_served):
+    trained = features.add_time_features(
+        pd.DataFrame(
+            {"parkId": SA_PARK, "attractionId": SA_RIDE, "timestamp": SA_TIMESTAMPS}
+        ),
+        SA_METADATA,
+    )
+    assert trained["is_weekend"].tolist() == sa_served["is_weekend"].tolist()
+    by_date = sa_served.groupby(sa_served["local_timestamp"].dt.date)["is_weekend"].max()
+    assert by_date.to_dict() == {
+        date(2026, 7, 2): 0,  # Thursday
+        date(2026, 7, 3): 1,  # Friday
+        date(2026, 7, 4): 1,  # Saturday
+    }
+
+
+def test_saudi_rolling_split_follows_is_weekend_in_training():
+    """A Friday reading is a weekend reading, a Sunday one a weekday reading."""
+    rows = ["2026-07-03 07:00", "2026-07-05 07:00", "2026-07-06 07:00"]  # Fri, Sun, Mon
+    df = pd.DataFrame(
+        {
+            "parkId": SA_PARK,
+            "attractionId": SA_RIDE,
+            "timestamp": [pd.Timestamp(t, tz="UTC") for t in rows],
+            "waitTime": [50.0, 10.0, 30.0],
+        }
+    )
+    out = features.add_historical_features(features.add_time_features(df, SA_METADATA))
+    monday = out.iloc[2]
+    assert monday["rolling_avg_weekend"] == pytest.approx(50.0)
+    assert monday["rolling_avg_weekday"] == pytest.approx(10.0)
+
+
+def test_saudi_far_rows_read_the_weekend_mean_on_fridays(sa_served):
+    """Beyond the live lead avg_wait_last_1h is the weekday or weekend mean
+    (no reading a week back in this fixture), chosen by is_weekend."""
+    far = sa_served[sa_served["lead_h"] > 3]
+    expected = np.where(far["is_weekend"] == 1, 60.0, 20.0)
+    assert far["avg_wait_last_1h"].tolist() == pytest.approx(expected.tolist())
+    assert (far["is_weekend"] == 1).any() and (far["is_weekend"] == 0).any()
+
+
+def test_serving_rolling_stats_split_on_the_country_weekend(monkeypatch):
+    """The served rolling statistics tag a weekend hour with the same table."""
+    import weekend_rules
+
+    queries = []
+
+    class _Capture(_Db):
+        def execute(self, query, params=None):
+            queries.append(str(query))
+            return _Result(pd.DataFrame())
+
+    monkeypatch.setattr(predict, "get_db", lambda: _Capture())
+    predict.fetch_recent_rolling_stats(
+        [SA_RIDE], end_time=datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    )
+    (sql,) = queries
+    assert 'p."countryCode" AS country' in sql
+    assert weekend_rules.weekend_sql("country", "EXTRACT(DOW FROM ts AT TIME ZONE tz)") in sql
+    assert "ISODOW" not in sql
+
+
 # --- park_occupancy_pct leave-one-out ---------------------------------------
 
 

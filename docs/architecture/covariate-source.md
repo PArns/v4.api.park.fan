@@ -41,6 +41,7 @@ covariate comparison is an upper bound.
 | Neighbour holidays | per influencing region: 3 public slots + `neighbor_school_holiday_count` | one flag, public **or school** | counts | — | as ml-service |
 | School holiday | flag + coverage NaN | flag, distance, `school_holiday_known` (grid) | flag; `holidays_through` | — | as ml-service |
 | Bridge day | `holiday_utils.calculate_holiday_info` (weekday next to a public holiday) | Nager `bridge` rows | Mon before a Tue / Fri after a Thu holiday | — | `schedule_entries.isBridgeDay` |
+| Weekend | `weekend_rules.py` (the API's `CUSTOM_WEEKEND_RULES`, PAR-1379): `is_weekend` and the weekday/weekend rolling split | vendored `weekend_rules.py` | vendored `weekend_rules.py` | vendored `weekend_rules.py` | Saturday + Sunday |
 | Opening hours | `add_park_schedule_features`, `is_park_open` with a wait override | grid only: `sched_open` / `sched_closed` | `fetch_windows` | `fetch_operating_windows` (same SQL, own copy) | `windows`, masked by `updated_us` |
 | Events | `has_special_event`, `has_extra_hours` | — | — | — | drivers `ev` |
 | Weather, training | `weather_data` historical (observed) | all types, median fill | none | none | observed, flagged `ORACLE` |

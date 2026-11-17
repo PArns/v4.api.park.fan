@@ -15,6 +15,7 @@ from db import (
 )
 from holiday_utils import calculate_holiday_info
 from holiday_features import SchoolCoverage, assign_holiday_features
+import weekend_rules
 from config import get_settings
 from percentile_features import add_percentile_features
 from attraction_features import (
@@ -94,55 +95,22 @@ def convert_to_local_time(
 
 def add_weekend_feature(df: pd.DataFrame, parks_metadata: pd.DataFrame) -> pd.DataFrame:
     """
-    Add weekend feature based on region-specific weekend days.
-
-    Centralized function to avoid code duplication between training and inference.
-
-    Weekend definitions:
-    - Middle East (SA, AE, BH, KW, OM, QA, IL): Friday (4) + Saturday (5)
-    - Western countries: Saturday (5) + Sunday (6)
+    `is_weekend` from the park's country (`weekend_rules`, the API's table):
+    Friday + Saturday in Saudi Arabia, Qatar, Bahrain, Kuwait, Oman and Israel,
+    Saturday + Sunday where the table lists nothing. Training and serving both
+    call this.
 
     Args:
-        df: DataFrame with 'parkId' and 'day_of_week' columns
-        parks_metadata: DataFrame with park metadata including 'park_id' and 'country'
-
-    Returns:
-        DataFrame with 'is_weekend' column added
+        df: DataFrame with 'parkId' and 'day_of_week' (0 = Monday) columns
+        parks_metadata: DataFrame with 'park_id' and 'country'
     """
-    # No need for copy - adding simple column
-
-    # Middle East countries use Friday+Saturday as weekend. The UAE moved to
-    # Saturday+Sunday in 2022.
-    middle_east_countries = ["SA", "BH", "KW", "OM", "QA", "IL"]
-
-    # Initialize is_weekend column
-    df["is_weekend"] = 0
-
-    # For each park, determine weekend based on country
-    for park_id in df["parkId"].unique():
-        park_info = parks_metadata[parks_metadata["park_id"] == park_id]
-        park_mask = df["parkId"] == park_id
-
-        if not park_info.empty:
-            country = park_info.iloc[0]["country"]
-
-            if country in middle_east_countries:
-                # Middle East: Friday (4) + Saturday (5)
-                # dayofweek: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
-                df.loc[park_mask, "is_weekend"] = (
-                    df.loc[park_mask, "day_of_week"].isin([4, 5]).astype(int)
-                )
-            else:
-                # Western: Saturday (5) + Sunday (6)
-                df.loc[park_mask, "is_weekend"] = (
-                    df.loc[park_mask, "day_of_week"].isin([5, 6]).astype(int)
-                )
-        else:
-            # Default: Western weekend (Saturday + Sunday)
-            df.loc[park_mask, "is_weekend"] = (
-                df.loc[park_mask, "day_of_week"].isin([5, 6]).astype(int)
-            )
-
+    country_by_park = dict(
+        zip(parks_metadata["park_id"].astype(str), parks_metadata["country"])
+    )
+    country = df["parkId"].astype(str).map(country_by_park)
+    df["is_weekend"] = weekend_rules.is_weekend(
+        df["day_of_week"], country.to_numpy()
+    ).astype(int)
     return df
 
 
@@ -397,6 +365,20 @@ def _local_dayofweek(frame: pd.DataFrame) -> np.ndarray:
     return frame.index.dayofweek.values
 
 
+def weekend_rows(frame: pd.DataFrame) -> np.ndarray:
+    """Which rows of a frame fall on the park's weekend, as a bool array.
+
+    The frame's own `is_weekend` (the park's country, add_weekend_feature), so
+    every weekday/weekend split means what `is_weekend` means: a Saudi Friday
+    is a weekend reading (PAR-1379). A frame without the column (no
+    add_time_features) splits Saturday + Sunday on the park-local weekday
+    (`local_timestamp`, else a timestamp index).
+    """
+    if "is_weekend" in frame.columns:
+        return frame["is_weekend"].to_numpy() == 1
+    return weekend_rules.is_weekend(_local_dayofweek(frame))
+
+
 def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add historical wait time features
@@ -455,13 +437,9 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # rolling_avg_weekday / rolling_avg_weekend: 7-day rolling mean split by day type.
     # Helps the model distinguish a ride's typical weekday vs weekend load.
     _df_indexed_dow = df_indexed.copy()
-    _dow = _local_dayofweek(_df_indexed_dow)
-    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
-        _dow < 5  # Mon-Fri
-    )
-    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _dow >= 5  # Sat-Sun
-    )
+    _weekend = weekend_rows(_df_indexed_dow)
+    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(~_weekend)
+    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(_weekend)
     df["rolling_avg_weekday"] = (
         _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
         .rolling("7d", closed="left", min_periods=1)
@@ -631,13 +609,9 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Recreate weekday vs weekend masks
     _df_indexed_dow = df_indexed.copy()
-    _dow = _local_dayofweek(_df_indexed_dow)
-    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
-        _dow < 5  # Mon-Fri
-    )
-    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _dow >= 5  # Sat-Sun
-    )
+    _weekend = weekend_rows(_df_indexed_dow)
+    _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(~_weekend)
+    _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(_weekend)
 
     # Rolling std for weekday only
     df["volatility_weekday"] = (
