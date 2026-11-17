@@ -52,6 +52,7 @@ export class RopeDropProcessor {
             const computed = await this.analyticsService.computeRopeDropForPark(
               park.id,
               park.timezone || "UTC",
+              park.countryCode || "",
             );
             if (computed.size === 0) return { stored: 0, worth: 0 };
 

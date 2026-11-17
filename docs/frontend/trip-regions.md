@@ -442,7 +442,7 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
           "headlinerWait": 50, // minutes on the measured scale, see below; absent when unknown
           "basis": "forecast", // forecast | long_range | last_year | none
           "forecastWait": 45, // the served forecast, unscaled, as the park calendar shows it
-          "lastYearWait": 55, // the same weekday a year back, as measured
+          "lastYearWait": 55, // the matching day a year back, as measured
           "seasons": ["5b0c…"], // ids into `seasons`
         },
         "disneys-typhoon-lagoon-water-park": {
@@ -487,14 +487,14 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     ([long-range forecasting §2](../ml/long-range-forecasting.md)): TFT reads low, more so further
     out. They are replaced by factors measured per region from `prediction_lead_snapshots` once its
     30- and 60-day buckets hold enough served rows;
-  - past it (`basis: "last_year"`) the same weekday a year back as measured, **not** the long-range
+  - past it (`basis: "last_year"`) the matching day a year back as measured, **not** the long-range
     forecast: on production's answers of 2026-11-14 that level read 42 % below the same dates of
     2026 in Orlando and was almost flat
     ([long-range forecasting §9](../ml/long-range-forecasting.md)), so a day ranked on it won on its
     basis, not its date (PAR-1319);
   - past it with nothing measured a year back (`basis: "long_range"`: the park was closed, or not
-    yet measured, that day a year back; USJ before 20 April 2026), the long-range forecast, unscaled,
-    as the one figure there is.
+    yet measured, on the matching day and on every day it may move to; USJ before 20 April 2026),
+    the long-range forecast, unscaled, as the one figure there is.
 
   Call it "the big rides' wait at their busiest"; it is not a total, not the wait at every hour and
   not the longest single queue. An hourly curve of the same day (`/plan/day`) runs lower for most
@@ -504,7 +504,7 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`forecastWait`** is the served forecast for the day, unscaled and rounded, as the park's own
   calendar shows it: present wherever the calendar has a forecast (to about six months), so also on
   a `last_year` day past 60 days, where it is only shown, never ranked. **`lastYearWait`** is the
-  same weekday a year back as measured, wherever one exists, also on a `forecast` day. Both sit
+  matching day a year back as measured, wherever one exists, also on a `forecast` day. Both sit
   beside `headlinerWait` so a client can show either; neither ranks anything.
 - **`crowdLevel`** is the calendar's own level for that park (the day against that park's typical
   day), so two parks' levels say how each compares with itself, not with each other. Compare parks
@@ -514,18 +514,17 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
     `SERVING_TFT_DAYS`), its `headlinerWait` times the lead factor above, its `crowdLevel` the
     calendar's predicted level.
   - `last_year`: a day past 60 days, or one the forecast does not cover (past `forecastUntil`, or a
-    gap in it), that was not CLOSED a year back reads the same weekday a year earlier:
-    `lastYearDays(date).sameWeekday`, the day of that weekday nearest the same date a year back, at
-    most three days off. Its `crowdLevel` is the level the calendar measured that day (the
-    typical-day-peak rating of `calculateCrowdLevelForDate`), its `headlinerWait` the calendar's
-    recorded `headlinerForecast.avgWait` for it (`actual: true`): the mean over the park's headliners
-    of each ride's day-P90 standby wait, rounded to five. It is an estimate and must be labelled
-    "last year", never shown as a forecast. A moving holiday is not lined up: Easter 2026 was on
-    5 April, Easter 2027 is on 28 March.
+    gap in it), reads the matching day a year earlier
+    ([which day](#the-matching-day-a-year-back)), a day the park was open and measured on. Its `crowdLevel` is the level the calendar
+    measured that day (the typical-day-peak rating of `calculateCrowdLevelForDate`), its
+    `headlinerWait` the calendar's recorded `headlinerForecast.avgWait` for it (`actual: true`): the
+    mean over the park's headliners of each ride's day-P90 standby wait, rounded to five. It is an
+    estimate and must be labelled "last year", never shown as a forecast.
   - `long_range`: a day past 60 days with nothing measured a year back: the calendar's long-range
     forecast (CatBoost's long tail), unscaled; reads low and flat
     ([long-range forecasting §9](../ml/long-range-forecasting.md)).
-  - `none`: nothing to say. A day that was closed last year and has no forecast gives no figure.
+  - `none`: nothing to say. A day with no open, measured day a year back and no forecast gives no
+    figure.
 - **`meta.forecastUntil`** is the last day any of the region's parks carries a forecast, as the
   calendar warmup last read it off the warm months (not a constant; CatBoost reaches about six
   months, as far as a park's published schedule). Absent until the warmup has run once.
@@ -558,7 +557,7 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   usual day (`usualHours`, else no hours factor), since its real hours are not known, and the day
   says **`bestHoursUnpublished: true`** so the client can add "hours not published yet". From
   January 2027 that is every Disney and Universal day. The resort's parks must read on one basis:
-  past 60 days that is `last_year`, so the pick is last year's on that weekday and is worded as an
+  past 60 days that is `last_year`, so the pick is last year's on the matching day and is worded as an
   estimate (the picked park's `basis` says so). Absent for a resort whose parks read on two bases
   that day and where none of its parks has a figure. **`bestWhy`**: `shortest_wait`, or
   `closes_early_elsewhere` when the park with the lowest raw wait lost because it closes early (Magic
@@ -582,6 +581,59 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
 - **`holidays`** are the names of the day's local holidays and school breaks; the day's flags are
   the region's, read off its first park. `schoolVacationUnknown: true` past the last stored school
   calendar, as on the park calendar.
+
+### The matching day a year back
+
+52 weeks back keeps the weekday and lets every moving holiday slip: Easter Monday 2027 (29 March)
+read Monday 30 March 2026, an ordinary Monday, and Monday 5 April 2027 read Easter Monday 2026. The
+same went for Ascension, Whitsun, Memorial Day, a school break that moved and a season that starts
+on another date. So `last_year` and `lastYearWait` read the day picked by what the day is
+(`lastYearReferenceDay`, `src/trip-regions/last-year-reference.ts`, PAR-1377):
+
+1. **A public holiday** reads the same holiday last year, by the holiday row's English `name` in the
+   park's own region (any of the names when two share a day), the one nearest 52 weeks back and at
+   most 36 days from it (Easter moves by up to five weeks): Easter Monday 2027 reads 6 April 2026,
+   Christmas Day reads Christmas Day whatever the weekday.
+2. **A bridge day or a school-break day** reads the day of the same weekday nearest 52 weeks back,
+   at most three weeks off, that was a bridge day or a break day too.
+3. **Any other day**, and a holiday or a bridge or break day that found none, reads 52 weeks back
+   where that was neither a public holiday, a bridge day nor a school-break day; otherwise the
+   nearest day of the same weekday at most three weeks off that was none of them; otherwise 52 weeks
+   back. Monday 5 April 2027 reads 30 March 2026.
+
+**A day the park was closed, or on which nothing was measured**, is never the reference day: each
+step passes over it and takes the next day it allows, in the same order and within the same reach
+(PAR-1386). The test is the one a trip day reads last year by (`lastYearMeasured`: not `closed`,
+and a level or the headliners' wait recorded), on the last-year snapshots, so the calendar reads
+every past month a reference day can sit in (`lastYearReferenceMonths`), not only the month of
+the day it picks. Phantasialand's Wednesday 23 December 2026, a break day it is open on, read Wednesday
+24 December 2025, a break day it was shut on (its winter opened on the 26th), and now reads
+Wednesday 31 December 2025; with no open break Wednesday within three weeks it would read the
+nearest open plain one. Only when the park was open on none of the days does the day read 52 weeks
+back, and then nothing (`long_range` or `none`). Parky's `get_park_history` applies the same test
+to the calendar days it reads ([assistant](assistant.md)), one candidate at a time
+(`lastYearReferenceDayReading`), mostly the first.
+
+The flags are the calendar's own (`dayHolidayFlags`, the park's region only, from
+`HolidaysService.getHolidays`, whose years are cached); parks at one location share one read per
+calendar build. **A day past the park's stored school calendar** (`schoolVacationUnknown`) may be a
+break day nobody has published yet ([absent facts](../rules/absent-facts.md)), so it does not move
+off last year's break days, and a reference day is never one that has not been measured yet (today
+or later). **A park without a country, or whose holidays cannot be read**, reads 52 weeks back.
+
+**Inside a park season** that is `confirmed` or `announced` and has an edition a year earlier (the
+same `kind` and `name`, ended before this one began), a day inside that edition goes first among the
+days step 2 or 3 found: a party night reads a party night where one was within three weeks. The
+holiday state comes first, the season second. Nights are compared with nights only when both
+editions list their `dates`; a season without its list says every day of its range, and matching
+that to last year's nights would put every day on an event night, so it is compared by last year's
+range. An `expected` season counts for nothing: it is last year's pattern, not a statement. Only a
+day inside a season looks for its edition: a day off this year's nights does not move off last
+year's nights. Orlando's curated editions begin with Halloween 2026 (and Christmas 2025), and most
+2027 editions on 2026-11-17 were `expected` or listed no nights, so for now the step moves few days.
+
+The reference day can sit up to three weeks before 52 weeks back, and a holiday further, so the
+warmup keeps 13 past months; a month it has not written is built on read.
 
 ## How a day is priced
 
@@ -2076,8 +2128,8 @@ their starts searched 0.22–0.25 s; two UK 14-day tickets with dates 0.21–0.2
 The calendar warmup (`CacheWarmupService`, twice a day) takes a region park's months to +13 instead
 of +3 (a year, and the two-week reference span past it, so `/when` reads a whole year from the
 month caches), records the last forecast day the months returned (`trip-regions:forecast-until:v1:{parkId}`)
-and keeps the past months the days read last year from (−12 … −1: every day from today on carries
-the same weekday a year back, ranked on it past 60 days; the running month is built on read) as
+and keeps the past months the days read last year from (−13 … −1: every day from today on carries
+the matching day a year back, ranked on it past 60 days; the running month is built on read) as
 week-long snapshots (`trip-regions:last-year:v1:{parkId}:{YYYY-MM}`).
 A snapshot is its own key because a schedule sync evicts every calendar month of a park twice a
 day, which is pointless for a month that has passed. What it adds:

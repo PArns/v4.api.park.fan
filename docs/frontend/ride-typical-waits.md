@@ -39,7 +39,7 @@ interface TypicalWaitBucket { typical: number | null; busy: number | null; sampl
 
 interface TypicalWaits {
   weekday: TypicalWaitBucket;   // country-aware weekdays
-  weekend: TypicalWaitBucket;   // Sat/Sun, or Fri+Sat in Gulf states
+  weekend: TypicalWaitBucket;   // Sat/Sun, or Fri+Sat in Saudi Arabia and the Gulf states that keep it
   byDayOfWeek: Array<TypicalWaitBucket & { dayOfWeek: number /* 0 = Sun */; isWeekend: boolean }>;
   peak: { value: number; date: string } | null; // the record daily peak
   windowDays: number;           // 365

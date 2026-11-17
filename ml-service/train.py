@@ -26,6 +26,7 @@ from features import (
     curated_attraction_coverage,
     engineer_features,
     get_feature_columns,
+    weekend_rows,
 )
 from model import WaitTimeModel
 from data_validation import validate_training_data
@@ -536,7 +537,7 @@ def holiday_pre_break_values(df: pd.DataFrame, holiday_rows: pd.Series) -> pd.Da
 
     tgt = pd.DataFrame(
         {"attractionId": df["attractionId"], "parkId": df["parkId"], "_day": day,
-         "_hour": hour, "_local": local, "_weekend": local.dt.dayofweek >= 5}
+         "_hour": hour, "_local": local, "_weekend": weekend_rows(df)}
     )[holiday_rows.to_numpy()]
     tgt["_anchor"] = anchor_of.reindex(
         pd.MultiIndex.from_arrays([tgt["parkId"], tgt["_day"]])
@@ -687,7 +688,7 @@ def as_known_at_origin(
     if lead > pd.Timedelta(hours=24):
         merged["avg_wait_last_24h"] = same_dow
 
-    weekend = merged["day_of_week"] >= 5
+    weekend = merged["is_weekend"] == 1
     profile_1h = merged["_o_rolling_avg_weekend"].where(
         weekend, merged["_o_rolling_avg_weekday"]
     )

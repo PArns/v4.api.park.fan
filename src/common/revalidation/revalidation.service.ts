@@ -101,12 +101,4 @@ export class RevalidationService {
     }
     return anySuccess;
   }
-
-  /**
-   * Revalidate best-days tags for the given park slugs
-   * (`best-days:<slug>`), the tag the frontend best-days clients read.
-   */
-  async revalidateBestDays(parkSlugs: string[]): Promise<boolean> {
-    return this.revalidateTags(parkSlugs.map((slug) => `best-days:${slug}`));
-  }
 }

@@ -47,13 +47,16 @@ training loop. A checkpoint loads with its own trained `arch_kwargs`, `target_mo
 | `down` | DOWN readings in the slot (reopening rebound) |
 | `slot_sin/cos`, `hour_sin/cos` | time of day |
 | `park_occ` | mean wait over the park's observed rides — the scalar crowd baseline the graph refines |
-| `dow_sin/cos`, `is_weekend` | day of week (added 2026-07-02) |
+| `dow_sin/cos`, `is_weekend` | day of week (added 2026-07-02); `is_weekend` is the park country's weekend (`weekend_rules.py`, vendored from ml-service; Friday + Saturday in the Gulf states and Israel since PAR-1379, Saturday + Sunday before) |
 
 `park_open` = at least `PCN_MIN_RIDES_OPEN` (3) rides report a reading or a DOWN in the slot. The
 loss mask is `obs_mask × park_open`: closed slots and sensor gaps never enter the loss (the
 0-filled hourly TFT PoC of 2026-05-23 was biased by exactly those zeros). **Channel contract:**
 the checkpoint stores the channel names it was trained on and `_model_features` selects by name,
 so a channel appended later never breaks an older checkpoint — it serves until its retrain.
+The same name selection means a changed channel reaches an old checkpoint unannounced: a Gulf
+park's checkpoint trained before PAR-1379 learned `is_weekend` as Saturday + Sunday and reads the
+Friday + Saturday channel with that meaning until the next nightly training replaces it.
 
 ### Targets: `PCN_TARGET_MODE` (PAR-1034)
 

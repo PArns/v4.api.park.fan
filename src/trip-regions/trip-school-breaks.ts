@@ -22,7 +22,8 @@
  * after the 2025–26 school year (measured 2026-11-13).
  */
 import { BadRequestException } from "@nestjs/common";
-import { addIsoDays, isWeekendDate } from "../common/utils/date.util";
+import { addIsoDays } from "../common/utils/date.util";
+import { isCountryWeekendDate } from "../date-features/constants/weekend-rules.constant";
 import type { SchoolCoverage } from "../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import type { SchoolBreakPeriod, WhenWithin } from "./trip-when";
@@ -167,9 +168,10 @@ const sameCode = (a: string | null, b: string): boolean =>
 
 /**
  * A region's breaks: its own rows and the country's nationwide ones, merged
- * into runs of consecutive days, each widened over the weekend before and
- * after it (no school on either). Named by the name most of the run's days
- * carry. Only runs that reach into [from, to] are kept, unclipped.
+ * into runs of consecutive days, each widened over the country's weekend
+ * before and after it (no school on either; Friday and Saturday in Israel).
+ * Named by the name most of the run's days carry. Only runs that reach into
+ * [from, to] are kept, unclipped.
  */
 export function schoolBreakPeriods(
   rows: readonly SchoolRowLike[],
@@ -177,7 +179,8 @@ export function schoolBreakPeriods(
   from: string,
   to: string,
 ): SchoolBreakPeriod[] {
-  const country = code.slice(0, 2).toUpperCase();
+  const country = countryOfCode(code);
+  const weekend = (date: string) => isCountryWeekendDate(date, country);
   const names = new Map<string, string[]>();
   for (const row of rows) {
     if (row.holidayType !== "school" || row.country !== country) continue;
@@ -195,8 +198,8 @@ export function schoolBreakPeriods(
     if (!start || !last) return;
     let a = start;
     let b = last;
-    while (isWeekendDate(addIsoDays(a, -1))) a = addIsoDays(a, -1);
-    while (isWeekendDate(addIsoDays(b, 1))) b = addIsoDays(b, 1);
+    while (weekend(addIsoDays(a, -1))) a = addIsoDays(a, -1);
+    while (weekend(addIsoDays(b, 1))) b = addIsoDays(b, 1);
     const counts = new Map<string, number>();
     for (const n of runNames) counts.set(n, (counts.get(n) ?? 0) + 1);
     const name = [...counts].sort(
@@ -205,10 +208,10 @@ export function schoolBreakPeriods(
     runs.push({ from: a, to: b, name });
   };
   for (const date of dates) {
-    // A break that ends on a Friday and one that starts the Monday after are one stretch.
+    // A break that ends before the weekend and one that starts after it are one stretch.
     let joins = !!last;
     for (let d = last ? addIsoDays(last, 1) : date; joins && d < date;) {
-      joins = isWeekendDate(d);
+      joins = weekend(d);
       d = addIsoDays(d, 1);
     }
     if (!joins) {

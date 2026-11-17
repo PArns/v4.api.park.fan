@@ -7,6 +7,8 @@
  * Default: Saturday (6) + Sunday (0) for Western countries
  */
 
+import { isoDateWeekday } from "../../common/utils/date.util";
+
 export interface WeekendRule {
   /** ISO 3166-1 alpha-2 country code */
   countryCode: string;
@@ -27,11 +29,6 @@ export const CUSTOM_WEEKEND_RULES: WeekendRule[] = [
   {
     countryCode: "SA",
     countryName: "Saudi Arabia",
-    weekendDays: [5, 6], // Friday + Saturday
-  },
-  {
-    countryCode: "AE",
-    countryName: "United Arab Emirates",
     weekendDays: [5, 6], // Friday + Saturday
   },
   {
@@ -136,4 +133,19 @@ export function getWeekendDaysForCountry(countryCode: string): number[] {
   );
 
   return customRule ? customRule.weekendDays : DEFAULT_WEEKEND_DAYS;
+}
+
+/**
+ * Whether a `YYYY-MM-DD` falls on the country's weekend, read from the date
+ * string itself (a park-local date needs no timezone). The one weekend test
+ * for a date: a Friday in Riyadh is a weekend day and a Sunday a working day.
+ * Without a country code the default weekend applies.
+ */
+export function isCountryWeekendDate(
+  date: string,
+  countryCode: string | null | undefined,
+): boolean {
+  return getWeekendDaysForCountry(countryCode ?? "").includes(
+    isoDateWeekday(date),
+  );
 }

@@ -143,3 +143,66 @@ constant `GLOBAL_PREFIX = "v1"` (`src/common/swagger/swagger-config.ts`).
 - Do not deploy on Sunday between 19:10 and 20:05 UTC: a pcn-service restart during the weekly
   `REINDEX` of `pcn_forecasts_pkey` stalls PCN writes
   ([nightly DB maintenance](../troubleshooting/nightly-db-maintenance.md#weekly-reindex-of-the-pcn-primary-key)).
+
+### A deploy that changes a served forecast
+
+`/plan/day` and Parky build a day's rides from the served daily rows (`getServingDailyPredictions`),
+so a deploy that changes them (the [season level](../ml/season-level.md), the serving merge, a
+model's serving path) reaches both with the first request after it. The calendar months
+(`calendar:month:v2:…`), the best-days snapshots (`best-days:v2:…`) and park.fan's copies of both
+keep the old level until the next `warmup-calendar-daily` (08:00 and 20:00 UTC) evicts and rebuilds
+them and rings the frontend ([the forecast ring](../architecture/caching-strategy.md#the-forecast-ring)).
+Until then a park page shows a day at one level in the calendar and at another in the trip planner
+and in Parky's answers. So after such a deploy:
+
+1. Wait for the new `api` container: `GET /v1/health/ready` answers 200.
+2. **Run the calendar warmup:** `POST /v1/admin/warmup-calendar` (editor; `run_job`
+   `warmup-calendar` in the admin MCP). It is done when the API logs
+   `✅ Calendar warmup complete: … parks in …s (best-days: …)`, after which it rings the frontend.
+3. **Then deploy the frontend.** Its deploy purges Cloudflare, which no ring reaches (park.fan's
+   `docs/architecture/cdn-caching.md#a-deploy-purges-cloudflare`): after the ring, the purge clears
+   the hour of old copies Cloudflare still holds; before it, Cloudflare refills from the old ones.
+
+Start the warmup outside the scheduled runs (from 08:00 and 20:00 UTC to their completion line).
+The route answers with the warmup already running or waiting instead of queueing a second, since two
+park builds in parallel saturated the database's disk
+([cache warmup](../architecture/caching-strategy.md#cache-warmup)), but it cannot see a run that is
+about to start from the cron. Keep it out of 05:50–07:30
+too, while CatBoost trains.
+
+### A deploy that changes what a model input means
+
+A trained model keeps the meaning it learned an input with. When a deploy changes what an existing
+input means, the models are served the new values with the old meaning until their next nightly
+training: CatBoost (06:00 UTC) and PCN (08:30) through their saved models, TFT (03:00) through the
+forecast its last run persisted, fitted on the old inputs. The release of 2026-11-17 is such a
+deploy: for parks in countries whose weekend is not Saturday and Sunday (Saudi Arabia, Qatar,
+Bahrain, Kuwait, Oman, Israel) CatBoost's weekday/weekend rolling features and TFT's and PCN's
+`is_weekend` now split on the country's weekend (PAR-1379), and CatBoost's `is_weekend` reads
+Saturday and Sunday for the UAE (PAR-1375). After such a deploy, train all three by hand once the
+new containers are up, one after the other:
+
+1. **TFT:** `POST /v1/admin/train-nf` (editor; `run_job` `train-nf`), about 40–50 minutes
+   ([TFT](../ml/tft.md)). Then run the calendar warmup
+   ([above](#a-deploy-that-changes-a-served-forecast)): `train-nf` evicts `ml:tft-daily:*` when it
+   completes and rings nothing, so `/plan/day` and Parky read the new forecast at once while the
+   calendar and best-days keep the old one.
+2. **CatBoost:** `POST /v1/admin/train-ml-model` (editor; `run_job` `train-ml-model` in the admin
+   MCP), 35–70 minutes ([CatBoost training](../ml/catboost-training.md)). Then run the calendar
+   warmup again: the served CatBoost rows are cached per park and day until the warmup evicts them,
+   so without it the new model reaches each surface when its own cache runs out, unrung, the first
+   at each park's midnight.
+3. **PCN:** `POST /v1/admin/pcn/train` (editor; `run_job` `pcn-train`), [PCN](../ml/pcn.md). It
+   serves the intraday forecast only, which no calendar cache holds, so no warmup follows.
+
+Start each only when the one before has finished, a warmup included: Bull Board shows the job, and
+the rows `tft`, `catboost` and `pcn` of `GET /v1/admin/ml-overview` read each service's
+`/train/status` ([ML overview](../ml/ml-overview.md)). Two trainings at once, or one next to a
+nightly training or the Linear runner (09:45, 13:45, 17:45 and 21:45 UTC), exceed the host's memory
+([container memory limits](container-memory-limits.md)), so pick a gap that fits all three.
+
+A training does not queue the warmup itself. After the nightly TFT run it would be a third warmup a
+day inside the nightly batch window, so there the calendar keeps the previous forecast until 08:00
+while `/plan/day` reads the new one. After a hand-started run it would start beside the next
+training of this list and, with nothing to stop two warmups at once, possibly beside a scheduled
+one.

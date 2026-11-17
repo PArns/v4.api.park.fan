@@ -25,6 +25,9 @@ import { repeatsLastQuestion, sameText } from "./assistant-junk";
 import { RepliesTextGuard } from "./assistant-replies-text";
 import { nowIn, userTimeZone } from "./assistant-time";
 import type { ChatRequest } from "./assistant.schemas";
+import type { AssistantLocale } from "./assistant-locales";
+import { ParkyTipService } from "./parky-tip.service";
+import { ParksService } from "../parks/parks.service";
 import {
   ASSISTANT_TOOL_PARAMS,
   runAssistantTool,
@@ -269,10 +272,14 @@ export class AssistantChatService {
       },
       answer,
     };
-    const [pageSubject, digest, knowledgeIndex] = await Promise.all([
+    const [pageSubject, digest, knowledgeIndex, dayTip] = await Promise.all([
       this.pages.subject(request.pagePath, request.locale),
       this.tripDigestOf(toolContext, pickTrip(trips)),
       this.knowledge.promptIndex(),
+      // Like the greeting, the tapped tip speaks to the chat's first question only.
+      chat.history.length === 0 && request.dayTip
+        ? this.dayTipContext(request.dayTip, request.locale)
+        : null,
     ]);
     const system: Anthropic.TextBlockParam[] = [
       {
@@ -293,6 +300,7 @@ export class AssistantChatService {
           tripDigest: digest,
           // Only the first question of a chat answers the greeting.
           opener: chat.history.length === 0 ? (request.opener ?? null) : null,
+          dayTip,
           liveRegions: request.liveRegions ?? null,
           interview: request.interview ?? null,
           alerts: request.alerts,
@@ -452,6 +460,36 @@ export class AssistantChatService {
       conversationId: conversation.id,
       messageId: message.id,
     });
+  }
+
+  /**
+   * What Parky needs about the day tip the chat was opened from: the park's name, his sentence for
+   * the day in the chat's language as the cache keeps it, and the day's facts as the tip reads them
+   * (`ParkyTipService.dayTip`, which never writes a tip, so the answer waits for no model call).
+   * Both are read here: the browser names the park and the day, and the text it sends is never
+   * handed to Parky as his own words, which he would defend. Null when the park or the day cannot
+   * be read; the chat goes on without it.
+   */
+  private async dayTipContext(
+    tip: NonNullable<ChatRequest["dayTip"]>,
+    locale: AssistantLocale,
+  ): Promise<{ park: string; text: string | null; facts: string } | null> {
+    try {
+      const [continent, country, city, slug] = tip.park.split("/");
+      const park = await this.moduleRef
+        .get(ParksService, { strict: false })
+        .findByGeographicPath(continent, country, city, slug);
+      if (!park) return null;
+      const day = await this.moduleRef
+        .get(ParkyTipService, { strict: false })
+        .dayTip(park, tip.date, locale);
+      return day ? { park: park.name, ...day } : null;
+    } catch (error) {
+      this.logger.warn(
+        `Day tip context skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   /**

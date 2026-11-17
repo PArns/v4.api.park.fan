@@ -593,7 +593,7 @@ describe("AnalyticsService", () => {
       expect(result.displayable).toBe(false);
     });
 
-    it("classifies weekend country-aware (Fri+Sat for the UAE)", async () => {
+    it("classifies weekend country-aware (Fri+Sat for Saudi Arabia)", async () => {
       mockRedis.get.mockResolvedValueOnce(null);
       mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([
         { day: "2025-06-05", dow: 4, day_peak: "10" }, // Thursday → weekday
@@ -603,8 +603,8 @@ describe("AnalyticsService", () => {
 
       const result = await service.getAttractionTypicalWaits(
         "attraction-123",
-        "Asia/Dubai",
-        "AE",
+        "Asia/Riyadh",
+        "SA",
       );
 
       expect(result.weekday.sampleDays).toBe(1);

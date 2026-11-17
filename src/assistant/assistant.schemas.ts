@@ -342,6 +342,26 @@ export const chatRequestSchema = z.strictObject({
   ),
   trips: tripsSnapshotSchema.optional(),
   /**
+   * The day tip the visitor tapped to open the chat, sent with that first question only: the park
+   * (its geographic path), the day and the sentence the dialog showed. The sentence is accepted,
+   * since park.fan sends it, and not used: the chat reads Parky's sentence and the day's facts
+   * itself, so nothing the browser sends becomes words he stands by.
+   */
+  dayTip: lenient(
+    z.strictObject({
+      park: z
+        .string()
+        .max(200)
+        .regex(/^[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9-]+$/),
+      date: z.iso.date(),
+      text: z
+        .string()
+        .max(2000)
+        .transform((value) => value.replace(/\s+/g, " ").trim().slice(0, 400))
+        .pipe(z.string().min(1)),
+    }),
+  ),
+  /**
    * The trip regions live on park.fan, as the site's region registry marks them: the one switch a
    * region flips at go-live, which also opens its hub. Parky plans, changes and links these only.
    * Absent (a widget from before 2.21.0): every region, as before.

@@ -14,6 +14,7 @@ import { SingleFlight } from "../common/utils/single-flight.util";
 import { DbJobBudget, mapWithDbBudget } from "../common/utils/db-job-budget";
 import {
   addIsoDays,
+  eachIsoDate,
   getCurrentDateInTimezone,
   isoDaysBetween,
 } from "../common/utils/date.util";
@@ -22,6 +23,7 @@ import { frontendParkPath } from "../common/utils/frontend-url.util";
 import { ParksService } from "../parks/parks.service";
 import { CalendarService } from "../parks/services/calendar.service";
 import { ParkSeasonService } from "../parks/services/park-season.service";
+import { HolidaysService } from "../holidays/holidays.service";
 import { resolveCuratedPark } from "../parks/utils/curated-park-facts.util";
 import { toPublicSeason } from "../parks/park-seasons.controller";
 import type { Park } from "../parks/entities/park.entity";
@@ -32,16 +34,23 @@ import {
   type RegionParkConfig,
 } from "./regions";
 import { MAX_TRIP_DAYS } from "./trip-optimizer";
-import type { ScheduleRowLike } from "./trip-calendar.util";
+import { lastYearMeasured, type ScheduleRowLike } from "./trip-calendar.util";
 import {
+  monthOf,
   readLastYearMonths,
   writeLastYearMonth,
   type LastYearMonth,
 } from "./last-year-snapshot";
 import {
+  lastYearReferenceDays,
+  lastYearReferenceMonths,
+  lastYearSeasonsFrom,
+  loadLastYearDayFacts,
+  type LastYearDayFacts,
+} from "./last-year-reference";
+import {
   assembleRegionCalendar,
   describeRegion,
-  lastYearMonthsNeeded,
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
@@ -118,6 +127,7 @@ export class TripRegionService {
     private readonly parksService: ParksService,
     private readonly calendarService: CalendarService,
     private readonly parkSeasonService: ParkSeasonService,
+    private readonly holidaysService: HolidaysService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     // Absent only where a spec builds the service by hand: it then plans with the seed.
     @Optional() private readonly tickets?: TicketCatalogService,
@@ -284,11 +294,25 @@ export class TripRegionService {
     const { fromDate, toDate } = parseDateRange(reference.from, reference.to, {
       timezone: region.timezone,
     });
+    // The window's seasons, and the year before it, whose editions a day
+    // inside a season reads last year from.
+    const seasonRows = await this.parkSeasonService.forParksInRange(
+      parks.map((p) => p.park.id),
+      lastYearSeasonsFrom(from),
+      to,
+    );
+    const seasons = seasonRows.filter(
+      (s) => s.startDate <= to && s.endDate >= from,
+    );
+    const facts = new Map<
+      string,
+      Promise<Map<string, LastYearDayFacts> | null>
+    >();
 
     const sources: ParkCalendarSource[] = await mapWithDbBudget(
       parks,
       async (rp) => {
-        const [calendar, rows] = await Promise.all([
+        const [calendar, rows, lastYear, dayFacts] = await Promise.all([
           this.calendarService.buildCalendarResponse(
             rp.park,
             fromDate,
@@ -303,35 +327,36 @@ export class TripRegionService {
               );
               return [];
             }),
-        ]);
-        const lastYear = await this.lastYearFor(
-          rp.park,
-          lastYearMonthsNeeded(
-            calendar.days.filter((d) => d.date >= from && d.date <= to),
+          this.lastYearFor(
+            rp.park,
+            lastYearReferenceMonths(from, to, today),
             today,
           ),
-          today,
-        );
+          this.lastYearFactsFor(rp.park, from, to, facts),
+        ]);
+        // Without holidays the park's days read 52 weeks back.
+        const lastYearReferences = dayFacts
+          ? lastYearReferenceDays(eachIsoDate(from, to), dayFacts, {
+              before: today,
+              seasons: seasonRows.filter((s) => s.parkId === rp.park.id),
+              measuredOpen: (day) =>
+                lastYearMeasured(lastYear.get(monthOf(day))?.[day]),
+            })
+          : new Map<string, string>();
         return {
           park: toRecord(rp),
           calendar,
           rows: rows as ScheduleRowLike[],
           lastYear,
+          lastYearReferences,
         };
       },
       REGION_PARK_BUDGET,
     );
 
-    const [seasons, forecastUntil] = await Promise.all([
-      this.parkSeasonService.forParksInRange(
-        parks.map((p) => p.park.id),
-        from,
-        to,
-      ),
-      this.redis
-        .mget(...parks.map((p) => CacheKeys.tripForecastUntil(p.park.id)))
-        .catch(() => [] as Array<string | null>),
-    ]);
+    const forecastUntil = await this.redis
+      .mget(...parks.map((p) => CacheKeys.tripForecastUntil(p.park.id)))
+      .catch(() => [] as Array<string | null>);
 
     return assembleRegionCalendar({
       region,
@@ -343,6 +368,37 @@ export class TripRegionService {
       seasons: seasons.map((s) => ({ ...toPublicSeason(s), parkId: s.parkId })),
       forecastUntil: forecastUntil as Array<string | null>,
     });
+  }
+
+  /**
+   * One park's holiday facts for its reference days a year back
+   * (`loadLastYearDayFacts`). Null where the park has no country or its
+   * holidays cannot be read. Parks at one location share a read through
+   * `facts`.
+   */
+  private lastYearFactsFor(
+    park: Park,
+    from: string,
+    to: string,
+    facts: Map<string, Promise<Map<string, LastYearDayFacts> | null>>,
+  ): Promise<Map<string, LastYearDayFacts> | null> {
+    const key = [park.countryCode, park.regionCode, park.timezone].join("|");
+    let pending = facts.get(key);
+    if (!pending) {
+      pending = loadLastYearDayFacts(
+        this.holidaysService,
+        park,
+        from,
+        to,
+      ).catch((err: Error) => {
+        this.logger.warn(
+          `Holidays unavailable for ${park.slug}, last year reads 52 weeks back: ${err.message}`,
+        );
+        return null;
+      });
+      facts.set(key, pending);
+    }
+    return pending;
   }
 
   /**

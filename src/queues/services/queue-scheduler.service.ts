@@ -13,6 +13,7 @@ import {
   PCN_REINDEX_CRON,
   TFT_PRUNE_CRON,
 } from "../../database/maintenance/vacuum-plan";
+import { CHECK_DISPLAY_CONSISTENCY_JOB } from "../../monitoring/display-consistency/display-consistency.processor";
 
 /**
  * How often the scheduler re-runs its registration after startup.
@@ -1528,6 +1529,30 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           jobId: "data-quality-monitor-cron",
           removeOnComplete: true,
           removeOnFail: true,
+        },
+      );
+    }
+
+    // Display consistency: every surface's value of a park-day, compared where
+    // they must agree. 09:40 follows the morning calendar warmup (08:00) and its
+    // ring, when every copy should agree; 23:40 follows midnight in Europe, when
+    // "today" has moved on under copies made the evening before. Both clear of
+    // the night batch (01:00–09:30) and of the :00–:10 crons.
+    if (
+      !(await this.hasRepeatableJob(
+        this.analyticsQueue,
+        "display-consistency-cron",
+        "40 9,23 * * *",
+        "UTC",
+      ))
+    ) {
+      await this.analyticsQueue.add(
+        CHECK_DISPLAY_CONSISTENCY_JOB,
+        {},
+        {
+          repeat: { cron: "40 9,23 * * *", tz: "UTC" },
+          jobId: "display-consistency-cron",
+          removeOnComplete: 100,
         },
       );
     }

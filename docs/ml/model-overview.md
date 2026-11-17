@@ -16,9 +16,12 @@ then open the reference page of the model you are changing.
 | `/plan/day` hours past CatBoost's 48 h (`tier: "composed"`) | to the end of the daily horizon | the served daily level × the ride's historical hour shape; the **H5 composer** (`slots[]`) up to day 21 (`PLAN_DAY_H5_MAX_LEAD_DAYS`) | — | `PLAN_DAY_H5_COMPOSER` (off in the code, on in `docker-compose.production.yml` since PAR-1341) |
 
 On a day of a running, published park season both daily rows are overridden per ride by the
-**season level** — the median of what the ride measured on that season's days so far — once three
-such days exist (`SEASON_LEVEL`, on in production since PAR-1343; [season level](season-level.md)).
-No model reads a season.
+**season level**, the median measured P90 of the season's latest days of the same day type (day
+off, neighbour day, eve, working day) once three exist, and a quieter type's level as a floor
+under the model's number before that (`SEASON_LEVEL`, on in production since PAR-1343;
+[season level](season-level.md)). `SEASON_LEVEL_MODE=ratio` scales a TFT row by measured ÷ TFT's
+forecast instead, bounded and unmeasured, so it is off by default (PAR-1383). No model reads a
+season.
 
 `SERVE_PCN_INTRADAY` and `SERVE_CHRONOS_INTRADAY` default to off in the code and in
 `docker-compose.production.yml`; production sets them in the server's `.env`. PCN has served

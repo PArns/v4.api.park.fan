@@ -188,4 +188,7 @@ this level, so they read too quiet and too even (PAR-1320).
 **Re-measure** after 2026-11-24: from about 19–24 November CatBoost reads last year's slot for days
 more than 28 days ahead (PAR-1045), which moves these figures. The long-range level earns its way
 back into a ranking only when the lead snapshots show a ratio of 0.9–1.1 at d60 and d90, a spread
-ratio of at least 0.5, and a lower MAE than "same weekday last year" on the same ride-days.
+ratio of at least 0.5, and a lower MAE than the matching day last year (the same holiday, else the
+same weekday in the same holiday situation,
+[trip regions](../frontend/trip-regions.md#the-matching-day-a-year-back), PAR-1377) on the same
+ride-days.

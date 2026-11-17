@@ -60,11 +60,17 @@ Future covariates (`db.FUTR_EXOG`), all known for the forecast dates:
 | Group | Columns |
 |---|---|
 | holidays | `is_holiday_primary`, `is_holiday_neighbor` (influencing regions — NL/BE carry Phantasialand), `is_school_holiday`, `is_bridge_day`, `holiday_count_total`, `days_until_holiday`, `days_since_holiday` |
-| calendar | `is_weekend`, `dow_sin/cos`, `doy_sin/cos`, `season_code`, `is_peak_season`, `dow_0` … `dow_6` |
+| calendar | `is_weekend` (the park country's weekend), `dow_sin/cos`, `doy_sin/cos`, `season_code`, `is_peak_season`, `dow_0` … `dow_6` |
 | weather | `temp_max`, `precip_mm`, `wind_max`, `is_wet` (precip ≥ 1 mm) from `weather_data`; past the stored forecast, the park's median, then the global median |
 
 `is_peak_season` is June–August and December; south of 15° S it is December–February and June.
 The tropics keep the northern months (their seasonality is in the school-holiday flags).
+
+`is_weekend` is Friday + Saturday for parks in Saudi Arabia, Qatar, Bahrain, Kuwait, Oman and
+Israel and Saturday + Sunday elsewhere: `weekend_rules.py`, vendored byte-identical from
+ml-service, CatBoost's and the API's table (PAR-1379; it was Saturday + Sunday for every park
+before). The `dow_*` columns are unchanged. TFT keeps no checkpoint, so the forecast of the night
+before this change, fitted on the old channel, serves the Gulf parks until the next nightly run.
 
 Static covariates (`NF_USE_STATIC`, on): country and region as integer codes. The static frame
 must be passed to `nf.predict` as well as `fit`, or the run fails with "static exogenous

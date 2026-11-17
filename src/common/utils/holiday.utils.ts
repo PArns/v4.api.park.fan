@@ -3,6 +3,7 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
 import type { HolidayRow } from "../../holidays/holidays.service";
 import { normalizeRegionCode } from "./region.util";
+import type { RegionInfluence } from "../region-influences";
 
 /**
  * Holiday Calculation Utilities
@@ -403,6 +404,40 @@ function localHolidayTest(
 }
 
 /**
+ * Whether a holiday row falls in one of a park's `influencingRegions`, as a
+ * test to run over many rows. An entry without a region matches every row of
+ * its country, as the calendar's neighbour marker reads it. An entry with one
+ * matches its region and its country's nationwide rows, as TFT and CatBoost
+ * read it: Limburg has Koningsdag, which is stored for NL without a region.
+ * Each distinct row region is normalised once, as in {@link localHolidayTest}.
+ */
+export function influencingHolidayTest(
+  regions: readonly RegionInfluence[],
+): (h: Pick<HolidayRow, "country" | "region" | "isNationwide">) => boolean {
+  const countries = new Set(regions.map((r) => r.countryCode));
+  const wholeCountries = new Set<string>();
+  const regional = new Set<string>();
+  for (const r of regions) {
+    const code = normalizeRegionCode(r.regionCode);
+    if (code) regional.add(`${r.countryCode}|${code}`);
+    else wholeCountries.add(r.countryCode);
+  }
+  const byRegion = new Map<string, string | null>();
+  return (h) => {
+    if (!countries.has(h.country)) return false;
+    if (wholeCountries.has(h.country) || h.isNationwide || !h.region) {
+      return true;
+    }
+    let code = byRegion.get(h.region);
+    if (code === undefined) {
+      code = normalizeRegionCode(h.region);
+      byRegion.set(h.region, code);
+    }
+    return regional.has(`${h.country}|${code}`);
+  };
+}
+
+/**
  * The calendar day a holiday row names. The row already is one, `YYYY-MM-DD`
  * in the country's own calendar. Reading it through a `Date` at noon UTC and
  * the park's zone, as the calendar did, put every holiday a day late for a park
@@ -464,6 +499,36 @@ export interface DayHolidayFlags {
 }
 
 /**
+ * Each day's public holidays (`public` and `bank` rows) by name, in row order.
+ * The names come from `name`, not `localName`: the calendar sends the English
+ * name, and the frontend translates from it.
+ */
+function publicHolidayNames(
+  local: Array<Pick<HolidayRow, "date" | "name" | "holidayType">>,
+): Map<string, string[]> {
+  const names = new Map<string, string[]>();
+  for (const h of local) {
+    if (h.holidayType !== "public" && h.holidayType !== "bank") continue;
+    const day = holidayDay(h);
+    const list = names.get(day) ?? [];
+    if (!list.includes(h.name)) list.push(h.name);
+    names.set(day, list);
+  }
+  return names;
+}
+
+/**
+ * The park's local public holidays per park-local day, with every name a day
+ * has: two can share one, and {@link dayHolidayFlags} names only the first.
+ */
+export function localPublicHolidayNames(
+  holidays: HolidayRow[],
+  park: Pick<HolidayLocation, "countryCode" | "regionCode">,
+): Map<string, string[]> {
+  return publicHolidayNames(holidays.filter(localHolidayTest(park)));
+}
+
+/**
  * The calendar's three holiday flags for each of `dates` (park-local
  * `YYYY-MM-DD`), by the calendar's own rule: {@link buildLocalHolidayMap} and
  * {@link calculateHolidayInfo}. `holidays` must reach three days past both ends
@@ -481,16 +546,12 @@ export function dayHolidayFlags(
   const local = holidays.filter(localHolidayTest(park));
   const map = buildLocalHolidayMap(local, park);
 
-  // The names come from `name`, not the map's `localName`: the calendar sends
-  // the English name, and the frontend translates from it.
-  const publicNames = new Map<string, string>();
+  const publicNames = publicHolidayNames(local);
   const schoolNames = new Map<string, string>();
   for (const h of local) {
     const day = holidayDay(h);
-    if (h.holidayType === "school") {
-      if (!schoolNames.has(day)) schoolNames.set(day, h.name);
-    } else if (h.holidayType === "public" || h.holidayType === "bank") {
-      if (!publicNames.has(day)) publicNames.set(day, h.name);
+    if (h.holidayType === "school" && !schoolNames.has(day)) {
+      schoolNames.set(day, h.name);
     }
   }
 
@@ -527,7 +588,9 @@ export function dayHolidayFlags(
       isSchoolVacation: info.isSchoolHoliday,
       isBridgeDay: info.isBridgeDay,
     };
-    const holidayName = info.isPublicHoliday ? publicNames.get(date) : null;
+    const holidayName = info.isPublicHoliday
+      ? publicNames.get(date)?.[0]
+      : null;
     if (holidayName) flags.holidayName = holidayName;
     const schoolVacationName = info.isSchoolHoliday
       ? schoolNames.get(date)

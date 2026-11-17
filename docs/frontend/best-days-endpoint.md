@@ -63,6 +63,10 @@ request from ML:
 - The calendar warmup (`warmup-calendar-daily`, [twice a day](../architecture/job-queues.md#schedule-utc))
   refreshes each park's calendar months and projects the snapshot from those warm
   month caches (`BestDaysService.precomputeForPark`) — no extra ML cost.
+- The schedule sync (03:00 and 15:00) rebuilds the snapshot of each park where it changed a
+  day inside the window, after evicting the months it is built from, so a day the grid shows
+  closed is not still forecast here. A change before today or past the window leaves the
+  snapshot alone ([the forecast ring](../architecture/caching-strategy.md#the-forecast-ring)).
 - **The snapshot expires with the month caches it is built from**
   (`CALENDAR_WARMUP_MONTH_TTL`; [TTLs](../architecture/caching-strategy.md#keys-and-ttls)):
   a projection may not outlive its source. At 26 h, a 24.8-hour-old snapshot said
@@ -78,8 +82,11 @@ request from ML:
 ## On-change revalidation
 
 After each warmup batch the API fires one batched `POST {REVALIDATE_URL}` with
-`{ "tags": ["best-days:<slug>", …] }` for every recomputed park, so park.fan drops
-its day-long best-days cache at once (`RevalidationService`).
+`{ "tags": ["best-days:<slug>", "park-calendar:<continent>/<country>/<city>/<slug>", …], "expire": 0 }`
+for every recomputed park, so park.fan drops its best-days and calendar copies at the same
+moment, and the same tags again after `CDN_SETTLE_MS`
+([the forecast ring](../architecture/caching-strategy.md#the-forecast-ring)). The schedule sync
+sends `best-days:<slug>` for each snapshot it rebuilt, with its own tags.
 
 | Env                 | Default                           | Notes                                                                 |
 | ------------------- | --------------------------------- | --------------------------------------------------------------------- |

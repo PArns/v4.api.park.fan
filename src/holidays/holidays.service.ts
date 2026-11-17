@@ -16,6 +16,7 @@ import { normalizeRegionCode } from "../common/utils/region.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
 import { CURATED_HOLIDAY_SETS } from "./data/curated-holidays";
+import { isCountryWeekendDate } from "../date-features/constants/weekend-rules.constant";
 import {
   SchoolCoverage,
   buildSchoolCoverage,
@@ -219,6 +220,7 @@ export class HolidaysService {
     const holidaysToUpsert: HolidayInput[] = bridgeDaysOf(
       longWeekends,
       year,
+      countryCode,
     ).map((day) => ({
       externalId: `nager-bridge:${countryCode}:${day}`,
       date: new Date(`${day}T00:00:00Z`),
@@ -1058,12 +1060,13 @@ export class HolidaysService {
 
 /**
  * The bridge days Nager names for `year`, each once and in order: working days
- * only, never a weekend, and none outside the year asked for (a long weekend
- * over New Year belongs to both).
+ * only, never a day of the country's weekend, and none outside the year asked
+ * for (a long weekend over New Year belongs to both).
  */
 export function bridgeDaysOf(
   longWeekends: ReadonlyArray<{ bridgeDays?: string[] }>,
   year: number,
+  countryCode: string,
 ): string[] {
   const days = new Set<string>();
   for (const weekend of longWeekends) {
@@ -1071,8 +1074,7 @@ export function bridgeDaysOf(
       if (!ISO_DATE_PATTERN.test(day) || !day.startsWith(`${year}-`)) {
         continue;
       }
-      const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
-      if (weekday !== 0 && weekday !== 6) days.add(day);
+      if (!isCountryWeekendDate(day, countryCode)) days.add(day);
     }
   }
   return [...days].sort();

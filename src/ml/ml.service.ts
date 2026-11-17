@@ -14,6 +14,10 @@ import {
   getCurrentDateInTimezone,
   formatInParkTimezone,
 } from "../common/utils/date.util";
+import {
+  SEASON_LEVEL_FAILURE_TTL,
+  SEASON_LEVEL_INPUTS_TTL,
+} from "../common/cache/cache-ttl";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
@@ -51,7 +55,12 @@ import {
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
-import { applySeasonLevel } from "./utils/season-level.util";
+import {
+  applySeasonLevel,
+  seasonSchoolCoverage,
+  type SeasonLevelMode,
+  type SeasonPark,
+} from "./utils/season-level.util";
 import {
   loadSeasonLevelInputs,
   type SeasonLevelInputs,
@@ -206,6 +215,20 @@ export function storedPredictionsCreatedAtCutoff(
     now - (predictionType === "hourly" ? HOURLY_LOOKBACK_MS : 26 * 3_600_000),
   );
 }
+
+/**
+ * The park fields the serving merge and the season level read: the timezone
+ * for park-local days, the country, region and influencing regions for its
+ * days off, the name for its warning.
+ */
+const SEASON_PARK_FIELDS = {
+  id: true,
+  name: true,
+  timezone: true,
+  countryCode: true,
+  regionCode: true,
+  influencingRegions: true,
+} as const;
 
 @Injectable()
 export class MLService {
@@ -1309,10 +1332,7 @@ export class MLService {
       // local day, CatBoost an instant whose UTC date can be the day after.
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: {
-          id: true,
-          timezone: true,
-        },
+        select: SEASON_PARK_FIELDS,
       });
       const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
@@ -1327,7 +1347,7 @@ export class MLService {
           count: merged.length,
           modelVersion: `${base.modelVersion ?? "catboost"}+tft${tftDays}`,
         },
-        tz,
+        park,
       );
     });
   }
@@ -1338,48 +1358,65 @@ export class MLService {
   }
 
   /**
+   * `SEASON_LEVEL_MODE`, read per call: `ratio`, or `level` for anything else.
+   * The level is the default because the ratio is not measured: it scales a
+   * forecast by what earlier forecasts missed, bounded but unscored.
+   */
+  static seasonLevelMode(): SeasonLevelMode {
+    return process.env.SEASON_LEVEL_MODE === "ratio" ? "ratio" : "level";
+  }
+
+  /**
    * The served daily rows with the season level on the days of a running park
-   * season (PAR-1343, `season-level.util.ts`). The inputs are one park's and
-   * move once a night, so they are cached for six hours; a failed read costs
-   * the season level, never the response.
+   * season (PAR-1343, `season-level.util.ts`).
+   *
+   * The inputs are kept under a key without a date until the calendar warmup
+   * evicts them (`CacheKeys.seasonLevelInputs`), so a level moves only with a
+   * warmup, whose forecast ring tells the frontend. A dated key would move it
+   * at the park's midnight on `/plan/day` and in Parky while the frontend's
+   * calendar kept the old one until the next ring. A read that finds no key,
+   * after a failed warmup, recomputes them unannounced. A failed read costs
+   * the season level, never the response; a failed load is remembered for
+   * `SEASON_LEVEL_FAILURE_TTL` ({@link buildSeasonLevelInputs}). The inputs
+   * hold the level and the ratio both, so a changed `SEASON_LEVEL_MODE`
+   * applies on the next call.
    */
   private async withSeasonLevel(
     parkId: string,
     served: BulkPredictionResponseDto,
-    timezone?: string,
+    loaded?: Pick<Park, keyof typeof SEASON_PARK_FIELDS> | null,
   ): Promise<BulkPredictionResponseDto> {
     if (!MLService.seasonLevelEnabled() || served.predictions.length === 0) {
       return served;
     }
     try {
-      const tz =
-        timezone ??
-        (
-          await this.parkRepository.findOne({
-            where: { id: parkId },
-            select: { id: true, timezone: true },
-          })
-        )?.timezone ??
-        "UTC";
-      const cacheKey = `ml:season-level:v1:${parkId}`;
-      const cached = await this.redis.get(cacheKey);
-      const inputs: SeasonLevelInputs = cached
+      const park =
+        loaded ??
+        (await this.parkRepository.findOne({
+          where: { id: parkId },
+          select: SEASON_PARK_FIELDS,
+        }));
+      const tz = park?.timezone || "UTC";
+      const seasonPark = {
+        id: parkId,
+        name: park?.name ?? parkId,
+        timezone: tz,
+        countryCode: park?.countryCode ?? "",
+        regionCode: park?.regionCode ?? null,
+        influencingRegions: park?.influencingRegions ?? [],
+      };
+      const cached = await this.redis.get(CacheKeys.seasonLevelInputs(parkId));
+      const inputs: SeasonLevelInputs | null = cached
         ? JSON.parse(cached)
-        : await loadSeasonLevelInputs(
-            this.parkRepository.manager.connection,
-            parkId,
-            tz,
-          );
-      if (!cached) {
-        await this.redis
-          .set(cacheKey, JSON.stringify(inputs), "EX", 6 * 60 * 60)
-          .catch(() => undefined);
-      }
+        : await this.buildSeasonLevelInputs(seasonPark);
+      if (!inputs) return served;
       const predictions = applySeasonLevel(
         served.predictions,
         inputs.seasons,
         inputs.references,
+        inputs.dayTypes,
         (p) => MLService.localDateOf(p.predictedTime, tz),
+        MLService.seasonLevelMode(),
       );
       return { ...served, predictions };
     } catch (e: unknown) {
@@ -1388,6 +1425,67 @@ export class MLService {
       );
       return served;
     }
+  }
+
+  /**
+   * The season level's inputs read from the database and kept under
+   * `CacheKeys.seasonLevelInputs`, or null while a failed load is remembered
+   * (`SEASON_LEVEL_FAILURE_TTL`). A failure is warned when it happens, not on
+   * the reads it is remembered for.
+   */
+  private async buildSeasonLevelInputs(
+    park: SeasonPark & { id: string; name: string },
+  ): Promise<SeasonLevelInputs | null> {
+    const failedKey = CacheKeys.seasonLevelInputsFailed(park.id);
+    if (await this.redis.get(failedKey)) return null;
+    let inputs: SeasonLevelInputs;
+    try {
+      inputs = await loadSeasonLevelInputs(
+        this.parkRepository.manager.connection,
+        park,
+        {
+          holidays: async (from, to) => {
+            const countries = new Set(
+              [
+                park.countryCode,
+                ...(park.influencingRegions ?? []).map((r) => r.countryCode),
+              ].filter((c): c is string => !!c),
+            );
+            const rows = await Promise.all(
+              [...countries].map((c) =>
+                this.holidaysService.getHolidays(c, from, to),
+              ),
+            );
+            return rows.flat();
+          },
+          schoolCoverage: async () =>
+            seasonSchoolCoverage(
+              await this.holidaysService.getSchoolHolidayCoverage(),
+              park,
+              getCurrentDateInTimezone(park.timezone),
+            ),
+        },
+      );
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.logger.warn(
+        `Season level inputs of ${park.name} (${park.id}) failed to load, ` +
+          `served without the level for ${SEASON_LEVEL_FAILURE_TTL / 60} min: ${message}`,
+      );
+      await this.redis
+        .set(failedKey, message, "EX", SEASON_LEVEL_FAILURE_TTL)
+        .catch(() => undefined);
+      return null;
+    }
+    await this.redis
+      .set(
+        CacheKeys.seasonLevelInputs(park.id),
+        JSON.stringify(inputs),
+        "EX",
+        SEASON_LEVEL_INPUTS_TTL,
+      )
+      .catch(() => undefined);
+    return inputs;
   }
 
   /**

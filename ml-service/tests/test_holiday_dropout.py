@@ -44,13 +44,14 @@ class _Log:
         pass
 
 
-def _frame():
-    """Hourly rows 10:00-17:00 over 2026-07-01..20; a school break from 07-11.
-    Every history feature carries its own day's level: 20 before, 60 inside."""
+def _frame(days=20):
+    """Hourly rows 10:00-17:00 from 2026-07-01 (20 days to 07-20); a school
+    break from 07-11. Every history feature carries its own day's level: 20
+    before, 60 inside."""
     local = pd.DatetimeIndex(
         [
             pd.Timestamp("2026-07-01") + pd.Timedelta(days=d, hours=h)
-            for d in range(20)
+            for d in range(days)
             for h in range(10, 18)
         ]
     )
@@ -94,6 +95,16 @@ def test_deep_inside_the_break_the_weekly_lags_are_unknown_too():
     row = _row(train.apply_training_dropout(_frame(), _Cfg(), _Log()), "2026-07-20 14:00")
     assert row["avg_wait_same_dow_4w"] == pytest.approx(20.0)
     assert row["avg_wait_last_1h"] == pytest.approx(20.0)
+
+
+def test_the_weekend_profile_is_the_park_countrys():
+    """PAR-1379: two weeks into the break a Saudi Friday has no weekly lag
+    before the origin and reads the origin's weekend mean, not its weekday one."""
+    df = _frame(days=25)
+    df["is_weekend"] = df["day_of_week"].isin([4, 5]).astype(int)
+    df["rolling_avg_weekend"] = np.where(df["is_school_holiday_primary"] == 1, 60.0, 99.0)
+    row = _row(train.apply_training_dropout(df, _Cfg(), _Log()), "2026-07-24 14:00")
+    assert row["avg_wait_last_1h"] == pytest.approx(99.0)
 
 
 def test_non_holiday_rows_are_untouched():

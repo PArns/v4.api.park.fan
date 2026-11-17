@@ -19,6 +19,7 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { buildSchoolCoverage } from "../common/utils/holiday.utils";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 import {
   BAND_CALIBRATION_KEY,
@@ -139,6 +140,7 @@ describe("MLService", () => {
     isBridgeDay: jest.fn(),
     isEffectiveSchoolHoliday: jest.fn(),
     getHolidays: jest.fn(),
+    getSchoolHolidayCoverage: jest.fn(),
   };
 
   const mockParksService = {
@@ -1455,35 +1457,63 @@ describe("MLService", () => {
     });
 
     describe("the season level (PAR-1343)", () => {
-      // A season that runs over both days, and what attr-1 measured in it.
+      // A season that runs over both days, and what the rides measured in it.
+      const seasons = [
+        {
+          id: "s1",
+          startDate: "2026-05-20",
+          endDate: "2026-06-30",
+          dates: null,
+        },
+      ];
+      const references = [
+        {
+          seasonId: "s1",
+          attractionId: "attr-1",
+          dayType: "working",
+          days: 5,
+          level: 58,
+          maxPeak: 70,
+          ratioDays: 5,
+          ratio: 2.5,
+        },
+        {
+          seasonId: "s1",
+          attractionId: "attr-2",
+          dayType: "working",
+          days: 4,
+          level: 30,
+          maxPeak: 35,
+          ratioDays: 0,
+          ratio: null,
+        },
+      ];
       const inputs = {
-        seasons: [
-          {
-            id: "s1",
-            startDate: "2026-05-20",
-            endDate: "2026-06-30",
-            dates: null,
-          },
-        ],
-        references: [
-          {
-            seasonId: "s1",
-            attractionId: "attr-1",
-            weekend: null,
-            days: 5,
-            level: 58,
-          },
-        ],
+        seasons,
+        // Monday 25 May 2026 is a working day here.
+        dayTypes: { daysOff: [], neighbourDays: [], eves: [], unknownDays: [] },
+        references,
       };
-      const serve = async () => {
+      // No date: the inputs change with the calendar warmup, never at the
+      // park's midnight.
+      const cacheKey = `ml:season-level:v4:${parkId}`;
+      /** What a test's `redis.set` stored, read back by the next serve. */
+      const stored = new Map<string, string>();
+      const serve = async (cached = true) => {
         mockParkRepository.findOne.mockResolvedValue({
           id: parkId,
           timezone: "UTC",
+          countryCode: "DE",
+          regionCode: "NRW",
+          influencingRegions: [
+            { countryCode: "NL", regionCode: "NL-LI" },
+            { countryCode: "BE", regionCode: null },
+          ],
         });
         mockRedis.get.mockImplementation(async (key: string) =>
-          key === `ml:season-level:v1:${parkId}`
+          cached && key === cacheKey
             ? JSON.stringify(inputs)
-            : null,
+            : (stored.get(key) ?? null),
         );
         jest.spyOn(service, "getParkPredictions").mockResolvedValue({
           predictions: [
@@ -1504,22 +1534,286 @@ describe("MLService", () => {
           ]),
         );
       };
+      /**
+       * The two reads of a cache miss: the running seasons, then attr-1's
+       * measured working days with TFT's forecasts of them.
+       */
+      const sqlReads = () => {
+        const measured = [
+          ["2026-05-20", 50],
+          ["2026-05-21", 60],
+          ["2026-05-26", 70],
+        ].map(([day, peak]) => ({
+          seasonId: "s1",
+          attractionId: "attr-1",
+          day,
+          peak,
+          forecast: 20,
+        }));
+        const query = jest.fn(async (sql: string, _params?: unknown[]) =>
+          sql.includes("WITH observed")
+            ? measured
+            : sql.includes("FROM park_seasons")
+              ? seasons
+              : [],
+        );
+        (mockParkRepository as any).manager = {
+          connection: {
+            transaction: async (work: (m: unknown) => unknown) =>
+              work({ query }),
+          },
+        };
+        return query;
+      };
+      /** A Belgian public holiday on Tuesday 2 June. */
+      const belgianHoliday = async (country: string) =>
+        country === "BE"
+          ? [
+              {
+                date: "2026-06-02",
+                name: "A Belgian holiday",
+                localName: "",
+                country: "BE",
+                region: null,
+                holidayType: "public",
+                isNationwide: true,
+              },
+            ]
+          : [];
+      /** Pins the park's today (UTC here), which bounds the neighbours' school edge. */
+      const onDay = (day: string) =>
+        jest.useFakeTimers({
+          now: new Date(`${day}T12:00:00Z`),
+          doNotFake: [
+            "nextTick",
+            "queueMicrotask",
+            "setImmediate",
+            "clearImmediate",
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+            "hrtime",
+            "performance",
+          ],
+        });
       afterEach(() => {
+        jest.useRealTimers();
+        stored.clear();
         delete process.env.SEASON_LEVEL;
+        delete process.env.SEASON_LEVEL_MODE;
+        delete (mockParkRepository as any).manager;
+        mockRedis.set.mockReset();
+        mockHolidaysService.getHolidays.mockReset();
+        mockHolidaysService.getSchoolHolidayCoverage.mockReset();
       });
 
-      it("serves a season day what the ride measured in the season", async () => {
+      it("serves every row the measured level by default", async () => {
         process.env.SEASON_LEVEL = "true";
         const byKey = await serve();
 
+        // 58, half-up to 60, on TFT's row and CatBoost's alike.
         expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
           predictedWaitTime: 60,
           modelVersion: "tft+season",
           crowdLevel: "unknown",
+          confidence: null,
+          uncertaintyMinutes: null,
         });
-        // No reference for attr-2; 1 August is past the season.
-        expect(byKey.get("attr-2|2026-05-25")?.predictedWaitTime).toBe(99);
-        expect(byKey.get("attr-1|2026-08-01")?.modelVersion).toBe("catboost");
+        expect(byKey.get("attr-2|2026-05-25")).toMatchObject({
+          predictedWaitTime: 30,
+          modelVersion: "catboost+season",
+        });
+        // 1 August is past the season.
+        expect(byKey.get("attr-1|2026-08-01")).toMatchObject({
+          modelVersion: "catboost",
+          confidence: 0.7,
+        });
+      });
+
+      it("scales TFT by the measured ratio in ratio mode, and says so", async () => {
+        process.env.SEASON_LEVEL = "true";
+        process.env.SEASON_LEVEL_MODE = "ratio";
+        const byKey = await serve();
+
+        // 15 × 2.5 = 37.5, half-up to 40, without TFT's band or confidence.
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 40,
+          modelVersion: "tft+season-ratio",
+          crowdLevel: "unknown",
+          confidence: null,
+          uncertaintyMinutes: null,
+        });
+        expect(byKey.get("attr-2|2026-05-25")).toMatchObject({
+          predictedWaitTime: 30,
+          modelVersion: "catboost+season",
+        });
+      });
+
+      it("reads the inputs on a miss and keeps them, without a date, past the next warmup", async () => {
+        process.env.SEASON_LEVEL = "true";
+        const query = sqlReads();
+        mockHolidaysService.getHolidays.mockImplementation(belgianHoliday);
+        // NRW's school breaks known well past the season; the neighbours
+        // store none, so none of their edges is read.
+        mockHolidaysService.getSchoolHolidayCoverage.mockResolvedValue(
+          buildSchoolCoverage([
+            { country: "DE", region: "DE-NW", through: "2027-07-20" },
+          ]),
+        );
+        mockRedis.set.mockResolvedValue("OK");
+
+        const byKey = await serve(false);
+
+        // Three working days at 50, 60 and 70: the level is 60.
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 60,
+          modelVersion: "tft+season",
+        });
+        // No reference for attr-2.
+        expect(byKey.get("attr-2|2026-05-25")?.modelVersion).toBe("catboost");
+        // The park's country and each influencing country, three days before
+        // the season and four past it, for the bridge-day and eve rules.
+        expect(
+          mockHolidaysService.getHolidays.mock.calls.map(([c]) => c).sort(),
+        ).toEqual(["BE", "DE", "NL"]);
+        expect(mockHolidaysService.getHolidays).toHaveBeenCalledWith(
+          "DE",
+          "2026-05-17",
+          "2026-07-04",
+        );
+        const measured = query.mock.calls.find(([sql]) =>
+          String(sql).includes("WITH observed"),
+        )!;
+        expect(measured[1]).toEqual([["s1"], parkId, "UTC"]);
+        const [key, json, , ttl] = mockRedis.set.mock.calls.find(([k]) =>
+          String(k).startsWith("ml:season-level:"),
+        )!;
+        // The warmup runs every 12 hours and evicts the key before it
+        // rebuilds; the inputs outlive the 13-hour month caches built on them.
+        expect([key, ttl]).toEqual([cacheKey, 14 * 60 * 60]);
+        expect(key).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+        const stored = JSON.parse(json);
+        // The Belgian holiday is a neighbour day, and Monday 1 June before it
+        // is no eve: only the park's own days off make one.
+        expect(stored.dayTypes.daysOff).toEqual(
+          expect.arrayContaining(["2026-05-23"]),
+        );
+        expect(stored.dayTypes.daysOff).not.toContain("2026-06-02");
+        expect(stored.dayTypes.neighbourDays).toEqual(["2026-06-02"]);
+        expect(stored.dayTypes.eves).toEqual(
+          expect.arrayContaining(["2026-05-22"]),
+        );
+        expect(stored.dayTypes.eves).not.toContain("2026-06-01");
+        expect(stored.dayTypes.unknownDays).toEqual([]);
+        expect(stored.references).toEqual([
+          {
+            seasonId: "s1",
+            attractionId: "attr-1",
+            dayType: "working",
+            days: 3,
+            level: 60,
+            maxPeak: 70,
+            ratioDays: 3,
+            ratio: 3,
+          },
+        ]);
+      });
+
+      it("measures no working day past a neighbour's school data", async () => {
+        process.env.SEASON_LEVEL = "true";
+        onDay("2026-05-20");
+        sqlReads();
+        mockHolidaysService.getHolidays.mockResolvedValue([]);
+        // Belgium's breaks are stored to Wednesday 20 May only: a Belgian
+        // break on Thursday 21 or Tuesday 26 May is not known.
+        mockHolidaysService.getSchoolHolidayCoverage.mockResolvedValue(
+          buildSchoolCoverage([
+            { country: "DE", region: "DE-NW", through: "2027-07-20" },
+            { country: "BE", region: null, through: "2026-05-20" },
+          ]),
+        );
+        mockRedis.set.mockResolvedValue("OK");
+
+        const byKey = await serve(false);
+
+        // One known working day is no reference: the model's number.
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 15,
+          modelVersion: "tft",
+        });
+        const [, json] = mockRedis.set.mock.calls.find(([k]) =>
+          String(k).startsWith("ml:season-level:"),
+        )!;
+        expect(JSON.parse(json).dayTypes.unknownDays).toEqual(
+          expect.arrayContaining(["2026-05-21", "2026-05-25", "2026-05-26"]),
+        );
+      });
+
+      it("ignores a neighbour whose school data ended before the park's today", async () => {
+        process.env.SEASON_LEVEL = "true";
+        // The same Belgian edge as above, read five days after it.
+        onDay("2026-05-25");
+        sqlReads();
+        mockHolidaysService.getHolidays.mockResolvedValue([]);
+        mockHolidaysService.getSchoolHolidayCoverage.mockResolvedValue(
+          buildSchoolCoverage([
+            { country: "DE", region: "DE-NW", through: "2027-07-20" },
+            { country: "BE", region: null, through: "2026-05-20" },
+          ]),
+        );
+        mockRedis.set.mockResolvedValue("OK");
+
+        const byKey = await serve(false);
+
+        expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+          predictedWaitTime: 60,
+          modelVersion: "tft+season",
+        });
+      });
+
+      it("serves the models' numbers when the inputs cannot be read, and remembers the failure for five minutes", async () => {
+        process.env.SEASON_LEVEL = "true";
+        const query = sqlReads();
+        mockHolidaysService.getHolidays.mockRejectedValue(
+          new Error("holidays down"),
+        );
+        mockRedis.set.mockImplementation(async (key: string, value: string) => {
+          stored.set(key, value);
+          return "OK";
+        });
+        const warn = jest
+          .spyOn((service as any).logger, "warn")
+          .mockImplementation(() => undefined);
+
+        const first = await serve(false);
+        const second = await serve(false);
+
+        for (const byKey of [first, second]) {
+          expect(byKey.get("attr-1|2026-05-25")).toMatchObject({
+            predictedWaitTime: 15,
+            modelVersion: "tft",
+          });
+        }
+        // The second read runs nothing and logs nothing.
+        expect(
+          query.mock.calls.filter(([sql]) =>
+            String(sql).includes("FROM park_seasons"),
+          ),
+        ).toHaveLength(1);
+        const warned = warn.mock.calls.filter(([line]) =>
+          String(line).includes("Season level inputs"),
+        );
+        expect(warned).toEqual([
+          [expect.stringMatching(/park-123.*5 min: holidays down/)],
+        ]);
+        expect(mockRedis.set).toHaveBeenCalledTimes(1);
+        expect(mockRedis.set).toHaveBeenCalledWith(
+          `${cacheKey}:failed`,
+          "holidays down",
+          "EX",
+          5 * 60,
+        );
       });
 
       it("leaves the models' numbers alone while the switch is off", async () => {

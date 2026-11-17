@@ -5,6 +5,8 @@ import {
   OnApplicationBootstrap,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
@@ -16,7 +18,11 @@ import { ParkIntegrationService } from "../../parks/services/park-integration.se
 import { AttractionIntegrationService } from "../../attractions/services/attraction-integration.service";
 import { CalendarService } from "../../parks/services/calendar.service";
 import { BestDaysService } from "../../parks/services/best-days.service";
-import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import {
+  CDN_SETTLE_MS,
+  RevalidationService,
+} from "../../common/revalidation/revalidation.service";
+import { forecastCacheTags } from "../../common/revalidation/park-status-transitions";
 import { ParkStatusRevalidationService } from "../../common/revalidation/park-status-revalidation.service";
 import { DiscoveryService } from "../../discovery/discovery.service";
 import { SearchService } from "../../search/search.service";
@@ -46,12 +52,22 @@ const CALENDAR_MONTHS_AHEAD = 3;
 const REGION_CALENDAR_MONTHS_AHEAD = 13;
 /**
  * And their past months, back to this one, are kept as last-year snapshots:
- * every day of the region calendar from today on reads the same weekday a
- * year earlier, ranked on it past TFT's 60 days and shown beside the forecast
- * within them, so a year's search reads months -12 … 0. The snapshots cover
- * -12 … -1; the running month is built on read, as it never stops changing.
+ * every day of the region calendar from today on reads its reference day a
+ * year earlier (`lastYearReferenceDay`, up to three weeks before 52 weeks back
+ * and further for a moving holiday), ranked on it past TFT's 60 days and
+ * shown beside the forecast within them, so a year's search reads months
+ * -13 … 0. The snapshots cover -13 … -1; the running month is built on read,
+ * as it never stops changing.
  */
-const REGION_LAST_YEAR_MONTHS_BACK = 12;
+const REGION_LAST_YEAR_MONTHS_BACK = 13;
+
+/**
+ * The pause after one park's calendar build before the next park's. A single force-refreshed
+ * build is already heavy (five months of per-ride-day CTEs over queue_data and a cold daily ML
+ * call), and the pause lets the user queries queued behind it drain. The schedule sync's best-days
+ * rebuilds, each a 90-day calendar build, keep the same distance.
+ */
+export const CALENDAR_WARMUP_PARK_PAUSE_MS = 2500;
 
 /**
  * Cache Warmup Service
@@ -100,6 +116,7 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     private readonly discoveryService: DiscoveryService,
     private readonly searchService: SearchService,
     private readonly popularityService: PopularityService,
+    @InjectQueue("manual-metadata") private readonly revalidateQueue: Queue,
   ) {}
 
   /**
@@ -219,9 +236,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * Covers typical user range: last month (e.g. recap) through 3 months ahead (planning).
    * Called from warmupCalendarForAllParks (background warmup every 12h).
    *
-   * @param force When true, evict the daily serving-prediction cache and the calendar
-   *   month caches first, so the rebuild regenerates fresh predictions instead of just
-   *   reading the still-warm cache. This is how the 12h background refresh actually
+   * @param force When true, evict the daily and yearly serving-prediction caches, the
+   *   season level's inputs and the calendar month caches first, so the rebuild
+   *   regenerates fresh predictions instead of just reading the still-warm cache.
+   *   This is how the 12h background refresh actually
    *   refreshes the data (weather/model) while keeping users off the ~15s cold path.
    * @returns the park slug when the best-days snapshot was materialized (for batched
    *   frontend revalidation), or null on failure / when the calendar build was skipped.
@@ -273,13 +291,19 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // Evict the cold-path daily ML cache + the calendar month caches in range so the
         // rebuild below regenerates fresh (otherwise buildCalendarResponse just returns
         // the still-warm month cache and the 12h refresh would be a no-op).
-        // The yearly ML cache is intentionally NOT evicted: only the read path
-        // (getParkPredictionsYearly) rebuilds it, so evicting it here just left
-        // it cold until the next visitor paid the ~15s cold path. It refreshes
-        // via its own TTL instead.
+        // The season level's inputs go with them, and a remembered failure to
+        // load them: this is the one place they change, so the forecast ring
+        // after the run announces every new season level
+        // (`MLService.withSeasonLevel`). The yearly view's served rows and its
+        // route answer carry that level too, and kept, they showed the old one
+        // for half a day; their rebuild reads the daily rows this run warms.
         await this.redis
           .del(
             CacheKeys.mlParkPredictions(park.id, "daily", todayStr),
+            CacheKeys.mlParkPredictions(park.id, "yearly", todayStr),
+            CacheKeys.predictionsYearlyResponse(park.id, todayStr),
+            CacheKeys.seasonLevelInputs(park.id),
+            CacheKeys.seasonLevelInputsFailed(park.id),
             ...monthKeys,
           )
           .catch(() => undefined);
@@ -373,8 +397,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * The two things a trip region's calendar reads besides the month caches:
    * the last day this park's calendar carries a forecast (`forecastUntil`,
    * read off what the warm months actually returned, not a constant), and the
-   * last-year snapshots of the past months its days read the same weekday a
-   * year back from. A snapshot that exists is left alone: a passed month does
+   * last-year snapshots of the past months its days read their reference day
+   * a year back from. A snapshot that exists is left alone: a passed month does
    * not change, and it lives a week (`TRIP_LAST_YEAR_TTL`).
    */
   private async warmTripRegionPark(
@@ -450,14 +474,12 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         return 0;
       }
 
-      // Serial (batch 1) with a 2.5s pause: a single force-refreshed park build is
-      // already heavy (5 months of per-ride-day CTEs over queue_data + a cold daily
-      // ML call), and two of them in parallel saturated disk IO — every concurrent
-      // query stalled uniformly for 24-48s in the 08:00/20:00 warmup windows
-      // (slow-query log 2026-06-11). Serializing halves the peak IO pressure and
-      // the pause lets queued user queries drain between parks; the only cost is
+      // Serial (batch 1), with CALENDAR_WARMUP_PARK_PAUSE_MS between parks: two
+      // park builds in parallel saturated disk IO — every concurrent query stalled
+      // uniformly for 24-48s in the 08:00/20:00 warmup windows (slow-query log
+      // 2026-06-11). Serializing halves the peak IO pressure; the only cost is
       // wall time on a 2×/day background job.
-      const revalidatedSlugs: string[] = [];
+      const rebuilt: Park[] = [];
       const warmedCount = await this.processBatch(
         parkIds,
         1,
@@ -470,37 +492,65 @@ export class CacheWarmupService implements OnApplicationBootstrap {
             },
           });
           if (!park) return false;
-          const slug = await this.warmupCalendarForPark(park, true);
-          if (slug) revalidatedSlugs.push(slug);
+          if (await this.warmupCalendarForPark(park, true)) rebuilt.push(park);
           return true;
         },
-        2500,
+        CALENDAR_WARMUP_PARK_PAUSE_MS,
       );
 
-      // One batched revalidation for every park whose best-days snapshot was just
-      // refreshed — the frontend drops its (day-long) best-days cache immediately
-      // instead of waiting out the TTL. No-op unless the webhook is configured.
-      if (revalidatedSlugs.length > 0) {
-        await this.revalidationService
-          .revalidateBestDays(revalidatedSlugs)
-          .catch((err) =>
-            this.logger.warn(
-              `Best-days revalidation failed: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            ),
-          );
-      }
+      if (rebuilt.length > 0) await this.announceForecast(rebuilt);
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(
-        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s (best-days: ${revalidatedSlugs.length})`,
+        `✅ Calendar warmup complete: ${warmedCount}/${parkIds.length} parks in ${duration}s (best-days: ${rebuilt.length})`,
       );
       return warmedCount;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Calendar warmup failed: ${msg}`);
       return 0;
+    }
+  }
+
+  /**
+   * Tells the frontend the forecast moved, for every park whose best-days snapshot was just
+   * rebuilt: one batched call with each park's best-days and calendar tags (`forecastCacheTags`),
+   * so the calendar grid, a month page's summary, best-days and Parky's tip take the new forecast
+   * at the same moment rather than each at the end of its own window.
+   *
+   * `immediate`, because the calendar relays sit under an hour at Cloudflare, which no tag
+   * reaches: an old answer Vercel served once more after the ring would be kept there for that
+   * hour. Sent again after `CDN_SETTLE_MS` (docs/rules/publish-outside-in.md). No-op unless the
+   * webhook is configured.
+   */
+  private async announceForecast(parks: Park[]): Promise<void> {
+    const tags = parks.flatMap(forecastCacheTags);
+    await this.revalidationService
+      .revalidateTags(tags, { immediate: true })
+      .catch((err) =>
+        this.logger.warn(
+          `Forecast revalidation failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+    try {
+      await this.revalidateQueue.add(
+        "revalidate-tags",
+        { tags },
+        {
+          delay: CDN_SETTLE_MS,
+          removeOnComplete: true,
+          removeOnFail: true,
+          jobId: `revalidate-forecast-${Math.floor(Date.now() / 60_000)}`,
+        },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not schedule the post-CDN forecast revalidation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 

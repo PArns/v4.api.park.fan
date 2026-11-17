@@ -88,6 +88,11 @@ export interface ParkCalendarSource {
   };
   rows: ScheduleRowLike[];
   lastYear: Map<string, LastYearMonth>;
+  /**
+   * The reference day a year back per date (`lastYearReferenceDays`); a date
+   * it lacks, or a source without it, reads 52 weeks back.
+   */
+  lastYearReferences?: ReadonlyMap<string, string>;
 }
 
 /** A curated season as the public seasons route serves it, with its park. */
@@ -335,19 +340,20 @@ export function stormSeasonSpan(storm: StormSeasonConfig): {
 }
 
 /**
- * The past months a window's days read last year from: the same weekday a
- * year back, for each day from today on. Every day, forecast or not: past
- * TFT's reach the day is ranked on last year, and within it last year sits
- * beside the forecast (`lastYearWait`).
+ * The past months a window's days read last year from: each day's reference
+ * day a year back (`lastYearDateFor`), for each day from today on. Every day,
+ * forecast or not: past TFT's reach the day is ranked on last year, and within
+ * it last year sits beside the forecast (`lastYearWait`).
  */
 export function lastYearMonthsNeeded(
   days: CalendarDayLike[],
   today: string,
+  references?: ReadonlyMap<string, string>,
 ): string[] {
   const months = new Set<string>();
   for (const day of days) {
     if (day.date < today) continue;
-    const ly = lastYearDateFor(day.date);
+    const ly = lastYearDateFor(day.date, references);
     if (ly < today) months.add(monthOf(ly));
   }
   return [...months].sort();
@@ -583,7 +589,13 @@ export function assembleRegionCalendar(
 
   const cells = new Map<string, Map<string, TripParkDayInternal>>();
   const coverage: Record<string, string | null> = {};
-  for (const { park, calendar, rows, lastYear } of sources) {
+  for (const {
+    park,
+    calendar,
+    rows,
+    lastYear,
+    lastYearReferences,
+  } of sources) {
     const tz = park.timezone || region.timezone;
     const earlyKind = earlyKindOf.get(park.config.group) ?? "early_entry";
     const rowsByDate = new Map<string, ScheduleRowLike[]>();
@@ -597,7 +609,7 @@ export function assembleRegionCalendar(
     const seasons = seasonsByPark.get(park.id) ?? [];
     const parkCells = new Map<string, TripParkDayInternal>();
     for (const date of span) {
-      const ly = lastYearDateFor(date);
+      const ly = lastYearDateFor(date, lastYearReferences);
       parkCells.set(
         date,
         buildParkDay({

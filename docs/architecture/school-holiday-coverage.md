@@ -51,6 +51,7 @@ park's wait-time day lies before its region's first school row.
 | Chronos-2 shadow | Values unchanged; the per-curve `covariates.holidays` flag and `holidayDataThrough` use `holidays_through`: the earlier of the country's last public row and the region's last school row, `none` when a type has no row |
 | Calendar (`CalendarDay`), `/best-days`, `/plan/day` context | `isSchoolVacation` stays boolean; a day `false` only because the data ends also gets `schoolVacationUnknown: true` |
 | `/plan/day` climatology | A planned or reference day with `schoolVacationUnknown` is `holidayState: "school_unknown"` and matches only such days, so Spain's unpublished days are not compared with its known regular days |
+| [Season level](../ml/season-level.md#day-types) (`seasonDayTypes`) | A weekday past the park's own edge that no other rule makes a day off, and the working day before it, is unknown: measured into no reference and served the model's number. So is a working day past the earliest edge among the influencing regions whose school data reaches the park's today, unless a stored neighbour row already makes it a neighbour day; a neighbour without school data, or whose data ended before today (Mexico for US parks, Ireland for English ones), is left out (`seasonSchoolCoverage`) |
 
 **CatBoost and NaN.** Training uses the default `nan_mode = Min`, which sends NaN to the side of the
 lowest border, 0, so a model trained before this change serves as before. Later trainings may split NaN

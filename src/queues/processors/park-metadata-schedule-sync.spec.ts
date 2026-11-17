@@ -1,5 +1,11 @@
 import { ParkMetadataProcessor } from "./park-metadata.processor";
 import { ThemeParksRateLimitError } from "../../external-apis/themeparks/themeparks.errors";
+import { CALENDAR_WARMUP_PARK_PAUSE_MS } from "../services/cache-warmup.service";
+import { BEST_DAYS_WINDOW } from "../../parks/services/best-days.service";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+} from "../../common/utils/date.util";
 
 /**
  * The bulk schedule sync's three outcomes per park, which used to be two.
@@ -21,7 +27,10 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     countrySlug: "germany",
     citySlug: "bruehl",
     slug: name.toLowerCase(),
+    timezone: "America/Los_Angeles",
   });
+  // The park's today, not the server's: the snapshot's window starts there.
+  const today = () => getCurrentDateInTimezone("America/Los_Angeles");
 
   const FULL = park("p-full", "Full");
   const EMPTY = park("p-empty", "Empty");
@@ -30,7 +39,9 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
   let parksService: any;
   let themeParksClient: any;
   let revalidationService: any;
+  let bestDaysService: any;
   let parkRepository: any;
+  let sleep: jest.SpyInstance;
   let warnings: string[];
   let processor: ParkMetadataProcessor;
 
@@ -50,7 +61,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
         .fn()
         .mockImplementation((_id: string, rows: unknown[]) => rows.length),
       fillScheduleGaps: jest.fn().mockResolvedValue(0),
-      recordScheduleVersions: jest.fn().mockResolvedValue(0),
+      recordScheduleVersions: jest.fn().mockResolvedValue([]),
       invalidateCalendarMonthCache: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -75,6 +86,11 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     revalidationService = {
       revalidateTags: jest.fn().mockResolvedValue(undefined),
     };
+    bestDaysService = {
+      precomputeForPark: jest.fn((p: { slug: string }) =>
+        Promise.resolve(p.slug),
+      ),
+    };
     parkRepository = {
       find: jest.fn().mockResolvedValue([FULL, EMPTY, THROTTLED]),
     };
@@ -95,6 +111,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
       {} as any,
       {} as any,
       {} as any,
+      bestDaysService,
     );
 
     const logger: any = (processor as any).logger;
@@ -105,6 +122,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     jest.spyOn(logger, "error").mockImplementation(() => undefined);
     jest.spyOn(logger, "debug").mockImplementation(() => undefined);
     jest.spyOn(logger, "verbose").mockImplementation(() => undefined);
+    sleep = jest.spyOn(processor as any, "sleep").mockResolvedValue(undefined);
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -178,13 +196,94 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     }
   });
 
-  it("revalidates each park's frontend tag once, in one call", async () => {
+  it("revalidates each park's page and calendar once, in one call", async () => {
     await processor.handleSyncSchedulesOnly({} as any);
 
     expect(revalidationService.revalidateTags).toHaveBeenCalledTimes(1);
     const [tags] = revalidationService.revalidateTags.mock.calls[0];
-    expect(tags).toHaveLength(3);
+    expect(tags).toHaveLength(6);
     expect(tags).toContain("park:europe/germany/bruehl/full");
+    expect(tags).toContain("park-calendar:europe/germany/bruehl/full");
+  });
+
+  it("rebuilds and rings the best-days snapshot of a park whose schedule changed, and of no other", async () => {
+    // Full's sync wrote a changed day; the throttled park's gap fill did too,
+    // but its snapshot fails to rebuild and keeps the old one.
+    parksService.recordScheduleVersions.mockImplementation((id: string) =>
+      Promise.resolve(id === EMPTY.id ? [] : [addIsoDays(today(), 10)]),
+    );
+    bestDaysService.precomputeForPark.mockImplementation(
+      (p: { id: string; slug: string }) =>
+        Promise.resolve(p.id === THROTTLED.id ? null : p.slug),
+    );
+
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    expect(
+      bestDaysService.precomputeForPark.mock.calls.map(
+        ([p]: [{ id: string }]) => p.id,
+      ),
+    ).toEqual([FULL.id, THROTTLED.id]);
+    // After the months it is built from were evicted.
+    expect(
+      bestDaysService.precomputeForPark.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      Math.max(
+        ...parksService.invalidateCalendarMonthCache.mock.invocationCallOrder,
+      ),
+    );
+    expect(revalidationService.revalidateTags).toHaveBeenCalledTimes(1);
+    const [tags] = revalidationService.revalidateTags.mock.calls[0];
+    expect(tags.filter((t: string) => t.startsWith("best-days:"))).toEqual([
+      "best-days:full",
+    ]);
+    expect(tags).toContain("park-calendar:europe/germany/bruehl/full");
+  });
+
+  it("rebuilds only a park with a changed day inside the snapshot's window", async () => {
+    // The gap fill's daily placeholder sits half a year out, past the window,
+    // and a corrected past day is no longer in it either; the window's last
+    // day still is.
+    const lastDay = addIsoDays(today(), BEST_DAYS_WINDOW);
+    const changed: Record<string, string[]> = {
+      [FULL.id]: [addIsoDays(today(), 182), lastDay],
+      [EMPTY.id]: [addIsoDays(today(), -1)],
+      [THROTTLED.id]: [addIsoDays(lastDay, 1), addIsoDays(today(), 182)],
+    };
+    parksService.recordScheduleVersions.mockImplementation((id: string) =>
+      Promise.resolve(changed[id]),
+    );
+
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    expect(
+      bestDaysService.precomputeForPark.mock.calls.map(
+        ([p]: [{ id: string }]) => p.id,
+      ),
+    ).toEqual([FULL.id]);
+    const [tags] = revalidationService.revalidateTags.mock.calls[0];
+    expect(tags.filter((t: string) => t.startsWith("best-days:"))).toEqual([
+      "best-days:full",
+    ]);
+    // The others' calendars are still rung: their months were evicted.
+    expect(tags).toContain("park-calendar:europe/germany/bruehl/throttled");
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("keeps the calendar warmup's pause between two rebuilds", async () => {
+    parksService.recordScheduleVersions.mockImplementation((id: string) =>
+      Promise.resolve(id === EMPTY.id ? [] : [today()]),
+    );
+
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(CALENDAR_WARMUP_PARK_PAUSE_MS);
+    const [first, second] =
+      bestDaysService.precomputeForPark.mock.invocationCallOrder;
+    const paused = sleep.mock.invocationCallOrder[0];
+    expect(paused).toBeGreaterThan(first);
+    expect(paused).toBeLessThan(second);
   });
 
   it("skips a park without the Wiki source without asking the client", async () => {

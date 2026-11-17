@@ -30,6 +30,7 @@ import type { TripParkDayInternal } from "./trip-calendar.util";
 import { findTripDates } from "./trip-when";
 import {
   resolveWithin,
+  schoolBreakPeriods,
   schoolBreakRegions,
   SCHOOL_BREAK_REGIONS,
 } from "./trip-school-breaks";
@@ -578,5 +579,44 @@ describe("school breaks of the six locales' markets", () => {
     expect(breaks.regions.find((r) => r.code === "ES-AN-SE")?.name).toBe(
       "Andalucía (Sevilla)",
     );
+  });
+
+  describe("on the country's own weekend", () => {
+    /** Nationwide break rows on these days of April 2027 (the 4th is a Sunday). */
+    const periods = (country: string, days: string[]) =>
+      schoolBreakPeriods(
+        days.map((d) => ({
+          date: `2027-04-${d}`,
+          name: "Spring break",
+          country,
+          region: null,
+          holidayType: "school",
+          isNationwide: true,
+        })),
+        `${country}-XX`,
+        "2027-04-01",
+        "2027-04-30",
+      ).map(({ from, to }) => [from, to]);
+
+    it("widens a break over the weekend either side", () => {
+      // Sunday to Thursday: no school on Friday and Saturday in Israel.
+      const sundayToThursday = ["04", "05", "06", "07", "08"];
+      expect(periods("IL", sundayToThursday)).toEqual([
+        ["2027-04-02", "2027-04-10"],
+      ]);
+      expect(periods("DE", sundayToThursday)).toEqual([
+        ["2027-04-03", "2027-04-08"],
+      ]);
+    });
+
+    it("joins two breaks across the weekend between them", () => {
+      // Sunday 4 to Thursday 8, then Sunday 11 and Monday 12.
+      const days = ["04", "05", "06", "07", "08", "11", "12"];
+      expect(periods("IL", days)).toEqual([["2027-04-02", "2027-04-12"]]);
+      expect(periods("DE", days)).toEqual([
+        ["2027-04-03", "2027-04-08"],
+        ["2027-04-10", "2027-04-12"],
+      ]);
+    });
   });
 });

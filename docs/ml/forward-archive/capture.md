@@ -31,13 +31,17 @@ and the persistence blend where PCN answered. Each slot records its source in `s
 pcn_blend, `c` catboost, `s` chronos2_served (PAR-911). `/plan/day` hours record `m` measured
 (the hour-mean of that served curve), `k` composed (old composer: hourly P50 stretched to the
 level), `h` `composed_h5` (H5, no level), `t` `composed_h5_tft` (H5 × TFT level ÷ the ride's 56-day
-P90), `l` climatology, `o` observed; `-` is a slot the payload did not carry. With
+P90), `e` `composed_h5_season` (H5 × the [season level](../season-level.md) ÷ the same P90), `l`
+climatology, `o` observed; `-` is a slot the payload did not carry. With
 `PLAN_DAY_H5_COMPOSER=true` a planner ride carrying `slots` is archived at 15 minutes
 (`slot_minutes = 15`) exactly as the frontend reads it.
 
 **Composer shadow (PAR-834).** Surfaces 3–5 hold, per ride with both an old-composer curve and an
-H5 profile, the old composer (its hour repeated over four quarters), plain H5, and H5 as the flag
-would serve it (`h5LevelFor`'s routing — a level only on busy rides d0–d2 since PAR-901). Where
+H5 profile, the old composer (its hour repeated over four quarters), plain H5, and H5 with TFT's
+routing (`h5LevelFor` — a TFT level only on busy rides d0–d2 since PAR-901). A season-scaled ride
+writes no surface 5, like any ride without a TFT level: surface 5 is the `tfth5` column of
+`planner_h5_slots` and measures TFT's routing only; the season-scaled curve is the served
+`plan_day` row (code `e`). Where
 surface 5 is missing the scorer reads surface 4 under its name, so the three always cover the
 same ride-days. They are scored only under use case `UC3S` (sources `shadow_peak_scaled`,
 `shadow_h5`, `shadow_h5_routed`), never into `all` or `UC3`.

@@ -7,6 +7,8 @@ and forward-fill of the context level.
     cd pcn-service && python3 -m pytest test_tensor.py -q
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -114,6 +116,30 @@ def test_dow_channels_broadcast_and_weekend_flag():
     # dow channels must sit AFTER the original 8 (append-only evolution contract —
     # older checkpoints select their channels by prefix-compatible names).
     assert CHANNELS.index("dow_sin") > CHANNELS.index("park_occ")
+
+
+def test_weekend_flag_is_the_park_countrys():
+    # PAR-1379: one slot each on Fri 2026-06-05, Sat and Sun. Friday is a weekend
+    # day in Saudi Arabia, Sunday in Germany and for a park without a country.
+    panel = pd.DataFrame([_row("a", "2026-06-05 10:00", 10.0, 5),
+                          _row("a", "2026-06-07 10:00", 10.0, 5)])
+    for country, expected in (
+        ("SA", [1.0, 1.0, 0.0]),
+        ("DE", [0.0, 1.0, 1.0]),
+        (None, [0.0, 1.0, 1.0]),
+    ):
+        crt = tensor.build(panel, min_rides_open=1, freq="1D", country=country)
+        wi = crt.channel_names.index("is_weekend")
+        assert crt.features[0, :, wi].tolist() == expected, country
+
+
+def test_weekend_rules_is_the_same_file_as_ml_service():
+    # Each service ships its own image, so the table is copied, not shared.
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "weekend_rules.py"), encoding="utf-8") as a, open(
+        os.path.join(here, "..", "ml-service", "weekend_rules.py"), encoding="utf-8"
+    ) as b:
+        assert a.read() == b.read()
 
 
 def test_loss_mask_excludes_closed_and_gaps():
