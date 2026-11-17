@@ -4,6 +4,7 @@ import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { safeJsonParse } from "../../common/utils/json.util";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import { parseDateRange } from "../../common/utils/date-parsing.util";
 import {
   addIsoDays,
@@ -297,7 +298,7 @@ export class DisplayConsistencyService {
           return [] as string[];
         }),
     ]);
-    return [...new Set([...seasonal, ...viewed])];
+    return [...new Set([...seasonal, ...viewed])].filter(isCanonicalUuid);
   }
 
   /** `/calendar` with `includeHourly=none`, what the grid, the day dialog and the month summary read. */

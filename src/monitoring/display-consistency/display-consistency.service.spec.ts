@@ -48,6 +48,8 @@ const park = {
   slug: "phantasialand",
   timezone: "Europe/Berlin",
 } as Park;
+const PARK_A = "22222222-2222-4222-8222-222222222222";
+const PARK_B = "33333333-3333-4333-8333-333333333333";
 const today = getCurrentDateInTimezone(park.timezone);
 const tomorrow = addIsoDays(today, 1);
 
@@ -178,7 +180,10 @@ describe("DisplayConsistencyService", () => {
           adminOverview: jest.fn().mockResolvedValue({
             kinds: [
               { kind: "article", top: [{ key: "a-post" }] },
-              { kind: "park", top: [{ key: "park-b" }, { key: "park-a" }] },
+              {
+                kind: "park",
+                top: [{ key: PARK_B }, { key: "not-a-uuid" }, { key: PARK_A }],
+              },
             ],
           }),
         },
@@ -208,7 +213,7 @@ describe("DisplayConsistencyService", () => {
       crowdLevel: dayOf(input.date as string)!.crowdLevel,
     });
     (regionOfPark as jest.Mock).mockReturnValue(null);
-    (parksWithRunningSeason as jest.Mock).mockResolvedValue(["park-a"]);
+    (parksWithRunningSeason as jest.Mock).mockResolvedValue([PARK_A]);
 
     service = new DisplayConsistencyService(moduleRef, {} as DataSource, redis);
   });
@@ -357,22 +362,22 @@ describe("DisplayConsistencyService", () => {
     );
   });
 
-  it("checks the parks in a season and the most read ones once each, and keeps the run for two days", async () => {
+  it("checks the parks in a season and the most read ones once each, ids only, and keeps the run for two days", async () => {
     parks.findById.mockImplementation((id: string) =>
       Promise.resolve({ ...park, id, name: id }),
     );
 
     const summary = await service.runDaily();
 
-    expect(summary.parks.map((p) => p.id)).toEqual(["park-a", "park-b"]);
+    expect(summary.parks.map((p) => p.id)).toEqual([PARK_A, PARK_B]);
     expect(summary.mismatches).toBe(0);
     expect(redis.set).toHaveBeenCalledWith(
-      "display-consistency:v1:park:park-a",
+      `display-consistency:v1:park:${PARK_A}`,
       expect.any(String),
       "EX",
       2 * 24 * 60 * 60,
     );
     expect(await service.latestSummary()).toEqual(summary);
-    expect((await service.latestForPark("park-b"))?.park.id).toBe("park-b");
+    expect((await service.latestForPark(PARK_B))?.park.id).toBe(PARK_B);
   });
 });

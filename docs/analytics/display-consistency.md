@@ -9,10 +9,11 @@ before you add a surface that shows a park-day's crowd level or wait.
 
 It exists because visitors saw two contradictions in three days: on 2026-11-15 at Europa-Park the today
 panel read "Andrang jetzt hoch" and the day dialog "Normal", and on 2026-11-17 at Phantasialand Parky's
-tip said "hoher Andrang, lieber nicht" above a day reading "sehr niedrig, 20 Min". The first is two
-statistics (the live level against P50, the day so far against the typical-day peak; see
-[crowd levels](../rules/crowd-levels.md)). The second is one statistic shown twice: a tip kept for 12
-hours keeps the stamp it was written with, here before PAR-1375 corrected the season level.
+tip said "hoher Andrang, lieber nicht" above a day reading "sehr niedrig, 20 Min". As the frontend reads
+them, the first is two statistics: the live level against P50, and the day so far against the
+typical-day peak ([crowd levels](../rules/crowd-levels.md)). The second is one statistic shown twice,
+and the tip's 12-hour cache lets a stamp outlive the level it was written from; PAR-1375 changed
+Phantasialand's season level that day.
 
 ## What it reads
 
