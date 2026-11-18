@@ -466,12 +466,17 @@ told otherwise.
 | `write_assistant_knowledge`     | editor | change, dry run | `PUT assistant/knowledge/:topic`: creates a topic or replaces its fields; the next chat reads it within a minute                  |
 | `delete_assistant_knowledge`    | editor | delete, confirm | `DELETE assistant/knowledge/:topic`; the audit row keeps the whole topic                                                          |
 | `block_event`                   | editor | change          | `PUT` or `DELETE analytics/blocked-events/:name`                                                                                  |
-| `api_keys`                      | owner  | no              | `GET api-keys`, the daily counts summed unless asked for                                                                          |
+| `api_keys`                      | owner  | no              | `GET api-keys`, the daily counts summed unless asked for, with permissions and `awaitsPickup`                                     |
 | `create_api_key`                | owner  | add             | `POST api-keys`                                                                                                                   |
-| `update_api_key`                | owner  | change          | `PATCH api-keys/:id`                                                                                                              |
+| `update_api_key`                | owner  | change          | `PATCH api-keys/:id`, `permissions` replacing the whole list                                                                      |
 | `rotate_api_key`                | owner  | change          | `POST api-keys/:id/rotate`                                                                                                        |
 | `revoke_api_key`                | owner  | delete, dry run | `DELETE api-keys/:id`, or `DELETE api-keys/:id/previous` to end a grace period                                                    |
 | `delete_api_key`                | owner  | delete, dry run | `POST api-keys/:id/delete`, a revoked key only                                                                                    |
+| `api_key_requests`              | owner  | no              | `GET api-key-requests`, what the applicant typed under `visitorData`                                                              |
+| `approve_api_key_request`       | owner  | add, dry run    | `POST api-key-requests/:id/approve`; the developer picks the key up, so no secret comes back                                      |
+| `reject_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reject`                                                                                                |
+| `reopen_api_key_request`        | owner  | change          | `POST api-key-requests/:id/reopen`                                                                                                |
+| `delete_api_key_request`        | owner  | delete, dry run | `DELETE api-key-requests/:id`; a key issued for it stays                                                                          |
 | `admin_users`                   | owner  | no              | `AdminAuthService.list`, as `auth/users` does: accounts and roles, never an address                                               |
 
 `run_maintenance`'s dry run of `validate-and-repair-parks` runs the check and repairs nothing

@@ -93,6 +93,13 @@ import {
   updateApiKeyTool,
 } from "./api-keys.tools";
 import {
+  apiKeyRequestsTool,
+  approveApiKeyRequestTool,
+  deleteApiKeyRequestTool,
+  rejectApiKeyRequestTool,
+  reopenApiKeyRequestTool,
+} from "./api-key-requests.tools";
+import {
   adminUsersTool,
   blockEventTool,
   deleteAssistantConversationTool,
@@ -196,5 +203,10 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   rotateApiKeyTool,
   revokeApiKeyTool,
   deleteApiKeyTool,
+  apiKeyRequestsTool,
+  approveApiKeyRequestTool,
+  rejectApiKeyRequestTool,
+  reopenApiKeyRequestTool,
+  deleteApiKeyRequestTool,
   adminUsersTool,
 ];
