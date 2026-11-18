@@ -23,6 +23,10 @@ function item(id: string, revokedAt: Date | null) {
     note: null,
     requestsPerHour: 1000,
     allowedParkIds: null,
+    permissions: null as string[] | null,
+    ownerUserId: null as string | null,
+    requestId: null as string | null,
+    revealedAt: null as Date | null,
     expiresAt: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     lastUsedAt: null,
@@ -50,8 +54,11 @@ function controller() {
       key: "pfk_secret",
       item: item(ACTIVE, null),
     })),
-    update: jest.fn(async () => {
-      throw new NotFoundException("No such active key");
+    update: jest.fn(async (_admin: unknown, id: string) => {
+      if (id !== ACTIVE) throw new NotFoundException("No such active key");
+      return {
+        item: { ...item(ACTIVE, null), permissions: ["parks.details"] },
+      };
     }),
     revoke: jest.fn(async () => undefined),
     remove: jest.fn(async () => undefined),
@@ -97,6 +104,44 @@ describe("API key tools", () => {
     expect(audit).toEqual([]);
   });
 
+  it("api_keys marks only a developer account's key as awaiting pickup", async () => {
+    const owner = "eeeeeeee-eeee-4eee-8eee-000000000001";
+    const keys = {
+      ...controller(),
+      list: async () => ({
+        items: [
+          { ...item(ACTIVE, null), ownerUserId: owner },
+          { ...item(REVOKED, null), permissions: ["forecasts.crowd"] },
+        ],
+      }),
+    };
+    const { ctx } = adminContext("owner", [[AdminApiKeysController, keys]]);
+    const answer = (await apiKeysTool.handler(
+      { status: "active", withDays: false, limit: 50 },
+      ctx,
+    )) as { items: Array<Record<string, unknown>> };
+    expect(answer.items).toEqual([
+      expect.objectContaining({ awaitsPickup: true, permissions: null }),
+      expect.objectContaining({
+        awaitsPickup: false,
+        permissions: ["forecasts.crowd"],
+      }),
+    ]);
+  });
+
+  it("update_api_key sends permissions as the route takes them", async () => {
+    const keys = controller();
+    const { ctx } = adminContext("owner", [[AdminApiKeysController, keys]]);
+    const answer = await updateApiKeyTool.handler(
+      { id: ACTIVE, permissions: ["parks.details"] },
+      ctx,
+    );
+    expect(keys.update).toHaveBeenCalledWith(ctx.admin, ACTIVE, {
+      permissions: ["parks.details"],
+    });
+    expect(answer).toMatchObject({ item: { permissions: ["parks.details"] } });
+  });
+
   it("update_api_key hands the route's 404 to the model", async () => {
     const { ctx } = adminContext("owner", [
       [AdminApiKeysController, controller()],
@@ -105,7 +150,7 @@ describe("API key tools", () => {
       updateApiKeyTool.handler({ id: REVOKED, requestsPerHour: 10 }, ctx),
     ).rejects.toEqual(new McpToolError("No such active key"));
     await expect(updateApiKeyTool.handler({ id: ACTIVE }, ctx)).rejects.toThrow(
-      /Name requestsPerHour/,
+      /Name permissions, requestsPerHour/,
     );
   });
 

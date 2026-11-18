@@ -17,6 +17,7 @@ import {
   RotateApiKeyDto,
   UpdateApiKeyDto,
 } from "../../api-keys/dto/create-api-key.dto";
+import { API_PERMISSIONS } from "../../api-keys/permissions";
 
 /**
  * The admin's API keys page: the data keys that open the forecast routes.
@@ -26,8 +27,17 @@ import {
 
 const keys = (ctx: McpToolContext) => ctx.get(AdminApiKeysController);
 
+/**
+ * Only a key held by a developer account is picked up on the dashboard; one
+ * the owner issued by hand was shown in clear when it was made, so its empty
+ * `revealedAt` says nothing.
+ */
+function awaitsPickup(item: ApiKeyItem): boolean {
+  return !item.revokedAt && item.ownerUserId !== null && !item.revealedAt;
+}
+
 /** One key as the list shows it, its daily counts summed unless asked for. */
-function keyView(item: ApiKeyItem, withDays = false) {
+export function keyView(item: ApiKeyItem, withDays = false) {
   const days = item.stats?.days ?? [];
   return {
     id: item.id,
@@ -36,8 +46,12 @@ function keyView(item: ApiKeyItem, withDays = false) {
     prefix: item.prefix,
     contact: item.contact,
     note: item.note,
+    permissions: item.permissions,
     requestsPerHour: item.requestsPerHour,
     allowedParks: item.allowedParks ?? item.allowedParkIds,
+    owner: item.owner ?? null,
+    requestId: item.requestId,
+    awaitsPickup: awaitsPickup(item),
     expiresAt: item.expiresAt,
     createdAt: item.createdAt,
     lastUsedAt: item.lastUsedAt,
@@ -74,9 +88,13 @@ export const apiKeysTool = defineMcpTool({
   title: "Data API keys",
   description:
     "The data API keys that open park.fan's forecast routes, active first, as the admin's API " +
-    "keys page lists them: name, usage (commercial or not), prefix, contact, hourly allowance, " +
-    "parks, end date, last use, requests this hour, in the last 30 days and per month, and the " +
-    "rotation and its grace period. Never a secret. Owner only.",
+    "keys page lists them: name, usage (commercial or not), prefix, contact, permissions (null " +
+    "for a key from before permissions, which reads everything), hourly allowance, parks, the " +
+    "developer account and request a key was approved from (owner, requestId; null for a key " +
+    "issued by hand), whether that developer has yet to pick it up on the dashboard " +
+    "(awaitsPickup), end date, last use, requests this hour, in the last 30 days and per month, " +
+    "and the rotation and its grace period. Never a secret. api_key_requests has the requests. " +
+    "Owner only.",
   minRole: "owner",
   input: {
     status: z
@@ -118,6 +136,12 @@ const ALLOWED_PARK_IDS = z
   .optional();
 const EXPIRES_AT = z.iso.datetime({ offset: true }).nullable().optional();
 
+/** A key's permissions, as `GET /v1/api-keys/permissions` lists them; the list replaces the key's. */
+export const PERMISSIONS = z
+  .array(z.enum(API_PERMISSIONS))
+  .min(1)
+  .max(API_PERMISSIONS.length);
+
 export const createApiKeyTool = defineMcpTool({
   name: "create_api_key",
   title: "Issue an API key",
@@ -152,6 +176,9 @@ export const createApiKeyTool = defineMcpTool({
     expiresAt: EXPIRES_AT.describe(
       "When it stops working, ISO 8601 in the future; null or absent for never",
     ),
+    permissions: PERMISSIONS.optional().describe(
+      "What the key may read (live.waits needs no key); absent: every permission",
+    ),
   },
   async handler(input, ctx) {
     const body = await routeBody(CreateApiKeyDto, {
@@ -175,9 +202,11 @@ export const updateApiKeyTool = defineMcpTool({
   name: "update_api_key",
   title: "Change an API key",
   description:
-    "Changes an active key's hourly allowance, parks or end date, as the admin does; a field " +
-    "left out stays, null clears it (no per-key limit, every park, never). A new end date " +
-    "brings an expired key back. Applies from the next request. Owner only.",
+    "Changes an active key's permissions, hourly allowance, parks or end date, as the admin " +
+    "does; a field left out stays, null clears it (no per-key limit, every park, never). " +
+    "permissions replaces the whole list, so send every permission the key keeps; a key from " +
+    "before permissions reads everything until it gets one. A new end date brings an expired " +
+    "key back. Applies from the next request. Owner only.",
   minRole: "owner",
   writes: "change",
   input: {
@@ -189,11 +218,14 @@ export const updateApiKeyTool = defineMcpTool({
       "The parks the key may read; null for every park",
     ),
     expiresAt: EXPIRES_AT.describe("When it stops working; null for never"),
+    permissions: PERMISSIONS.optional().describe(
+      "Every permission the key carries afterwards (live.waits needs no key)",
+    ),
   },
   async handler({ id, ...change }, ctx) {
     if (Object.values(change).every((value) => value === undefined)) {
       throw new McpToolError(
-        "Name requestsPerHour, allowedParkIds or expiresAt",
+        "Name permissions, requestsPerHour, allowedParkIds or expiresAt",
       );
     }
     const keyId = id.toLowerCase();
