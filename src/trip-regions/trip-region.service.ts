@@ -50,12 +50,15 @@ import {
 } from "./last-year-reference";
 import {
   assembleRegionCalendar,
+  calendarMonths,
   describeRegion,
+  joinCalendarMonths,
   MAX_CALENDAR_DAYS,
   publicCalendar,
   referenceRange,
   summarizeRegion,
   validateWindow,
+  type CalendarMonthPart,
   type InternalRegionCalendar,
   type ParkCalendarSource,
   type RegionParkRecord,
@@ -121,7 +124,12 @@ export class TripRegionService {
     string,
     { at: number; parks: ResolvedRegionPark[] }
   >();
-  private readonly calendarFlight = new SingleFlight();
+  private readonly bestDaysFlight = new SingleFlight();
+  /** The calendar months being built in this process, by key, for a second reader to wait for. */
+  private readonly monthFlights = new Map<
+    string,
+    Promise<InternalRegionCalendar>
+  >();
 
   constructor(
     private readonly parksService: ParksService,
@@ -240,7 +248,10 @@ export class TripRegionService {
     return publicCalendar(await this.internalCalendar(region, from, to));
   }
 
-  /** `GET /v1/trip-regions/:region/best-days` */
+  /**
+   * `GET /v1/trip-regions/:region/best-days`: an hour in Redis by its window
+   * and `limit`, built from the region calendar as the plan is.
+   */
   async bestDays(
     slug: string,
     fromQuery: string | undefined,
@@ -248,32 +259,28 @@ export class TripRegionService {
     limit: number,
   ): Promise<TripBestDays> {
     const region = this.region(slug);
-    const from = fromQuery ?? this.today(region);
+    const today = this.today(region);
+    const from = fromQuery ?? today;
     const to = toQuery ?? addIsoDays(from, 30);
-    this.validateWindow(region, from, to, MAX_CALENDAR_DAYS);
+    validateWindow(from, to, MAX_CALENDAR_DAYS, today);
     noteTripShape({ rangeDays: isoDaysBetween(from, to) + 1 });
-    const calendar = await this.internalCalendar(region, from, to);
-    return regionBestDays(region, calendar, limit);
-  }
-
-  /** The region calendar with the plan's fields, an hour in Redis. */
-  async internalCalendar(
-    region: RegionConfig,
-    from: string,
-    to: string,
-  ): Promise<InternalRegionCalendar> {
-    const key = CacheKeys.tripRegionCalendar(region.slug, from, to);
-    const cached = safeJsonParse<InternalRegionCalendar>(
-      await this.redis.get(key),
+    const key = CacheKeys.tripRegionBestDays(
+      region.slug,
+      today,
+      from,
+      to,
+      limit,
     );
+    const cached = safeJsonParse<TripBestDays>(await this.redis.get(key));
     if (cached) {
-      noteTripCache("calendarCache", "hit");
+      noteTripCache("cache", "hit");
       return cached;
     }
-    noteTripCache("calendarCache", "joined");
-    return this.calendarFlight.run(key, async () => {
-      noteTripCache("calendarCache", "miss");
-      const built = await this.buildCalendar(region, from, to);
+    noteTripCache("cache", "joined");
+    return this.bestDaysFlight.run(key, async () => {
+      noteTripCache("cache", "miss");
+      const calendar = await this.internalCalendar(region, from, to);
+      const built = regionBestDays(region, calendar, limit);
       await this.redis
         .set(key, JSON.stringify(built), "EX", TRIP_REGION_RESPONSE_TTL)
         .catch(() => undefined);
@@ -281,12 +288,86 @@ export class TripRegionService {
     });
   }
 
-  private async buildCalendar(
+  /**
+   * The region calendar with the plan's fields, joined from its months
+   * (`calendarMonths`), each an hour in Redis. The months a window misses are
+   * built together from one read; a month another request is building is
+   * waited for.
+   */
+  async internalCalendar(
     region: RegionConfig,
     from: string,
     to: string,
   ): Promise<InternalRegionCalendar> {
     const today = this.today(region);
+    if (from < today) {
+      // Every route refuses a past day; a caller that asks anyway is not kept.
+      noteTripCache("calendarCache", "miss");
+      const [built] = await this.buildMonths(region, today, [
+        { month: monthOf(from), from, to },
+      ]);
+      return built;
+    }
+    const parts = calendarMonths(from, to, today);
+    const keys = parts.map((p) =>
+      CacheKeys.tripRegionCalendarMonth(region.slug, today, p.month),
+    );
+    const stored = await this.redis
+      .mget(...keys)
+      .catch(() => keys.map(() => null));
+    const found = stored.map((v) => safeJsonParse<InternalRegionCalendar>(v));
+    const missing = parts.filter(
+      (_, i) => !found[i] && !this.monthFlights.has(keys[i]),
+    );
+    if (missing.length > 0) {
+      noteTripCache("calendarCache", "miss");
+      this.buildAndKeep(region, today, missing);
+    } else if (found.some((m) => !m)) {
+      noteTripCache("calendarCache", "joined");
+    } else {
+      noteTripCache("calendarCache", "hit");
+    }
+    const months = await Promise.all(
+      keys.map((key, i) => found[i] ?? this.monthFlights.get(key)),
+    );
+    return joinCalendarMonths(months as InternalRegionCalendar[], from, to);
+  }
+
+  /** Builds `parts` from one read and keeps each month an hour, waitable while it builds. */
+  private buildAndKeep(
+    region: RegionConfig,
+    today: string,
+    parts: CalendarMonthPart[],
+  ): void {
+    const build = this.buildMonths(region, today, parts);
+    parts.forEach((part, i) => {
+      const key = CacheKeys.tripRegionCalendarMonth(
+        region.slug,
+        today,
+        part.month,
+      );
+      const month = build.then(async (built) => {
+        await this.redis
+          .set(key, JSON.stringify(built[i]), "EX", TRIP_REGION_RESPONSE_TTL)
+          .catch(() => undefined);
+        return built[i];
+      });
+      this.monthFlights.set(key, month);
+      month.finally(() => this.monthFlights.delete(key)).catch(() => undefined);
+    });
+  }
+
+  /**
+   * The region calendar of each part, assembled from one read of the parks
+   * over all of them and their reference span.
+   */
+  private async buildMonths(
+    region: RegionConfig,
+    today: string,
+    parts: CalendarMonthPart[],
+  ): Promise<InternalRegionCalendar[]> {
+    const from = parts[0].from;
+    const to = parts[parts.length - 1].to;
     const parks = await this.resolveParks(region);
     // Read with the reference span, so each day is priced against the
     // park's usual day around it, whatever window was asked for.
@@ -300,9 +381,6 @@ export class TripRegionService {
       parks.map((p) => p.park.id),
       lastYearSeasonsFrom(from),
       to,
-    );
-    const seasons = seasonRows.filter(
-      (s) => s.startDate <= to && s.endDate >= from,
     );
     const facts = new Map<
       string,
@@ -358,16 +436,21 @@ export class TripRegionService {
       .mget(...parks.map((p) => CacheKeys.tripForecastUntil(p.park.id)))
       .catch(() => [] as Array<string | null>);
 
-    return assembleRegionCalendar({
-      region,
-      from,
-      to,
-      today,
-      computedAt: new Date().toISOString(),
-      sources,
-      seasons: seasons.map((s) => ({ ...toPublicSeason(s), parkId: s.parkId })),
-      forecastUntil: forecastUntil as Array<string | null>,
-    });
+    const computedAt = new Date().toISOString();
+    return parts.map((part) =>
+      assembleRegionCalendar({
+        region,
+        from: part.from,
+        to: part.to,
+        today,
+        computedAt,
+        sources,
+        seasons: seasonRows
+          .filter((s) => s.startDate <= part.to && s.endDate >= part.from)
+          .map((s) => ({ ...toPublicSeason(s), parkId: s.parkId })),
+        forecastUntil: forecastUntil as Array<string | null>,
+      }),
+    );
   }
 
   /**

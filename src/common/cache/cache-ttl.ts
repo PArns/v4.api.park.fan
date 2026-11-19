@@ -47,9 +47,10 @@ export const SEASON_LEVEL_FAILURE_TTL = 5 * 60;
 export const CALENDAR_WARMUP_CURRENT_MONTH_TTL = 2 * 60 * 60;
 
 /**
- * A trip region's calendar and plan answers: an hour, the edge lifetime the
- * contract gives them (docs/frontend/trip-regions.md). They are assembled from
- * the month caches above, so an hour is the most they lag a warmup.
+ * A trip region's calendar months and its plan and best-days answers: an hour,
+ * the edge lifetime the contract gives them (docs/frontend/trip-regions.md).
+ * They are assembled from the month caches above, so an hour is the most they
+ * lag a warmup.
  */
 export const TRIP_REGION_RESPONSE_TTL = 60 * 60;
 

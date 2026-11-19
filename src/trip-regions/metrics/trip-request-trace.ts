@@ -38,7 +38,7 @@ export interface TripRequestShape {
 }
 
 export interface TripRequestTrace {
-  /** The answer's own cache (`/plan`, `/when`). */
+  /** The answer's own cache (`/plan`, `/plan/ideas`, `/when`, `/best-days`). */
   cache?: TripCacheState;
   /** The region calendar the answer was built from. */
   calendarCache?: TripCacheState;

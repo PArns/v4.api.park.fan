@@ -44,7 +44,12 @@ import {
   type TripParkDay,
   type TripParkDayInternal,
 } from "./trip-calendar.util";
-import { monthOf, type LastYearMonth } from "./last-year-snapshot";
+import {
+  monthBounds,
+  monthOf,
+  shiftMonth,
+  type LastYearMonth,
+} from "./last-year-snapshot";
 import type {
   TripCalendarDto,
   TripRegionDto,
@@ -418,6 +423,67 @@ export function referenceRange(
   return {
     from: addIsoDays(from, -REFERENCE_DAYS),
     to: addIsoDays(to, REFERENCE_DAYS),
+  };
+}
+
+/** A calendar month of the region calendar as it is kept: from the region's today on. */
+export interface CalendarMonthPart {
+  /** `YYYY-MM` */
+  month: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * The months a window from today on is joined from, each whole from today
+ * on. Every day is priced from its own reference span, so a month built once
+ * serves every window that touches it: the hub's 30 days, a month page, a
+ * plan's trip and `/when`'s year read the same parts.
+ */
+export function calendarMonths(
+  from: string,
+  to: string,
+  today: string,
+): CalendarMonthPart[] {
+  const parts: CalendarMonthPart[] = [];
+  for (let month = monthOf(from); month <= monthOf(to);) {
+    const { first, last } = monthBounds(month);
+    parts.push({ month, from: first < today ? today : first, to: last });
+    month = shiftMonth(month, 1);
+  }
+  return parts;
+}
+
+/**
+ * A window cut from the months that hold it: their days in the window, the
+ * seasons that touch it once each in start order, and the meta of the newest
+ * month with the oldest `computedAt`, the age of the answer's oldest day.
+ */
+export function joinCalendarMonths(
+  parts: readonly InternalRegionCalendar[],
+  from: string,
+  to: string,
+): InternalRegionCalendar {
+  const newest = parts.reduce((a, b) =>
+    b.meta.computedAt > a.meta.computedAt ? b : a,
+  );
+  const oldest = parts.reduce((a, b) =>
+    b.meta.computedAt < a.meta.computedAt ? b : a,
+  );
+  const seasons = new Map<string, InternalRegionCalendar["seasons"][number]>();
+  for (const s of parts.flatMap((p) => p.seasons)) {
+    const touches = String(s.startDate) <= to && String(s.endDate) >= from;
+    if (touches && !seasons.has(String(s.id))) seasons.set(String(s.id), s);
+  }
+  return {
+    meta: { ...newest.meta, from, to, computedAt: oldest.meta.computedAt },
+    parks: newest.parks,
+    days: parts
+      .flatMap((p) => p.days)
+      .filter((d) => d.date >= from && d.date <= to),
+    seasons: [...seasons.values()].sort((a, b) =>
+      String(a.startDate).localeCompare(String(b.startDate)),
+    ),
   };
 }
 
