@@ -25,6 +25,7 @@ export const API_PERMISSIONS = [
   "rides.profiles",
   "stats.live",
   "stats.history",
+  "stats.typical-waits",
   "stats.platform",
   "stats.accuracy",
   "forecasts.crowd",
@@ -78,6 +79,7 @@ export const API_PERMISSION_GROUPS: readonly ApiPermissionGroup[] = [
     permissions: [
       "stats.live",
       "stats.history",
+      "stats.typical-waits",
       "stats.platform",
       "stats.accuracy",
     ],
@@ -120,7 +122,9 @@ export const API_PERMISSION_DESCRIPTIONS: Record<ApiPermission, string> = {
   "stats.live":
     "park.fan's live analysis: crowd level, occupancy, trend, the comparison with a typical day.",
   "stats.history":
-    "Measured history: park statistics, hourly profiles, a ride's day curve and history, typical waits, rope drop, downtime.",
+    "Measured history: park statistics, hourly profiles, a ride's day curve and history, typical waits, rope drop, downtime. Includes stats.typical-waits.",
+  "stats.typical-waits":
+    "Each ride's typical waits and which rides are a park's headliners, in the park and ride detail (`typicalWaits`, `isHeadliner`), without the rest of the history.",
   "stats.platform":
     "Platform-wide figures: realtime totals, the live ticker, live map, best times overall.",
   "stats.accuracy":
@@ -150,6 +154,17 @@ export const KEYLESS_ACCESS: ReadonlySet<string> = new Set(KEYLESS_PERMISSIONS);
  * admin shows these keys as legacy so they get an explicit list.
  */
 export const LEGACY_KEY_PERMISSIONS: readonly ApiPermission[] = API_PERMISSIONS;
+
+/**
+ * Permissions a wider one brings along: whoever may read the whole measured
+ * history may read the typical waits taken from it. A key stores only what
+ * the admin granted; `effectivePermissions` adds these when it is read.
+ */
+export const IMPLIED_PERMISSIONS: Partial<
+  Record<ApiPermission, readonly ApiPermission[]>
+> = {
+  "stats.history": ["stats.typical-waits"],
+};
 
 /** The value is a grantable permission. */
 export function isApiPermission(value: unknown): value is ApiPermission {
@@ -232,9 +247,11 @@ export const PERMISSION_FIELDS: Record<
       "ropeDropHeadliners",
       "attractions[].statistics",
       "attractions[].runsOnWeekdays",
+      "attractions[].ropeDrop",
+    ],
+    "stats.typical-waits": [
       "attractions[].typicalWaits",
       "attractions[].isHeadliner",
-      "attractions[].ropeDrop",
     ],
   },
   ride: {
@@ -253,13 +270,12 @@ export const PERMISSION_FIELDS: Record<
     "stats.history": [
       "statistics",
       "history",
-      "typicalWaits",
       "downtime",
       "ropeDrop",
       "hasDayCurve",
       "runsOnWeekdays",
-      "isHeadliner",
     ],
+    "stats.typical-waits": ["typicalWaits", "isHeadliner"],
     "stats.accuracy": ["predictionAccuracy"],
   },
 };
@@ -297,14 +313,23 @@ export function grantedPermissions(
 
 /**
  * What a key may read: everything plus the internal routes for park.fan's own
- * frontend, the legacy set for a key from before permissions, else its list.
+ * frontend, the legacy set for a key from before permissions, else its list
+ * with what each of them implies (`IMPLIED_PERMISSIONS`).
  */
 export function effectivePermissions(key: {
   usage: string;
   permissions: readonly string[] | null;
 }): ReadonlySet<string> {
   if (key.usage === "internal") return ALL_PERMISSIONS_AND_INTERNAL;
-  return new Set(key.permissions ?? LEGACY_KEY_PERMISSIONS);
+  const granted = key.permissions ?? LEGACY_KEY_PERMISSIONS;
+  return new Set<string>(
+    granted.flatMap((permission) => [
+      permission,
+      ...(isApiPermission(permission)
+        ? (IMPLIED_PERMISSIONS[permission] ?? [])
+        : []),
+    ]),
+  );
 }
 
 /** Every permission and the internal one: park.fan's own frontend. */
