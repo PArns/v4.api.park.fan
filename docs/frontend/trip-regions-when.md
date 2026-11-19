@@ -334,9 +334,11 @@ specs) the search always runs to the end. With tickets (measured on the dev shim
 UK 14-day tickets take 0.35 s and a US 4-day and a 3-day ticket 0.6 s, every window planned twice
 for the mixing comparison ([tickets](./trip-regions.md#tickets)).
 
-**Reads.** The days come from the same calendar read as `/calendar`, over the whole range plus its
-two-week reference span: one read per park and month from the month caches, the last-year
-snapshots for every day (−12 … 0 for a year's range), no ML call. The warmup keeps a region park's
+**Reads.** The days come from the region calendar `/calendar` reads, by month: the months any trip
+route of the region built within the hour are read from Redis, and the rest are built together over
+their span plus the two-week reference span: one read per park and month from the month caches, the
+last-year snapshots for every day (−12 … 0 for a year's range), no ML call
+([caching](./trip-regions.md#caching-and-cost)). The warmup keeps a region park's
 months to +13 and the snapshots −12 … −1 so a year's range is all cache hits
 ([trip regions](./trip-regions.md#caching-and-cost)). An answer is kept six hours in Redis
 (`trip-regions:when:v4:{region}:{query}`) by its normalized query.
