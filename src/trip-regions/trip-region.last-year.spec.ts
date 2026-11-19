@@ -138,15 +138,16 @@ describe("TripRegionService › the day a year back", () => {
     expect(waits["2027-05-31"]).toBe(90);
     expect(waits["2027-05-24"]).toBe(45);
     expect(waits["2027-05-25"]).toBe(50);
+    // The calendar is read by the months the window touches, May and June.
     expect(holidays.getHolidays).toHaveBeenCalledWith(
       "US",
-      addIsoDays(FROM, -364 - 36 - 3),
-      addIsoDays(TO, 3),
+      addIsoDays("2027-05-01", -364 - 36 - 3),
+      addIsoDays("2027-06-30", 3),
     );
     expect(forParksInRange).toHaveBeenCalledWith(
       ["00000000-0000-4000-8000-000000000001"],
-      addIsoDays(FROM, -364 - 21),
-      TO,
+      addIsoDays("2027-05-01", -364 - 21),
+      "2027-06-30",
     );
   });
 

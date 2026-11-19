@@ -2110,9 +2110,18 @@ each region reads the archive once a day. For the hub's line on how far to trust
 ## Caching and cost
 
 The days are assembled from the calendar's month caches (`calendar:month:v2:{parkId}:{YYYY-MM}:none`),
-the schedule rows and `park_seasons`; no ML call happens per request. Both keyed routes are kept an
-hour in Redis (`trip-regions:calendar:v2:*`, `trip-regions:plan:v4:*`, the plan's ideas
-`trip-regions:plan-ideas:v1:*`), the plan by its normalized query, so the same trip asked with its parameters in another order is one entry. A plan reads the
+the schedule rows and `park_seasons`; no ML call happens per request. The region calendar is kept an
+hour in Redis by month from the region's today (`trip-regions:calendar:v3:{region}:{today}:{YYYY-MM}`),
+and every window is cut from the months it touches: the hub's 30 days, a month page, `/best-days`,
+a plan's trip and `/when`'s year read the same months, so whichever route comes first builds them
+for the others. Each day is priced from its own reference span, so a day reads the same in every
+window (`calendarMonths`, `joinCalendarMonths`). The months a read misses are built together from
+one read of the parks over all of them; a month another request is building is waited for. Until
+PAR-1402 each window was an entry of its own, and the hourly refetch of every hub window rebuilt it.
+The answers are kept an hour too (`trip-regions:plan:v4:*`, the plan's ideas
+`trip-regions:plan-ideas:v1:*`, `/best-days` by its window and `limit`
+`trip-regions:best-days:v1:*`), the plan by its normalized query, so the same trip asked with its
+parameters in another order is one entry. No key holds the client's release `v`. A plan reads the
 calendar for its trip once, and for its evenings the shows of the parks with curated night shows on
 each day that gets one (`PlanDayService.showsOn`, four at a time).
 
@@ -2161,8 +2170,8 @@ which would count one trip once per question.
 | `caller`                                               | `site`, the route itself, or `parky`, his trip tools (`TRIP_METRIC_CALLERS`); `site` on the rows from before the column                                    |
 | `status`, `error_code`                                 | the HTTP status, and why a request was refused or failed (below); `error_code` is null on a 200                                                           |
 | `latency_ms`                                           | from the route taking the request (after the key guard) to its answer, before serialization                                                                |
-| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` has none: the calendar's |
-| `calendar_cache`                                       | the region calendar a built answer read, the same three states                                                                                             |
+| `cache`                                                | the answer's own Redis entry: `hit`; `joined`, it waited for the same build in flight in this process; `miss`, built. `/best-days` rows before PAR-1402 hold the calendar's here |
+| `calendar_cache`                                       | the region calendar a built answer read, the same three states; of its months, the costliest                                                               |
 | `exact`                                                | `meta.exact` (`/plan`) or `meta.search.exact` (`/when`): the search was proven, not stopped by its time budget                                            |
 | `relaxed`                                              | the codes of `meta.relaxed`, sorted; `/when`: `ticket_window_relaxed` when a window answered carries that warning                                         |
 | `unplaced_reasons`                                     | one entry per `unplaced[]`, its reason; `/when` names none, so one `unknown` per park its best window left out                                            |
