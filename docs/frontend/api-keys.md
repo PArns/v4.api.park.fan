@@ -24,7 +24,8 @@ list of permissions, granted one by one or a group at a time:
 | rides     | `rides.details`        | `…/{park}/attractions`, the ride detail; heights, single rider, virtual queue, coordinates in the park detail |
 | rides     | `rides.profiles`       | `rideProfile` (manufacturer, figures, elements); `/v1/glossary/terms/**`                                      |
 | stats     | `stats.live`           | crowd level, occupancy, trend, the comparison with a typical day                                              |
-| stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, typical waits, rope drop, downtime                          |
+| stats     | `stats.history`        | `/stats`, `/stats/hourly`, `/stats/day`; history, rope drop, downtime; implies `stats.typical-waits`          |
+| stats     | `stats.typical-waits`  | `typicalWaits` and `isHeadliner` in the park and ride detail; no route of its own                             |
 | stats     | `stats.platform`       | `/v1/analytics/{realtime,geo-live,ticker,best-times}`, `/v1/page-views/top`                                   |
 | stats     | `stats.accuracy`       | `/v1/ml/accuracy/system`, `/v1/trip-regions/{region}/accuracy`, `predictionAccuracy`                          |
 | forecasts | `forecasts.crowd`      | `/calendar`, `/best-days`, `/predictions/yearly`, `/parky-tip`; a region's `/calendar`, `/best-days`, `/when` |
@@ -47,6 +48,10 @@ list of permissions, granted one by one or a group at a time:
 - **The two mixed answers lose what the caller may not read.** The park and the ride detail need
   `parks.details` and `rides.details`; `@PermissionFields("park" | "ride")` then drops each field
   whose permission the caller lacks (`PERMISSION_FIELDS`), on a copy, never on the cached object.
+- **A wider permission brings a narrower one along.** `IMPLIED_PERMISSIONS` lets `stats.history`
+  read what `stats.typical-waits` opens, so a planner that needs only the typical waits gets them
+  without the history, and a key with the history loses nothing. `effectivePermissions` adds the
+  implied ones when a key is read; the key stores only what the admin granted.
 - **Refusals.** Without a key on any route but `/wait-times`: 401 `api-key-required`, naming the
   permission and the portal. A key without the permission: 403 `api-key-permission-missing` with
   `requiredPermission`, before the request counts against the allowance. A key that is unknown,
