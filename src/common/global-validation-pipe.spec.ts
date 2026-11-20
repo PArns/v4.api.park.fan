@@ -1,6 +1,7 @@
 import { ValidationPipe, ArgumentMetadata } from "@nestjs/common";
 import { TripWriteDto } from "../trips/dto/trip.dto";
 import { PushSubscribeDto, PushUnsubscribeDto } from "../push/dto/push.dto";
+import { UpdateAccountDataDto } from "../account/dto/account.dto";
 
 /**
  * Every request body has to survive the pipe that production actually mounts.
@@ -59,6 +60,17 @@ describe("the global ValidationPipe vs. every request body", () => {
       PushUnsubscribeDto,
       { endpoint: "https://fcm.googleapis.com/fcm/send/abc123" },
     ],
+    [
+      "PUT /v1/account/data",
+      UpdateAccountDataDto,
+      {
+        riddenRides: ["0b5bd0a6-3c5e-4d6c-9a4f-0f1d6b1f2a3c"],
+        visitedParks: [
+          { region: "orlando", park: "epcot", date: "2026-11-20" },
+        ],
+        temperatureUnit: "C",
+      },
+    ],
   ];
 
   it.each(bodies)("accepts a valid body for %s", async (_route, dto, body) => {
@@ -84,6 +96,18 @@ describe("the global ValidationPipe vs. every request body", () => {
     await expect(
       pipe.transform({ payload: "a string" }, asBody(TripWriteDto)),
     ).rejects.toThrow();
+  });
+
+  it("refuses a visited park that is not a slug and a date", async () => {
+    for (const visit of [
+      { region: "orlando", park: "Epcot!", date: "2026-11-20" },
+      { region: "orlando", park: "epcot", date: "20.11.2026" },
+      { region: "orlando", park: "epcot", date: "2026-11-20", note: "x" },
+    ]) {
+      await expect(
+        pipe.transform({ visitedParks: [visit] }, asBody(UpdateAccountDataDto)),
+      ).rejects.toThrow();
+    }
   });
 
   it("refuses a subscription with a missing key rather than storing half of one", async () => {
