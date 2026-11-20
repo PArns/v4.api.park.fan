@@ -18,6 +18,7 @@ import { AccountStorageEntry } from "./entities/account-storage.entity";
 import {
   AccountData,
   type AccountFavorites,
+  type AccountVisitedPark,
 } from "./entities/account-data.entity";
 
 /** What an account carries before its browser wrote anything. */
@@ -32,6 +33,7 @@ const EMPTY_FAVORITES: AccountFavorites = {
 export interface AccountDataView {
   favorites: AccountFavorites;
   riddenRides: string[];
+  visitedParks: AccountVisitedPark[];
   temperatureUnit: "C" | "F" | null;
   updatedAt: string | null;
 }
@@ -39,6 +41,22 @@ export interface AccountDataView {
 /** Each id once, in the order it first came. */
 function unique(ids: readonly string[]): string[] {
   return [...new Set(ids)];
+}
+
+/**
+ * Each region's park once, with the later of its dates: two ticks of one park
+ * are one visit, and the later one is the trip it belongs to.
+ */
+export function uniqueVisits(
+  visits: readonly AccountVisitedPark[],
+): AccountVisitedPark[] {
+  const kept = new Map<string, AccountVisitedPark>();
+  for (const { region, park, date } of visits) {
+    const key = `${region}:${park}`;
+    const known = kept.get(key);
+    if (!known || date > known.date) kept.set(key, { region, park, date });
+  }
+  return [...kept.values()];
 }
 
 /**
@@ -74,6 +92,7 @@ export class AccountService implements OnModuleInit {
     return {
       favorites: row?.favorites ?? EMPTY_FAVORITES,
       riddenRides: row?.riddenRides ?? [],
+      visitedParks: row?.visitedParks ?? [],
       temperatureUnit: row?.temperatureUnit ?? null,
       updatedAt: row?.updatedAt?.toISOString() ?? null,
     };
@@ -97,6 +116,9 @@ export class AccountService implements OnModuleInit {
         },
       }),
       ...(patch.riddenRides && { riddenRides: unique(patch.riddenRides) }),
+      ...(patch.visitedParks && {
+        visitedParks: uniqueVisits(patch.visitedParks),
+      }),
       ...(patch.temperatureUnit !== undefined && {
         temperatureUnit: patch.temperatureUnit,
       }),

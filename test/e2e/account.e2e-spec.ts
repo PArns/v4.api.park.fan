@@ -100,10 +100,22 @@ describe("Visitor accounts (e2e)", () => {
     await call("put", "/v1/account/data", session)
       .send({ riddenRides: ["not-a-uuid"] })
       .expect(400);
+    await call("put", "/v1/account/data", session)
+      .send({
+        visitedParks: [
+          { region: "orlando", park: "epcot", date: "2026-11-18" },
+          { region: "orlando", park: "epcot", date: "2026-11-20" },
+        ],
+      })
+      .expect(200);
+    await call("put", "/v1/account/data", session)
+      .send({ visitedParks: [{ region: "orlando", park: "EPCOT", date: "x" }] })
+      .expect(400);
     const synced = await call("get", "/v1/account", session).expect(200);
     expect(synced.body.data).toMatchObject({
       favorites: { parks: [PARK], attractions: [RIDE] },
       riddenRides: [RIDE],
+      visitedParks: [{ region: "orlando", park: "epcot", date: "2026-11-20" }],
       temperatureUnit: "F",
     });
 
