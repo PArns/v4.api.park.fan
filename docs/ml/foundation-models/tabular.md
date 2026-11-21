@@ -131,6 +131,9 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
   [running.md](../ml-bench/running.md#the-foundation-model-arms-par-1063--1064--1067)). Build the
   image with `--build-arg EXTRA_REQUIREMENTS=requirements-par1405.txt` and size it with `--probe`
   first. On TabArena's GPU Kumo-Tabular predicted 0.24 s and Inpriora 0.06 s per 1,000 rows.
+- **In the admin:** the model comparison has an offline-only column „Kumo-Tabular / Inpriora“
+  (`tfm`) on the four calendar questions. It reads „not measured“ until the run's verdicts are in
+  `src/ml/data/offline-model-verdicts.json`; the arms run in no production shadow.
 - **How it is judged:** against `driver_level` (paired, same rows) and `lvl_tft` on UC4 / D6 / D7,
   per segment and lead, with the rules on [model-overview](../model-overview.md#how-a-model-change-is-judged).
   A win on overall MAE alone does not count.
