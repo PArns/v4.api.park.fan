@@ -559,6 +559,23 @@ describe("buildModelComparison", () => {
     expect(
       res.questions.find((x) => x.id === "cal_far")!.cells.pcn,
     ).toBeUndefined();
+    // PAR-1405: the tabular foundation models are an offline-only calendar column
+    for (const question of res.questions) {
+      const cell = question.cells.tfm;
+      if (question.group !== "calendar") {
+        expect(cell).toBeUndefined();
+        continue;
+      }
+      expect(cell.state).toBe("unclear");
+      expect(cell.checks).toEqual({
+        offline: "open",
+        live: "open",
+        visible: false,
+      });
+      expect(cell.note).toBe(
+        "Noch nicht gemessen. Dieses Modell wird live nicht archiviert.",
+      );
+    }
     const total = Object.values(res.summary).reduce((a, b) => a + b, 0);
     const cells = res.questions.reduce(
       (s, x) => s + Object.keys(x.cells).length - 1,

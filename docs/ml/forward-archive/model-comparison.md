@@ -132,6 +132,9 @@ headliners, `cal_far_90` (PEAK d90) against CatBoost's. Every metric is minutes,
 except `cal_rank` (`rate`, percentage points). The calendar questions read the planner's per-ride `dayPeak` (built on the same daily
 level the calendar reads); the calendar's crowd level itself is not archived per model. Toto 2.0 /
 TiRex-2 (`fm`) have no archived curve, so their cells are offline only (`checks.live = "open"`).
+The same holds for Kumo-Tabular / Inpriora (`tfm`, PAR-1405) on the four calendar questions: their
+cells stay "not measured" until the ml-bench run of
+[the tabular arms](../foundation-models/tabular.md#status) writes their verdicts.
 
 ## Cells and states
 

@@ -197,6 +197,14 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
     oneLiner:
       "Zwei weitere fertig trainierte KI-Modelle, bisher nur offline gemessen.",
   },
+  {
+    // PAR-1405: ml-bench's kumo_level / inpriora_level, offline only
+    id: "tfm",
+    label: "Kumo-Tabular / Inpriora",
+    family: "foundation",
+    oneLiner:
+      "Zwei fertig trainierte KI-Modelle für Tabellen, die das Treiber-Niveau lernen statt des Baum-Modells. In ml-bench vorbereitet, gemessen wird im gemeinsamen Lauf; läuft nicht nebenher.",
+  },
 ];
 
 export const COMPARISON_GROUPS: {
@@ -507,6 +515,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
       driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
+      tfm: null,
     },
   },
   {
@@ -526,6 +535,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
       driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
+      tfm: null,
     },
     pairwise: CAL_PAIRWISE,
   },
@@ -549,6 +559,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
       driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
+      tfm: null,
     },
     pairwise: CAL_PAIRWISE,
   },
@@ -566,6 +577,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     models: {
       driver: [PAIRED_MODELS.driverLevel],
       wkd: ["weekday_avg"],
+      tfm: null,
     },
   },
 ];

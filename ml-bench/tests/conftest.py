@@ -28,3 +28,5 @@ def _foundation_stub(monkeypatch):
 
     if not os.environ.get("MLBENCH_FM_REAL"):
         monkeypatch.setenv("MLBENCH_FM_BACKEND", "stub")
+        # PAR-1405: the tabular foundation-model arms learn the daily level with a stub too
+        monkeypatch.setenv("MLBENCH_TFM_BACKEND", "stub")

@@ -25,6 +25,10 @@ models. Also holds the commands of runs that are implemented but not run yet.
    days) must declare its need instead of silently publishing numbers from a truncated context.
 5. Foundation plug-ins also declare `licence` (`servable` / `benchmark-only` / `unclear`) and
    `serving_candidate`; see [licences](../foundation-models/README.md#licences).
+6. **Retiring an arm** whose question is answered (PAR-1405): add its scored name and the reason
+   to `RETIRED` in `mlbench/models/__init__.py`, and keep the class and its tests. `mlbench run`
+   then refuses it; `--allow-retired` scores it anyway as a reference and `run-*.json` lists it
+   under `retired`. Retired today: `timesfm3*`, `toto2*`, `tabpfn_ts` and the four `nf_*` arms.
 
 ## Build and run
 
@@ -90,6 +94,9 @@ pcn-service, which do not take the bench's lock.
   bench process instead of squeezing production. Container RAM is capped at 8 GB.
 
 ## NeuralForecast precompute (PAR-829)
+
+The `nf_*` arms are retired (PAR-1405, they lose every head to head against Chronos-2): the
+scoring commands below need `--allow-retired`.
 
 TiDE, NHITS and TSMixerx are trained and forecast on the GPU into a parquet cache
 (`mlbench/models/nf_precompute.py`, wrapper `run_nf_precompute.sh`, bounded run
@@ -161,8 +168,12 @@ the built-in `lvlh5_naive`.
 
 ## The foundation-model arms (PAR-1063 / 1064 / 1067)
 
-- `tabpfn_ts` is benchmark-only and needs `HF_TOKEN` and `TABPFN_TOKEN` exported in the shell
-  (`read -s`), never written to a file.
+- `tabpfn_ts` is retired (PAR-1405) and leaves the combined run. Scored anyway with
+  `--allow-retired`, it is benchmark-only and needs `HF_TOKEN` and `TABPFN_TOKEN` exported in the
+  shell (`read -s`), never written to a file.
+- The tabular arms `kumo_level` and `inpriora_level` (PAR-1405) join it. They need an image built
+  with `EXTRA_REQUIREMENTS=requirements-par1405.txt`, which also pins Inpriora's reviewed git commit
+  ([tabular.md](../foundation-models/tabular.md#status)).
 - `driver_level` goes in as a `--model`, not only `--pair-with`, when a run reports daily-level
   cells: they compare every `lvl_*` source of the run.
 - The fine-tunes (`chronos2_ft`, `chronos2_lora`, `ttm_r2_ft`) refit once per 28 days of origin

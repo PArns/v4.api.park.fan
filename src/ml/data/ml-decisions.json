@@ -111,6 +111,20 @@
         { "questionId": "cal_far", "modelId": "driver" },
         { "questionId": "cal_far_90", "modelId": "driver" }
       ]
+    },
+    {
+      "id": "calendar_tabular_fm",
+      "title": "Kalender: Kumo-Tabular oder Inpriora als Lernverfahren des Treiber-Niveaus",
+      "detail": "Zwei fertig trainierte KI-Modelle für Tabellen, die auf der Rangliste TabArena das Baum-Modell klar schlagen, dort aber nur auf kleinen Datensätzen ohne zeitliche Ordnung. Im Treiber-Niveau ersetzen sie das Baum-Modell; Zeilen, Merkmale und Wochentag-Wert bleiben gleich. In ml-bench vorbereitet, gemessen wird im gemeinsamen Offline-Lauf. Sie laufen nicht nebenher. Entschieden wird erst nach dem Treiber-Niveau: sie können es nur verbessern, wenn es selbst kommt.",
+      "state": "later",
+      "dependsOn": ["calendar_driver_level"],
+      "evaluateOn": "2027-09-01",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "tfm" },
+        { "questionId": "cal_busier", "modelId": "tfm" },
+        { "questionId": "cal_far", "modelId": "tfm" },
+        { "questionId": "cal_far_90", "modelId": "tfm" }
+      ]
     }
   ]
 }

@@ -142,8 +142,6 @@ class DriverLevel(LevelH5Example):
         D.park_day_features(db)
 
     def _fit(self, c) -> None:
-        from ..driver_analysis import fit_model
-
         db = self._db
         if self._rd.empty:
             return
@@ -162,8 +160,16 @@ class DriverLevel(LevelH5Example):
             return
         if len(tr) > self.max_train_rows:
             tr = tr.sample(self.max_train_rows, random_state=self.seed)
-        self._model = fit_model("hgb", FEATURES, tr, self.seed)
+        self._model = self._learner(tr)
         self._fit_date, self._fit_rows = c, len(tr)
+
+    def _learner(self, tr: pd.DataFrame):
+        """Fit the model of ``log(true P90 / naive)`` on the driver rows ``tr``; the result
+        needs ``predict(rows) -> ndarray``. The tabular foundation-model arms (PAR-1405)
+        override only this, so their margin against ``driver_level`` is the learner alone."""
+        from ..driver_analysis import fit_model
+
+        return fit_model("hgb", FEATURES, tr, self.seed)
 
     def _yhat(self, origin: Origin, days: pd.DataFrame, cov: pd.DataFrame) -> pd.DataFrame:
         """ref and ŷ per requested (ride, date)."""
