@@ -73,7 +73,8 @@ Start at the first page: which model serves which surface today.
 - [ml-overview](ml/ml-overview.md) — Admin ML overview: switch decisions and evaluateOn, frozen decision reports, component status, drift watch
 - [forward-archive/](ml/forward-archive/README.md) — Forward archive of served curves: what it answers, code, queues, tables, when scores appear; index
 - [ml-bench/](ml/ml-bench/README.md) — ml-bench offline benchmark: what it is, layout, results dirs, verdict per model family; start here
-- [foundation-models/](ml/foundation-models/README.md) — Foundation models in ml-bench: status and licence per model, shared adapter, licence enforcement, lessons
+- [foundation-models/](ml/foundation-models/README.md) — Foundation models in ml-bench: status and licence per model, shared adapter, licence enforcement, retired arms, lessons
+- [foundation-models/tabular](ml/foundation-models/tabular.md) — Tabular foundation models (TabArena) as the daily-level learner: why, which are benchmarked, licences, status
 - [pcn-service/README](../pcn-service/README.md) — pcn-service directory map: endpoints and schedule, files, local run commands; model in docs/ml/pcn.md
 
 ## Database

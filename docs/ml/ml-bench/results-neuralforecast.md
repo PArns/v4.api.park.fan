@@ -9,7 +9,8 @@ is pursued; how they are built and precomputed is in
 **Verdict:** TiDE beats every incumbent (persistence, H5, TFT×H5) on several live and intraday
 leads, in autumn and outside it — but loses every paired head to head against Chronos-2, which
 already runs in the forward archive's shadow. Nothing from this family is in the model
-comparison matrix or in production. TSMixerx is implemented and was never scored.
+comparison matrix or in production. TSMixerx is implemented and was never scored. Since
+PAR-1405 all four `nf_*` arms are retired: `mlbench run` refuses them without `--allow-retired`.
 
 ## Runs
 

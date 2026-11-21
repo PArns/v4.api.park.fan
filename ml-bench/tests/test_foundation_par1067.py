@@ -73,11 +73,15 @@ def test_run_metadata_labels_the_licence(synth_export, tmp_path):
     from mlbench.__main__ import main
 
     out = tmp_path / "probe"
+    # tabpfn_ts is retired since PAR-1405; --allow-retired scores it as a labelled reference
     assert main(["run", "--export", str(synth_export), "--out", str(out), "--model", "tabpfn_ts",
-                 "--model", "ttm_r2", "--leads", "0,1", "--memory", "1GB", "--threads", "2", "--probe"]) == 0
-    lic = json.loads((out / "run-0of1.json").read_text())["licences"]
+                 "--model", "ttm_r2", "--leads", "0,1", "--memory", "1GB", "--threads", "2", "--probe",
+                 "--allow-retired"]) == 0
+    meta = json.loads((out / "run-0of1.json").read_text())
+    lic = meta["licences"]
     assert lic["tabpfn_ts"] == {"licence": "benchmark-only", "serving_candidate": False}
     assert lic["ttm_r2"] == {"licence": "servable", "serving_candidate": True}
+    assert set(meta["retired"]) == {"tabpfn_ts"}
 
 
 # ---------------------------------------------------------------- PatchTST-FM backend

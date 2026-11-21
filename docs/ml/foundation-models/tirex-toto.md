@@ -3,6 +3,8 @@
 Two more pretrained models, scored on the same inputs as `chronos2` and inside the same run, so
 every margin against Chronos-2 is paired. **Verdict: drop both for serving; keep TiRex-2 as a
 plug-in** — the first choice if Chronos-2 ever falls away for licence or operational reasons.
+Since PAR-1405 the three `toto2*` arms are retired: `mlbench run` refuses them without
+`--allow-retired`. The `tirex2*` arms stay live.
 Shared adapter and licences: [README.md](README.md).
 
 | | TiRex-2 | Toto 2.0 |

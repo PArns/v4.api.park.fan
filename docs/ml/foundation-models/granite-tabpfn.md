@@ -78,6 +78,11 @@ reference arm; `tabpfn` is a listed prefix in `benchmark_only_models.json`.
 
 ## TabPFN-TS (`tabpfn_ts`)
 
+**Retired before its run (PAR-1405).** No result could ever be served (the weights are
+benchmark-only), and on TabArena two servable tabular models rank above the TabPFN-3.5 it runs
+on ([tabular.md](tabular.md#which-models-are-benchmarked)). `mlbench run` refuses it without
+`--allow-retired`; the adapter and its tests stay.
+
 - Packages: tabpfn-time-series 1.3.0, tabpfn 9.1.0, tabpfn-client 0.6.1 (imported, never used),
   datasets 4.8.5.
 - Daily level only, against `driver_level` and `wt_med`. One series per ride: the ride-day P90 (≥ 8

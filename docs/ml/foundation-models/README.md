@@ -1,23 +1,28 @@
 # Foundation models in ml-bench
 
-Pretrained time-series foundation models plugged into [ml-bench](../ml-bench/README.md) through
+Pretrained time-series foundation models, and since PAR-1405 tabular ones, plugged into
+[ml-bench](../ml-bench/README.md) through
 the same restricted plug-in interface as every other candidate (DataFrames only, truth strictly
 before the origin, schedules as known at the origin, weather only as an opt-in ORACLE). The
 question for each is the one BENCH-SPEC asks: up to which lead does it beat the best naive
 baseline, and where does it hand over? Open this folder before adding, running or quoting a
 foundation model, and always before proposing to serve one (licences below).
 
-All adapters live in `ml-bench/mlbench/models/foundation.py` (`VARIANTS`), tests in
-`ml-bench/tests/test_foundation*.py`.
+The time-series adapters live in `ml-bench/mlbench/models/foundation.py` (`VARIANTS`), tests in
+`ml-bench/tests/test_foundation*.py`; the tabular ones in `mlbench/models/tabular_fm.py`, tests in
+`tests/test_tabular_fm.py`. Arms marked *retired* are refused by `mlbench run` without
+`--allow-retired` (`RETIRED` in `mlbench/models/__init__.py`, PAR-1405): their question is answered.
 
 | Family | Variants | Licence | Status | Page |
 | --- | --- | --- | --- | --- |
 | Chronos-2 (PAR-828, PAR-869, PAR-1063) | `chronos2`, `chronos2_grid`, `chronos2_nocov`, `chronos2_owx`, `chronos2_ft`, `chronos2_lora` | Apache-2.0 — servable | Measured: wins UC1 30–120 min and parts of the planner; shadow in production, serving prepared. `chronos2_ft` / `chronos2_lora` not run | [chronos-2.md](chronos-2.md) |
-| TimesFM 3.0 / 2.5 (PAR-828, PAR-1064) | `timesfm3`, `timesfm3_owx`, `timesfm25`, `timesfm25_grid` | 3.0 benchmark-only; 2.5 Apache-2.0 | 3.0 ruled out, never scored; 2.5 not run | [timesfm.md](timesfm.md) |
-| TiRex-2, Toto 2.0 (PAR-853) | `tirex2`, `tirex2_grid`, `toto2`, `toto2_nocov`, `toto2_grid` | Apache-2.0 | Measured: drop for serving, keep TiRex-2 as a plug-in | [tirex-toto.md](tirex-toto.md) |
-| Granite PatchTST-FM-r2, TTM-r2, TabPFN-TS (PAR-1067) | `patchtst_fm`, `ttm_r2`, `ttm_r2_ft`, `tabpfn_ts` | Granite servable; TabPFN-TS benchmark-only | Implemented and tested, not run | [granite-tabpfn.md](granite-tabpfn.md) |
+| TimesFM 3.0 / 2.5 (PAR-828, PAR-1064) | `timesfm3`, `timesfm3_owx`, `timesfm25`, `timesfm25_grid` | 3.0 benchmark-only; 2.5 Apache-2.0 | 3.0 ruled out, never scored, retired; 2.5 not run | [timesfm.md](timesfm.md) |
+| TiRex-2, Toto 2.0 (PAR-853) | `tirex2`, `tirex2_grid`, `toto2`, `toto2_nocov`, `toto2_grid` | Apache-2.0 | Measured: drop for serving, keep TiRex-2 as a plug-in; Toto 2.0 retired | [tirex-toto.md](tirex-toto.md) |
+| Granite PatchTST-FM-r2, TTM-r2, TabPFN-TS (PAR-1067) | `patchtst_fm`, `ttm_r2`, `ttm_r2_ft`, `tabpfn_ts` | Granite servable; TabPFN-TS benchmark-only | Implemented and tested, not run; `tabpfn_ts` retired before its run | [granite-tabpfn.md](granite-tabpfn.md) |
+| Tabular: Kumo-Tabular, Inpriora (PAR-1405) | `kumo_level`, `inpriora_level` | Kumo OpenMDW-1.1, Inpriora Apache-2.0 — servable | Implemented and tested (Kumo CPU smoke with real weights), not run; Inpriora's code dependency awaits review | [tabular.md](tabular.md) |
 
-The combined run of the PAR-1063 / 1064 / 1067 arms is PAR-1141; what those arms need is in
+The combined run of the PAR-1063 / 1064 / 1067 arms is PAR-1141, since PAR-1405 with `kumo_level`
+and `inpriora_level` and without the retired `tabpfn_ts`; what those arms need is in
 [running.md](../ml-bench/running.md#the-foundation-model-arms-par-1063--1064--1067).
 
 ## Shared adapter
@@ -57,6 +62,7 @@ The combined run of the PAR-1063 / 1064 / 1067 arms is PAR-1141; what those arms
 | TiRex-2, Toto 2.0 | servable | Apache-2.0, code and weights (TiRex v1 is under the NXAI Community License, which is why TiRex-2 is benchmarked) |
 | Granite PatchTST-FM-r2, TTM-r2 | servable | dual OpenMDW-1.0 / Apache-2.0, resp. Apache-2.0; not gated |
 | TabPFN-TS | **benchmark-only** | the TabPFN-3.5 weights it downloads are non-commercial and non-production; gated |
+| Kumo-Tabular, Inpriora | servable | OpenMDW-1.1, resp. Apache-2.0; not gated. The tabular models not benchmarked, with their licences: [tabular.md](tabular.md#licence-verdicts) |
 
 Exact quotes and URLs for the PAR-1067 verdicts: [granite-tabpfn.md](granite-tabpfn.md#licence-verdicts).
 

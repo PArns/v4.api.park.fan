@@ -28,7 +28,8 @@ Further handicaps: 32-variate cap (40–70 rides per park), and it interpolates 
 could only run on the compressed context — the layout Chronos-2 lost on. The adapter is
 implemented, registered and tested with the stub backend; `--model timesfm3` scores it as a
 benchmark-only reference arm. `timesfm3` is a listed prefix in
-`ml-bench/mlbench/benchmark_only_models.json`, so no verdict writer may emit it.
+`ml-bench/mlbench/benchmark_only_models.json`, so no verdict writer may emit it. Since PAR-1405
+both `timesfm3` arms are retired: `mlbench run` refuses them without `--allow-retired`.
 
 ## TimesFM 2.5 (PAR-1064)
 
