@@ -20,10 +20,9 @@ Arms (licences and the selection rule: docs/ml/foundation-models/tabular.md):
   OpenMDW-1.1, so it is servable. structured-data-models 0.3.0 pins the weights to revision
   ``v1.0.1``. A regression returns 999 quantiles ``q001`` ... ``q999``, and the level uses
   ``q500``: the median, as ``driver_level``'s absolute-error loss.
-* ``inpriora_level``: Ant Group's Inpriora regressor (121 M). Weights Apache-2.0, so servable;
-  pinned to Hugging Face revision ``MLBENCH_INPRIORA_REVISION``. Its inference code has no PyPI
-  release (GitHub only), so it is not in the image extra until that dependency is reviewed, and
-  without it the first fit fails loudly.
+* ``inpriora_level``: Ant Group's Inpriora regressor (121 M). Code and weights Apache-2.0, so
+  servable; weights pinned to Hugging Face revision ``MLBENCH_INPRIORA_REVISION``. Its inference
+  code has no PyPI release (GitHub only); the image extra pins the commit that was reviewed.
 
 Both run on the GPU when there is one (VRAM capped like the other foundation arms,
 ``MLBENCH_FM_VRAM_FRACTION``) and fall back to CPU. ``MLBENCH_TFM_BACKEND=stub`` swaps the learner
@@ -156,27 +155,31 @@ class KumoBackend(_Backend):
 
 
 class InprioraBackend(_Backend):
-    """Ant Group's Inpriora regressor (sklearn-style ``fit`` / ``predict``)."""
+    """Ant Group's Inpriora regressor (sklearn-style ``fit`` / ``predict``), code pinned to the
+    reviewed commit in ``requirements-par1405.txt``."""
 
     name = "inpriora"
 
-    def __init__(self):
-        from huggingface_hub import snapshot_download
+    def __init__(self, estimators: int = 8):
+        import torch
         from inpriora import InprioraRegressor
 
-        path = snapshot_download("ai-for-data/inpriora", revision=INPRIORA_REVISION,
-                                 allow_patterns=["regressor/*"])
-        self.model = InprioraRegressor(model_path=os.path.join(path, "regressor"))
+        from .foundation import _cap_vram
+
+        _cap_vram(torch)
+        # weights from the pinned Hugging Face revision; CUDA when available, fp16 autocast there
+        self.model = InprioraRegressor(
+            revision=INPRIORA_REVISION,
+            n_estimators=int(os.environ.get("MLBENCH_INPRIORA_ESTIMATORS", estimators)))
 
     def fit(self, X, y, seed):
-        # Inpriora reads numbers only: categoricals become codes of the context's categories
-        self._cats = {c: sorted(X[c].astype(str).unique()) for c in X.columns if c in D.CATEGORICAL}
-        self.model.fit(_codes(X, self._cats).to_numpy(), np.asarray(y, dtype=float))
+        # the frame as `design` builds it: Inpriora encodes the category columns itself
+        self.model.set_params(random_seed=seed)
+        self.model.fit(X, np.asarray(y, dtype=float))
 
     def predict(self, X):
-        Z = _codes(X, self._cats).to_numpy()
-        out = [np.asarray(self.model.predict(Z[a:a + QUERY_CHUNK]), dtype=float).reshape(-1)
-               for a in range(0, len(Z), QUERY_CHUNK)]
+        out = [np.asarray(self.model.predict(X.iloc[a:a + QUERY_CHUNK]), dtype=float).reshape(-1)
+               for a in range(0, len(X), QUERY_CHUNK)]
         return np.concatenate(out) if out else np.empty(0)
 
 

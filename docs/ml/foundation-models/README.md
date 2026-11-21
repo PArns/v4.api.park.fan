@@ -19,7 +19,7 @@ The time-series adapters live in `ml-bench/mlbench/models/foundation.py` (`VARIA
 | TimesFM 3.0 / 2.5 (PAR-828, PAR-1064) | `timesfm3`, `timesfm3_owx`, `timesfm25`, `timesfm25_grid` | 3.0 benchmark-only; 2.5 Apache-2.0 | 3.0 ruled out, never scored, retired; 2.5 not run | [timesfm.md](timesfm.md) |
 | TiRex-2, Toto 2.0 (PAR-853) | `tirex2`, `tirex2_grid`, `toto2`, `toto2_nocov`, `toto2_grid` | Apache-2.0 | Measured: drop for serving, keep TiRex-2 as a plug-in; Toto 2.0 retired | [tirex-toto.md](tirex-toto.md) |
 | Granite PatchTST-FM-r2, TTM-r2, TabPFN-TS (PAR-1067) | `patchtst_fm`, `ttm_r2`, `ttm_r2_ft`, `tabpfn_ts` | Granite servable; TabPFN-TS benchmark-only | Implemented and tested, not run; `tabpfn_ts` retired before its run | [granite-tabpfn.md](granite-tabpfn.md) |
-| Tabular: Kumo-Tabular, Inpriora (PAR-1405) | `kumo_level`, `inpriora_level` | Kumo OpenMDW-1.1, Inpriora Apache-2.0 — servable | Implemented and tested (Kumo CPU smoke with real weights), not run; Inpriora's code dependency awaits review | [tabular.md](tabular.md) |
+| Tabular: Kumo-Tabular, Inpriora (PAR-1405) | `kumo_level`, `inpriora_level` | Kumo OpenMDW-1.1, Inpriora Apache-2.0 — servable | Implemented and tested (CPU smoke of both with real weights), not run | [tabular.md](tabular.md) |
 
 The combined run of the PAR-1063 / 1064 / 1067 arms is PAR-1141, since PAR-1405 with `kumo_level`
 and `inpriora_level` and without the retired `tabpfn_ts`; what those arms need is in

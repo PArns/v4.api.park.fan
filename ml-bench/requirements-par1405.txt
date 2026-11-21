@@ -1,7 +1,8 @@
 # PAR-1405 — tabular foundation models as the daily-level learner (`kumo_level`,
 # `inpriora_level`; docs/ml/foundation-models/tabular.md). Build with
 #   --build-arg EXTRA_REQUIREMENTS=requirements-par1405.txt
-# on the default python:3.11-slim base. Every pin is at least two weeks old on 2026-11-21.
+# on the default python:3.11-slim base. Every pin but Inpriora's (below) is at least two weeks
+# old on 2026-11-21.
 #
 # torch: comes from the cu128 wheel in the Dockerfile; structured-data-models asks only for
 # torch >= 2.7, so pip keeps it.
@@ -12,8 +13,13 @@
 # requirements.txt (numpy, pandas, pyarrow, scikit-learn stay).
 structured-data-models==0.2.1
 #
-# Inpriora (Ant Group): weights Apache-2.0 (servable), but the inference code has no PyPI
-# release, only https://github.com/ai-for-data/inpriora. A git dependency is not added
-# without a review of that code; once reviewed, pin the commit that was read, e.g.
-#   inpriora @ git+https://github.com/ai-for-data/inpriora.git@<commit>
-# Until then `inpriora_level` fails at its first fit with ModuleNotFoundError.
+# Inpriora (Ant Group): code and weights Apache-2.0 (servable). The inference code has no PyPI
+# release, only https://github.com/ai-for-data/inpriora, so it is pinned to the commit that was
+# reviewed on 2026-11-21: the release commit dde547d0 (2026-11-13). The repository has no older
+# commit, so this is the one pin younger than two weeks. Its regressor code is identical to HEAD
+# 4b0d403c, which changed only the classifier. Review: the weights load as safetensors from
+# Hugging Face; there is no telemetry, subprocess, eval or pickle load on import (pickle only in
+# the estimator's explicit save/load, which ml-bench does not call). Its dependencies (torch >= 2.4,
+# numpy, scipy, scikit-learn < 2, pandas, huggingface-hub, safetensors) change no pin here.
+# The image has no git binary, so pip builds the commit's source archive (the same tree).
+inpriora @ https://github.com/ai-for-data/inpriora/archive/dde547d0559ee825a5e3830825c2bfff9badc6ab.tar.gz

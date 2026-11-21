@@ -172,8 +172,8 @@ the built-in `lvlh5_naive`.
   `--allow-retired`, it is benchmark-only and needs `HF_TOKEN` and `TABPFN_TOKEN` exported in the
   shell (`read -s`), never written to a file.
 - The tabular arms `kumo_level` and `inpriora_level` (PAR-1405) join it. They need an image built
-  with `EXTRA_REQUIREMENTS=requirements-par1405.txt`, and Inpriora additionally needs its reviewed
-  git dependency ([tabular.md](../foundation-models/tabular.md#status)).
+  with `EXTRA_REQUIREMENTS=requirements-par1405.txt`, which also pins Inpriora's reviewed git commit
+  ([tabular.md](../foundation-models/tabular.md#status)).
 - `driver_level` goes in as a `--model`, not only `--pair-with`, when a run reports daily-level
   cells: they compare every `lvl_*` source of the run.
 - The fine-tunes (`chronos2_ft`, `chronos2_lora`, `ttm_r2_ft`) refit once per 28 days of origin

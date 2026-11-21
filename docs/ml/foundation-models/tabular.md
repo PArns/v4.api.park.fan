@@ -61,7 +61,7 @@ The rule has two parts:
 | Model | Verdict |
 | --- | --- |
 | Kumo-Tabular, `large` | **benchmarked** as `kumo_level` |
-| Inpriora | **benchmarked** as `inpriora_level` (its code dependency still needs a review, see below) |
+| Inpriora | **benchmarked** as `inpriora_level` |
 | Kumo-Tabular-Medium / -Small | not run: size variants of the same model; `MLBENCH_KUMO_SIZE` exists for CPU smokes only |
 | Mitra-v2 | dropped: upper bound 2206 < 2298, and every fit is an 8-fold bagged fine-tune on a CUDA GPU |
 | Xiaomi-TabLDM, Nori-30M, TabICLv2, TabDPT(-1.3), TabPFN-2.6, RealTabPFN-2.5 | dropped: upper bounds 2023 and lower, all below 2298 |
@@ -104,9 +104,11 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
   `q001` … `q999`, and the level uses `q500`: the median, like `driver_level`'s absolute-error
   loss. Categoricals (`dow`, `region`) go in as strings, because sdm encodes a category by its
   value.
-- **`inpriora_level`:** Inpriora's regressor (121 M), weights pinned to Hugging Face revision
-  `8c41fb1a` (`MLBENCH_INPRIORA_REVISION`). Categoricals go in as codes of the context's
-  categories, and an unseen category becomes NaN.
+- **`inpriora_level`:** Inpriora's regressor (121 M) with its default 8 estimators
+  (`MLBENCH_INPRIORA_ESTIMATORS`) and fp16 autocast on CUDA. The weights are pinned to Hugging Face
+  revision `8c41fb1a` (`MLBENCH_INPRIORA_REVISION`), and the code to the reviewed commit `dde547d0`.
+  It gets the frame as `design` builds it, so it encodes the category columns itself. The point
+  forecast is the regressor's own `predict`.
 - **Query chunks:** `MLBENCH_TFM_QUERY_CHUNK` (20,000 rows per forward pass). VRAM is capped by
   `MLBENCH_FM_VRAM_FRACTION`, like the other foundation arms.
 - **Per-arm counters** (`stats`, in a `--probe` run's json): fits, fit seconds, context rows,
@@ -119,13 +121,15 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
 
 ## Status
 
-- **Implemented and tested.** The CPU wiring smoke used the real Kumo-Tabular weights (`small`, 2
-  estimators) on the synthetic export, over three origins: 904 context rows and 360 scored levels,
-  2.5 s to fit and 0.9 s to predict. `test_kumo_backend_real_weights` runs the backend against the
-  real weights when `MLBENCH_FM_REAL=1`. The synthetic export says nothing about accuracy.
-- **Inpriora is not installable yet.** Its inference code has no PyPI release, only GitHub.
-  `requirements-par1405.txt` therefore leaves it out until that code has been reviewed and a commit
-  is pinned. Until then `inpriora_level` fails at its first fit.
+- **Implemented and tested.** The CPU wiring smoke ran both arms with their real weights on the
+  synthetic export, over three origins: 904 context rows and 360 scored levels each. Kumo-Tabular
+  (`small`, 2 estimators) took 2.5 s to fit and 0.9 s to predict; Inpriora (8 estimators,
+  `INPRIORA_DISABLE_TRITON=1` on CPU) took 10.6 s and 3.2 s. `test_kumo_backend_real_weights` and
+  `test_inpriora_backend_real_weights` run the backends against the real weights when
+  `MLBENCH_FM_REAL=1`. The synthetic export says nothing about accuracy.
+- **Inpriora's code comes from GitHub.** It has no PyPI release, so `requirements-par1405.txt` pins
+  the commit that was reviewed on 2026-11-21, with the findings. The repository's first commit is
+  from 2026-11-13, so no pin of it can be two weeks old.
 - **Not scored on the production export yet.** The run belongs in the combined run (PAR-1141),
   next to `driver_level` (pass `driver_level` as a `--model`, not only `--pair-with`, see
   [running.md](../ml-bench/running.md#the-foundation-model-arms-par-1063--1064--1067)). Build the

@@ -132,3 +132,23 @@ def test_kumo_backend_real_weights():
     p = b.predict(X.iloc[1000:])
     assert p.shape == (200,) and np.isfinite(p).all()
     assert np.abs(p - y[1000:]).mean() < np.abs(y[1000:] - np.median(y[:1000])).mean()
+
+
+@pytest.mark.skipif(not (os.environ.get("MLBENCH_FM_REAL") and importlib.util.find_spec("inpriora")),
+                    reason="real Inpriora weights: MLBENCH_FM_REAL=1 with inpriora installed")
+def test_inpriora_backend_real_weights():
+    from mlbench.models.tabular_fm import InprioraBackend
+
+    rng = np.random.default_rng(2)
+    X = pd.DataFrame({"L": rng.integers(1, 90, 1200).astype(float),
+                      "region": pd.Categorical(rng.choice(["EU", "NA", "ASIA"], 1200)),
+                      "log_ref": rng.normal(3, 0.5, 1200)})
+    X.loc[rng.random(1200) < 0.1, "log_ref"] = np.nan
+    y = 0.3 * np.nan_to_num(X["log_ref"].to_numpy() - 3) + np.where(X["region"] == "EU", 0.2, -0.1)
+    b = InprioraBackend(estimators=2)
+    b.fit(X.iloc[:1000], y[:1000], seed=830)
+    # a query frame whose categories differ from the context's still lines up by value
+    q = X.iloc[1000:].assign(region=pd.Categorical(X["region"].iloc[1000:].astype(str)))
+    p = b.predict(q)
+    assert p.shape == (200,) and np.isfinite(p).all()
+    assert np.abs(p - y[1000:]).mean() < np.abs(y[1000:] - np.median(y[:1000])).mean()
