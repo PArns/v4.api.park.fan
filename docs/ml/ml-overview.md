@@ -54,6 +54,7 @@ removing the field returns to daily derivation). Current decisions and dates:
 | `calendar_tft_grid`, `calendar_tft_grid_drivers` | `cal_rank`, `cal_busier`, `cal_far` × `tft_grid` / `tft_grid_drivers` | 2027-01-08 |
 | `catboost_daily_off` (state `later`) | `cal_rank`, `cal_busier`, `cal_far` × `catboost` (`not_better`), `cal_far_90` × `catboost`, `wkd` | 2027-01-21 |
 | `calendar_driver_level` | `cal_rank`, `cal_busier`, `cal_far`, `cal_far_90` × `driver` | 2027-09-01 |
+| `calendar_tabular_fm` (state `later`, after `calendar_driver_level`) | `cal_rank`, `cal_busier`, `cal_far`, `cal_far_90` × `tfm` (offline only, [tabular arms](foundation-models/tabular.md)) | 2027-09-01 |
 
 The overview date can differ by a day from a cell's own `expectedBy`, which counts from the window's
 last scored date. Without a matrix (the comparison fails) the summary is zero and every derived

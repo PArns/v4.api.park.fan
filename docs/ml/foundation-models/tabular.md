@@ -137,7 +137,10 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
   first. On TabArena's GPU Kumo-Tabular predicted 0.24 s and Inpriora 0.06 s per 1,000 rows.
 - **In the admin:** the model comparison has an offline-only column „Kumo-Tabular / Inpriora“
   (`tfm`) on the four calendar questions. It reads „not measured“ until the run's verdicts are in
-  `src/ml/data/offline-model-verdicts.json`; the arms run in no production shadow.
+  `src/ml/data/offline-model-verdicts.json`; the arms run in no production shadow. The ML overview
+  (admin page and MCP `ml_overview`) lists the decision `calendar_tabular_fm`, state `later`
+  behind `calendar_driver_level`: a better learner only matters once the driver level itself is
+  switched in. The MCP tool `model_comparison` returns the `tfm` column as part of the matrix.
 - **How it is judged:** against `driver_level` (paired, same rows) and `lvl_tft` on UC4 / D6 / D7,
   per segment and lead, with the rules on [model-overview](../model-overview.md#how-a-model-change-is-judged).
   A win on overall MAE alone does not count.
