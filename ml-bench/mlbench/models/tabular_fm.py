@@ -46,8 +46,9 @@ from .driver_level import FEATURES, DriverLevel
 LICENCES = ("servable", "benchmark-only", "unclear")
 #: Hugging Face revision of ai-for-data/inpriora (2026-11-17)
 INPRIORA_REVISION = os.environ.get("MLBENCH_INPRIORA_REVISION", "8c41fb1a17dc775cf5c2d76bbe91097d55a040c9")
-#: query rows per forward pass (bounds GPU memory; the context is encoded once per fit)
-QUERY_CHUNK = int(os.environ.get("MLBENCH_TFM_QUERY_CHUNK", "20000"))
+#: query rows per forward pass (bounds GPU memory; the context is encoded once per fit).
+#: 20,000 ran Inpriora out of the 9.3 GB cap on the RTX 5080 at the April origins (PAR-1141).
+QUERY_CHUNK = int(os.environ.get("MLBENCH_TFM_QUERY_CHUNK", "4000"))
 
 
 # --------------------------------------------------------------------------- backends

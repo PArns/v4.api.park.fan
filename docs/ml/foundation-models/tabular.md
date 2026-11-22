@@ -108,7 +108,7 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
   revision `8c41fb1a` (`MLBENCH_INPRIORA_REVISION`), and the code to the reviewed commit `dde547d0`.
   It gets the frame as `design` builds it, so it encodes the category columns itself. The point
   forecast is the regressor's own `predict`.
-- **Query chunks:** `MLBENCH_TFM_QUERY_CHUNK` (20,000 rows per forward pass). VRAM is capped by
+- **Query chunks:** `MLBENCH_TFM_QUERY_CHUNK` (4,000 rows per forward pass; 20,000 ran Inpriora out of GPU memory on the RTX 5080). VRAM is capped by
   `MLBENCH_FM_VRAM_FRACTION`, like the other foundation arms.
 - **Per-arm counters** (`stats`, in a `--probe` run's json): fits, fit seconds, context rows,
   predicted rows, predict seconds.
