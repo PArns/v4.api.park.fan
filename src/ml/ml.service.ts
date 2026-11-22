@@ -2411,7 +2411,7 @@ export class MLService {
    * CatBoost where PCN has no forecast (or the table/flag is absent).
    *
    * Since PAR-911 the read paths ask whether EITHER served-model override is on:
-   * the PCN champion swap or the Chronos-2 30–120 min window
+   * the PCN champion swap or the Chronos-2 45–240 min window
    * (`SERVE_CHRONOS_INTRADAY`, also default OFF). With both off every read path
    * returns CatBoost untouched apart from the PAR-1060 band factor. */
   private get serveIntradayOverride(): boolean {
@@ -2550,8 +2550,8 @@ export class MLService {
    * would hand the forecast the answer.
    *
    * `chronos` where the Chronos-2 serving override (PAR-911) produced the
-   * slot. Chronos serves only 45–120 min ahead, so under the two-hour scored
-   * lead below it is recorded only where the two windows meet — see
+   * slot. Chronos serves 45–240 min ahead (PAR-1409), so under the two-hour
+   * scored lead below it is recorded on the 2–4 h slots it served — see
    * docs/ml/forward-archive/chronos-serving.md#where-it-applies before reading the badge as a Chronos
    * figure.
    *
@@ -2615,9 +2615,9 @@ export class MLService {
    * model each changed row ended on.
    *
    * 1. PCN + the persistence blend (`SERVE_PCN_INTRADAY`) on every slot it has.
-   * 2. Chronos-2 (`SERVE_CHRONOS_INTRADAY`, PAR-911) on the 45–120 min slots
-   *    its cached curve covers — so ≤ 30 min stays the blend (persistence wins
-   *    at 15 min) and > 120 min stays PCN, and a stale or missing curve leaves
+   * 2. Chronos-2 (`SERVE_CHRONOS_INTRADAY`, PAR-911) on the 45–240 min slots
+   *    (PAR-1409) its cached curve covers — so ≤ 30 min stays the blend
+   *    (persistence wins at 15 min) and > 240 min stays PCN, and a stale or missing curve leaves
    *    whatever step 1 served.
    *
    * Chronos's lead base is the current slot start, never the caller's

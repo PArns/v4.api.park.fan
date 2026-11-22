@@ -18,7 +18,7 @@ For the daily number (`/plan/day` `leadTimeMae`) the equivalent forward record i
 | [scoring.md](scoring.md) | Truth, the daily scores per use case × lead × source × segment, the admin board, open follow-ups |
 | [chronos-shadow.md](chronos-shadow.md) | The Chronos-2 shadow (PAR-852): variants, covariates, information cut, paired board, safety switches |
 | [model-comparison.md](model-comparison.md) | The admin model comparison (PAR-855): paired scoring of every model against what is served, questions, cell states, endpoints |
-| [chronos-serving.md](chronos-serving.md) | Chronos-2 served on the 45–120 min slots (PAR-911): lead routing, serving cache, switch-on checklist and rollback |
+| [chronos-serving.md](chronos-serving.md) | Chronos-2 served on the 45–240 min slots (PAR-911, PAR-1409): lead routing, serving cache, switch-on checklist and rollback |
 
 ## Code and jobs
 
