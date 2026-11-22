@@ -19,8 +19,8 @@ import { roundServedWait } from "./pcn-serving.constants";
  * | lead | served |
  * | --- | --- |
  * | ≤ 30 min | unchanged — persistence/blend (persistence wins at 15 min, PAR-869) |
- * | 45 … 120 min | Chronos-2 q50 (band q95 − q50, crowd from q80) |
- * | > 120 min | unchanged — PCN + blend (or CatBoost) |
+ * | 45 … 240 min | Chronos-2 q50 (band q95 − q50, crowd from q80) |
+ * | > 240 min | unchanged — PCN + blend (or CatBoost) |
  *
  * See docs/ml/forward-archive/chronos-serving.md.
  */
@@ -32,8 +32,12 @@ export function serveChronosIntraday(): boolean {
 
 /** Leads strictly above this are Chronos's (≤ 30 min stays persistence/blend). */
 export const CHRONOS_SERVE_MIN_LEAD_MS = 30 * 60_000;
-/** Leads up to and including this are Chronos's (beyond stays PCN). */
-export const CHRONOS_SERVE_MAX_LEAD_MS = 120 * 60_000;
+/**
+ * Leads up to and including this are Chronos's (beyond stays PCN). 4 h since
+ * PAR-1409: live it beat PCN by 1.1 min at 2–4 h (sure, 28 days, 136 parks);
+ * the `live` curve reaches 240 min (`keep_minutes`), a slot it lacks stays PCN.
+ */
+export const CHRONOS_SERVE_MAX_LEAD_MS = 240 * 60_000;
 /**
  * A curve whose origin is older than this is not served. The cache is
  * refreshed every hour at :05 (+ up to ~15 min of capture) while the flag is

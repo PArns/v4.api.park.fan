@@ -967,7 +967,7 @@ describe("MLService", () => {
     });
   });
 
-  // PAR-911: Chronos-2 on the 45–120 min slots behind SERVE_CHRONOS_INTRADAY,
+  // PAR-911: Chronos-2 on the 45–240 min slots (PAR-1409, was 120) behind SERVE_CHRONOS_INTRADAY,
   // read from the serving cache the forward-archive capture writes.
   describe("Chronos-2 serving override (PAR-911)", () => {
     const parkId = "park-chronos";
@@ -977,7 +977,7 @@ describe("MLService", () => {
     // A slot-aligned "now", so a lead of exactly 120 min is reachable for the
     // recorder test below.
     const NOW = Math.floor(Date.UTC(2026, 9, 17, 12, 0) / 900_000) * 900_000;
-    const LEADS = [30, 60, 120, 180];
+    const LEADS = [30, 60, 120, 180, 300];
     const pyIso = (ms: number) =>
       new Date(ms).toISOString().replace(".000Z", "+00:00");
 
@@ -1080,7 +1080,7 @@ describe("MLService", () => {
       expect(mockRedis.mget).not.toHaveBeenCalled();
     });
 
-    it("Chronos only: 45–120 min from Chronos, the rest stays CatBoost", async () => {
+    it("Chronos only: 45–240 min from Chronos, the rest stays CatBoost", async () => {
       delete process.env.SERVE_PCN_INTRADAY;
       process.env.SERVE_CHRONOS_INTRADAY = "true";
 
@@ -1089,23 +1089,23 @@ describe("MLService", () => {
 
       expect(at(30).modelVersion).toBe("v1");
       expect(at(30).predictedWaitTime).toBe(20);
-      for (const l of [60, 120]) {
+      for (const l of [60, 120, 180]) {
         expect(at(l).modelVersion).toBe("v1+chronos");
         expect(at(l).predictedWaitTime).toBe(40); // q50 42 → 40
         expect(at(l).uncertaintyMinutes).toBe(18); // q95 60 − q50 42
         expect(at(l).crowdLevel).toBe("high"); // q80 50 / 40 = 125 %
       }
-      expect(at(180).modelVersion).toBe("v1");
+      expect(at(300).modelVersion).toBe("v1");
       expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
     });
 
     it("PAR-1060: the band factor scales CatBoost slots only, never Chronos or PCN", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
       process.env.SERVE_CHRONOS_INTRADAY = "true";
-      // PCN only for the 180-min slot, so 30 stays CatBoost.
+      // PCN only for the 300-min slot, so 30 stays CatBoost.
       mockPredictionRepository.manager.query.mockResolvedValue(
         pcnRows("60").filter(
-          (r) => r.predicted_time.getTime() === NOW + 180 * MIN,
+          (r) => r.predicted_time.getTime() === NOW + 300 * MIN,
         ),
       );
       const payload = await mockRedis.get();
@@ -1131,11 +1131,11 @@ describe("MLService", () => {
       expect(at(30).uncertaintyMinutes).toBe(10); // 5 × 2
       expect(at(60).modelVersion).toBe("v1+chronos");
       expect(at(60).uncertaintyMinutes).toBe(18); // Chronos's own band
-      expect(at(180).modelVersion).toBe("v1+pcn");
-      expect(at(180).uncertaintyMinutes).toBeNull();
+      expect(at(300).modelVersion).toBe("v1+pcn");
+      expect(at(300).uncertaintyMinutes).toBeNull();
     });
 
-    it("with PCN on: blend ≤ 30 min, Chronos 45–120, PCN beyond", async () => {
+    it("with PCN on: blend ≤ 30 min, Chronos 45–240, PCN beyond", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
       process.env.SERVE_CHRONOS_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
@@ -1147,7 +1147,8 @@ describe("MLService", () => {
       expect(at(30).predictedWaitTime).toBe(100); // pure anchor ≤ 1 h
       expect(at(60).modelVersion).toBe("v1+chronos");
       expect(at(120).modelVersion).toBe("v1+chronos");
-      expect(at(180).modelVersion).toBe("v1+pcn");
+      expect(at(180).modelVersion).toBe("v1+chronos");
+      expect(at(300).modelVersion).toBe("v1+pcn");
     });
 
     it("falls back to PCN where the Chronos curve is stale", async () => {
@@ -1199,12 +1200,13 @@ describe("MLService", () => {
         }) as never;
 
       const served = await service.servedIntradayValues(
-        [row(60), row(120), row(180)],
+        [row(60), row(120), row(180), row(300)],
         NOW,
       );
 
       expect(served).toEqual([
         null, // closer than the two-hour scored lead
+        { wait: 40, source: "chronos" },
         { wait: 40, source: "chronos" },
         { wait: 60, source: "pcn" },
       ]);

@@ -88,18 +88,26 @@ describe("chronos-serving (PAR-911)", () => {
       expect(preds.every((p) => p.modelVersion === "v1+pcn")).toBe(true);
     });
 
-    it("serves Chronos q50 from 45 min up to and including 120 min", () => {
-      const { preds, done } = run([45, 60, 120]);
-      expect(done.size).toBe(3);
+    it("serves Chronos q50 from 45 min up to and including 240 min", () => {
+      const { preds, done } = run([45, 60, 120, 135, 240]);
+      expect(done.size).toBe(5);
       // q50 at slot 3 = 33 → rounded to the served 5-minute step.
       expect(preds[0].predictedWaitTime).toBe(35);
       expect(preds[1].predictedWaitTime).toBe(35); // 34 → 35
       expect(preds[2].predictedWaitTime).toBe(40); // 38 → 40
+      expect(preds[3].predictedWaitTime).toBe(40); // 39 → 40 (PAR-1409: was PCN)
+      expect(preds[4].predictedWaitTime).toBe(45); // 46 → 45
       expect(preds.every((p) => p.modelVersion === "v1+chronos")).toBe(true);
     });
 
-    it("leaves > 120 min to PCN", () => {
-      const { preds, done } = run([135, 180, 240]);
+    it("leaves > 240 min to PCN, even where the curve reaches further", () => {
+      const preds = [255, 300].map((l) => pred(l));
+      const done = applyChronosOverride(
+        preds,
+        new Map([["a1", entry({}, 25)]]),
+        BASE,
+        BASE + 5 * MIN,
+      );
       expect(done.size).toBe(0);
       expect(preds.every((p) => p.predictedWaitTime === 20)).toBe(true);
     });

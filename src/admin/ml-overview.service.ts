@@ -424,11 +424,11 @@ export class MlOverviewService {
       {
         id: "chronos",
         name: "Chronos-2",
-        // PAR-911: with SERVE_CHRONOS_INTRADAY on, the live 30–120 min slots
-        // are served; the planner variant stays a shadow either way.
+        // PAR-911: with SERVE_CHRONOS_INTRADAY on, the live 45 min – 4 h slots
+        // (PAR-1409) are served; the planner variant stays a shadow either way.
         delivers: chronosServed
-          ? "Live 30–120 Min. (ausgeliefert), Tagesplaner 0–7 Tage (Schatten)"
-          : "Live 30–120 Min., Tagesplaner 0–7 Tage (nur Schatten)",
+          ? "Live 45 Min. bis 4 Std. (ausgeliefert), Tagesplaner 0–7 Tage (Schatten)"
+          : "Live 45 Min. bis 4 Std., Tagesplaner 0–7 Tage (nur Schatten)",
         role: chronosServed ? "served" : "shadow",
         lastRunAt: iso(chronosAt),
         expected: chronosServed

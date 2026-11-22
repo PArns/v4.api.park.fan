@@ -9,7 +9,7 @@ day-curve band. Which compared slots count as an error at all is
 | Figure | Surface | Forecast it describes | Scored from |
 | --- | --- | --- | --- |
 | `leadTimeMae` | `/plan/day` | the **served** daily level: TFT for headliners up to d59, CatBoost elsewhere | `prediction_lead_snapshots`, rows with `source` set |
-| accuracy badge (`badge`, `last30Days.mae`) | attraction detail | the **served** intraday wait: PCN + persistence blend when `SERVE_PCN_INTRADAY=true`, CatBoost otherwise; `chronos` where Chronos-2 served the scored slot (rare at the 2-hour scored lead — [chronos-serving.md](forward-archive/chronos-serving.md#where-it-applies)) | `prediction_accuracy.served_*` → `attraction_accuracy_stats.mae` |
+| accuracy badge (`badge`, `last30Days.mae`) | attraction detail | the **served** intraday wait: PCN + persistence blend when `SERVE_PCN_INTRADAY=true`, CatBoost otherwise; `chronos` where Chronos-2 served the scored slot (the usual case at the 2-hour scored lead since PAR-1409, where its curve covers the slot — [chronos-serving.md](forward-archive/chronos-serving.md#where-it-applies)) | `prediction_accuracy.served_*` → `attraction_accuracy_stats.mae` |
 | `forecastError` | ride day curve (`/stats/day`) | **raw CatBoost** — the curve plots `wait_time_predictions` | `prediction_accuracy.absolute_error` → `attraction_accuracy_stats.raw_mae` |
 
 The admin boards (`/v1/ml/accuracy/*`, the dashboard, drift) keep scoring raw CatBoost on purpose:
