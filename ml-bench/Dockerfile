@@ -17,6 +17,12 @@ FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
+# A C compiler for Triton, which builds its CUDA launcher at the first GPU kernel call:
+# Kumo-Tabular (PAR-1405) failed its first GPU probe without one ("Failed to find C
+# compiler"); the CPU smoke never reached Triton.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # torch pinned to the newest cu128 build (2.11.0; 2.12+ ship as cu130 only, which needs a
 # driver check on the host first) so a rebuild cannot move it.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu128
