@@ -293,7 +293,10 @@ ANTHROPIC_API_KEY=sk-ant-… pnpm assistant:eval --prompt-ref origin/main   # an
 ```
 
 It reads the key from the environment only and costs a few cents a run. `--only <case id>` runs one
-case. The model answers differently from run to run, so a single failure is worth a second run
+case. `--render <dir>` calls no model and needs no key: it writes each case as the model gets it
+(`<id>.system.md` with the case's "This chat", `<id>.chat.json` with the turns, the canned results
+in `results/`, the checks in `checks/`) and `tools.json`, so a stand-in such as a local agent can
+answer the cases and be scored by hand; with `--prompt-ref` it renders another commit's prompt. The model answers differently from run to run, so a single failure is worth a second run
 before it is worth a rule.
 
 ## Language and feedback from the chat

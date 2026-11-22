@@ -6,6 +6,8 @@ import {
 } from "../mcp-tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
+import { assistantTranscriptsTool } from "./assistant-transcripts.tool";
+import { SYSTEM_PROMPT_VERSION } from "../../assistant/system-prompt";
 import { siteFeedbackTool } from "./site-feedback.tool";
 import { feedbackEntry } from "./assistant-records";
 import { CHAT_DATA_NOTICE } from "./visitor-data";
@@ -44,6 +46,37 @@ const feedbackRow = {
   updatedAt: AT,
 };
 
+const MESSAGES = [
+  {
+    id: "55555555-5555-4555-8555-555555555555",
+    conversationId: CHAT,
+    role: "user",
+    text: "wo gibt es denn das leckerste Eis?",
+    toolCalls: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    costUsd: "0",
+    rating: null,
+    promptVersion: null,
+    createdAt: AT,
+  },
+  {
+    id: "66666666-6666-4666-8666-666666666666",
+    conversationId: CHAT,
+    role: "assistant",
+    text: "Pistachio, eaten on a bench between two coasters.",
+    toolCalls: [{ name: "find_parks", input: { query: "Phantasialand" } }],
+    inputTokens: 8128,
+    outputTokens: 376,
+    cacheReadTokens: 7908,
+    costUsd: "0.001300",
+    rating: -1,
+    promptVersion: 26,
+    createdAt: AT,
+  },
+];
+
 function records() {
   return {
     listConversations: jest.fn(
@@ -58,41 +91,18 @@ function records() {
       id === CHAT
         ? {
             ...chatRow,
-            messages: [
-              {
-                id: "55555555-5555-4555-8555-555555555555",
-                conversationId: CHAT,
-                role: "user",
-                text: "wo gibt es denn das leckerste Eis?",
-                toolCalls: null,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                costUsd: "0",
-                rating: null,
-                promptVersion: null,
-                createdAt: AT,
-              },
-              {
-                id: "66666666-6666-4666-8666-666666666666",
-                conversationId: CHAT,
-                role: "assistant",
-                text: "Pistachio, eaten on a bench between two coasters.",
-                toolCalls: [
-                  { name: "find_parks", input: { query: "Phantasialand" } },
-                ],
-                inputTokens: 8128,
-                outputTokens: 376,
-                cacheReadTokens: 7908,
-                costUsd: "0.001300",
-                rating: -1,
-                promptVersion: 26,
-                createdAt: AT,
-              },
-            ],
+            messages: MESSAGES,
             feedback: [feedbackRow],
           }
         : null,
+    ),
+    transcripts: jest.fn(
+      async (params: { page: number; pageSize: number }) => ({
+        total: 3,
+        page: params.page,
+        pageSize: params.pageSize,
+        items: [{ ...chatRow, messages: MESSAGES, feedback: [feedbackRow] }],
+      }),
     ),
     listFeedback: jest.fn(
       async (params: { page: number; pageSize: number }) => ({
@@ -203,6 +213,75 @@ describe("assistant_conversation tool", () => {
         id: "77777777-7777-4777-8777-777777777777",
       }),
     ).rejects.toBeInstanceOf(McpToolError);
+  });
+});
+
+describe("assistant_transcripts tool", () => {
+  it("reads whole chats by the prompt version any answer ran on", async () => {
+    const { answer, service } = await run(assistantTranscriptsTool, {
+      promptVersion: 26,
+      locale: "de",
+    });
+    expect(service.transcripts).toHaveBeenCalledWith({
+      promptVersion: 26,
+      rating: undefined,
+      q: undefined,
+      locale: "de",
+      page: 1,
+      pageSize: 10,
+    });
+    expect(answer).toMatchObject({
+      total: 3,
+      page: 1,
+      pageSize: 10,
+      nextPage: null,
+      currentPromptVersion: SYSTEM_PROMPT_VERSION,
+    });
+    const data = answer.visitorData as {
+      chats: Array<{
+        messages: Array<Record<string, unknown>>;
+        feedback: Array<Record<string, unknown>>;
+      }>;
+    };
+    expect(data.chats[0]).toMatchObject({
+      id: CHAT,
+      promptVersion: 26,
+      startPath: "/en",
+    });
+    expect(data.chats[0].messages).toEqual([
+      { at: AT, role: "user", text: "wo gibt es denn das leckerste Eis?" },
+      {
+        at: AT,
+        role: "assistant",
+        text: "Pistachio, eaten on a bench between two coasters.",
+        toolCalls: [{ name: "find_parks", input: { query: "Phantasialand" } }],
+        promptVersion: 26,
+        rating: -1,
+      },
+    ]);
+    expect(data.chats[0].feedback[0]).toMatchObject({ wantsReply: true });
+  });
+
+  it("names the next page while chats are left", async () => {
+    const { answer } = await run(assistantTranscriptsTool, { pageSize: 1 });
+    expect(answer.nextPage).toBe(2);
+  });
+
+  it("keeps the visitor's words under visitorData, and no hash or address", async () => {
+    const { answer } = await run(assistantTranscriptsTool, {});
+    expect(answer.visitorDataNotice).toBe(CHAT_DATA_NOTICE);
+    const outside = JSON.stringify({ ...answer, visitorData: undefined });
+    expect(outside).not.toContain(INJECTION);
+    const text = JSON.stringify(answer);
+    for (const secret of ["a1b2c3", "d4e5f6", "visitor@example.com"]) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it("refuses more than twenty chats a page", () => {
+    expect(() =>
+      z.object(assistantTranscriptsTool.input).parse({ pageSize: 21 }),
+    ).toThrow();
   });
 });
 
