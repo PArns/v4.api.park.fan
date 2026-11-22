@@ -443,6 +443,24 @@ describe("lookedUpIds", () => {
     ]);
   });
 
+  it("reads the ids among plan_add_rides' rides and skips the names", () => {
+    expect(
+      lookedUpIds([
+        {
+          toolCalls: [
+            {
+              name: "plan_add_rides",
+              input: { park: PARK, rides: ["Taron", RIDE] },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      { kind: "ride", id: RIDE },
+      { kind: "park", id: PARK },
+    ]);
+  });
+
   it("keeps at most eight", () => {
     const ids = Array.from(
       { length: 12 },
