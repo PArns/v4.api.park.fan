@@ -617,11 +617,14 @@ describe("buildModelComparison", () => {
     }
     // the two `today` questions stay pending: Chronos beats the H5 profile there,
     // but PCN is what is served and PCN is not in the offline benchmark — and a
-    // pending cell carries the date its live confirmation is expected
+    // the offline check against served stays open, not "running": no bench run
+    // is under way, so the verdict file owes no date (it once carried the live
+    // confirmation's 26.10. and the admin listed it as overdue for weeks)
     for (const id of ["today_h2_6", "today_h6_12"]) {
       const cell = res.questions.find((x) => x.id === id)!.cells.chronos;
       expect(cell.state).toBe("pending");
-      expect(cell.expectedBy?.date).toBe("2026-10-26");
+      expect(cell.checks.offline).toBe("open");
+      expect(cell.expectedBy?.overdue).toBeFalsy();
     }
     // the archived chronos_grid surface stops at d7, so the long planner band has
     // no Chronos column at all rather than an empty-looking one
