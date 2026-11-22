@@ -35,7 +35,6 @@ pairwise win rate.
 | LimiX-2 | default | 2442 | non-commercial |
 | Kumo-Tabular-Medium | default | 2329 [2184, 2538] | OpenMDW-1.1 — servable |
 | Inpriora (Ant Group) | default | 2258 [2111, 2495] | Apache-2.0 — servable |
-| Seldon (Neuralk-AI) | default | 2242 [2158, 2409] | Seldon Research and Evaluation License — benchmark-only |
 | TabPFN-3.5 | default | 2190 | non-commercial, non-production |
 | Lattice | default | 2183 | CC-BY-NC-4.0 |
 | Mitra-v2 (Amazon) | default | 2023 [1913, 2206] | Apache-2.0 — servable |
@@ -67,7 +66,6 @@ The rule has two parts:
 | Xiaomi-TabLDM, Nori-30M, TabICLv2, TabDPT(-1.3), TabPFN-2.6, RealTabPFN-2.5 | dropped: upper bounds 2023 and lower, all below 2298 |
 | LimiX-2, TabPFN-3.5, Lattice, TabFM, TabAbax, TabH2O | dropped: the weights' licence excludes commercial or production use |
 | Causilo | dropped: its non-commercial purpose excludes "business decision-making" and "production deployment", so even a benchmark run that decides what we serve falls outside it |
-| Seldon, Seldon-Mini | dropped: the licence bans production use and serving through a web or API service, free of charge or not (read 2026-11-22, see below) |
 | EXAONE-Tabular | dropped: own licence, not read; benchmark only after a licence read |
 | TabPFN-TS (`tabpfn_ts`, PAR-1067) | retired: runs on the TabPFN-3.5 weights (benchmark-only), and two servable models rank above TabPFN-3.5 |
 
@@ -84,7 +82,6 @@ Read on 2026-11-21.
 | Lattice | benchmark-only | weights `cc-by-nc-4.0` (code Apache-2.0). <https://huggingface.co/hachure-ai/Lattice> |
 | TabFM (Google) | benchmark-only | `license_name: tabfm-non-commercial-v1.0` (code Apache-2.0). <https://huggingface.co/google/tabfm-1.0.0-pytorch> |
 | Causilo | benchmark-only | Causilo License v1.0, §2(b): "commercial or production use of the Model, Derivatives, or Outputs … requires a separate license". <https://huggingface.co/nums-ai/causilo> |
-| Seldon, Seldon-Mini | benchmark-only | "Seldon Research and Evaluation License" (model card `license_name: neuralk-seldon-license`, gated). §1.2 counts production use and use in a product or service "whether offered for a fee or free of charge" as commercial use; §3.1 and §3.3 forbid both; evaluation is only for deciding on a commercial licence, and §4.2 says its results "may never be published". <https://huggingface.co/Neuralk-AI/seldon> |
 | TabAbax, TabH2O | benchmark-only | `cc-by-nc-4.0`; `h2o-model-non-commercial-licence-v1.0` |
 | TabPFN-3.5 | benchmark-only | see [granite-tabpfn.md](granite-tabpfn.md#licence-verdicts) |
 
