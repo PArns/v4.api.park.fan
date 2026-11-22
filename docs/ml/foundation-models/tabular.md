@@ -35,7 +35,6 @@ pairwise win rate.
 | LimiX-2 | default | 2442 | non-commercial |
 | Kumo-Tabular-Medium | default | 2329 [2184, 2538] | OpenMDW-1.1 — servable |
 | Inpriora (Ant Group) | default | 2258 [2111, 2495] | Apache-2.0 — servable |
-| Seldon | default | 2242 | own licence, gated, not read |
 | TabPFN-3.5 | default | 2190 | non-commercial, non-production |
 | Lattice | default | 2183 | CC-BY-NC-4.0 |
 | Mitra-v2 (Amazon) | default | 2023 [1913, 2206] | Apache-2.0 — servable |
@@ -67,7 +66,7 @@ The rule has two parts:
 | Xiaomi-TabLDM, Nori-30M, TabICLv2, TabDPT(-1.3), TabPFN-2.6, RealTabPFN-2.5 | dropped: upper bounds 2023 and lower, all below 2298 |
 | LimiX-2, TabPFN-3.5, Lattice, TabFM, TabAbax, TabH2O | dropped: the weights' licence excludes commercial or production use |
 | Causilo | dropped: its non-commercial purpose excludes "business decision-making" and "production deployment", so even a benchmark run that decides what we serve falls outside it |
-| Seldon, EXAONE-Tabular | dropped: own licences, not read; benchmark only after a licence read |
+| EXAONE-Tabular | dropped: own licence, not read; benchmark only after a licence read |
 | TabPFN-TS (`tabpfn_ts`, PAR-1067) | retired: runs on the TabPFN-3.5 weights (benchmark-only), and two servable models rank above TabPFN-3.5 |
 
 ## Licence verdicts
@@ -109,7 +108,7 @@ H5 composition. A margin against `driver_level` is therefore the learner alone. 
   revision `8c41fb1a` (`MLBENCH_INPRIORA_REVISION`), and the code to the reviewed commit `dde547d0`.
   It gets the frame as `design` builds it, so it encodes the category columns itself. The point
   forecast is the regressor's own `predict`.
-- **Query chunks:** `MLBENCH_TFM_QUERY_CHUNK` (20,000 rows per forward pass). VRAM is capped by
+- **Query chunks:** `MLBENCH_TFM_QUERY_CHUNK` (4,000 rows per forward pass; 20,000 ran Inpriora out of GPU memory on the RTX 5080). VRAM is capped by
   `MLBENCH_FM_VRAM_FRACTION`, like the other foundation arms.
 - **Per-arm counters** (`stats`, in a `--probe` run's json): fits, fit seconds, context rows,
   predicted rows, predict seconds.
