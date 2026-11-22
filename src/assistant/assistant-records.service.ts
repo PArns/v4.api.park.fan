@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository, type SelectQueryBuilder } from "typeorm";
 import { AssistantConversation } from "./entities/assistant-conversation.entity";
 import {
   ASSISTANT_TOOL_ERROR_KINDS,
@@ -189,24 +189,14 @@ export class AssistantRecordsService {
     pageSize?: number;
   }) {
     const pageSize = params.pageSize ?? RECORDS_PAGE_SIZE;
-    const query = this.conversations
-      .createQueryBuilder("c")
+    const query = this.chatsWhere(params)
       .orderBy("c.createdAt", "DESC")
       .take(pageSize)
       .skip((params.page - 1) * pageSize);
-    if (params.rating !== undefined)
-      query.andWhere("c.rating = :rating", { rating: params.rating });
     if (params.promptVersion !== undefined) {
       query.andWhere("c.promptVersion = :promptVersion", {
         promptVersion: params.promptVersion,
       });
-    }
-    if (params.q) {
-      query.andWhere(
-        `EXISTS (SELECT 1 FROM assistant_messages m
-                  WHERE m."conversationId" = c.id AND m.text ILIKE :q)`,
-        { q: likeContains(params.q) },
-      );
     }
     const [items, total] = await query.getManyAndCount();
     const firstQuestions = await this.firstQuestions(items.map((c) => c.id));
@@ -232,6 +222,77 @@ export class AssistantRecordsService {
         [ids],
       );
     return new Map(rows.map((row) => [row.conversationId, row.text]));
+  }
+
+  /**
+   * Whole chats a page at a time, newest first, for reading a prompt version's answers in one go:
+   * `promptVersion` keeps a chat when any of its answers ran on it, not only its latest.
+   */
+  async transcripts(params: {
+    rating?: number;
+    q?: string;
+    locale?: string;
+    /** Only chats with at least one answer written on this prompt version. */
+    promptVersion?: number;
+    page: number;
+    pageSize: number;
+  }) {
+    const query = this.chatsWhere(params)
+      .orderBy("c.createdAt", "DESC")
+      .take(params.pageSize)
+      .skip((params.page - 1) * params.pageSize);
+    if (params.locale) {
+      query.andWhere("c.locale = :locale", { locale: params.locale });
+    }
+    if (params.promptVersion !== undefined) {
+      query.andWhere(
+        `EXISTS (SELECT 1 FROM assistant_messages pv
+                  WHERE pv."conversationId" = c.id AND pv."promptVersion" = :promptVersion)`,
+        { promptVersion: params.promptVersion },
+      );
+    }
+    const [chats, total] = await query.getManyAndCount();
+    const ids = chats.map((chat) => chat.id);
+    const [messages, feedback] = ids.length
+      ? await Promise.all([
+          this.messages.find({
+            where: { conversationId: In(ids) },
+            order: { createdAt: "ASC" },
+          }),
+          this.feedback.find({
+            where: { conversationId: In(ids) },
+            order: { createdAt: "ASC" },
+          }),
+        ])
+      : [[], []];
+    return {
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+      items: chats.map((chat) => ({
+        ...chat,
+        messages: messages.filter((m) => m.conversationId === chat.id),
+        feedback: feedback.filter((f) => f.conversationId === chat.id),
+      })),
+    };
+  }
+
+  /** The chats a rating and a word in any message leave, shared by the list and the transcripts. */
+  private chatsWhere(params: {
+    rating?: number;
+    q?: string;
+  }): SelectQueryBuilder<AssistantConversation> {
+    const query = this.conversations.createQueryBuilder("c");
+    if (params.rating !== undefined)
+      query.andWhere("c.rating = :rating", { rating: params.rating });
+    if (params.q) {
+      query.andWhere(
+        `EXISTS (SELECT 1 FROM assistant_messages m
+                  WHERE m."conversationId" = c.id AND m.text ILIKE :q)`,
+        { q: likeContains(params.q) },
+      );
+    }
+    return query;
   }
 
   async conversation(id: string) {

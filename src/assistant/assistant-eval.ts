@@ -4,12 +4,18 @@
  * which tool Parky reaches for first, not how he words the answer.
  *
  *   ANTHROPIC_API_KEY=… pnpm assistant:eval [--prompt-ref <git ref>] [--only <case id>]
+ *   pnpm assistant:eval --render <dir> [--prompt-ref <git ref>] [--only <case id>]
  *
  * `--prompt-ref` takes the system prompt from another commit (the tools stay this checkout's),
- * so two prompt versions can be scored side by side.
+ * so two prompt versions can be scored side by side. `--render` calls no model and needs no
+ * key: it writes each case as the model would get it (`<id>.system.md`, `<id>.chat.json`, the
+ * canned results in `results/<id>.json`, the checks in `checks/<id>.json`) and the tool list
+ * (`tools.json`), for a stand-in model, such as a local agent, to answer from.
  */
 
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   ASSISTANT_MAX_TOKENS,
@@ -116,6 +122,26 @@ export function promptAt(ref: string): string {
   return source.slice(start + "export const SYSTEM_PROMPT = `".length, end);
 }
 
+/** The per-request block of the system prompt, as the chat builds it for this case. */
+function caseContext(testCase: EvalCase): string {
+  return chatContext({
+    locale: testCase.locale,
+    now: testCase.now ?? "2026-11-07 10:15",
+    timeZone: "Europe/Berlin",
+    pagePath: testCase.pagePath,
+    pageSubject: testCase.pageSubject,
+    planner: testCase.planner,
+    trips: visitorTrips(testCase.trips),
+    tripDigest: testCase.tripDigest,
+    interview: testCase.interview,
+    alerts: testCase.alerts,
+    favorites: testCase.favorites,
+    liveRegions: testCase.liveRegions ?? null,
+    earlierLookups: testCase.earlierLookups,
+    dayTip: testCase.dayTip,
+  });
+}
+
 /** Sends one case, feeding canned results until it has as many calls as it checks. */
 async function run(
   client: Anthropic,
@@ -124,24 +150,7 @@ async function run(
 ): Promise<{ calls: ToolCall[]; answer: string }> {
   const system: Anthropic.TextBlockParam[] = [
     { type: "text", text: prompt, cache_control: { type: "ephemeral" } },
-    {
-      type: "text",
-      text: chatContext({
-        locale: testCase.locale,
-        now: testCase.now ?? "2026-11-07 10:15",
-        timeZone: "Europe/Berlin",
-        pagePath: testCase.pagePath,
-        pageSubject: testCase.pageSubject,
-        planner: testCase.planner,
-        trips: visitorTrips(testCase.trips),
-        tripDigest: testCase.tripDigest,
-        interview: testCase.interview,
-        alerts: testCase.alerts,
-        favorites: testCase.favorites,
-        liveRegions: testCase.liveRegions ?? null,
-        earlierLookups: testCase.earlierLookups,
-      }),
-    },
+    { type: "text", text: caseContext(testCase) },
   ];
   const messages: Anthropic.MessageParam[] = [
     ...(testCase.history ?? []).map(
@@ -170,10 +179,12 @@ async function run(
     const uses = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
     );
-    answer = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    // A round that only closes after suggest_replies writes no text: the answer is the last one.
+    answer =
+      response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map((block) => block.text)
+        .join("\n") || answer;
     if (!uses.length) break;
     calls.push(
       ...uses.map((use) => ({
@@ -199,22 +210,32 @@ async function run(
 }
 
 async function main(): Promise<void> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.error("Set ANTHROPIC_API_KEY to run the eval.");
-    process.exit(2);
-  }
   const arg = (flag: string) => {
     const i = process.argv.indexOf(flag);
     return i > 0 ? process.argv[i + 1] : undefined;
   };
   const ref = arg("--prompt-ref");
   const only = arg("--only");
+  const renderDir = arg("--render");
   // The seed's topics stand in for the stored ones: the eval reads no database.
   const prompt = fillKnowledge(
     ref ? promptAt(ref) : SYSTEM_PROMPT,
     knowledgeIndex(KNOWLEDGE_SEED),
   );
+  if (renderDir) {
+    const rendered = render(
+      renderDir,
+      prompt,
+      EVAL_CASES.filter((c) => !only || c.id === only),
+    );
+    console.log(`Rendered ${rendered} cases to ${renderDir}`);
+    return;
+  }
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.error("Set ANTHROPIC_API_KEY to run the eval, or --render <dir>.");
+    process.exit(2);
+  }
   const client = new Anthropic({ apiKey, maxRetries: 2 });
 
   const probe: Anthropic.MessageParam[] = [{ role: "user", content: "hi" }];
@@ -261,6 +282,63 @@ async function main(): Promise<void> {
   console.log(rows.join("\n"));
   console.log(`\n${passed}/${cases.length} passed`);
   process.exit(passed === cases.length ? 0 : 1);
+}
+
+/**
+ * Writes the cases as the model would get them, for a stand-in model to answer: the system prompt
+ * with this case's "This chat", the turns, and apart from them the canned results and the checks,
+ * which the stand-in must not see before it has chosen its calls. Returns how many it wrote.
+ */
+export function render(
+  dir: string,
+  prompt: string,
+  cases: readonly EvalCase[],
+): number {
+  for (const sub of ["results", "checks"]) {
+    mkdirSync(join(dir, sub), { recursive: true });
+  }
+  writeFileSync(
+    join(dir, "tools.json"),
+    JSON.stringify(ASSISTANT_TOOL_PARAMS, null, 1),
+  );
+  for (const testCase of cases) {
+    writeFileSync(
+      join(dir, `${testCase.id}.system.md`),
+      `${prompt}\n\n${caseContext(testCase)}\n`,
+    );
+    writeFileSync(
+      join(dir, `${testCase.id}.chat.json`),
+      JSON.stringify(
+        {
+          history: (testCase.history ?? []).map(([role, content]) => ({
+            role,
+            content,
+          })),
+          message: testCase.message,
+        },
+        null,
+        1,
+      ),
+    );
+    writeFileSync(
+      join(dir, "results", `${testCase.id}.json`),
+      JSON.stringify(testCase.results ?? {}, null, 1),
+    );
+    writeFileSync(
+      join(dir, "checks", `${testCase.id}.json`),
+      JSON.stringify(
+        {
+          want: testCase.want,
+          allowBefore: testCase.allowBefore,
+          forbid: testCase.forbid,
+          answer: testCase.answer,
+        },
+        null,
+        1,
+      ),
+    );
+  }
+  return cases.length;
 }
 
 if (require.main === module) void main();

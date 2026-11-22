@@ -21,6 +21,7 @@ import { retirementCandidatesTool } from "./retirement-candidates.tool";
 import { auditLogTool } from "./audit-log.tool";
 import { assistantConversationsTool } from "./assistant-conversations.tool";
 import { assistantConversationTool } from "./assistant-conversation.tool";
+import { assistantTranscriptsTool } from "./assistant-transcripts.tool";
 import { siteFeedbackTool } from "./site-feedback.tool";
 import {
   assistantKnowledgeTool,
@@ -134,6 +135,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   auditLogTool,
   assistantConversationsTool,
   assistantConversationTool,
+  assistantTranscriptsTool,
   siteFeedbackTool,
   assistantKnowledgeTool,
   assistantToolsReportTool,
