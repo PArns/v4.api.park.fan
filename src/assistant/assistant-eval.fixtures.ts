@@ -1002,7 +1002,7 @@ const CHAT_REVIEW_CASES: EvalCase[] = [
     answer: [
       { must: "Monday|15" },
       {
-        must: "^(?![\\s\\S]*(keep an eye|check (again|back)|let you know|I'll (watch|check|remind)))",
+        must: "^(?![\\s\\S]*(keep an eye|check (again|back)|closer to the time|let you know|I'll (watch|check|remind)))",
       },
     ],
   },
