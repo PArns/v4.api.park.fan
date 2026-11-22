@@ -281,8 +281,8 @@ does, and when Parky may call it is the prompt's action rule.
 
 ### The prompt eval
 
-`src/assistant/assistant-eval.ts` sends 104 short chats (`assistant-eval.fixtures.ts`: page, planner,
-trips and their plan, the live regions, interview, alerts and favourites snapshots, earlier turns) to the chat's model with the real tool list, runs no
+`src/assistant/assistant-eval.ts` sends 113 short chats (`assistant-eval.fixtures.ts`: page, planner,
+trips and their plan, the live regions, interview, alerts and favourites snapshots, the day tip, earlier turns) to the chat's model with the real tool list, runs no
 tool, and checks the first calls: the wanted tool and a subset of its input, the lookups allowed
 before it, or a tool that must not be called (canned results stand in for a second step). It prints
 the prompt's tokens alone and with the tools, then a pass/fail table:

@@ -140,6 +140,7 @@ async function run(
         favorites: testCase.favorites,
         liveRegions: testCase.liveRegions ?? null,
         earlierLookups: testCase.earlierLookups,
+        dayTip: testCase.dayTip,
       }),
     },
   ];
@@ -170,10 +171,12 @@ async function run(
     const uses = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
     );
-    answer = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    // A round that only closes after suggest_replies writes no text: the answer is the last one.
+    answer =
+      response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map((block) => block.text)
+        .join("\n") || answer;
     if (!uses.length) break;
     calls.push(
       ...uses.map((use) => ({
