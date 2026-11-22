@@ -2881,14 +2881,15 @@ describe("planner tools", () => {
       minimumHeight: slug === "taron" ? 130 : null,
     });
     const shut = { from: dayAhead(1), to: dayAhead(30), toUncertain: false };
+    afterEach(() => jest.restoreAllMocks());
     const add = (
-      rideIds: string[],
+      rides: string[],
       plan: typeof planner = planner,
       input: Record<string, unknown> = {},
     ) =>
       runAssistantTool(
         "plan_add_rides",
-        { park: PARK_ID, date: DATE, rideIds, ...input },
+        { park: PARK_ID, date: DATE, rides, ...input },
         {
           ...context(
             new Map<unknown, unknown>([
@@ -2971,6 +2972,68 @@ describe("planner tools", () => {
       expect(result.action).toMatchObject({
         rides: [{ slug: "taron", name: "Taron" }],
       });
+    });
+
+    // "Ja, alle Tipps einplanen" cost five find_rides rounds: the earlier answer's ids were gone.
+    it("takes a ride by its name at the park, so no lookup goes first", async () => {
+      const search = jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [{ id: TARON, name: "Taron" }] });
+      const result = await add(["taron", RAIK.toUpperCase()]);
+      expect(search.mock.calls[0][0]).toMatchObject({ query: "taron" });
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: ["Taron"],
+        notAdded: [{ name: "Raik", reason: "maintenance" }],
+      });
+    });
+
+    it("names a ride it cannot place and still adds the rest", async () => {
+      jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [] });
+      const result = await add(["Nirgendwo-Bahn", TARON]);
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: ["Taron"],
+        notAdded: [{ name: "Nirgendwo-Bahn", reason: "not_found" }],
+      });
+    });
+
+    it("hands two rides of one name back with their ids instead of a guess", async () => {
+      jest.spyOn(findAttractionsTool, "handler").mockResolvedValue({
+        attractions: [
+          { id: TARON, name: "Winja", park: { name: "Phantasialand" } },
+          { id: RAIK, name: "Winja", park: { name: "Phantasialand" } },
+        ],
+      });
+      const result = await add(["Winja"]);
+      expect(result.action).toBeUndefined();
+      expect(JSON.parse(result.content)).toMatchObject({
+        added: [],
+        notAdded: [
+          {
+            name: "Winja",
+            reason: "ambiguous",
+            candidates: [{ id: TARON }, { id: RAIK }],
+          },
+        ],
+      });
+    });
+
+    it("adds a ride named twice once", async () => {
+      jest
+        .spyOn(findAttractionsTool, "handler")
+        .mockResolvedValue({ attractions: [{ id: TARON, name: "Taron" }] });
+      const result = await add(["Taron", TARON]);
+      expect(result.action).toMatchObject({
+        rides: [{ slug: "taron", name: "Taron" }],
+      });
+      expect((result.action as { rides: unknown[] }).rides).toHaveLength(1);
     });
   });
 

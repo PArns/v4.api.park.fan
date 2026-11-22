@@ -832,7 +832,8 @@ const CHAT_REVIEW_CASES: EvalCase[] = [
     ],
     earlierLookups: [["get_park_day", "get_hours"]],
     message: "Ja, alle Tipps einplanen",
-    want: [{ tool: ["get_park_day", "get_park_live"] }],
+    allowBefore: ["get_park_day"],
+    want: [{ tool: "plan_add_rides", input: { rides: "*" } }],
     forbid: ["find_rides"],
   },
   {
@@ -1231,6 +1232,18 @@ const PROBE_CASES: EvalCase[] = [
     answer: [
       { must: NO_GAP_TALK },
       { must: "^(?![\\s\\S]*(entschuldig|tut mir leid))" },
+    ],
+  },
+  {
+    // "No tengo datos sobre una ficha en Play Store": park.fan has no app, it goes on the home screen.
+    id: "no-store-app-es",
+    locale: "es",
+    pagePath: "/es/blog/six-flags-mexico-horarios-consejos",
+    message: "¿Cómo apareces en la Play Store?",
+    forbid: ["submit_feedback", "open_page"],
+    answer: [
+      { must: "navegador|pantalla de inicio" },
+      { must: "^(?![\\s\\S]*(no tengo datos|no sé si|no puedo))" },
     ],
   },
   {

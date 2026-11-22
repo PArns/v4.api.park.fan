@@ -41,7 +41,8 @@ the model made-up earlier answers; a failed answer (empty text) is left out with
 The history carries text only, not the earlier tool results, so the "This chat" block after the
 cache breakpoint lists the parks and rides earlier answers looked up, newest first, at most eight,
 each with its name and id (`lookedUpIds` reads the ids off the stored tool inputs — `park`,
-`parkId`, `parks`, `rideId`, `rideIds`, failed calls and slugs skipped — and two primary-key reads
+`parkId`, `parks`, `rideId`, `rideIds`, the ids among `plan_add_rides`' `rides`, failed calls and
+slugs skipped — and two primary-key reads
 name them). Parky reuses the id instead of calling `search_parks` again on every turn.
 Below them it lists the tools behind each earlier answer, counted oldest first as the history
 counts its answers (`earlierLookups`, off the stored tool calls; failed calls, the reply chips and
@@ -482,7 +483,11 @@ counted apart as `shelterUnknown`, never as outdoor, and under half known
 (`SHELTER_MIN_KNOWN_SHARE`, the frontend's gate) the result says `shelterIncomplete`.
 `get_ride`, `get_ride_forecast` and `set_ride_alert` take a ride by `rideId` or by its name
 (`ride`) with its park (`rideIdOf`): the site's ride search, the only match or the one whose name
-is the reference, the candidates otherwise. In a test run of 41 questions through Haiku with this
+is the reference, the candidates otherwise. `plan_add_rides` takes its `rides` the same way, each an
+id or a name at the park (`planRideIds`); a name it cannot place comes back in `notAdded` with
+reason `not_found`, or `ambiguous` with the candidates and their ids, and the rest still go in.
+Before (PAR-1406), it took ids only, and the history keeps no tool results: "Ja, alle Tipps
+einplanen" after a day plan cost one `find_rides` per ride the plan had named, five in one answer. In a test run of 41 questions through Haiku with this
 prompt, every ride named by the visitor cost a `find_rides` round first, and in the chats of 3 to 9
 November `get_ride` followed `find_rides` in 2 of 3 answers. `compare_rides` without `by` lists
 every ride of its filters by name, the ones not ridden yet first and counted as `notRidden`, the

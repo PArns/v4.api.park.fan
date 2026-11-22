@@ -904,7 +904,7 @@ const STEP_GUIDE: Record<Exclude<InterviewStep, "refine">, StepGuide> = {
   },
   mustdo: {
     ask: "the rides they must not miss",
-    apply: "plan_add_rides with the rides' ids",
+    apply: "plan_add_rides with the rides, by id or by name",
     chips: "two headliners by name / the biggest coasters / whatever is quiet",
   },
   heights: {

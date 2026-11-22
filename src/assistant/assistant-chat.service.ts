@@ -732,6 +732,8 @@ export function lookedUpIds(
       const input = call.input as Record<string, unknown>;
       add("ride", input.rideId);
       list(input.rideIds).forEach((id) => add("ride", id));
+      // plan_add_rides' rides: an id or a name each; add keeps the ids only.
+      list(input.rides).forEach((id) => add("ride", id));
       add("park", input.park);
       add("park", input.parkId);
       list(input.parks).forEach((id) => add("park", id));

@@ -73,6 +73,7 @@ import { Restaurant } from "../../restaurants/entities/restaurant.entity";
 import { FavoritesService } from "../../favorites/favorites.service";
 import type { FavoritesResponseDto } from "../../favorites/dto/favorites-response.dto";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import { worksPeriodOn } from "../../attractions/utils/curated-out-of-service.util";
 import { nextPerformanceTime } from "../../attractions/utils/performance-schedule.util";
 import { getNoLiveWaitTimesReason } from "../../parks/data/live-wait-time-sources";
@@ -702,6 +703,49 @@ async function rideIdOf(
       park: hit.park?.name ?? null,
     })),
   };
+}
+
+/** A ride plan_add_rides was given by name and could not place, with why. */
+type UnplacedRide = {
+  name: string;
+  reason: "not_found" | "ambiguous";
+  candidates?: AmbiguousRide["rides"];
+};
+
+/**
+ * plan_add_rides' rides, each an id from a result or a name at the park, as ids in the order
+ * given, each once. A name resolves as get_ride's does (`rideIdOf`); one that matches no ride, or
+ * several, comes back as unplaced with the candidates and their ids, so the others still go in.
+ */
+async function planRideIds(
+  ctx: AssistantToolContext,
+  park: string,
+  rides: readonly string[],
+): Promise<{ ids: string[]; unplaced: UnplacedRide[] }> {
+  const ids: string[] = [];
+  const unplaced: UnplacedRide[] = [];
+  for (const ride of rides) {
+    const id = ride.toLowerCase();
+    if (isCanonicalUuid(id)) {
+      ids.push(id);
+      continue;
+    }
+    try {
+      const found = await rideIdOf(ctx, { ride, park });
+      if (typeof found === "string") ids.push(found);
+      else if ("rides" in found) {
+        unplaced.push({
+          name: ride,
+          reason: "ambiguous",
+          candidates: found.rides,
+        });
+      } else unplaced.push({ name: ride, reason: "not_found" });
+    } catch (error) {
+      if (!(error instanceof McpToolError)) throw error;
+      unplaced.push({ name: ride, reason: "not_found" });
+    }
+  }
+  return { ids: [...new Set(ids)], unplaced };
 }
 
 /**
@@ -5277,8 +5321,10 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Add rides to the user's trip planner for one park and day, in the order given; the " +
-      "planner places them after what is already planned. Ride ids " +
-      "come from find_rides or get_park_live and must belong to the park. A ride a maintenance " +
+      "planner places them after what is already planned. Each ride is its id from a result " +
+      "in this chat or its name at that park, so rides named in an earlier answer need no " +
+      "lookup first; a name that matches no ride or several comes back in notAdded (reason " +
+      "not_found, or ambiguous with the candidates and their ids) while the rest go in. A ride a maintenance " +
       "window shuts that day is not added: it comes back in notAdded with the window, to tell " +
       "the user. Nor is a ride the party's shortest rider (the day's riderHeightCm) is under " +
       "the minimum for: notAdded with reason too_short and the minimum. despiteHeight adds such " +
@@ -5286,11 +5332,13 @@ export const ASSISTANT_TOOLS = [
     input: z.object({
       park: parkRef,
       date: planDate,
-      rideIds: z
-        .array(z.string().uuid())
+      rides: z
+        .array(z.string().trim().min(2).max(100))
         .min(1)
         .max(10)
-        .describe("Ride ids, at most ten"),
+        .describe(
+          'At most ten rides of this park, each its id or its name ("Taron")',
+        ),
       riderHeightCm: riderHeight
         .optional()
         .describe(
@@ -5304,12 +5352,14 @@ export const ASSISTANT_TOOLS = [
         ),
     }),
     run: async (
-      { park: reference, date, rideIds, riderHeightCm, despiteHeight },
+      { park: reference, date, rides: asked, riderHeightCm, despiteHeight },
       ctx,
     ) => {
       const park = await planPark(mcp(ctx), reference);
       if ("ambiguous" in park) return park;
-      const found = await parkRides(mcp(ctx), park.slug, rideIds, date);
+      const { ids, unplaced } = await planRideIds(ctx, reference, asked);
+      const found =
+        ids.length > 0 ? await parkRides(mcp(ctx), park.slug, ids, date) : [];
       const party =
         snapshotDay(ctx, park.slug, date)?.prefs?.riderHeightCm ??
         riderHeightCm;
@@ -5321,28 +5371,31 @@ export const ASSISTANT_TOOLS = [
       const rides = found
         .filter((ride) => !ride.maintenance && !tooShort(ride))
         .map(({ slug, name }) => ({ slug, name }));
-      const notAdded = found.flatMap((ride): Record<string, unknown>[] =>
-        ride.maintenance
-          ? [
-              {
-                id: ride.id,
-                name: ride.name,
-                reason: "maintenance",
-                window: ride.maintenance,
-              },
-            ]
-          : tooShort(ride)
+      const notAdded: Record<string, unknown>[] = [
+        ...unplaced,
+        ...found.flatMap((ride): Record<string, unknown>[] =>
+          ride.maintenance
             ? [
                 {
                   id: ride.id,
                   name: ride.name,
-                  reason: "too_short",
-                  minimumHeightCm: ride.minimumHeightCm,
-                  riderHeightCm: party,
+                  reason: "maintenance",
+                  window: ride.maintenance,
                 },
               ]
-            : [],
-      );
+            : tooShort(ride)
+              ? [
+                  {
+                    id: ride.id,
+                    name: ride.name,
+                    reason: "too_short",
+                    minimumHeightCm: ride.minimumHeightCm,
+                    riderHeightCm: party,
+                  },
+                ]
+              : [],
+        ),
+      ];
       const result = {
         added: rides.map((ride) => ride.name),
         ...(notAdded.length > 0 && { notAdded }),
