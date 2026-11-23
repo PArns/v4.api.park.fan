@@ -355,10 +355,12 @@ export class AssistantChatService {
     let partial: Usage | null = null;
 
     let breakpoint: Anthropic.CacheControlEphemeral | null = null;
+    /** A round that ended without a word after the tools ran: the next one must write. */
+    let mustWrite = false;
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         answer.round = round;
-        const lastRound = round === MAX_ROUNDS - 1;
+        const lastRound = round === MAX_ROUNDS - 1 || mustWrite;
         breakpoint = moveCacheBreakpoint(messages, breakpoint);
         const stream = client.messages.stream(
           {
@@ -404,7 +406,15 @@ export class AssistantChatService {
         const calls = reply.content.filter(
           (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
         );
-        if (reply.stop_reason !== "tool_use" || calls.length === 0) break;
+        if (reply.stop_reason !== "tool_use" || calls.length === 0) {
+          // After a write the model sometimes stops without a word, read as "the widget shows it";
+          // the visitor then sees nothing, mid-interview too. One more round answers in text.
+          if (!guard.started && toolCalls.length > 0 && !lastRound) {
+            mustWrite = true;
+            continue;
+          }
+          break;
+        }
 
         messages.push({ role: "assistant", content: reply.content });
         // The replies close an answer: alone in a round they need no round after them, and beside

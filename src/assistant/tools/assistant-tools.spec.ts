@@ -3368,6 +3368,13 @@ describe("reopeningOf", () => {
     ).toMatchObject({ reason: "season", nextSeasonMonth: 4 });
   });
 
+  it("calls the park's maintenance status maintenance, with no window known", () => {
+    expect(reopeningOf({ status: "REFURBISHMENT" }, 11)).toEqual({
+      reason: "maintenance",
+      windowKnown: false,
+    });
+  });
+
   it("says unknown without data, and nothing while the ride runs", () => {
     expect(reopeningOf({ status: "CLOSED" }, 11)).toEqual({
       reason: "unknown",

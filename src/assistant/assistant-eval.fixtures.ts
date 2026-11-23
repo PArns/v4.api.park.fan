@@ -1007,6 +1007,74 @@ const CHAT_REVIEW_CASES: EvalCase[] = [
       },
     ],
   },
+  {
+    // "Temperatur?" got tomorrow's figures again, no lookup, and "heute Abend deutlich kälter".
+    id: "temperature-now-de",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/rust/europa-park",
+    pageSubject: EUROPA_PARK_SUBJECT,
+    now: "2026-11-23 17:27",
+    history: [
+      ["user", "Morgen Temperatur"],
+      [
+        "assistant",
+        "Morgen wird frostig: zwischen **-1 °C und 2,4 °C**, dazu Raureifnebel. Es bleibt trocken.",
+      ],
+    ],
+    earlierLookups: [["get_days"]],
+    message: "Temperatur?",
+    want: [{ tool: ["get_park_weather", "get_park_live"] }],
+  },
+  {
+    // Silver Star in maintenance today with no window: Parky said "keine Wartung geplant,
+    // spontaner Stillstand" and then "morgen laufen alle Bahnen".
+    id: "maintenance-not-planned-de",
+    locale: "de",
+    pagePath: "/de/parks/europe/germany/rust/europa-park/silver-star",
+    pageSubject: EUROPA_PARK_SUBJECT,
+    now: "2026-11-23 17:27",
+    message: "War die Wartung heute geplant? Läuft sie morgen?",
+    want: [{ tool: "get_ride" }],
+    results: {
+      get_ride: {
+        name: "Silver Star",
+        park: { name: "Europa-Park" },
+        status: "REFURBISHMENT",
+        worksPeriods: [],
+        reopening: { reason: "maintenance", windowKnown: false },
+      },
+    },
+    answer: [
+      { must: "Wartung" },
+      {
+        must: "^(?![\\s\\S]*(spontan|Stillstand|keine Wartung (war )?geplant|läuft morgen wieder|morgen laufen alle))",
+      },
+    ],
+  },
+  {
+    // Three writes in a row, then no text at all: the visitor saw nothing.
+    id: "interview-write-then-text-en",
+    locale: "en",
+    pagePath: "/en/parks/asia/japan/osaka/universal-studios-japan",
+    pageSubject:
+      'the park "Universal Studios Japan" in "Osaka, Japan" (park id 5c9f9cbf-9277-4a42-b70d-ec30445ba15f)',
+    now: "2026-11-23 21:53",
+    history: [
+      ["user", "January 28th 2027"],
+      [
+        "assistant",
+        "Thursday, 28 January 2027 looks like a moderate day, open 09:00 to 20:00. Which rides must you not miss?",
+      ],
+    ],
+    earlierLookups: [["get_park_day"]],
+    message: "Mine Cart Madness and Mario Kart",
+    want: [{ tool: ["plan_add_rides", "interview"] }],
+    results: {
+      plan_add_rides: { added: 2, notAdded: [] },
+      interview: { ok: true, next: "refine" },
+    },
+    answer: [{ must: "\\S" }],
+  },
 ];
 
 /**

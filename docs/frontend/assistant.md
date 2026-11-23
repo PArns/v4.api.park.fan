@@ -957,7 +957,10 @@ on a ride open whenever its park is. `set_show_reminder` takes one of today's ve
 `backWithin60MinutesPercent`, `likelyBack`, and `typicalOutageMinutes`, the median of its
 outages), `works` (`closedUntil`, the works period's last closed day, null while unknown;
 `estimatedByParkFan` when we set it), `season` (`seasonMonths`, `nextSeasonMonth` in the park's
-month) or `unknown`. `works` and `season` also carry `reopensOn`: the first operating day of the
+month), `maintenance` (the park's feed says `REFURBISHMENT` and no curated window runs today:
+`windowKnown: false`; the outage's start is left out, since it is the day's first reading and
+often before the gates opened; `get_park_live`'s maintenance rows lose `since` for the same
+reason) or `unknown`. `works` and `season` also carry `reopensOn`: the first operating day of the
 park's published calendar (`ParksService.getFirstOperatingDayFrom`, the query behind
 `nextSchedule`) after the last closed day or from the first of the next season month; null when
 the calendar has none yet, absent when nothing says when the closure ends.

@@ -614,6 +614,18 @@ async function parkLiveSummary(
   // The park's clock right now and its zone stay: every time reaches the model in that zone.
   const { funFacts, ...rest } = live;
   if (rest.retiredAt === null) delete rest.retiredAt;
+  // A maintenance status's since is the day's first reading, often before opening: Parky told
+  // it as "in maintenance since 08:15" at a park that opened at 11:00. New objects: it may be cached.
+  const rides = rest.rides as
+    { maintenance?: Array<Record<string, unknown>> } | undefined;
+  if (rides?.maintenance) {
+    rest.rides = {
+      ...rides,
+      maintenance: rides.maintenance.map(
+        ({ since: _since, startObserved: _startObserved, ...kept }) => kept,
+      ),
+    };
+  }
   // The day's rating beside the live one: before opening the live level is null, and "how full
   // will it get today?" is the calendar's to answer, labelled as such.
   const entity =
@@ -813,6 +825,9 @@ async function rideDetails(
     const reopening = performances
       ? null
       : reopeningOf(ride as RideClosure, Number(today.slice(5, 7)));
+    // A maintenance status's start is the first reading of the day, often before the gates
+    // opened, and read back as "observed at 08:15" it sounds like a breakdown.
+    if (reopening?.reason === "maintenance") delete ride.outage;
     if (reopening) {
       const from = reopenSearchFrom(reopening, today);
       ride.reopening = {
@@ -1522,6 +1537,11 @@ export function reopeningOf(ride: RideClosure, month: number) {
         typicalOutageMinutes: ride.downtime.medianMinutes,
       }),
     };
+  }
+  if (status === "REFURBISHMENT") {
+    // The park's own feed says maintenance, with no window we know: no breakdown, and neither a
+    // planned end nor the next day is known (Silver Star, 23 November).
+    return { reason: "maintenance" as const, windowKnown: false };
   }
   return { reason: "unknown" as const, status };
 }
@@ -2586,7 +2606,9 @@ export const ASSISTANT_TOOLS = [
       "last has begun), worksPeriods (every planned maintenance or works window: " +
       "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
-      "reopening: why (breakdown, works, season or unknown) and what is known about its return " +
+      "reopening: why (breakdown, works, season, maintenance or unknown) and what is known about its return " +
+      "(maintenance: the park lists the ride in maintenance today with no window we know, so " +
+      "neither its end nor whether it runs tomorrow is known; never a breakdown, never 'no maintenance planned') " +
       "(for season: the park season the ride runs in when one is bound, its name and days).",
     input: z.object({
       ...rideRef,
