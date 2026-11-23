@@ -3,6 +3,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { BullModule } from "@nestjs/bull";
 import { RedisModule } from "../common/redis/redis.module";
 import { ParksModule } from "../parks/parks.module";
+import { AdminWeatherClosureController } from "./admin-weather-closure.controller";
 import { AttractionsModule } from "../attractions/attractions.module";
 import { AdminController } from "./admin.controller";
 import { AdminAuthModule } from "./auth/admin-auth.module";
@@ -30,6 +31,7 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "nf-training" }),
     BullModule.registerQueue({ name: "wait-times" }),
     BullModule.registerQueue({ name: "downtime" }),
+    BullModule.registerQueue({ name: "weather-closure" }),
     BullModule.registerQueue({ name: "children-metadata" }),
     BullModule.registerQueue({ name: "six-flags-heights" }),
     BullModule.registerQueue({ name: "ride-stats" }),
@@ -40,7 +42,7 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "park-day-operation" }),
     BullModule.registerQueue({ name: "search-console" }),
   ],
-  controllers: [AdminController],
+  controllers: [AdminController, AdminWeatherClosureController],
   providers: [
     SystemHealthService,
     DowntimeMeasurementService,

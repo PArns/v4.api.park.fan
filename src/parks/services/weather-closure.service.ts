@@ -20,8 +20,11 @@ import {
   decideWeatherClosure,
   isPublishable,
   learnWeatherClosureProfiles,
+  MIN_PUBLISHED_CLOSED_SHARE_LOWER,
+  MIN_PUBLISHED_PROBABILITY,
   RideHourState,
   SNOW_MIN_CM,
+  WeatherClosureProfile,
   WeatherClosureVerdict,
 } from "../utils/weather-closure.util";
 import {
@@ -40,6 +43,55 @@ const REQUEST_LIMITS: StatementLimits = {
   statementTimeoutMs: 2_000,
   lockTimeoutMs: 1_000,
 };
+
+/** A whole-table read for the admin page; a few thousand rows at most. */
+const REQUEST_LIMITS_LIST: StatementLimits = {
+  statementTimeoutMs: 10_000,
+  lockTimeoutMs: 1_000,
+};
+/** Below the bar but worth watching. */
+const NEAR_PROBABILITY = 0.75;
+
+const WEATHER_CLOSURE_PROFILES_LIST_SQL = `
+  SELECT p."attractionId", a.name AS "attractionName", a.slug AS "attractionSlug",
+         p."parkId", pk.name AS "parkName", pk.slug AS "parkSlug",
+         CASE WHEN pk."continentSlug" IS NOT NULL AND pk."countrySlug" IS NOT NULL
+                   AND pk."citySlug" IS NOT NULL
+              THEN pk."continentSlug" || '/' || pk."countrySlug" || '/' || pk."citySlug" || '/' || pk.slug
+         END AS "parkPath",
+         p.cold, p.snow, p."generatedAt"
+    FROM attraction_weather_closure_profiles p
+    JOIN attractions a ON a.id = p."attractionId"
+    JOIN parks pk ON pk.id = p."parkId"
+`;
+
+export type WeatherClosureProfileWithFlag = WeatherClosureProfile & {
+  publishable: boolean;
+};
+
+export interface WeatherClosureOverviewRide {
+  attractionId: string;
+  attractionName: string;
+  attractionSlug: string;
+  parkId: string;
+  parkName: string;
+  parkSlug: string;
+  /** `continent/country/city/park`, for the public URL; null when a slug is missing. */
+  parkPath: string | null;
+  publishable: boolean;
+  bestProbability: number;
+  cold: WeatherClosureProfileWithFlag | null;
+  snow: WeatherClosureProfileWithFlag | null;
+}
+
+export interface WeatherClosureOverview {
+  bar: { probability: number; closedShareLower: number };
+  /** The newest profile's computation; null when the job has never run. */
+  generatedAt: string | null;
+  /** `near`: not shown, best probability at least 0.75. */
+  totals: { rides: number; publishable: number; near: number };
+  rides: WeatherClosureOverviewRide[];
+}
 
 /**
  * Learns per ride whether cold or snow shuts it, and says so for a ride that
@@ -165,6 +217,75 @@ export class WeatherClosureService {
       if (profiles.length > 0) await manager.save(profiles, { chunk: 500 });
     });
     return { profiles: profiles.length, publishable };
+  }
+
+  /**
+   * Every stored profile with its ride and park, for the admin page and the
+   * MCP tool: which rides the weather shuts, how close each is to the bar.
+   *
+   * @param minProbability - Leave out rides whose best profile is below this.
+   */
+  async listProfiles(minProbability = 0.5): Promise<WeatherClosureOverview> {
+    const rows: Array<{
+      attractionId: string;
+      attractionName: string;
+      attractionSlug: string;
+      parkId: string;
+      parkName: string;
+      parkSlug: string;
+      parkPath: string | null;
+      cold: WeatherClosureProfile | null;
+      snow: WeatherClosureProfile | null;
+      generatedAt: Date | string;
+    }> = await queryWithLimits(
+      this.dataSource,
+      WEATHER_CLOSURE_PROFILES_LIST_SQL,
+      [],
+      REQUEST_LIMITS_LIST,
+    );
+    const withFlag = (p: WeatherClosureProfile | null) =>
+      p ? { ...p, publishable: isPublishable(p) } : null;
+    let generatedAt: Date | null = null;
+    let publishable = 0;
+    let near = 0;
+    const rides: WeatherClosureOverviewRide[] = [];
+    for (const r of rows) {
+      const at = new Date(r.generatedAt);
+      if (!generatedAt || at > generatedAt) generatedAt = at;
+      const cold = withFlag(r.cold);
+      const snow = withFlag(r.snow);
+      const shown = !!(cold?.publishable || snow?.publishable);
+      const best = Math.max(
+        cold?.attributableShare ?? 0,
+        snow?.attributableShare ?? 0,
+      );
+      if (shown) publishable += 1;
+      else if (best >= NEAR_PROBABILITY) near += 1;
+      if (best < minProbability && !shown) continue;
+      rides.push({
+        attractionId: r.attractionId,
+        attractionName: r.attractionName,
+        attractionSlug: r.attractionSlug,
+        parkId: r.parkId,
+        parkName: r.parkName,
+        parkSlug: r.parkSlug,
+        parkPath: r.parkPath,
+        publishable: shown,
+        bestProbability: best,
+        cold,
+        snow,
+      });
+    }
+    rides.sort((a, b) => b.bestProbability - a.bestProbability);
+    return {
+      bar: {
+        probability: MIN_PUBLISHED_PROBABILITY,
+        closedShareLower: MIN_PUBLISHED_CLOSED_SHARE_LOWER,
+      },
+      generatedAt: generatedAt?.toISOString() ?? null,
+      totals: { rides: rows.length, publishable, near },
+      rides,
+    };
   }
 
   /**

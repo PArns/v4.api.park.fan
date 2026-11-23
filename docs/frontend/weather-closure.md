@@ -84,6 +84,14 @@ rule. No park was open below −3 °C, so the claims that Taron runs to −10 °
 `attraction_weather_closure_profiles`; it keeps every ride with a profile, also those below the
 bar, so a ride approaching it can be watched.
 
+## In the admin
+
+`GET /v1/admin/weather-closure` lists every stored profile with its ride and park, best probability
+first, with `publishable` and `totals.near` (not shown, best probability at least 0.75), so a ride
+approaching the bar can be watched. `POST /v1/admin/weather-closure/rebuild` (editor) runs the job
+now instead of on Monday. The MCP has the same list as `weather_closure_profiles` and the rebuild
+as `run_job` `rebuild-weather-closure`.
+
 ## Who reads it
 
 The park page's ride cards and the ride page (frontend `WeatherClosureNote`), Parky's `get_ride`

@@ -45,6 +45,52 @@ function service(profiles: Array<Record<string, unknown>>) {
   return { svc, openMeteo };
 }
 
+describe("WeatherClosureService.listProfiles", () => {
+  it("flags what the page shows, counts the near ones and drops the weak", async () => {
+    const row = (name: string, p: number, extra = {}) => ({
+      attractionId: name,
+      attractionName: name,
+      attractionSlug: name,
+      parkId: "p",
+      parkName: "Park",
+      parkSlug: "park",
+      parkPath: "europe/germany/rust/park",
+      cold: { ...cold, attributableShare: p, ...extra },
+      snow: null,
+      generatedAt: "2026-11-30T05:46:00Z",
+    });
+    const dataSource = {
+      transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
+        fn({
+          query: jest
+            .fn()
+            .mockResolvedValue([
+              row("near", 0.8),
+              row("shown", 0.93),
+              row("weak", 0.3),
+              row("floor", 0.95, { closedShareLower: 0.1 }),
+            ]),
+        }),
+      ),
+    };
+    const svc = new WeatherClosureService(
+      dataSource as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const out = await svc.listProfiles(0.5);
+    expect(out.totals).toEqual({ rides: 4, publishable: 1, near: 2 });
+    expect(out.rides.map((r) => [r.attractionName, r.publishable])).toEqual([
+      ["floor", false],
+      ["shown", true],
+      ["near", false],
+    ]);
+    expect(out.generatedAt).toBe("2026-11-30T05:46:00.000Z");
+  });
+});
+
 describe("WeatherClosureService.getVerdicts", () => {
   it("asks for no forecast while no profile clears the bar", async () => {
     const { svc, openMeteo } = service([
