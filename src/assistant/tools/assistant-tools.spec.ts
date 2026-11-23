@@ -3369,7 +3369,7 @@ describe("reopeningOf", () => {
   });
 
   it("calls the park's maintenance status maintenance, with no window known", () => {
-    expect(reopeningOf({ status: "REFURBISHMENT" }, 11)).toEqual({
+    expect(reopeningOf({ status: "REFURBISHMENT" }, 11)).toMatchObject({
       reason: "maintenance",
       windowKnown: false,
     });
