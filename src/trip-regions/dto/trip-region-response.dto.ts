@@ -410,6 +410,36 @@ export class TripSlotDto {
   source?: string;
 }
 
+export class TripDayWeatherDto {
+  @ApiPropertyOptional({ example: 26.1, description: "The day's high, °C." })
+  tempMax?: number;
+  @ApiPropertyOptional({ example: 14.8, description: "The day's low, °C." })
+  tempMin?: number;
+  @ApiPropertyOptional({ example: 2.3, description: "Precipitation, mm." })
+  precipitationMm?: number;
+  @ApiPropertyOptional({
+    example: 3,
+    description: "WMO code: the forecast's, a normal's most frequent.",
+  })
+  icon?: number;
+  @ApiPropertyOptional({ enum: ["forecast", "climate_normal"] })
+  basis?: "forecast" | "climate_normal";
+  @ApiPropertyOptional({
+    example: 24.3,
+    description:
+      "climate_normal only: the 25th percentile of the daily high; with tempMaxP75 the range half of such days' highs fell in.",
+  })
+  tempMaxP25?: number;
+  @ApiPropertyOptional({ example: 28.0 })
+  tempMaxP75?: number;
+  @ApiPropertyOptional({
+    example: 24,
+    description:
+      "climate_normal only: the chance of a day with at least 1 mm, in percent.",
+  })
+  wetDayPercent?: number;
+}
+
 export class TripParkDayDto {
   @ApiProperty({ enum: ["OPERATING", "CLOSED", "UNKNOWN"] }) status: string;
   @ApiProperty() hoursPublished: boolean;
@@ -451,16 +481,13 @@ export class TripParkDayDto {
   })
   dayGuestCloseAt?: string;
   @ApiPropertyOptional({
+    type: () => TripDayWeatherDto,
     description:
-      "The park's weather that day: within the forecast's reach (about 16 days) the forecast " +
-      "{ tempMax, tempMin, precipitationMm, icon, basis: forecast }; past it the date's climate " +
-      "normal (2015-2024) with basis climate_normal, tempMaxP25/tempMaxP75 (the range half of " +
-      "such days' highs fell in) and wetDayPercent. A normal is what the date is usually like, " +
-      "never the day's forecast. Absent where the park's calendar has none.",
-    type: "object",
-    additionalProperties: true,
+      "The park's weather that day: within the forecast's reach (about 16 days) the forecast; " +
+      "past it the date's climate normal (2015-2024). A normal is what the date is usually " +
+      "like, never the day's forecast. Absent where the park's calendar has none.",
   })
-  weather?: Record<string, unknown>;
+  weather?: TripDayWeatherDto;
 }
 
 export class TripCalendarDayDto {
