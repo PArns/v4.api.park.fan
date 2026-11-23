@@ -502,27 +502,40 @@ export class OpenMeteoClient {
         temperature_2m?: (number | null)[];
         snowfall?: (number | null)[];
       };
-    };
-    try {
-      const response = await this.client.get(
-        "https://archive-api.open-meteo.com/v1/archive",
-        {
-          params: {
-            latitude: Math.round(latitude * 100) / 100,
-            longitude: Math.round(longitude * 100) / 100,
-            start_date: startDate,
-            end_date: endDate,
-            hourly: "temperature_2m,snowfall",
-            timezone: "GMT",
+    } = {};
+    // One retry for a timeout or a 5xx. Only a 429 parks the archive: the
+    // weekly job asks park after park, and one park's hiccup must not cost
+    // every park after it (and the calendar's climate normals) 15 minutes.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await this.client.get(
+          "https://archive-api.open-meteo.com/v1/archive",
+          {
+            params: {
+              latitude: Math.round(latitude * 100) / 100,
+              longitude: Math.round(longitude * 100) / 100,
+              start_date: startDate,
+              end_date: endDate,
+              hourly: "temperature_2m,snowfall",
+              timezone: "GMT",
+            },
           },
-        },
-      );
-      data = response.data;
-    } catch (error) {
-      await this.redis
-        .set(this.ARCHIVE_BLOCKED_KEY, "true", "EX", 15 * 60)
-        .catch(() => {});
-      throw error;
+        );
+        data = response.data;
+        break;
+      } catch (error) {
+        const status = axios.isAxiosError(error)
+          ? error.response?.status
+          : undefined;
+        if (status === 429) {
+          await this.redis
+            .set(this.ARCHIVE_BLOCKED_KEY, "true", "EX", 15 * 60)
+            .catch(() => {});
+          throw error;
+        }
+        const retryable = status === undefined || status >= 500;
+        if (!retryable || attempt >= 1) throw error;
+      }
     }
     const out = new Map<
       number,

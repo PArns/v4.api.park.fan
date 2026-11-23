@@ -5,22 +5,23 @@ import { OpenMeteoClient } from "../../external-apis/weather/open-meteo.client";
 import { Park } from "../entities/park.entity";
 import { WeatherData } from "../entities/weather-data.entity";
 import { AttractionWeatherClosureProfile } from "../entities/attraction-weather-closure-profile.entity";
-import { WeatherService } from "../weather.service";
 import {
   StatementLimits,
   queryWithLimits,
 } from "../../common/utils/statement-limits.util";
 import {
   addIsoDays,
+  formatInParkTimezone,
   getCurrentDateInTimezone,
   getYesterdayDateInTimezone,
 } from "../../common/utils/date.util";
 import {
   buildWeatherClosureSamples,
   decideWeatherClosure,
+  isPublishable,
   learnWeatherClosureProfiles,
-  MIN_PUBLISHED_PROBABILITY,
   RideHourState,
+  SNOW_MIN_CM,
   WeatherClosureVerdict,
 } from "../utils/weather-closure.util";
 import {
@@ -30,7 +31,7 @@ import {
 
 /** A year: one winter behind every profile, and the summer that sets the baseline. */
 const LOOKBACK_DAYS = 365;
-/** Measured at 3–4 s per park on production; generous for the largest parks. */
+/** Measured at 1.4 s for Europa-Park on production; generous for the largest parks. */
 const JOB_LIMITS: StatementLimits = {
   statementTimeoutMs: 120_000,
   lockTimeoutMs: 5_000,
@@ -56,7 +57,6 @@ export class WeatherClosureService {
     @InjectRepository(AttractionWeatherClosureProfile)
     private readonly profileRepository: Repository<AttractionWeatherClosureProfile>,
     private readonly openMeteo: OpenMeteoClient,
-    private readonly weatherService: WeatherService,
   ) {}
 
   /**
@@ -112,14 +112,9 @@ export class WeatherClosureService {
     park: Pick<Park, "id" | "timezone" | "latitude" | "longitude">,
     asOf: Date,
   ): Promise<{ profiles: number; publishable: number }> {
-    const today = getCurrentDateInTimezone(park.timezone);
     const from = new Date(asOf.getTime() - LOOKBACK_DAYS * 24 * 3600 * 1000);
-    const weather = await this.openMeteo.fetchHourlyArchive(
-      park.latitude!,
-      park.longitude!,
-      from.toISOString().slice(0, 10),
-      addIsoDays(today, -1),
-    );
+    // The scan first: a park with no opening hours or no readings must not
+    // spend archive quota.
     const rows = await queryWithLimits<
       Array<{ attractionId: string; hourStart: Date | string; closed: boolean }>
     >(
@@ -128,34 +123,39 @@ export class WeatherClosureService {
       [park.id, from, asOf, park.timezone],
       JOB_LIMITS,
     );
-    const states: RideHourState[] = rows.map((r) => ({
-      attractionId: r.attractionId,
-      hourStart: new Date(r.hourStart),
-      closed: r.closed,
-    }));
-
-    const samples = buildWeatherClosureSamples(states, weather);
     const profiles: AttractionWeatherClosureProfile[] = [];
     let publishable = 0;
-    for (const [attractionId, list] of samples) {
-      const learned = learnWeatherClosureProfiles(list);
-      if (!learned.cold && !learned.snow) continue;
-      if (
-        [learned.cold, learned.snow].some(
-          (p) => p && p.attributableShare >= MIN_PUBLISHED_PROBABILITY,
-        )
-      ) {
-        publishable += 1;
-      }
-      profiles.push(
-        this.profileRepository.create({
-          attractionId,
-          parkId: park.id,
-          cold: learned.cold,
-          snow: learned.snow,
-          generatedAt: asOf,
-        }),
+    if (rows.length > 0) {
+      const weather = await this.openMeteo.fetchHourlyArchive(
+        park.latitude!,
+        park.longitude!,
+        formatInParkTimezone(from, park.timezone),
+        addIsoDays(getCurrentDateInTimezone(park.timezone), -1),
       );
+      const states: RideHourState[] = rows.map((r) => ({
+        attractionId: r.attractionId,
+        hourStart: new Date(r.hourStart),
+        closed: r.closed,
+      }));
+      const samples = buildWeatherClosureSamples(states, weather, (d) =>
+        formatInParkTimezone(d, park.timezone),
+      );
+      for (const [attractionId, list] of samples) {
+        const learned = learnWeatherClosureProfiles(list);
+        if (!learned.cold && !learned.snow) continue;
+        if (isPublishable(learned.cold) || isPublishable(learned.snow)) {
+          publishable += 1;
+        }
+        profiles.push(
+          this.profileRepository.create({
+            attractionId,
+            parkId: park.id,
+            cold: learned.cold,
+            snow: learned.snow,
+            generatedAt: asOf,
+          }),
+        );
+      }
     }
 
     await this.dataSource.transaction(async (manager) => {
@@ -169,12 +169,16 @@ export class WeatherClosureService {
 
   /**
    * The weather verdict for each of the given rides, which the caller has
-   * already found shut during opening hours (an `outage` or `notRunToday`).
+   * already found shut during opening hours (an `outage` or `notRunToday`,
+   * CLOSED or DOWN).
    *
    * Reads the profiles first and stops there for the usual park with none
    * that clear the bar, so the forecast and the window are only asked about
-   * when a verdict is possible. Never throws: a line under a badge is a
-   * nicety, the page is not.
+   * when a verdict is possible. The forecast comes straight from the client,
+   * not from `WeatherService.getHourlyForecast`, which falls back to hours
+   * synthesised from the daily min and max: a made-up curve must not name an
+   * opening time. Never throws: a line under a badge is a nicety, the page is
+   * not.
    */
   async getVerdicts(
     park: Pick<Park, "id" | "timezone">,
@@ -188,11 +192,7 @@ export class WeatherClosureService {
         await this.profileRepository.find({
           where: { attractionId: In(attractionIds) },
         })
-      ).filter((p) =>
-        [p.cold, p.snow].some(
-          (x) => x && x.attributableShare >= MIN_PUBLISHED_PROBABILITY,
-        ),
-      );
+      ).filter((p) => isPublishable(p.cold) || isPublishable(p.snow));
       if (profiles.length === 0) return out;
 
       const window = await queryWithLimits<Array<{ closesAt: Date | string }>>(
@@ -204,11 +204,19 @@ export class WeatherClosureService {
       if (window.length === 0) return out;
       const closesAt = new Date(window[0].closesAt);
 
-      const forecast = await this.weatherService.getHourlyForecast(park.id);
-      const hours = forecast.map((h) => ({
+      const coords = await this.parkRepository.findOne({
+        where: { id: park.id },
+        select: { id: true, latitude: true, longitude: true },
+      });
+      if (coords?.latitude == null || coords.longitude == null) return out;
+      const forecast = await this.openMeteo.getHourlyForecast(
+        coords.latitude,
+        coords.longitude,
+      );
+      const hours = forecast.hours.map((h) => ({
         time: new Date(h.time),
-        temperatureC: h.temperature ?? null,
-        snowfallCm: h.snowfall ?? null,
+        temperatureC: h.temperature,
+        snowfallCm: h.snowfall,
       }));
       const yesterday = await this.weatherDataRepository.findOne({
         where: {
@@ -217,7 +225,8 @@ export class WeatherClosureService {
         },
         select: { parkId: true, snowfallSum: true },
       });
-      const snowedYesterday = Number(yesterday?.snowfallSum ?? 0) > 0;
+      const snowedYesterday =
+        Number(yesterday?.snowfallSum ?? 0) >= SNOW_MIN_CM;
 
       for (const profile of profiles) {
         const verdict = decideWeatherClosure(

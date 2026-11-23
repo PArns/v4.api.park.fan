@@ -1,4 +1,8 @@
 import { parkOpenWindowCtes } from "../../common/utils/park-open-window.sql";
+import {
+  OUTAGE_QUEUE_TYPE,
+  SYNTHETIC_SOURCES,
+} from "../../common/utils/outage-rows.sql";
 
 /** Both statements are about one park whose timezone the caller holds. */
 const ONE_PARK = "SELECT $1::uuid AS park_id, $4::text AS tz";
@@ -12,6 +16,15 @@ const ONE_PARK = "SELECT $1::uuid AS park_id, $4::text AS tz";
  * reading) is left out rather than counted either way. Only whole hours inside
  * a window count: the first, partial hour of a day is when rides open one poll
  * at a time, and it would read every ride as shut by the cold at 09:00.
+ *
+ * Our own bookkeeping is not a reading (`SYNTHETIC_SOURCES`: the "nobody has
+ * mentioned this ride for a day" row and the heartbeat's invented CLOSED), and
+ * an hour counts only when the park's feed delivered at least one real
+ * observation in it. Carried heartbeats are kept otherwise: a ride shut all
+ * day by the cold has one CLOSED reading in the morning and heartbeats after
+ * it, and capping them as the outage reconstruction does would erase exactly
+ * the whole-day closures this is about. What a heartbeat must not do is carry
+ * a state through a dead feed, and the live-hour join is that guard.
  *
  * Parameters: `$1` park id, `$2` range start, `$3` range end, `$4` the park's
  * timezone.
@@ -33,20 +46,29 @@ export const WEATHER_CLOSURE_HOURS_SQL = `
     SELECT q."attractionId" AS attraction_id,
            date_trunc('hour', q."timestamp") AS hour_start,
            bool_or(q.status = 'OPERATING') AS ran,
-           bool_or(q.status IN ('CLOSED', 'DOWN')) AS shut
+           bool_or(q.status IN ('CLOSED', 'DOWN')) AS shut,
+           bool_or(NOT COALESCE(q.is_heartbeat, q."lastUpdated" = q."timestamp")) AS observed
       FROM queue_data q
       JOIN attractions a ON a.id = q."attractionId"
      WHERE a."parkId" = $1::uuid
-       AND q."queueType" = 'STANDBY'
+       AND q."queueType" = '${OUTAGE_QUEUE_TYPE}'
+       AND q.data_source NOT IN (${SYNTHETIC_SOURCES.map((s) => `'${s}'`).join(", ")})
        AND q."timestamp" >= $2::timestamptz
        AND q."timestamp" < $3::timestamptz
      GROUP BY 1, 2
+  ),
+  live_hours AS (
+    SELECT hour_start
+      FROM ride_hours
+     GROUP BY hour_start
+    HAVING bool_or(observed)
   )
   SELECT r.attraction_id AS "attractionId",
          r.hour_start    AS "hourStart",
          (r.shut AND NOT r.ran) AS closed
     FROM ride_hours r
     JOIN open_hours o USING (hour_start)
+    JOIN live_hours l USING (hour_start)
    WHERE r.ran OR r.shut
 `;
 

@@ -5,11 +5,11 @@ import { WeatherClosureService } from "../../parks/services/weather-closure.serv
 /**
  * Weekly: relearns, per ride, whether cold or snow shuts it.
  *
- * On the `downtime` queue because it reads the same year of `queue_data` the
- * nightly reconstruction reads, and one queue runs one job at a time; the two
- * never decompress the same chunks at once.
+ * Its own queue, not `downtime`: Bull starts one fetch loop per handler, so a
+ * second handler there would let two reconstructions run at once. Scheduled
+ * at 05:45, after the 05:00 reconstruction usually finishes.
  */
-@Processor("downtime")
+@Processor("weather-closure")
 export class WeatherClosureProcessor {
   private readonly logger = new Logger(WeatherClosureProcessor.name);
 

@@ -18,14 +18,23 @@
  * attributable fraction `(p_condition - p_warm) / p_condition`, and that is
  * the probability a page may print. Both rates come from a handful of winter
  * days, so the figure is computed from the pessimistic end of both: the Wilson
- * lower bound of `p_condition` against the upper bound of `p_warm`.
+ * lower bound of `p_condition` against the upper bound of `p_warm`, with one
+ * park-local day counted as one observation.
+ *
+ * What would otherwise pass for weather, and is removed before learning:
+ * a ride out of season (it must have run within a week on BOTH sides of the
+ * day, so the days after its last run of the year do not count), a streak of
+ * whole days shut (a rehab, not a cold morning), and hours in which a large
+ * part of the park was shut (a storm, a feed outage).
  */
 
 /** One park-open hour of one ride. */
 export interface WeatherClosureSample {
   hourStart: Date;
+  /** The park-local date of the hour. */
+  day: string;
   temperatureC: number;
-  /** Snow fell in this hour or in the 24 before it. */
+  /** At least {@link SNOW_MIN_CM} fell in this hour or in the 24 before it. */
   snow: boolean;
   closed: boolean;
 }
@@ -44,63 +53,95 @@ export interface ArchiveHour {
   snowfallCm: number | null;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-/** A ride that ran within this many days either side is in its season. */
+/** Less than this is model trace, not snow on a track (cm). */
+export const SNOW_MIN_CM = 0.1;
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+/** A ride that ran within this many days on both sides is in its season. */
 const SEASON_REACH_DAYS = 7;
-/** Above this share of the park's other rides shut, the hour is about the park. */
+/** Above this share of the park's other in-season rides shut, the hour is about the park. */
 const PARK_WIDE_SHARE = 0.3;
 const PARK_WIDE_MIN_RIDES = 5;
+/**
+ * This many consecutive open days shut from first hour to last are a rehab or
+ * a season's end, not the weather; a cold morning shuts a ride for hours.
+ */
+const CLOSED_STREAK_DAYS = 4;
+
+function dayNumber(day: string): number {
+  return Math.round(Date.parse(`${day}T00:00:00Z`) / DAY_MS);
+}
 
 /**
  * Turns a park's ride-hours and its hourly archive into one sample list per
- * ride. Three hours are dropped, each because it would teach the wrong lesson:
+ * ride, dropping what would teach the wrong lesson (see the file comment).
  *
- * - out of season (the ride ran on no day within a week): a water ride shut
- *   from November to March is closed for the season, not for today's weather;
- * - park-wide (over 30 % of the park's other rides shut that hour): a storm
- *   evacuation or a feed outage is not this ride's sensitivity;
- * - no temperature in the archive for the hour.
+ * @param dayOf - The park-local date of an instant, `YYYY-MM-DD`.
  */
 export function buildWeatherClosureSamples(
   states: readonly RideHourState[],
   weather: ReadonlyMap<number, ArchiveHour>,
+  dayOf: (instant: Date) => string,
 ): Map<string, WeatherClosureSample[]> {
-  const perHour = new Map<number, { closed: number; total: number }>();
+  const dayCache = new Map<number, string>();
+  const localDay = (d: Date): string => {
+    const t = d.getTime();
+    let v = dayCache.get(t);
+    if (v === undefined) {
+      v = dayOf(d);
+      dayCache.set(t, v);
+    }
+    return v;
+  };
+
   const ranOn = new Map<string, Set<number>>();
   for (const s of states) {
+    if (s.closed) continue;
+    const days = ranOn.get(s.attractionId) ?? new Set<number>();
+    days.add(dayNumber(localDay(s.hourStart)));
+    ranOn.set(s.attractionId, days);
+  }
+  const ranWithin = (
+    days: Set<number> | undefined,
+    from: number,
+    to: number,
+  ) => {
+    for (let d = from; d <= to; d++) if (days?.has(d)) return true;
+    return false;
+  };
+  const inSeason = states.filter((s) => {
+    const days = ranOn.get(s.attractionId);
+    const d = dayNumber(localDay(s.hourStart));
+    return (
+      ranWithin(days, d - SEASON_REACH_DAYS, d) &&
+      ranWithin(days, d, d + SEASON_REACH_DAYS)
+    );
+  });
+
+  const perHour = new Map<number, { closed: number; total: number }>();
+  for (const s of inSeason) {
     const t = s.hourStart.getTime();
     const agg = perHour.get(t) ?? { closed: 0, total: 0 };
     agg.total += 1;
     if (s.closed) agg.closed += 1;
     perHour.set(t, agg);
-    if (!s.closed) {
-      const days = ranOn.get(s.attractionId) ?? new Set<number>();
-      days.add(Math.floor(t / DAY_MS));
-      ranOn.set(s.attractionId, days);
-    }
   }
 
   const snowWithin24h = (t: number): boolean => {
     for (let k = 0; k <= 24; k++) {
-      if ((weather.get(t - k * HOUR_MS)?.snowfallCm ?? 0) > 0) return true;
+      if ((weather.get(t - k * HOUR_MS)?.snowfallCm ?? 0) >= SNOW_MIN_CM) {
+        return true;
+      }
     }
     return false;
   };
 
   const out = new Map<string, WeatherClosureSample[]>();
-  for (const s of states) {
+  for (const s of inSeason) {
     const t = s.hourStart.getTime();
     const wx = weather.get(t);
     if (!wx || wx.temperatureC === null) continue;
-
-    const days = ranOn.get(s.attractionId);
-    const day = Math.floor(t / DAY_MS);
-    let inSeason = false;
-    for (let k = -SEASON_REACH_DAYS; k <= SEASON_REACH_DAYS && !inSeason; k++) {
-      inSeason = days?.has(day + k) ?? false;
-    }
-    if (!inSeason) continue;
-
     const agg = perHour.get(t)!;
     const others = agg.total - 1;
     const othersClosed = agg.closed - (s.closed ? 1 : 0);
@@ -110,17 +151,42 @@ export function buildWeatherClosureSamples(
     ) {
       continue;
     }
-
     const list = out.get(s.attractionId) ?? [];
     list.push({
       hourStart: s.hourStart,
+      day: localDay(s.hourStart),
       temperatureC: wx.temperatureC,
       snow: snowWithin24h(t),
       closed: s.closed,
     });
     out.set(s.attractionId, list);
   }
+
+  for (const [id, list] of out) out.set(id, withoutClosedStreaks(list));
   return out;
+}
+
+/** Drops runs of {@link CLOSED_STREAK_DAYS}+ consecutive open days shut all day. */
+function withoutClosedStreaks(
+  list: WeatherClosureSample[],
+): WeatherClosureSample[] {
+  const fullyClosed = new Map<string, boolean>();
+  for (const s of list) {
+    fullyClosed.set(s.day, (fullyClosed.get(s.day) ?? true) && s.closed);
+  }
+  const days = [...fullyClosed.keys()].sort();
+  const drop = new Set<string>();
+  let run: string[] = [];
+  const flush = () => {
+    if (run.length >= CLOSED_STREAK_DAYS) run.forEach((d) => drop.add(d));
+    run = [];
+  };
+  for (const day of days) {
+    if (fullyClosed.get(day)) run.push(day);
+    else flush();
+  }
+  flush();
+  return drop.size ? list.filter((s) => !drop.has(s.day)) : list;
 }
 
 /** What the weekly job stores per ride and cause. */
@@ -132,6 +198,8 @@ export interface WeatherClosureProfile {
   thresholdC: number | null;
   /** Share of the condition's park-open hours the ride was shut. */
   closedShare: number;
+  /** Its lower bound, days counted once. */
+  closedShareLower: number;
   /** Share of hours at 12–25 °C it was shut — the ride's ordinary rate. */
   baselineShare: number;
   /** Conservative probability that a closure under the condition is its doing. */
@@ -152,11 +220,19 @@ const WARM_TO_C = 25;
 const MIN_WARM_HOURS = 100;
 /** A profile needs this many condition hours over this many days behind it. */
 const MIN_HOURS = 30;
-const MIN_DAYS = 5;
+const MIN_DAYS = 8;
 /** One-sided 95 %. */
 const Z = 1.645;
 /** What a page may print at all; anything weaker is not a statement. */
 export const MIN_PUBLISHED_PROBABILITY = 0.9;
+/**
+ * The condition must also shut the ride in a fair share of its hours: a ride
+ * that never closes in mild weather and closed on one cold afternoon has a
+ * perfect ratio and no weather sensitivity anybody could plan around.
+ */
+const MIN_PUBLISHED_CLOSED_SHARE_LOWER = 0.15;
+/** Snow is not named above this: a ride shut at 10 °C after yesterday's snow is shut for something else. */
+const SNOW_MAX_PLAUSIBLE_C = 6;
 
 const CANDIDATE_THRESHOLDS_C = Array.from({ length: 25 }, (_, i) => -2 + i / 2);
 
@@ -178,14 +254,11 @@ function profileOf(
   warm: readonly WeatherClosureSample[],
   thresholdC: number | null,
 ): WeatherClosureProfile | null {
-  const days = new Set(hit.map((s) => s.hourStart.toISOString().slice(0, 10)))
-    .size;
+  const days = new Set(hit.map((s) => s.day)).size;
   if (hit.length < MIN_HOURS || days < MIN_DAYS) return null;
   const closed = hit.filter((s) => s.closed).length;
   const warmClosed = warm.filter((s) => s.closed).length;
-  const warmDays = new Set(
-    warm.map((s) => s.hourStart.toISOString().slice(0, 10)),
-  ).size;
+  const warmDays = new Set(warm.map((s) => s.day)).size;
   // The hours of one day are one observation, not ten: a single snowy
   // afternoon with a long fault would otherwise vouch for itself ten times.
   // So the bounds take the day count as the sample size.
@@ -194,6 +267,7 @@ function profileOf(
   return {
     thresholdC,
     closedShare: closed / hit.length,
+    closedShareLower: condition.lo,
     baselineShare: warmClosed / warm.length,
     attributableShare:
       condition.lo > 0
@@ -204,15 +278,31 @@ function profileOf(
   };
 }
 
+/** Whether a profile may be printed. */
+export function isPublishable(
+  p: WeatherClosureProfile | null | undefined,
+): boolean {
+  return (
+    !!p &&
+    p.attributableShare >= MIN_PUBLISHED_PROBABILITY &&
+    (p.closedShareLower ?? 0) >= MIN_PUBLISHED_CLOSED_SHARE_LOWER
+  );
+}
+
 /**
  * The cold and the snow profile of one ride; either is null when there is too
  * little behind it.
  *
  * The cold threshold is the one that best separates dry cold-hour closures
  * from the rest (F1 of "closed" against "below the threshold", over the dry
- * hours under 12 °C); the probability is then judged at that threshold alone.
+ * hours under 12 °C); the probability is then judged at that threshold alone,
+ * on the same hours, which flatters it somewhat — the day-counted bound and
+ * the closed-share floor are there to absorb that. Snow is learned on the
+ * snowy hours at or above a publishable cold threshold, so a ride the cold
+ * already explains does not learn a snow profile out of cold hours.
+ *
  * A profile is stored whatever its probability, so the admin can see a ride
- * approach the bar; {@link decideWeatherClosure} applies the bar.
+ * approach the bar; {@link isPublishable} is the bar.
  */
 export function learnWeatherClosureProfiles(
   samples: readonly WeatherClosureSample[],
@@ -241,13 +331,17 @@ export function learnWeatherClosureProfiles(
   }
   const cold = best
     ? profileOf(
-        dry.filter((s) => s.temperatureC < best!.thresholdC),
+        dry.filter((s) => s.temperatureC < best.thresholdC),
         warm,
         best.thresholdC,
       )
     : null;
+  const coldFloor =
+    isPublishable(cold) && cold!.thresholdC !== null
+      ? cold!.thresholdC
+      : -Infinity;
   const snow = profileOf(
-    samples.filter((s) => s.snow),
+    samples.filter((s) => s.snow && s.temperatureC >= coldFloor),
     warm,
     null,
   );
@@ -275,25 +369,20 @@ export interface WeatherClosureVerdict {
   expectedOpenAt: Date | null;
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-
-function publishable(p: WeatherClosureProfile | null | undefined): boolean {
-  return !!p && p.attributableShare >= MIN_PUBLISHED_PROBABILITY;
-}
-
 /**
  * Whether a ride that is shut during opening hours is shut for the weather,
  * and what today's temperature curve says about the rest of the day.
  *
- * Snow is asked first: when snow fell in the last 24 hours, a cold verdict
- * would name the wrong cause for exactly the rides that close for snow and
- * not for cold, so the cold is not asked at all. Without snow, the cold
- * verdict needs the ride to be colder than its threshold right now — a ride
- * shut at 15 °C is shut for something else — and the outlook walks the
- * forecast to the park's close for the first hour that reaches it; none means
- * the ride most likely stays shut.
+ * Cold is asked first: its profile is learned on dry hours only, so a ride it
+ * names is one the cold shuts with or without snow, and the cold verdict
+ * carries the opening time. It needs the ride to be colder than its threshold
+ * right now — a ride shut at 15 °C is shut for something else — and the
+ * outlook walks the forecast to the park's close for the first hour that
+ * reaches it; none means the ride most likely stays shut. Snow is asked when
+ * the cold does not answer, snow fell in the last 24 hours and it is still
+ * cold enough for it to lie.
  *
- * Null unless the matching profile clears {@link MIN_PUBLISHED_PROBABILITY}.
+ * Null unless the matching profile clears {@link isPublishable}.
  */
 export function decideWeatherClosure(
   profiles: WeatherClosureProfiles | null | undefined,
@@ -310,19 +399,47 @@ export function decideWeatherClosure(
   );
   if (!current || current.temperatureC === null) return null;
 
+  const cold = profiles.cold;
+  if (
+    isPublishable(cold) &&
+    cold!.thresholdC !== null &&
+    current.temperatureC < cold!.thresholdC
+  ) {
+    const thresholdC = cold!.thresholdC;
+    const warmEnough = sorted.find(
+      (h) =>
+        h.time.getTime() > now &&
+        h.time.getTime() < closesAt.getTime() &&
+        h.temperatureC !== null &&
+        h.temperatureC >= thresholdC,
+    );
+    return {
+      cause: "cold",
+      probability: Math.round(cold!.attributableShare * 100) / 100,
+      temperatureC: current.temperatureC,
+      thresholdC,
+      outlook: warmEnough ? "opens_when_warmer" : "likely_closed_today",
+      expectedOpenAt: warmEnough ? warmEnough.time : null,
+    };
+  }
+
   // shortcut: the forecast starts at 00:00 UTC, so "the last 24 hours" is
-  // today's hours so far plus yesterday's daily snowfall sum.
+  // today's UTC hours so far plus yesterday's park-local daily sum; parks far
+  // east of UTC miss their local early morning. Upgrade with `past_days=1`
+  // on the forecast call if a snow verdict ever reaches one of them.
   const snowRecently =
     snowedYesterday ||
     sorted.some(
       (h) =>
         h.time.getTime() <= now &&
-        h.time.getTime() > now - 24 * HOUR_MS &&
-        (h.snowfallCm ?? 0) > 0,
+        h.time.getTime() > now - DAY_MS &&
+        (h.snowfallCm ?? 0) >= SNOW_MIN_CM,
     );
-
-  if (snowRecently) {
-    if (!publishable(profiles.snow)) return null;
+  if (
+    snowRecently &&
+    isPublishable(profiles.snow) &&
+    current.temperatureC < SNOW_MAX_PLAUSIBLE_C
+  ) {
     return {
       cause: "snow",
       probability: Math.round(profiles.snow!.attributableShare * 100) / 100,
@@ -332,25 +449,5 @@ export function decideWeatherClosure(
       expectedOpenAt: null,
     };
   }
-
-  const cold = profiles.cold;
-  if (!publishable(cold) || cold!.thresholdC === null) return null;
-  const thresholdC = cold!.thresholdC;
-  if (current.temperatureC >= thresholdC) return null;
-
-  const warmEnough = sorted.find(
-    (h) =>
-      h.time.getTime() > now &&
-      h.time.getTime() < closesAt.getTime() &&
-      h.temperatureC !== null &&
-      h.temperatureC >= thresholdC,
-  );
-  return {
-    cause: "cold",
-    probability: Math.round(cold!.attributableShare * 100) / 100,
-    temperatureC: current.temperatureC,
-    thresholdC,
-    outlook: warmEnough ? "opens_when_warmer" : "likely_closed_today",
-    expectedOpenAt: warmEnough ? warmEnough.time : null,
-  };
+  return null;
 }

@@ -89,6 +89,17 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
       lockRenewTime: 300000,
     },
   },
+  {
+    // Weekly per-ride cold/snow profiles: a year of queue_data per park plus
+    // one archive call each, park after park. Its own queue: a second
+    // @Processor on `downtime` would start a second fetch loop there and let
+    // two reconstructions overlap.
+    name: "weather-closure",
+    settings: {
+      lockDuration: 900000, // 15 min
+      lockRenewTime: 300000,
+    },
+  },
   { name: "geoip-update" }, // GeoLite2-City every 48h
   { name: "nf-training" }, // TFT train (persists tft_forecasts)
   { name: "pcn-shadow" }, // PCN train + forecast + score ("shadow" is historical)

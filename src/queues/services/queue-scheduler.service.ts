@@ -104,6 +104,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("park-day-operation")
     private parkDayOperationQueue: Queue,
     @InjectQueue("downtime") private downtimeQueue: Queue,
+    @InjectQueue("weather-closure") private weatherClosureQueue: Queue,
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
@@ -1083,14 +1084,14 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Weather-closure profiles: weekly, Monday 05:45, after the 05:00
-    // downtime run on the same queue. A profile moves with a winter's days,
-    // not with one night's.
+    // downtime run has had its time with `queue_data`. A profile moves with a
+    // winter's days, not with one night's.
     const hasWeatherClosureCron = await this.hasRepeatableJob(
-      this.downtimeQueue,
+      this.weatherClosureQueue,
       "weather-closure-profiles-cron",
     );
     if (!hasWeatherClosureCron) {
-      await this.downtimeQueue.add(
+      await this.weatherClosureQueue.add(
         "rebuild-weather-closure-profiles",
         {},
         {
