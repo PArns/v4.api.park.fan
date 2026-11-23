@@ -31,6 +31,7 @@ import {
 import { assistantToolsReportTool } from "./assistant-tools-report.tool";
 import { assistantReportTool } from "./assistant-report.tool";
 import { downtimeTool } from "./downtime.tool";
+import { weatherClosureProfilesTool } from "./weather-closure-profiles.tool";
 import { analyticsOverviewTool } from "./analytics-overview.tool";
 import { analyticsBreakdownTool } from "./analytics-breakdown.tool";
 import { analyticsEventsTool } from "./analytics-events.tool";
@@ -141,6 +142,7 @@ export const MCP_TOOLS: readonly AnyMcpTool[] = [
   assistantToolsReportTool,
   assistantReportTool,
   downtimeTool,
+  weatherClosureProfilesTool,
   analyticsOverviewTool,
   analyticsLiveTool,
   analyticsBreakdownTool,

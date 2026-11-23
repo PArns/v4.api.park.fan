@@ -230,7 +230,7 @@ export const MIN_PUBLISHED_PROBABILITY = 0.9;
  * that never closes in mild weather and closed on one cold afternoon has a
  * perfect ratio and no weather sensitivity anybody could plan around.
  */
-const MIN_PUBLISHED_CLOSED_SHARE_LOWER = 0.15;
+export const MIN_PUBLISHED_CLOSED_SHARE_LOWER = 0.15;
 /** Snow is not named above this: a ride shut at 10 °C after yesterday's snow is shut for something else. */
 const SNOW_MAX_PLAUSIBLE_C = 6;
 
