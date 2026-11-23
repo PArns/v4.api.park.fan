@@ -3304,6 +3304,57 @@ describe("performancesOf (PAR-1355)", () => {
 });
 
 describe("reopeningOf", () => {
+  it("names the cold before a breakdown, with the forecast hour it reaches the ride's temperature", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "DOWN",
+          outage: { startedAt: "2026-11-23T09:00:00.000Z", signal: "down" },
+          weatherClosure: {
+            cause: "cold",
+            probability: 0.91,
+            temperatureC: 1.2,
+            thresholdC: 4.5,
+            outlook: "opens_when_warmer",
+            expectedOpenAt: "2026-11-23T12:00:00.000Z",
+          },
+        },
+        11,
+      ),
+    ).toEqual({
+      reason: "weather",
+      cause: "cold",
+      probabilityPercent: 91,
+      temperatureNowC: 1.2,
+      usuallyRunsFromC: 4.5,
+      likelyOpensAround: "2026-11-23T12:00:00.000Z",
+    });
+  });
+
+  it("names snow without promising a time", () => {
+    expect(
+      reopeningOf(
+        {
+          status: "CLOSED",
+          weatherClosure: {
+            cause: "snow",
+            probability: 0.93,
+            temperatureC: -1,
+            thresholdC: null,
+            outlook: null,
+            expectedOpenAt: null,
+          },
+        },
+        1,
+      ),
+    ).toEqual({
+      reason: "weather",
+      cause: "snow",
+      probabilityPercent: 93,
+      temperatureNowC: -1,
+    });
+  });
+
   it("names a breakdown's start and how such outages ended before", () => {
     expect(
       reopeningOf(

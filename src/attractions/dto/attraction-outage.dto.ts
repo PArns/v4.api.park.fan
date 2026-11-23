@@ -1,5 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import type { CurrentOutage } from "../services/attraction-outage.service";
+import type { WeatherClosureVerdict } from "../../parks/utils/weather-closure.util";
 import {
   OUTAGE_SIGNALS,
   type OutageSignal,
@@ -296,6 +297,76 @@ export class NotRunTodayDto {
     example: "2026-10-04T16:00:00.000Z",
   })
   lastRunAt: string;
+}
+
+/**
+ * Why a ride that is shut during opening hours is shut, when the weather
+ * explains it beyond reasonable doubt, and what today's temperature curve says
+ * about the rest of the day. See `docs/frontend/weather-closure.md`.
+ */
+export class WeatherClosureDto {
+  @ApiProperty({
+    enum: ["cold", "snow"],
+    description:
+      "What shut the ride. Any value a client does not know means nothing " +
+      "may be said.",
+  })
+  cause: "cold" | "snow";
+
+  @ApiProperty({
+    description:
+      "How likely the weather is the reason for this closure, 0–1. A " +
+      "conservative figure (lower confidence bound, one day counted as one " +
+      "observation), and never below 0.9: below that the field is absent.",
+    example: 0.91,
+  })
+  probability: number;
+
+  @ApiProperty({ description: "Temperature at the park this hour, °C." })
+  temperatureC: number;
+
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      "Cold: the temperature from which the ride usually runs, °C, learned " +
+      "from its own history. Null for snow.",
+  })
+  thresholdC: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    enum: ["opens_when_warmer", "likely_closed_today"],
+    description:
+      "Cold: whether today's forecast reaches `thresholdC` before the park " +
+      "closes. Null for snow, whose clearing is not forecast.",
+  })
+  outlook: "opens_when_warmer" | "likely_closed_today" | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      "With `opens_when_warmer`: the start of the first forecast hour at or " +
+      "above the threshold, ISO 8601 UTC. An estimate from the forecast, not " +
+      "an announced opening — name it as „probably around“.",
+    example: "2026-11-23T12:00:00.000Z",
+  })
+  expectedOpenAt: string | null;
+}
+
+export function toWeatherClosureDto(
+  verdict: WeatherClosureVerdict | undefined,
+): WeatherClosureDto | undefined {
+  if (!verdict) return undefined;
+  return {
+    cause: verdict.cause,
+    probability: verdict.probability,
+    temperatureC: Math.round(verdict.temperatureC * 10) / 10,
+    thresholdC: verdict.thresholdC,
+    outlook: verdict.outlook,
+    expectedOpenAt: verdict.expectedOpenAt?.toISOString() ?? null,
+  };
 }
 
 export function toNotRunTodayDto(

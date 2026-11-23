@@ -899,6 +899,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "discard",
   },
   {
+    // Discard for the reason the downtime profile is: the loser's hours are
+    // a different series, and the weekly job relearns the merged ride.
+    table: "attraction_weather_closure_profiles",
+    column: "attractionId",
+    strategy: "discard",
+  },
+  {
     table: "headliner_attractions",
     column: "attractionId",
     strategy: "move",
@@ -1322,6 +1329,13 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   { table: "attraction_outages", column: "parkId", strategy: "move" },
   { table: "attraction_exposure_days", column: "parkId", strategy: "move" },
   { table: "attraction_downtime_profiles", column: "parkId", strategy: "move" },
+  // Move: a profile is a year of the ride's own hours, and the weekly job
+  // rewrites it under the winner's id at its next run anyway.
+  {
+    table: "attraction_weather_closure_profiles",
+    column: "parkId",
+    strategy: "move",
+  },
   { table: "park_downtime_coverage", column: "parkId", strategy: "discard" },
   // `park_id`, snake_case like the curves below. Move, not discard: the nightly
   // job judges only yesterday, so a dropped verdict for an older day stays gone

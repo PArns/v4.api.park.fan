@@ -39,6 +39,7 @@ import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
 import {
   AttractionOutageDto,
   NotRunTodayDto,
+  WeatherClosureDto,
 } from "../../attractions/dto/attraction-outage.dto";
 import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
 import {
@@ -124,6 +125,17 @@ export class ParkAttractionDto {
     type: NotRunTodayDto,
   })
   notRunToday?: NotRunTodayDto;
+
+  @ApiProperty({
+    description:
+      "Only beside an `outage` or a `notRunToday`, i.e. while the ride is " +
+      "shut during opening hours: the weather shut it, with at least 90 % " +
+      "confidence, and for cold the temperature from which it usually runs " +
+      "and when today's forecast reaches it.",
+    required: false,
+    type: WeatherClosureDto,
+  })
+  weatherClosure?: WeatherClosureDto;
 
   @ApiProperty({
     required: false,

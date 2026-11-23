@@ -1,3 +1,4 @@
+import { WeatherClosureService } from "./weather-closure.service";
 import { Test, TestingModule } from "@nestjs/testing";
 import { ParkIntegrationService } from "./park-integration.service";
 import { ParksService } from "../parks.service";
@@ -66,7 +67,14 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
         { provide: WartezeitenClient, useValue: {} },
         { provide: PopularityService, useValue: {} },
         { provide: RideProfileService, useValue: {} },
-        { provide: AttractionOutageService, useValue: {} },
+        {
+          provide: WeatherClosureService,
+          useValue: { getVerdicts: jest.fn().mockResolvedValue(new Map()) },
+        },
+        {
+          provide: AttractionOutageService,
+          useValue: {},
+        },
         { provide: REDIS_CLIENT, useValue: {} },
       ],
     }).compile();

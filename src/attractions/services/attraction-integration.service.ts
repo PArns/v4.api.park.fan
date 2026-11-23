@@ -60,7 +60,12 @@ import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { AttractionOutageService } from "./attraction-outage.service";
-import { toNotRunTodayDto, toOutageDto } from "../dto/attraction-outage.dto";
+import {
+  toNotRunTodayDto,
+  toOutageDto,
+  toWeatherClosureDto,
+} from "../dto/attraction-outage.dto";
+import { WeatherClosureService } from "../../parks/services/weather-closure.service";
 import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
 import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
 import { hasMeasuredDays } from "../../analytics/utils/typical-waits.util";
@@ -99,6 +104,7 @@ export class AttractionIntegrationService {
     private readonly dataSource: DataSource,
     private readonly rideProfileService: RideProfileService,
     private readonly outageService: AttractionOutageService,
+    private readonly weatherClosureService: WeatherClosureService,
   ) {}
 
   /**
@@ -402,6 +408,19 @@ export class AttractionIntegrationService {
           ],
         );
         dto.notRunToday = toNotRunTodayDto(notRun.get(attraction.id));
+      }
+
+      // Whether the weather shut it — the park list asks the same service
+      // about the same rides, those shut during opening hours.
+      if (
+        (dto.outage || dto.notRunToday) &&
+        (dto.effectiveStatus === "CLOSED" || dto.effectiveStatus === "DOWN")
+      ) {
+        const verdicts = await this.weatherClosureService.getVerdicts(
+          { id: attraction.parkId, timezone: attraction.park.timezone },
+          [attraction.id],
+        );
+        dto.weatherClosure = toWeatherClosureDto(verdicts.get(attraction.id));
       }
     }
 

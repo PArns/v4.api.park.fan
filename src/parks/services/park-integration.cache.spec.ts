@@ -18,6 +18,7 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
 import { PopularityService } from "../../popularity/popularity.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
+import { WeatherClosureService } from "./weather-closure.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import type { Park } from "../entities/park.entity";
 
@@ -62,6 +63,7 @@ describe("ParkIntegrationService › integrated cache rebuilds", () => {
       PopularityService,
       RideProfileService,
       AttractionOutageService,
+      WeatherClosureService,
     ].map((provide) => ({ provide, useValue: {} }));
     const module = await Test.createTestingModule({
       providers: [

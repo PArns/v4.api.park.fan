@@ -1,3 +1,4 @@
+import { WeatherClosureService } from "./weather-closure.service";
 import { Test, TestingModule } from "@nestjs/testing";
 import { ParkIntegrationService } from "./park-integration.service";
 import { ParksService } from "../parks.service";
@@ -106,6 +107,10 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { provide: WartezeitenClient, useValue: {} },
         { provide: PopularityService, useValue: {} },
         { provide: RideProfileService, useValue: {} },
+        {
+          provide: WeatherClosureService,
+          useValue: { getVerdicts: jest.fn().mockResolvedValue(new Map()) },
+        },
         {
           provide: AttractionOutageService,
           useValue: {
