@@ -661,7 +661,7 @@ const rideRef = {
     .string()
     .uuid()
     .optional()
-    .describe("Ride id from find_rides or a ride list"),
+    .describe("Ride id from any result in this chat"),
   ride: z
     .string()
     .trim()
@@ -2430,8 +2430,8 @@ export const ASSISTANT_TOOLS = [
     status: "parks",
     description:
       "Find theme parks by name, city or country (typo-tolerant). Returns id, name, slug, city, " +
-      "country, whether it is open now, the live crowd level and today's opening hours. Use the " +
-      "id for the other tools.",
+      "country, whether it is open now, the live crowd level and today's opening hours. Only for " +
+      "a city or region, or to pick between candidates: every other tool takes a park's name.",
     input: z.object({
       query: z
         .string()
@@ -2464,7 +2464,8 @@ export const ASSISTANT_TOOLS = [
     name: "find_rides",
     status: "rides",
     description:
-      "Find rides by name only (typo-tolerant), optionally within one park: id (for get_ride), " +
+      "Find rides by name only (typo-tolerant), optionally within one park, when a name is unclear " +
+      "(get_ride and the others take a ride's name with its park): id, " +
       'name, park, status and standby wait, at most 5. Not by type or figure: for "the fastest ' +
       'coaster" or "coasters in Germany" use compare_rides.',
     input: z.object({
@@ -5261,7 +5262,7 @@ export const ASSISTANT_TOOLS = [
         .string()
         .uuid()
         .optional()
-        .describe("Ride id from find_rides or get_park_live"),
+        .describe("Ride id from any result in this chat"),
       url: z
         .string()
         .max(400)
@@ -5684,8 +5685,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
-      "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
-      "find_rides or a ride list, or the ride's name. One alert per ride, a new one replaces it.",
+      "again, kind wait_below once the standby wait drops under thresholdMinutes. The ride's name " +
+      "with its park, or its id from any result in this chat. One alert per ride, a new one replaces it.",
     input: z.object({
       park: parkRef,
       ...rideRef,
