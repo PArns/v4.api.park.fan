@@ -7,8 +7,11 @@ import type { AssistantConversation } from "./entities/assistant-conversation.en
 import type { AssistantMessage } from "./entities/assistant-message.entity";
 
 const requests: Array<Record<string, unknown>> = [];
-/** The tool every round calls; the replies test swaps it. */
-const calling = { name: "get_post" };
+/**
+ * The tool every round calls; the replies test swaps it. `silent` ends the second round without
+ * a word, as the model sometimes does after a write.
+ */
+const calling = { name: "get_post", silent: false };
 
 /** Every request answers with a tool call, so only the round limit ends the loop. */
 jest.mock("@anthropic-ai/sdk", () => {
@@ -30,6 +33,13 @@ jest.mock("@anthropic-ai/sdk", () => {
             listeners.push(listener);
           },
           finalMessage: () => {
+            if (calling.silent && !answersInText && requests.length > 1) {
+              return Promise.resolve({
+                stop_reason: "end_turn",
+                usage: { input_tokens: 100, output_tokens: 1 },
+                content: [],
+              });
+            }
             if (answersInText) listeners.forEach((l) => l("Fertig!"));
             return Promise.resolve({
               stop_reason: answersInText ? "end_turn" : "tool_use",
@@ -171,6 +181,52 @@ describe("AssistantChatService.answer", () => {
       const last = messages[messages.length - 1].content;
       expect(marked).toEqual([last[last.length - 1]]);
     }
+  });
+});
+
+describe("AssistantChatService.answer after a silent round", () => {
+  it("asks once more for text when the tools ran and nothing was written", async () => {
+    requests.length = 0;
+    calling.silent = true;
+    const messages = repository<AssistantMessage>({ id: "message-silent" });
+    const saveMessage = jest.spyOn(messages, "save");
+    const service = new AssistantChatService(
+      { addTokens: jest.fn() } as unknown as AssistantSettingsService,
+      {
+        get: () => ({ post: jest.fn().mockResolvedValue({ title: "A post" }) }),
+      } as unknown as ModuleRef,
+      repository<AssistantConversation>({}),
+      messages,
+      {
+        subject: () => Promise.resolve(null),
+      } as unknown as AssistantPageService,
+      knowledge,
+    );
+    await service.answer(
+      {
+        apiKey: "sk-ant-test",
+        conversation: { id: "chat-silent" } as AssistantConversation,
+        history: [],
+        request: {
+          locale: "de",
+          pagePath: "/de",
+          message: "Trag es ein",
+          sessionToken: "s1.checked-by-the-controller",
+        },
+        session: "session-silent",
+        sessionHash: "session-hash-silent",
+      },
+      () => undefined,
+      new AbortController().signal,
+      null,
+    );
+    calling.silent = false;
+    expect(
+      requests.map((r) => (r.tool_choice as { type: string }).type),
+    ).toEqual(["auto", "auto", "none"]);
+    expect(saveMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "assistant", text: "Fertig!" }),
+    );
   });
 });
 

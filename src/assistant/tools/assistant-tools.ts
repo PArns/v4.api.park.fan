@@ -614,6 +614,18 @@ async function parkLiveSummary(
   // The park's clock right now and its zone stay: every time reaches the model in that zone.
   const { funFacts, ...rest } = live;
   if (rest.retiredAt === null) delete rest.retiredAt;
+  // A maintenance status's since is the day's first reading, often before opening: Parky told
+  // it as "in maintenance since 08:15" at a park that opened at 11:00. New objects: it may be cached.
+  const rides = rest.rides as
+    { maintenance?: Array<Record<string, unknown>> } | undefined;
+  if (rides?.maintenance) {
+    rest.rides = {
+      ...rides,
+      maintenance: rides.maintenance.map(
+        ({ since: _since, startObserved: _startObserved, ...kept }) => kept,
+      ),
+    };
+  }
   // The day's rating beside the live one: before opening the live level is null, and "how full
   // will it get today?" is the calendar's to answer, labelled as such.
   const entity =
@@ -649,7 +661,7 @@ const rideRef = {
     .string()
     .uuid()
     .optional()
-    .describe("Ride id from find_rides or a ride list"),
+    .describe("Ride id from any result in this chat"),
   ride: z
     .string()
     .trim()
@@ -813,6 +825,9 @@ async function rideDetails(
     const reopening = performances
       ? null
       : reopeningOf(ride as RideClosure, Number(today.slice(5, 7)));
+    // A maintenance status's start is the first reading of the day, often before the gates
+    // opened, and read back as "observed at 08:15" it sounds like a breakdown.
+    if (reopening?.reason === "maintenance") delete ride.outage;
     if (reopening) {
       const from = reopenSearchFrom(reopening, today);
       ride.reopening = {
@@ -1523,6 +1538,15 @@ export function reopeningOf(ride: RideClosure, month: number) {
       }),
     };
   }
+  if (status === "REFURBISHMENT") {
+    // The park's own feed says maintenance, with no window we know: no breakdown, and neither a
+    // planned end nor the next day is known (Silver Star, 23 November).
+    return {
+      reason: "maintenance" as const,
+      windowKnown: false,
+      say: "in maintenance today, as the park lists it; whether it was planned, when it ends and whether it runs tomorrow are not known",
+    };
+  }
   return { reason: "unknown" as const, status };
 }
 
@@ -2092,6 +2116,18 @@ function comingRegion(slug: string): McpToolError {
  * A trip region and its parks as the database has them, named as the site names them; a region
  * not live yet is refused (`regionLive`).
  */
+/**
+ * Ticket and hotel facts Parky may give for Orlando, moved out of the prompt (PAR-1413) so they
+ * reach the model only with get_trip_region; checked against Disney's and Universal's pages.
+ */
+const ORLANDO_FACTS = [
+  "A Disney date-based ticket's days fall in a window from its first day (4 days in 7, 10 in 14); a hop day is one day",
+  "The UK 14-Day Magic Ticket is 14 days in 18 with hopping and water parks, sold by UK shops",
+  "Universal's 1- and 2-day tickets leave out Epic Universe, 3 days and more include it; Universal's UK 14-day tickets are every day for 14 days; no annual pass includes Epic Universe",
+  "Early Entry: Disney resort guests 30 minutes early; Early Park Admission: Universal hotel guests an hour early; Extended Evening Hours: Disney deluxe hotel guests after closing",
+  "Universal Premier hotels include Express Unlimited at Universal Studios and Islands of Adventure, not Epic Universe",
+];
+
 async function tripRegion(ctx: AssistantToolContext, slug = ORLANDO.slug) {
   if (!regionLive(ctx, slug)) throw comingRegion(slug);
   const regions = ctx.get(TripRegionService);
@@ -2394,8 +2430,8 @@ export const ASSISTANT_TOOLS = [
     status: "parks",
     description:
       "Find theme parks by name, city or country (typo-tolerant). Returns id, name, slug, city, " +
-      "country, whether it is open now, the live crowd level and today's opening hours. Use the " +
-      "id for the other tools.",
+      "country, whether it is open now, the live crowd level and today's opening hours. Only for " +
+      "a city or region, or to pick between candidates: every other tool takes a park's name.",
     input: z.object({
       query: z
         .string()
@@ -2413,8 +2449,10 @@ export const ASSISTANT_TOOLS = [
       "The park right now: open or closed, today's hours and the next opening, the live crowd " +
       "level (null with levelWhy while closed), todayExpected (the calendar's rating of the whole " +
       'day, for "how full will it get today"), ' +
-      "average and peak waits today, weather now, only the 8 longest current standby waits, " +
-      "rides that are down, rides in maintenance (window: until when), maintenance starting in " +
+      "average and peak waits today, a line of weather now (a weather question is get_park_weather's), " +
+      "only the 8 longest current standby waits, " +
+      "rides that are down, rides in maintenance (window: the planned window and until when; " +
+      "null: the park lists it in maintenance today and its end is not known), maintenance starting in " +
       "the next 30 days (maintenanceAhead), rides that have not run today, the park's pageUrl and the " +
       "editors' funFacts about it. Not the shortest waits, one ride type or a recommendation: " +
       "show_card kind rides order shortest (with type for coasters, dark rides, water or " +
@@ -2426,7 +2464,8 @@ export const ASSISTANT_TOOLS = [
     name: "find_rides",
     status: "rides",
     description:
-      "Find rides by name only (typo-tolerant), optionally within one park: id (for get_ride), " +
+      "Find rides by name only (typo-tolerant), optionally within one park, when a name is unclear " +
+      "(get_ride and the others take a ride's name with its park): id, " +
       'name, park, status and standby wait, at most 5. Not by type or figure: for "the fastest ' +
       'coaster" or "coasters in Germany" use compare_rides.',
     input: z.object({
@@ -2586,7 +2625,9 @@ export const ASSISTANT_TOOLS = [
       "last has begun), worksPeriods (every planned maintenance or works window: " +
       "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
-      "reopening: why (breakdown, works, season or unknown) and what is known about its return " +
+      "reopening: why (breakdown, works, season, maintenance or unknown) and what is known about its return " +
+      "(maintenance: the park lists the ride in maintenance today with no window we know, so " +
+      "neither its end nor whether it runs tomorrow is known; never a breakdown, never 'no maintenance planned') " +
       "(for season: the park season the ride runs in when one is bound, its name and days).",
     input: z.object({
       ...rideRef,
@@ -2900,7 +2941,7 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_day",
     status: "forecast",
     description:
-      "One day at one park as park.fan's trip planner sees it: whether and when it is open, the " +
+      "One day at one park as park.fan's day planner sees it: whether and when it is open, the " +
       `expected crowd level, the day's weather (${WEATHER_VIEW_FIELDS}; past the forecast's ` +
       "14 days or so the historical average for the date, basis climate_normal), holiday, school " +
       "break, bridge day and weekend, neighbouring holidays, hotel early entry; every ride with " +
@@ -3034,7 +3075,9 @@ export const ASSISTANT_TOOLS = [
     name: "get_park_weather",
     status: "weather",
     description:
-      "Weather at one park right now and for the next hours: temperature and feels-like, " +
+      "Weather at one park right now and for the next hours, for every weather question without " +
+      'a day ("Temperatur?", "is it raining?", "how cold is it tonight?"), each time asked: ' +
+      "temperature and feels-like, " +
       "humidity, whether it rains and how hard, when rain, a thunderstorm, hail or a storm " +
       "starts and ends (ISO times), wind and gusts now and the next hours' strongest gust, the " +
       "official severe-weather warnings in force (warnings: event, severity, from, until, " +
@@ -3977,7 +4020,8 @@ export const ASSISTANT_TOOLS = [
       "A live trip region's facts, for questions the plan tools do not answer: its resorts and " +
       "parks (headliners marked), whose hotels give which perks, its hotel areas, in a region " +
       "with bases the cities with their airports and stations and the hotel-change buffers, " +
-      "its ticket ids by resort, its storm season and its hub. Use its ids in plan_vacation " +
+      "its ticket ids by resort, its storm season, its hub and, for Orlando, the ticket and hotel " +
+      "facts Parky may give (facts: which tickets cover which parks and days, early entry). Use its ids in plan_vacation " +
       "and change_trip (tickets, hotel, area, bases, landAt).",
     input: z.object({ region: regionInput }),
     run: async ({ region: slug }, ctx) => {
@@ -4052,6 +4096,7 @@ export const ASSISTANT_TOOLS = [
         ...(storm && {
           stormSeason: `${storm.kind} season, its peak ${storm.peak.from} to ${storm.peak.to} (month-day): the planner ranks windows there lower`,
         }),
+        ...(region.slug === ORLANDO.slug && { facts: ORLANDO_FACTS }),
       };
     },
   }),
@@ -5217,7 +5262,7 @@ export const ASSISTANT_TOOLS = [
         .string()
         .uuid()
         .optional()
-        .describe("Ride id from find_rides or get_park_live"),
+        .describe("Ride id from any result in this chat"),
       url: z
         .string()
         .max(400)
@@ -5309,7 +5354,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_day",
     status: "planner",
     description:
-      "Open a day at one park in the user's trip planner (it opens beside the page). The plan " +
+      "Open a day at one park in the user's day planner (it opens beside the page). The plan " +
       "lives in their browser.",
     input: z.object({ park: parkRef, date: planDate }),
     run: async ({ park: reference, date }, ctx) => {
@@ -5325,7 +5370,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_add_rides",
     status: "planner",
     description:
-      "Add rides to the user's trip planner for one park and day, in the order given; the " +
+      "Add rides to the user's day planner for one park and day, in the order given; the " +
       "planner places them after what is already planned. Each ride is its id from a result " +
       "in this chat or its name at that park, so rides named in an earlier answer need no " +
       "lookup first; a name that matches no ride or several comes back in notAdded (reason " +
@@ -5419,7 +5464,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_add_block",
     status: "planner",
     description:
-      "Add a block of the user's own to their trip planner: a break, a meal, a show they named, " +
+      "Add a block of the user's own to their day planner: a break, a meal, a show they named, " +
       "shopping, a photo stop or a meeting point. A show's start time comes from get_shows " +
       "for today and get_park_day's shows for another day (projected, so say so); a food stop " +
       "from find_restaurants. A show with a listed time goes in with plan_add_show instead.",
@@ -5461,7 +5506,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_optimize",
     status: "planner",
     description:
-      "Let the trip planner sort one planned day for the shortest waits (mode order), or first " +
+      "Let the day planner sort one planned day for the shortest waits (mode order), or first " +
       "add the park's headliners that are missing and then sort (mode headliners). The planner " +
       "shows the result and an undo.",
     input: z.object({
@@ -5607,7 +5652,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_add_show",
     status: "planner",
     description:
-      "Add one of a park's shows to the user's trip planner at one of its times that day. The " +
+      "Add one of a park's shows to the user's day planner at one of its times that day. The " +
       "show's slug and times come from get_shows; start is the park's local time, HH:MM.",
     input: z.object({
       park: parkRef,
@@ -5640,8 +5685,8 @@ export const ASSISTANT_TOOLS = [
     status: "planner",
     description:
       "Have park.fan send the user a push message about one ride: kind reopen once it runs " +
-      "again, kind wait_below once the standby wait drops under thresholdMinutes. Ride id from " +
-      "find_rides or a ride list, or the ride's name. One alert per ride, a new one replaces it.",
+      "again, kind wait_below once the standby wait drops under thresholdMinutes. The ride's name " +
+      "with its park, or its id from any result in this chat. One alert per ride, a new one replaces it.",
     input: z.object({
       park: parkRef,
       ...rideRef,
@@ -5847,7 +5892,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_set_party",
     status: "planner",
     description:
-      "Tell the trip planner about the party for one planned day: the smallest rider's height " +
+      "Tell the day planner about the party for one planned day: the smallest rider's height " +
       "in cm, whether to stay dry, whether they have early entry. The planner then flags rides " +
       "that do not fit.",
     input: z.object({
@@ -5917,7 +5962,7 @@ export const ASSISTANT_TOOLS = [
     name: "plan_trip",
     status: "planner",
     description:
-      "Reserve days in the trip planner at once, empty days the user fills later: several days " +
+      "Reserve days in the day planner at once, empty days the user fills later: several days " +
       "at one park, or a trip across parks (days, as plan_vacation's or get_trip_plan's reserve). " +
       "riderHeightCm: the party's smallest rider, written to every day.",
     input: z.object({
@@ -6375,7 +6420,7 @@ export const ASSISTANT_TOOLS = [
           ...(state.mustDoRides.length > 0 && {
             mustDoRides: state.mustDoRides,
           }),
-          then: "one short question or the plan in your voice, and end with suggest_replies",
+          then: "write now, never tools alone: at most one sentence on what changed, then one short question asking one thing (one question mark), or the plan in your voice; end with suggest_replies",
         },
       );
     },

@@ -897,7 +897,7 @@ const STEP_GUIDE: Record<Exclude<InterviewStep, "refine">, StepGuide> = {
     chips: "yes, into the day planner / not yet",
   },
   day: {
-    ask: "which park and which day",
+    ask: "the park; once the park is known (the page's or one they named), which day",
     apply: "plan_day",
     chips:
       "today / tomorrow / a real park by its name (the page's, one in their plans, else a big park they may mean)",

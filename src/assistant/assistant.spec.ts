@@ -363,7 +363,7 @@ describe("system prompt", () => {
       "once a result in this chat gave a ride's id, use the id",
     );
     expect(SYSTEM_PROMPT).toContain(
-      "kind ride (by name with its park, too) everything get_ride does",
+      "ride, by name with its park too: everything get_ride has",
     );
     expect(SYSTEM_PROMPT).not.toContain("Name a park and I'll prove it");
   });
@@ -437,7 +437,7 @@ describe("system prompt", () => {
   });
 
   it("keeps its voice without copying its examples, in the singular, true to the level", () => {
-    expect(SYSTEM_PROMPT).toContain("never reuse or translate their phrases");
+    expect(SYSTEM_PROMPT).toContain("never reuse or translate these phrases");
     expect(SYSTEM_PROMPT).not.toContain("Taron is at 15 minutes");
     expect(SYSTEM_PROMPT).not.toContain("is a crime");
     expect(SYSTEM_PROMPT).toContain("After a list or a card too");
@@ -641,7 +641,7 @@ describe("request schemas", () => {
     );
     expect(SYSTEM_PROMPT).toContain("never a promise");
     expect(SYSTEM_PROMPT).toContain(
-      "unknown or nothing given means no date is known",
+      "unknown or nothing given: no date is known",
     );
   });
 
