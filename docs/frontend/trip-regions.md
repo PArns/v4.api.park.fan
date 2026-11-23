@@ -444,6 +444,17 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
           "forecastWait": 45, // the served forecast, unscaled, as the park calendar shows it
           "lastYearWait": 55, // the matching day a year back, as measured
           "seasons": ["5b0c…"], // ids into `seasons`
+          "weather": {
+            // past the forecast's reach: the date's climate normal; see below
+            "tempMax": 26.1,
+            "tempMin": 14.8,
+            "precipitationMm": 2.3,
+            "icon": 3,
+            "basis": "climate_normal",
+            "tempMaxP25": 24.3,
+            "tempMaxP75": 28.0,
+            "wetDayPercent": 24,
+          },
         },
         "disneys-typhoon-lagoon-water-park": {
           "status": "CLOSED",
@@ -546,6 +557,14 @@ ahead. Dates are region-local; every Orlando park runs on `America/New_York`.
   either Early Entry or the party; it now keeps both
   ([schedule sync](../architecture/schedule-sync-and-calendar.md)), and the season stays the
   fallback for a party the feed does not list.
+- **`weather`** is the park's weather that day as its own calendar has it: within the forecast's
+  reach (about 16 days) the forecast (`tempMax`, `tempMin`, `precipitationMm`, the WMO `icon`,
+  `basis: "forecast"`); past it the date's climate normal (2015–2024, ERA5), `basis:
+  "climate_normal"`, with `tempMaxP25`…`tempMaxP75`, the range half of such days' highs fell in,
+  and `wetDayPercent`, the chance of a rain day ([the spread](../architecture/weather.md#the-spread-typically-1618-c)).
+  A client shows a normal as what the date is usually like and marks it so („Ø 15–19°“), never as
+  the day's forecast. The percentiles are absent while the park's cached normals predate them, the
+  whole block where its calendar has no weather (PAR-1411).
 - **`closesEarly: true`** with **`dayGuestCloseAt`** (park offset) marks a day whose day-guest close
   is at least two hours before the park's usual close: the median over its open days within 14
   days of that date that have no ticketed evening (whatever window was asked for), so a party season

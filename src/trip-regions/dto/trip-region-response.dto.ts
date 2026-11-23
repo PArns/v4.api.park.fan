@@ -450,6 +450,17 @@ export class TripParkDayDto {
     description: "The day guests' close on such a day (park offset).",
   })
   dayGuestCloseAt?: string;
+  @ApiPropertyOptional({
+    description:
+      "The park's weather that day: within the forecast's reach (about 16 days) the forecast " +
+      "{ tempMax, tempMin, precipitationMm, icon, basis: forecast }; past it the date's climate " +
+      "normal (2015-2024) with basis climate_normal, tempMaxP25/tempMaxP75 (the range half of " +
+      "such days' highs fell in) and wetDayPercent. A normal is what the date is usually like, " +
+      "never the day's forecast. Absent where the park's calendar has none.",
+    type: "object",
+    additionalProperties: true,
+  })
+  weather?: Record<string, unknown>;
 }
 
 export class TripCalendarDayDto {
