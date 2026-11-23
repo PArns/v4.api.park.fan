@@ -580,6 +580,18 @@ export class PlanDayContextDto {
   })
   weather?: Record<string, unknown> | null;
 
+  @ApiProperty({
+    required: false,
+    description:
+      "Past the forecast's reach, the date's climate normal: the calendar's " +
+      'weather block with `basis: "climate_normal"` and its `normalPeriod`, ' +
+      "the long-run average for the date with the range half of such days " +
+      "fell in (`tempMaxP25`…`tempMaxP75`) and `wetDayPercent`. Shown as what " +
+      "the date is usually like, never as the day's forecast; it moves no bar. " +
+      "Absent while `weather` is set and while the park's normals are not cached.",
+  })
+  climateNormal?: Record<string, unknown>;
+
   @ApiProperty({ example: false })
   isHoliday: boolean;
 

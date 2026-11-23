@@ -21,7 +21,10 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
-import { ClimateNormals } from "../external-apis/weather/climate-normals";
+import {
+  ClimateNormals,
+  hasClimateSpread,
+} from "../external-apis/weather/climate-normals";
 import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
@@ -1001,9 +1004,36 @@ export class WeatherService {
       coords.latitude,
       coords.longitude,
     );
-    if (cached) return cached;
+    if (cached) {
+      // Normals cached before PAR-1411 have the means only: served as they
+      // are, and fetched again in the background so the next read has the
+      // spread too. Once an hour per park, inside the same daily budget.
+      if (!hasClimateSpread(cached))
+        void this.refreshClimateNormals(parkId, coords);
+      return cached;
+    }
     void this.warmClimateNormals(parkId, coords);
     return null;
+  }
+
+  /** One background re-fetch per park and hour for normals of an older shape. */
+  private async refreshClimateNormals(
+    parkId: string,
+    coords: { latitude: number; longitude: number },
+  ): Promise<void> {
+    try {
+      const claimed = await this.redis.set(
+        `weather:climate-normals:refresh:${parkId}`,
+        "1",
+        "EX",
+        60 * 60,
+        "NX",
+      );
+      if (claimed !== "OK") return;
+    } catch {
+      return;
+    }
+    await this.warmClimateNormals(parkId, coords);
   }
 
   /**

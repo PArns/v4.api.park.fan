@@ -97,6 +97,35 @@ describe("climate normals never reach the wait-time model", () => {
     expect(client.fetchClimateNormals).toHaveBeenCalledWith(50.8, 6.87);
   });
 
+  it("serves normals without the spread and fetches them again, once an hour", async () => {
+    // Cached before PAR-1411: means only.
+    await expect(service.getClimateNormals("p1")).resolves.toEqual(normals);
+    await new Promise((r) => setImmediate(r));
+    expect(redis.set).toHaveBeenCalledWith(
+      "weather:climate-normals:refresh:p1",
+      "1",
+      "EX",
+      3600,
+      "NX",
+    );
+    expect(client.fetchClimateNormals).toHaveBeenCalledTimes(1);
+    // The hour is claimed: no second fetch.
+    redis.set.mockResolvedValueOnce(null);
+    client.fetchClimateNormals.mockClear();
+    await service.getClimateNormals("p1");
+    await new Promise((r) => setImmediate(r));
+    expect(client.fetchClimateNormals).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch normals again that carry the spread", async () => {
+    client.peekClimateNormals.mockResolvedValue({
+      "07-11": { temperatureMax: 25, temperatureMaxP25: 23 },
+    });
+    await service.getClimateNormals("p1");
+    await new Promise((r) => setImmediate(r));
+    expect(client.fetchClimateNormals).not.toHaveBeenCalled();
+  });
+
   it("stops warming once the daily budget is spent", async () => {
     redis.incr.mockResolvedValue(21);
     await service.warmClimateNormals("p1");

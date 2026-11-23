@@ -20,6 +20,9 @@ import {
   type RegionConfig,
 } from "../../trip-regions/regions";
 import { stormSeasonSpan } from "../../trip-regions/trip-region.assembly";
+import type { TripClimate } from "../../trip-regions/trip-climate";
+import { CLIMATE_NORMAL_PERIOD } from "../../external-apis/weather/climate-normals";
+import { tempRange } from "../../parks/utils/weather-summary.util";
 import { travelSource, type TripLeg } from "../../trip-regions/travel";
 import type {
   EveningOption,
@@ -174,6 +177,25 @@ export function heatAndStormWatch(
   if (storm) watch.push(seasonPhrases(region)[storm]);
   return watch;
 }
+
+/**
+ * A span's typical weather in words (`TripClimate`): the high's range half of such days fell in,
+ * the low's, and the chance of a rain day; the means where the normals carry no spread yet.
+ */
+export function typicalWeatherPhrase(c: TripClimate): string {
+  const high =
+    tempRange(c.tempMaxP25, c.tempMaxP75) ?? `${Math.round(c.tempMax)}`;
+  const low =
+    tempRange(c.tempMinP25, c.tempMinP75) ?? `${Math.round(c.tempMin)}`;
+  const rain =
+    c.wetDayPercent !== undefined
+      ? `rain on ${c.wetDayPercent}% of such days`
+      : `${c.precipitationMm} mm rain`;
+  return `high ${high} °C, low ${low} °C, ${rain}`;
+}
+
+/** What every `typicalWeather` is, said once per answer. */
+export const TYPICAL_WEATHER_MEANS = `the historical average for the dates (${CLIMATE_NORMAL_PERIOD}), never a forecast: the high and low as the range half of such days fell in`;
 
 /** The plan's reasons in words; a perk's reason is the day's `perks`, named once. */
 const REASONS: Record<PlanDayReason, string> = {
@@ -798,6 +820,7 @@ export function vacationItinerary(input: {
       .filter((r): r is PlanDayReason => r in REASONS)
       .map((r) => REASONS[r]);
     const move = (day as unknown as { move?: DayMove }).move;
+    const climate = (day as unknown as { climate?: TripClimate }).climate;
     return {
       date: day.date,
       weekday: weekdayOf(day.date),
@@ -817,6 +840,7 @@ export function vacationItinerary(input: {
         evening: eveningPhrase(day.evening, names, region),
       }),
       ...(ownedTicket(day, owned) && { ticket: ownedTicket(day, owned) }),
+      ...(climate && { typicalWeather: typicalWeatherPhrase(climate) }),
     };
   });
   const area = region.hotelAreas.find((a) => a.key === query.area);
@@ -853,6 +877,9 @@ export function vacationItinerary(input: {
     }),
     ...(tripSeason(region, planned) && {
       season: tripSeason(region, planned),
+    }),
+    ...(days.some((d) => d.typicalWeather) && {
+      typicalWeatherMeans: `${TYPICAL_WEATHER_MEANS}, at the day's park`,
     }),
 
     days,
@@ -1398,6 +1425,9 @@ export function tripDatesSummary(input: {
               `${input.names?.get(l.park) ?? l.park} (${UNPLACED[l.reason] ?? l.reason})`,
           ),
         }),
+        ...(w.climate && {
+          typicalWeather: typicalWeatherPhrase(w.climate),
+        }),
         ...(w.tickets && { tickets: w.tickets.map(whenTicketPhrase) }),
         ...(w.ticketSuggestion && {
           ticketsToBuy: w.ticketSuggestion.map(
@@ -1413,7 +1443,7 @@ export function tripDatesSummary(input: {
       ...(m.headlinerWait != null && { headlinerWait: m.headlinerWait }),
       ...(m.basis === "last_year" && { lastYear: true }),
       ...(m.climate && {
-        climate: `${m.climate.tempMax}/${m.climate.tempMin} °C, ${m.climate.precipitationMm} mm`,
+        climate: `${typicalWeatherPhrase(m.climate)}; ${m.climate.precipitationMm} mm in the month`,
       }),
       ...(m.localSchoolBreakDays.length > 0 && {
         schoolBreakDays: m.localSchoolBreakDays.length,
@@ -1423,7 +1453,7 @@ export function tripDatesSummary(input: {
       ...(m.typhoonSeason && { typhoonSeason: true }),
       ...(m.rainySeason && { rainySeason: true }),
     })),
-    monthsMean: `headlinerWait: each chosen park on its best day of the week, meaned; climate: the 2015-2024 normals at ${climatePark} (high/low, month's rain), never a forecast; schoolBreakDays: days of ${localSchool(region)} school breaks`,
+    monthsMean: `headlinerWait: each chosen park on its best day of the week, meaned; climate and each window's typicalWeather: ${TYPICAL_WEATHER_MEANS}, at ${climatePark}; schoolBreakDays: days of ${localSchool(region)} school breaks`,
     ...(!result.meta.search.exact && {
       searchCutShort: "good windows, not proven the best",
     }),

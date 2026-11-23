@@ -7,13 +7,17 @@ import {
   hurricaneMinutes,
   hurricaneWeight,
   isHurricanePeak,
+  monthTouchesStorm,
   optimizeTrip,
   touchesStormPeak,
   type PlanCell,
 } from "./trip-optimizer";
 import { regionBestDays } from "./trip-best-days";
 import { normalizePlanQuery, planCacheQuery } from "./trip-plan.assembly";
-import type { InternalRegionCalendar } from "./trip-region.assembly";
+import {
+  stormSeasonSpan,
+  type InternalRegionCalendar,
+} from "./trip-region.assembly";
 import type { TripParkDayInternal } from "./trip-calendar.util";
 import { findTripDates } from "./trip-when";
 
@@ -63,17 +67,49 @@ describe("the heat term", () => {
 });
 
 describe("the hurricane season", () => {
-  it("weighs the dates to NHC's climatology, peak mid-August to mid-October", () => {
-    expect(hurricaneWeight("2027-05-31")).toBe(0);
-    expect(hurricaneWeight("2027-06-01")).toBe(0.05);
+  it("weighs August to October to NHC's climatology, peak mid-August to mid-October", () => {
+    // June, July and November bring Orlando a quarter of September's storms or fewer (PAR-1411).
+    expect(hurricaneWeight("2027-06-01")).toBe(0);
+    expect(hurricaneWeight("2027-07-31")).toBe(0);
+    expect(hurricaneWeight("2027-08-01")).toBe(0.4);
+    expect(hurricaneWeight("2027-08-15")).toBe(0.8);
     expect(hurricaneWeight("2027-09-10")).toBe(1);
-    expect(hurricaneWeight("2027-11-30")).toBe(0.05);
-    expect(hurricaneWeight("2027-12-01")).toBe(0);
+    expect(hurricaneWeight("2027-10-31")).toBe(0.4);
+    expect(hurricaneWeight("2027-11-01")).toBe(0);
+    expect(hurricaneWeight("2027-11-30")).toBe(0);
     expect(isHurricanePeak("2027-08-14")).toBe(false);
     expect(isHurricanePeak("2027-08-15")).toBe(true);
     expect(isHurricanePeak("2027-10-15")).toBe(true);
     expect(isHurricanePeak("2027-10-16")).toBe(false);
     expect(hurricaneMinutes("2027-09-10")).toBe(8);
+  });
+
+  it("names the season by half month, as the plan's days warn of it", () => {
+    // A season whose last half month is weightless ends on the 15th, not the month's end.
+    const storm = {
+      kind: "typhoon" as const,
+      weights: [
+        [7, 0, 0.5],
+        [8, 1, 1],
+        [11, 0.05, 0],
+      ] as const,
+      peak: { from: "08-01", to: "08-31" },
+      peakMinutes: 8,
+    };
+    expect(stormSeasonSpan(storm)).toEqual({
+      kind: "typhoon",
+      from: "07-16",
+      to: "11-15",
+      peak: { from: "08-01", to: "08-31" },
+    });
+    expect(stormSeasonSpan(ORLANDO.weather.storm!)).toMatchObject({
+      from: "08-01",
+      to: "10-31",
+    });
+    // A month the season reaches only in its second half still touches it.
+    expect(monthTouchesStorm(storm, "2027-07")).toBe(true);
+    expect(monthTouchesStorm(storm, "2027-06")).toBe(false);
+    expect(monthTouchesStorm(undefined, "2027-08")).toBe(false);
   });
 
   it("finds a trip touching the peak on any day, travel days included", () => {

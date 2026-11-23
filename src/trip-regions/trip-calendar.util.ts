@@ -74,6 +74,8 @@ export interface TripParkDay {
    * normal) passes the plan's heat threshold (`HeatModel` in the optimizer).
    */
   warnings?: Array<"extreme_heat">;
+  /** The park's weather that day: the forecast, past it the date's climate normal. */
+  weather?: TripDayWeather;
 }
 
 /** What the plan reads beside the public fields; never sent. */
@@ -91,13 +93,30 @@ export interface TripParkDayInternal extends TripParkDay {
    * against. Never sent.
    */
   usualHours?: number;
-  weather?: {
-    tempMax?: number;
-    precipitationMm?: number;
-    icon?: number;
-    /** `climate_normal` past the forecast's reach (the calendar's own marker). */
-    basis?: "forecast" | "climate_normal";
-  };
+}
+
+/**
+ * A park's weather on a region calendar day (`parks[slug].weather`): the
+ * forecast within its reach (about 16 days), past it the date's climate
+ * normal, marked `basis: "climate_normal"`, with the range half of such days'
+ * highs fell in and the chance of a rain day. Served as the park's calendar
+ * has it; absent where it has none.
+ */
+export interface TripDayWeather {
+  /** The day's high, °C: the forecast's, or the date's mean high. */
+  tempMax?: number;
+  /** The day's low, °C. */
+  tempMin?: number;
+  precipitationMm?: number;
+  /** The WMO code: the forecast's; a normal's most frequent one. */
+  icon?: number;
+  /** `climate_normal` past the forecast's reach (the calendar's own marker). */
+  basis?: "forecast" | "climate_normal";
+  /** A normal only: the 25th and 75th percentile of the daily high. */
+  tempMaxP25?: number;
+  tempMaxP75?: number;
+  /** A normal only: the chance of a day with at least 1 mm, in percent. */
+  wetDayPercent?: number;
 }
 
 /** A schedule row as `ParksService.getSchedule` returns it. */
@@ -131,10 +150,14 @@ export interface CalendarDayLike {
   headlinerForecast?: { avgWait: number; exactWait?: number; actual?: boolean };
   weather?: {
     tempMax: number;
+    tempMin?: number;
     rainChance: number;
     precipitationMm?: number;
     icon: number;
     basis?: "forecast" | "climate_normal";
+    tempMaxP25?: number;
+    tempMaxP75?: number;
+    wetDayPercent?: number;
   };
 }
 
@@ -580,21 +603,28 @@ export function buildParkDay(input: ParkDayInput): TripParkDayInternal {
   }
 
   if (day?.weather) {
+    const w = day.weather;
     out.weather = {
-      tempMax: day.weather.tempMax,
-      precipitationMm: day.weather.precipitationMm ?? day.weather.rainChance,
-      icon: day.weather.icon,
-      ...(day.weather.basis && { basis: day.weather.basis }),
+      tempMax: w.tempMax,
+      ...(w.tempMin != null && { tempMin: w.tempMin }),
+      precipitationMm: w.precipitationMm ?? w.rainChance,
+      icon: w.icon,
+      ...(w.basis && { basis: w.basis }),
+      ...(w.tempMaxP25 != null &&
+        w.tempMaxP75 != null && {
+          tempMaxP25: w.tempMaxP25,
+          tempMaxP75: w.tempMaxP75,
+        }),
+      ...(w.wetDayPercent != null && { wetDayPercent: w.wetDayPercent }),
     };
   }
   return out;
 }
 
-/** The public shape: the plan's internal fields stay home. */
+/** The public shape: the plan's internal fields stay home, the weather goes out. */
 export function toPublicParkDay(day: TripParkDayInternal): TripParkDay {
   const {
     dayHours: _dayHours,
-    weather: _weather,
     waitExact: _waitExact,
     forecastExact: _forecastExact,
     lastYearExact: _lastYearExact,

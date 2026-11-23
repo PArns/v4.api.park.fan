@@ -323,23 +323,40 @@ export function basesOfGateway(
 /** Days in a month of a common year; a storm season never ends in February. */
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-/** A storm season's first and last day (`MM-DD`) and its peak, as the region route names them. */
+/**
+ * A storm season's first and last day (`MM-DD`) and its peak, as the region route names them:
+ * the first and last half month with a weight, so the span is exactly the days whose plan day
+ * says `<kind>_season` or `<kind>_peak` (`stormWarning`). Until PAR-1411 it was read by whole
+ * month, and Japan's November, whose second half has no weight, read as typhoon season to its
+ * last day on the planner's calendars.
+ */
 export function stormSeasonSpan(storm: StormSeasonConfig): {
   kind: StormSeasonConfig["kind"];
   from: string;
   to: string;
   peak: { from: string; to: string };
 } {
-  const months = storm.weights
-    .filter(([, a, b]) => a > 0 || b > 0)
-    .map(([m]) => m);
   const pad = (n: number) => String(n).padStart(2, "0");
-  const first = Math.min(...months);
-  const last = Math.max(...months);
+  const halves = storm.weights.flatMap(([m, first, second]) => {
+    const split = storm.firstHalfEnds?.[m] ?? 15;
+    return [
+      ...(first > 0
+        ? [{ from: `${pad(m)}-01`, to: `${pad(m)}-${pad(split)}` }]
+        : []),
+      ...(second > 0
+        ? [
+            {
+              from: `${pad(m)}-${pad(split + 1)}`,
+              to: `${pad(m)}-${pad(MONTH_DAYS[m - 1])}`,
+            },
+          ]
+        : []),
+    ];
+  });
   return {
     kind: storm.kind,
-    from: `${pad(first)}-01`,
-    to: `${pad(last)}-${pad(MONTH_DAYS[last - 1])}`,
+    from: halves.reduce((a, h) => (h.from < a ? h.from : a), halves[0].from),
+    to: halves.reduce((a, h) => (h.to > a ? h.to : a), halves[0].to),
     peak: { ...storm.peak },
   };
 }

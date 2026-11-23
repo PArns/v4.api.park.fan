@@ -25,6 +25,7 @@
     "test:watch": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --watch --config jest.config.json",
     "test:cov": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --coverage --config jest.config.json",
     "test:debug": "NODE_ENV=test node --experimental-vm-modules --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand --config jest.config.json",
+    "test:planner-exhaustive": "PLANNER_EXHAUSTIVE=1 NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config jest.config.json src/planner/day-optimizer",
     "test:e2e": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config ./test/jest-e2e.json",
     "test:e2e:watch": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config ./test/jest-e2e.json --watch --runInBand",
     "test:e2e:cov": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --config ./test/jest-e2e.json --coverage",

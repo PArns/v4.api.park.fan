@@ -256,6 +256,9 @@ function setup(
       getLeadTimeMae: jest.fn(async () => null),
     } as unknown as PredictionLeadSnapshotService,
     { showsOn: jest.fn(async () => []) } as unknown as PlanDayService,
+    {
+      getClimateNormals: jest.fn(async () => null),
+    } as unknown as WeatherService,
     redis,
   );
   const seasons = {

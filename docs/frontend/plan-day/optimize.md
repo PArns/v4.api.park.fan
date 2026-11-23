@@ -22,17 +22,17 @@ POST /v1/parks/:continent/:country/:city/:parkSlug/plan/optimize
 
 ## The request
 
-| Field                | Notes                                                                                                                               |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `date`               | park-local `YYYY-MM-DD`; an impossible date is a **400**                                                                            |
-| `mode`               | `day`, `headliners` or `fit` (below)                                                                                                |
-| `entries[]`          | the day as it stands, at most 80, ids unique: `id`, `attractionSlug?`, `attractionName?`, `custom?`, `showSlug?`, `startMinute`, `done?`, `actualWait?` |
-| `prefs`              | `riderHeightCm?`, `avoidWet?` (read by `headliners`), `earlyEntry?` (the visitor holds early entry that day)                         |
-| `nowMinute`          | park-local minute the caller reads as now; used only when `date` is the park's today                                               |
-| `add[]`              | `fit` only: slugs of rides being added, unique, at most 40                                                                          |
-| `choice`             | `fit` only: `dropped[]`, `droppedBlocks[]`, `shortBlocks[]`, `priority[]` (wish keys and block ids); absent is everything ticked     |
-| `levers`             | `fit` only: also measure what taking out or shortening each free block buys                                                          |
-| `preview`            | `day`/`headliners` only: skip the fit question, for a button that shows what a press would gain                                     |
+| Field       | Notes                                                                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `date`      | park-local `YYYY-MM-DD`; an impossible date is a **400**                                                                                                |
+| `mode`      | `day`, `headliners` or `fit` (below)                                                                                                                    |
+| `entries[]` | the day as it stands, at most 80, ids unique: `id`, `attractionSlug?`, `attractionName?`, `custom?`, `showSlug?`, `startMinute`, `done?`, `actualWait?` |
+| `prefs`     | `riderHeightCm?`, `avoidWet?` (read by `headliners`), `earlyEntry?` (the visitor holds early entry that day)                                            |
+| `nowMinute` | park-local minute the caller reads as now; used only when `date` is the park's today                                                                    |
+| `add[]`     | `fit` only: slugs of rides being added, unique, at most 40                                                                                              |
+| `choice`    | `fit` only: `dropped[]`, `droppedBlocks[]`, `shortBlocks[]`, `priority[]` (wish keys and block ids); absent is everything ticked                        |
+| `levers`    | `fit` only: also measure what taking out or shortening each free block buys                                                                             |
+| `preview`   | `day`/`headliners` only: skip the fit question, for a button that shows what a press would gain                                                         |
 
 An entry is park.fan's `PlannerEntry`: `startMinute` is park-local minutes since midnight and runs
 past 1440 on a day past midnight (at most 2880). A free block carries
@@ -86,19 +86,19 @@ As on every public route, a field whose value is `null` is left out of the JSON
 (`ExcludeNullInterceptor`): read an absent `refusal`, `before`, `plan`, `fit`, a stop's `entryId` or
 `waitMinutes` as `null`. A stop without `entryId` is a ride being added.
 
-| Field               | Notes                                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `status`            | `optimized`, `unchanged` (the day is already the plan), `needs-fit`, `fit` or `refused`                       |
-| `refusal`           | with `refused`: `past-day`, `no-plan`, `no-hours`, `no-wait-times`, `no-rides`, `unknown-ride`; else `null`   |
-| `clock`             | `{ phase }`, plus `nowMinute` on today: what the day was planned against                                      |
-| `maxStops`          | 24: rides one search holds; more are reported in `plan.capped`, never silently dropped                        |
-| `add`               | slugs offered on top of the entries                                                                           |
-| `skippedHeadliners` | `headliners`: headliners this party cannot ride                                                               |
-| `movable`           | entries the optimizer may move                                                                                |
+| Field               | Notes                                                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `status`            | `optimized`, `unchanged` (the day is already the plan), `needs-fit`, `fit` or `refused`                           |
+| `refusal`           | with `refused`: `past-day`, `no-plan`, `no-hours`, `no-wait-times`, `no-rides`, `unknown-ride`; else `null`       |
+| `clock`             | `{ phase }`, plus `nowMinute` on today: what the day was planned against                                          |
+| `maxStops`          | 24: rides one search holds; more are reported in `plan.capped`, never silently dropped                            |
+| `add`               | slugs offered on top of the entries                                                                               |
+| `skippedHeadliners` | `headliners`: headliners this party cannot ride                                                                   |
+| `movable`           | entries the optimizer may move                                                                                    |
 | `before`, `after`   | `{ totalWaitMinutes, idleMinutes, walkMinutes, endMinute, overflow, clashes }` for the day as sent and as planned |
-| `plan`              | `optimized`: `stops[]` in plan order plus the totals (`walkMinutes` among them) and `capped`                  |
-| `entries`           | the day as the answer leaves it, in start order; an added ride has `id: null` and `added: true`               |
-| `fit`               | `needs-fit` and `fit`: the assistant's answer (below)                                                         |
+| `plan`              | `optimized`: `stops[]` in plan order plus the totals (`walkMinutes` among them) and `capped`                      |
+| `entries`           | the day as the answer leaves it, in start order; an added ride has `id: null` and `added: true`                   |
+| `fit`               | `needs-fit` and `fit`: the assistant's answer (below)                                                             |
 
 A stop is `{ entryId, attractionSlug, attractionName, startMinute, waitMinutes, fits }`:
 `entryId: null` is a ride being added, `fits` says whether its queue is joined before closing. A
@@ -112,19 +112,18 @@ The waits are raw minutes, not rounded to five. A press can save walking and no 
 search weighs both, so `after.totalWaitMinutes` may sit a few minutes above `before`'s when
 `after.walkMinutes` is well below it.
 
-
 ### `fit`
 
-| Field                  | Notes                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `wishes[]`             | `{ key, entryId, attractionSlug, attractionName, headliner, replannable }`; key `e:<entry id>` or `a:<slug>` |
-| `blocks[]`             | the free blocks a lever may act on: `{ entryId, label, icon, durationMinutes }`                         |
-| `order[]`              | wish keys in the order the day is decided in: pinned first, then as offered, a second lap last         |
-| `wanted`               | wishes still ticked                                                                                     |
-| `fitted[]`, `missed[]` | wish keys with and without a slot before closing                                                        |
-| `endMinute`, `totalWaitMinutes`, `idleMinutes` | the plan for this choice                                                        |
-| `entries[]`, `stops[]` | the entries the day keeps under this choice, and the plan to lay over them                              |
-| `levers[]`, `applied[]`| with `levers` (always on `needs-fit`): what each block would buy, best first, and the levers already pulled as `kind:entryId`; `null` otherwise |
+| Field                                          | Notes                                                                                                                                           |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wishes[]`                                     | `{ key, entryId, attractionSlug, attractionName, headliner, replannable }`; key `e:<entry id>` or `a:<slug>`                                    |
+| `blocks[]`                                     | the free blocks a lever may act on: `{ entryId, label, icon, durationMinutes }`                                                                 |
+| `order[]`                                      | wish keys in the order the day is decided in: pinned first, then as offered, a second lap last                                                  |
+| `wanted`                                       | wishes still ticked                                                                                                                             |
+| `fitted[]`, `missed[]`                         | wish keys with and without a slot before closing                                                                                                |
+| `endMinute`, `totalWaitMinutes`, `idleMinutes` | the plan for this choice                                                                                                                        |
+| `entries[]`, `stops[]`                         | the entries the day keeps under this choice, and the plan to lay over them                                                                      |
+| `levers[]`, `applied[]`                        | with `levers` (always on `needs-fit`): what each block would buy, best first, and the levers already pulled as `kind:entryId`; `null` otherwise |
 
 A lever is `{ kind, entryId?, label?, icon?, minutes?, fits, fitsNow, wanted, solves }` with `kind`
 one of `shorten-block` (to 30 minutes), `drop-block`, `drop-all-blocks`. A lever that buys nothing
@@ -150,6 +149,18 @@ expects the recorded orders, start minutes, scores and levers exactly. The input
 answers came from the browser engine (`__fixtures__/record-browser-parity.mjs` says how); a change
 meant to move answers re-records them with `RECORD_PARITY=1 pnpm test -- browser-parity`, as
 PAR-1364 did, and the fixture's diff is the change.
+
+**Every order of eight rides, on every change to the optimizer.** `optimize.vectors.spec.ts` §16
+enumerates all 40,320 orders of eight rides through the optimizer's own scorer and asserts the
+heuristic found one of the optima: the check the claim "it finds the best order" rests on. It takes
+about a minute, 18 % of the whole unit suite on its own, so `pnpm test` skips it (the run lists it
+as skipped) and `pnpm test:planner-exhaustive` runs it, with the rest of
+`src/planner/day-optimizer/`. Run that before you push any change there. CI does it for you: a
+pull request or push whose diff touches `src/planner/day-optimizer/` runs the step "Day optimizer,
+every order of eight rides" after the unit tests, and skips it, saying so, otherwise. A change
+outside the folder that moves what the optimizer sees (the `/plan/day` payload it plans on, a
+scorer weight imported from elsewhere) does not trigger it; run the script by hand then.
+`BENCH=1 pnpm test:planner-exhaustive` adds the timing table.
 
 ## Related
 

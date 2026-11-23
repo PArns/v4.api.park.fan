@@ -30,7 +30,12 @@ import type { TripPlanQueryDto } from "./dto/trip-region-query.dto";
  * a day earlier. It also added each spare rest day's `spare`, `spareDays`
  * and `spareDayParks`. PAR-1349 only added fields: each park day's
  * `weather` (its high and basis) and `meta.heat` (the thresholds); every other
- * value is unchanged.
+ * value is unchanged. PAR-1411 moved them on purpose: the hurricane season is
+ * August to October, so June's and November's windows lose their hurricane
+ * term and warning (the ten- and seven-day searches now rank their November
+ * window first, at the same wait as April's), the months from June, July and
+ * November say `hurricaneSeason: false`, three November plan days lose
+ * `hurricane_season`, and each window carries its typical weather (`climate`).
  *
  * `WRITE_ORLANDO_IDENTITY=1` rewrites the file: only for a change that is
  * meant to move Orlando's answers, and the diff then says how.

@@ -39,7 +39,9 @@ the licence requires it.
 - A day without a row is simply missing, and a park without coordinates answers `weather: []`.
 - The live fields (current temperature, humidity, `isDay`) are not on these endpoints: they are on the
   park payload's `weather.now` and on the nowcast. Climate normals past the forecast are served by the
-  calendar only.
+  calendar (with their spread: `tempMaxP25`…`tempMinP75`, `wetDayPercent`), the day planner's
+  `climateNormal` and the trip planner's `climate` blocks
+  ([the spread](../architecture/weather.md#the-spread-typically-1618-c)).
 
 ## The nowcast
 

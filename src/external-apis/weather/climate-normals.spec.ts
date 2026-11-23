@@ -2,7 +2,9 @@ import {
   ArchiveDaily,
   CLIMATE_NORMAL_PERIOD,
   buildClimateNormals,
+  hasClimateSpread,
   monthDayKey,
+  quantile,
 } from "./climate-normals";
 
 /** One `value` per day for every year in `years`, for the given MM-DD list. */
@@ -108,6 +110,62 @@ describe("buildClimateNormals", () => {
       weathercode: values,
     } as ArchiveDaily);
     expect(normals["07-11"].weatherCode).toBe(3);
+  });
+
+  it("gives the range half of the days fell in: the 25th to 75th percentile", () => {
+    // Highs 20..29 over ten years: the quartiles interpolate between ranks.
+    const { time, values } = series(years, ["07-11"], (y) => 20 + (y - 2015));
+    const normals = buildClimateNormals({
+      time,
+      temperature_2m_max: values,
+      temperature_2m_min: values.map((v) => (v === null ? null : v - 10)),
+    });
+    expect(normals["07-11"]).toMatchObject({
+      temperatureMax: 24.5,
+      temperatureMaxP25: 22.3,
+      temperatureMaxP75: 26.8,
+      temperatureMinP25: 12.3,
+      temperatureMinP75: 16.8,
+    });
+  });
+
+  it("counts a rain day from 1 mm, so drizzle is not one", () => {
+    // Four years dry, three with 0.4 mm of drizzle, three with real rain.
+    const { time, values } = series(years, ["07-11"], (y) =>
+      y < 2019 ? 0 : y < 2022 ? 0.4 : 6,
+    );
+    const normals = buildClimateNormals({
+      time,
+      temperature_2m_max: values.map(() => 25),
+      precipitation_sum: values,
+    });
+    expect(normals["07-11"].wetDayShare).toBe(0.3);
+    expect(normals["07-11"].precipitationSum).toBe(1.9);
+  });
+
+  it("says whether cached normals carry the spread", () => {
+    const { time, values } = series(years, ["07-11"], () => 20);
+    const fresh = buildClimateNormals({ time, temperature_2m_max: values });
+    expect(hasClimateSpread(fresh)).toBe(true);
+    expect(
+      hasClimateSpread({
+        "07-11": {
+          temperatureMax: 20,
+          temperatureMin: 10,
+          precipitationSum: 1,
+          rainSum: 1,
+          snowfallSum: 0,
+          windSpeedMax: 10,
+          weatherCode: 3,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("interpolates a quantile and keeps an empty set empty", () => {
+    expect(quantile([1, 2, 3, 4, 5], 0.25)).toBe(2);
+    expect(quantile([null, 4, undefined], 0.75)).toBe(4);
+    expect(quantile([null], 0.5)).toBeNull();
   });
 
   it("maps a date string to its MM-DD key", () => {

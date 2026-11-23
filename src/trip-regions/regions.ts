@@ -545,14 +545,22 @@ export const ORLANDO_HEAT: HeatModelConfig = {
 };
 
 /**
- * The Atlantic hurricane season, 1 June to 30 November, weighted by half
- * month to the shape of the National Hurricane Center's climatology
- * (nhc.noaa.gov/climo, 1991–2020): the first named storm usually forms in
- * mid to late June, the first hurricane in early to mid August; the peak is
+ * Orlando's hurricane season, August to October, weighted by half month to
+ * the shape of the National Hurricane Center's climatology (nhc.noaa.gov/climo,
+ * 1991–2020): the first hurricane forms in early to mid August, the peak is
  * 10 September, with most activity between mid-August and mid-October. The
  * weights are curated relative to that peak, not NHC figures, and never a
  * forecast. August splits after the 14th, so the peak starts on 15 August.
  * Eight minutes at the peak is about a fifth of a typical headliner figure.
+ *
+ * The season is the months in which storms reach Orlando at least half as
+ * often as in the peak month, the rule Japan's typhoons follow. In NHC's best
+ * track (HURDAT2, 1950–2025) a tropical storm or hurricane passed within
+ * 150 km of Magic Kingdom 3 times in June, 3 in July, 8 in August, 13 in
+ * September, 9 in October and 3 in November; within 100 km since 1851, 4, 2,
+ * 17, 18, 13 and 2. The official Atlantic season runs 1 June to 30 November,
+ * and until PAR-1411 the planner named all of it, half the year, though June,
+ * July and November bring a quarter of September's storms or fewer.
  *
  * `peakWindowMinutes` keeps a window that touches the peak (the NHC's mid
  * August to mid October, as above) out of `/when`'s top three (PAR-1319). On
@@ -567,12 +575,9 @@ export const ORLANDO_HEAT: HeatModelConfig = {
 export const ATLANTIC_HURRICANES: StormSeasonConfig = {
   kind: "hurricane",
   weights: [
-    [6, 0.05, 0.1],
-    [7, 0.15, 0.2],
     [8, 0.4, 0.8],
     [9, 1, 1],
     [10, 0.8, 0.4],
-    [11, 0.15, 0.05],
   ],
   firstHalfEnds: { 8: 14 },
   peak: { from: "08-15", to: "10-15" },
@@ -1748,20 +1753,24 @@ export const JAPAN: RegionConfig = {
     // of Tokyo's June–September (and humid heat weighs more than the figure).
     heat: { ...ORLANDO_HEAT, normalFromC: 30.5 },
     // Typhoon approaches by month, curated relative to September from JMA's
-    // 1991–2020 normals (Kanto-Koshin Jun 0.2, Jul 0.4, Aug 0.8, Sep 1.2,
-    // Oct 0.7; Kinki 0.3, 0.6, 0.7, 1.1, 0.7). Monthly data only: the
-    // half-month split is curated, never a forecast. The peak window term is
-    // Orlando's, by its rule (ATLANTIC_HURRICANES): on 2026's measured days no
-    // window touching the peak stays in a top three from 8 minutes on.
+    // 1991–2020 normals (a typhoon's centre within 300 km of a station;
+    // Kanto-Koshin May 0.0, Jun 0.2, Jul 0.4, Aug 0.8, Sep 1.2, Oct 0.7;
+    // Kinki 0.1, 0.3, 0.6, 0.7, 1.1, 0.7; neither region had one in November
+    // in those thirty years). The season is the months in which typhoons come
+    // near Tokyo and Osaka at least half as often as in September (their mean:
+    // Aug 0.75, Sep 1.15, Oct 0.7 a month; Jul 0.5 and Jun 0.25 stay below):
+    // August to October. Until PAR-1411 June, July and November counted too,
+    // so half the year, and in November every trip, read "typhoon season".
+    // Monthly data only: the half-month split is curated, never a forecast.
+    // The peak window term is Orlando's, by its rule (ATLANTIC_HURRICANES): on
+    // 2026's measured days no window touching the peak stays in a top three
+    // from 8 minutes on.
     storm: {
       kind: "typhoon",
       weights: [
-        [6, 0.15, 0.25],
-        [7, 0.35, 0.5],
         [8, 0.6, 0.7],
         [9, 1, 1],
         [10, 0.8, 0.45],
-        [11, 0.05, 0],
       ],
       peak: { from: "09-01", to: "10-15" },
       peakMinutes: 8,
