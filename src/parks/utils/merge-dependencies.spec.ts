@@ -93,6 +93,7 @@ describe("merge dependency tables", () => {
     "attraction_rope_drop",
     "attraction_slug_aliases",
     "attraction_typical_waits",
+    "attraction_weather_closure_profiles",
     "driver_level_forecasts",
     "forecast_archive_curves",
     "forecast_data",
@@ -573,6 +574,8 @@ describe("merge dependency tables", () => {
         "attraction_p90_baselines",
         "attraction_rope_drop",
         "attraction_typical_waits",
+        // Relearned weekly from the survivor's own hours (PAR-1414).
+        "attraction_weather_closure_profiles",
       ].sort(),
     );
   });

@@ -68,8 +68,10 @@ import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
+import { WeatherClosureService } from "./weather-closure.service";
 import {
   toNotRunTodayDto,
+  toWeatherClosureDto,
   toOutageDto,
 } from "../../attractions/dto/attraction-outage.dto";
 import { PopularityService } from "../../popularity/popularity.service";
@@ -140,6 +142,7 @@ export class ParkIntegrationService {
     private readonly popularityService: PopularityService,
     private readonly rideProfileService: RideProfileService,
     private readonly attractionOutageService: AttractionOutageService,
+    private readonly weatherClosureService: WeatherClosureService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -1240,6 +1243,32 @@ export class ParkIntegrationService {
           for (const attraction of dto.attractions) {
             const line = toNotRunTodayDto(notRun.get(attraction.id));
             if (line) attraction.notRunToday = line;
+          }
+        }
+
+        // --- Whether the weather shut them ---
+        //
+        // Asked only about the rides the two lookups above found shut during
+        // opening hours: a ride shut at night or out of season is not closed
+        // for today's weather, and the outage and not-run rules already carry
+        // the opening-hours and season gates.
+        const shut = dto.attractions
+          // CLOSED or DOWN only: a ride the park lists in maintenance carries
+          // an outage too, and "shut by the cold" would contradict the park.
+          .filter(
+            (a) =>
+              (a.outage || a.notRunToday) &&
+              (a.effectiveStatus === "CLOSED" || a.effectiveStatus === "DOWN"),
+          )
+          .map((a) => a.id);
+        if (shut.length > 0) {
+          const verdicts = await this.weatherClosureService.getVerdicts(
+            { id: park.id, timezone: park.timezone },
+            shut,
+          );
+          for (const attraction of dto.attractions) {
+            const line = toWeatherClosureDto(verdicts.get(attraction.id));
+            if (line) attraction.weatherClosure = line;
           }
         }
       }

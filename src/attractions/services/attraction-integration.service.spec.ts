@@ -1,3 +1,4 @@
+import { WeatherClosureService } from "../../parks/services/weather-closure.service";
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
@@ -166,6 +167,10 @@ describe("AttractionIntegrationService", () => {
         {
           // The outage line is only asked for when a ride reads DOWN, so the
           // default here is the empty answer every other case gets.
+          provide: WeatherClosureService,
+          useValue: { getVerdicts: jest.fn().mockResolvedValue(new Map()) },
+        },
+        {
           provide: AttractionOutageService,
           useValue: {
             getCurrentOutages: jest.fn().mockResolvedValue(new Map()),

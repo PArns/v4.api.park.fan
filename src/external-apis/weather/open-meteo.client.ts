@@ -475,6 +475,70 @@ export class OpenMeteoClient {
     });
   }
 
+  /**
+   * Observed hourly temperature and snowfall from the ERA5 archive, keyed by
+   * the UTC hour start in ms.
+   *
+   * For the weekly weather-closure profiles. Two variables over a year weigh
+   * about five calls of the daily allowance per park; one attempt, no cache,
+   * and the archive's own block key, as `fetchClimateNormals`. The archive
+   * trails real time by about five days, so the newest hours come back null
+   * and are skipped by the caller. Throws when blocked or failed.
+   */
+  async fetchHourlyArchive(
+    latitude: number,
+    longitude: number,
+    startDate: string,
+    endDate: string,
+  ): Promise<
+    Map<number, { temperatureC: number | null; snowfallCm: number | null }>
+  > {
+    if (await this.redis.get(this.ARCHIVE_BLOCKED_KEY)) {
+      throw new Error("Open-Meteo archive: blocked");
+    }
+    let data: {
+      hourly?: {
+        time?: string[];
+        temperature_2m?: (number | null)[];
+        snowfall?: (number | null)[];
+      };
+    };
+    try {
+      const response = await this.client.get(
+        "https://archive-api.open-meteo.com/v1/archive",
+        {
+          params: {
+            latitude: Math.round(latitude * 100) / 100,
+            longitude: Math.round(longitude * 100) / 100,
+            start_date: startDate,
+            end_date: endDate,
+            hourly: "temperature_2m,snowfall",
+            timezone: "GMT",
+          },
+        },
+      );
+      data = response.data;
+    } catch (error) {
+      await this.redis
+        .set(this.ARCHIVE_BLOCKED_KEY, "true", "EX", 15 * 60)
+        .catch(() => {});
+      throw error;
+    }
+    const out = new Map<
+      number,
+      { temperatureC: number | null; snowfallCm: number | null }
+    >();
+    const time = data.hourly?.time ?? [];
+    for (let i = 0; i < time.length; i++) {
+      out.set(Date.parse(`${time[i]}:00Z`), {
+        temperatureC: data.hourly?.temperature_2m?.[i] ?? null,
+        snowfallCm: data.hourly?.snowfall?.[i] ?? null,
+      });
+    }
+    if (out.size === 0) throw new Error("Open-Meteo archive: no data");
+    return out;
+  }
+
   async getHourlyForecast(
     latitude: number,
     longitude: number,

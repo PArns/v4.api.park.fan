@@ -57,6 +57,7 @@ page for the field or endpoint you are reading or changing.
 | [works-period](./works-period.md)                                 | `worksPeriod`, `worksPeriods`: curated rebuild windows                                                                   |
 | [performance-schedules](./performance-schedules.md)               | `performanceSchedules`: start times of a ride that runs as performances                                                  |
 | [not-run-today](./not-run-today.md)                               | `notRunToday`: a ride that has not run yet today                                                                         |
+| [weather-closure](./weather-closure.md)                           | `weatherClosure`: shut by cold or snow, and when the day's curve lets it open                                            |
 | [retired-parks](./retired-parks.md)                               | `retiredAt` on a park                                                                                                    |
 | [data-timestamp](./data-timestamp.md)                             | `dataTimestamp` on a park: when its live data was read                                                                   |
 | [attraction-kind](./attraction-kind.md)                           | `attractionKind`                                                                                                         |

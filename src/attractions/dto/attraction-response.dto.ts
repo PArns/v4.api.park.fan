@@ -24,7 +24,11 @@ import {
   IndoorOutdoor,
 } from "../../common/types/indoor-outdoor.type";
 import { HistoryDayDto } from "./history-day.dto";
-import { AttractionOutageDto, NotRunTodayDto } from "./attraction-outage.dto";
+import {
+  AttractionOutageDto,
+  NotRunTodayDto,
+  WeatherClosureDto,
+} from "./attraction-outage.dto";
 import {
   DowntimeFiguresDto,
   DowntimeWithheldDto,
@@ -240,6 +244,17 @@ export class AttractionResponseDto {
     type: NotRunTodayDto,
   })
   notRunToday?: NotRunTodayDto;
+
+  @ApiProperty({
+    description:
+      "Only beside an `outage` or a `notRunToday`, i.e. while the ride is " +
+      "shut during opening hours: the weather shut it, with at least 90 % " +
+      "confidence, and for cold the temperature from which it usually runs " +
+      "and when today's forecast reaches it.",
+    required: false,
+    type: WeatherClosureDto,
+  })
+  weatherClosure?: WeatherClosureDto;
 
   @ApiProperty({
     description:

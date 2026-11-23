@@ -93,6 +93,7 @@ export const getAttractionTool = defineMcpTool({
       baselineMinutes: dto.baseline ?? null,
       outage: dto.outage ?? null,
       notRunToday: dto.notRunToday ?? null,
+      weatherClosure: dto.weatherClosure ?? null,
       // The window's days are park-local, so "running today" is the park's today.
       worksPeriod: dto.worksPeriod
         ? {

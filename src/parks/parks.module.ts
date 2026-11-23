@@ -22,6 +22,8 @@ import { ForecastArchiveScore } from "../ml/entities/forecast-archive-score.enti
 import { ForecastArchivePaired } from "../ml/entities/forecast-archive-paired.entity";
 import { ChronosShadowService } from "./services/chronos-shadow.service";
 import { ParkDayOperation } from "./entities/park-day-operation.entity";
+import { AttractionWeatherClosureProfile } from "./entities/attraction-weather-closure-profile.entity";
+import { WeatherClosureService } from "./services/weather-closure.service";
 import { ParkDayOperationService } from "./services/park-day-operation.service";
 import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
@@ -69,6 +71,7 @@ import { ParkSeasonsModule } from "./park-seasons.module";
       Attraction,
       PlanDayCoverage,
       ParkDayOperation,
+      AttractionWeatherClosureProfile,
       ForecastArchiveCurve,
       ForecastArchiveParkDay,
       ForecastArchiveScore,
@@ -98,6 +101,7 @@ import { ParkSeasonsModule } from "./park-seasons.module";
   providers: [
     ParksService,
     WeatherService,
+    WeatherClosureService,
     WeatherWarningsService,
     ParkIntegrationService,
     ParkEnrichmentService,
@@ -119,6 +123,7 @@ import { ParkSeasonsModule } from "./park-seasons.module";
   ],
   exports: [
     ParksService,
+    WeatherClosureService,
     PlanDayService,
     WeatherService,
     WeatherWarningsService,

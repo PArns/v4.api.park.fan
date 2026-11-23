@@ -31,6 +31,7 @@ import { MLMonitoringProcessor } from "./processors/ml-monitoring.processor";
 import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
+import { WeatherClosureProcessor } from "./processors/weather-closure.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
@@ -204,6 +205,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
     ParkDayOperationProcessor, // Measured-operation verdict per park-day (daily)
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
+    WeatherClosureProcessor, // Weekly cold/snow closure profiles (PAR-1414)
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     RainSoonPushService, // …and its `rain-soon` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans

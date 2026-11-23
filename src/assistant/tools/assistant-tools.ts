@@ -1457,6 +1457,14 @@ interface RideClosure {
     pausedBySeason?: SeasonBinding | null;
   };
   downtime?: { kind: string; medianMinutes?: number } | null;
+  weatherClosure?: {
+    cause: "cold" | "snow";
+    probability: number;
+    temperatureC: number;
+    thresholdC: number | null;
+    outlook: "opens_when_warmer" | "likely_closed_today" | null;
+    expectedOpenAt: string | null;
+  } | null;
 }
 
 interface RidePerformances {
@@ -1522,6 +1530,24 @@ export function reopeningOf(ride: RideClosure, month: number) {
     };
   }
   if (status === null) return null;
+  // Before the breakdown: a ride the cold stopped reads DOWN too, and the
+  // weather is the better answer to "when" (PAR-1414).
+  if (ride.weatherClosure) {
+    const w = ride.weatherClosure;
+    return {
+      reason: "weather" as const,
+      cause: w.cause,
+      probabilityPercent: Math.round(w.probability * 100),
+      temperatureNowC: w.temperatureC,
+      ...(w.thresholdC !== null && { usuallyRunsFromC: w.thresholdC }),
+      ...(w.outlook === "opens_when_warmer" && {
+        likelyOpensAround: w.expectedOpenAt,
+      }),
+      ...(w.outlook === "likely_closed_today" && {
+        forecastStaysBelowThresholdToday: true,
+      }),
+    };
+  }
   if (status === "DOWN" && ride.outage) {
     const estimate = ride.outage.estimate;
     return {
@@ -2625,9 +2651,12 @@ export const ASSISTANT_TOOLS = [
       "last has begun), worksPeriods (every planned maintenance or works window: " +
       "from and to are park-local days, both inclusive, either may be absent; toUncertain means " +
       "the end is our estimate; past windows stay on the list), and, while it is not running, " +
-      "reopening: why (breakdown, works, season, maintenance or unknown) and what is known about its return " +
+      "reopening: why (breakdown, works, season, maintenance, weather or unknown) and what is known about its return " +
       "(maintenance: the park lists the ride in maintenance today with no window we know, so " +
       "neither its end nor whether it runs tomorrow is known; never a breakdown, never 'no maintenance planned') " +
+      "(for weather: cold or snow with our confidence, the temperature now, the temperature it usually " +
+      "runs from, and the forecast hour that reaches it, or that today stays below; an estimate, not an " +
+      "announced opening) " +
       "(for season: the park season the ride runs in when one is bound, its name and days).",
     input: z.object({
       ...rideRef,

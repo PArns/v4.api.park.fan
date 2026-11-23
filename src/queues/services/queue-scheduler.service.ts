@@ -1082,6 +1082,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // Weather-closure profiles: weekly, Monday 05:45, after the 05:00
+    // downtime run on the same queue. A profile moves with a winter's days,
+    // not with one night's.
+    const hasWeatherClosureCron = await this.hasRepeatableJob(
+      this.downtimeQueue,
+      "weather-closure-profiles-cron",
+    );
+    if (!hasWeatherClosureCron) {
+      await this.downtimeQueue.add(
+        "rebuild-weather-closure-profiles",
+        {},
+        {
+          repeat: {
+            cron: "45 5 * * 1", // Mondays at 5:45am
+          },
+          jobId: "weather-closure-profiles-cron",
+        },
+      );
+    }
+
     // Push notifications: every five minutes, all day.
     //
     // Not a nightly job like everything else in this file, and it cannot be:

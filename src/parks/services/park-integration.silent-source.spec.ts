@@ -1,3 +1,4 @@
+import { WeatherClosureService } from "./weather-closure.service";
 import { Test, TestingModule } from "@nestjs/testing";
 import { ParkIntegrationService } from "./park-integration.service";
 import { ParksService } from "../parks.service";
@@ -321,6 +322,10 @@ describe("ParkIntegrationService › a source that stopped measuring", () => {
             getForPark: jest.fn().mockResolvedValue(new Map()),
             findByAttractions: jest.fn().mockResolvedValue(new Map()),
           },
+        },
+        {
+          provide: WeatherClosureService,
+          useValue: { getVerdicts: jest.fn().mockResolvedValue(new Map()) },
         },
         {
           provide: AttractionOutageService,

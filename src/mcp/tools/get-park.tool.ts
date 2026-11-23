@@ -144,6 +144,8 @@ function summarize(
           // `closed_gap` is inferred, not reported by the park.
           signal: ride.outage?.signal ?? null,
           operatingMinutesDown: ride.outage?.estimate?.elapsedMinutes ?? null,
+          // Cold or snow shut it, ≥ 90 % sure; absent otherwise.
+          ...(ride.weatherClosure && { weatherClosure: ride.weatherClosure }),
         })),
       // REFURBISHMENT rides with the same since-when as `down`, and rides a curated window shuts
       // today with that window, which says until when.
@@ -175,7 +177,11 @@ function summarize(
         ),
       notRunToday: rides
         .filter((ride) => ride.notRunToday && !onScheduleToday.has(ride.id))
-        .map((ride) => ({ id: ride.id, name: ride.name })),
+        .map((ride) => ({
+          id: ride.id,
+          name: ride.name,
+          ...(ride.weatherClosure && { weatherClosure: ride.weatherClosure }),
+        })),
       // Park-local `HH:MM` start times and the next one; `next` null once the
       // last has begun.
       performancesToday: performancesToday.map(({ ride, times }) => ({
