@@ -5,7 +5,7 @@ Does the zero-shot foundation model that won parts of the offline benchmark
 The owner's switch rule needs (1) an offline win, (2) a live confirmation in this archive — ≥ 14
 days and ≥ 10 parks per lead — and (3) a visible effect on a user surface. This page is (2): the
 shadow capture, its inputs, scoring and switches. Nothing here is served unless
-`SERVE_CHRONOS_INTRADAY` is on ([chronos-serving.md](chronos-serving.md)).
+the constant `SERVE_CHRONOS_INTRADAY` is on ([chronos-serving.md](chronos-serving.md)).
 
 ## Model and variants
 

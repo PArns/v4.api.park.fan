@@ -127,7 +127,7 @@ never tighter than the gaps measured on production.
   capture writes that summary to Redis (`forecast-archive:chronos:last-run`, 2 days). Younger than 4 h
   with `warming > 0` → `warming` ("lädt Historie (12 von 70 Parks liefern schon)"); calls with no
   answer and failures → `failed`. `CHRONOS_SHADOW_ENABLED=false` or nf `enabled: false` is said in
-  the note; with `SERVE_CHRONOS_INTRADAY` on the note says "Live ausgeliefert".
+  the note; while Chronos-2 serves (the code constant `SERVE_CHRONOS_INTRADAY`) the note says "Live ausgeliefert".
 - PCN is `served` only when `SERVE_PCN_INTRADAY=true`, else `shadow`.
 - **Feature drift** (PAR-1050): `detectFeatureDrift` returns `summary.status: "no_data"` when no
   feature could be compared — production today, because `prediction_accuracy.features` is never

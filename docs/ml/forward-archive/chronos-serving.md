@@ -1,8 +1,9 @@
 # Chronos-2 served on the live surface (PAR-911)
 
-With `SERVE_CHRONOS_INTRADAY=true` on the API, Chronos-2's `live` curve serves the intraday slots
-45 minutes to 4 hours ahead (to 2 hours until PAR-1409); nothing else changes. **Default off** in
-`docker-compose.production.yml`, **switched on in production on 2026-11-22** (Coolify):
+While the constant `SERVE_CHRONOS_INTRADAY` in `src/ml/chronos-serving.ts` is `true`, Chronos-2's
+`live` curve serves the intraday slots 45 minutes to 4 hours ahead (to 2 hours until PAR-1409);
+nothing else changes. **On since 2026-11-22.** It was an env flag until PAR-1410 and is a code
+constant now, so no Coolify variable can override it:
 prepared so that, once the [live A/B](chronos-shadow.md) confirms the offline result (Chronos-2
 beats persistence from 30 min and the served PCN/profiles at 30–120 min; persistence stays best at
 15 min — [chronos-2.md](../foundation-models/chronos-2.md)), switching is a flag flip. Open this
@@ -93,13 +94,13 @@ window ended at 2 h and the scored row was mostly PCN/blend.
 2. Cache is warm: `redis-cli --scan --pattern 'ml:chronos-serve:*' | wc -l` during an intraday hour
    ≈ the rides of the parks at that origin; a sample's `originAt` is the last even hour.
 3. `GET /v1/admin/ml-overview`: the Chronos component is not `failed` / `warming`.
-4. Set `SERVE_CHRONOS_INTRADAY=true` on the API in Coolify, redeploy.
+4. Set the constant `SERVE_CHRONOS_INTRADAY` to `true` in `src/ml/chronos-serving.ts` and deploy.
 5. Next odd hour: the archive job log shows the refresh; the overview says "Live ausgeliefert";
    `GET /v1/parks/<slug>` shows `modelVersion …+chronos` on 45–240 min slots.
 6. Next day's scoring: surface 8 rows exist, `chronos2` vs `served` keeps its sign, and
    `chronos2_served` slots appear in the scores.
 
-**Rollback:** `SERVE_CHRONOS_INTRADAY=false` (or unset) and redeploy. Every read path is back to
+**Rollback:** set the constant `SERVE_CHRONOS_INTRADAY` to `false` and deploy. Every read path is back to
 PCN/blend/CatBoost on the next request; nothing persisted depends on the flag (cache keys expire
 within 3 h and are only read while it is on; surface 8 stops being written). The shadow keeps
 running under `CHRONOS_SHADOW_ENABLED`.

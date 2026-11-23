@@ -967,13 +967,12 @@ describe("MLService", () => {
     });
   });
 
-  // PAR-911: Chronos-2 on the 45–240 min slots (PAR-1409, was 120) behind SERVE_CHRONOS_INTRADAY,
+  // PAR-911: Chronos-2 on the 45–240 min slots (PAR-1409, was 120) (always on since PAR-1410),
   // read from the serving cache the forward-archive capture writes.
   describe("Chronos-2 serving override (PAR-911)", () => {
     const parkId = "park-chronos";
     const MIN = 60_000;
     const prevPcn = process.env.SERVE_PCN_INTRADAY;
-    const prevChronos = process.env.SERVE_CHRONOS_INTRADAY;
     // A slot-aligned "now", so a lead of exactly 120 min is reachable for the
     // recorder test below.
     const NOW = Math.floor(Date.UTC(2026, 9, 17, 12, 0) / 900_000) * 900_000;
@@ -1053,8 +1052,6 @@ describe("MLService", () => {
       jest.restoreAllMocks();
       if (prevPcn === undefined) delete process.env.SERVE_PCN_INTRADAY;
       else process.env.SERVE_PCN_INTRADAY = prevPcn;
-      if (prevChronos === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
-      else process.env.SERVE_CHRONOS_INTRADAY = prevChronos;
       mockPredictionRepository.manager.query.mockResolvedValue([]);
       mockRedis.get.mockReset();
       mockRedis.mget.mockReset();
@@ -1070,19 +1067,8 @@ describe("MLService", () => {
         uncertaintyMinutes: number;
       };
 
-    it("both flags off: CatBoost untouched and the cache never read", async () => {
+    it("PCN off: 45–240 min from Chronos, the rest stays CatBoost", async () => {
       delete process.env.SERVE_PCN_INTRADAY;
-      delete process.env.SERVE_CHRONOS_INTRADAY;
-
-      const res = await service.getParkPredictions(parkId, "hourly");
-
-      expect(res.predictions.every((p) => p.modelVersion === "v1")).toBe(true);
-      expect(mockRedis.mget).not.toHaveBeenCalled();
-    });
-
-    it("Chronos only: 45–240 min from Chronos, the rest stays CatBoost", async () => {
-      delete process.env.SERVE_PCN_INTRADAY;
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
 
       const res = await service.getParkPredictions(parkId, "hourly");
       const at = byLead(res.predictions);
@@ -1101,7 +1087,6 @@ describe("MLService", () => {
 
     it("PAR-1060: the band factor scales CatBoost slots only, never Chronos or PCN", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       // PCN only for the 300-min slot, so 30 stays CatBoost.
       mockPredictionRepository.manager.query.mockResolvedValue(
         pcnRows("60").filter(
@@ -1137,7 +1122,6 @@ describe("MLService", () => {
 
     it("with PCN on: blend ≤ 30 min, Chronos 45–240, PCN beyond", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
 
       const res = await service.getParkPredictions(parkId, "hourly");
@@ -1153,7 +1137,6 @@ describe("MLService", () => {
 
     it("falls back to PCN where the Chronos curve is stale", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
       mockRedis.mget.mockResolvedValue([chronosEntry(NOW - 91 * MIN)]);
 
@@ -1166,7 +1149,6 @@ describe("MLService", () => {
 
     it("`chronos: false` (the archive's incumbent read) skips Chronos", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
 
       const res = await service.getParkPredictions(
@@ -1185,7 +1167,6 @@ describe("MLService", () => {
 
     it("servedIntradayValues records `chronos` where Chronos served the scored slot", async () => {
       process.env.SERVE_PCN_INTRADAY = "true";
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
       const row = (l: number) =>
         ({
@@ -2378,7 +2359,9 @@ describe("MLService", () => {
           new Date(currentSlotStartMs()),
         );
         expect(out.get(attractionId)).toHaveLength(2);
-        expect(mockRedis.mget).not.toHaveBeenCalled();
+        // The only mget is the Chronos serving cache, never the fresh marks.
+        for (const call of mockRedis.mget.mock.calls)
+          expect(String(call[0])).toMatch(/^ml:chronos-serve:/);
       });
 
       it("serves one row per slot, the newest", async () => {

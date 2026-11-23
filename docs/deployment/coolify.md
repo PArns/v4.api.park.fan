@@ -125,7 +125,6 @@ Switches set in the compose file, each with its default:
 | Variable                                    | Default  | Effect                                                                                     |
 | ------------------------------------------- | -------- | ------------------------------------------------------------------------------------------ |
 | `SERVE_PCN_INTRADAY`                        | `false`  | Serve PCN's 15-minute intraday forecast instead of CatBoost's hourly one.                  |
-| `SERVE_CHRONOS_INTRADAY`                    | `false`  | Serve Chronos-2 on the 45–120 minute intraday slots.                                       |
 | `CHRONOS_SHADOW_ENABLED`                    | `true`   | Capture Chronos-2 into the forward archive (never served).                                 |
 | `CHRONOS_ENABLED` (nf-service)              | `true`   | Run Chronos-2 in nf-service at all.                                                        |
 | `DOCKER_RUNTIME`, `NVIDIA_VISIBLE_DEVICES`  | `runc`, empty | Set to `nvidia` / `all` on a GPU host (needs `nvidia-container-toolkit`).             |

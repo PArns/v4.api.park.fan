@@ -25,7 +25,7 @@ never reads truth.
 | intraday 10–18 (UC1, UC2 intraday) | `park_hourly` — CatBoost + PCN + blend (+ Chronos-2 where served) | that hour's own capture (4 h ahead) |
 
 `served_incumbent` prefers surface 8 at the same capture — what `park_hourly` would have shown
-without Chronos-2, archived only while `SERVE_CHRONOS_INTRADAY` is on. It is the reference once
+without Chronos-2, archived only while Chronos-2 serves (since 2026-11-22). It is the reference once
 Chronos-2 is itself served.
 
 ## Own capture only

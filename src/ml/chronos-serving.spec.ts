@@ -6,7 +6,6 @@ import {
   chronosServeKey,
   chronosSlot,
   readChronosServeCache,
-  serveChronosIntraday,
   stripServedSuffix,
   writeChronosServeCache,
 } from "./chronos-serving";
@@ -52,23 +51,6 @@ function pred(leadMin: number, over: Partial<PredictionDto> = {}) {
 }
 
 describe("chronos-serving (PAR-911)", () => {
-  describe("serveChronosIntraday", () => {
-    const prev = process.env.SERVE_CHRONOS_INTRADAY;
-    afterEach(() => {
-      if (prev === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
-      else process.env.SERVE_CHRONOS_INTRADAY = prev;
-    });
-
-    it("is off unless set to exactly `true`", () => {
-      delete process.env.SERVE_CHRONOS_INTRADAY;
-      expect(serveChronosIntraday()).toBe(false);
-      process.env.SERVE_CHRONOS_INTRADAY = "1";
-      expect(serveChronosIntraday()).toBe(false);
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
-      expect(serveChronosIntraday()).toBe(true);
-    });
-  });
-
   describe("applyChronosOverride — the lead window", () => {
     const run = (leads: number[]) => {
       const preds = leads.map((l) => pred(l));
