@@ -772,7 +772,7 @@ describe("ForecastArchiveService.capturePark", () => {
     const res = await service.capturePark(park, "intraday", new Date());
     expect(planDay.buildPlanDay).toHaveBeenCalledTimes(1);
     expect(planDay.buildPlanDay).toHaveBeenCalledWith(park, "2026-10-08");
-    expect(res).toEqual({ curves: 2, parkDays: 0 });
+    expect(res).toEqual({ curves: 3, parkDays: 0 }); // + the incumbent (surface 8) while Chronos serves
     const nextRide = (inserted[0] as Array<Record<string, unknown>>).find(
       (c) => c.surface === 2,
     )!;
@@ -900,40 +900,13 @@ describe("ForecastArchiveService — Chronos-2 shadow (PAR-852)", () => {
     return { service, shadow, inserted, ml, cacheSet };
   }
 
-  const prevServe = process.env.SERVE_CHRONOS_INTRADAY;
   afterEach(() => {
     jest.useRealTimers();
-    if (prevServe === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
-    else process.env.SERVE_CHRONOS_INTRADAY = prevServe;
   });
 
-  // PAR-911: the live curves feed the serving cache, and with the flag on the
-  // archive also keeps the incumbent so the live A/B keeps a reference.
-  it("writes the live curves to the serving cache, flag on or off", async () => {
-    delete process.env.SERVE_CHRONOS_INTRADAY;
-    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T10:05:00Z"));
-    const { service, ml, cacheSet, inserted } = build(
-      response("2026-10-08", "2026-10-08T10:15:00Z"),
-    );
-    const origin = new Date();
-    await service.capturePark(park, "intraday", origin);
-    expect(cacheSet).toHaveBeenCalledTimes(2); // id-taron and the ghost ride
-    expect(cacheSet.mock.calls[0][0]).toBe("ml:chronos-serve:id-taron");
-    expect(JSON.parse(cacheSet.mock.calls[0][1])).toMatchObject({
-      originAt: origin.getTime(),
-      revision: "29ec3766d36d6f73f0696f85560a422f50e8498c",
-    });
-    // Flag off: one served read, no incumbent surface.
-    expect(ml.getParkPredictions).toHaveBeenCalledTimes(1);
-    expect(
-      (inserted[0] as Array<Record<string, unknown>>).some(
-        (r) => r.surface === 8,
-      ),
-    ).toBe(false);
-  });
-
-  it("with the flag on, caches before the served read and archives the incumbent as surface 8", async () => {
-    process.env.SERVE_CHRONOS_INTRADAY = "true";
+  // PAR-911: the live curves feed the serving cache, and the archive also keeps
+  // the incumbent so the live A/B keeps a reference.
+  it("caches before the served read and archives the incumbent as surface 8", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T10:05:00Z"));
     const { service, ml, cacheSet, inserted } = build(
       response("2026-10-08", "2026-10-08T10:15:00Z"),
@@ -1111,12 +1084,6 @@ describe("ForecastArchiveService.captureDue", () => {
   });
 
   describe("Chronos serving refresh between the origins (PAR-911)", () => {
-    const prev = process.env.SERVE_CHRONOS_INTRADAY;
-    afterEach(() => {
-      if (prev === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
-      else process.env.SERVE_CHRONOS_INTRADAY = prev;
-    });
-
     function setup() {
       const service = Object.create(
         ForecastArchiveService.prototype,
@@ -1174,7 +1141,6 @@ describe("ForecastArchiveService.captureDue", () => {
     const clock = () => new Date("2026-10-08T09:05:00Z");
 
     it("refreshes active parks only, writes the cache and no archive rows", async () => {
-      process.env.SERVE_CHRONOS_INTRADAY = "true";
       const { service, chronos, cacheSet, capture, redis } = setup();
       const res = await service.captureDue(clock);
       expect(capture).not.toHaveBeenCalled();
@@ -1195,14 +1161,6 @@ describe("ForecastArchiveService.captureDue", () => {
         3 * 3600,
         "NX",
       );
-    });
-
-    it("costs the GPU nothing while the flag is off", async () => {
-      delete process.env.SERVE_CHRONOS_INTRADAY;
-      const { service, chronos } = setup();
-      const res = await service.captureDue(clock);
-      expect(chronos.forecast).not.toHaveBeenCalled();
-      expect(res.chronosRefreshed).toBeUndefined();
     });
   });
 });

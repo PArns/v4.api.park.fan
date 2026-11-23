@@ -11,7 +11,7 @@ Every served hourly read runs `MLService.serveHourlyRows` on **copies** of the C
 
 1. **PCN override + persistence blend** (`SERVE_PCN_INTRADAY=true`): every slot PCN has a fresh
    forecast for (`applyPcnIntradayOverride`).
-2. **Chronos-2** (`SERVE_CHRONOS_INTRADAY=true`, PAR-911, on since 2026-11-22): the slots 45 minutes
+2. **Chronos-2** (PAR-911, on since 2026-11-22; a code constant since PAR-1410): the slots 45 minutes
    to 4 hours ahead (PAR-1409) its cached curve covers. ≤ 30 min stays the blend (persistence wins at
    15 min), > 4 h stays
    PCN, and a missing or > 90-minute-old curve leaves what step 1 served. Design, cache, cadence

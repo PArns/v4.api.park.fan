@@ -21,7 +21,7 @@ would measure itself.
 | 10, 12, 14, 16, 18 | `park_hourly` (1) | as above | 15 min | next 4 h, with the live anchor |
 | 10 … 18 | `plan_day` D1 row | `buildPlanDay(park, today)` | 60 min | per planned ride: the plan hours of the 2-h look-ahead, the frontend's next-best-ride "later" value and the live anchor — feeds D1 only |
 | 10 … 18 | `chronos_live` (6, shadow) | nf-service `variant=live` | 15 min | next 4 h; also feeds the serving cache ([chronos-serving.md](chronos-serving.md)) |
-| 10 … 18, only while `SERVE_CHRONOS_INTRADAY` is on | `park_hourly_incumbent` (8, not served) | `getParkPredictions(…, { chronos: false })` | 15 min | what `park_hourly` would show without Chronos-2 |
+| 10 … 18, only while Chronos-2 serves | `park_hourly_incumbent` (8, not served) | `getParkPredictions(…, { chronos: false })` | 15 min | what `park_hourly` would show without Chronos-2 |
 
 Intraday origins run only for parks whose 06:00 capture found a curve for today, so a closed park
 costs nothing all day. The q80 crowd quantile is not archived (only `crowdLevel` is served).

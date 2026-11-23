@@ -9,7 +9,7 @@ then open the reference page of the model you are changing.
 | Surface (who reads it) | Lead | Served model | Falls back to | Switch |
 |---|---|---|---|---|
 | 15-min wait curve: ride page `hourlyForecast`, park page, `/plan/day` today, calendar today, favourites | 0–12 h | **PCN** q0.5, with the **persistence blend** (first hour = the current wait) | CatBoost hourly, per slot, where PCN has no forecast written in the last 3 h | `SERVE_PCN_INTRADAY` on the API |
-| same, slots 45 min – 4 h ahead | 45–240 min | **Chronos-2** `live` q50 (on since 2026-11-22) | whatever the row above serves | `SERVE_CHRONOS_INTRADAY` (default off, on in Coolify) |
+| same, slots 45 min – 4 h ahead | 45–240 min | **Chronos-2** `live` q50 (on since 2026-11-22) | whatever the row above serves | constant `SERVE_CHRONOS_INTRADAY` in `src/ml/chronos-serving.ts` (on; no env) |
 | same, beyond PCN's horizon | 12–48 h | **CatBoost** hourly (q0.5), band × calibration factor | — | — |
 | Daily level: calendar crowd levels, `/plan/day` day levels, yearly view | up to d59 | **TFT** `predicted_peak`, every ride in `tft_forecasts` (the calendar averages the headliners) | CatBoost daily for a ride/day TFT has no row for, or when the newest TFT run is more than 3 days old | — |
 | Daily level beyond TFT | days 61–365, up to the operator's published calendar ([measured](long-range-forecasting.md#1-the-models-and-how-far-they-reach)) | **CatBoost** daily (max of the park-local 12/14/16 h predictions) | — | — |
@@ -23,8 +23,9 @@ under the model's number before that (`SEASON_LEVEL`, on in production since PAR
 forecast instead, bounded and unmeasured, so it is off by default (PAR-1383). No model reads a
 season.
 
-`SERVE_PCN_INTRADAY` and `SERVE_CHRONOS_INTRADAY` default to off in the code and in
-`docker-compose.production.yml`; production sets them in the server's `.env`. PCN has served
+`SERVE_PCN_INTRADAY` defaults to off in the code and in `docker-compose.production.yml`;
+production sets it in the server's `.env`. Chronos-2's switch is no env variable but the constant
+`SERVE_CHRONOS_INTRADAY` in `src/ml/chronos-serving.ts` (on, PAR-1410). PCN has served
 intraday since 2026-06-29. What is live right now is on `GET /v1/admin/ml-overview`: the `pcn`
 and `chronos` rows read `served` or `shadow` from the flags. With both flags off, every hourly
 read returns CatBoost apart from the band factor.
