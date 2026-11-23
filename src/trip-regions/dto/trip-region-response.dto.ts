@@ -171,11 +171,13 @@ export class TripTicketMarketsDto {
 export class TripStormSeasonDto {
   @ApiProperty({ enum: ["hurricane", "typhoon"] }) kind: string;
   @ApiProperty({
-    example: "06-01",
-    description: "The season's first day, MM-DD.",
+    example: "08-01",
+    description:
+      "The season's first day, MM-DD: the first day a plan day says `<kind>_season`. The " +
+      "months storms reach the region at least half as often as in its peak month.",
   })
   from: string;
-  @ApiProperty({ example: "11-30", description: "Its last day, MM-DD." })
+  @ApiProperty({ example: "10-31", description: "Its last day, MM-DD." })
   to: string;
   @ApiProperty({ example: { from: "08-15", to: "10-15" } })
   peak: { from: string; to: string };

@@ -489,6 +489,12 @@ export class PlanDayService {
         theDay?.weather && theDay.weather.basis !== "climate_normal"
           ? (theDay.weather as unknown as Record<string, unknown>)
           : null,
+      // The date's historical average where no forecast reaches (PAR-1411):
+      // its own field, read by nothing that moves a bar, so a client can say
+      // "usually 15-19 °C" and nothing on the day changes by it.
+      ...(theDay?.weather?.basis === "climate_normal" && {
+        climateNormal: theDay.weather as unknown as Record<string, unknown>,
+      }),
       isHoliday: Boolean(theDay?.isHoliday),
       isBridgeDay: Boolean(theDay?.isBridgeDay),
       isSchoolVacation: Boolean(theDay?.isSchoolVacation),

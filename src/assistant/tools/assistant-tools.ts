@@ -2901,7 +2901,8 @@ export const ASSISTANT_TOOLS = [
     status: "forecast",
     description:
       "One day at one park as park.fan's trip planner sees it: whether and when it is open, the " +
-      `expected crowd level, the day's weather (${WEATHER_VIEW_FIELDS}; absent beyond about 14 days), holiday, school ` +
+      `expected crowd level, the day's weather (${WEATHER_VIEW_FIELDS}; past the forecast's ` +
+      "14 days or so the historical average for the date, basis climate_normal), holiday, school " +
       "break, bridge day and weekend, neighbouring holidays, hotel early entry; every ride with " +
       "opensAt (when it starts, later than the park's gates; absent means not known), the " +
       "weekdays it runs on, the predicted peak and the hour with the shortest wait; and the " +
@@ -2940,7 +2941,7 @@ export const ASSISTANT_TOOLS = [
         publishedUntil(ctx, park),
       ]);
       const hoursPublished = until !== null && day <= until;
-      const { openHour, closeHour, ...context } = plan.context;
+      const { openHour, closeHour, climateNormal, ...context } = plan.context;
       const currentHour =
         day === getCurrentDateInTimezone(tz)
           ? Number(formatInTimeZone(new Date(), tz, "H"))
@@ -2962,7 +2963,10 @@ export const ASSISTANT_TOOLS = [
         park: park.name,
         tier: plan.tier,
         ...context,
-        weather: weatherView(context.weather as WeatherSummary | null),
+        // Past the forecast's reach the date's historical average stands in, marked as one.
+        weather: weatherView(
+          (context.weather ?? climateNormal ?? null) as WeatherSummary | null,
+        ),
         hoursPublished,
         ...(!hoursPublished && {
           statusWhy: until
@@ -3353,7 +3357,8 @@ export const ASSISTANT_TOOLS = [
       "The days at one park, up to a year ahead: per day its weekday, whether it is open, " +
       "closed or its hours are not published yet, the hours, the crowd level park.fan's calendar " +
       "expects, the headliners' expected peak wait, holidays, school breaks, bridge days, events, " +
-      `the rides a maintenance window shuts, and the weather where a forecast reaches (${WEATHER_VIEW_FIELDS}). A closed ` +
+      `the rides a maintenance window shuts, and the weather (${WEATHER_VIEW_FIELDS}): the forecast where it ` +
+      "reaches, beyond it the historical average for the date. A closed " +
       "day names the next day the park opens. Give 1 to 10 dates, or from and to for a stretch of " +
       'up to 31 days; nothing gives the next 7 days. For "Saturday or Sunday?", "10 or 17 ' +
       'May?", "is it open on 28 December?", "the next two weeks". The hours of one day are ' +

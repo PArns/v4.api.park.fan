@@ -156,6 +156,21 @@ export function stormWeight(
   return day <= split ? row[1] : row[2];
 }
 
+/**
+ * Whether a calendar month (`YYYY-MM`) has a day in a storm season: either of
+ * its halves weighs. `/when`'s months say `hurricaneSeason`/`typhoonSeason` by
+ * it, so a month the season only reaches in its second half says so too.
+ */
+export function monthTouchesStorm(
+  storm: StormSeasonConfig | undefined,
+  month: string,
+): boolean {
+  if (!storm) return false;
+  const m = Number(month.slice(5, 7));
+  const row = storm.weights.find(([r]) => r === m);
+  return row !== undefined && (row[1] > 0 || row[2] > 0);
+}
+
 /** Whether a date lies in a storm season's peak (`peak.from` … `peak.to`). */
 export function isStormPeak(
   storm: StormSeasonConfig | undefined,

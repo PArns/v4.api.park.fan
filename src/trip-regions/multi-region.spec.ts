@@ -4,7 +4,7 @@ import {
   TEST_TOKYO,
   TEST_TOKYO_TICKETS,
 } from "./__fixtures__/test-regions";
-import { ORLANDO, type RegionConfig } from "./regions";
+import { JAPAN, ORLANDO, type RegionConfig } from "./regions";
 import { withCatalog } from "./ticket-catalog";
 import { validateTicketProduct } from "./ticket-validation";
 import { buildLegs, travelSource } from "./travel";
@@ -217,9 +217,16 @@ describe("a region's own vocabulary", () => {
     const orlando = describeRegion(ORLANDO, records(ORLANDO));
     expect(orlando.weather.storm).toEqual({
       kind: "hurricane",
-      from: "06-01",
-      to: "11-30",
+      from: "08-01",
+      to: "10-31",
       peak: { from: "08-15", to: "10-15" },
+    });
+    // Japan: August to October (JMA's approach normals; none in November in thirty years).
+    expect(describeRegion(JAPAN, records(JAPAN)).weather.storm).toEqual({
+      kind: "typhoon",
+      from: "08-01",
+      to: "10-31",
+      peak: { from: "09-01", to: "10-15" },
     });
     expect(orlando.hotels.map((h) => h.key)).toEqual([
       "disney",

@@ -1,4 +1,5 @@
 import { addIsoDays } from "../common/utils/date.util";
+import type { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { ORLANDO } from "./regions";
 import { extraVisitRoom, type PlanInput } from "./trip-optimizer";
 import {
@@ -242,6 +243,64 @@ describe("planResponse", () => {
       leadMae: new Map(),
     });
     expect(none.totals).not.toHaveProperty("expectedError");
+  });
+
+  it("gives every day the typical weather at its park, the region's climate park on the others", () => {
+    const q = normalizePlanQuery(
+      ORLANDO,
+      KNOWN,
+      query({ to: addIsoDays(FROM, 3), parks: "epcot" }),
+      TODAY,
+    );
+    const cal = calendar(q.from, q.to);
+    const trip = optimizePlan(ORLANDO, q, cal);
+    // A table that knows the trip's dates: Magic Kingdom a degree warmer than EPCOT.
+    const table = (high: number): ClimateNormals =>
+      Object.fromEntries(
+        cal.days.map((d) => [
+          d.date.slice(5),
+          {
+            temperatureMax: high,
+            temperatureMin: high - 10,
+            temperatureMaxP25: high - 2,
+            temperatureMaxP75: high + 2,
+            temperatureMinP25: high - 12,
+            temperatureMinP75: high - 8,
+            wetDayShare: 0.2,
+            precipitationSum: 1.5,
+            rainSum: 1.5,
+            snowfallSum: 0,
+            windSpeedMax: 10,
+            weatherCode: 1,
+          },
+        ]),
+      );
+    const answer = planResponse(ORLANDO, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+      climate: new Map([
+        ["epcot", table(25)],
+        ["magic-kingdom-park", table(26)],
+      ]),
+    });
+    const days = answer.days as Array<{
+      kind: string;
+      climate?: { tempMax: number; tempMaxP25?: number; basis: string };
+    }>;
+    expect(days.every((d) => d.climate?.basis === "climate_normal")).toBe(true);
+    expect(days.find((d) => d.kind === "park")?.climate?.tempMax).toBe(25);
+    expect(days.find((d) => d.kind === "arrival")?.climate).toMatchObject({
+      tempMax: 26,
+      tempMaxP25: 24,
+    });
+    // Without normals the days carry none.
+    const bare = planResponse(ORLANDO, q, cal, trip, {
+      computedAt: "t",
+      today: TODAY,
+      leadMae: new Map(),
+    });
+    expect(bare.days.some((d) => "climate" in d)).toBe(false);
   });
 
   it("feeds the optimizer the unrounded wait", () => {

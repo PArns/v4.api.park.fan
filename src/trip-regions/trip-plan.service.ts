@@ -7,6 +7,9 @@ import { safeJsonParse } from "../common/utils/json.util";
 import { SingleFlight } from "../common/utils/single-flight.util";
 import { PredictionLeadSnapshotService } from "../ml/services/prediction-lead-snapshot.service";
 import { PlanDayService } from "../parks/services/plan-day.service";
+import { WeatherService } from "../parks/weather.service";
+import type { ClimateNormals } from "../external-apis/weather/climate-normals";
+import { climateParkOfDay } from "./trip-climate";
 import { DbJobBudget, mapWithDbBudget } from "../common/utils/db-job-budget";
 import { TripRegionService } from "./trip-region.service";
 import {
@@ -52,6 +55,7 @@ export class TripPlanService {
     private readonly regions: TripRegionService,
     private readonly leadSnapshots: PredictionLeadSnapshotService,
     private readonly planDay: PlanDayService,
+    private readonly weather: WeatherService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -166,7 +170,45 @@ export class TripPlanService {
       shows: q.evenings
         ? await this.eveningShows(region, q, calendar, trip)
         : undefined,
+      climate: await this.climateOf(region, trip),
     });
+  }
+
+  /**
+   * The climate normals of the parks the plan's days read their typical
+   * weather at (`climateParkOfDay`), from the cache only: a park whose normals
+   * are not cached yet is warmed in the background and its days go without.
+   */
+  private async climateOf(
+    region: RegionConfig,
+    trip: OptimizedTrip,
+  ): Promise<Map<string, ClimateNormals>> {
+    const wanted = new Set(
+      trip.plan.days.map((day) => climateParkOfDay(region, day)),
+    );
+    const parks = new Map(
+      (await this.regions.resolveParks(region)).map((p) => [
+        p.config.slug,
+        p.park,
+      ]),
+    );
+    const out = new Map<string, ClimateNormals>();
+    await Promise.all(
+      [...wanted].map(async (slug) => {
+        const park = parks.get(slug);
+        if (!park) return;
+        const normals = await this.weather
+          .getClimateNormals(park.id)
+          .catch((err: Error) => {
+            this.logger.warn(
+              `Climate normals unavailable for ${slug}: ${err.message}`,
+            );
+            return null;
+          });
+        if (normals) out.set(slug, normals);
+      }),
+    );
+    return out;
   }
 
   /** The night shows of the parks the plan's evenings may name. */

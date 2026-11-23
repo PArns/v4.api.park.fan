@@ -94,7 +94,9 @@ export function toWeatherSummary(
 /** What {@link weatherView} holds, as the tools that return it describe it. */
 export const WEATHER_VIEW_FIELDS =
   "condition, °C (feelsLikeC today), precipitation in mm with its highest hourly chance in % " +
-  "and its hours, snow in cm, wind and gusts in km/h, UV index, sunshine hours";
+  "and its hours, snow in cm, wind and gusts in km/h, UV index, sunshine hours; " +
+  "`basis: climate_normal` is the historical average for the date (note), with typicalHighC " +
+  "and typicalLowC (the range half such days fell in) and rainDayChancePercent";
 
 /**
  * A day's weather as Parky and the admin MCP read it: every figure the calendar
@@ -121,6 +123,14 @@ export function weatherView(weather: WeatherSummary | null | undefined) {
     uvIndexMax: weather.uvIndexMax,
     sunshineHours: weather.sunshineHours,
     humidityPercent: weather.humidity,
+    // A normal is said as what such a day is usually like, never as the day's
+    // forecast: the note says so beside the figures, the ranges give the spread.
+    ...(weather.basis === "climate_normal" && {
+      note: CLIMATE_NORMAL_NOTE,
+      typicalHighC: tempRange(weather.tempMaxP25, weather.tempMaxP75),
+      typicalLowC: tempRange(weather.tempMinP25, weather.tempMinP75),
+      rainDayChancePercent: weather.wetDayPercent,
+    }),
   };
 }
 
@@ -137,9 +147,34 @@ export function toClimateNormalSummary(
   if (!normal) return undefined;
   const summary = toWeatherSummary(normal);
   if (!summary) return undefined;
+  const maxP25 = num(normal.temperatureMaxP25);
+  const maxP75 = num(normal.temperatureMaxP75);
+  const minP25 = num(normal.temperatureMinP25);
+  const minP75 = num(normal.temperatureMinP75);
+  const wet = num(normal.wetDayShare);
   return {
     ...summary,
     basis: "climate_normal",
     normalPeriod: CLIMATE_NORMAL_PERIOD,
+    // The spread of the days the mean is taken over (PAR-1411); absent in
+    // normals cached before it.
+    ...(maxP25 !== undefined &&
+      maxP75 !== undefined && { tempMaxP25: maxP25, tempMaxP75: maxP75 }),
+    ...(minP25 !== undefined &&
+      minP75 !== undefined && { tempMinP25: minP25, tempMinP75: minP75 }),
+    ...(wet !== undefined && { wetDayPercent: Math.round(wet * 100) }),
   };
+}
+
+/** What a climate normal is, in the words Parky and the admin MCP read beside it. */
+export const CLIMATE_NORMAL_NOTE =
+  `historical average for this calendar date (${CLIMATE_NORMAL_PERIOD}), ` +
+  "not a forecast for the day";
+
+/** A range of two temperatures as one short string, "15-19"; one figure where they round alike. */
+export function tempRange(low: number | undefined, high: number | undefined) {
+  if (low === undefined || high === undefined) return undefined;
+  const a = Math.round(low);
+  const b = Math.round(high);
+  return a === b ? `${a}` : `${a}-${b}`;
 }

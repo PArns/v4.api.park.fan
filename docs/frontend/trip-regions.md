@@ -101,7 +101,7 @@ region route serves the parts a client needs:
 | `perkNames`, a perk rule's `share`     | (the codes)                      | a perk's code, its English name (Parky) and what it takes off a day's cost                                                                                 |
 | a group's `earlyKind`                  | (on the calendar's `early.kind`) | what the resort calls its before-opening slot                                                                                                               |
 | `weather.heat`, `.storm`, `.notes`     | `weather`                        | heat thresholds, the storm season and the seasons the answers name but do not price ([how a day is priced](#how-a-day-is-priced))                           |
-| `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months (`/when`)                                                                                      |
+| `weather.climatePark`                  | `weather.climatePark`            | the park whose climate normals stand for the region's months and windows (`/when`) and a plan day with no park or base ([typical weather](#typical-weather)) |
 | `travel`                               | `travel.source`, `basis`         | OSRM's drive, or legs curated from timetables ([below](#the-region-get-v1trip-regionsorlando))                                                              |
 | `ticketMarkets`                        | `ticketMarkets`                  | the market codes its tickets and links name, where each is sold; `home` is the operators' own shops ([tickets](#tickets))                                   |
 | `bases`, `baseLegs`, `stayRules`       | `bases`, `baseLegs`, `stayRules` | the cities a trip stays in, the moves between them and how both are priced (Japan, Paris; [bases](#bases-a-trip-across-several-cities))                     |
@@ -309,8 +309,8 @@ or a `hurricane` penalty.
   "weather": {
     "storm": {
       "kind": "hurricane", // hurricane | typhoon; absent where the region has none
-      "from": "06-01",
-      "to": "11-30",
+      "from": "08-01", // the first and last day a plan day says hurricane_season (by half month)
+      "to": "10-31",
       "peak": { "from": "08-15", "to": "10-15" },
     },
     // "notes": [{ "kind": "rainy_season", "from": "06-05", "to": "07-19" }] in Japan
@@ -676,21 +676,39 @@ region's own figures (`regions.ts`, `weather`):
   `hurricane_season` and `hurricane_peak` in Orlando, `typhoon_season` and `typhoon_peak` in Japan,
   and `penalties` names it by its kind. We chose a code per kind over a generic `storm_*` with a
   `kind`: the client translates each code into one sentence, the two seasons differ in months and
-  in wording, and Orlando's codes stay as they were. **Orlando's hurricane season**
-  (`ATLANTIC_HURRICANES`), 1 June to 30 November, adds **8 minutes × the date's weight** to every
-  park's day: weight 1 at the peak, by half month 0.05 / 0.1 in June,
-  0.15 / 0.2 in July, 0.4 / 0.8 in August (the peak starting on the 15th), 1 / 1 in September,
-  0.8 / 0.4 in October, 0.15 / 0.05 in November. The shape follows the National Hurricane
-  Center's climatology (nhc.noaa.gov/climo, 1991–2020: first named storm mid to late June, first
-  hurricane early to mid August, peak 10 September, most activity mid-August to mid-October); the
-  weights are curated relative to that peak, not NHC figures, and never a forecast. Eight minutes
-  at the peak is about a fifth of a typical headliner figure, enough to rank a September window
-  behind an equal May one without hiding a genuinely quieter one. Within one date every park
-  carries the same minutes, so the calendar's `best` is unchanged; across dates (`/best-days`,
-  the plan's days, `/when`'s windows) it counts. A plan day says `hurricane_season`, or
-  `hurricane_peak` from 15 August to 15 October. **Japan's typhoons** are set the same way from
-  the Japan Meteorological Agency's climatology (most landfalls August to October, the peak in
-  September) with the region's data.
+  in wording, and Orlando's codes stay as they were.
+
+  **Which months are the season: one rule for every region** (PAR-1411). The season is the months
+  in which storms reach the region at least half as often as in its peak month; it is named and
+  priced alike (a day outside it carries no weight, so no `penalties` without a warning). Until
+  PAR-1411 every month with any storm counted, so Orlando and Japan read "storm season" half the
+  year, and in November every Japan trip did:
+
+  | Region | Storms by month (Jun · Jul · Aug · Sep · Oct · Nov) | Season | Peak |
+  | --- | --- | --- | --- |
+  | Orlando | 3 · 3 · 8 · 13 · 9 · 3 tropical storms or hurricanes within 150 km of Magic Kingdom, 1950–2025 (NHC best track, HURDAT2); within 100 km since 1851: 4 · 2 · 17 · 18 · 13 · 2 | 1 August – 31 October | 15 August – 15 October |
+  | Japan | typhoon approaches (centre within 300 km) a month, JMA normals 1991–2020: Kanto-Koshin 0.2 · 0.4 · 0.8 · 1.2 · 0.7 · none; Kinki 0.3 · 0.6 · 0.7 · 1.1 · 0.7 · none; their mean 0.25 · 0.5 · 0.75 · 1.15 · 0.7 · 0 | 1 August – 31 October | 1 September – 15 October |
+
+  The official Atlantic season (1 June – 30 November) is a fact a client may still say in prose;
+  the planner's warning, calendar mark and price follow the rule. Southern California and Paris
+  have no storm season.
+
+  **Orlando's hurricane season** (`ATLANTIC_HURRICANES`) adds **8 minutes × the date's weight** to
+  every park's day: weight 1 at the peak, by half month 0.4 / 0.8 in August (the peak starting on
+  the 15th), 1 / 1 in September, 0.8 / 0.4 in October. The shape follows the National Hurricane
+  Center's climatology (nhc.noaa.gov/climo, 1991–2020: first hurricane early to mid August, peak
+  10 September, most activity mid-August to mid-October); the weights are curated relative to that
+  peak, not NHC figures, and never a forecast. Eight minutes at the peak is about a fifth of a
+  typical headliner figure, enough to rank a September window behind an equal May one without
+  hiding a genuinely quieter one. Within one date every park carries the same minutes, so the
+  calendar's `best` is unchanged; across dates (`/best-days`, the plan's days, `/when`'s windows)
+  it counts. A plan day says `hurricane_season`, or `hurricane_peak` from 15 August to 15 October.
+  **Japan's typhoons** are set the same way from the Japan Meteorological Agency's normals: 0.6 / 0.7
+  in August, 1 / 1 in September, 0.8 / 0.45 in October (monthly data, the halves curated).
+
+  The region route's `weather.storm.from` and `to` are the first and last day with a weight, by
+  half month (`stormSeasonSpan`), so a calendar that marks them marks exactly the days a plan
+  warns of.
 - **The storm peak in `/when`** (`weather.storm.peakWindowMinutes`, ranking only): a window that
   touches the peak on any day, travel days included, adds **10 minutes per visit** to its score
   ([when to go](./trip-regions-when.md#how-the-storm-peak-ranks)). No plan, no day and no shown
@@ -903,6 +921,19 @@ day, the day is already pinned, more locks than visits) is listed in `ignoredLoc
       "crowdLevel": "low",
       "basis": "forecast",
       "weather": { "tempMax": 27.4, "basis": "forecast" }, // the park's high; on a hop day per park
+      "climate": {
+        // the date's typical weather at the day's park, every kind of day; see Typical weather
+        "tempMax": 26.8,
+        "tempMin": 15.1,
+        "tempMaxP25": 25.2,
+        "tempMaxP75": 28.6,
+        "tempMinP25": 12.9,
+        "tempMinP75": 17.6,
+        "precipitationMm": 1.9,
+        "wetDayPercent": 22,
+        "basis": "climate_normal",
+        "period": "2015-2024",
+      },
       "travel": {
         "from": "hotel:disney",
         "to": "universal-epic-universe",
@@ -1148,6 +1179,34 @@ served daily forecast at the planned visits' lead times (`leadTimeMae`,
 [reader-facing accuracy](../ml/reader-facing-accuracy.md)), per headliner ride like the saving, so
 the two can be read side by side; absent where nothing is measured at those distances (a `last_year`
 visit never counts). `parkDays` counts days with a park, `visits` the visits placed.
+
+### Typical weather
+
+Every plan day carries **`climate`**, the date's typical weather: the climate normals (2015–2024,
+ERA5, [the spread](../architecture/weather.md#the-spread-typically-1618-c)), never a forecast, beside
+`weather`, which within the forecast's 16 days is the forecast. A client shows it as what such a day
+is usually like ("meist 25–29 °C, nachts 13–18 °C, Regen an 2 von 10 Tagen") and says once that it
+is the long-run average, not the day's forecast. The same block is each `/when` window's `climate`
+(over all its days) and each month's ([when to go](./trip-regions-when.md)).
+
+| Field | What |
+| --- | --- |
+| `tempMax`, `tempMin` | the mean daily high and low, °C, one decimal |
+| `tempMaxP25`, `tempMaxP75` | the range half of such days' highs fell in (25th to 75th percentile), meaned over the span's days. Show it rounded, "25–29 °C"; where both round alike, one figure |
+| `tempMinP25`, `tempMinP75` | the same for the lows |
+| `precipitationMm` | a day's mean precipitation (one decimal); a window's or month's total (whole mm) |
+| `wetDayPercent` | the chance a day of the span is a rain day (at least 1 mm), %. "2 of 10 days" is the friendlier wording |
+| `basis`, `period` | always `climate_normal` and `2015-2024` |
+
+- **Where it is read:** a park or hop day at its (first) park; a day without a park at the nearest
+  park of the base it sleeps in (a region with bases: an Osaka travel day reads Universal Studios
+  Japan, not Tokyo Disneyland); else at the region's `weather.climatePark` (`climateParkOfDay`,
+  `src/trip-regions/trip-climate.ts`).
+- **Absent** while that park's normals are not cached (they are warmed in the background, so the
+  next build has them). The percentiles and `wetDayPercent` are absent while a park's cached
+  normals predate them (fetched again in the background); `tempMax`, `tempMin` and
+  `precipitationMm` are there either way.
+- It prices nothing: the heat term reads `weather` ([how a day is priced](#how-a-day-is-priced)).
 
 ## Ideas (`GET /v1/trip-regions/orlando/plan/ideas`)
 

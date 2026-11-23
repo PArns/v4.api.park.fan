@@ -190,6 +190,36 @@ export class WeatherSummary {
     description: "Apparent ('feels like') temperature, when available (today).",
   })
   apparentTemp?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'A "climate_normal" only: the 25th percentile of the daily high around ' +
+      "this date over the averaging period; with tempMaxP75 the range half of " +
+      "those days' highs fell in. Absent for a forecast and for normals cached " +
+      "before the spread was kept.",
+  })
+  tempMaxP25?: number;
+
+  @ApiProperty({ required: false, description: "See tempMaxP25: the 75th." })
+  tempMaxP75?: number;
+
+  @ApiProperty({
+    required: false,
+    description: "The same range for the daily low (climate_normal only).",
+  })
+  tempMinP25?: number;
+
+  @ApiProperty({ required: false, description: "See tempMinP25: the 75th." })
+  tempMinP75?: number;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'A "climate_normal" only: the share of days around this date with at ' +
+      "least 1 mm of precipitation, 0-100 (%).",
+  })
+  wetDayPercent?: number;
 }
 
 /**

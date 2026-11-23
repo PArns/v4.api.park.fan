@@ -811,6 +811,15 @@ forecast" (`LAST_YEAR_PHRASE`), and the prompt has him say "estimated from last 
 forecast. In a hurricane or typhoon region the prompt keeps him from calling the storm peak the
 quietest time to go, whatever its queues: the date tools rank it lower (`rankedLowerBy`).
 
+**The weather past the forecast is the historical average** (PAR-1411). Where no forecast reaches
+(about 14 days), `get_days`, `get_park_day` and `compare_parks` give the date's climate normal as
+its `weather`, `basis: "climate_normal"`, with `note` ("historical average for this calendar date
+(2015-2024), not a forecast for the day"), `typicalHighC` and `typicalLowC` (the range half of
+such days fell in, "15-19") and `rainDayChancePercent` (`weatherView`). `plan_vacation`'s days carry
+`typicalWeather` ("high 15-19 °C, low 7-11 °C, rain on 27% of such days"), said once in
+`typicalWeatherMeans`, and `find_trip_dates`' windows the same. The prompt has him say it as what
+such a day is usually like ("usually 15-19 °C"), never as the day's forecast.
+
 ### The trip regions: the vacation planner in the chat
 
 Four lookups read the [trip regions](trip-regions.md) through `TripRegionService` and
@@ -889,8 +898,9 @@ name contains the words ("Epic"), several as candidates, else the site's park se
   season, not a forecast"), `events`, and `hubUrl`, the hub with that window's plan under the plan
   route's own parameter names (`hubUrl` above). Then `within` (the breaks and how far the data
   reaches), `noWindow` when none fits, and the year strip as `months` (`headlinerWait`,
-  `lastYear`, `climate` as "high/low °C, mm", the count of US school-break days, `partyNights`,
-  `hurricaneSeason`), with `monthsMean` saying what the numbers are. A window the season ranked
+  `lastYear`, `climate` as "high 15-19 °C, low 7-11 °C, rain on 27% of such days; 72 mm in the
+  month", the count of US school-break days, `partyNights`, `hurricaneSeason`), with `monthsMean`
+  saying what the numbers are. Each window carries its `typicalWeather` in the same words. A window the season ranked
   lower carries `rankedLowerBy` ("hurricane season, 6.4 min a park day"); with tickets a window
   lists them in short (`tickets`), with `suggest` the tickets to buy (`ticketsToBuy`); `extreme_heat` and
   `hurricane_peak` read as short phrases in `watch`. Four eval cases (German and

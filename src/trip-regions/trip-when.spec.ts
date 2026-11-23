@@ -301,10 +301,9 @@ describe("findTripDates", () => {
     expect(all.some((w) => w.reasons.includes("no_school_break"))).toBe(true);
     const inBreak = all.find((w) => w.warnings.includes("school_break"));
     if (inBreak) expect(inBreak.reasons).not.toContain("no_school_break");
-    const june = all.find((w) => w.to >= "2027-06-01");
-    expect(june?.warnings ?? ["hurricane_season"]).toContain(
-      "hurricane_season",
-    );
+    // Orlando's hurricane season is August to October (PAR-1411): June is not in it.
+    const june = all.find((w) => w.to >= "2027-06-01" && w.to < "2027-08-01");
+    expect(june?.warnings ?? []).not.toContain("hurricane_season");
     expect(byFrom.size).toBe(all.length);
     const lastYear = all.find((w) => w.basis === "last_year");
     if (lastYear) expect(lastYear.warnings).toContain("estimate_last_year");
@@ -373,6 +372,33 @@ describe("findTripDates", () => {
       partyNights: 1,
       hurricaneSeason: false,
     });
+    // A window reaching into February, which the table lacks, carries no typical weather.
+    for (const w of result.windows.filter((w) => w.to > "2027-01-31")) {
+      expect(w.climate).toBeUndefined();
+    }
+    // With a whole year's table every window carries its own, over all its days.
+    const year = Object.fromEntries(
+      Array.from({ length: 365 }, (_, d) => [
+        addIsoDays("2027-01-01", d).slice(5),
+        { ...climate["01-01"], wetDayShare: 0.25 },
+      ]),
+    );
+    const withYear = findTripDates({
+      ...input(cal, 7),
+      climate: year,
+      climatePark: "magic-kingdom-park",
+    });
+    expect(withYear.windows.length).toBeGreaterThan(0);
+    for (const w of withYear.windows) {
+      expect(w.climate).toEqual({
+        tempMax: 22,
+        tempMin: 10,
+        precipitationMm: 14,
+        wetDayPercent: 25,
+        basis: "climate_normal",
+        period: "2015-2024",
+      });
+    }
     expect(jan.headlinerWait).toBeGreaterThan(0);
     expect(jan.dayGuestHours).toBeCloseTo(12, 0);
     expect(result.months[1].climate).toBeUndefined();
